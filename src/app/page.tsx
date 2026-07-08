@@ -156,6 +156,9 @@ export default function Home() {
       const nextClientId = storedClientId || createUuid();
       localStorage.setItem(CLIENT_STORAGE_KEY, nextClientId);
       setClientId(nextClientId);
+      if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+        setSettingsOpen(false);
+      }
       setIsLoaded(true);
     });
 
@@ -183,9 +186,10 @@ export default function Home() {
   }, [conversationId, isLoaded, messages]);
 
   useEffect(() => {
+    const prefersReducedMotion = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     transcriptRef.current?.scrollTo({
       top: transcriptRef.current.scrollHeight,
-      behavior: "smooth",
+      behavior: prefersReducedMotion ? "auto" : "smooth",
     });
   }, [isSending, messages]);
 
@@ -289,12 +293,19 @@ export default function Home() {
 
   return (
     <main className="app-shell">
-      <section className="hero" aria-label="Findog/Fred">
+      <header className="hero" aria-label="Findog/Fred">
         <div className="hero-copy">
-          <p className="eyebrow">findog.at</p>
+          <p className="eyebrow">
+            <span className="austria-flag" aria-hidden="true">
+              <span className="red"></span>
+              <span className="white"></span>
+              <span className="red"></span>
+            </span>
+            findog.at
+          </p>
           <h1>Findog/Fred</h1>
           <p>
-            Deutscher Chat fuer oesterreichisches Steuerrecht mit DeepSeek BYOK und
+            Deutscher Chat für österreichisches Steuerrecht mit DeepSeek BYOK und
             BFG/WeKnora-MCP-Recherche.
           </p>
         </div>
@@ -307,9 +318,9 @@ export default function Home() {
           </span>
           <span className="status ready">{settings.model}</span>
         </div>
-      </section>
+      </header>
 
-      <section className="workspace" aria-label="Chat">
+      <section className={`workspace ${settingsOpen ? "has-sidebar" : ""}`} aria-label="Arbeitsbereich">
         <aside className={settingsOpen ? "settings-panel open" : "settings-panel"}>
           <div className="panel-heading">
             <div>
@@ -317,13 +328,13 @@ export default function Home() {
               <h2>Lokale Konfiguration</h2>
             </div>
             <button
-              className="icon-button"
+              className="icon-button close-sidebar"
               type="button"
-              onClick={() => setSettingsOpen((current) => !current)}
-              aria-label={settingsOpen ? "Einstellungen ausblenden" : "Einstellungen anzeigen"}
-              title={settingsOpen ? "Einstellungen ausblenden" : "Einstellungen anzeigen"}
+              onClick={() => setSettingsOpen(false)}
+              aria-label="Einstellungen ausblenden"
+              title="Einstellungen ausblenden"
             >
-              {settingsOpen ? "×" : "⚙"}
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
             </button>
           </div>
 
@@ -337,6 +348,7 @@ export default function Home() {
               autoComplete="off"
               placeholder="sk-..."
             />
+            <span className="field-help">Wird nur flüchtig im React-State gehalten und nie persistent gespeichert.</span>
           </div>
 
           <div className="field-group">
@@ -349,6 +361,7 @@ export default function Home() {
               autoComplete="off"
               placeholder="Bearer Token"
             />
+            <span className="field-help">Ermöglicht den Zugriff auf BFG/WeKnora-MCP-Recherche-Tools.</span>
           </div>
 
           <div className="field-group">
@@ -376,7 +389,8 @@ export default function Home() {
             />
           </div>
 
-          <button className="secondary-button" type="button" onClick={clearConversation}>
+          <button className="secondary-button danger-button" type="button" onClick={clearConversation}>
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
             Verlauf leeren
           </button>
         </aside>
@@ -384,16 +398,20 @@ export default function Home() {
         <section className="chat-panel">
           <div className="chat-toolbar">
             <div>
-              <p className="eyebrow">Chat</p>
-              <h2>BFG- und Steuerrechtsrecherche</h2>
+              <p className="eyebrow">Steuerrechts-Chat</p>
+              <h2>Recherche & Analyse</h2>
             </div>
-            <button
-              className="secondary-button compact"
-              type="button"
-              onClick={() => setSettingsOpen((current) => !current)}
-            >
-              Einstellungen
-            </button>
+            {!settingsOpen && (
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setSettingsOpen(true)}
+                title="Einstellungen anzeigen"
+              >
+                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                Einstellungen
+              </button>
+            )}
           </div>
 
           {error ? (
@@ -405,27 +423,36 @@ export default function Home() {
           <div className="transcript" ref={transcriptRef}>
             {messages.length === 0 ? (
               <div className="empty-state">
+                <svg aria-hidden="true" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="empty-state-icon" style={{ color: "var(--bmf-blue)", marginBottom: "16px", opacity: 0.8 }}><path d="M12 3v17" /><path d="M3 6h18" /><path d="M3 6l3 6h6L9 6" /><path d="M15 6l3 6h6l-3-6" /><path d="M9 21h6" /></svg>
                 <h3>Neue Anfrage</h3>
                 <p>Stelle eine konkrete steuerrechtliche Frage mit Sachverhalt und Zeitraum.</p>
               </div>
             ) : (
               messages.map((message, index) => (
                 <article className={`message ${message.role}`} key={`${message.createdAt}-${index}`}>
-                  <div className="message-meta">
-                    <span>{message.role === "user" ? "Du" : "Findog/Fred"}</span>
-                    <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
+                  <div className="message-header">
+                    <div className="message-avatar">
+                      {message.role === "user" ? "DU" : "FF"}
+                    </div>
+                    <div className="message-meta">
+                      <span className="sender-name">{message.role === "user" ? "Du" : "Findog/Fred"}</span>
+                      <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
+                    </div>
                   </div>
-                  <p>{message.content}</p>
+                  <p className="message-body">{message.content}</p>
                 </article>
               ))
             )}
 
             {isSending ? (
               <article className="message assistant pending" aria-live="polite">
-                <div className="message-meta">
-                  <span>Findog/Fred</span>
+                <div className="message-header">
+                  <div className="message-avatar">FF</div>
+                  <div className="message-meta">
+                    <span className="sender-name">Findog/Fred</span>
+                  </div>
                 </div>
-                <p>Recherchiert und formuliert die Antwort...</p>
+                <p className="message-body">Recherchiert und formuliert die Antwort...</p>
               </article>
             ) : null}
           </div>
@@ -444,7 +471,17 @@ export default function Home() {
             <div className="composer-actions">
               <span>{messages.length} Nachrichten lokal gespeichert</span>
               <button type="submit" disabled={!canSend}>
-                {isSending ? "Senden..." : "Senden"}
+                {isSending ? (
+                  <>
+                    <span className="spinner" aria-hidden="true"></span>
+                    Senden...
+                  </>
+                ) : (
+                  <>
+                    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                    Senden
+                  </>
+                )}
               </button>
             </div>
           </form>
