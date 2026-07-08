@@ -16,7 +16,7 @@ import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { type AppChatMessage } from "@/lib/deepseek";
 import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
 import { UserVisibleError } from "@/lib/errors";
-import { persistConversationTurn } from "@/lib/persistence";
+import { persistConversationTurn, resolveConversationIdForClient } from "@/lib/persistence";
 import { runAgent } from "@/lib/agent";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getServerMcpBearerToken } from "@/lib/mcp/server-token";
@@ -148,8 +148,13 @@ export async function POST(request: Request) {
       DEFAULT_SYSTEM_PROMPT;
     const messages = parseMessages(body.messages);
     const mcpBearerToken = getServerMcpBearerToken();
+    const conversationId = await resolveConversationIdForClient({
+      conversationId: asOptionalString(body.conversationId, 80, "Conversation ID"),
+      clientId: authenticatedUser.id,
+      supabase,
+    });
 
-    const answer = await runAgent({
+    const agentResult = await runAgent({
       apiKey: deepSeekApiKey,
       model,
       systemPrompt,
@@ -159,14 +164,17 @@ export async function POST(request: Request) {
 
     const latestUserMessage = messages.findLast((message) => message.role === "user");
     await persistConversationTurn({
-      conversationId: asOptionalString(body.conversationId, 80, "Conversation ID"),
+      conversationId,
       clientId: authenticatedUser.id,
       userMessage: latestUserMessage?.content,
-      assistantMessage: answer,
+      assistantMessage: agentResult.answer,
     });
 
     return NextResponse.json({
-      answer,
+      answer: agentResult.answer,
+      steps: agentResult.steps,
+      tools: agentResult.tools,
+      conversationId,
       model,
       availableModels: AVAILABLE_MODELS,
     });

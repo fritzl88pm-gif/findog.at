@@ -22,18 +22,31 @@ const emptyObjectSchema: JsonObject = {
 
 export function normalizeInputSchema(inputSchema?: JsonObject): JsonObject {
   if (!inputSchema || typeof inputSchema !== "object" || Array.isArray(inputSchema)) {
-    return emptyObjectSchema;
+    return { ...emptyObjectSchema };
   }
 
-  return inputSchema;
+  if ("type" in inputSchema && inputSchema.type !== "object") {
+    return { ...emptyObjectSchema };
+  }
+
+  if (inputSchema.type === "object") {
+    return inputSchema;
+  }
+
+  return {
+    type: "object",
+    ...inputSchema,
+  };
 }
 
 export function mcpToolToDeepSeekTool(tool: McpTool): DeepSeekTool {
+  const description = tool.description?.trim() || `BFG/WeKnora MCP tool: ${tool.name}`;
+
   return {
     type: "function",
     function: {
       name: tool.name,
-      description: tool.description ?? "",
+      description,
       parameters: normalizeInputSchema(tool.inputSchema),
     },
   };

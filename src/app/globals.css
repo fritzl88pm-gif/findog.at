@@ -305,6 +305,13 @@ button:disabled {
   font-weight: 600;
 }
 
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 input,
 select,
 textarea {
@@ -620,6 +627,65 @@ textarea:focus {
   font-size: 0.95rem;
 }
 
+.agent-steps {
+  margin-top: 14px;
+  border: 1px solid rgba(40, 111, 156, 0.14);
+  border-radius: var(--radius-sm);
+  background: #f7fafc;
+}
+
+.agent-steps summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  color: var(--bmf-blue-deep);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.agent-steps ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0 12px 12px 30px;
+}
+
+.agent-step {
+  padding-left: 2px;
+}
+
+.agent-step-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.agent-step-header span {
+  border-radius: 999px;
+  background: rgba(40, 111, 156, 0.08);
+  color: var(--bmf-blue-dark);
+  padding: 2px 8px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.agent-step-header strong {
+  color: var(--bmf-blue-deep);
+  font-size: 0.82rem;
+}
+
+.agent-step pre {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
 /* Loading/Pending State */
 .message.pending {
   color: var(--muted);
@@ -757,6 +823,12 @@ textarea:focus {
   background: var(--bg-app);
   border-color: rgba(40, 111, 156, 0.3);
   color: var(--bmf-blue);
+}
+
+.compact-button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 0.78rem;
 }
 
 /* Destructive Button */

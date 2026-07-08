@@ -49,4 +49,28 @@ describe("mcpToolToDeepSeekTool", () => {
       properties: {},
     });
   });
+
+  it("uses a safe fallback description when an MCP tool omits one", () => {
+    const tool = mcpToolToDeepSeekTool({
+      name: "bfg_detail",
+      description: "  ",
+    });
+
+    expect(tool.function.description).toBe("BFG/WeKnora MCP tool: bfg_detail");
+  });
+
+  it("uses an empty object schema when the MCP schema is not an object schema", () => {
+    const tool = mcpToolToDeepSeekTool({
+      name: "invalid_schema_tool",
+      description: "Invalid schema",
+      inputSchema: {
+        type: "string",
+      },
+    });
+
+    expect(tool.function.parameters).toEqual({
+      type: "object",
+      properties: {},
+    });
+  });
 });

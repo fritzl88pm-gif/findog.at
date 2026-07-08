@@ -9,7 +9,9 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`, register or sign in with Supabase Auth, and use the default `deepseek-v4-flash` model through the server-side global DeepSeek key. `deepseek-v4-pro` is optional BYOK: users enter their own DeepSeek API key in Settings, and that key is kept only in React state for the current browser session. Model and system prompt are stored in browser `localStorage`. Local chat history is scoped by the authenticated Supabase user ID. BFG/WeKnora MCP access is fixed server-side and is not configurable by users.
+Open `http://localhost:3000`, register or sign in with Supabase Auth, and use the default `deepseek-v4-flash` model through the server-side global DeepSeek key. `deepseek-v4-pro` is optional BYOK: users enter their own DeepSeek API key in Settings, and that key is kept only in React state for the current browser session. Model and system prompt are stored in browser `localStorage`; the Settings panel can reset the prompt to the bundled Fred default. Local chat history is scoped by the authenticated Supabase user ID, and conversation IDs are verified server-side before use. BFG/WeKnora MCP access is fixed server-side and is not configurable by users.
+
+Assistant responses include a non-streaming agent-step panel with the plan, loaded MCP tools, tool calls, bounded tool-result snippets, and the final answer marker.
 
 ## Environment
 

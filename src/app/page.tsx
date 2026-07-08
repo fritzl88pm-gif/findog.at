@@ -8,8 +8,10 @@ import {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
   DEFAULT_SYSTEM_PROMPT,
+  MAX_SYSTEM_PROMPT_CHARS,
   type ChatModel,
 } from "@/lib/config";
+import type { AgentStep } from "@/lib/agent-steps";
 import {
   getSupabaseBrowserClient,
   isSupabaseBrowserConfigured,
@@ -19,6 +21,7 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  steps?: AgentStep[];
 };
 
 type Settings = {
@@ -63,19 +66,6 @@ function modelLabel(model: ChatModel): string {
     : "deepseek-v4-flash (Global, Standard)";
 }
 
-function createUuid(): string {
-  const randomUuid = globalThis.crypto?.randomUUID?.();
-  if (randomUuid) {
-    return randomUuid;
-  }
-
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
-    const random = Math.floor(Math.random() * 16);
-    const value = character === "x" ? random : (random & 0x3) | 0x8;
-    return value.toString(16);
-  });
-}
-
 function readJson<T>(key: string): T | null {
   try {
     const value = localStorage.getItem(key);
@@ -93,6 +83,64 @@ function writeJson(key: string, value: unknown): void {
   }
 }
 
+function normalizeAgentSteps(value: unknown): AgentStep[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((step): AgentStep[] => {
+    if (!step || typeof step !== "object" || Array.isArray(step)) {
+      return [];
+    }
+
+    const item = step as Record<string, unknown>;
+    if (typeof item.type !== "string" || typeof item.title !== "string" || typeof item.content !== "string") {
+      return [];
+    }
+
+    if (item.type === "plan") {
+      return [{ type: "plan", title: item.title, content: item.content }];
+    }
+    if (item.type === "tools") {
+      return [
+        {
+          type: "tools",
+          title: item.title,
+          content: item.content,
+          tools: Array.isArray(item.tools) ? item.tools.filter((tool): tool is string => typeof tool === "string") : undefined,
+        },
+      ];
+    }
+    if (item.type === "tool_call" && typeof item.toolName === "string") {
+      return [
+        {
+          type: "tool_call",
+          title: item.title,
+          content: item.content,
+          toolName: item.toolName,
+          arguments: item.arguments,
+        },
+      ];
+    }
+    if (item.type === "tool_result" && typeof item.toolName === "string" && typeof item.success === "boolean") {
+      return [
+        {
+          type: "tool_result",
+          title: item.title,
+          content: item.content,
+          toolName: item.toolName,
+          success: item.success,
+        },
+      ];
+    }
+    if (item.type === "answer") {
+      return [{ type: "answer", title: item.title, content: item.content }];
+    }
+
+    return [];
+  });
+}
+
 function normalizeMessages(value: unknown): ChatMessage[] {
   if (!Array.isArray(value)) {
     return [];
@@ -107,12 +155,14 @@ function normalizeMessages(value: unknown): ChatMessage[] {
     if ((item.role !== "user" && item.role !== "assistant") || typeof item.content !== "string") {
       return [];
     }
+    const steps = item.role === "assistant" ? normalizeAgentSteps(item.steps) : [];
 
     return [
       {
         role: item.role,
         content: item.content,
         createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString(),
+        ...(steps.length > 0 ? { steps } : {}),
       },
     ];
   });
@@ -128,6 +178,44 @@ function formatTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function stepTypeLabel(step: AgentStep): string {
+  switch (step.type) {
+    case "plan":
+      return "Plan";
+    case "tools":
+      return "Werkzeuge";
+    case "tool_call":
+      return "Aufruf";
+    case "tool_result":
+      return step.success ? "Ergebnis" : "Fehler";
+    case "answer":
+      return "Antwort";
+  }
+}
+
+function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
+  if (steps.length === 0) {
+    return null;
+  }
+
+  return (
+    <details className="agent-steps" open>
+      <summary>Agentenschritte ({steps.length})</summary>
+      <ol>
+        {steps.map((step, index) => (
+          <li className={`agent-step ${step.type}`} key={`${step.type}-${step.title}-${index}`}>
+            <div className="agent-step-header">
+              <span>{stepTypeLabel(step)}</span>
+              <strong>{step.title}</strong>
+            </div>
+            <pre>{step.content}</pre>
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
 }
 
 export default function Home() {
@@ -242,7 +330,7 @@ export default function Home() {
       setConversationId(
         typeof storedHistory?.conversationId === "string" && storedHistory.conversationId
           ? storedHistory.conversationId
-          : createUuid(),
+          : "",
       );
       setMessages(normalizeMessages(storedHistory?.messages));
     });
@@ -392,7 +480,7 @@ export default function Home() {
   function clearConversation() {
     setError("");
     setMessages([]);
-    setConversationId(createUuid());
+    setConversationId("");
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -435,17 +523,12 @@ export default function Home() {
     setMessages(nextMessages);
 
     try {
-      const activeConversationId = conversationId || createUuid();
-      if (!conversationId) {
-        setConversationId(activeConversationId);
-      }
-
       const requestBody: {
         deepSeekApiKey?: string;
         model: ChatModel;
         systemPrompt: string;
         messages: Array<Pick<ChatMessage, "role" | "content">>;
-        conversationId: string;
+        conversationId?: string;
       } = {
         model: settings.model,
         systemPrompt: settings.systemPrompt.trim() || DEFAULT_SYSTEM_PROMPT,
@@ -453,9 +536,11 @@ export default function Home() {
           role: message.role,
           content: message.content,
         })),
-        conversationId: activeConversationId,
       };
 
+      if (conversationId) {
+        requestBody.conversationId = conversationId;
+      }
       if (isProModel(settings.model)) {
         requestBody.deepSeekApiKey = settings.deepSeekApiKey.trim();
       }
@@ -472,6 +557,8 @@ export default function Home() {
       const payload = (await response.json().catch(() => ({}))) as {
         answer?: unknown;
         error?: unknown;
+        steps?: unknown;
+        conversationId?: unknown;
       };
 
       if (!response.ok) {
@@ -486,12 +573,18 @@ export default function Home() {
         throw new Error("Die Antwort war leer.");
       }
 
+      if (typeof payload.conversationId === "string" && payload.conversationId.trim()) {
+        setConversationId(payload.conversationId.trim());
+      }
+
+      const steps = normalizeAgentSteps(payload.steps);
       setMessages([
         ...nextMessages,
         {
           role: "assistant",
           content: payload.answer.trim(),
           createdAt: new Date().toISOString(),
+          ...(steps.length > 0 ? { steps } : {}),
         },
       ]);
     } catch (caughtError) {
@@ -695,13 +788,27 @@ export default function Home() {
           )}
 
           <div className="field-group">
-            <label htmlFor="system-prompt">System Prompt</label>
+            <div className="field-label-row">
+              <label htmlFor="system-prompt">System Prompt</label>
+              <button
+                className="secondary-button compact-button"
+                type="button"
+                onClick={() => updateSetting("systemPrompt", DEFAULT_SYSTEM_PROMPT)}
+              >
+                Auf Standard zurücksetzen
+              </button>
+            </div>
             <textarea
               id="system-prompt"
               value={settings.systemPrompt}
               onChange={(event) => updateSetting("systemPrompt", event.target.value)}
-              rows={8}
+              maxLength={MAX_SYSTEM_PROMPT_CHARS}
+              rows={12}
             />
+            <span className="field-help">
+              {settings.systemPrompt.length.toLocaleString("de-AT")} /{" "}
+              {MAX_SYSTEM_PROMPT_CHARS.toLocaleString("de-AT")} Zeichen
+            </span>
           </div>
 
           <button
@@ -778,6 +885,9 @@ export default function Home() {
                     </div>
                   </div>
                   <p className="message-body">{message.content}</p>
+                  {message.role === "assistant" && message.steps?.length ? (
+                    <AgentStepsPanel steps={message.steps} />
+                  ) : null}
                 </article>
               ))
             )}
@@ -790,7 +900,9 @@ export default function Home() {
                     <span className="sender-name">Findog/Fred</span>
                   </div>
                 </div>
-                <p className="message-body">Recherchiert und formuliert die Antwort...</p>
+                <p className="message-body">
+                  Plant den Rechercheablauf, lädt BFG/WeKnora-Werkzeuge und wertet Quellen aus...
+                </p>
               </article>
             ) : null}
           </div>

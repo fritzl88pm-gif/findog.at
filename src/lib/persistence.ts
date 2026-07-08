@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+
+import { UserVisibleError } from "./errors";
 import { getSupabaseServerClient } from "./supabase/server";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -31,12 +34,65 @@ type PersistenceSupabaseClient = {
   };
 };
 
+type ConversationLookupSupabaseClient = {
+  from: (table: "conversations") => {
+    select: (columns: string) => {
+      eq: (column: string, value: string) => {
+        maybeSingle: () => Promise<{
+          data: { client_id: string | null } | null;
+          error: unknown;
+        }>;
+      };
+    };
+  };
+};
+
 function isUuid(value: string): boolean {
   return uuidPattern.test(value);
 }
 
 export function isConversationOwnedByClient(existingClientId: string | null | undefined, clientId: string): boolean {
   return !existingClientId || existingClientId === clientId;
+}
+
+export async function resolveConversationIdForClient(options: {
+  conversationId?: string;
+  clientId: string;
+  supabase?: unknown;
+}): Promise<string> {
+  if (!isUuid(options.clientId)) {
+    throw new UserVisibleError("Anmeldung konnte keinem gültigen Benutzer zugeordnet werden.", 401);
+  }
+
+  const requestedConversationId = options.conversationId?.trim();
+  if (!requestedConversationId) {
+    return randomUUID();
+  }
+
+  if (!isUuid(requestedConversationId)) {
+    throw new UserVisibleError("Gespräch-ID ist ungültig.", 400);
+  }
+
+  const supabase = (options.supabase ?? getSupabaseServerClient()) as ConversationLookupSupabaseClient | null;
+  if (!supabase) {
+    throw new UserVisibleError("Gesprächszuordnung kann derzeit nicht geprüft werden.", 503);
+  }
+
+  const { data: existingConversation, error: lookupError } = await supabase
+    .from("conversations")
+    .select("client_id")
+    .eq("id", requestedConversationId)
+    .maybeSingle();
+
+  if (lookupError) {
+    throw new UserVisibleError("Gesprächszuordnung konnte nicht geprüft werden.", 503);
+  }
+
+  if (!isConversationOwnedByClient(existingConversation?.client_id, options.clientId)) {
+    throw new UserVisibleError("Dieses Gespräch gehört nicht zu deinem Konto.", 403);
+  }
+
+  return requestedConversationId;
 }
 
 export async function persistConversationTurn(options: {
