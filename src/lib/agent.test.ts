@@ -30,12 +30,12 @@ describe("runAgent", () => {
     vi.resetAllMocks();
   });
 
-  it("returns a final answer with visible plan, tool, result, and answer steps", async () => {
+  function mockMcpSession() {
     const openToolSession = vi.fn().mockResolvedValue({
       sessionId: "mcp-session",
       tools: [
         {
-          name: "knowledge_search",
+          name: "hybrid_search",
           description: "Search scoped knowledge bases",
           inputSchema: {
             type: "object",
@@ -49,7 +49,7 @@ describe("runAgent", () => {
         {
           type: "function",
           function: {
-            name: "knowledge_search",
+            name: "hybrid_search",
             description: "Search scoped knowledge bases",
             parameters: {
               type: "object",
@@ -62,21 +62,25 @@ describe("runAgent", () => {
       ],
     });
     const callTool = vi.fn().mockResolvedValue("Gefundene Normen und BFG-Fundstellen.");
-    MockedMcpClient.mockImplementation(
-      function MockMcpClient() {
-        return {
-          openToolSession,
-          callTool,
-        } as unknown as McpClient;
-      },
-    );
+    MockedMcpClient.mockImplementation(function MockMcpClient() {
+      return {
+        openToolSession,
+        callTool,
+      } as unknown as McpClient;
+    });
+
+    return { callTool, openToolSession };
+  }
+
+  it("returns a final answer with visible plan, tool, result, and answer steps", async () => {
+    mockMcpSession();
     mockedChatCompletion
       .mockResolvedValueOnce({
         content: "Ich recherchiere.",
         toolCalls: [
           {
             id: "call-1",
-            name: "knowledge_search",
+            name: "hybrid_search",
             arguments: JSON.stringify({ query: "Pendlerpauschale 2024" }),
           },
         ],
@@ -87,7 +91,7 @@ describe("runAgent", () => {
       });
 
     const result = (await runAgent({
-      apiKey: "deepseek-key",
+      apiKey: "test-key",
       model: "deepseek-v4-flash",
       systemPrompt: "System",
       messages: [{ role: "user", content: "Frage" }],
@@ -95,7 +99,7 @@ describe("runAgent", () => {
     })) as unknown as AgentRunShape;
 
     expect(result.answer).toBe("Finale Antwort.");
-    expect(result.tools).toEqual(["knowledge_search"]);
+    expect(result.tools).toEqual(["hybrid_search"]);
     expect(result.steps.map((step) => step.type)).toEqual([
       "plan",
       "tools",
@@ -104,11 +108,52 @@ describe("runAgent", () => {
       "answer",
     ]);
     expect(result.steps[2]).toMatchObject({
-      toolName: "knowledge_search",
+      toolName: "hybrid_search",
     });
     expect(result.steps[3]).toMatchObject({
-      toolName: "knowledge_search",
+      toolName: "hybrid_search",
       success: true,
+    });
+  });
+
+  it("synthesizes a final answer without tools after the tool loop reaches its limit", async () => {
+    const { callTool } = mockMcpSession();
+
+    mockedChatCompletion.mockImplementation(async (options) => {
+      if ((options.tools?.length ?? 0) === 0) {
+        return {
+          content: "Finale Antwort aus bisherigen Werkzeugergebnissen.",
+          toolCalls: [],
+        };
+      }
+
+      return {
+        content: "Ich recherchiere weiter.",
+        toolCalls: [
+          {
+            id: `call-${mockedChatCompletion.mock.calls.length}`,
+            name: "hybrid_search",
+            arguments: JSON.stringify({ query: "Familienbonus Plus" }),
+          },
+        ],
+      };
+    });
+
+    const result = (await runAgent({
+      apiKey: "test-key",
+      model: "deepseek-v4-flash",
+      systemPrompt: "System",
+      messages: [{ role: "user", content: "Frage" }],
+      mcpBearerToken: "mcp-token",
+    })) as unknown as AgentRunShape;
+
+    expect(result.answer).toBe("Finale Antwort aus bisherigen Werkzeugergebnissen.");
+    expect(callTool.mock.calls.length).toBeGreaterThan(4);
+    expect(mockedChatCompletion.mock.calls.at(-1)?.[0]).not.toHaveProperty("tools");
+    expect(result.steps.at(-2)?.type).toBe("finalize");
+    expect(result.steps.at(-1)).toMatchObject({
+      type: "answer",
+      content: "Finale Antwort aus bisherigen Werkzeugergebnissen.",
     });
   });
 });

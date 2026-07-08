@@ -11,7 +11,7 @@ import {
   type AgentStep,
 } from "./agent-steps";
 
-const MAX_TOOL_ITERATIONS = 4;
+const MAX_TOOL_ITERATIONS = 12;
 
 function parseToolArguments(name: string, rawArguments: string): JsonObject {
   if (!rawArguments.trim()) {
@@ -156,8 +156,33 @@ export async function runAgent(options: {
     }
   }
 
-  throw new UserVisibleError(
-    "DeepSeek hat nach 4 Werkzeugrunden keine finale Antwort geliefert. Bitte die Frage enger formulieren.",
-    502,
-  );
+  steps.push({
+    type: "finalize",
+    title: "Finalisierung ohne weitere Werkzeuge",
+    content:
+      "Das Werkzeuglimit ist erreicht. Ich erstelle jetzt eine finale Antwort aus den bisherigen Ergebnissen, ohne weitere MCP-Werkzeuge aufzurufen.",
+  });
+  const finalResult = await chatCompletion({
+    apiKey: options.apiKey,
+    model: options.model,
+    messages,
+  });
+  const answer = finalResult.content?.trim();
+  if (!answer) {
+    throw new UserVisibleError(
+      "DeepSeek konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
+      502,
+    );
+  }
+
+  steps.push({
+    type: "answer",
+    title: "Finale Antwort",
+    content: summarizeStepText(answer),
+  });
+  return {
+    answer,
+    steps,
+    tools: toolNames,
+  };
 }

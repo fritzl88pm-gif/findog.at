@@ -63,16 +63,17 @@ export async function chatCompletion(options: {
   apiKey: string;
   model: ChatModel;
   messages: DeepSeekMessage[];
-  tools: DeepSeekTool[];
+  tools?: DeepSeekTool[];
 }): Promise<DeepSeekResult> {
+  const tools = options.tools ?? [];
   const payload: JsonObject = {
     model: options.model,
     messages: options.messages,
     temperature: 0.2,
   };
 
-  if (options.tools.length > 0) {
-    payload.tools = options.tools;
+  if (tools.length > 0) {
+    payload.tools = tools;
     payload.tool_choice = "auto";
   }
 

@@ -3,6 +3,7 @@ export type AgentStep =
   | { type: "tools"; title: string; content: string; tools?: string[] }
   | { type: "tool_call"; title: string; content: string; toolName: string; arguments?: unknown }
   | { type: "tool_result"; title: string; content: string; toolName: string; success: boolean }
+  | { type: "finalize"; title: string; content: string }
   | { type: "answer"; title: string; content: string };
 
 export type AgentRunResult = {

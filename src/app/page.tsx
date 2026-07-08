@@ -133,6 +133,9 @@ function normalizeAgentSteps(value: unknown): AgentStep[] {
         },
       ];
     }
+    if (item.type === "finalize") {
+      return [{ type: "finalize", title: item.title, content: item.content }];
+    }
     if (item.type === "answer") {
       return [{ type: "answer", title: item.title, content: item.content }];
     }
@@ -190,6 +193,8 @@ function stepTypeLabel(step: AgentStep): string {
       return "Aufruf";
     case "tool_result":
       return step.success ? "Ergebnis" : "Fehler";
+    case "finalize":
+      return "Finalisierung";
     case "answer":
       return "Antwort";
   }
