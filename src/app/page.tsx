@@ -494,6 +494,104 @@ export default function Home() {
   const isAuthConfigured = isSupabaseBrowserConfigured();
   const canSend = isAppReady && Boolean(user) && composer.trim().length > 0 && !isSending;
 
+  if (!isAuthLoaded) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-card auth-card-standalone" aria-label="Anmeldung wird geprüft">
+          <p className="eyebrow">findog.at</p>
+          <h1>Anmeldung prüfen</h1>
+          <p className="auth-copy">Bitte warten...</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (!user) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-card auth-card-standalone" aria-label="Anmeldung">
+          <p className="eyebrow">findog.at</p>
+          <h1>{authMode === "sign-in" ? "Anmelden" : "Registrieren"}</h1>
+          <p className="auth-copy">
+            Melde dich mit E-Mail und Passwort an. Der geschützte Bereich öffnet sich erst nach
+            erfolgreicher Anmeldung.
+          </p>
+
+          <div className="auth-tabs" role="tablist" aria-label="Authentifizierungsmodus">
+            <button
+              type="button"
+              role="tab"
+              className={authMode === "sign-in" ? "auth-tab active" : "auth-tab"}
+              onClick={() => selectAuthMode("sign-in")}
+              aria-selected={authMode === "sign-in"}
+            >
+              Anmelden
+            </button>
+            <button
+              type="button"
+              role="tab"
+              className={authMode === "sign-up" ? "auth-tab active" : "auth-tab"}
+              onClick={() => selectAuthMode("sign-up")}
+              aria-selected={authMode === "sign-up"}
+            >
+              Registrieren
+            </button>
+          </div>
+
+          {!isAuthConfigured ? (
+            <div className="error-box auth-message" role="alert">
+              Supabase Auth ist für diese Umgebung noch nicht konfiguriert.
+            </div>
+          ) : null}
+          {authError ? (
+            <div className="error-box auth-message" role="alert" aria-live="polite">
+              {authError}
+            </div>
+          ) : null}
+          {authNotice ? (
+            <div className="notice-box auth-message" role="status" aria-live="polite">
+              {authNotice}
+            </div>
+          ) : null}
+
+          <form className="auth-form" onSubmit={handleAuthSubmit}>
+            <div className="field-group">
+              <label htmlFor="auth-email">E-Mail-Adresse</label>
+              <input
+                id="auth-email"
+                type="email"
+                value={authForm.email}
+                onChange={(event) => updateAuthForm("email", event.target.value)}
+                autoComplete="email"
+                placeholder="name@example.com"
+                disabled={!isAppReady || !isAuthConfigured || isAuthSubmitting}
+              />
+            </div>
+            <div className="field-group">
+              <label htmlFor="auth-password">Passwort</label>
+              <input
+                id="auth-password"
+                type="password"
+                value={authForm.password}
+                onChange={(event) => updateAuthForm("password", event.target.value)}
+                autoComplete={authMode === "sign-in" ? "current-password" : "new-password"}
+                placeholder="Mindestens 6 Zeichen"
+                disabled={!isAppReady || !isAuthConfigured || isAuthSubmitting}
+              />
+            </div>
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={!isAppReady || !isAuthConfigured || isAuthSubmitting}
+            >
+              {isAuthSubmitting ? "Bitte warten..." : authMode === "sign-in" ? "Anmelden" : "Registrieren"}
+            </button>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <header className="hero" aria-label="Findog/Fred">
@@ -647,155 +745,71 @@ export default function Home() {
             </div>
           ) : null}
 
-          {!user ? (
-            <section className="auth-card" aria-label="Anmeldung">
-              <p className="eyebrow">Supabase Auth</p>
-              <h3>{authMode === "sign-in" ? "Anmelden" : "Registrieren"}</h3>
-              <p className="auth-copy">
-                Melde dich mit E-Mail und Passwort an, damit Chatverlauf und Server-Persistenz deiner
-                Supabase-Benutzer-ID zugeordnet werden.
-              </p>
-
-              <div className="auth-tabs" role="tablist" aria-label="Authentifizierungsmodus">
-                <button
-                  type="button"
-                  role="tab"
-                  className={authMode === "sign-in" ? "auth-tab active" : "auth-tab"}
-                  onClick={() => selectAuthMode("sign-in")}
-                  aria-selected={authMode === "sign-in"}
-                >
-                  Anmelden
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  className={authMode === "sign-up" ? "auth-tab active" : "auth-tab"}
-                  onClick={() => selectAuthMode("sign-up")}
-                  aria-selected={authMode === "sign-up"}
-                >
-                  Registrieren
-                </button>
+          <div className="transcript" ref={transcriptRef}>
+            {messages.length === 0 ? (
+              <div className="empty-state">
+                <svg aria-hidden="true" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="empty-state-icon" style={{ color: "var(--bmf-blue)", marginBottom: "16px", opacity: 0.8 }}><path d="M12 3v17" /><path d="M3 6h18" /><path d="M3 6l3 6h6L9 6" /><path d="M15 6l3 6h6l-3-6" /><path d="M9 21h6" /></svg>
+                <h3>Neue Anfrage</h3>
+                <p>Stelle eine konkrete steuerrechtliche Frage mit Sachverhalt und Zeitraum.</p>
               </div>
-
-              {!isAuthConfigured ? (
-                <div className="error-box auth-message" role="alert">
-                  Supabase Auth ist für diese Umgebung noch nicht konfiguriert.
-                </div>
-              ) : null}
-              {authError ? (
-                <div className="error-box auth-message" role="alert" aria-live="polite">
-                  {authError}
-                </div>
-              ) : null}
-              {authNotice ? (
-                <div className="notice-box auth-message" role="status" aria-live="polite">
-                  {authNotice}
-                </div>
-              ) : null}
-
-              <form className="auth-form" onSubmit={handleAuthSubmit}>
-                <div className="field-group">
-                  <label htmlFor="auth-email">E-Mail-Adresse</label>
-                  <input
-                    id="auth-email"
-                    type="email"
-                    value={authForm.email}
-                    onChange={(event) => updateAuthForm("email", event.target.value)}
-                    autoComplete="email"
-                    placeholder="name@example.com"
-                    disabled={!isAppReady || !isAuthConfigured || isAuthSubmitting}
-                  />
-                </div>
-                <div className="field-group">
-                  <label htmlFor="auth-password">Passwort</label>
-                  <input
-                    id="auth-password"
-                    type="password"
-                    value={authForm.password}
-                    onChange={(event) => updateAuthForm("password", event.target.value)}
-                    autoComplete={authMode === "sign-in" ? "current-password" : "new-password"}
-                    placeholder="Mindestens 6 Zeichen"
-                    disabled={!isAppReady || !isAuthConfigured || isAuthSubmitting}
-                  />
-                </div>
-                <button
-                  className="primary-button"
-                  type="submit"
-                  disabled={!isAppReady || !isAuthConfigured || isAuthSubmitting}
-                >
-                  {isAuthSubmitting ? "Bitte warten..." : authMode === "sign-in" ? "Anmelden" : "Registrieren"}
-                </button>
-              </form>
-            </section>
-          ) : (
-            <>
-              <div className="transcript" ref={transcriptRef}>
-                {messages.length === 0 ? (
-                  <div className="empty-state">
-                    <svg aria-hidden="true" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="empty-state-icon" style={{ color: "var(--bmf-blue)", marginBottom: "16px", opacity: 0.8 }}><path d="M12 3v17" /><path d="M3 6h18" /><path d="M3 6l3 6h6L9 6" /><path d="M15 6l3 6h6l-3-6" /><path d="M9 21h6" /></svg>
-                    <h3>Neue Anfrage</h3>
-                    <p>Stelle eine konkrete steuerrechtliche Frage mit Sachverhalt und Zeitraum.</p>
-                  </div>
-                ) : (
-                  messages.map((message, index) => (
-                    <article className={`message ${message.role}`} key={`${message.createdAt}-${index}`}>
-                      <div className="message-header">
-                        <div className="message-avatar">
-                          {message.role === "user" ? "DU" : "FF"}
-                        </div>
-                        <div className="message-meta">
-                          <span className="sender-name">{message.role === "user" ? "Du" : "Findog/Fred"}</span>
-                          <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
-                        </div>
-                      </div>
-                      <p className="message-body">{message.content}</p>
-                    </article>
-                  ))
-                )}
-
-                {isSending ? (
-                  <article className="message assistant pending" aria-live="polite">
-                    <div className="message-header">
-                      <div className="message-avatar">FF</div>
-                      <div className="message-meta">
-                        <span className="sender-name">Findog/Fred</span>
-                      </div>
+            ) : (
+              messages.map((message, index) => (
+                <article className={`message ${message.role}`} key={`${message.createdAt}-${index}`}>
+                  <div className="message-header">
+                    <div className="message-avatar">
+                      {message.role === "user" ? "DU" : "FF"}
                     </div>
-                    <p className="message-body">Recherchiert und formuliert die Antwort...</p>
-                  </article>
-                ) : null}
-              </div>
+                    <div className="message-meta">
+                      <span className="sender-name">{message.role === "user" ? "Du" : "Findog/Fred"}</span>
+                      <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
+                    </div>
+                  </div>
+                  <p className="message-body">{message.content}</p>
+                </article>
+              ))
+            )}
 
-              <form className="composer" onSubmit={handleSubmit}>
-                <label className="sr-only" htmlFor="question">
-                  Frage
-                </label>
-                <textarea
-                  id="question"
-                  value={composer}
-                  onChange={(event) => setComposer(event.target.value)}
-                  placeholder="Frage zu BFG, EStG, UStG oder Verfahrensrecht..."
-                  rows={4}
-                />
-                <div className="composer-actions">
-                  <span>{messages.length} Nachrichten lokal für dieses Konto gespeichert</span>
-                  <button type="submit" disabled={!canSend}>
-                    {isSending ? (
-                      <>
-                        <span className="spinner" aria-hidden="true"></span>
-                        Senden...
-                      </>
-                    ) : (
-                      <>
-                        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-                        Senden
-                      </>
-                    )}
-                  </button>
+            {isSending ? (
+              <article className="message assistant pending" aria-live="polite">
+                <div className="message-header">
+                  <div className="message-avatar">FF</div>
+                  <div className="message-meta">
+                    <span className="sender-name">Findog/Fred</span>
+                  </div>
                 </div>
-              </form>
-            </>
-          )}
+                <p className="message-body">Recherchiert und formuliert die Antwort...</p>
+              </article>
+            ) : null}
+          </div>
+
+          <form className="composer" onSubmit={handleSubmit}>
+            <label className="sr-only" htmlFor="question">
+              Frage
+            </label>
+            <textarea
+              id="question"
+              value={composer}
+              onChange={(event) => setComposer(event.target.value)}
+              placeholder="Frage zu BFG, EStG, UStG oder Verfahrensrecht..."
+              rows={4}
+            />
+            <div className="composer-actions">
+              <span>{messages.length} Nachrichten lokal für dieses Konto gespeichert</span>
+              <button type="submit" disabled={!canSend}>
+                {isSending ? (
+                  <>
+                    <span className="spinner" aria-hidden="true"></span>
+                    Senden...
+                  </>
+                ) : (
+                  <>
+                    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                    Senden
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
         </section>
       </section>
     </main>

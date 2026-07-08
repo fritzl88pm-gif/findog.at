@@ -71,6 +71,34 @@ button:disabled {
   margin: 0 auto;
 }
 
+.auth-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 212, 0, 0.14), transparent 32%),
+    linear-gradient(135deg, var(--bmf-blue-deep) 0%, var(--bmf-blue-dark) 52%, var(--bg-app) 52%);
+}
+
+.auth-card-standalone {
+  flex: initial;
+  width: min(460px, 100%);
+  border: 1px solid var(--border-color);
+  border-top: 4px solid var(--accent-yellow);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.auth-card-standalone h1 {
+  margin: 0;
+  color: var(--bmf-blue-deep);
+  font-size: clamp(1.8rem, 5vw, 2.4rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
 /* Header/Hero Section */
 .hero {
   display: flex;
