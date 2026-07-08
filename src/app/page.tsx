@@ -53,6 +53,16 @@ function isChatModel(value: unknown): value is ChatModel {
   return typeof value === "string" && AVAILABLE_MODELS.includes(value as ChatModel);
 }
 
+function isProModel(model: ChatModel): boolean {
+  return model === "deepseek-v4-pro";
+}
+
+function modelLabel(model: ChatModel): string {
+  return model === "deepseek-v4-pro"
+    ? "deepseek-v4-pro (BYOK, eigener API Key)"
+    : "deepseek-v4-flash (Global, Standard)";
+}
+
 function createUuid(): string {
   const randomUuid = globalThis.crypto?.randomUUID?.();
   if (randomUuid) {
@@ -406,8 +416,8 @@ export default function Home() {
     }
     setSession(sessionData.session);
 
-    if (!settings.deepSeekApiKey.trim()) {
-      setError("DeepSeek API Key fehlt. Bitte in den Einstellungen eintragen.");
+    if (isProModel(settings.model) && !settings.deepSeekApiKey.trim()) {
+      setError("DeepSeek Pro benötigt deinen eigenen API Key. Bitte in den Einstellungen eintragen.");
       setSettingsOpen(true);
       return;
     }
@@ -430,22 +440,33 @@ export default function Home() {
         setConversationId(activeConversationId);
       }
 
+      const requestBody: {
+        deepSeekApiKey?: string;
+        model: ChatModel;
+        systemPrompt: string;
+        messages: Array<Pick<ChatMessage, "role" | "content">>;
+        conversationId: string;
+      } = {
+        model: settings.model,
+        systemPrompt: settings.systemPrompt.trim() || DEFAULT_SYSTEM_PROMPT,
+        messages: nextMessages.map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+        conversationId: activeConversationId,
+      };
+
+      if (isProModel(settings.model)) {
+        requestBody.deepSeekApiKey = settings.deepSeekApiKey.trim();
+      }
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          deepSeekApiKey: settings.deepSeekApiKey.trim(),
-          model: settings.model,
-          systemPrompt: settings.systemPrompt.trim() || DEFAULT_SYSTEM_PROMPT,
-          messages: nextMessages.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
-          conversationId: activeConversationId,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       const payload = (await response.json().catch(() => ({}))) as {
@@ -488,6 +509,8 @@ export default function Home() {
   const isAppReady = isLoaded && isAuthLoaded;
   const isAuthConfigured = isSupabaseBrowserConfigured();
   const canSend = isAppReady && Boolean(user) && composer.trim().length > 0 && !isSending;
+  const needsOwnDeepSeekKey = isProModel(settings.model);
+  const hasOwnDeepSeekKey = Boolean(settings.deepSeekApiKey.trim());
 
   if (!isAuthLoaded) {
     return (
@@ -601,14 +624,14 @@ export default function Home() {
           </p>
           <h1>Findog/Fred</h1>
           <p>
-            Deutscher Chat für österreichisches Steuerrecht mit DeepSeek BYOK und
-            BFG/WeKnora-MCP-Recherche.
+            Deutscher Chat für österreichisches Steuerrecht mit DeepSeek Flash global,
+            DeepSeek Pro BYOK und BFG/WeKnora-MCP-Recherche.
           </p>
         </div>
         <div className="status-strip" aria-label="Status">
           <span className={user ? "status ready" : "status missing"}>Auth</span>
-          <span className={settings.deepSeekApiKey.trim() ? "status ready" : "status missing"}>
-            DeepSeek
+          <span className={!needsOwnDeepSeekKey || hasOwnDeepSeekKey ? "status ready" : "status missing"}>
+            {needsOwnDeepSeekKey ? "DeepSeek Pro BYOK" : "DeepSeek Flash global"}
           </span>
           <span className="status ready">{settings.model}</span>
         </div>
@@ -633,19 +656,6 @@ export default function Home() {
           </div>
 
           <div className="field-group">
-            <label htmlFor="deepseek-key">DeepSeek API Key</label>
-            <input
-              id="deepseek-key"
-              type="password"
-              value={settings.deepSeekApiKey}
-              onChange={(event) => updateSetting("deepSeekApiKey", event.target.value)}
-              autoComplete="off"
-              placeholder="sk-..."
-            />
-            <span className="field-help">Wird nur flüchtig im React-State gehalten und nie persistent gespeichert.</span>
-          </div>
-
-          <div className="field-group">
             <label htmlFor="model">DeepSeek Modell</label>
             <select
               id="model"
@@ -654,11 +664,35 @@ export default function Home() {
             >
               {AVAILABLE_MODELS.map((model) => (
                 <option key={model} value={model}>
-                  {model}
+                  {modelLabel(model)}
                 </option>
               ))}
             </select>
+            <span className="field-help">
+              Flash ist der Standard und nutzt den globalen Server-Key. Pro ist BYOK und benötigt deinen eigenen Key.
+            </span>
           </div>
+
+          {needsOwnDeepSeekKey ? (
+            <div className="field-group">
+              <label htmlFor="deepseek-key">DeepSeek API Key für Pro</label>
+              <input
+                id="deepseek-key"
+                type="password"
+                value={settings.deepSeekApiKey}
+                onChange={(event) => updateSetting("deepSeekApiKey", event.target.value)}
+                autoComplete="off"
+                placeholder="Nur für deepseek-v4-pro"
+              />
+              <span className="field-help">
+                Wird nur flüchtig im React-State gehalten und nie persistent gespeichert.
+              </span>
+            </div>
+          ) : (
+            <div className="notice-box" role="status">
+              DeepSeek v4 Flash ist global verfügbar. Für das Standardmodell ist kein eigener API Key nötig.
+            </div>
+          )}
 
           <div className="field-group">
             <label htmlFor="system-prompt">System Prompt</label>

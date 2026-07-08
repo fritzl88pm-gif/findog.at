@@ -1,6 +1,6 @@
 # findog.at
 
-Next.js MVP for Findog/Fred, a German-language tax-law chat UI using DeepSeek BYOK and the fixed BFG/WeKnora MCP endpoint.
+Next.js MVP for Findog/Fred, a German-language tax-law chat UI using DeepSeek v4 and the fixed BFG/WeKnora MCP endpoint.
 
 ## Local Setup
 
@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`, register or sign in with Supabase Auth, and enter a DeepSeek API key in the UI. The DeepSeek key is kept only in React state for the current browser session; model and system prompt are stored in browser `localStorage`. Local chat history is scoped by the authenticated Supabase user ID. BFG/WeKnora MCP access is fixed server-side and is not configurable by users.
+Open `http://localhost:3000`, register or sign in with Supabase Auth, and use the default `deepseek-v4-flash` model through the server-side global DeepSeek key. `deepseek-v4-pro` is optional BYOK: users enter their own DeepSeek API key in Settings, and that key is kept only in React state for the current browser session. Model and system prompt are stored in browser `localStorage`. Local chat history is scoped by the authenticated Supabase user ID. BFG/WeKnora MCP access is fixed server-side and is not configurable by users.
 
 ## Environment
 
@@ -21,9 +21,13 @@ Copy `.env.example` to `.env.local` and configure Supabase Auth before using the
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Browser-safe Supabase anon key for Auth calls. Do not use a service role key here. |
 | `SUPABASE_URL` | Yes | Server-side Supabase project URL for validating Auth access tokens and chat persistence. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Server-only Supabase service role key. Never expose it to the browser. |
+| `DEEPSEEK_API_KEY` | Yes | Server-only DeepSeek API key used for the default `deepseek-v4-flash` model. Never expose it to the browser. |
+| `GLOBAL_DEEPSEEK_API_KEY` | Optional | Fallback server-only DeepSeek Flash key if `DEEPSEEK_API_KEY` is unset or blank. |
 | `BFG_MCP_BEARER_TOKEN` | Yes | Server-only bearer token for the fixed BFG/WeKnora MCP endpoint. Never expose it to the browser. |
 
-DeepSeek keys are entered by the user in the browser UI and are not configured as server environment variables. BFG/WeKnora MCP credentials are configured only as server-side deployment environment variables.
+DeepSeek uses the OpenAI-compatible base URL `https://api.deepseek.com` and `POST /chat/completions`. Supported models are `deepseek-v4-flash` and `deepseek-v4-pro`. Deprecated `deepseek-chat` and `deepseek-reasoner` must not be used.
+
+`deepseek-v4-flash` is the default for authenticated users and always uses the server-only global key. The browser does not send a user DeepSeek key for Flash. `deepseek-v4-pro` requires the user's own DeepSeek API key in Settings; that key remains browser-session only and is not persisted.
 
 ## Supabase Migration
 
@@ -40,4 +44,4 @@ npm run build
 
 ## Deployment
 
-Deploy as a standard Vercel Next.js app. Configure the Supabase env vars plus server-only `BFG_MCP_BEARER_TOKEN` in the deployment environment. Do not configure DeepSeek keys in Vercel; users bring their own DeepSeek key in the authenticated UI.
+Deploy as a standard Vercel Next.js app. Configure the Supabase env vars plus server-only `DEEPSEEK_API_KEY` (or optional fallback `GLOBAL_DEEPSEEK_API_KEY`) and `BFG_MCP_BEARER_TOKEN` in the deployment environment. Users bring their own DeepSeek key only when selecting `deepseek-v4-pro` in the authenticated UI.

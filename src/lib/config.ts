@@ -1,7 +1,7 @@
-export const DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1";
+export const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 export const BFG_MCP_ENDPOINT = "https://taxdog.cloud/mcp/bfg-query";
-export const DEFAULT_MODEL = "deepseek-chat";
-export const AVAILABLE_MODELS = ["deepseek-chat", "deepseek-reasoner"] as const;
+export const DEFAULT_MODEL = "deepseek-v4-flash";
+export const AVAILABLE_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"] as const;
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 export const MAX_REQUEST_BYTES = 100_000;
 export const MAX_MESSAGES = 20;

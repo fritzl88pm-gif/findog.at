@@ -5,7 +5,6 @@ import {
   DEFAULT_MODEL,
   DEFAULT_SYSTEM_PROMPT,
   isSupportedModel,
-  MAX_DEEPSEEK_KEY_CHARS,
   MAX_MESSAGE_CHARS,
   MAX_MESSAGES,
   MAX_REQUEST_BYTES,
@@ -15,6 +14,7 @@ import {
 } from "@/lib/config";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { type AppChatMessage } from "@/lib/deepseek";
+import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
 import { UserVisibleError } from "@/lib/errors";
 import { persistConversationTurn } from "@/lib/persistence";
 import { runAgent } from "@/lib/agent";
@@ -137,13 +137,12 @@ export async function POST(request: Request) {
     const authenticatedUser = await authenticateSupabaseRequest(request, supabase);
 
     const body = (await request.json()) as ChatRequestBody;
-    const deepSeekApiKey = asOptionalString(body.deepSeekApiKey, MAX_DEEPSEEK_KEY_CHARS, "DeepSeek API Key");
-    if (!deepSeekApiKey) {
-      throw new UserVisibleError("DeepSeek API Key fehlt. Bitte in den Einstellungen eintragen.", 400);
-    }
-
     const requestedModel = asOptionalString(body.model, 80, "Modell") ?? DEFAULT_MODEL;
     const model = isSupportedModel(requestedModel) ? requestedModel : DEFAULT_MODEL;
+    const deepSeekApiKey = resolveDeepSeekApiKey({
+      model,
+      userApiKey: typeof body.deepSeekApiKey === "string" ? body.deepSeekApiKey : undefined,
+    });
     const systemPrompt =
       asOptionalString(body.systemPrompt, MAX_SYSTEM_PROMPT_CHARS, "System Prompt") ??
       DEFAULT_SYSTEM_PROMPT;
