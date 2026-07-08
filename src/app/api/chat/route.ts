@@ -7,6 +7,8 @@ import {
   isSupportedModel,
   MAX_MESSAGE_CHARS,
   MAX_MESSAGES,
+  MAX_MULTIPART_REQUEST_BYTES,
+  MAX_PDF_UPLOAD_BYTES,
   MAX_REQUEST_BYTES,
   MAX_SYSTEM_PROMPT_CHARS,
   RATE_LIMIT_MAX_REQUESTS,
@@ -17,10 +19,12 @@ import { type AppChatMessage } from "@/lib/deepseek";
 import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
 import { UserVisibleError } from "@/lib/errors";
 import { persistConversationTurn, resolveConversationIdForClient } from "@/lib/persistence";
-import { runAgent } from "@/lib/agent";
+import { runAgent, type PdfContext } from "@/lib/agent";
+import type { AgentStep } from "@/lib/agent-steps";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getServerMcpBearerToken } from "@/lib/mcp/server-token";
 import { CHAT_STREAM_CONTENT_TYPE, encodeChatStreamEvent } from "@/lib/chat-stream";
+import { extractPdfContext } from "@/lib/pdf-context";
 
 export const runtime = "nodejs";
 
@@ -35,6 +39,17 @@ type ChatRequestBody = {
 type RateLimitEntry = {
   count: number;
   resetAt: number;
+};
+
+type PdfUpload = {
+  filename: string;
+  mimeType: "application/pdf";
+  bytes: Uint8Array;
+};
+
+type ParsedChatRequest = {
+  body: ChatRequestBody;
+  pdfUpload?: PdfUpload;
 };
 
 const rateLimit = new Map<string, RateLimitEntry>();
@@ -73,9 +88,14 @@ function enforceRateLimit(request: Request): void {
   current.count += 1;
 }
 
+function isMultipartRequest(request: Request): boolean {
+  return request.headers.get("content-type")?.toLowerCase().startsWith("multipart/form-data") ?? false;
+}
+
 function enforceRequestSize(request: Request): void {
   const contentLength = request.headers.get("content-length");
-  if (contentLength && Number(contentLength) > MAX_REQUEST_BYTES) {
+  const maxBytes = isMultipartRequest(request) ? MAX_MULTIPART_REQUEST_BYTES : MAX_REQUEST_BYTES;
+  if (contentLength && Number(contentLength) > maxBytes) {
     throw new UserVisibleError("Die Anfrage ist zu groß.", 413);
   }
 }
@@ -134,6 +154,112 @@ function parseMessages(value: unknown): AppChatMessage[] {
   return messages;
 }
 
+function sanitizePdfFilename(value: string): string {
+  const cleaned = value
+    .replace(/[\\/\0<>:"|?*]+/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+
+  return cleaned || "document.pdf";
+}
+
+function parseJsonPayload(value: unknown): ChatRequestBody {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new UserVisibleError("Die Chat-Anfrage enthält kein gültiges Payload.", 400);
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as ChatRequestBody;
+    }
+  } catch {
+    throw new UserVisibleError("Die Chat-Anfrage enthält kein gültiges JSON-Payload.", 400);
+  }
+
+  throw new UserVisibleError("Die Chat-Anfrage enthält kein gültiges JSON-Payload.", 400);
+}
+
+function isUploadedFile(value: FormDataEntryValue): value is File {
+  return typeof File !== "undefined" && value instanceof File;
+}
+
+async function parseMultipartChatRequest(request: Request): Promise<ParsedChatRequest> {
+  const formData = await request.formData();
+  const body = parseJsonPayload(formData.get("payload"));
+  const pdfFiles = formData
+    .getAll("pdf")
+    .filter((value): value is File => isUploadedFile(value) && value.size > 0);
+
+  if (pdfFiles.length === 0) {
+    return { body };
+  }
+  if (pdfFiles.length > 1) {
+    throw new UserVisibleError("Bitte nur ein PDF pro Anfrage hochladen.", 400);
+  }
+
+  const pdf = pdfFiles[0];
+  if (!pdf) {
+    return { body };
+  }
+  if (pdf.type !== "application/pdf") {
+    throw new UserVisibleError("Bitte nur PDF-Dateien hochladen.", 400);
+  }
+  if (pdf.size > MAX_PDF_UPLOAD_BYTES) {
+    throw new UserVisibleError("Das PDF ist zu groß. Maximal 50 MB sind erlaubt.", 413);
+  }
+
+  return {
+    body,
+    pdfUpload: {
+      filename: sanitizePdfFilename(pdf.name),
+      mimeType: "application/pdf",
+      bytes: new Uint8Array(await pdf.arrayBuffer()),
+    },
+  };
+}
+
+async function parseChatRequest(request: Request): Promise<ParsedChatRequest> {
+  if (isMultipartRequest(request)) {
+    return parseMultipartChatRequest(request);
+  }
+
+  return { body: (await request.json()) as ChatRequestBody };
+}
+
+async function preparePdfContext(
+  pdfUpload: PdfUpload | undefined,
+  onStep?: (step: AgentStep) => void | Promise<void>,
+): Promise<{ pdfContext?: PdfContext; initialSteps: AgentStep[] }> {
+  if (!pdfUpload) {
+    return { initialSteps: [] };
+  }
+
+  const readingStep: AgentStep = {
+    type: "pdf_context",
+    title: "PDF wird mit Gemini 3.5 Flash gelesen",
+    content: `${pdfUpload.filename} wird serverseitig über OpenRouter/Gemini ausgelesen.`,
+  };
+  await onStep?.(readingStep);
+
+  const content = await extractPdfContext(pdfUpload);
+  const extractedStep: AgentStep = {
+    type: "pdf_context",
+    title: "PDF-Kontext extrahiert",
+    content: `${pdfUpload.filename}: ${content.length.toLocaleString("de-AT")} Zeichen PDF-Kontext wurden an das gewählte Antwortmodell übergeben.`,
+  };
+  await onStep?.(extractedStep);
+
+  return {
+    pdfContext: {
+      filename: pdfUpload.filename,
+      content,
+    },
+    initialSteps: [readingStep, extractedStep],
+  };
+}
+
 export async function POST(request: Request) {
   try {
     enforceRateLimit(request);
@@ -145,7 +271,7 @@ export async function POST(request: Request) {
     }
     const authenticatedUser = await authenticateSupabaseRequest(request, supabase);
 
-    const body = (await request.json()) as ChatRequestBody;
+    const { body, pdfUpload } = await parseChatRequest(request);
     const requestedModel = asOptionalString(body.model, 80, "Modell") ?? DEFAULT_MODEL;
     const model = isSupportedModel(requestedModel) ? requestedModel : DEFAULT_MODEL;
     const deepSeekApiKey = resolveDeepSeekApiKey({
@@ -174,12 +300,15 @@ export async function POST(request: Request) {
           };
 
           try {
+            const pdfAgentContext = await preparePdfContext(pdfUpload, (step) => send({ type: "step", step }));
             const agentResult = await runAgent({
               apiKey: deepSeekApiKey,
               model,
               systemPrompt,
               messages,
               mcpBearerToken,
+              pdfContext: pdfAgentContext.pdfContext,
+              initialSteps: pdfAgentContext.initialSteps,
               onStep: (step) => send({ type: "step", step }),
             });
 
@@ -225,12 +354,15 @@ export async function POST(request: Request) {
       });
     }
 
+    const pdfAgentContext = await preparePdfContext(pdfUpload);
     const agentResult = await runAgent({
       apiKey: deepSeekApiKey,
       model,
       systemPrompt,
       messages,
       mcpBearerToken,
+      pdfContext: pdfAgentContext.pdfContext,
+      initialSteps: pdfAgentContext.initialSteps,
     });
 
     await persistConversationTurn({

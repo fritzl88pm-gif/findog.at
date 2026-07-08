@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 
 import { chatHistoryStorageKey } from "@/lib/chat/storage";
@@ -8,6 +8,7 @@ import {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
   DEFAULT_SYSTEM_PROMPT,
+  MAX_PDF_UPLOAD_BYTES,
   MAX_SYSTEM_PROMPT_CHARS,
   type ChatModel,
 } from "@/lib/config";
@@ -108,6 +109,9 @@ function normalizeAgentSteps(value: unknown): AgentStep[] {
       return [];
     }
 
+    if (item.type === "pdf_context") {
+      return [{ type: "pdf_context", title: item.title, content: item.content }];
+    }
     if (item.type === "plan") {
       return [{ type: "plan", title: item.title, content: item.content }];
     }
@@ -212,6 +216,8 @@ function pendingTextForStep(step: AgentStep): string {
   const preview = compactStatusText(step.content);
 
   switch (step.type) {
+    case "pdf_context":
+      return `${step.title}: ${preview}`;
     case "plan":
       return `Arbeitsplan erstellt: ${preview}`;
     case "tools":
@@ -292,6 +298,8 @@ async function readChatStream(
 
 function stepTypeLabel(step: AgentStep): string {
   switch (step.type) {
+    case "pdf_context":
+      return "PDF";
     case "plan":
       return "Plan";
     case "tools":
@@ -462,6 +470,7 @@ export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversationId, setConversationId] = useState("");
   const [composer, setComposer] = useState("");
+  const [selectedPdf, setSelectedPdf] = useState<File | null>(null);
   const [error, setError] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [pendingStepText, setPendingStepText] = useState(INITIAL_PENDING_TEXT);
@@ -477,6 +486,7 @@ export default function Home() {
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [historyOwnerId, setHistoryOwnerId] = useState("");
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
   const user = session?.user ?? null;
   const signedInEmail = user?.email ?? "";
 
@@ -711,6 +721,7 @@ export default function Home() {
       setConversationId("");
       setMessages([]);
       setComposer("");
+      clearPdfAttachment();
       setError("");
       setPendingStepText(INITIAL_PENDING_TEXT);
       setPendingSteps([]);
@@ -721,19 +732,50 @@ export default function Home() {
     }
   }
 
+  function clearPdfAttachment() {
+    setSelectedPdf(null);
+    if (pdfInputRef.current) {
+      pdfInputRef.current.value = "";
+    }
+  }
+
+  function handlePdfChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+    if (file.type !== "application/pdf") {
+      clearPdfAttachment();
+      setError("Bitte nur PDF-Dateien hochladen.");
+      return;
+    }
+    if (file.size > MAX_PDF_UPLOAD_BYTES) {
+      clearPdfAttachment();
+      setError("Das PDF ist zu groß. Maximal 50 MB sind erlaubt.");
+      return;
+    }
+
+    setSelectedPdf(file);
+    setError("");
+  }
+
   function clearConversation() {
     setError("");
     setMessages([]);
     setConversationId("");
     setPendingStepText(INITIAL_PENDING_TEXT);
     setPendingSteps([]);
+    clearPdfAttachment();
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const question = composer.trim();
-    if (!question || isSending) {
+    const attachedPdf = selectedPdf;
+    if ((!question && !attachedPdf) || isSending) {
       return;
     }
 
@@ -756,9 +798,13 @@ export default function Home() {
       return;
     }
 
+    const userContent = attachedPdf
+      ? [question || "Bitte analysiere das hochgeladene PDF.", `PDF-Anhang: ${attachedPdf.name}`].join("\n\n")
+      : question;
+
     const userMessage: ChatMessage = {
       role: "user",
-      content: question,
+      content: userContent,
       createdAt: new Date().toISOString(),
     };
     const nextMessages = [...messages, userMessage];
@@ -793,15 +839,26 @@ export default function Home() {
         requestBody.deepSeekApiKey = settings.deepSeekApiKey.trim();
       }
 
-      const response = await fetch("/api/chat", {
+      const requestHeaders: Record<string, string> = {
+        Accept: CHAT_STREAM_CONTENT_TYPE,
+        Authorization: `Bearer ${accessToken}`,
+      };
+      const requestInit: RequestInit = {
         method: "POST",
-        headers: {
-          Accept: CHAT_STREAM_CONTENT_TYPE,
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
+        headers: requestHeaders,
+      };
+
+      if (attachedPdf) {
+        const formData = new FormData();
+        formData.append("payload", JSON.stringify(requestBody));
+        formData.append("pdf", attachedPdf, attachedPdf.name);
+        requestInit.body = formData;
+      } else {
+        requestHeaders["Content-Type"] = "application/json";
+        requestInit.body = JSON.stringify(requestBody);
+      }
+
+      const response = await fetch("/api/chat", requestInit);
 
       const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
       const payload = contentType.includes(CHAT_STREAM_CONTENT_TYPE)
@@ -825,6 +882,9 @@ export default function Home() {
 
       if (typeof payload.conversationId === "string" && payload.conversationId.trim()) {
         setConversationId(payload.conversationId.trim());
+      }
+      if (attachedPdf) {
+        clearPdfAttachment();
       }
 
       const steps = normalizeAgentSteps(payload.steps);
@@ -853,7 +913,7 @@ export default function Home() {
 
   const isAppReady = isLoaded && isAuthLoaded;
   const isAuthConfigured = isSupabaseBrowserConfigured();
-  const canSend = isAppReady && Boolean(user) && composer.trim().length > 0 && !isSending;
+  const canSend = isAppReady && Boolean(user) && (composer.trim().length > 0 || Boolean(selectedPdf)) && !isSending;
   const needsOwnDeepSeekKey = isProModel(settings.model);
 
   if (!isAuthLoaded) {
@@ -1209,6 +1269,31 @@ export default function Home() {
               placeholder="Frage zu BFG, EStG, UStG oder Verfahrensrecht..."
               rows={3}
             />
+            <div className="attachment-row">
+              <input
+                ref={pdfInputRef}
+                className="sr-only"
+                id="pdf-upload"
+                type="file"
+                accept="application/pdf"
+                onChange={handlePdfChange}
+                disabled={isSending}
+              />
+              <label className="attachment-button" htmlFor="pdf-upload" aria-disabled={isSending}>
+                PDF anhängen
+              </label>
+              {selectedPdf ? (
+                <span className="attachment-chip">
+                  <span title={selectedPdf.name}>{selectedPdf.name}</span>
+                  <small>{(selectedPdf.size / 1_048_576).toLocaleString("de-AT", { maximumFractionDigits: 1 })} MB</small>
+                  <button type="button" onClick={clearPdfAttachment} disabled={isSending} aria-label="PDF entfernen">
+                    Entfernen
+                  </button>
+                </span>
+              ) : (
+                <span className="attachment-help">Gemini 3.5 Flash liest PDFs/OCR serverseitig aus.</span>
+              )}
+            </div>
             <div className="composer-actions">
               <span>{messages.length} Nachrichten lokal für dieses Konto gespeichert</span>
               <button type="submit" disabled={!canSend}>

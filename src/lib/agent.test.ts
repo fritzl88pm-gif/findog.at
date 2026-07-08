@@ -243,6 +243,66 @@ describe("runAgent", () => {
     );
   });
 
+  it("passes extracted PDF context into the selected answer model", async () => {
+    mockMcpSession();
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        content: "1. PDF-Sachverhalt prüfen",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Vorläufige Antwort ohne Werkzeuge.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Selbstcheck: PDF wurde berücksichtigt.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Finale Antwort mit PDF-Kontext.",
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      apiKey: "test-key",
+      model: "deepseek-v4-pro",
+      systemPrompt: "System",
+      messages: [{ role: "user", content: "Was steht im Bescheid?" }],
+      mcpBearerToken: "mcp-token",
+      pdfContext: {
+        filename: "Bescheid.pdf",
+        content: "## Seite 1\nDer Bescheid nennt Einkommensteuer 2024.",
+      },
+      initialSteps: [
+        {
+          type: "pdf_context",
+          title: "PDF-Kontext extrahiert",
+          content: "Bescheid.pdf wurde serverseitig ausgelesen.",
+        },
+      ],
+    });
+
+    expect(result.answer).toBe("Finale Antwort mit PDF-Kontext.");
+    expect(result.steps[0]).toMatchObject({
+      type: "pdf_context",
+      title: "PDF-Kontext extrahiert",
+    });
+    expect(mockedChatCompletion.mock.calls.every((call) => call[0].model === "deepseek-v4-pro")).toBe(
+      true,
+    );
+    expect(mockedChatCompletion.mock.calls[0]?.[0].messages[0]?.content).toContain(
+      "Vom Nutzer hochgeladenes PDF",
+    );
+    expect(mockedChatCompletion.mock.calls[0]?.[0].messages[0]?.content).toContain("Bescheid.pdf");
+    expect(mockedChatCompletion.mock.calls[0]?.[0].messages[0]?.content).toContain(
+      "Einkommensteuer 2024",
+    );
+    expect(mockedChatCompletion.mock.calls.at(-1)?.[0].messages[0]?.content).toContain(
+      "Vom Nutzer hochgeladenes PDF",
+    );
+    expectProtocolSafeMessages();
+  });
+
   it("synthesizes a final answer without tools after the tool loop reaches its limit", async () => {
     const { callTool } = mockMcpSession();
 

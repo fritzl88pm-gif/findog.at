@@ -24,7 +24,14 @@ export function isAgentStep(value: unknown): value is AgentStep {
     return false;
   }
 
-  if (value.type === "plan" || value.type === "progress" || value.type === "finalize" || value.type === "self_check" || value.type === "answer") {
+  if (
+    value.type === "pdf_context" ||
+    value.type === "plan" ||
+    value.type === "progress" ||
+    value.type === "finalize" ||
+    value.type === "self_check" ||
+    value.type === "answer"
+  ) {
     return true;
   }
   if (value.type === "tools") {
