@@ -14,10 +14,12 @@ import {
   RATE_LIMIT_MAX_REQUESTS,
   RATE_LIMIT_WINDOW_MS,
 } from "@/lib/config";
+import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { type AppChatMessage } from "@/lib/deepseek";
 import { UserVisibleError } from "@/lib/errors";
 import { persistConversationTurn } from "@/lib/persistence";
 import { runAgent } from "@/lib/agent";
+import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
@@ -28,7 +30,6 @@ type ChatRequestBody = {
   systemPrompt?: unknown;
   messages?: unknown;
   conversationId?: unknown;
-  clientId?: unknown;
 };
 
 type RateLimitEntry = {
@@ -37,6 +38,14 @@ type RateLimitEntry = {
 };
 
 const rateLimit = new Map<string, RateLimitEntry>();
+
+function pruneExpiredRateLimitEntries(now: number): void {
+  for (const [key, entry] of rateLimit) {
+    if (entry.resetAt <= now) {
+      rateLimit.delete(key);
+    }
+  }
+}
 
 function clientKey(request: Request): string {
   return (
@@ -48,6 +57,7 @@ function clientKey(request: Request): string {
 
 function enforceRateLimit(request: Request): void {
   const now = Date.now();
+  pruneExpiredRateLimitEntries(now);
   const key = clientKey(request);
   const current = rateLimit.get(key);
 
@@ -121,6 +131,12 @@ export async function POST(request: Request) {
     enforceRateLimit(request);
     enforceRequestSize(request);
 
+    const supabase = getSupabaseServerClient();
+    if (!supabase) {
+      throw new UserVisibleError("Anmeldung kann derzeit nicht geprüft werden.", 503);
+    }
+    const authenticatedUser = await authenticateSupabaseRequest(request, supabase);
+
     const body = (await request.json()) as ChatRequestBody;
     const deepSeekApiKey = asOptionalString(body.deepSeekApiKey, MAX_DEEPSEEK_KEY_CHARS, "DeepSeek API Key");
     if (!deepSeekApiKey) {
@@ -146,7 +162,7 @@ export async function POST(request: Request) {
     const latestUserMessage = messages.findLast((message) => message.role === "user");
     await persistConversationTurn({
       conversationId: asOptionalString(body.conversationId, 80, "Conversation ID"),
-      clientId: asOptionalString(body.clientId, 80, "Client ID"),
+      clientId: authenticatedUser.id,
       userMessage: latestUserMessage?.content,
       assistantMessage: answer,
     });

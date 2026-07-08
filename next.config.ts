@@ -1,5 +1,34 @@
 import type { NextConfig } from "next";
 
+const supabaseConnectSources = [
+  "https://*.supabase.co",
+  "wss://*.supabase.co",
+  "http://localhost:54321",
+  "ws://localhost:54321",
+  "http://127.0.0.1:54321",
+  "ws://127.0.0.1:54321",
+];
+
+const configuredSupabaseOrigin = (() => {
+  try {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    return url ? new URL(url).origin : null;
+  } catch {
+    return null;
+  }
+})();
+
+if (configuredSupabaseOrigin && !supabaseConnectSources.includes(configuredSupabaseOrigin)) {
+  supabaseConnectSources.push(configuredSupabaseOrigin);
+}
+
+if (configuredSupabaseOrigin?.startsWith("https://")) {
+  const configuredSupabaseWebSocketOrigin = configuredSupabaseOrigin.replace("https://", "wss://");
+  if (!supabaseConnectSources.includes(configuredSupabaseWebSocketOrigin)) {
+    supabaseConnectSources.push(configuredSupabaseWebSocketOrigin);
+  }
+}
+
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   async headers() {
@@ -10,7 +39,7 @@ const nextConfig: NextConfig = {
           {
             key: "Content-Security-Policy",
             value:
-              "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+              `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ${supabaseConnectSources.join(" ")}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`,
           },
           { key: "Referrer-Policy", value: "same-origin" },
           { key: "X-Content-Type-Options", value: "nosniff" },
