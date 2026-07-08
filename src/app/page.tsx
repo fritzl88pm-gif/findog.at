@@ -639,7 +639,6 @@ export default function Home() {
   const isAuthConfigured = isSupabaseBrowserConfigured();
   const canSend = isAppReady && Boolean(user) && composer.trim().length > 0 && !isSending;
   const needsOwnDeepSeekKey = isProModel(settings.model);
-  const hasOwnDeepSeekKey = Boolean(settings.deepSeekApiKey.trim());
 
   if (!isAuthLoaded) {
     return (
@@ -741,167 +740,197 @@ export default function Home() {
 
   return (
     <main className="app-shell">
-      <header className="hero" aria-label="Findog/Fred">
-        <div className="hero-copy">
-          <p className="eyebrow">
-            <span className="austria-flag" aria-hidden="true">
-              <span className="red"></span>
-              <span className="white"></span>
-              <span className="red"></span>
-            </span>
-            findog.at
-          </p>
-          <h1>Findog/Fred</h1>
-          <p>
-            Deutscher Chat für österreichisches Steuerrecht mit DeepSeek Flash global,
-            DeepSeek Pro BYOK und BFG/WeKnora-MCP-Recherche.
-          </p>
-        </div>
-        <div className="status-strip" aria-label="Status">
-          <span className={user ? "status ready" : "status missing"}>Auth</span>
-          <span className={!needsOwnDeepSeekKey || hasOwnDeepSeekKey ? "status ready" : "status missing"}>
-            {needsOwnDeepSeekKey ? "DeepSeek Pro BYOK" : "DeepSeek Flash global"}
-          </span>
-          <span className="status ready">{settings.model}</span>
-        </div>
-      </header>
+      {settingsOpen && (
+        <div
+          className="sidebar-backdrop"
+          onClick={() => setSettingsOpen(false)}
+          aria-hidden="true"
+        />
+      )}
 
-      <section className={`workspace ${settingsOpen ? "has-sidebar" : ""}`} aria-label="Arbeitsbereich">
-        <aside className={settingsOpen ? "settings-panel open" : "settings-panel"}>
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Einstellungen</p>
-              <h2>Lokale Konfiguration</h2>
-            </div>
+      {!settingsOpen && (
+        <button
+          className="mobile-menu-toggle"
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          aria-label="Menü öffnen"
+          title="Menü öffnen"
+        >
+          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+        </button>
+      )}
+
+      <aside className={`sidebar ${settingsOpen ? "expanded" : "collapsed"}`} aria-label="Seitenmenü">
+        <div className="sidebar-header">
+          {settingsOpen ? (
+            <>
+              <div className="sidebar-brand">
+                <span className="austria-flag" aria-hidden="true">
+                  <span className="red"></span>
+                  <span className="white"></span>
+                  <span className="red"></span>
+                </span>
+                <span className="brand-text">findog.at</span>
+              </div>
+              <button
+                className="icon-button toggle-sidebar-btn"
+                type="button"
+                onClick={() => setSettingsOpen(false)}
+                aria-label="Menü einklappen"
+                title="Menü einklappen"
+              >
+                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+              </button>
+            </>
+          ) : (
             <button
-              className="icon-button close-sidebar"
+              className="icon-button toggle-sidebar-btn rail-btn"
               type="button"
-              onClick={() => setSettingsOpen(false)}
-              aria-label="Einstellungen ausblenden"
-              title="Einstellungen ausblenden"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Menü ausklappen"
+              title="Menü ausklappen"
             >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
             </button>
-          </div>
+          )}
+        </div>
 
-          <div className="field-group">
-            <label htmlFor="model">DeepSeek Modell</label>
-            <select
-              id="model"
-              value={settings.model}
-              onChange={(event) => updateSetting("model", event.target.value as ChatModel)}
-            >
-              {AVAILABLE_MODELS.map((model) => (
-                <option key={model} value={model}>
-                  {modelLabel(model)}
-                </option>
-              ))}
-            </select>
-            <span className="field-help">
-              Flash ist der Standard und nutzt den globalen Server-Key. Pro ist BYOK und benötigt deinen eigenen Key.
-            </span>
-          </div>
-
-          {needsOwnDeepSeekKey ? (
+        {settingsOpen ? (
+          <div className="sidebar-content">
             <div className="field-group">
-              <label htmlFor="deepseek-key">DeepSeek API Key für Pro</label>
-              <input
-                id="deepseek-key"
-                type="password"
-                value={settings.deepSeekApiKey}
-                onChange={(event) => updateSetting("deepSeekApiKey", event.target.value)}
-                autoComplete="off"
-                placeholder="Nur für deepseek-v4-pro"
-              />
+              <label htmlFor="model">DeepSeek Modell</label>
+              <select
+                id="model"
+                value={settings.model}
+                onChange={(event) => updateSetting("model", event.target.value as ChatModel)}
+              >
+                {AVAILABLE_MODELS.map((model) => (
+                  <option key={model} value={model}>
+                    {modelLabel(model)}
+                  </option>
+                ))}
+              </select>
               <span className="field-help">
-                Wird nur flüchtig im React-State gehalten und nie persistent gespeichert.
+                Flash ist der Standard und nutzt den globalen Server-Key. Pro ist BYOK und benötigt deinen eigenen Key.
               </span>
             </div>
-          ) : (
-            <div className="notice-box" role="status">
-              DeepSeek v4 Flash ist global verfügbar. Für das Standardmodell ist kein eigener API Key nötig.
-            </div>
-          )}
 
-          <div className="field-group">
-            <div className="field-label-row">
-              <label htmlFor="system-prompt">System Prompt</label>
-              <button
-                className="secondary-button compact-button"
-                type="button"
-                onClick={() => updateSetting("systemPrompt", DEFAULT_SYSTEM_PROMPT)}
-              >
-                Auf Standard zurücksetzen
-              </button>
-            </div>
-            <textarea
-              id="system-prompt"
-              value={settings.systemPrompt}
-              onChange={(event) => updateSetting("systemPrompt", event.target.value)}
-              maxLength={MAX_SYSTEM_PROMPT_CHARS}
-              rows={12}
-            />
-            <span className="field-help">
-              {settings.systemPrompt.length.toLocaleString("de-AT")} /{" "}
-              {MAX_SYSTEM_PROMPT_CHARS.toLocaleString("de-AT")} Zeichen
-            </span>
-          </div>
+            {needsOwnDeepSeekKey ? (
+              <div className="field-group">
+                <label htmlFor="deepseek-key">DeepSeek API Key für Pro</label>
+                <input
+                  id="deepseek-key"
+                  type="password"
+                  value={settings.deepSeekApiKey}
+                  onChange={(event) => updateSetting("deepSeekApiKey", event.target.value)}
+                  autoComplete="off"
+                  placeholder="Nur für deepseek-v4-pro"
+                />
+                <span className="field-help">
+                  Wird nur flüchtig im React-State gehalten und nie persistent gespeichert.
+                </span>
+              </div>
+            ) : (
+              <div className="notice-box" role="status">
+                DeepSeek v4 Flash ist global verfügbar. Für das Standardmodell ist kein eigener API Key nötig.
+              </div>
+            )}
 
-          <button
-            className="secondary-button danger-button"
-            type="button"
-            onClick={clearConversation}
-            disabled={!user}
-          >
-            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-            Verlauf leeren
-          </button>
-        </aside>
-
-        <section className="chat-panel">
-          <div className="chat-toolbar">
-            <div>
-              <p className="eyebrow">Steuerrechts-Chat</p>
-              <h2>Recherche & Analyse</h2>
-            </div>
-            <div className="toolbar-actions">
-              {user ? (
-                <>
-                  <div className="signed-in-user">
-                    <span>Angemeldet als</span>
-                    <strong>{signedInEmail}</strong>
-                  </div>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={handleSignOut}
-                    disabled={isAuthSubmitting}
-                  >
-                    Abmelden
-                  </button>
-                </>
-              ) : null}
-              {!settingsOpen && (
+            <div className="field-group">
+              <div className="field-label-row">
+                <label htmlFor="system-prompt">System Prompt</label>
                 <button
-                  className="secondary-button"
+                  className="secondary-button compact-button"
                   type="button"
-                  onClick={() => setSettingsOpen(true)}
-                  title="Einstellungen anzeigen"
+                  onClick={() => updateSetting("systemPrompt", DEFAULT_SYSTEM_PROMPT)}
                 >
-                  <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                  Einstellungen
+                  Auf Standard zurücksetzen
                 </button>
-              )}
+              </div>
+              <textarea
+                id="system-prompt"
+                value={settings.systemPrompt}
+                onChange={(event) => updateSetting("systemPrompt", event.target.value)}
+                maxLength={MAX_SYSTEM_PROMPT_CHARS}
+                rows={12}
+              />
+              <span className="field-help">
+                {settings.systemPrompt.length.toLocaleString("de-AT")} /{" "}
+                {MAX_SYSTEM_PROMPT_CHARS.toLocaleString("de-AT")} Zeichen
+              </span>
             </div>
+
+            <button
+              className="secondary-button danger-button"
+              type="button"
+              onClick={clearConversation}
+              disabled={!user}
+            >
+              <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+              Verlauf leeren
+            </button>
           </div>
+        ) : (
+          <div className="rail-content">
+            <button
+              className="icon-button rail-icon-btn"
+              type="button"
+              onClick={clearConversation}
+              disabled={!user}
+              title="Verlauf leeren"
+              aria-label="Verlauf leeren"
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            </button>
+            <button
+              className="icon-button rail-icon-btn"
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              title="Einstellungen einblenden"
+              aria-label="Einstellungen einblenden"
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            </button>
+          </div>
+        )}
 
-          {error ? (
-            <div className="error-box" role="alert" aria-live="polite">
-              {error}
-            </div>
-          ) : null}
+        <div className="sidebar-footer">
+          {settingsOpen ? (
+            <>
+              <div className="user-profile">
+                <span className="user-email-label">Angemeldet als</span>
+                <span className="user-email" title={signedInEmail}>{signedInEmail}</span>
+              </div>
+              <button
+                className="secondary-button sidebar-signout-btn"
+                type="button"
+                onClick={handleSignOut}
+                disabled={isAuthSubmitting}
+                title="Abmelden"
+                aria-label="Abmelden"
+              >
+                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                Abmelden
+              </button>
+            </>
+          ) : (
+            <button
+              className="icon-button rail-icon-btn sidebar-signout-btn"
+              type="button"
+              onClick={handleSignOut}
+              disabled={isAuthSubmitting}
+              title="Abmelden"
+              aria-label="Abmelden"
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+            </button>
+          )}
+        </div>
+      </aside>
 
-          <div className="transcript" ref={transcriptRef}>
+      <section className="chat-panel">
+        <div className="transcript" ref={transcriptRef}>
+          <div className="transcript-content">
             {messages.length === 0 ? (
               <div className="empty-state">
                 <svg aria-hidden="true" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="empty-state-icon" style={{ color: "var(--bmf-blue)", marginBottom: "16px", opacity: 0.8 }}><path d="M12 3v17" /><path d="M3 6h18" /><path d="M3 6l3 6h6L9 6" /><path d="M15 6l3 6h6l-3-6" /><path d="M9 21h6" /></svg>
@@ -942,7 +971,14 @@ export default function Home() {
               </article>
             ) : null}
           </div>
+        </div>
 
+        <div className="composer-container">
+          {error ? (
+            <div className="error-box" role="alert" aria-live="polite" style={{ maxWidth: "800px", margin: "0 auto 12px" }}>
+              {error}
+            </div>
+          ) : null}
           <form className="composer" onSubmit={handleSubmit}>
             <label className="sr-only" htmlFor="question">
               Frage
@@ -952,7 +988,7 @@ export default function Home() {
               value={composer}
               onChange={(event) => setComposer(event.target.value)}
               placeholder="Frage zu BFG, EStG, UStG oder Verfahrensrecht..."
-              rows={4}
+              rows={3}
             />
             <div className="composer-actions">
               <span>{messages.length} Nachrichten lokal für dieses Konto gespeichert</span>
@@ -971,7 +1007,7 @@ export default function Home() {
               </button>
             </div>
           </form>
-        </section>
+        </div>
       </section>
     </main>
   );
