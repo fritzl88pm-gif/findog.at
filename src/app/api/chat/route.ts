@@ -20,6 +20,7 @@ import { persistConversationTurn, resolveConversationIdForClient } from "@/lib/p
 import { runAgent } from "@/lib/agent";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getServerMcpBearerToken } from "@/lib/mcp/server-token";
+import { CHAT_STREAM_CONTENT_TYPE, encodeChatStreamEvent } from "@/lib/chat-stream";
 
 export const runtime = "nodejs";
 
@@ -77,6 +78,14 @@ function enforceRequestSize(request: Request): void {
   if (contentLength && Number(contentLength) > MAX_REQUEST_BYTES) {
     throw new UserVisibleError("Die Anfrage ist zu groß.", 413);
   }
+}
+
+function wantsStreamingResponse(request: Request): boolean {
+  return request.headers
+    .get("accept")
+    ?.toLowerCase()
+    .split(",")
+    .some((value) => value.trim().startsWith(CHAT_STREAM_CONTENT_TYPE)) ?? false;
 }
 
 function asOptionalString(value: unknown, maxLength: number, label: string): string | undefined {
@@ -154,6 +163,68 @@ export async function POST(request: Request) {
       supabase,
     });
 
+    const latestUserMessage = messages.findLast((message) => message.role === "user");
+
+    if (wantsStreamingResponse(request)) {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const send = (event: Parameters<typeof encodeChatStreamEvent>[0]) => {
+            controller.enqueue(encoder.encode(encodeChatStreamEvent(event)));
+          };
+
+          try {
+            const agentResult = await runAgent({
+              apiKey: deepSeekApiKey,
+              model,
+              systemPrompt,
+              messages,
+              mcpBearerToken,
+              onStep: (step) => send({ type: "step", step }),
+            });
+
+            await persistConversationTurn({
+              conversationId,
+              clientId: authenticatedUser.id,
+              userMessage: latestUserMessage?.content,
+              assistantMessage: agentResult.answer,
+            });
+
+            send({
+              type: "final",
+              answer: agentResult.answer,
+              steps: agentResult.steps,
+              tools: agentResult.tools,
+              conversationId,
+              model,
+              availableModels: AVAILABLE_MODELS,
+            });
+          } catch (streamError) {
+            if (!(streamError instanceof UserVisibleError)) {
+              console.error("Chat stream failed");
+            }
+            send({
+              type: "error",
+              error:
+                streamError instanceof UserVisibleError
+                  ? streamError.message
+                  : "Unerwarteter Serverfehler. Bitte später erneut versuchen.",
+            });
+          } finally {
+            controller.close();
+          }
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          "Content-Type": `${CHAT_STREAM_CONTENT_TYPE}; charset=utf-8`,
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
+        },
+      });
+    }
+
     const agentResult = await runAgent({
       apiKey: deepSeekApiKey,
       model,
@@ -162,7 +233,6 @@ export async function POST(request: Request) {
       mcpBearerToken,
     });
 
-    const latestUserMessage = messages.findLast((message) => message.role === "user");
     await persistConversationTurn({
       conversationId,
       clientId: authenticatedUser.id,

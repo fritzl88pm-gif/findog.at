@@ -181,6 +181,68 @@ describe("runAgent", () => {
     expectProtocolSafeMessages();
   });
 
+  it("notifies callers whenever a visible agent step is added", async () => {
+    mockMcpSession();
+    const onStep = vi.fn();
+
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        content: "1. Rechtsgrundlage prüfen",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Ich recherchiere.",
+        toolCalls: [
+          {
+            id: "call-1",
+            name: "hybrid_search",
+            arguments: JSON.stringify({ query: "Pendlerpauschale" }),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        content: "- ~~Rechtsgrundlage prüfen~~",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Die Recherche ist abgeschlossen.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Selbstcheck: erledigt.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Finale Antwort.",
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      apiKey: "test-key",
+      model: "deepseek-v4-flash",
+      systemPrompt: "System",
+      messages: [{ role: "user", content: "Frage" }],
+      mcpBearerToken: "mcp-token",
+      onStep,
+    });
+
+    expect(onStep.mock.calls.map(([step]) => step.type)).toEqual(
+      result.steps.map((step) => step.type),
+    );
+    expect(onStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "tool_call",
+        title: "Werkzeugaufruf: hybrid_search",
+      }),
+    );
+    expect(onStep).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        type: "answer",
+        content: "Finale Antwort.",
+      }),
+    );
+  });
+
   it("synthesizes a final answer without tools after the tool loop reaches its limit", async () => {
     const { callTool } = mockMcpSession();
 

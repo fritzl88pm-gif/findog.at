@@ -12,10 +12,12 @@ import {
   type ChatModel,
 } from "@/lib/config";
 import type { AgentStep } from "@/lib/agent-steps";
+import { parseRichAnswer, type RichBlock, type RichInline } from "@/lib/answer-rendering";
 import {
   getSupabaseBrowserClient,
   isSupabaseBrowserConfigured,
 } from "@/lib/supabase/browser";
+import { CHAT_STREAM_CONTENT_TYPE, parseChatStreamLine } from "@/lib/chat-stream";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -44,7 +46,15 @@ type AuthForm = {
   password: string;
 };
 
+type ChatResponsePayload = {
+  answer?: unknown;
+  error?: unknown;
+  steps?: unknown;
+  conversationId?: unknown;
+};
+
 const SETTINGS_STORAGE_KEY = "findog.settings.v1";
+const INITIAL_PENDING_TEXT = "Verbindung zum Rechercheagenten wird aufgebaut...";
 
 const DEFAULT_SETTINGS: Settings = {
   deepSeekApiKey: "",
@@ -189,6 +199,97 @@ function formatTime(value: string): string {
   }).format(date);
 }
 
+function compactStatusText(value: string, maxLength = 220): string {
+  const compacted = value.replace(/\s+/g, " ").trim();
+  if (compacted.length <= maxLength) {
+    return compacted;
+  }
+
+  return `${compacted.slice(0, maxLength).trimEnd()}...`;
+}
+
+function pendingTextForStep(step: AgentStep): string {
+  const preview = compactStatusText(step.content);
+
+  switch (step.type) {
+    case "plan":
+      return `Arbeitsplan erstellt: ${preview}`;
+    case "tools":
+      return preview || step.title;
+    case "tool_call":
+      return `${step.title}: ${compactStatusText(step.content.replace(/^Argumente:\s*/i, ""))}`;
+    case "tool_result":
+      return `${step.title}: ${preview}`;
+    case "progress":
+      return `Fortschritt aktualisiert: ${preview}`;
+    case "finalize":
+      return "Recherche abgeschlossen. Die finale Antwort wird vorbereitet.";
+    case "self_check":
+      return `Selbstcheck: ${preview}`;
+    case "answer":
+      return "Finale Antwort wird übernommen.";
+  }
+}
+
+async function readChatStream(
+  response: Response,
+  onStep: (step: AgentStep) => void,
+): Promise<ChatResponsePayload> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("Der Antwortstream konnte nicht gelesen werden.");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalPayload: ChatResponsePayload | null = null;
+
+  const processLine = (line: string) => {
+    const event = parseChatStreamLine(line);
+    if (!event) {
+      return;
+    }
+
+    if (event.type === "step") {
+      onStep(event.step);
+      return;
+    }
+
+    if (event.type === "error") {
+      throw new Error(event.error || "Die Streaming-Antwort konnte nicht verarbeitet werden.");
+    }
+
+    finalPayload = {
+      answer: event.answer,
+      steps: event.steps,
+      conversationId: event.conversationId,
+    };
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      processLine(line);
+    }
+  }
+
+  buffer += decoder.decode();
+  processLine(buffer);
+
+  if (!finalPayload) {
+    throw new Error("Der Antwortstream wurde ohne finale Antwort beendet.");
+  }
+
+  return finalPayload;
+}
+
 function stepTypeLabel(step: AgentStep): string {
   switch (step.type) {
     case "plan":
@@ -231,6 +332,107 @@ function renderStepContent(content: string): ReactNode {
   return nodes.length > 0 ? nodes : content;
 }
 
+function renderRichInline(nodes: RichInline[], keyPrefix: string): ReactNode[] {
+  return nodes.map((node, index) => {
+    const key = `${keyPrefix}-${index}`;
+
+    if (node.type === "text") {
+      return <span key={key}>{node.text}</span>;
+    }
+    if (node.type === "strong") {
+      return <strong key={key}>{renderRichInline(node.children, key)}</strong>;
+    }
+    if (node.type === "code") {
+      return <code key={key}>{node.text}</code>;
+    }
+    return <mark key={key}>{renderRichInline(node.children, key)}</mark>;
+  });
+}
+
+function renderRichBlock(block: RichBlock, index: number): ReactNode {
+  if (block.type === "heading") {
+    const HeadingTag = `h${block.level}` as "h2" | "h3" | "h4";
+    return (
+      <HeadingTag key={`heading-${index}`}>
+        {renderRichInline(block.children, `heading-${index}`)}
+      </HeadingTag>
+    );
+  }
+
+  if (block.type === "paragraph") {
+    return <p key={`paragraph-${index}`}>{renderRichInline(block.children, `paragraph-${index}`)}</p>;
+  }
+
+  if (block.type === "unordered-list") {
+    return (
+      <ul key={`unordered-list-${index}`}>
+        {block.items.map((item, itemIndex) => (
+          <li key={`unordered-list-${index}-${itemIndex}`}>
+            {renderRichInline(item, `unordered-list-${index}-${itemIndex}`)}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  if (block.type === "ordered-list") {
+    return (
+      <ol key={`ordered-list-${index}`}>
+        {block.items.map((item, itemIndex) => (
+          <li key={`ordered-list-${index}-${itemIndex}`}>
+            {renderRichInline(item, `ordered-list-${index}-${itemIndex}`)}
+          </li>
+        ))}
+      </ol>
+    );
+  }
+
+  if (block.type === "table") {
+    return (
+      <div className="answer-table-scroll" key={`table-${index}`}>
+        <table>
+          <thead>
+            <tr>
+              {block.headers.map((cell, cellIndex) => (
+                <th key={`table-${index}-head-${cellIndex}`} scope="col">
+                  {renderRichInline(cell, `table-${index}-head-${cellIndex}`)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {block.rows.map((row, rowIndex) => (
+              <tr key={`table-${index}-row-${rowIndex}`}>
+                {row.map((cell, cellIndex) => (
+                  <td key={`table-${index}-row-${rowIndex}-${cellIndex}`}>
+                    {renderRichInline(cell, `table-${index}-row-${rowIndex}-${cellIndex}`)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  return (
+    <blockquote className="answer-callout" key={`blockquote-${index}`}>
+      {renderRichInline(block.children, `blockquote-${index}`)}
+    </blockquote>
+  );
+}
+
+function RichAnswer({ content }: { content: string }) {
+  const blocks = parseRichAnswer(content);
+
+  if (blocks.length === 0) {
+    return <p className="message-body"></p>;
+  }
+
+  return <div className="answer-content">{blocks.map(renderRichBlock)}</div>;
+}
+
 function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
   if (steps.length === 0) {
     return null;
@@ -262,6 +464,8 @@ export default function Home() {
   const [composer, setComposer] = useState("");
   const [error, setError] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [pendingStepText, setPendingStepText] = useState(INITIAL_PENDING_TEXT);
+  const [pendingSteps, setPendingSteps] = useState<AgentStep[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
@@ -358,6 +562,8 @@ export default function Home() {
         setMessages([]);
         setComposer("");
         setIsSending(false);
+        setPendingStepText(INITIAL_PENDING_TEXT);
+        setPendingSteps([]);
         return;
       }
 
@@ -400,7 +606,7 @@ export default function Home() {
       top: transcriptRef.current.scrollHeight,
       behavior: prefersReducedMotion ? "auto" : "smooth",
     });
-  }, [isSending, messages]);
+  }, [isSending, messages, pendingStepText, pendingSteps]);
 
   function updateSetting<Key extends keyof Settings>(key: Key, value: Settings[Key]) {
     setSettings((current) => ({
@@ -506,6 +712,8 @@ export default function Home() {
       setMessages([]);
       setComposer("");
       setError("");
+      setPendingStepText(INITIAL_PENDING_TEXT);
+      setPendingSteps([]);
     } catch {
       setAuthError("Abmeldung fehlgeschlagen. Bitte erneut versuchen.");
     } finally {
@@ -517,6 +725,8 @@ export default function Home() {
     setError("");
     setMessages([]);
     setConversationId("");
+    setPendingStepText(INITIAL_PENDING_TEXT);
+    setPendingSteps([]);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -556,6 +766,8 @@ export default function Home() {
     setComposer("");
     setError("");
     setIsSending(true);
+    setPendingStepText(INITIAL_PENDING_TEXT);
+    setPendingSteps([]);
     setMessages(nextMessages);
 
     try {
@@ -584,18 +796,20 @@ export default function Home() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
+          Accept: CHAT_STREAM_CONTENT_TYPE,
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(requestBody),
       });
 
-      const payload = (await response.json().catch(() => ({}))) as {
-        answer?: unknown;
-        error?: unknown;
-        steps?: unknown;
-        conversationId?: unknown;
-      };
+      const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+      const payload = contentType.includes(CHAT_STREAM_CONTENT_TYPE)
+        ? await readChatStream(response, (step) => {
+            setPendingSteps((current) => [...current, step]);
+            setPendingStepText(pendingTextForStep(step));
+          })
+        : ((await response.json().catch(() => ({}))) as ChatResponsePayload);
 
       if (!response.ok) {
         throw new Error(
@@ -632,6 +846,8 @@ export default function Home() {
       setMessages(nextMessages);
     } finally {
       setIsSending(false);
+      setPendingStepText(INITIAL_PENDING_TEXT);
+      setPendingSteps([]);
     }
   }
 
@@ -949,7 +1165,11 @@ export default function Home() {
                       <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
                     </div>
                   </div>
-                  <p className="message-body">{message.content}</p>
+                  {message.role === "assistant" ? (
+                    <RichAnswer content={message.content} />
+                  ) : (
+                    <p className="message-body">{message.content}</p>
+                  )}
                   {message.role === "assistant" && message.steps?.length ? (
                     <AgentStepsPanel steps={message.steps} />
                   ) : null}
@@ -965,9 +1185,8 @@ export default function Home() {
                     <span className="sender-name">Findog/Fred</span>
                   </div>
                 </div>
-                <p className="message-body">
-                  Plant den Rechercheablauf, lädt BFG/WeKnora-Werkzeuge und wertet Quellen aus...
-                </p>
+                <p className="message-body">{pendingStepText}</p>
+                {pendingSteps.length > 0 ? <AgentStepsPanel steps={pendingSteps} /> : null}
               </article>
             ) : null}
           </div>

@@ -503,6 +503,7 @@ textarea:focus {
 
 .message.assistant {
   align-self: flex-start;
+  max-width: 88%;
   background-color: #ffffff;
   border-left: 4px solid var(--accent-yellow);
   border-bottom-left-radius: 2px;
@@ -558,6 +559,117 @@ textarea:focus {
   white-space: pre-wrap;
   color: var(--ink);
   font-size: 0.95rem;
+}
+
+.answer-content {
+  display: grid;
+  width: 100%;
+  gap: 10px;
+  color: var(--ink);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.answer-content :where(p, h2, h3, h4, ul, ol, blockquote) {
+  margin: 0;
+}
+
+.answer-content h2,
+.answer-content h3,
+.answer-content h4 {
+  color: var(--bmf-blue-deep);
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.answer-content h2 {
+  margin-top: 4px;
+  font-size: 1.12rem;
+}
+
+.answer-content h3 {
+  margin-top: 2px;
+  font-size: 1.02rem;
+}
+
+.answer-content h4 {
+  font-size: 0.96rem;
+}
+
+.answer-content ul,
+.answer-content ol {
+  display: grid;
+  gap: 5px;
+  padding-left: 1.35rem;
+}
+
+.answer-content li::marker {
+  color: var(--bmf-blue);
+  font-weight: 800;
+}
+
+.answer-content strong {
+  color: var(--bmf-blue-deep);
+  font-weight: 750;
+}
+
+.answer-content code {
+  border: 1px solid rgba(40, 111, 156, 0.14);
+  border-radius: 5px;
+  background: #f2f7fa;
+  color: var(--bmf-blue-deep);
+  padding: 0.1em 0.35em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.88em;
+}
+
+.answer-content mark {
+  border-radius: 5px;
+  background: rgba(255, 212, 0, 0.32);
+  color: var(--bmf-blue-deep);
+  padding: 0.05em 0.25em;
+}
+
+.answer-callout {
+  border-left: 3px solid var(--bmf-blue);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: #f3f8fb;
+  color: var(--bmf-blue-deep);
+  padding: 10px 12px;
+  white-space: pre-line;
+}
+
+.answer-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid rgba(40, 111, 156, 0.16);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+}
+
+.answer-table-scroll table {
+  width: 100%;
+  min-width: 420px;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.answer-table-scroll th,
+.answer-table-scroll td {
+  border-bottom: 1px solid rgba(40, 111, 156, 0.12);
+  padding: 9px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.answer-table-scroll th {
+  background: #f3f8fb;
+  color: var(--bmf-blue-deep);
+  font-weight: 750;
+}
+
+.answer-table-scroll tr:last-child td {
+  border-bottom: none;
 }
 
 .agent-steps {
@@ -927,6 +1039,14 @@ textarea:focus {
 
   .message {
     max-width: 95%;
+  }
+
+  .answer-content {
+    font-size: 0.92rem;
+  }
+
+  .answer-table-scroll table {
+    min-width: 360px;
   }
 
   .composer-container {

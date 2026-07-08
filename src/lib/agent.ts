@@ -100,6 +100,17 @@ type ToolLogEntry = {
   success: boolean;
 };
 
+type AgentStepHandler = (step: AgentStep) => void | Promise<void>;
+
+async function appendAgentStep(
+  steps: AgentStep[],
+  step: AgentStep,
+  onStep?: AgentStepHandler,
+): Promise<void> {
+  steps.push(step);
+  await onStep?.(step);
+}
+
 function formatConversation(messages: AppChatMessage[]): string {
   return messages
     .map((message) => `${message.role === "user" ? "Nutzer" : "Assistent"}: ${message.content}`)
@@ -165,6 +176,7 @@ async function createProgressUpdate(options: {
   toolLog: ToolLogEntry[];
   plan: string;
   steps: AgentStep[];
+  onStep?: AgentStepHandler;
 }): Promise<void> {
   const progressResult = await chatCompletion({
     apiKey: options.apiKey,
@@ -181,11 +193,11 @@ async function createProgressUpdate(options: {
     "DeepSeek konnte keinen Fortschrittsstatus zum Arbeitsplan erstellen.",
   );
 
-  options.steps.push({
+  await appendAgentStep(options.steps, {
     type: "progress",
     title: "Fortschritt im Arbeitsplan",
     content: summarizeStepText(progress),
-  });
+  }, options.onStep);
 }
 
 async function finalizeAgentRun(options: {
@@ -199,12 +211,13 @@ async function finalizeAgentRun(options: {
   steps: AgentStep[];
   tools: string[];
   reason: string;
+  onStep?: AgentStepHandler;
 }): Promise<AgentRunResult> {
-  options.steps.push({
+  await appendAgentStep(options.steps, {
     type: "finalize",
     title: "Finalisierung ohne weitere Werkzeuge",
     content: options.reason,
-  });
+  }, options.onStep);
 
   const selfCheckResult = await chatCompletion({
     apiKey: options.apiKey,
@@ -221,11 +234,11 @@ async function finalizeAgentRun(options: {
     selfCheckResult.content,
     "DeepSeek konnte keinen Selbstcheck zum Arbeitsplan erstellen.",
   );
-  options.steps.push({
+  await appendAgentStep(options.steps, {
     type: "self_check",
     title: "Selbstcheck des Arbeitsplans",
     content: summarizeStepText(selfCheck),
-  });
+  }, options.onStep);
 
   const finalResult = await chatCompletion({
     apiKey: options.apiKey,
@@ -244,11 +257,11 @@ async function finalizeAgentRun(options: {
     "DeepSeek konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
   );
 
-  options.steps.push({
+  await appendAgentStep(options.steps, {
     type: "answer",
     title: "Finale Antwort",
     content: summarizeStepText(answer),
-  });
+  }, options.onStep);
   return {
     answer,
     steps: options.steps,
@@ -262,6 +275,7 @@ export async function runAgent(options: {
   systemPrompt: string;
   messages: AppChatMessage[];
   mcpBearerToken?: string;
+  onStep?: AgentStepHandler;
 }): Promise<AgentRunResult> {
   const mcp = new McpClient();
   const conversationMessages = options.messages.map(
@@ -287,21 +301,20 @@ export async function runAgent(options: {
     "DeepSeek konnte keinen Arbeitsplan für die Anfrage erstellen.",
   );
 
-  const steps: AgentStep[] = [
-    {
-      type: "plan",
-      title: "Arbeitsplan",
-      content: summarizeStepText(plan),
-    },
-  ];
+  const steps: AgentStep[] = [];
+  await appendAgentStep(steps, {
+    type: "plan",
+    title: "Arbeitsplan",
+    content: summarizeStepText(plan),
+  }, options.onStep);
   const session = await mcp.openToolSession(options.mcpBearerToken);
   const toolNames = session.tools.map((tool) => tool.name);
-  steps.push({
+  await appendAgentStep(steps, {
     type: "tools",
     title: "MCP-Werkzeuge geladen",
     content: `${toolNames.length} BFG/WeKnora-MCP-Werkzeuge verfügbar: ${summarizeToolNames(toolNames)}`,
     tools: toolNames,
-  });
+  }, options.onStep);
 
   const messages: DeepSeekMessage[] = [
     {
@@ -332,6 +345,7 @@ export async function runAgent(options: {
         plan,
         steps,
         tools: toolNames,
+        onStep: options.onStep,
         reason:
           "Die Werkzeugrecherche ist abgeschlossen. Ich prüfe den Arbeitsplan und erstelle daraus die finale Antwort ohne weitere MCP-Werkzeuge.",
       });
@@ -353,13 +367,13 @@ export async function runAgent(options: {
     for (const call of result.toolCalls) {
       const parsedArguments = parseToolArguments(call.name, call.arguments);
       const argumentSummary = summarizeToolArguments(parsedArguments);
-      steps.push({
+      await appendAgentStep(steps, {
         type: "tool_call",
         title: `Werkzeugaufruf: ${call.name}`,
         content: `Argumente:\n${argumentSummary}`,
         toolName: call.name,
         arguments: argumentSummary,
-      });
+      }, options.onStep);
 
       let toolResult: string;
       try {
@@ -370,7 +384,7 @@ export async function runAgent(options: {
           arguments: parsedArguments,
         });
       } catch (error) {
-        steps.push({
+        await appendAgentStep(steps, {
           type: "tool_result",
           title: `Werkzeugfehler: ${call.name}`,
           content:
@@ -379,7 +393,7 @@ export async function runAgent(options: {
               : "Das Werkzeug konnte nicht erfolgreich ausgeführt werden.",
           toolName: call.name,
           success: false,
-        });
+        }, options.onStep);
         throw error;
       }
 
@@ -390,13 +404,13 @@ export async function runAgent(options: {
         result: toolResult,
         success,
       });
-      steps.push({
+      await appendAgentStep(steps, {
         type: "tool_result",
         title: success ? `Werkzeugergebnis: ${call.name}` : `Werkzeugfehler: ${call.name}`,
         content: summarizeStepText(toolResult),
         toolName: call.name,
         success,
-      });
+      }, options.onStep);
 
       messages.push({
         role: "tool",
@@ -413,6 +427,7 @@ export async function runAgent(options: {
       toolLog,
       plan,
       steps,
+      onStep: options.onStep,
     });
   }
 
@@ -425,6 +440,7 @@ export async function runAgent(options: {
     plan,
     steps,
     tools: toolNames,
+    onStep: options.onStep,
     reason:
       "Das Werkzeuglimit ist erreicht. Ich erstelle jetzt eine finale Antwort aus den bisherigen Ergebnissen, ohne weitere MCP-Werkzeuge aufzurufen.",
   });
