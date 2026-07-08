@@ -200,7 +200,10 @@ export class McpClient {
       throw new MissingMcpBearerTokenError();
     }
     if (response.status === 401) {
-      throw new UserVisibleError("BFG MCP Token wurde abgelehnt. Bitte in den Einstellungen prüfen.", 401);
+      throw new UserVisibleError(
+        "BFG MCP Token wurde abgelehnt. Bitte serverseitige BFG MCP Konfiguration prüfen.",
+        401,
+      );
     }
     if (!response.ok) {
       throw new UserVisibleError(`BFG MCP Fehler HTTP ${response.status}.`, 502);

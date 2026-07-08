@@ -6,7 +6,6 @@ import {
   DEFAULT_SYSTEM_PROMPT,
   isSupportedModel,
   MAX_DEEPSEEK_KEY_CHARS,
-  MAX_MCP_TOKEN_CHARS,
   MAX_MESSAGE_CHARS,
   MAX_MESSAGES,
   MAX_REQUEST_BYTES,
@@ -20,12 +19,12 @@ import { UserVisibleError } from "@/lib/errors";
 import { persistConversationTurn } from "@/lib/persistence";
 import { runAgent } from "@/lib/agent";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getServerMcpBearerToken } from "@/lib/mcp/server-token";
 
 export const runtime = "nodejs";
 
 type ChatRequestBody = {
   deepSeekApiKey?: unknown;
-  mcpBearerToken?: unknown;
   model?: unknown;
   systemPrompt?: unknown;
   messages?: unknown;
@@ -149,7 +148,7 @@ export async function POST(request: Request) {
       asOptionalString(body.systemPrompt, MAX_SYSTEM_PROMPT_CHARS, "System Prompt") ??
       DEFAULT_SYSTEM_PROMPT;
     const messages = parseMessages(body.messages);
-    const mcpBearerToken = asOptionalString(body.mcpBearerToken, MAX_MCP_TOKEN_CHARS, "MCP Bearer Token");
+    const mcpBearerToken = getServerMcpBearerToken();
 
     const answer = await runAgent({
       apiKey: deepSeekApiKey,

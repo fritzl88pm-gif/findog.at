@@ -23,7 +23,6 @@ type ChatMessage = {
 
 type Settings = {
   deepSeekApiKey: string;
-  mcpBearerToken: string;
   model: ChatModel;
   systemPrompt: string;
 };
@@ -46,7 +45,6 @@ const SETTINGS_STORAGE_KEY = "findog.settings.v1";
 
 const DEFAULT_SETTINGS: Settings = {
   deepSeekApiKey: "",
-  mcpBearerToken: "",
   model: DEFAULT_MODEL,
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
 };
@@ -156,7 +154,6 @@ export default function Home() {
       if (storedSettings) {
         setSettings({
           deepSeekApiKey: "",
-          mcpBearerToken: "",
           model: isChatModel(storedSettings.model) ? storedSettings.model : DEFAULT_MODEL,
           systemPrompt:
             typeof storedSettings.systemPrompt === "string" && storedSettings.systemPrompt.trim()
@@ -368,7 +365,6 @@ export default function Home() {
       setSettings((current) => ({
         ...current,
         deepSeekApiKey: "",
-        mcpBearerToken: "",
       }));
       setSession(null);
       setHistoryOwnerId("");
@@ -442,7 +438,6 @@ export default function Home() {
         },
         body: JSON.stringify({
           deepSeekApiKey: settings.deepSeekApiKey.trim(),
-          mcpBearerToken: settings.mcpBearerToken.trim() || undefined,
           model: settings.model,
           systemPrompt: settings.systemPrompt.trim() || DEFAULT_SYSTEM_PROMPT,
           messages: nextMessages.map((message) => ({
@@ -615,9 +610,6 @@ export default function Home() {
           <span className={settings.deepSeekApiKey.trim() ? "status ready" : "status missing"}>
             DeepSeek
           </span>
-          <span className={settings.mcpBearerToken.trim() ? "status ready" : "status muted"}>
-            MCP Token
-          </span>
           <span className="status ready">{settings.model}</span>
         </div>
       </header>
@@ -651,19 +643,6 @@ export default function Home() {
               placeholder="sk-..."
             />
             <span className="field-help">Wird nur flüchtig im React-State gehalten und nie persistent gespeichert.</span>
-          </div>
-
-          <div className="field-group">
-            <label htmlFor="mcp-token">MCP Bearer Token (optional)</label>
-            <input
-              id="mcp-token"
-              type="password"
-              value={settings.mcpBearerToken}
-              onChange={(event) => updateSetting("mcpBearerToken", event.target.value)}
-              autoComplete="off"
-              placeholder="Bearer Token"
-            />
-            <span className="field-help">Ermöglicht den Zugriff auf BFG/WeKnora-MCP-Recherche-Tools.</span>
           </div>
 
           <div className="field-group">
