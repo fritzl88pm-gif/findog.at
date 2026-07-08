@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 
 import { chatHistoryStorageKey } from "@/lib/chat/storage";
@@ -133,8 +133,14 @@ function normalizeAgentSteps(value: unknown): AgentStep[] {
         },
       ];
     }
+    if (item.type === "progress") {
+      return [{ type: "progress", title: item.title, content: item.content }];
+    }
     if (item.type === "finalize") {
       return [{ type: "finalize", title: item.title, content: item.content }];
+    }
+    if (item.type === "self_check") {
+      return [{ type: "self_check", title: item.title, content: item.content }];
     }
     if (item.type === "answer") {
       return [{ type: "answer", title: item.title, content: item.content }];
@@ -193,11 +199,36 @@ function stepTypeLabel(step: AgentStep): string {
       return "Aufruf";
     case "tool_result":
       return step.success ? "Ergebnis" : "Fehler";
+    case "progress":
+      return "Fortschritt";
     case "finalize":
       return "Finalisierung";
+    case "self_check":
+      return "Selbstcheck";
     case "answer":
       return "Antwort";
   }
+}
+
+function renderStepContent(content: string): ReactNode {
+  const nodes: ReactNode[] = [];
+  const strikePattern = /~~(.+?)~~/gs;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = strikePattern.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(<span key={`text-${lastIndex}`}>{content.slice(lastIndex, match.index)}</span>);
+    }
+    nodes.push(<s key={`strike-${match.index}-${match[1]}`}>{match[1]}</s>);
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < content.length) {
+    nodes.push(<span key={`text-${lastIndex}`}>{content.slice(lastIndex)}</span>);
+  }
+
+  return nodes.length > 0 ? nodes : content;
 }
 
 function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
@@ -215,7 +246,7 @@ function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
               <span>{stepTypeLabel(step)}</span>
               <strong>{step.title}</strong>
             </div>
-            <pre>{step.content}</pre>
+            <pre>{renderStepContent(step.content)}</pre>
           </li>
         ))}
       </ol>

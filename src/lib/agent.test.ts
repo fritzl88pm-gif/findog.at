@@ -25,6 +25,28 @@ type AgentRunShape = {
   tools: string[];
 };
 
+function expectProtocolSafeMessages(): void {
+  for (const [callIndex, call] of mockedChatCompletion.mock.calls.entries()) {
+    const messages = call[0].messages;
+    for (let index = 1; index < messages.length; index += 1) {
+      const previousRole = messages[index - 1]?.role;
+      const currentRole = messages[index]?.role;
+      expect(
+        previousRole === "assistant" && currentRole === "assistant",
+        `chatCompletion call ${callIndex} has consecutive assistant messages at ${index - 1}/${index}`,
+      ).toBe(false);
+      expect(
+        previousRole === "user" && currentRole === "user",
+        `chatCompletion call ${callIndex} has consecutive user messages at ${index - 1}/${index}`,
+      ).toBe(false);
+      expect(
+        previousRole === "tool" && currentRole !== "tool" && currentRole !== "assistant",
+        `chatCompletion call ${callIndex} has ${currentRole} directly after tool at ${index - 1}/${index}`,
+      ).toBe(false);
+    }
+  }
+}
+
 describe("runAgent", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -72,9 +94,13 @@ describe("runAgent", () => {
     return { callTool, openToolSession };
   }
 
-  it("returns a final answer with visible plan, tool, result, and answer steps", async () => {
+  it("plans before tool use, shows progress, self-checks, and returns the final answer", async () => {
     mockMcpSession();
     mockedChatCompletion
+      .mockResolvedValueOnce({
+        content: "1. Gesetzliche Grundlage prüfen\n2. BFG-Judikatur zur Pendlerpauschale suchen",
+        toolCalls: [],
+      })
       .mockResolvedValueOnce({
         content: "Ich recherchiere.",
         toolCalls: [
@@ -84,6 +110,19 @@ describe("runAgent", () => {
             arguments: JSON.stringify({ query: "Pendlerpauschale 2024" }),
           },
         ],
+      })
+      .mockResolvedValueOnce({
+        content:
+          "- ~~Gesetzliche Grundlage prüfen~~\n- BFG-Judikatur zur Pendlerpauschale suchen",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Die Recherche ist abgeschlossen.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Selbstcheck: Alle Planpunkte wurden anhand der Recherche behandelt.",
+        toolCalls: [],
       })
       .mockResolvedValueOnce({
         content: "Finale Antwort.",
@@ -105,8 +144,14 @@ describe("runAgent", () => {
       "tools",
       "tool_call",
       "tool_result",
+      "progress",
+      "finalize",
+      "self_check",
       "answer",
     ]);
+    expect(result.steps[0]?.content).toBe(
+      "1. Gesetzliche Grundlage prüfen\n2. BFG-Judikatur zur Pendlerpauschale suchen",
+    );
     expect(result.steps[2]).toMatchObject({
       toolName: "hybrid_search",
     });
@@ -114,12 +159,51 @@ describe("runAgent", () => {
       toolName: "hybrid_search",
       success: true,
     });
+    expect(result.steps[4]?.content).toContain("~~Gesetzliche Grundlage prüfen~~");
+    expect(result.steps.at(-2)).toMatchObject({
+      type: "self_check",
+      content: "Selbstcheck: Alle Planpunkte wurden anhand der Recherche behandelt.",
+    });
+
+    expect(mockedChatCompletion.mock.calls[0]?.[0]).not.toHaveProperty("tools");
+    expect(mockedChatCompletion.mock.calls[0]?.[0].messages[0]?.content).toContain(
+      "Erstelle zuerst einen dynamischen Arbeitsplan",
+    );
+    expect(mockedChatCompletion.mock.calls[1]?.[0].tools).toHaveLength(1);
+    expect(mockedChatCompletion.mock.calls[1]?.[0].messages[0]?.content).toContain(
+      "Arbeite den Arbeitsplan systematisch ab.",
+    );
+    expect(mockedChatCompletion.mock.calls[2]?.[0]).not.toHaveProperty("tools");
+    expect(mockedChatCompletion.mock.calls[2]?.[0].messages.at(-1)).toMatchObject({
+      role: "user",
+      content: expect.stringContaining("Aktualisiere den Arbeitsplan"),
+    });
+    expectProtocolSafeMessages();
   });
 
   it("synthesizes a final answer without tools after the tool loop reaches its limit", async () => {
     const { callTool } = mockMcpSession();
 
     mockedChatCompletion.mockImplementation(async (options) => {
+      const lastMessage = options.messages.at(-1)?.content ?? "";
+      if (lastMessage.includes("Erstelle zuerst einen dynamischen Arbeitsplan")) {
+        return {
+          content: "1. Anspruchsvoraussetzungen prüfen\n2. Bisherige Ergebnisse würdigen",
+          toolCalls: [],
+        };
+      }
+      if (lastMessage.includes("Aktualisiere den Arbeitsplan")) {
+        return {
+          content: "- ~~Anspruchsvoraussetzungen prüfen~~\n- Bisherige Ergebnisse würdigen",
+          toolCalls: [],
+        };
+      }
+      if (lastMessage.includes("Prüfe vor der finalen Antwort")) {
+        return {
+          content: "Selbstcheck: Die erreichbaren Punkte wurden geprüft.",
+          toolCalls: [],
+        };
+      }
       if ((options.tools?.length ?? 0) === 0) {
         return {
           content: "Finale Antwort aus bisherigen Werkzeugergebnissen.",
@@ -150,10 +234,15 @@ describe("runAgent", () => {
     expect(result.answer).toBe("Finale Antwort aus bisherigen Werkzeugergebnissen.");
     expect(callTool.mock.calls.length).toBeGreaterThan(4);
     expect(mockedChatCompletion.mock.calls.at(-1)?.[0]).not.toHaveProperty("tools");
-    expect(result.steps.at(-2)?.type).toBe("finalize");
+    expect(result.steps.at(-3)?.type).toBe("finalize");
+    expect(result.steps.at(-2)).toMatchObject({
+      type: "self_check",
+      content: "Selbstcheck: Die erreichbaren Punkte wurden geprüft.",
+    });
     expect(result.steps.at(-1)).toMatchObject({
       type: "answer",
       content: "Finale Antwort aus bisherigen Werkzeugergebnissen.",
     });
+    expectProtocolSafeMessages();
   });
 });

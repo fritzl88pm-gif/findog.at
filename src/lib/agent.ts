@@ -13,6 +13,15 @@ import {
 
 const MAX_TOOL_ITERATIONS = 12;
 
+function requireModelContent(content: string | null, errorMessage: string): string {
+  const text = content?.trim();
+  if (!text) {
+    throw new UserVisibleError(errorMessage, 502);
+  }
+
+  return text;
+}
+
 function parseToolArguments(name: string, rawArguments: string): JsonObject {
   if (!rawArguments.trim()) {
     return {};
@@ -30,6 +39,223 @@ function parseToolArguments(name: string, rawArguments: string): JsonObject {
   throw new UserVisibleError(`DeepSeek lieferte ungültige Werkzeugargumente für ${name}.`, 502);
 }
 
+function planningInstruction(): string {
+  return [
+    "Erstelle zuerst einen dynamischen Arbeitsplan für diese konkrete Anfrage.",
+    "Der Plan ist verpflichtend, aber Umfang und Zahl der Punkte bestimmst du selbst.",
+    "Nutze keine fixe Vorlage; Gesetze, Richtlinien oder BFG-Urteile sind nur mögliche Beispiele, wenn sie zur Anfrage passen.",
+    "Gib nur den Plan als nummerierte oder stichpunktartige Markdown-Liste aus.",
+  ].join("\n");
+}
+
+function executionInstruction(plan: string): string {
+  return [
+    "Arbeite den Arbeitsplan systematisch ab.",
+    "Nutze MCP-Werkzeuge gezielt für die jeweils offenen Planpunkte und vermeide Recherche, die nicht zum Plan beiträgt.",
+    "Wenn ein Planpunkt erledigt ist, berücksichtige das in späteren Fortschritts- und Abschlussprüfungen.",
+    "",
+    "Arbeitsplan:",
+    plan,
+  ].join("\n");
+}
+
+function progressInstruction(plan: string): string {
+  return [
+    "Aktualisiere den Arbeitsplan anhand der bisherigen Werkzeugergebnisse.",
+    "Gib den vollständigen Plan als Markdown-Liste zurück.",
+    "Streiche erledigte Punkte mit ~~Punkt~~ durch und lasse offene Punkte ungestrichen.",
+    "Antworte knapp und ohne finale Fallbeurteilung.",
+    "",
+    "Ursprünglicher Arbeitsplan:",
+    plan,
+  ].join("\n");
+}
+
+function selfCheckInstruction(plan: string): string {
+  return [
+    "Prüfe vor der finalen Antwort, ob alle Punkte des Arbeitsplans abgearbeitet wurden.",
+    "Nenne knapp erledigte Punkte, offene Punkte und ob die finale Antwort trotz offener Punkte belastbar ist.",
+    "Gib nur den Selbstcheck aus.",
+    "",
+    "Arbeitsplan:",
+    plan,
+  ].join("\n");
+}
+
+function finalAnswerInstruction(plan: string): string {
+  return [
+    "Formuliere jetzt die finale Antwort aus Anfrage, Arbeitsplan, Werkzeugergebnissen und Selbstcheck.",
+    "Nutze keine weiteren Werkzeuge.",
+    "Wenn Planpunkte offen geblieben sind, benenne die Unsicherheit transparent.",
+    "",
+    "Arbeitsplan:",
+    plan,
+  ].join("\n");
+}
+
+type ToolLogEntry = {
+  toolName: string;
+  arguments: string;
+  result: string;
+  success: boolean;
+};
+
+function formatConversation(messages: AppChatMessage[]): string {
+  return messages
+    .map((message) => `${message.role === "user" ? "Nutzer" : "Assistent"}: ${message.content}`)
+    .join("\n\n");
+}
+
+function formatToolLog(toolLog: ToolLogEntry[]): string {
+  if (toolLog.length === 0) {
+    return "Noch keine Werkzeugergebnisse.";
+  }
+
+  return toolLog
+    .map((entry, index) =>
+      [
+        `${index + 1}. ${entry.success ? "Erfolg" : "Fehler"}: ${entry.toolName}`,
+        `Argumente: ${entry.arguments}`,
+        `Ergebnis: ${summarizeStepText(entry.result, 4_000)}`,
+      ].join("\n"),
+    )
+    .join("\n\n");
+}
+
+function supportMessages(options: {
+  systemPrompt: string;
+  conversation: AppChatMessage[];
+  instruction: string;
+  toolLog: ToolLogEntry[];
+  draftAnswer?: string;
+  selfCheck?: string;
+}): DeepSeekMessage[] {
+  const context = [
+    "Chatverlauf:",
+    formatConversation(options.conversation),
+    "",
+    "Bisherige Werkzeugergebnisse:",
+    formatToolLog(options.toolLog),
+  ];
+
+  if (options.draftAnswer) {
+    context.push("", "Vorläufige Antwort des Agenten:", options.draftAnswer);
+  }
+  if (options.selfCheck) {
+    context.push("", "Selbstcheck des Arbeitsplans:", options.selfCheck);
+  }
+
+  return [
+    {
+      role: "system",
+      content: options.systemPrompt,
+    },
+    {
+      role: "user",
+      content: [context.join("\n"), options.instruction].join("\n\n"),
+    },
+  ];
+}
+
+async function createProgressUpdate(options: {
+  apiKey: string;
+  model: ChatModel;
+  systemPrompt: string;
+  conversation: AppChatMessage[];
+  toolLog: ToolLogEntry[];
+  plan: string;
+  steps: AgentStep[];
+}): Promise<void> {
+  const progressResult = await chatCompletion({
+    apiKey: options.apiKey,
+    model: options.model,
+    messages: supportMessages({
+      systemPrompt: options.systemPrompt,
+      conversation: options.conversation,
+      instruction: progressInstruction(options.plan),
+      toolLog: options.toolLog,
+    }),
+  });
+  const progress = requireModelContent(
+    progressResult.content,
+    "DeepSeek konnte keinen Fortschrittsstatus zum Arbeitsplan erstellen.",
+  );
+
+  options.steps.push({
+    type: "progress",
+    title: "Fortschritt im Arbeitsplan",
+    content: summarizeStepText(progress),
+  });
+}
+
+async function finalizeAgentRun(options: {
+  apiKey: string;
+  model: ChatModel;
+  systemPrompt: string;
+  conversation: AppChatMessage[];
+  toolLog: ToolLogEntry[];
+  draftAnswer?: string;
+  plan: string;
+  steps: AgentStep[];
+  tools: string[];
+  reason: string;
+}): Promise<AgentRunResult> {
+  options.steps.push({
+    type: "finalize",
+    title: "Finalisierung ohne weitere Werkzeuge",
+    content: options.reason,
+  });
+
+  const selfCheckResult = await chatCompletion({
+    apiKey: options.apiKey,
+    model: options.model,
+    messages: supportMessages({
+      systemPrompt: options.systemPrompt,
+      conversation: options.conversation,
+      instruction: selfCheckInstruction(options.plan),
+      toolLog: options.toolLog,
+      draftAnswer: options.draftAnswer,
+    }),
+  });
+  const selfCheck = requireModelContent(
+    selfCheckResult.content,
+    "DeepSeek konnte keinen Selbstcheck zum Arbeitsplan erstellen.",
+  );
+  options.steps.push({
+    type: "self_check",
+    title: "Selbstcheck des Arbeitsplans",
+    content: summarizeStepText(selfCheck),
+  });
+
+  const finalResult = await chatCompletion({
+    apiKey: options.apiKey,
+    model: options.model,
+    messages: supportMessages({
+      systemPrompt: options.systemPrompt,
+      conversation: options.conversation,
+      instruction: finalAnswerInstruction(options.plan),
+      toolLog: options.toolLog,
+      draftAnswer: options.draftAnswer,
+      selfCheck,
+    }),
+  });
+  const answer = requireModelContent(
+    finalResult.content,
+    "DeepSeek konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
+  );
+
+  options.steps.push({
+    type: "answer",
+    title: "Finale Antwort",
+    content: summarizeStepText(answer),
+  });
+  return {
+    answer,
+    steps: options.steps,
+    tools: options.tools,
+  };
+}
+
 export async function runAgent(options: {
   apiKey: string;
   model: ChatModel;
@@ -38,12 +264,34 @@ export async function runAgent(options: {
   mcpBearerToken?: string;
 }): Promise<AgentRunResult> {
   const mcp = new McpClient();
+  const conversationMessages = options.messages.map(
+    (message): DeepSeekMessage => ({
+      role: message.role,
+      content: message.content,
+    }),
+  );
+
+  const planResult = await chatCompletion({
+    apiKey: options.apiKey,
+    model: options.model,
+    messages: [
+      {
+        role: "system",
+        content: [options.systemPrompt, planningInstruction()].join("\n\n"),
+      },
+      ...conversationMessages,
+    ],
+  });
+  const plan = requireModelContent(
+    planResult.content,
+    "DeepSeek konnte keinen Arbeitsplan für die Anfrage erstellen.",
+  );
+
   const steps: AgentStep[] = [
     {
       type: "plan",
       title: "Arbeitsplan",
-      content:
-        "Ich folge dem Fred-Ablauf: zuerst Rechtslage, Beträge und Verwaltungspraxis prüfen; bei Relevanz gezielt BFG-Judikatur recherchieren; danach eine verwaltungspraktisch verwertbare Gesamtbeurteilung formulieren.",
+      content: summarizeStepText(plan),
     },
   ];
   const session = await mcp.openToolSession(options.mcpBearerToken);
@@ -58,39 +306,35 @@ export async function runAgent(options: {
   const messages: DeepSeekMessage[] = [
     {
       role: "system",
-      content: options.systemPrompt,
+      content: [options.systemPrompt, executionInstruction(plan)].join("\n\n"),
     },
-    ...options.messages.map(
-      (message): DeepSeekMessage => ({
-        role: message.role,
-        content: message.content,
-      }),
-    ),
+    ...conversationMessages,
   ];
+  const toolLog: ToolLogEntry[] = [];
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
     const result = await chatCompletion({
       apiKey: options.apiKey,
       model: options.model,
-      messages,
+      messages: [...messages],
       tools: session.deepSeekTools,
     });
 
     if (result.toolCalls.length === 0) {
-      const answer = result.content?.trim();
-      if (!answer) {
-        throw new UserVisibleError("DeepSeek Antwort ist leer.", 502);
-      }
-      steps.push({
-        type: "answer",
-        title: "Finale Antwort",
-        content: summarizeStepText(answer),
-      });
-      return {
-        answer,
+      const draftAnswer = result.content?.trim();
+      return finalizeAgentRun({
+        apiKey: options.apiKey,
+        model: options.model,
+        systemPrompt: options.systemPrompt,
+        conversation: options.messages,
+        toolLog,
+        draftAnswer,
+        plan,
         steps,
         tools: toolNames,
-      };
+        reason:
+          "Die Werkzeugrecherche ist abgeschlossen. Ich prüfe den Arbeitsplan und erstelle daraus die finale Antwort ohne weitere MCP-Werkzeuge.",
+      });
     }
 
     messages.push({
@@ -140,6 +384,12 @@ export async function runAgent(options: {
       }
 
       const success = !toolResult.startsWith("MCP-Fehler:");
+      toolLog.push({
+        toolName: call.name,
+        arguments: argumentSummary,
+        result: toolResult,
+        success,
+      });
       steps.push({
         type: "tool_result",
         title: success ? `Werkzeugergebnis: ${call.name}` : `Werkzeugfehler: ${call.name}`,
@@ -154,35 +404,28 @@ export async function runAgent(options: {
         content: toolResult,
       });
     }
+
+    await createProgressUpdate({
+      apiKey: options.apiKey,
+      model: options.model,
+      systemPrompt: options.systemPrompt,
+      conversation: options.messages,
+      toolLog,
+      plan,
+      steps,
+    });
   }
 
-  steps.push({
-    type: "finalize",
-    title: "Finalisierung ohne weitere Werkzeuge",
-    content:
-      "Das Werkzeuglimit ist erreicht. Ich erstelle jetzt eine finale Antwort aus den bisherigen Ergebnissen, ohne weitere MCP-Werkzeuge aufzurufen.",
-  });
-  const finalResult = await chatCompletion({
+  return finalizeAgentRun({
     apiKey: options.apiKey,
     model: options.model,
-    messages,
-  });
-  const answer = finalResult.content?.trim();
-  if (!answer) {
-    throw new UserVisibleError(
-      "DeepSeek konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
-      502,
-    );
-  }
-
-  steps.push({
-    type: "answer",
-    title: "Finale Antwort",
-    content: summarizeStepText(answer),
-  });
-  return {
-    answer,
+    systemPrompt: options.systemPrompt,
+    conversation: options.messages,
+    toolLog,
+    plan,
     steps,
     tools: toolNames,
-  };
+    reason:
+      "Das Werkzeuglimit ist erreicht. Ich erstelle jetzt eine finale Antwort aus den bisherigen Ergebnissen, ohne weitere MCP-Werkzeuge aufzurufen.",
+  });
 }
