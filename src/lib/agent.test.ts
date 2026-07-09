@@ -232,7 +232,8 @@ describe("runAgent", () => {
     expect(onStep).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "tool_call",
-        title: "Werkzeugaufruf: hybrid_search",
+        title: "Datenbank wird abgefragt",
+        toolName: "hybrid_search",
       }),
     );
     expect(onStep).toHaveBeenLastCalledWith(

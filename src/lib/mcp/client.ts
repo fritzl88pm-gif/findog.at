@@ -1,4 +1,4 @@
-import { BFG_MCP_ENDPOINT, MCP_PROTOCOL_VERSION } from "../config";
+import { BFG_MCP_ENDPOINT, MCP_PROTOCOL_VERSION } from "./config";
 import { MissingMcpBearerTokenError, UserVisibleError } from "../errors";
 import { extractJsonPayloads } from "./parser";
 import { mcpToolToDeepSeekTool, type DeepSeekTool, type JsonObject, type McpTool } from "./tools";
@@ -40,7 +40,7 @@ function resultObject(payloads: JsonObject[], fallbackMessage: string): JsonObje
 }
 
 function parseTools(payloads: JsonObject[]): McpTool[] {
-  const result = resultObject(payloads, "BFG MCP tools/list Antwort ist unvollständig.");
+  const result = resultObject(payloads, "Datenbankantwort ist unvollständig.");
   if (!Array.isArray(result.tools)) {
     return [];
   }
@@ -69,7 +69,7 @@ function parseTools(payloads: JsonObject[]): McpTool[] {
 }
 
 function stringifyToolContent(payloads: JsonObject[]): string {
-  const result = resultObject(payloads, "BFG MCP tools/call Antwort ist unvollständig.");
+  const result = resultObject(payloads, "Datenbankantwort ist unvollständig.");
   const parts: string[] = [];
 
   if (Array.isArray(result.content)) {
@@ -87,7 +87,7 @@ function stringifyToolContent(payloads: JsonObject[]): string {
   }
 
   const text = parts.filter(Boolean).join("\n\n") || JSON.stringify(result);
-  return result.isError === true ? `MCP-Fehler: ${text}` : text;
+  return result.isError === true ? `Datenbankfehler: ${text}` : text;
 }
 
 export class McpClient {
@@ -201,23 +201,23 @@ export class McpClient {
     }
     if (response.status === 401) {
       throw new UserVisibleError(
-        "BFG MCP Token wurde abgelehnt. Bitte serverseitige BFG MCP Konfiguration prüfen.",
+        "Datenbankzugang wurde abgelehnt. Bitte serverseitige Datenbank-Konfiguration prüfen.",
         401,
       );
     }
     if (!response.ok) {
-      throw new UserVisibleError(`BFG MCP Fehler HTTP ${response.status}.`, 502);
+      throw new UserVisibleError(`Datenbankfehler HTTP ${response.status}.`, 502);
     }
 
     const payloads = extractJsonPayloads(body);
     if (payloads.length === 0 && !options.allowEmptyResponse) {
-      throw new UserVisibleError("BFG MCP Antwort ist leer.", 502);
+      throw new UserVisibleError("Datenbankantwort ist leer.", 502);
     }
 
     const jsonRpcError = getJsonRpcError(payloads);
     if (jsonRpcError) {
       throw new UserVisibleError(
-        `BFG MCP Fehler${jsonRpcError.code ? ` ${jsonRpcError.code}` : ""}: ${
+        `Datenbankfehler${jsonRpcError.code ? ` ${jsonRpcError.code}` : ""}: ${
           jsonRpcError.message ?? "Unbekannter JSON-RPC Fehler."
         }`,
         502,

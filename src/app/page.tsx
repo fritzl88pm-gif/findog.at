@@ -303,7 +303,7 @@ function stepTypeLabel(step: AgentStep): string {
     case "plan":
       return "Plan";
     case "tools":
-      return "Werkzeuge";
+      return "Datenbank";
     case "tool_call":
       return "Aufruf";
     case "tool_result":
@@ -1290,9 +1290,7 @@ export default function Home() {
                     Entfernen
                   </button>
                 </span>
-              ) : (
-                <span className="attachment-help">Gemini 3.5 Flash liest PDFs/OCR serverseitig aus.</span>
-              )}
+              ) : null}
             </div>
             <div className="composer-actions">
               <span>{messages.length} Nachrichten lokal für dieses Konto gespeichert</span>

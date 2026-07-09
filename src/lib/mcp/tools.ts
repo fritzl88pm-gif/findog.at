@@ -40,7 +40,7 @@ export function normalizeInputSchema(inputSchema?: JsonObject): JsonObject {
 }
 
 export function mcpToolToDeepSeekTool(tool: McpTool): DeepSeekTool {
-  const description = tool.description?.trim() || `BFG/WeKnora MCP tool: ${tool.name}`;
+  const description = tool.description?.trim() || `Fachdatenbank-Recherchefunktion: ${tool.name}`;
 
   return {
     type: "function",

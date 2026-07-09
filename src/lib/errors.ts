@@ -11,7 +11,7 @@ export class UserVisibleError extends Error {
 export class MissingMcpBearerTokenError extends UserVisibleError {
   constructor() {
     super(
-      "Der BFG-MCP-Server verlangt einen Bearer Token. Bitte serverseitige BFG MCP Konfiguration prüfen.",
+      "Der Datenbankzugang ist serverseitig nicht konfiguriert. Bitte Administrator kontaktieren.",
       401,
     );
     this.name = "MissingMcpBearerTokenError";

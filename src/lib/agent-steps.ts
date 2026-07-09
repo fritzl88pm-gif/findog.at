@@ -17,8 +17,6 @@ export type AgentRunResult = {
 
 const DEFAULT_STEP_TEXT_LIMIT = 1_200;
 const DEFAULT_ARGUMENT_LIMIT = 800;
-const MAX_VISIBLE_TOOL_NAMES = 40;
-
 function stringifyUnknown(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -42,16 +40,4 @@ export function summarizeStepText(value: unknown, maxLength = DEFAULT_STEP_TEXT_
 
 export function summarizeToolArguments(value: unknown): string {
   return summarizeStepText(value, DEFAULT_ARGUMENT_LIMIT);
-}
-
-export function summarizeToolNames(toolNames: string[]): string {
-  if (toolNames.length === 0) {
-    return "Keine MCP-Werkzeuge verfügbar.";
-  }
-
-  const visibleNames = toolNames.slice(0, MAX_VISIBLE_TOOL_NAMES);
-  const remaining = toolNames.length - visibleNames.length;
-  return remaining > 0
-    ? `${visibleNames.join(", ")} und ${remaining} weitere`
-    : visibleNames.join(", ");
 }

@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Findog/Fred",
-  description: "KI-Assistent fuer oesterreichisches Steuerrecht mit BFG-Recherche.",
+  description: "KI-Assistent fuer oesterreichisches Steuerrecht mit Fachdatenbank-Recherche.",
 };
 
 export default function RootLayout({

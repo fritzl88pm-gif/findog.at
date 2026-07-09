@@ -238,8 +238,8 @@ async function preparePdfContext(
 
   const readingStep: AgentStep = {
     type: "pdf_context",
-    title: "PDF wird mit Gemini 3.5 Flash gelesen",
-    content: `${pdfUpload.filename} wird serverseitig über OpenRouter/Gemini ausgelesen.`,
+    title: "PDF wird gelesen",
+    content: `${pdfUpload.filename} wird ausgelesen.`,
   };
   await onStep?.(readingStep);
 
@@ -247,7 +247,7 @@ async function preparePdfContext(
   const extractedStep: AgentStep = {
     type: "pdf_context",
     title: "PDF-Kontext extrahiert",
-    content: `${pdfUpload.filename}: ${content.length.toLocaleString("de-AT")} Zeichen PDF-Kontext wurden an das gewählte Antwortmodell übergeben.`,
+    content: `${pdfUpload.filename}: ${content.length.toLocaleString("de-AT")} Zeichen PDF-Inhalt wurden für die Antwort berücksichtigt.`,
   };
   await onStep?.(extractedStep);
 

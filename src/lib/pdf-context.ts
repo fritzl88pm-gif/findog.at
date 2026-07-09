@@ -16,7 +16,7 @@ function getOpenRouterApiKey(): string {
   const apiKey = process.env.OPENROUTER_API_KEY?.trim();
   if (!apiKey) {
     throw new UserVisibleError(
-      "PDF-Auswertung ist serverseitig nicht konfiguriert. Bitte OPENROUTER_API_KEY prüfen.",
+      "PDF-Auswertung ist serverseitig nicht konfiguriert. Bitte Administrator kontaktieren.",
       503,
     );
   }
@@ -94,22 +94,22 @@ function openRouterError(status: number, body: string): UserVisibleError {
 
   if (status === 401) {
     return new UserVisibleError(
-      "OpenRouter API Key wurde abgelehnt. Bitte serverseitige PDF-Konfiguration prüfen.",
+      "PDF-Zugang wurde abgelehnt. Bitte serverseitige PDF-Konfiguration prüfen.",
       401,
     );
   }
   if (status === 413) {
-    return new UserVisibleError("Das PDF ist für die Gemini-Auswertung zu groß.", 413);
+    return new UserVisibleError("Das PDF ist für die Auswertung zu groß.", 413);
   }
   if (status === 429) {
-    return new UserVisibleError("OpenRouter Rate Limit erreicht. Bitte später erneut versuchen.", 429);
+    return new UserVisibleError("PDF-Auswertung ist derzeit ausgelastet. Bitte später erneut versuchen.", 429);
   }
   if (status >= 500) {
-    return new UserVisibleError("OpenRouter/Gemini ist derzeit nicht erreichbar. Bitte später erneut versuchen.", 502);
+    return new UserVisibleError("PDF-Auswertung ist derzeit nicht erreichbar. Bitte später erneut versuchen.", 502);
   }
 
   return new UserVisibleError(
-    `OpenRouter/Gemini Fehler HTTP ${status}${apiMessage ? `: ${apiMessage}` : ""}`,
+    `PDF-Auswertung Fehler HTTP ${status}${apiMessage ? `: ${apiMessage}` : ""}`,
     status,
   );
 }
@@ -160,7 +160,7 @@ export async function extractPdfContext(options: ExtractPdfContextOptions): Prom
   try {
     parsed = JSON.parse(body) as JsonRecord;
   } catch {
-    throw new UserVisibleError("OpenRouter/Gemini lieferte keine gültige JSON-Antwort.", 502);
+    throw new UserVisibleError("PDF-Auswertung lieferte keine gültige Antwort.", 502);
   }
 
   const choices = Array.isArray(parsed.choices) ? parsed.choices : [];
@@ -168,7 +168,7 @@ export async function extractPdfContext(options: ExtractPdfContextOptions): Prom
   const message = firstChoice?.message as JsonRecord | undefined;
   const text = contentText(message?.content);
   if (!text) {
-    throw new UserVisibleError("Gemini konnte keinen PDF-Kontext extrahieren.", 502);
+    throw new UserVisibleError("Aus dem PDF konnte kein Kontext extrahiert werden.", 502);
   }
 
   return boundedContext(text);

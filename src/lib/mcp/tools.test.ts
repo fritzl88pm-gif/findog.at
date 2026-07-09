@@ -56,7 +56,7 @@ describe("mcpToolToDeepSeekTool", () => {
       description: "  ",
     });
 
-    expect(tool.function.description).toBe("BFG/WeKnora MCP tool: bfg_detail");
+    expect(tool.function.description).toBe("Fachdatenbank-Recherchefunktion: bfg_detail");
   });
 
   it("uses an empty object schema when the MCP schema is not an object schema", () => {
