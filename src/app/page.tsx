@@ -5,15 +5,12 @@ import type { Session } from "@supabase/supabase-js";
 
 import { chatHistoryStorageKey } from "@/lib/chat/storage";
 import {
-  AVAILABLE_MODELS,
-  DEFAULT_MODEL,
   DEFAULT_SYSTEM_PROMPT,
   MAX_IMAGE_UPLOAD_BYTES,
   MAX_IMAGE_UPLOADS,
   MAX_PDF_UPLOAD_BYTES,
   MAX_PDF_UPLOADS,
   MAX_SYSTEM_PROMPT_CHARS,
-  type ChatModel,
 } from "@/lib/config";
 import { ellipsizeFilename } from "@/lib/attachment-names";
 import type { AgentStep } from "@/lib/agent-steps";
@@ -32,8 +29,6 @@ type ChatMessage = {
 };
 
 type Settings = {
-  deepSeekApiKey: string;
-  model: ChatModel;
   systemPrompt: string;
 };
 
@@ -42,7 +37,7 @@ type StoredHistory = {
   messages: ChatMessage[];
 };
 
-type StoredSettings = Pick<Settings, "model" | "systemPrompt">;
+type StoredSettings = Pick<Settings, "systemPrompt">;
 
 type AuthMode = "sign-in" | "sign-up";
 
@@ -62,24 +57,8 @@ const SETTINGS_STORAGE_KEY = "findog.settings.v1";
 const INITIAL_PENDING_TEXT = "Verbindung zum Rechercheagenten wird aufgebaut...";
 
 const DEFAULT_SETTINGS: Settings = {
-  deepSeekApiKey: "",
-  model: DEFAULT_MODEL,
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
 };
-
-function isChatModel(value: unknown): value is ChatModel {
-  return typeof value === "string" && AVAILABLE_MODELS.includes(value as ChatModel);
-}
-
-function isProModel(model: ChatModel): boolean {
-  return model === "deepseek-v4-pro";
-}
-
-function modelLabel(model: ChatModel): string {
-  return model === "deepseek-v4-pro"
-    ? "deepseek-v4-pro (BYOK, eigener API Key)"
-    : "deepseek-v4-flash (Global, Standard)";
-}
 
 function readJson<T>(key: string): T | null {
   try {
@@ -539,8 +518,6 @@ export default function Home() {
       const storedSettings = readJson<Partial<StoredSettings>>(SETTINGS_STORAGE_KEY);
       if (storedSettings) {
         setSettings({
-          deepSeekApiKey: "",
-          model: isChatModel(storedSettings.model) ? storedSettings.model : DEFAULT_MODEL,
           systemPrompt:
             typeof storedSettings.systemPrompt === "string" && storedSettings.systemPrompt.trim()
               ? storedSettings.systemPrompt
@@ -633,7 +610,6 @@ export default function Home() {
   useEffect(() => {
     if (isLoaded) {
       writeJson(SETTINGS_STORAGE_KEY, {
-        model: settings.model,
         systemPrompt: settings.systemPrompt,
       });
     }
@@ -750,10 +726,6 @@ export default function Home() {
         throw signOutError;
       }
 
-      setSettings((current) => ({
-        ...current,
-        deepSeekApiKey: "",
-      }));
       setSession(null);
       setHistoryOwnerId("");
       setConversationId("");
@@ -874,12 +846,6 @@ export default function Home() {
     }
     setSession(sessionData.session);
 
-    if (isProModel(settings.model) && !settings.deepSeekApiKey.trim()) {
-      setError("DeepSeek Pro benötigt deinen eigenen API Key. Bitte in den Einstellungen eintragen.");
-      setSettingsOpen(true);
-      return;
-    }
-
     const attachmentLines = [
       ...attachedPdfs.map((file) => `PDF-Anhang: ${file.name}`),
       ...attachedImages.map((file) => `Bild-Anhang: ${file.name}`),
@@ -904,13 +870,10 @@ export default function Home() {
 
     try {
       const requestBody: {
-        deepSeekApiKey?: string;
-        model: ChatModel;
         systemPrompt: string;
         messages: Array<Pick<ChatMessage, "role" | "content">>;
         conversationId?: string;
       } = {
-        model: settings.model,
         systemPrompt: settings.systemPrompt.trim() || DEFAULT_SYSTEM_PROMPT,
         messages: nextMessages.map((message) => ({
           role: message.role,
@@ -920,9 +883,6 @@ export default function Home() {
 
       if (conversationId) {
         requestBody.conversationId = conversationId;
-      }
-      if (isProModel(settings.model)) {
-        requestBody.deepSeekApiKey = settings.deepSeekApiKey.trim();
       }
 
       const requestHeaders: Record<string, string> = {
@@ -1006,7 +966,6 @@ export default function Home() {
   const isAuthConfigured = isSupabaseBrowserConfigured();
   const hasSelectedAttachments = selectedPdfs.length > 0 || selectedImages.length > 0;
   const canSend = isAppReady && Boolean(user) && (composer.trim().length > 0 || hasSelectedAttachments) && !isSending;
-  const needsOwnDeepSeekKey = isProModel(settings.model);
 
   if (!isAuthLoaded) {
     return (
@@ -1165,45 +1124,6 @@ export default function Home() {
 
         {settingsOpen ? (
           <div className="sidebar-content">
-            <div className="field-group">
-              <label htmlFor="model">DeepSeek Modell</label>
-              <select
-                id="model"
-                value={settings.model}
-                onChange={(event) => updateSetting("model", event.target.value as ChatModel)}
-              >
-                {AVAILABLE_MODELS.map((model) => (
-                  <option key={model} value={model}>
-                    {modelLabel(model)}
-                  </option>
-                ))}
-              </select>
-              <span className="field-help">
-                Flash ist der Standard und nutzt den globalen Server-Key. Pro ist BYOK und benötigt deinen eigenen Key.
-              </span>
-            </div>
-
-            {needsOwnDeepSeekKey ? (
-              <div className="field-group">
-                <label htmlFor="deepseek-key">DeepSeek API Key für Pro</label>
-                <input
-                  id="deepseek-key"
-                  type="password"
-                  value={settings.deepSeekApiKey}
-                  onChange={(event) => updateSetting("deepSeekApiKey", event.target.value)}
-                  autoComplete="off"
-                  placeholder="Nur für deepseek-v4-pro"
-                />
-                <span className="field-help">
-                  Wird nur flüchtig im React-State gehalten und nie persistent gespeichert.
-                </span>
-              </div>
-            ) : (
-              <div className="notice-box" role="status">
-                DeepSeek v4 Flash ist global verfügbar. Für das Standardmodell ist kein eigener API Key nötig.
-              </div>
-            )}
-
             <div className="field-group">
               <div className="field-label-row">
                 <label htmlFor="system-prompt">System Prompt</label>

@@ -131,7 +131,7 @@ describe("runAgent", () => {
 
     const result = (await runAgent({
       apiKey: "test-key",
-      model: "deepseek-v4-flash",
+      model: "deepseek-v4-pro",
       systemPrompt: "System",
       messages: [{ role: "user", content: "Frage" }],
       mcpBearerToken: "mcp-token",
@@ -219,7 +219,7 @@ describe("runAgent", () => {
 
     const result = await runAgent({
       apiKey: "test-key",
-      model: "deepseek-v4-flash",
+      model: "deepseek-v4-pro",
       systemPrompt: "System",
       messages: [{ role: "user", content: "Frage" }],
       mcpBearerToken: "mcp-token",
@@ -244,7 +244,7 @@ describe("runAgent", () => {
     );
   });
 
-  it("passes extracted PDF context into the selected answer model", async () => {
+  it("passes extracted PDF context into the fixed answer model", async () => {
     mockMcpSession();
     mockedChatCompletion
       .mockResolvedValueOnce({
@@ -304,7 +304,7 @@ describe("runAgent", () => {
     expectProtocolSafeMessages();
   });
 
-  it("passes extracted PDF and image contexts into the selected answer model", async () => {
+  it("passes extracted PDF and image contexts into the fixed answer model", async () => {
     mockMcpSession();
     mockedChatCompletion
       .mockResolvedValueOnce({
@@ -326,7 +326,7 @@ describe("runAgent", () => {
 
     await runAgent({
       apiKey: "test-key",
-      model: "deepseek-v4-flash",
+      model: "deepseek-v4-pro",
       systemPrompt: "System",
       messages: [{ role: "user", content: "Was steht in den Anhängen?" }],
       mcpBearerToken: "mcp-token",
@@ -400,7 +400,7 @@ describe("runAgent", () => {
 
     const result = (await runAgent({
       apiKey: "test-key",
-      model: "deepseek-v4-flash",
+      model: "deepseek-v4-pro",
       systemPrompt: "System",
       messages: [{ role: "user", content: "Frage" }],
       mcpBearerToken: "mcp-token",

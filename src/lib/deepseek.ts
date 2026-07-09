@@ -47,7 +47,7 @@ function parseDeepSeekError(code: number, body: string): string {
   }
 
   if (code === 401) {
-    return "DeepSeek API Key wurde abgelehnt. Bitte prüfen und erneut speichern.";
+    return "DeepSeek API Key wurde abgelehnt. Bitte Administrator kontaktieren.";
   }
   if (code === 429) {
     return "DeepSeek Rate Limit erreicht. Bitte später erneut versuchen.";

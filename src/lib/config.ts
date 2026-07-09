@@ -1,8 +1,8 @@
 import { DEFAULT_SYSTEM_PROMPT } from "./default-system-prompt";
 
 export const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
-export const DEFAULT_MODEL = "deepseek-v4-flash";
-export const AVAILABLE_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"] as const;
+export const DEFAULT_MODEL = "deepseek-v4-pro";
+export const AVAILABLE_MODELS = [DEFAULT_MODEL] as const;
 export const MAX_REQUEST_BYTES = 400_000;
 export const MAX_PDF_UPLOAD_BYTES = 50_000_000;
 export const MAX_IMAGE_UPLOAD_BYTES = 5_000_000;

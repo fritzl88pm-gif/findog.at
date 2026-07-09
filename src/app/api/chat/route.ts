@@ -4,7 +4,6 @@ import {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
   DEFAULT_SYSTEM_PROMPT,
-  isSupportedModel,
   MAX_IMAGE_UPLOAD_BYTES,
   MAX_MESSAGE_CHARS,
   MAX_IMAGE_UPLOADS,
@@ -32,8 +31,6 @@ import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 export const runtime = "nodejs";
 
 type ChatRequestBody = {
-  deepSeekApiKey?: unknown;
-  model?: unknown;
   systemPrompt?: unknown;
   messages?: unknown;
   conversationId?: unknown;
@@ -348,12 +345,8 @@ export async function POST(request: Request) {
     const authenticatedUser = await authenticateSupabaseRequest(request, supabase);
 
     const { body, attachmentUploads } = await parseChatRequest(request);
-    const requestedModel = asOptionalString(body.model, 80, "Modell") ?? DEFAULT_MODEL;
-    const model = isSupportedModel(requestedModel) ? requestedModel : DEFAULT_MODEL;
-    const deepSeekApiKey = resolveDeepSeekApiKey({
-      model,
-      userApiKey: typeof body.deepSeekApiKey === "string" ? body.deepSeekApiKey : undefined,
-    });
+    const model = DEFAULT_MODEL;
+    const deepSeekApiKey = resolveDeepSeekApiKey();
     const systemPrompt =
       asOptionalString(body.systemPrompt, MAX_SYSTEM_PROMPT_CHARS, "System Prompt") ??
       DEFAULT_SYSTEM_PROMPT;

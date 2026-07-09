@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AVAILABLE_MODELS,
+  DEFAULT_MODEL,
   DEFAULT_SYSTEM_PROMPT,
   MAX_IMAGE_UPLOAD_BYTES,
   MAX_IMAGE_UPLOADS,
@@ -9,6 +11,7 @@ import {
   MAX_PDF_UPLOADS,
   MAX_REQUEST_BYTES,
   MAX_SYSTEM_PROMPT_CHARS,
+  isSupportedModel,
 } from "./config";
 
 describe("DEFAULT_SYSTEM_PROMPT", () => {
@@ -27,5 +30,14 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
     expect(MAX_MULTIPART_REQUEST_BYTES).toBeGreaterThanOrEqual(
       MAX_REQUEST_BYTES + MAX_PDF_UPLOAD_BYTES * MAX_PDF_UPLOADS + MAX_IMAGE_UPLOAD_BYTES * MAX_IMAGE_UPLOADS,
     );
+  });
+});
+
+describe("model policy", () => {
+  it("exposes DeepSeek v4 Pro as the only supported and default chat model", () => {
+    expect(DEFAULT_MODEL).toBe("deepseek-v4-pro");
+    expect(AVAILABLE_MODELS).toEqual(["deepseek-v4-pro"]);
+    expect(isSupportedModel("deepseek-v4-pro")).toBe(true);
+    expect(isSupportedModel("deepseek-v4-flash")).toBe(false);
   });
 });

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_IMAGE_UPLOAD_BYTES } from "@/lib/config";
 import { runAgent } from "@/lib/agent";
+import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 import { POST } from "./route";
 
@@ -41,10 +42,19 @@ vi.mock("@/lib/agent", () => ({
 
 function chatPayload() {
   return {
-    model: "deepseek-v4-flash",
     systemPrompt: "System",
     messages: [{ role: "user", content: "Bitte auswerten." }],
   };
+}
+
+function jsonRequest(payload: Record<string, unknown>): Request {
+  return new Request("http://localhost/api/chat", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
 }
 
 function multipartRequest(formData: FormData): Request {
@@ -57,6 +67,25 @@ function multipartRequest(formData: FormData): Request {
 describe("POST /api/chat uploads", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("always uses server-keyed DeepSeek v4 Pro and ignores stale client model or key fields", async () => {
+    const response = await POST(
+      jsonRequest({
+        ...chatPayload(),
+        model: "obsolete-client-model",
+        deepSeekApiKey: "user-key",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(resolveDeepSeekApiKey).toHaveBeenCalledWith();
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "deepseek-key",
+        model: "deepseek-v4-pro",
+      }),
+    );
   });
 
   it("accepts five PDFs without inspecting or blocking page count", async () => {
