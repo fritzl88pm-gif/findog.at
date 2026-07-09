@@ -17,7 +17,9 @@ import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 import { parseChatStreamLine } from "@/lib/chat-stream";
 import { persistConversationTurn } from "@/lib/persistence";
-import { POST, maxDuration } from "./route";
+import * as chatRoute from "./route";
+
+const { POST } = chatRoute;
 
 vi.mock("@/lib/auth/server", () => ({
   authenticateSupabaseRequest: vi.fn().mockResolvedValue({ id: "user-1" }),
@@ -60,13 +62,14 @@ function chatPayload() {
   };
 }
 
-function jsonRequest(payload: Record<string, unknown>): Request {
+function jsonRequest(payload: Record<string, unknown>, signal?: AbortSignal): Request {
   return new Request("http://localhost/api/chat", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
+    signal,
   });
 }
 
@@ -112,11 +115,11 @@ describe("POST /api/chat uploads", () => {
     );
   });
 
-  it("declares the Vercel max duration for the chat route", () => {
-    expect(maxDuration).toBe(300);
+  it("does not declare a Vercel max duration for the chat route", () => {
+    expect(chatRoute).not.toHaveProperty("maxDuration");
   });
 
-  it("passes a request deadline to attachment extraction and the agent", async () => {
+  it("passes unbounded request cancellation to attachment extraction and the agent", async () => {
     const formData = new FormData();
     formData.append("payload", JSON.stringify(chatPayload()));
     formData.append(
@@ -131,13 +134,35 @@ describe("POST /api/chat uploads", () => {
       deadline?: { signal?: AbortSignal; remainingMs?: () => number };
     };
     expect(pdfOptions.deadline?.signal).toBeInstanceOf(AbortSignal);
-    expect(pdfOptions.deadline?.remainingMs?.()).toBeGreaterThan(0);
+    expect(pdfOptions.deadline?.remainingMs?.()).toBe(Number.POSITIVE_INFINITY);
 
     const agentOptions = vi.mocked(runAgent).mock.calls[0]?.[0] as {
       deadline?: { signal?: AbortSignal; remainingMs?: () => number };
     };
     expect(agentOptions.deadline?.signal).toBeInstanceOf(AbortSignal);
-    expect(agentOptions.deadline?.remainingMs?.()).toBeGreaterThan(0);
+    expect(agentOptions.deadline?.remainingMs?.()).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it("propagates request aborts to the agent cancellation signal", async () => {
+    const requestController = new AbortController();
+    let agentSignal: AbortSignal | undefined;
+    vi.mocked(runAgent).mockImplementationOnce(async (options) => {
+      agentSignal = options.deadline?.signal;
+      await new Promise<void>((resolve) => {
+        agentSignal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return { answer: "Antwort", steps: [], tools: [] };
+    });
+
+    const responsePromise = POST(jsonRequest(chatPayload(), requestController.signal));
+    await vi.waitFor(() => expect(agentSignal).toBeInstanceOf(AbortSignal));
+
+    requestController.abort();
+
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    expect(agentSignal?.aborted).toBe(true);
+    expect(agentSignal?.reason).toBe(requestController.signal.reason);
   });
 
   it("streams the final event before best-effort persistence failures", async () => {

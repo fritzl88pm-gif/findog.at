@@ -46,11 +46,11 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-export function createDeadline(durationMs: number, options: DeadlineOptions = {}): Deadline {
+function createDeadlineInternal(durationMs: number | undefined, options: DeadlineOptions): Deadline {
   const timeoutMessage = options.timeoutMessage ?? ROUTE_TIMEOUT_MESSAGE;
   const status = options.status ?? 504;
   const controller = new AbortController();
-  const expiresAt = Date.now() + Math.max(0, durationMs);
+  const expiresAt = durationMs === undefined ? Number.POSITIVE_INFINITY : Date.now() + Math.max(0, durationMs);
 
   const abort = (reason?: unknown) => {
     if (!controller.signal.aborted) {
@@ -58,8 +58,13 @@ export function createDeadline(durationMs: number, options: DeadlineOptions = {}
     }
   };
 
-  const timeout = setTimeout(() => abort(timeoutError(timeoutMessage, status)), Math.max(0, durationMs));
-  unrefTimer(timeout);
+  const timeout =
+    durationMs === undefined
+      ? undefined
+      : setTimeout(() => abort(timeoutError(timeoutMessage, status)), Math.max(0, durationMs));
+  if (timeout !== undefined) {
+    unrefTimer(timeout);
+  }
 
   const onParentAbort = () => abort(options.parentSignal?.reason ?? timeoutError("Die Anfrage wurde abgebrochen.", 499));
   if (options.parentSignal?.aborted) {
@@ -78,16 +83,26 @@ export function createDeadline(durationMs: number, options: DeadlineOptions = {}
       if (controller.signal.aborted) {
         throw abortReasonError(controller.signal, message, status);
       }
-      if (Date.now() >= expiresAt) {
+      if (durationMs !== undefined && Date.now() >= expiresAt) {
         abort(timeoutError(message, status));
         throw timeoutError(message, status);
       }
     },
     dispose() {
-      clearTimeout(timeout);
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
       options.parentSignal?.removeEventListener("abort", onParentAbort);
     },
   };
+}
+
+export function createDeadline(durationMs: number, options: DeadlineOptions = {}): Deadline {
+  return createDeadlineInternal(durationMs, options);
+}
+
+export function createUnboundedDeadline(options: DeadlineOptions = {}): Deadline {
+  return createDeadlineInternal(undefined, options);
 }
 
 export function hasDeadlineTime(deadline: Deadline | undefined, minimumMs: number): boolean {

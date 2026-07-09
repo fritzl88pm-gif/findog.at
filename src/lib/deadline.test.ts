@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createDeadline, hasDeadlineTime, runWithTimeout } from "./deadline";
+import { createDeadline, createUnboundedDeadline, hasDeadlineTime, runWithTimeout } from "./deadline";
 
 describe("deadline helpers", () => {
   afterEach(() => {
@@ -32,6 +32,36 @@ describe("deadline helpers", () => {
     vi.setSystemTime(400);
 
     expect(deadline.remainingMs()).toBe(600);
+    deadline.dispose();
+  });
+
+  it("keeps an unbounded deadline unlimited without scheduling an expiration timer", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const deadline = createUnboundedDeadline();
+
+    expect(deadline.expiresAt).toBe(Number.POSITIVE_INFINITY);
+    expect(deadline.remainingMs()).toBe(Number.POSITIVE_INFINITY);
+    expect(vi.getTimerCount()).toBe(0);
+
+    vi.advanceTimersByTime(240_000);
+
+    expect(deadline.signal.aborted).toBe(false);
+    expect(deadline.remainingMs()).toBe(Number.POSITIVE_INFINITY);
+    expect(hasDeadlineTime(deadline, Number.MAX_SAFE_INTEGER)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    deadline.dispose();
+  });
+
+  it("propagates parent aborts through an unbounded deadline", () => {
+    const parent = new AbortController();
+    const deadline = createUnboundedDeadline({ parentSignal: parent.signal });
+
+    parent.abort();
+
+    expect(deadline.signal.aborted).toBe(true);
+    expect(deadline.signal.reason).toBe(parent.signal.reason);
+    expect(() => deadline.throwIfExpired()).toThrow();
     deadline.dispose();
   });
 
@@ -76,5 +106,32 @@ describe("deadline helpers", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     await expectation;
+  });
+
+  it("retains the per-call timeout when the shared deadline is unbounded", async () => {
+    vi.useFakeTimers();
+    const deadline = createUnboundedDeadline();
+    const promise = runWithTimeout(
+      (signal) =>
+        new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+      {
+        deadline,
+        timeoutMs: 100,
+        timeoutMessage: "Externer Aufruf dauerte zu lange.",
+      },
+    );
+
+    const expectation = expect(promise).rejects.toMatchObject({
+      message: "Externer Aufruf dauerte zu lange.",
+      status: 504,
+    });
+
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(100);
+
+    await expectation;
+    deadline.dispose();
   });
 });

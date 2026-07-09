@@ -27,12 +27,9 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getServerMcpBearerToken } from "@/lib/mcp/server-token";
 import { CHAT_STREAM_CONTENT_TYPE, encodeChatStreamEvent } from "@/lib/chat-stream";
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
-import { createDeadline, type Deadline } from "@/lib/deadline";
+import { createUnboundedDeadline, type Deadline } from "@/lib/deadline";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
-
-const CHAT_ROUTE_INTERNAL_BUDGET_MS = 240_000;
 
 type ChatRequestBody = {
   systemPrompt?: unknown;
@@ -368,7 +365,7 @@ async function prepareAttachmentContexts(
 }
 
 export async function POST(request: Request) {
-  const deadline = createDeadline(CHAT_ROUTE_INTERNAL_BUDGET_MS, { parentSignal: request.signal });
+  const deadline = createUnboundedDeadline({ parentSignal: request.signal });
   let disposeDeadline = true;
 
   try {
