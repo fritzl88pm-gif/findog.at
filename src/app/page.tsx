@@ -1,6 +1,6 @@
 "use client";
 
-import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { Fragment, type ChangeEvent, type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 
 import { chatHistoryStorageKey } from "@/lib/chat/storage";
@@ -8,10 +8,14 @@ import {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
   DEFAULT_SYSTEM_PROMPT,
+  MAX_IMAGE_UPLOAD_BYTES,
+  MAX_IMAGE_UPLOADS,
   MAX_PDF_UPLOAD_BYTES,
+  MAX_PDF_UPLOADS,
   MAX_SYSTEM_PROMPT_CHARS,
   type ChatModel,
 } from "@/lib/config";
+import { ellipsizeFilename } from "@/lib/attachment-names";
 import type { AgentStep } from "@/lib/agent-steps";
 import { parseRichAnswer, type RichBlock, type RichInline } from "@/lib/answer-rendering";
 import {
@@ -109,8 +113,8 @@ function normalizeAgentSteps(value: unknown): AgentStep[] {
       return [];
     }
 
-    if (item.type === "pdf_context") {
-      return [{ type: "pdf_context", title: item.title, content: item.content }];
+    if (item.type === "pdf_context" || item.type === "attachment_context") {
+      return [{ type: item.type, title: item.title, content: item.content }];
     }
     if (item.type === "plan") {
       return [{ type: "plan", title: item.title, content: item.content }];
@@ -217,6 +221,7 @@ function pendingTextForStep(step: AgentStep): string {
 
   switch (step.type) {
     case "pdf_context":
+    case "attachment_context":
       return `${step.title}: ${preview}`;
     case "plan":
       return `Arbeitsplan erstellt: ${preview}`;
@@ -300,6 +305,8 @@ function stepTypeLabel(step: AgentStep): string {
   switch (step.type) {
     case "pdf_context":
       return "PDF";
+    case "attachment_context":
+      return "Anhang";
     case "plan":
       return "Plan";
     case "tools":
@@ -338,6 +345,35 @@ function renderStepContent(content: string): ReactNode {
   }
 
   return nodes.length > 0 ? nodes : content;
+}
+
+function renderUserMessageContent(content: string): ReactNode {
+  return (
+    <p className="message-body">
+      {content.split("\n").map((line, index) => {
+        const match = /^(PDF-Anhang|Bild-Anhang):\s*(.+)$/.exec(line);
+        const prefix = index > 0 ? "\n" : "";
+
+        if (!match) {
+          return <Fragment key={`${index}-${line}`}>{prefix}{line}</Fragment>;
+        }
+
+        const label = match[1];
+        const filename = match[2];
+        return (
+          <Fragment key={`${index}-${line}`}>
+            {prefix}
+            <span className="attachment-message-line">
+              <span>{label}: </span>
+              <span className="inline-attachment-name" title={filename}>
+                {ellipsizeFilename(filename)}
+              </span>
+            </span>
+          </Fragment>
+        );
+      })}
+    </p>
+  );
 }
 
 function renderRichInline(nodes: RichInline[], keyPrefix: string): ReactNode[] {
@@ -470,7 +506,8 @@ export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversationId, setConversationId] = useState("");
   const [composer, setComposer] = useState("");
-  const [selectedPdf, setSelectedPdf] = useState<File | null>(null);
+  const [selectedPdfs, setSelectedPdfs] = useState<File[]>([]);
+  const [selectedImages, setSelectedImages] = useState<File[]>([]);
   const [error, setError] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [pendingStepText, setPendingStepText] = useState(INITIAL_PENDING_TEXT);
@@ -487,6 +524,7 @@ export default function Home() {
   const [historyOwnerId, setHistoryOwnerId] = useState("");
   const transcriptRef = useRef<HTMLDivElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const user = session?.user ?? null;
   const signedInEmail = user?.email ?? "";
 
@@ -721,7 +759,7 @@ export default function Home() {
       setConversationId("");
       setMessages([]);
       setComposer("");
-      clearPdfAttachment();
+      clearAttachments();
       setError("");
       setPendingStepText(INITIAL_PENDING_TEXT);
       setPendingSteps([]);
@@ -732,32 +770,74 @@ export default function Home() {
     }
   }
 
-  function clearPdfAttachment() {
-    setSelectedPdf(null);
+  function clearAttachments() {
+    setSelectedPdfs([]);
+    setSelectedImages([]);
     if (pdfInputRef.current) {
       pdfInputRef.current.value = "";
     }
+    if (imageInputRef.current) {
+      imageInputRef.current.value = "";
+    }
+  }
+
+  function removePdfAttachment(index: number) {
+    setSelectedPdfs((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  function removeImageAttachment(index: number) {
+    setSelectedImages((current) => current.filter((_, itemIndex) => itemIndex !== index));
   }
 
   function handlePdfChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0] ?? null;
+    const files = Array.from(event.target.files ?? []);
     event.target.value = "";
 
-    if (!file) {
+    if (files.length === 0) {
       return;
     }
-    if (file.type !== "application/pdf") {
-      clearPdfAttachment();
-      setError("Bitte nur PDF-Dateien hochladen.");
-      return;
-    }
-    if (file.size > MAX_PDF_UPLOAD_BYTES) {
-      clearPdfAttachment();
-      setError("Das PDF ist zu groß. Maximal 50 MB sind erlaubt.");
+    if (selectedPdfs.length + files.length > MAX_PDF_UPLOADS) {
+      setError(`Bitte maximal ${MAX_PDF_UPLOADS} PDF-Dateien pro Anfrage hochladen.`);
       return;
     }
 
-    setSelectedPdf(file);
+    for (const file of files) {
+      if (file.type !== "application/pdf") {
+        setError("Bitte nur PDF-Dateien hochladen.");
+        return;
+      }
+      if (file.size > MAX_PDF_UPLOAD_BYTES) {
+        setError("Das PDF ist zu groß. Maximal 50 MB sind erlaubt.");
+        return;
+      }
+    }
+
+    setSelectedPdfs((current) => [...current, ...files]);
+    setError("");
+  }
+
+  function handleImageChange(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+
+    if (files.length === 0) {
+      return;
+    }
+    if (selectedImages.length + files.length > MAX_IMAGE_UPLOADS) {
+      setError(`Bitte maximal ${MAX_IMAGE_UPLOADS} Bilder pro Anfrage hochladen.`);
+      return;
+    }
+
+    if (!files.every((file) => file.type.toLowerCase().startsWith("image/"))) {
+      setError("Bitte nur Bilddateien hochladen.");
+      return;
+    }
+    if (files.some((file) => file.size > MAX_IMAGE_UPLOAD_BYTES)) {
+      setError("Das Bild ist zu groß. Maximal 5 MB sind erlaubt.");
+      return;
+    }
+
+    setSelectedImages((current) => [...current, ...files]);
     setError("");
   }
 
@@ -767,15 +847,17 @@ export default function Home() {
     setConversationId("");
     setPendingStepText(INITIAL_PENDING_TEXT);
     setPendingSteps([]);
-    clearPdfAttachment();
+    clearAttachments();
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const question = composer.trim();
-    const attachedPdf = selectedPdf;
-    if ((!question && !attachedPdf) || isSending) {
+    const attachedPdfs = selectedPdfs;
+    const attachedImages = selectedImages;
+    const hasAttachments = attachedPdfs.length > 0 || attachedImages.length > 0;
+    if ((!question && !hasAttachments) || isSending) {
       return;
     }
 
@@ -798,8 +880,12 @@ export default function Home() {
       return;
     }
 
-    const userContent = attachedPdf
-      ? [question || "Bitte analysiere das hochgeladene PDF.", `PDF-Anhang: ${attachedPdf.name}`].join("\n\n")
+    const attachmentLines = [
+      ...attachedPdfs.map((file) => `PDF-Anhang: ${file.name}`),
+      ...attachedImages.map((file) => `Bild-Anhang: ${file.name}`),
+    ];
+    const userContent = attachmentLines.length > 0
+      ? [question || "Bitte analysiere die hochgeladenen Anhänge.", attachmentLines.join("\n")].join("\n\n")
       : question;
 
     const userMessage: ChatMessage = {
@@ -848,10 +934,15 @@ export default function Home() {
         headers: requestHeaders,
       };
 
-      if (attachedPdf) {
+      if (hasAttachments) {
         const formData = new FormData();
         formData.append("payload", JSON.stringify(requestBody));
-        formData.append("pdf", attachedPdf, attachedPdf.name);
+        for (const file of attachedPdfs) {
+          formData.append("pdf", file, file.name);
+        }
+        for (const file of attachedImages) {
+          formData.append("image", file, file.name);
+        }
         requestInit.body = formData;
       } else {
         requestHeaders["Content-Type"] = "application/json";
@@ -883,8 +974,8 @@ export default function Home() {
       if (typeof payload.conversationId === "string" && payload.conversationId.trim()) {
         setConversationId(payload.conversationId.trim());
       }
-      if (attachedPdf) {
-        clearPdfAttachment();
+      if (hasAttachments) {
+        clearAttachments();
       }
 
       const steps = normalizeAgentSteps(payload.steps);
@@ -913,7 +1004,8 @@ export default function Home() {
 
   const isAppReady = isLoaded && isAuthLoaded;
   const isAuthConfigured = isSupabaseBrowserConfigured();
-  const canSend = isAppReady && Boolean(user) && (composer.trim().length > 0 || Boolean(selectedPdf)) && !isSending;
+  const hasSelectedAttachments = selectedPdfs.length > 0 || selectedImages.length > 0;
+  const canSend = isAppReady && Boolean(user) && (composer.trim().length > 0 || hasSelectedAttachments) && !isSending;
   const needsOwnDeepSeekKey = isProModel(settings.model);
 
   if (!isAuthLoaded) {
@@ -1228,7 +1320,7 @@ export default function Home() {
                   {message.role === "assistant" ? (
                     <RichAnswer content={message.content} />
                   ) : (
-                    <p className="message-body">{message.content}</p>
+                    renderUserMessageContent(message.content)
                   )}
                   {message.role === "assistant" && message.steps?.length ? (
                     <AgentStepsPanel steps={message.steps} />
@@ -1276,21 +1368,44 @@ export default function Home() {
                 id="pdf-upload"
                 type="file"
                 accept="application/pdf"
+                multiple
                 onChange={handlePdfChange}
                 disabled={isSending}
               />
               <label className="attachment-button" htmlFor="pdf-upload" aria-disabled={isSending}>
-                PDF anhängen
+                PDFs anhängen
               </label>
-              {selectedPdf ? (
-                <span className="attachment-chip">
-                  <span title={selectedPdf.name}>{selectedPdf.name}</span>
-                  <small>{(selectedPdf.size / 1_048_576).toLocaleString("de-AT", { maximumFractionDigits: 1 })} MB</small>
-                  <button type="button" onClick={clearPdfAttachment} disabled={isSending} aria-label="PDF entfernen">
+              <input
+                ref={imageInputRef}
+                className="sr-only"
+                id="image-upload"
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleImageChange}
+                disabled={isSending}
+              />
+              <label className="attachment-button" htmlFor="image-upload" aria-disabled={isSending}>
+                Bilder anhängen
+              </label>
+              {selectedPdfs.map((file, index) => (
+                <span className="attachment-chip" key={`pdf-${file.name}-${file.lastModified}-${index}`}>
+                  <span title={file.name}>{ellipsizeFilename(file.name)}</span>
+                  <small>{(file.size / 1_048_576).toLocaleString("de-AT", { maximumFractionDigits: 1 })} MB</small>
+                  <button type="button" onClick={() => removePdfAttachment(index)} disabled={isSending} aria-label={`PDF ${file.name} entfernen`}>
                     Entfernen
                   </button>
                 </span>
-              ) : null}
+              ))}
+              {selectedImages.map((file, index) => (
+                <span className="attachment-chip image" key={`image-${file.name}-${file.lastModified}-${index}`}>
+                  <span title={file.name}>{ellipsizeFilename(file.name)}</span>
+                  <small>{(file.size / 1_048_576).toLocaleString("de-AT", { maximumFractionDigits: 1 })} MB</small>
+                  <button type="button" onClick={() => removeImageAttachment(index)} disabled={isSending} aria-label={`Bild ${file.name} entfernen`}>
+                    Entfernen
+                  </button>
+                </span>
+              ))}
             </div>
             <div className="composer-actions">
               <span>{messages.length} Nachrichten lokal für dieses Konto gespeichert</span>

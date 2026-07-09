@@ -1,12 +1,19 @@
 import { UserVisibleError } from "./errors";
 
 export const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions";
-export const OPENROUTER_GEMINI_PDF_MODEL = "google/gemini-3.5-flash";
+export const OPENROUTER_GEMINI_CONTEXT_MODEL = "google/gemini-3.5-flash";
+export const OPENROUTER_GEMINI_PDF_MODEL = OPENROUTER_GEMINI_CONTEXT_MODEL;
 export const MAX_PDF_CONTEXT_CHARS = 120_000;
 
 type ExtractPdfContextOptions = {
   filename: string;
   mimeType: "application/pdf";
+  bytes: Uint8Array;
+};
+
+type ExtractImageContextOptions = {
+  filename: string;
+  mimeType: `image/${string}`;
   bytes: Uint8Array;
 };
 
@@ -36,6 +43,19 @@ function extractionPrompt(filename: string): string {
     "Beschreibe wichtige Fakten aus Bildern, Diagrammen, Stempeln, Unterschriftenfeldern und visuellen Markierungen.",
     "Markiere unlesbare, abgeschnittene oder leere Bereiche ausdrücklich.",
     "Beantworte keine rechtliche Frage und ziehe keine rechtlichen Schlüsse. Extrahiere nur Dokumentinhalt und Kontext.",
+  ].join("\n");
+}
+
+function imageExtractionPrompt(filename: string): string {
+  return [
+    "Extrahiere den vollständigen Kontext aus dem hochgeladenen Bild für eine spätere steuerrechtliche Chat-Antwort.",
+    `Dateiname: ${filename}`,
+    "",
+    "Liefer das Ergebnis in gut lesbarem, deutschfreundlichem Markdown.",
+    "Erfasse sichtbaren Text per OCR, inklusive Beträgen, Datumsangaben, Namen, Aktenzeichen und Tabellen.",
+    "Beschreibe Dokumenttyp, Layout, Stempel, Unterschriftenfelder, Markierungen und andere fachlich relevante sichtbare Merkmale.",
+    "Markiere unlesbare, abgeschnittene oder leere Bereiche ausdrücklich.",
+    "Beantworte keine rechtliche Frage und ziehe keine rechtlichen Schlüsse. Extrahiere nur Bildinhalt und Kontext.",
   ].join("\n");
 }
 
@@ -89,34 +109,51 @@ function safeApiMessage(body: string): string {
   }
 }
 
-function openRouterError(status: number, body: string): UserVisibleError {
+function openRouterError(status: number, body: string, label: "PDF" | "Bild"): UserVisibleError {
   const apiMessage = safeApiMessage(body);
 
   if (status === 401) {
     return new UserVisibleError(
-      "PDF-Zugang wurde abgelehnt. Bitte serverseitige PDF-Konfiguration prüfen.",
+      `${label}-Zugang wurde abgelehnt. Bitte serverseitige OpenRouter-Konfiguration prüfen.`,
       401,
     );
   }
   if (status === 413) {
-    return new UserVisibleError("Das PDF ist für die Auswertung zu groß.", 413);
+    return new UserVisibleError(`${label === "PDF" ? "Das PDF ist" : "Das Bild ist"} für die Auswertung zu groß.`, 413);
   }
   if (status === 429) {
-    return new UserVisibleError("PDF-Auswertung ist derzeit ausgelastet. Bitte später erneut versuchen.", 429);
+    return new UserVisibleError(`${label}-Auswertung ist derzeit ausgelastet. Bitte später erneut versuchen.`, 429);
   }
   if (status >= 500) {
-    return new UserVisibleError("PDF-Auswertung ist derzeit nicht erreichbar. Bitte später erneut versuchen.", 502);
+    return new UserVisibleError(`${label}-Auswertung ist derzeit nicht erreichbar. Bitte später erneut versuchen.`, 502);
   }
 
   return new UserVisibleError(
-    `PDF-Auswertung Fehler HTTP ${status}${apiMessage ? `: ${apiMessage}` : ""}`,
+    `${label}-Auswertung Fehler HTTP ${status}${apiMessage ? `: ${apiMessage}` : ""}`,
     status,
   );
 }
 
-export async function extractPdfContext(options: ExtractPdfContextOptions): Promise<string> {
+async function extractOpenRouterContext(options: {
+  prompt: string;
+  title: string;
+  label: "PDF" | "Bild";
+  contentPart:
+    | {
+        type: "file";
+        file: {
+          filename: string;
+          file_data: string;
+        };
+      }
+    | {
+        type: "image_url";
+        image_url: {
+          url: string;
+        };
+      };
+}): Promise<string> {
   const apiKey = getOpenRouterApiKey();
-  const fileData = `data:${options.mimeType};base64,${Buffer.from(options.bytes).toString("base64")}`;
 
   const response = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
     method: "POST",
@@ -124,25 +161,19 @@ export async function extractPdfContext(options: ExtractPdfContextOptions): Prom
       Accept: "application/json",
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      "X-Title": "findog.at PDF context extraction",
+      "X-Title": options.title,
     },
     body: JSON.stringify({
-      model: OPENROUTER_GEMINI_PDF_MODEL,
+      model: OPENROUTER_GEMINI_CONTEXT_MODEL,
       messages: [
         {
           role: "user",
           content: [
             {
               type: "text",
-              text: extractionPrompt(options.filename),
+              text: options.prompt,
             },
-            {
-              type: "file",
-              file: {
-                filename: options.filename,
-                file_data: fileData,
-              },
-            },
+            options.contentPart,
           ],
         },
       ],
@@ -153,14 +184,14 @@ export async function extractPdfContext(options: ExtractPdfContextOptions): Prom
 
   const body = await response.text();
   if (!response.ok) {
-    throw openRouterError(response.status, body);
+    throw openRouterError(response.status, body, options.label);
   }
 
   let parsed: JsonRecord;
   try {
     parsed = JSON.parse(body) as JsonRecord;
   } catch {
-    throw new UserVisibleError("PDF-Auswertung lieferte keine gültige Antwort.", 502);
+    throw new UserVisibleError(`${options.label}-Auswertung lieferte keine gültige Antwort.`, 502);
   }
 
   const choices = Array.isArray(parsed.choices) ? parsed.choices : [];
@@ -168,8 +199,41 @@ export async function extractPdfContext(options: ExtractPdfContextOptions): Prom
   const message = firstChoice?.message as JsonRecord | undefined;
   const text = contentText(message?.content);
   if (!text) {
-    throw new UserVisibleError("Aus dem PDF konnte kein Kontext extrahiert werden.", 502);
+    throw new UserVisibleError(`Aus dem ${options.label === "PDF" ? "PDF" : "Bild"} konnte kein Kontext extrahiert werden.`, 502);
   }
 
   return boundedContext(text);
+}
+
+export async function extractPdfContext(options: ExtractPdfContextOptions): Promise<string> {
+  const fileData = `data:${options.mimeType};base64,${Buffer.from(options.bytes).toString("base64")}`;
+
+  return extractOpenRouterContext({
+    prompt: extractionPrompt(options.filename),
+    title: "findog.at PDF context extraction",
+    label: "PDF",
+    contentPart: {
+      type: "file",
+      file: {
+        filename: options.filename,
+        file_data: fileData,
+      },
+    },
+  });
+}
+
+export async function extractImageContext(options: ExtractImageContextOptions): Promise<string> {
+  const fileData = `data:${options.mimeType};base64,${Buffer.from(options.bytes).toString("base64")}`;
+
+  return extractOpenRouterContext({
+    prompt: imageExtractionPrompt(options.filename),
+    title: "findog.at image context extraction",
+    label: "Bild",
+    contentPart: {
+      type: "image_url",
+      image_url: {
+        url: fileData,
+      },
+    },
+  });
 }

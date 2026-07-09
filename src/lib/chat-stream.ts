@@ -26,6 +26,7 @@ export function isAgentStep(value: unknown): value is AgentStep {
 
   if (
     value.type === "pdf_context" ||
+    value.type === "attachment_context" ||
     value.type === "plan" ||
     value.type === "progress" ||
     value.type === "finalize" ||

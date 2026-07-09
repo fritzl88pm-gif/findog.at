@@ -5,7 +5,11 @@ export const DEFAULT_MODEL = "deepseek-v4-flash";
 export const AVAILABLE_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"] as const;
 export const MAX_REQUEST_BYTES = 400_000;
 export const MAX_PDF_UPLOAD_BYTES = 50_000_000;
-export const MAX_MULTIPART_REQUEST_BYTES = MAX_PDF_UPLOAD_BYTES + MAX_REQUEST_BYTES;
+export const MAX_IMAGE_UPLOAD_BYTES = 5_000_000;
+export const MAX_PDF_UPLOADS = 5;
+export const MAX_IMAGE_UPLOADS = 5;
+export const MAX_MULTIPART_REQUEST_BYTES =
+  MAX_REQUEST_BYTES + MAX_PDF_UPLOAD_BYTES * MAX_PDF_UPLOADS + MAX_IMAGE_UPLOAD_BYTES * MAX_IMAGE_UPLOADS;
 export const MAX_MESSAGES = 20;
 export const MAX_MESSAGE_CHARS = 6_000;
 export const MAX_SYSTEM_PROMPT_CHARS = 40_000;

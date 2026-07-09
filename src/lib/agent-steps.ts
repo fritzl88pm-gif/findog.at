@@ -1,5 +1,6 @@
 export type AgentStep =
   | { type: "pdf_context"; title: string; content: string }
+  | { type: "attachment_context"; title: string; content: string }
   | { type: "plan"; title: string; content: string }
   | { type: "tools"; title: string; content: string; tools?: string[] }
   | { type: "tool_call"; title: string; content: string; toolName: string; arguments?: unknown }

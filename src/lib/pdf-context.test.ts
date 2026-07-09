@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MAX_PDF_CONTEXT_CHARS, extractPdfContext } from "./pdf-context";
+import { MAX_PDF_CONTEXT_CHARS, extractImageContext, extractPdfContext } from "./pdf-context";
 import { UserVisibleError } from "./errors";
 
 describe("extractPdfContext", () => {
@@ -67,6 +67,49 @@ describe("extractPdfContext", () => {
       file: {
         filename: "Bescheid.pdf",
         file_data: "data:application/pdf;base64,JVBERg==",
+      },
+    });
+  });
+
+  it("sends images to the same fixed OpenRouter Gemini context model", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: "Bildtext und sichtbarer Kontext",
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const context = await extractImageContext({
+      filename: "Beleg.png",
+      mimeType: "image/png",
+      bytes: new Uint8Array([137, 80, 78, 71]),
+    });
+
+    expect(context).toBe("Bildtext und sichtbarer Kontext");
+    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string) as {
+      model: string;
+      messages: Array<{
+        content: Array<{ type: string; text?: string; image_url?: { url: string } }>;
+      }>;
+    };
+    expect(body.model).toBe("google/gemini-3.5-flash");
+    expect(body.messages[0]?.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Extrahiere den vollständigen Kontext aus dem hochgeladenen Bild"),
+    });
+    expect(body.messages[0]?.content[1]).toEqual({
+      type: "image_url",
+      image_url: {
+        url: "data:image/png;base64,iVBORw==",
       },
     });
   });

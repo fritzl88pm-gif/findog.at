@@ -5,10 +5,13 @@ import {
   DEFAULT_MODEL,
   DEFAULT_SYSTEM_PROMPT,
   isSupportedModel,
+  MAX_IMAGE_UPLOAD_BYTES,
   MAX_MESSAGE_CHARS,
+  MAX_IMAGE_UPLOADS,
   MAX_MESSAGES,
   MAX_MULTIPART_REQUEST_BYTES,
   MAX_PDF_UPLOAD_BYTES,
+  MAX_PDF_UPLOADS,
   MAX_REQUEST_BYTES,
   MAX_SYSTEM_PROMPT_CHARS,
   RATE_LIMIT_MAX_REQUESTS,
@@ -19,12 +22,12 @@ import { type AppChatMessage } from "@/lib/deepseek";
 import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
 import { UserVisibleError } from "@/lib/errors";
 import { persistConversationTurn, resolveConversationIdForClient } from "@/lib/persistence";
-import { runAgent, type PdfContext } from "@/lib/agent";
+import { runAgent, type AttachmentContext } from "@/lib/agent";
 import type { AgentStep } from "@/lib/agent-steps";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getServerMcpBearerToken } from "@/lib/mcp/server-token";
 import { CHAT_STREAM_CONTENT_TYPE, encodeChatStreamEvent } from "@/lib/chat-stream";
-import { extractPdfContext } from "@/lib/pdf-context";
+import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 
 export const runtime = "nodejs";
 
@@ -42,17 +45,28 @@ type RateLimitEntry = {
 };
 
 type PdfUpload = {
+  type: "pdf";
   filename: string;
   mimeType: "application/pdf";
   bytes: Uint8Array;
 };
 
+type ImageUpload = {
+  type: "image";
+  filename: string;
+  mimeType: `image/${string}`;
+  bytes: Uint8Array;
+};
+
+type AttachmentUpload = PdfUpload | ImageUpload;
+
 type ParsedChatRequest = {
   body: ChatRequestBody;
-  pdfUpload?: PdfUpload;
+  attachmentUploads: AttachmentUpload[];
 };
 
 const rateLimit = new Map<string, RateLimitEntry>();
+const MAX_ATTACHMENT_EXTRACTION_CONCURRENCY = 3;
 
 function pruneExpiredRateLimitEntries(now: number): void {
   for (const [key, entry] of rateLimit) {
@@ -154,12 +168,12 @@ function parseMessages(value: unknown): AppChatMessage[] {
   return messages;
 }
 
-function sanitizePdfFilename(value: string): string {
+function sanitizeAttachmentFilename(value: string): string {
   const cleaned = value
     .replace(/[\\/\0<>:"|?*]+/g, "_")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 180);
+    .slice(0, 255);
 
   return cleaned || "document.pdf";
 }
@@ -185,38 +199,64 @@ function isUploadedFile(value: FormDataEntryValue): value is File {
   return typeof File !== "undefined" && value instanceof File;
 }
 
+function isImageMimeType(value: string): value is `image/${string}` {
+  return value.toLowerCase().startsWith("image/");
+}
+
 async function parseMultipartChatRequest(request: Request): Promise<ParsedChatRequest> {
   const formData = await request.formData();
   const body = parseJsonPayload(formData.get("payload"));
   const pdfFiles = formData
     .getAll("pdf")
     .filter((value): value is File => isUploadedFile(value) && value.size > 0);
+  const imageFiles = formData
+    .getAll("image")
+    .filter((value): value is File => isUploadedFile(value) && value.size > 0);
 
-  if (pdfFiles.length === 0) {
-    return { body };
+  if (pdfFiles.length > MAX_PDF_UPLOADS) {
+    throw new UserVisibleError(`Bitte maximal ${MAX_PDF_UPLOADS} PDF-Dateien pro Anfrage hochladen.`, 400);
   }
-  if (pdfFiles.length > 1) {
-    throw new UserVisibleError("Bitte nur ein PDF pro Anfrage hochladen.", 400);
+  if (imageFiles.length > MAX_IMAGE_UPLOADS) {
+    throw new UserVisibleError(`Bitte maximal ${MAX_IMAGE_UPLOADS} Bilder pro Anfrage hochladen.`, 400);
   }
 
-  const pdf = pdfFiles[0];
-  if (!pdf) {
-    return { body };
+  const pdfUploads: PdfUpload[] = [];
+  for (const pdf of pdfFiles) {
+    if (pdf.type !== "application/pdf") {
+      throw new UserVisibleError("Bitte nur PDF-Dateien hochladen.", 400);
+    }
+    if (pdf.size > MAX_PDF_UPLOAD_BYTES) {
+      throw new UserVisibleError("Das PDF ist zu groß. Maximal 50 MB sind erlaubt.", 413);
+    }
+
+    pdfUploads.push({
+      type: "pdf",
+      filename: sanitizeAttachmentFilename(pdf.name),
+      mimeType: "application/pdf",
+      bytes: new Uint8Array(await pdf.arrayBuffer()),
+    });
   }
-  if (pdf.type !== "application/pdf") {
-    throw new UserVisibleError("Bitte nur PDF-Dateien hochladen.", 400);
-  }
-  if (pdf.size > MAX_PDF_UPLOAD_BYTES) {
-    throw new UserVisibleError("Das PDF ist zu groß. Maximal 50 MB sind erlaubt.", 413);
+
+  const imageUploads: ImageUpload[] = [];
+  for (const image of imageFiles) {
+    if (!isImageMimeType(image.type)) {
+      throw new UserVisibleError("Bitte nur Bilddateien hochladen.", 400);
+    }
+    if (image.size > MAX_IMAGE_UPLOAD_BYTES) {
+      throw new UserVisibleError("Das Bild ist zu groß. Maximal 5 MB sind erlaubt.", 413);
+    }
+
+    imageUploads.push({
+      type: "image",
+      filename: sanitizeAttachmentFilename(image.name),
+      mimeType: image.type,
+      bytes: new Uint8Array(await image.arrayBuffer()),
+    });
   }
 
   return {
     body,
-    pdfUpload: {
-      filename: sanitizePdfFilename(pdf.name),
-      mimeType: "application/pdf",
-      bytes: new Uint8Array(await pdf.arrayBuffer()),
-    },
+    attachmentUploads: [...pdfUploads, ...imageUploads],
   };
 }
 
@@ -225,38 +265,74 @@ async function parseChatRequest(request: Request): Promise<ParsedChatRequest> {
     return parseMultipartChatRequest(request);
   }
 
-  return { body: (await request.json()) as ChatRequestBody };
+  return { body: (await request.json()) as ChatRequestBody, attachmentUploads: [] };
 }
 
-async function preparePdfContext(
-  pdfUpload: PdfUpload | undefined,
+async function prepareAttachmentContexts(
+  attachmentUploads: AttachmentUpload[],
   onStep?: (step: AgentStep) => void | Promise<void>,
-): Promise<{ pdfContext?: PdfContext; initialSteps: AgentStep[] }> {
-  if (!pdfUpload) {
+): Promise<{ attachmentContexts?: AttachmentContext[]; initialSteps: AgentStep[] }> {
+  if (attachmentUploads.length === 0) {
     return { initialSteps: [] };
   }
 
-  const readingStep: AgentStep = {
-    type: "pdf_context",
-    title: "PDF wird gelesen",
-    content: `${pdfUpload.filename} wird ausgelesen.`,
-  };
-  await onStep?.(readingStep);
+  const attachmentContexts: AttachmentContext[] = [];
+  const initialSteps: AgentStep[] = [];
 
-  const content = await extractPdfContext(pdfUpload);
-  const extractedStep: AgentStep = {
-    type: "pdf_context",
-    title: "PDF-Kontext extrahiert",
-    content: `${pdfUpload.filename}: ${content.length.toLocaleString("de-AT")} Zeichen PDF-Inhalt wurden für die Antwort berücksichtigt.`,
-  };
-  await onStep?.(extractedStep);
+  for (const upload of attachmentUploads) {
+    const label = upload.type === "pdf" ? "PDF" : "Bild";
+    const readingStep: AgentStep = {
+      type: "attachment_context",
+      title: `${label} wird gelesen`,
+      content: `${upload.filename} wird ausgelesen.`,
+    };
+    initialSteps.push(readingStep);
+    await onStep?.(readingStep);
+  }
+
+  const results: Array<{ context: AttachmentContext; extractedStep: AgentStep }> = [];
+  let nextIndex = 0;
+
+  async function extractNextAttachment(): Promise<void> {
+    while (nextIndex < attachmentUploads.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const upload = attachmentUploads[index];
+      if (!upload) {
+        continue;
+      }
+
+      const label = upload.type === "pdf" ? "PDF" : "Bild";
+      const content = upload.type === "pdf" ? await extractPdfContext(upload) : await extractImageContext(upload);
+      const extractedStep: AgentStep = {
+        type: "attachment_context",
+        title: `${label}-Kontext extrahiert`,
+        content: `${upload.filename}: ${content.length.toLocaleString("de-AT")} Zeichen ${label}-Inhalt wurden für die Antwort berücksichtigt.`,
+      };
+      await onStep?.(extractedStep);
+
+      results[index] = {
+        extractedStep,
+        context: {
+          type: upload.type,
+          filename: upload.filename,
+          content,
+        },
+      };
+    }
+  }
+
+  const workerCount = Math.min(MAX_ATTACHMENT_EXTRACTION_CONCURRENCY, attachmentUploads.length);
+  await Promise.all(Array.from({ length: workerCount }, () => extractNextAttachment()));
+
+  for (const result of results) {
+    initialSteps.push(result.extractedStep);
+    attachmentContexts.push(result.context);
+  }
 
   return {
-    pdfContext: {
-      filename: pdfUpload.filename,
-      content,
-    },
-    initialSteps: [readingStep, extractedStep],
+    attachmentContexts,
+    initialSteps,
   };
 }
 
@@ -271,7 +347,7 @@ export async function POST(request: Request) {
     }
     const authenticatedUser = await authenticateSupabaseRequest(request, supabase);
 
-    const { body, pdfUpload } = await parseChatRequest(request);
+    const { body, attachmentUploads } = await parseChatRequest(request);
     const requestedModel = asOptionalString(body.model, 80, "Modell") ?? DEFAULT_MODEL;
     const model = isSupportedModel(requestedModel) ? requestedModel : DEFAULT_MODEL;
     const deepSeekApiKey = resolveDeepSeekApiKey({
@@ -300,15 +376,15 @@ export async function POST(request: Request) {
           };
 
           try {
-            const pdfAgentContext = await preparePdfContext(pdfUpload, (step) => send({ type: "step", step }));
+            const attachmentAgentContext = await prepareAttachmentContexts(attachmentUploads, (step) => send({ type: "step", step }));
             const agentResult = await runAgent({
               apiKey: deepSeekApiKey,
               model,
               systemPrompt,
               messages,
               mcpBearerToken,
-              pdfContext: pdfAgentContext.pdfContext,
-              initialSteps: pdfAgentContext.initialSteps,
+              attachmentContexts: attachmentAgentContext.attachmentContexts,
+              initialSteps: attachmentAgentContext.initialSteps,
               onStep: (step) => send({ type: "step", step }),
             });
 
@@ -354,15 +430,15 @@ export async function POST(request: Request) {
       });
     }
 
-    const pdfAgentContext = await preparePdfContext(pdfUpload);
+    const attachmentAgentContext = await prepareAttachmentContexts(attachmentUploads);
     const agentResult = await runAgent({
       apiKey: deepSeekApiKey,
       model,
       systemPrompt,
       messages,
       mcpBearerToken,
-      pdfContext: pdfAgentContext.pdfContext,
-      initialSteps: pdfAgentContext.initialSteps,
+      attachmentContexts: attachmentAgentContext.attachmentContexts,
+      initialSteps: attachmentAgentContext.initialSteps,
     });
 
     await persistConversationTurn({

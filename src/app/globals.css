@@ -557,8 +557,26 @@ textarea:focus {
 .message-body {
   margin: 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   color: var(--ink);
   font-size: 0.95rem;
+}
+
+.attachment-message-line {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  vertical-align: bottom;
+}
+
+.inline-attachment-name {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
 .answer-content {
@@ -864,7 +882,7 @@ textarea:focus {
 .attachment-chip {
   display: inline-flex;
   min-width: 0;
-  max-width: 100%;
+  max-width: min(100%, 360px);
   align-items: center;
   gap: 8px;
   border: 1px solid rgba(40, 111, 156, 0.18);
@@ -876,6 +894,8 @@ textarea:focus {
 }
 
 .attachment-chip > span {
+  min-width: 0;
+  max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

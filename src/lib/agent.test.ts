@@ -304,6 +304,58 @@ describe("runAgent", () => {
     expectProtocolSafeMessages();
   });
 
+  it("passes extracted PDF and image contexts into the selected answer model", async () => {
+    mockMcpSession();
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        content: "1. Anhänge prüfen",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Vorläufige Antwort ohne Werkzeuge.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Selbstcheck: Anhänge wurden berücksichtigt.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Finale Antwort mit Anhang-Kontext.",
+        toolCalls: [],
+      });
+
+    await runAgent({
+      apiKey: "test-key",
+      model: "deepseek-v4-flash",
+      systemPrompt: "System",
+      messages: [{ role: "user", content: "Was steht in den Anhängen?" }],
+      mcpBearerToken: "mcp-token",
+      attachmentContexts: [
+        {
+          type: "pdf",
+          filename: "Bescheid.pdf",
+          content: "## Seite 1\nDer Bescheid nennt Einkommensteuer 2024.",
+        },
+        {
+          type: "image",
+          filename: "Beleg.png",
+          content: "Foto eines Zahlungsbelegs über 120 Euro.",
+        },
+      ],
+    });
+
+    const planningSystemPrompt = mockedChatCompletion.mock.calls[0]?.[0].messages[0]?.content;
+    expect(planningSystemPrompt).toContain("Vom Nutzer hochgeladene Anhänge");
+    expect(planningSystemPrompt).toContain("PDF: Bescheid.pdf");
+    expect(planningSystemPrompt).toContain("Bild: Beleg.png");
+    expect(planningSystemPrompt).toContain("Einkommensteuer 2024");
+    expect(planningSystemPrompt).toContain("Zahlungsbelegs über 120 Euro");
+    expect(mockedChatCompletion.mock.calls.at(-1)?.[0].messages[0]?.content).toContain(
+      "Vom Nutzer hochgeladene Anhänge",
+    );
+    expectProtocolSafeMessages();
+  });
+
   it("synthesizes a final answer without tools after the tool loop reaches its limit", async () => {
     const { callTool } = mockMcpSession();
 

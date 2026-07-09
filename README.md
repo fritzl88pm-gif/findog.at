@@ -11,7 +11,7 @@ npm run dev
 
 Open `http://localhost:3000`, register or sign in with Supabase Auth, and use the default `deepseek-v4-flash` model through the server-side global DeepSeek key. `deepseek-v4-pro` is optional BYOK: users enter their own DeepSeek API key in Settings, and that key is kept only in React state for the current browser session. Model and system prompt are stored in browser `localStorage`; the Settings panel can reset the prompt to the bundled Fred default. Local chat history is scoped by the authenticated Supabase user ID, and conversation IDs are verified server-side before use. BFG/WeKnora MCP access is fixed server-side and is not configurable by users.
 
-Assistant responses include a streaming agent-step panel with the plan, loaded MCP tools, tool calls, bounded tool-result snippets, optional PDF-context extraction status, and the final answer marker.
+Assistant responses include a streaming agent-step panel with the plan, loaded MCP tools, tool calls, bounded tool-result snippets, optional attachment-context extraction status, and the final answer marker.
 
 ## Environment
 
@@ -26,13 +26,13 @@ Copy `.env.example` to `.env.local` and configure Supabase Auth before using the
 | `DEEPSEEK_API_KEY` | Yes | Server-only DeepSeek API key used for the default `deepseek-v4-flash` model. Never expose it to the browser. |
 | `GLOBAL_DEEPSEEK_API_KEY` | Optional | Fallback server-only DeepSeek Flash key if `DEEPSEEK_API_KEY` is unset or blank. |
 | `BFG_MCP_BEARER_TOKEN` | Yes | Server-only bearer token for the fixed BFG/WeKnora MCP endpoint. Never expose it to the browser. |
-| `OPENROUTER_API_KEY` | Yes for PDF uploads | Server-only OpenRouter key used only for fixed Gemini 3.5 Flash PDF/OCR context extraction. Never expose it to the browser. |
+| `OPENROUTER_API_KEY` | Yes for PDF/image uploads | Server-only OpenRouter key used only for fixed Gemini 3.5 Flash attachment/OCR context extraction. Never expose it to the browser. |
 
 DeepSeek uses the OpenAI-compatible base URL `https://api.deepseek.com` and `POST /chat/completions`. Supported models are `deepseek-v4-flash` and `deepseek-v4-pro`. Deprecated `deepseek-chat` and `deepseek-reasoner` must not be used.
 
 `deepseek-v4-flash` is the default for authenticated users and always uses the server-only global key. The browser does not send a user DeepSeek key for Flash. `deepseek-v4-pro` requires the user's own DeepSeek API key in Settings; that key remains browser-session only and is not persisted.
 
-PDF uploads are handled as a separate fixed server-side context layer: the browser sends at most one `application/pdf` attachment with the chat payload, the server sends that PDF to OpenRouter model `google/gemini-3.5-flash` for OCR/document extraction, and the extracted Markdown context is passed into the selected answer model. Gemini does not produce the final chat answer.
+PDF and image uploads are handled as a separate fixed server-side context layer: the browser sends up to five `application/pdf` attachments and up to five image attachments with the chat payload, the server sends each file to OpenRouter model `google/gemini-3.5-flash` for OCR/document or image extraction, and the extracted Markdown contexts are passed together into the selected answer model. The existing 50 MB per-PDF limit still applies; images are capped at 5 MB each. There is no page-count gate before extraction. Gemini does not produce the final chat answer.
 
 ## Supabase Migration
 
