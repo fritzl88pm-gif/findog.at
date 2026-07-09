@@ -1,4 +1,5 @@
 import type { DeepSeekTool, JsonObject } from "../mcp/tools";
+import type { Deadline } from "../deadline";
 import { verifyBfgCitations } from "./bfg-citations";
 
 export const FINDOK_VERIFY_BFG_CASES_TOOL_NAME = "findok_verify_bfg_cases";
@@ -32,7 +33,10 @@ function asGzArray(argumentsObject: JsonObject): string[] {
   return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 }
 
-export async function callFindokVerifier(argumentsObject: JsonObject): Promise<string> {
+export async function callFindokVerifier(
+  argumentsObject: JsonObject,
+  options: { deadline?: Deadline; signal?: AbortSignal } = {},
+): Promise<string> {
   const gzs = asGzArray(argumentsObject);
   if (gzs.length === 0) {
     return JSON.stringify({
@@ -42,7 +46,7 @@ export async function callFindokVerifier(argumentsObject: JsonObject): Promise<s
     });
   }
 
-  const verification = await verifyBfgCitations(gzs);
+  const verification = await verifyBfgCitations(gzs, fetch, options);
   return JSON.stringify(
     {
       verified: verification.verified.map((citation) => ({

@@ -1,6 +1,9 @@
 import { DEEPSEEK_BASE_URL, type ChatModel } from "./config";
+import { type Deadline, runWithTimeout } from "./deadline";
 import { UserVisibleError } from "./errors";
 import type { DeepSeekTool, JsonObject } from "./mcp/tools";
+
+export const DEEPSEEK_CHAT_TIMEOUT_MS = 90_000;
 
 export type AppChatMessage = {
   role: "user" | "assistant";
@@ -64,6 +67,10 @@ export async function chatCompletion(options: {
   model: ChatModel;
   messages: DeepSeekMessage[];
   tools?: DeepSeekTool[];
+  deadline?: Deadline;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  reserveMs?: number;
 }): Promise<DeepSeekResult> {
   const tools = options.tools ?? [];
   const payload: JsonObject = {
@@ -77,18 +84,31 @@ export async function chatCompletion(options: {
     payload.tool_choice = "auto";
   }
 
-  const response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${options.apiKey}`,
-      "Content-Type": "application/json",
+  const { response, body } = await runWithTimeout(
+    (signal) =>
+      fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${options.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        cache: "no-store",
+        signal,
+      }).then(async (response) => ({
+        response,
+        body: await response.text(),
+      })),
+    {
+      deadline: options.deadline,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs ?? DEEPSEEK_CHAT_TIMEOUT_MS,
+      timeoutMessage: "DeepSeek hat nicht rechtzeitig geantwortet. Bitte erneut versuchen.",
+      reserveMs: options.reserveMs,
     },
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
+  );
 
-  const body = await response.text();
   if (!response.ok) {
     throw new UserVisibleError(parseDeepSeekError(response.status, body), response.status);
   }

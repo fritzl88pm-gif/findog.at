@@ -1,4 +1,10 @@
-import { chatCompletion, type AppChatMessage, type DeepSeekMessage } from "./deepseek";
+import {
+  DEEPSEEK_CHAT_TIMEOUT_MS,
+  chatCompletion,
+  type AppChatMessage,
+  type DeepSeekMessage,
+} from "./deepseek";
+import { type Deadline, hasDeadlineTime } from "./deadline";
 import { UserVisibleError } from "./errors";
 import { McpClient } from "./mcp/client";
 import type { JsonObject } from "./mcp/tools";
@@ -24,6 +30,9 @@ import {
 } from "./agent-steps";
 
 const MAX_TOOL_ITERATIONS = 12;
+const AGENT_FINALIZATION_RESERVE_MS = 100_000;
+const AGENT_PROGRESS_RESERVE_MS = AGENT_FINALIZATION_RESERVE_MS + 25_000;
+const AGENT_MIN_ITERATION_BUDGET_MS = AGENT_FINALIZATION_RESERVE_MS + 30_000;
 
 function requireModelContent(content: string | null, errorMessage: string): string {
   const text = content?.trim();
@@ -261,9 +270,10 @@ async function verifyBfgCitationsForFinalization(options: {
   draftAnswer?: string;
   steps: AgentStep[];
   onStep?: AgentStepHandler;
+  deadline?: Deadline;
 }): Promise<BfgVerificationSummary> {
   const candidates = extractBfgGzCandidates(bfgCandidateText(options.toolLog, options.draftAnswer));
-  const verification = await verifyBfgCitations(candidates);
+  const verification = await verifyBfgCitations(candidates, fetch, { deadline: options.deadline });
   await appendAgentStep(options.steps, {
     type: "citation_verification",
     title: "BFG-Fundstellen geprüft",
@@ -353,6 +363,7 @@ async function guardFinalAnswer(options: {
   selfCheck: string;
   answer: string;
   bfgVerification: BfgVerificationSummary;
+  deadline?: Deadline;
 }): Promise<string> {
   let guardedAnswer = linkVerifiedBfgCitations(options.answer, options.bfgVerification.verified);
   let unverified = findUnverifiedBfgCitations(guardedAnswer, options.bfgVerification.verified);
@@ -361,9 +372,14 @@ async function guardFinalAnswer(options: {
     return guardedAnswer;
   }
 
+  if (!hasDeadlineTime(options.deadline, DEEPSEEK_CHAT_TIMEOUT_MS + 5_000)) {
+    return removeUnverifiedBfgCitations(guardedAnswer, options.bfgVerification.verified);
+  }
+
   const correctionResult = await chatCompletion({
     apiKey: options.apiKey,
     model: options.model,
+    deadline: options.deadline,
     messages: supportMessages({
       systemPrompt: options.systemPrompt,
       conversation: options.conversation,
@@ -399,10 +415,17 @@ async function createProgressUpdate(options: {
   onStep?: AgentStepHandler;
   pdfContext?: PdfContext;
   attachmentContexts?: AttachmentContext[];
+  deadline?: Deadline;
 }): Promise<void> {
+  if (!hasDeadlineTime(options.deadline, AGENT_PROGRESS_RESERVE_MS)) {
+    return;
+  }
+
   const progressResult = await chatCompletion({
     apiKey: options.apiKey,
     model: options.model,
+    deadline: options.deadline,
+    reserveMs: AGENT_FINALIZATION_RESERVE_MS,
     messages: supportMessages({
       systemPrompt: systemPromptWithAttachmentContext({
         systemPrompt: options.systemPrompt,
@@ -440,7 +463,9 @@ async function finalizeAgentRun(options: {
   onStep?: AgentStepHandler;
   pdfContext?: PdfContext;
   attachmentContexts?: AttachmentContext[];
+  deadline?: Deadline;
 }): Promise<AgentRunResult> {
+  options.deadline?.throwIfExpired();
   await appendAgentStep(options.steps, {
     type: "finalize",
     title: "Finalisierung ohne weitere Abfragen",
@@ -452,28 +477,37 @@ async function finalizeAgentRun(options: {
     draftAnswer: options.draftAnswer,
     steps: options.steps,
     onStep: options.onStep,
+    deadline: options.deadline,
   });
 
-  const selfCheckResult = await chatCompletion({
-    apiKey: options.apiKey,
-    model: options.model,
-    messages: supportMessages({
-      systemPrompt: systemPromptWithAttachmentContext({
-        systemPrompt: options.systemPrompt,
-        attachmentContexts: options.attachmentContexts,
-        pdfContext: options.pdfContext,
+  let selfCheck: string;
+  if (hasDeadlineTime(options.deadline, DEEPSEEK_CHAT_TIMEOUT_MS + AGENT_FINALIZATION_RESERVE_MS)) {
+    const selfCheckResult = await chatCompletion({
+      apiKey: options.apiKey,
+      model: options.model,
+      deadline: options.deadline,
+      reserveMs: AGENT_FINALIZATION_RESERVE_MS,
+      messages: supportMessages({
+        systemPrompt: systemPromptWithAttachmentContext({
+          systemPrompt: options.systemPrompt,
+          attachmentContexts: options.attachmentContexts,
+          pdfContext: options.pdfContext,
+        }),
+        conversation: options.conversation,
+        instruction: selfCheckInstruction(options.plan),
+        toolLog: options.toolLog,
+        draftAnswer: options.draftAnswer,
+        bfgVerification,
       }),
-      conversation: options.conversation,
-      instruction: selfCheckInstruction(options.plan),
-      toolLog: options.toolLog,
-      draftAnswer: options.draftAnswer,
-      bfgVerification,
-    }),
-  });
-  const selfCheck = requireModelContent(
-    selfCheckResult.content,
-    "DeepSeek konnte keinen Selbstcheck zum Arbeitsplan erstellen.",
-  );
+    });
+    selfCheck = requireModelContent(
+      selfCheckResult.content,
+      "DeepSeek konnte keinen Selbstcheck zum Arbeitsplan erstellen.",
+    );
+  } else {
+    selfCheck =
+      "Zeitbudget fast ausgeschöpft: Die finale Antwort wird anhand des Arbeitsplans und der bisherigen Rechercheergebnisse erstellt.";
+  }
   await appendAgentStep(options.steps, {
     type: "self_check",
     title: "Selbstcheck des Arbeitsplans",
@@ -483,6 +517,7 @@ async function finalizeAgentRun(options: {
   const finalResult = await chatCompletion({
     apiKey: options.apiKey,
     model: options.model,
+    deadline: options.deadline,
     messages: supportMessages({
       systemPrompt: systemPromptWithAttachmentContext({
         systemPrompt: options.systemPrompt,
@@ -510,6 +545,7 @@ async function finalizeAgentRun(options: {
     plan: options.plan,
     selfCheck,
     bfgVerification,
+    deadline: options.deadline,
     answer: requireModelContent(
       finalResult.content,
       "DeepSeek konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
@@ -538,6 +574,7 @@ export async function runAgent(options: {
   pdfContext?: PdfContext;
   attachmentContexts?: AttachmentContext[];
   initialSteps?: AgentStep[];
+  deadline?: Deadline;
 }): Promise<AgentRunResult> {
   const mcp = new McpClient();
   const effectiveSystemPrompt = systemPromptWithAttachmentContext({
@@ -555,6 +592,7 @@ export async function runAgent(options: {
   const planResult = await chatCompletion({
     apiKey: options.apiKey,
     model: options.model,
+    deadline: options.deadline,
     messages: [
       {
         role: "system",
@@ -574,7 +612,7 @@ export async function runAgent(options: {
     title: "Arbeitsplan",
     content: summarizeStepText(plan),
   }, options.onStep);
-  const session = await mcp.openToolSession(options.mcpBearerToken);
+  const session = await mcp.openToolSession(options.mcpBearerToken, { deadline: options.deadline });
   const toolNames = [...session.tools.map((tool) => tool.name), FINDOK_VERIFY_BFG_CASES_TOOL_NAME];
   const deepSeekTools = [...session.deepSeekTools, findokVerifyBfgCasesTool];
   await appendAgentStep(steps, {
@@ -594,9 +632,30 @@ export async function runAgent(options: {
   const toolLog: ToolLogEntry[] = [];
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
+    if (!hasDeadlineTime(options.deadline, AGENT_MIN_ITERATION_BUDGET_MS)) {
+      return finalizeAgentRun({
+        apiKey: options.apiKey,
+        model: options.model,
+        systemPrompt: options.systemPrompt,
+        conversation: options.messages,
+        toolLog,
+        plan,
+        steps,
+        tools: toolNames,
+        onStep: options.onStep,
+        pdfContext: options.pdfContext,
+        attachmentContexts: options.attachmentContexts,
+        deadline: options.deadline,
+        reason:
+          "Das Zeitbudget ist fast ausgeschöpft. Ich erstelle jetzt eine finale Antwort aus den bisherigen Ergebnissen, ohne weitere Rechercheabfragen auszuführen.",
+      });
+    }
+
     const result = await chatCompletion({
       apiKey: options.apiKey,
       model: options.model,
+      deadline: options.deadline,
+      reserveMs: AGENT_FINALIZATION_RESERVE_MS,
       messages: [...messages],
       tools: deepSeekTools,
     });
@@ -616,6 +675,7 @@ export async function runAgent(options: {
         onStep: options.onStep,
         pdfContext: options.pdfContext,
         attachmentContexts: options.attachmentContexts,
+        deadline: options.deadline,
         reason:
           "Die Datenbankrecherche ist abgeschlossen. Ich prüfe den Arbeitsplan und erstelle daraus die finale Antwort ohne weitere Rechercheabfragen.",
       });
@@ -635,6 +695,26 @@ export async function runAgent(options: {
     });
 
     for (const call of result.toolCalls) {
+      if (!hasDeadlineTime(options.deadline, AGENT_FINALIZATION_RESERVE_MS)) {
+        return finalizeAgentRun({
+          apiKey: options.apiKey,
+          model: options.model,
+          systemPrompt: options.systemPrompt,
+          conversation: options.messages,
+          toolLog,
+          draftAnswer: result.content?.trim(),
+          plan,
+          steps,
+          tools: toolNames,
+          onStep: options.onStep,
+          pdfContext: options.pdfContext,
+          attachmentContexts: options.attachmentContexts,
+          deadline: options.deadline,
+          reason:
+            "Das Zeitbudget ist fast ausgeschöpft. Ich starte keine weitere Rechercheabfrage und finalisiere aus den bisherigen Ergebnissen.",
+        });
+      }
+
       const parsedArguments = parseToolArguments(call.name, call.arguments);
       const argumentSummary = summarizeToolArguments(parsedArguments);
       const isFindokVerifierCall = call.name === FINDOK_VERIFY_BFG_CASES_TOOL_NAME;
@@ -649,13 +729,14 @@ export async function runAgent(options: {
       let toolResult: string;
       try {
         if (isFindokVerifierCall) {
-          toolResult = await callFindokVerifier(parsedArguments);
+          toolResult = await callFindokVerifier(parsedArguments, { deadline: options.deadline });
         } else {
           toolResult = await mcp.callTool({
             token: options.mcpBearerToken,
             sessionId: session.sessionId,
             name: call.name,
             arguments: parsedArguments,
+            deadline: options.deadline,
           });
         }
       } catch (error) {
@@ -694,18 +775,23 @@ export async function runAgent(options: {
       });
     }
 
-    await createProgressUpdate({
-      apiKey: options.apiKey,
-      model: options.model,
-      systemPrompt: options.systemPrompt,
-      conversation: options.messages,
-      toolLog,
-      plan,
-      steps,
-      onStep: options.onStep,
-      pdfContext: options.pdfContext,
-      attachmentContexts: options.attachmentContexts,
-    });
+    try {
+      await createProgressUpdate({
+        apiKey: options.apiKey,
+        model: options.model,
+        systemPrompt: options.systemPrompt,
+        conversation: options.messages,
+        toolLog,
+        plan,
+        steps,
+        onStep: options.onStep,
+        pdfContext: options.pdfContext,
+        attachmentContexts: options.attachmentContexts,
+        deadline: options.deadline,
+      });
+    } catch {
+      // Progress updates are best-effort; finalization must keep the remaining budget.
+    }
   }
 
   return finalizeAgentRun({
@@ -720,6 +806,7 @@ export async function runAgent(options: {
     onStep: options.onStep,
     pdfContext: options.pdfContext,
     attachmentContexts: options.attachmentContexts,
+    deadline: options.deadline,
     reason:
       "Das Abfragelimit ist erreicht. Ich erstelle jetzt eine finale Antwort aus den bisherigen Ergebnissen, ohne weitere Rechercheabfragen auszuführen.",
   });

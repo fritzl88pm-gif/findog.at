@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 
 import {
   AVAILABLE_MODELS,
@@ -27,8 +27,12 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getServerMcpBearerToken } from "@/lib/mcp/server-token";
 import { CHAT_STREAM_CONTENT_TYPE, encodeChatStreamEvent } from "@/lib/chat-stream";
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
+import { createDeadline, type Deadline } from "@/lib/deadline";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
+
+const CHAT_ROUTE_INTERNAL_BUDGET_MS = 240_000;
 
 type ChatRequestBody = {
   systemPrompt?: unknown;
@@ -64,6 +68,32 @@ type ParsedChatRequest = {
 
 const rateLimit = new Map<string, RateLimitEntry>();
 const MAX_ATTACHMENT_EXTRACTION_CONCURRENCY = 3;
+
+function sanitizeLogText(value: string): string {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [redacted]")
+    .replace(/sk-[A-Za-z0-9._-]{8,}/giu, "sk-[redacted]")
+    .slice(0, 2_000);
+}
+
+function safeErrorDetails(error: unknown): Record<string, string> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: sanitizeLogText(error.message),
+    };
+  }
+
+  return { message: sanitizeLogText(String(error)) };
+}
+
+function scheduleConversationPersistence(options: Parameters<typeof persistConversationTurn>[0]): void {
+  after(() => {
+    void persistConversationTurn(options).catch((error) => {
+      console.error("Chat persistence failed", safeErrorDetails(error));
+    });
+  });
+}
 
 function pruneExpiredRateLimitEntries(now: number): void {
   for (const [key, entry] of rateLimit) {
@@ -268,6 +298,7 @@ async function parseChatRequest(request: Request): Promise<ParsedChatRequest> {
 async function prepareAttachmentContexts(
   attachmentUploads: AttachmentUpload[],
   onStep?: (step: AgentStep) => void | Promise<void>,
+  deadline?: Deadline,
 ): Promise<{ attachmentContexts?: AttachmentContext[]; initialSteps: AgentStep[] }> {
   if (attachmentUploads.length === 0) {
     return { initialSteps: [] };
@@ -300,7 +331,10 @@ async function prepareAttachmentContexts(
       }
 
       const label = upload.type === "pdf" ? "PDF" : "Bild";
-      const content = upload.type === "pdf" ? await extractPdfContext(upload) : await extractImageContext(upload);
+      const content =
+        upload.type === "pdf"
+          ? await extractPdfContext({ ...upload, deadline })
+          : await extractImageContext({ ...upload, deadline });
       const extractedStep: AgentStep = {
         type: "attachment_context",
         title: `${label}-Kontext extrahiert`,
@@ -334,6 +368,9 @@ async function prepareAttachmentContexts(
 }
 
 export async function POST(request: Request) {
+  const deadline = createDeadline(CHAT_ROUTE_INTERNAL_BUDGET_MS, { parentSignal: request.signal });
+  let disposeDeadline = true;
+
   try {
     enforceRateLimit(request);
     enforceRequestSize(request);
@@ -361,6 +398,7 @@ export async function POST(request: Request) {
     const latestUserMessage = messages.findLast((message) => message.role === "user");
 
     if (wantsStreamingResponse(request)) {
+      disposeDeadline = false;
       const encoder = new TextEncoder();
       const stream = new ReadableStream<Uint8Array>({
         async start(controller) {
@@ -369,7 +407,11 @@ export async function POST(request: Request) {
           };
 
           try {
-            const attachmentAgentContext = await prepareAttachmentContexts(attachmentUploads, (step) => send({ type: "step", step }));
+            const attachmentAgentContext = await prepareAttachmentContexts(
+              attachmentUploads,
+              (step) => send({ type: "step", step }),
+              deadline,
+            );
             const agentResult = await runAgent({
               apiKey: deepSeekApiKey,
               model,
@@ -378,14 +420,8 @@ export async function POST(request: Request) {
               mcpBearerToken,
               attachmentContexts: attachmentAgentContext.attachmentContexts,
               initialSteps: attachmentAgentContext.initialSteps,
+              deadline,
               onStep: (step) => send({ type: "step", step }),
-            });
-
-            await persistConversationTurn({
-              conversationId,
-              clientId: authenticatedUser.id,
-              userMessage: latestUserMessage?.content,
-              assistantMessage: agentResult.answer,
             });
 
             send({
@@ -397,9 +433,16 @@ export async function POST(request: Request) {
               model,
               availableModels: AVAILABLE_MODELS,
             });
+
+            scheduleConversationPersistence({
+              conversationId,
+              clientId: authenticatedUser.id,
+              userMessage: latestUserMessage?.content,
+              assistantMessage: agentResult.answer,
+            });
           } catch (streamError) {
             if (!(streamError instanceof UserVisibleError)) {
-              console.error("Chat stream failed");
+              console.error("Chat stream failed", safeErrorDetails(streamError));
             }
             send({
               type: "error",
@@ -409,6 +452,7 @@ export async function POST(request: Request) {
                   : "Unerwarteter Serverfehler. Bitte später erneut versuchen.",
             });
           } finally {
+            deadline.dispose();
             controller.close();
           }
         },
@@ -423,7 +467,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const attachmentAgentContext = await prepareAttachmentContexts(attachmentUploads);
+    const attachmentAgentContext = await prepareAttachmentContexts(attachmentUploads, undefined, deadline);
     const agentResult = await runAgent({
       apiKey: deepSeekApiKey,
       model,
@@ -432,9 +476,10 @@ export async function POST(request: Request) {
       mcpBearerToken,
       attachmentContexts: attachmentAgentContext.attachmentContexts,
       initialSteps: attachmentAgentContext.initialSteps,
+      deadline,
     });
 
-    await persistConversationTurn({
+    scheduleConversationPersistence({
       conversationId,
       clientId: authenticatedUser.id,
       userMessage: latestUserMessage?.content,
@@ -454,7 +499,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
 
-    console.error("Chat route failed");
+    console.error("Chat route failed", safeErrorDetails(error));
     return NextResponse.json(
       {
         error: "Unerwarteter Serverfehler. Bitte später erneut versuchen.",
@@ -463,5 +508,9 @@ export async function POST(request: Request) {
         status: 500,
       },
     );
+  } finally {
+    if (disposeDeadline) {
+      deadline.dispose();
+    }
   }
 }

@@ -6,6 +6,7 @@ import {
   linkVerifiedBfgCitations,
   resolveBfgCitation,
 } from "./bfg-citations";
+import { createDeadline } from "../deadline";
 
 const validFindokBody = {
   dokumentId: "121623",
@@ -40,9 +41,10 @@ describe("Findok BFG citation verification", () => {
   });
 
   it("resolves a valid Findok BFG response to official full-text and PDF URLs", async () => {
+    const deadline = createDeadline(240_000);
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(validFindokBody));
 
-    await expect(resolveBfgCitation("RV/7103053/2014", fetchImpl)).resolves.toMatchObject({
+    await expect(resolveBfgCitation("RV/7103053/2014", fetchImpl, { deadline })).resolves.toMatchObject({
       status: "verified",
       gz: "RV/7103053/2014",
       title: "Anrechnung von Quellensteuern nach DBA-Schweiz",
@@ -54,6 +56,8 @@ describe("Findok BFG citation verification", () => {
     expect(String(fetchImpl.mock.calls[0]?.[0])).toContain(
       "https://findok.bmf.gv.at/findok/api/volltext/gz?gz=RV%2F7103053%2F2014",
     );
+    expect(fetchImpl.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    deadline.dispose();
   });
 
   it("rejects missing, non-BFG, and missing-PDF resolver responses", async () => {

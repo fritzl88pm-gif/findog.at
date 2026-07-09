@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chatCompletion } from "./deepseek";
+import { createDeadline } from "./deadline";
 import { McpClient } from "./mcp/client";
 import { runAgent } from "./agent";
 
@@ -247,6 +248,151 @@ describe("runAgent", () => {
         content: "Finale Antwort.",
       }),
     );
+  });
+
+  it("passes the request deadline to model and MCP calls", async () => {
+    const deadline = createDeadline(240_000);
+    const { callTool, openToolSession } = mockMcpSession();
+
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        content: "1. Recherche planen",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Ich recherchiere.",
+        toolCalls: [
+          {
+            id: "call-1",
+            name: "hybrid_search",
+            arguments: JSON.stringify({ query: "Pendlerpauschale" }),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        content: "- ~~Recherche planen~~",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Vorläufige Antwort.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Selbstcheck: erledigt.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Finale Antwort.",
+        toolCalls: [],
+      });
+
+    await runAgent({
+      apiKey: "test-key",
+      model: "deepseek-v4-pro",
+      systemPrompt: "System",
+      messages: [{ role: "user", content: "Frage" }],
+      mcpBearerToken: "mcp-token",
+      deadline,
+    });
+
+    expect(mockedChatCompletion.mock.calls.every((call) => call[0].deadline === deadline)).toBe(true);
+    expect(openToolSession).toHaveBeenCalledWith("mcp-token", expect.objectContaining({ deadline }));
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({ deadline }));
+    deadline.dispose();
+  });
+
+  it("continues to finalization when a best-effort progress update fails", async () => {
+    mockMcpSession();
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        content: "1. Recherche planen",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Ich recherchiere.",
+        toolCalls: [
+          {
+            id: "call-1",
+            name: "hybrid_search",
+            arguments: JSON.stringify({ query: "Pendlerpauschale" }),
+          },
+        ],
+      })
+      .mockRejectedValueOnce(new Error("progress timeout"))
+      .mockResolvedValueOnce({
+        content: "Vorläufige Antwort.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Selbstcheck: erledigt.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Finale Antwort.",
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      apiKey: "server-key",
+      model: "deepseek-v4-pro",
+      systemPrompt: "System",
+      messages: [{ role: "user", content: "Frage" }],
+      mcpBearerToken: "mcp-token",
+    });
+
+    expect(result.answer).toBe("Finale Antwort.");
+    expect(result.steps.some((step) => step.type === "progress")).toBe(false);
+  });
+
+  it("skips expensive self-check generation when only finalization budget remains", async () => {
+    mockMcpSession();
+    const controller = new AbortController();
+    const deadline = {
+      signal: controller.signal,
+      expiresAt: Date.now() + 150_000,
+      remainingMs: () => 150_000,
+      throwIfExpired: vi.fn(),
+      dispose: vi.fn(),
+    };
+
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        content: "1. Anfrage einordnen",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Vorläufige Antwort.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Finale Antwort trotz knappem Zeitbudget.",
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      apiKey: "server-key",
+      model: "deepseek-v4-pro",
+      systemPrompt: "System",
+      messages: [{ role: "user", content: "Frage" }],
+      mcpBearerToken: "mcp-token",
+      deadline,
+    });
+
+    expect(result.answer).toBe("Finale Antwort trotz knappem Zeitbudget.");
+    expect(result.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "self_check",
+          content: expect.stringContaining("Zeitbudget fast ausgeschöpft"),
+        }),
+      ]),
+    );
+    expect(mockedChatCompletion.mock.calls).toHaveLength(3);
+    expect(
+      mockedChatCompletion.mock.calls.some((call) =>
+        String(call[0].messages.at(-1)?.content ?? "").includes("Prüfe vor der finalen Antwort"),
+      ),
+    ).toBe(false);
   });
 
   it("passes extracted PDF context into the fixed answer model", async () => {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createDeadline } from "./deadline";
 import { MAX_PDF_CONTEXT_CHARS, extractImageContext, extractPdfContext } from "./pdf-context";
 import { UserVisibleError } from "./errors";
 
@@ -17,6 +18,7 @@ describe("extractPdfContext", () => {
   });
 
   it("sends PDFs to the fixed OpenRouter Gemini model as a data URL", async () => {
+    const deadline = createDeadline(240_000);
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(
       new Response(
@@ -37,6 +39,7 @@ describe("extractPdfContext", () => {
       filename: "Bescheid.pdf",
       mimeType: "application/pdf",
       bytes: new Uint8Array([37, 80, 68, 70]),
+      deadline,
     });
 
     expect(context).toBe("## Seite 1\nExtrahierter Kontext");
@@ -50,6 +53,7 @@ describe("extractPdfContext", () => {
         }),
       }),
     );
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
 
     const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string) as {
       model: string;
@@ -69,6 +73,7 @@ describe("extractPdfContext", () => {
         file_data: "data:application/pdf;base64,JVBERg==",
       },
     });
+    deadline.dispose();
   });
 
   it("sends images to the same fixed OpenRouter Gemini context model", async () => {

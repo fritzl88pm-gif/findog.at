@@ -1,7 +1,10 @@
 import { BFG_MCP_ENDPOINT, MCP_PROTOCOL_VERSION } from "./config";
+import { type Deadline, runWithTimeout } from "../deadline";
 import { MissingMcpBearerTokenError, UserVisibleError } from "../errors";
 import { extractJsonPayloads } from "./parser";
 import { mcpToolToDeepSeekTool, type DeepSeekTool, type JsonObject, type McpTool } from "./tools";
+
+export const MCP_HTTP_TIMEOUT_MS = 30_000;
 
 type McpHttpResult = {
   payloads: JsonObject[];
@@ -93,7 +96,10 @@ function stringifyToolContent(payloads: JsonObject[]): string {
 export class McpClient {
   private nextId = 1;
 
-  async openToolSession(token?: string): Promise<McpSession> {
+  async openToolSession(
+    token?: string,
+    options: { deadline?: Deadline; signal?: AbortSignal } = {},
+  ): Promise<McpSession> {
     const initialize = await this.postJson({
       payload: {
         jsonrpc: "2.0",
@@ -109,6 +115,8 @@ export class McpClient {
         },
       },
       token,
+      deadline: options.deadline,
+      signal: options.signal,
       allowEmptyResponse: false,
     });
 
@@ -120,6 +128,8 @@ export class McpClient {
       },
       token,
       sessionId: initialize.sessionId,
+      deadline: options.deadline,
+      signal: options.signal,
       allowEmptyResponse: true,
     }).catch(() => undefined);
 
@@ -132,6 +142,8 @@ export class McpClient {
       },
       token,
       sessionId: initialize.sessionId,
+      deadline: options.deadline,
+      signal: options.signal,
       allowEmptyResponse: false,
     });
 
@@ -150,6 +162,8 @@ export class McpClient {
     sessionId?: string;
     name: string;
     arguments: JsonObject;
+    deadline?: Deadline;
+    signal?: AbortSignal;
   }): Promise<string> {
     const result = await this.postJson({
       payload: {
@@ -163,6 +177,8 @@ export class McpClient {
       },
       token: options.token,
       sessionId: options.sessionId,
+      deadline: options.deadline,
+      signal: options.signal,
       allowEmptyResponse: false,
     });
 
@@ -173,6 +189,8 @@ export class McpClient {
     payload: JsonObject;
     token?: string;
     sessionId?: string;
+    deadline?: Deadline;
+    signal?: AbortSignal;
     allowEmptyResponse: boolean;
   }): Promise<McpHttpResult> {
     const headers: Record<string, string> = {
@@ -188,14 +206,26 @@ export class McpClient {
       headers["Mcp-Session-Id"] = options.sessionId;
     }
 
-    const response = await fetch(BFG_MCP_ENDPOINT, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(options.payload),
-      cache: "no-store",
-    });
+    const { response, body } = await runWithTimeout(
+      (signal) =>
+        fetch(BFG_MCP_ENDPOINT, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(options.payload),
+          cache: "no-store",
+          signal,
+        }).then(async (response) => ({
+          response,
+          body: await response.text(),
+        })),
+      {
+        deadline: options.deadline,
+        signal: options.signal,
+        timeoutMs: MCP_HTTP_TIMEOUT_MS,
+        timeoutMessage: "Die Datenbank hat nicht rechtzeitig geantwortet. Bitte erneut versuchen.",
+      },
+    );
 
-    const body = await response.text();
     if (response.status === 401 && !options.token) {
       throw new MissingMcpBearerTokenError();
     }

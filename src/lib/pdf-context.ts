@@ -1,20 +1,26 @@
+import { type Deadline, runWithTimeout } from "./deadline";
 import { UserVisibleError } from "./errors";
 
 export const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions";
 export const OPENROUTER_GEMINI_CONTEXT_MODEL = "google/gemini-3.5-flash";
 export const OPENROUTER_GEMINI_PDF_MODEL = OPENROUTER_GEMINI_CONTEXT_MODEL;
 export const MAX_PDF_CONTEXT_CHARS = 120_000;
+export const OPENROUTER_CONTEXT_TIMEOUT_MS = 90_000;
 
 type ExtractPdfContextOptions = {
   filename: string;
   mimeType: "application/pdf";
   bytes: Uint8Array;
+  deadline?: Deadline;
+  signal?: AbortSignal;
 };
 
 type ExtractImageContextOptions = {
   filename: string;
   mimeType: `image/${string}`;
   bytes: Uint8Array;
+  deadline?: Deadline;
+  signal?: AbortSignal;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -138,6 +144,8 @@ async function extractOpenRouterContext(options: {
   prompt: string;
   title: string;
   label: "PDF" | "Bild";
+  deadline?: Deadline;
+  signal?: AbortSignal;
   contentPart:
     | {
         type: "file";
@@ -155,34 +163,46 @@ async function extractOpenRouterContext(options: {
 }): Promise<string> {
   const apiKey = getOpenRouterApiKey();
 
-  const response = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "X-Title": options.title,
-    },
-    body: JSON.stringify({
-      model: OPENROUTER_GEMINI_CONTEXT_MODEL,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: options.prompt,
-            },
-            options.contentPart,
-          ],
+  const { response, body } = await runWithTimeout(
+    (signal) =>
+      fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "X-Title": options.title,
         },
-      ],
-      temperature: 0.1,
-    }),
-    cache: "no-store",
-  });
+        body: JSON.stringify({
+          model: OPENROUTER_GEMINI_CONTEXT_MODEL,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: options.prompt,
+                },
+                options.contentPart,
+              ],
+            },
+          ],
+          temperature: 0.1,
+        }),
+        cache: "no-store",
+        signal,
+      }).then(async (response) => ({
+        response,
+        body: await response.text(),
+      })),
+    {
+      deadline: options.deadline,
+      signal: options.signal,
+      timeoutMs: OPENROUTER_CONTEXT_TIMEOUT_MS,
+      timeoutMessage: `${options.label}-Auswertung hat nicht rechtzeitig geantwortet. Bitte erneut versuchen.`,
+    },
+  );
 
-  const body = await response.text();
   if (!response.ok) {
     throw openRouterError(response.status, body, options.label);
   }
@@ -212,6 +232,8 @@ export async function extractPdfContext(options: ExtractPdfContextOptions): Prom
     prompt: extractionPrompt(options.filename),
     title: "findog.at PDF context extraction",
     label: "PDF",
+    deadline: options.deadline,
+    signal: options.signal,
     contentPart: {
       type: "file",
       file: {
@@ -229,6 +251,8 @@ export async function extractImageContext(options: ExtractImageContextOptions): 
     prompt: imageExtractionPrompt(options.filename),
     title: "findog.at image context extraction",
     label: "Bild",
+    deadline: options.deadline,
+    signal: options.signal,
     contentPart: {
       type: "image_url",
       image_url: {

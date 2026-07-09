@@ -1,7 +1,10 @@
+import { type Deadline, runWithTimeout } from "../deadline";
+
 const FINDOK_ORIGIN = "https://findok.bmf.gv.at";
 const FINDOK_PDF_PATH_PREFIX = "/findok/resources/pdf/";
 const SUPPORTED_GZ_PREFIXES = ["RV", "RS", "RM", "AW", "VH"] as const;
 const MAX_CONCURRENT_FINDOK_REQUESTS = 4;
+export const FINDOK_VERIFY_TIMEOUT_MS = 8_000;
 
 export type BfgCitationStatus = "verified" | "not_found" | "not_bfg" | "missing_pdf" | "error";
 
@@ -133,6 +136,7 @@ export function extractBfgGzCandidates(text: string): string[] {
 export async function resolveBfgCitation(
   rawGz: string,
   fetchImpl: FetchLike = fetch,
+  options: { deadline?: Deadline; signal?: AbortSignal } = {},
 ): Promise<BfgCitationResolution> {
   const gz = normalizeBfgGz(rawGz);
   if (!gz) {
@@ -143,12 +147,25 @@ export async function resolveBfgCitation(
   endpoint.searchParams.set("gz", gz);
 
   try {
-    const response = await fetchImpl(endpoint.toString(), {
-      headers: {
-        Accept: "application/json",
+    const { response, body } = await runWithTimeout(
+      (signal) =>
+        fetchImpl(endpoint.toString(), {
+          headers: {
+            Accept: "application/json",
+          },
+          cache: "no-store",
+          signal,
+        }).then(async (response) => ({
+          response,
+          body: await response.text(),
+        })),
+      {
+        deadline: options.deadline,
+        signal: options.signal,
+        timeoutMs: FINDOK_VERIFY_TIMEOUT_MS,
+        timeoutMessage: "Findok hat nicht rechtzeitig geantwortet.",
       },
-      cache: "no-store",
-    });
+    );
 
     if (response.status === 404) {
       return { status: "not_found", gz, reason: "Findok konnte diese Geschäftszahl nicht finden." };
@@ -157,7 +174,7 @@ export async function resolveBfgCitation(
       return { status: "error", gz, reason: `Findok antwortete mit HTTP ${response.status}.` };
     }
 
-    const payload = (await response.json()) as unknown;
+    const payload = JSON.parse(body) as unknown;
     if (!isRecord(payload)) {
       return { status: "error", gz, reason: "Findok lieferte keine verwertbare JSON-Antwort." };
     }
@@ -198,6 +215,7 @@ export async function resolveBfgCitation(
 export async function verifyBfgCitations(
   gzs: string[],
   fetchImpl: FetchLike = fetch,
+  options: { deadline?: Deadline; signal?: AbortSignal } = {},
 ): Promise<{ verified: VerifiedBfgCitation[]; rejected: RejectedBfgCitation[] }> {
   const seen = new Set<string>();
   const orderedGzs = gzs.flatMap((value) => {
@@ -220,7 +238,7 @@ export async function verifyBfgCitations(
       const gz = orderedGzs[index] ?? "";
       let resolution = cache.get(gz);
       if (!resolution) {
-        resolution = resolveBfgCitation(gz, fetchImpl);
+        resolution = resolveBfgCitation(gz, fetchImpl, options);
         cache.set(gz, resolution);
       }
       results[index] = await resolution;

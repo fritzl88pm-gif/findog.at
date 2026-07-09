@@ -1,10 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("next/server", async () => {
+  const actual = await vi.importActual<typeof import("next/server")>("next/server");
+
+  return {
+    ...actual,
+    after: vi.fn((callback: () => void | Promise<void>) => {
+      void callback();
+    }),
+  };
+});
+
 import { MAX_IMAGE_UPLOAD_BYTES } from "@/lib/config";
 import { runAgent } from "@/lib/agent";
 import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
-import { POST } from "./route";
+import { parseChatStreamLine } from "@/lib/chat-stream";
+import { persistConversationTurn } from "@/lib/persistence";
+import { POST, maxDuration } from "./route";
 
 vi.mock("@/lib/auth/server", () => ({
   authenticateSupabaseRequest: vi.fn().mockResolvedValue({ id: "user-1" }),
@@ -57,6 +70,17 @@ function jsonRequest(payload: Record<string, unknown>): Request {
   });
 }
 
+function streamingJsonRequest(payload: Record<string, unknown>): Request {
+  return new Request("http://localhost/api/chat", {
+    method: "POST",
+    headers: {
+      Accept: "application/x-ndjson",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
 function multipartRequest(formData: FormData): Request {
   return new Request("http://localhost/api/chat", {
     method: "POST",
@@ -86,6 +110,77 @@ describe("POST /api/chat uploads", () => {
         model: "deepseek-v4-pro",
       }),
     );
+  });
+
+  it("declares the Vercel max duration for the chat route", () => {
+    expect(maxDuration).toBe(300);
+  });
+
+  it("passes a request deadline to attachment extraction and the agent", async () => {
+    const formData = new FormData();
+    formData.append("payload", JSON.stringify(chatPayload()));
+    formData.append(
+      "pdf",
+      new File([new Uint8Array([37, 80, 68, 70])], "Bescheid.pdf", { type: "application/pdf" }),
+    );
+
+    const response = await POST(multipartRequest(formData));
+
+    expect(response.status).toBe(200);
+    const pdfOptions = vi.mocked(extractPdfContext).mock.calls[0]?.[0] as {
+      deadline?: { signal?: AbortSignal; remainingMs?: () => number };
+    };
+    expect(pdfOptions.deadline?.signal).toBeInstanceOf(AbortSignal);
+    expect(pdfOptions.deadline?.remainingMs?.()).toBeGreaterThan(0);
+
+    const agentOptions = vi.mocked(runAgent).mock.calls[0]?.[0] as {
+      deadline?: { signal?: AbortSignal; remainingMs?: () => number };
+    };
+    expect(agentOptions.deadline?.signal).toBeInstanceOf(AbortSignal);
+    expect(agentOptions.deadline?.remainingMs?.()).toBeGreaterThan(0);
+  });
+
+  it("streams the final event before best-effort persistence failures", async () => {
+    vi.mocked(persistConversationTurn).mockRejectedValueOnce(new Error("database unavailable"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const response = await POST(streamingJsonRequest(chatPayload()));
+    const events = (await response.text())
+      .split("\n")
+      .map((line) => parseChatStreamLine(line))
+      .filter((event) => event !== null);
+
+    expect(events[0]).toMatchObject({
+      type: "final",
+      answer: "Antwort",
+      conversationId: "conversation-1",
+    });
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(errorSpy).toHaveBeenCalledWith(
+      "Chat persistence failed",
+      expect.objectContaining({ message: "database unavailable" }),
+    );
+
+    errorSpy.mockRestore();
+  });
+
+  it("returns non-streaming JSON before best-effort persistence failures", async () => {
+    vi.mocked(persistConversationTurn).mockRejectedValueOnce(new Error("database unavailable"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const response = await POST(jsonRequest(chatPayload()));
+    await expect(response.json()).resolves.toMatchObject({
+      answer: "Antwort",
+      conversationId: "conversation-1",
+    });
+    await Promise.resolve();
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      "Chat persistence failed",
+      expect.objectContaining({ message: "database unavailable" }),
+    );
+
+    errorSpy.mockRestore();
   });
 
   it("accepts five PDFs without inspecting or blocking page count", async () => {
