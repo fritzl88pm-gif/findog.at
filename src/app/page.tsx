@@ -136,6 +136,9 @@ function normalizeAgentSteps(value: unknown): AgentStep[] {
     if (item.type === "finalize") {
       return [{ type: "finalize", title: item.title, content: item.content }];
     }
+    if (item.type === "citation_verification") {
+      return [{ type: "citation_verification", title: item.title, content: item.content }];
+    }
     if (item.type === "self_check") {
       return [{ type: "self_check", title: item.title, content: item.content }];
     }
@@ -214,6 +217,8 @@ function pendingTextForStep(step: AgentStep): string {
       return `Fortschritt aktualisiert: ${preview}`;
     case "finalize":
       return "Recherche abgeschlossen. Die finale Antwort wird vorbereitet.";
+    case "citation_verification":
+      return `Findok-Verifikation: ${preview}`;
     case "self_check":
       return `Selbstcheck: ${preview}`;
     case "answer":
@@ -298,6 +303,8 @@ function stepTypeLabel(step: AgentStep): string {
       return "Fortschritt";
     case "finalize":
       return "Finalisierung";
+    case "citation_verification":
+      return "Findok";
     case "self_check":
       return "Selbstcheck";
     case "answer":
@@ -368,7 +375,14 @@ function renderRichInline(nodes: RichInline[], keyPrefix: string): ReactNode[] {
     if (node.type === "code") {
       return <code key={key}>{node.text}</code>;
     }
-    return <mark key={key}>{renderRichInline(node.children, key)}</mark>;
+    if (node.type === "highlight") {
+      return <mark key={key}>{renderRichInline(node.children, key)}</mark>;
+    }
+    return (
+      <a key={key} href={node.href} target="_blank" rel="noreferrer noopener">
+        {renderRichInline(node.children, key)}
+      </a>
+    );
   });
 }
 

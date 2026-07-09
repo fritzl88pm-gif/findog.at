@@ -2,7 +2,8 @@ export type RichInline =
   | { type: "text"; text: string }
   | { type: "strong"; children: RichInline[] }
   | { type: "code"; text: string }
-  | { type: "highlight"; children: RichInline[] };
+  | { type: "highlight"; children: RichInline[] }
+  | { type: "link"; href: string; children: RichInline[] };
 
 export type RichBlock =
   | { type: "paragraph"; children: RichInline[] }
@@ -31,13 +32,63 @@ function pushText(nodes: RichInline[], text: string): void {
   nodes.push({ type: "text", text });
 }
 
-function findNextToken(text: string, start: number): { marker: "`" | "**" | "__" | "=="; index: number } | null {
+type InlineMarker = "`" | "**" | "__" | "==";
+type InlineToken =
+  | { type: "marker"; marker: InlineMarker; index: number }
+  | { type: "link"; index: number; label: string; href: string; end: number };
+
+function isSafeFindokHref(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.hostname === "findok.bmf.gv.at" &&
+      url.pathname.startsWith("/findok/resources/pdf/") &&
+      url.pathname.toLowerCase().endsWith(".pdf")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function findNextMarkdownLink(text: string, start: number): InlineToken | null {
+  let index = text.indexOf("[", start);
+  while (index >= 0) {
+    const labelEnd = text.indexOf("]", index + 1);
+    if (labelEnd < 0) {
+      return null;
+    }
+    if (text[labelEnd + 1] !== "(") {
+      index = text.indexOf("[", index + 1);
+      continue;
+    }
+
+    const hrefStart = labelEnd + 2;
+    const hrefEnd = text.indexOf(")", hrefStart);
+    if (hrefEnd < 0) {
+      return null;
+    }
+
+    const label = text.slice(index + 1, labelEnd);
+    const href = text.slice(hrefStart, hrefEnd);
+    if (label && isSafeFindokHref(href)) {
+      return { type: "link", index, label, href, end: hrefEnd + 1 };
+    }
+
+    index = text.indexOf("[", index + 1);
+  }
+
+  return null;
+}
+
+function findNextToken(text: string, start: number): InlineToken | null {
   const candidates = (["`", "**", "__", "=="] as const)
-    .map((marker) => ({ marker, index: text.indexOf(marker, start) }))
+    .map((marker) => ({ type: "marker" as const, marker, index: text.indexOf(marker, start) }))
     .filter((candidate) => candidate.index >= 0)
     .sort((left, right) => left.index - right.index || right.marker.length - left.marker.length);
 
-  return candidates[0] ?? null;
+  const link = findNextMarkdownLink(text, start);
+  return [...(link ? [link] : []), ...candidates].sort((left, right) => left.index - right.index)[0] ?? null;
 }
 
 export function parseInline(text: string): RichInline[] {
@@ -53,6 +104,12 @@ export function parseInline(text: string): RichInline[] {
 
     if (token.index > cursor) {
       pushText(nodes, text.slice(cursor, token.index));
+    }
+
+    if (token.type === "link") {
+      nodes.push({ type: "link", href: token.href, children: parseInline(token.label) });
+      cursor = token.end;
+      continue;
     }
 
     const contentStart = token.index + token.marker.length;

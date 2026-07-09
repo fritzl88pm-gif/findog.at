@@ -7,6 +7,7 @@ export type AgentStep =
   | { type: "tool_result"; title: string; content: string; toolName: string; success: boolean }
   | { type: "progress"; title: string; content: string }
   | { type: "finalize"; title: string; content: string }
+  | { type: "citation_verification"; title: string; content: string }
   | { type: "self_check"; title: string; content: string }
   | { type: "answer"; title: string; content: string };
 

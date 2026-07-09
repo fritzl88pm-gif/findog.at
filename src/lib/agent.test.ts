@@ -50,9 +50,10 @@ function expectProtocolSafeMessages(): void {
 describe("runAgent", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  function mockMcpSession() {
+  function mockMcpSession(toolResult = "Gefundene Normen und BFG-Fundstellen.") {
     const openToolSession = vi.fn().mockResolvedValue({
       sessionId: "mcp-session",
       tools: [
@@ -83,7 +84,7 @@ describe("runAgent", () => {
         },
       ],
     });
-    const callTool = vi.fn().mockResolvedValue("Gefundene Normen und BFG-Fundstellen.");
+    const callTool = vi.fn().mockResolvedValue(toolResult);
     MockedMcpClient.mockImplementation(function MockMcpClient() {
       return {
         openToolSession,
@@ -138,7 +139,7 @@ describe("runAgent", () => {
     })) as unknown as AgentRunShape;
 
     expect(result.answer).toBe("Finale Antwort.");
-    expect(result.tools).toEqual(["hybrid_search"]);
+    expect(result.tools).toEqual(["hybrid_search", "findok_verify_bfg_cases"]);
     expect(result.steps.map((step) => step.type)).toEqual([
       "plan",
       "tools",
@@ -146,6 +147,7 @@ describe("runAgent", () => {
       "tool_result",
       "progress",
       "finalize",
+      "citation_verification",
       "self_check",
       "answer",
     ]);
@@ -169,7 +171,10 @@ describe("runAgent", () => {
     expect(mockedChatCompletion.mock.calls[0]?.[0].messages[0]?.content).toContain(
       "Erstelle zuerst einen dynamischen Arbeitsplan",
     );
-    expect(mockedChatCompletion.mock.calls[1]?.[0].tools).toHaveLength(1);
+    expect(mockedChatCompletion.mock.calls[1]?.[0].tools?.map((tool) => tool.function.name)).toEqual([
+      "hybrid_search",
+      "findok_verify_bfg_cases",
+    ]);
     expect(mockedChatCompletion.mock.calls[1]?.[0].messages[0]?.content).toContain(
       "Arbeite den Arbeitsplan systematisch ab.",
     );
@@ -409,7 +414,11 @@ describe("runAgent", () => {
     expect(result.answer).toBe("Finale Antwort aus bisherigen Werkzeugergebnissen.");
     expect(callTool.mock.calls.length).toBeGreaterThan(4);
     expect(mockedChatCompletion.mock.calls.at(-1)?.[0]).not.toHaveProperty("tools");
-    expect(result.steps.at(-3)?.type).toBe("finalize");
+    expect(result.steps.at(-4)?.type).toBe("finalize");
+    expect(result.steps.at(-3)).toMatchObject({
+      type: "citation_verification",
+      content: "0 verifiziert, 0 verworfen.",
+    });
     expect(result.steps.at(-2)).toMatchObject({
       type: "self_check",
       content: "Selbstcheck: Die erreichbaren Punkte wurden geprüft.",
@@ -418,6 +427,231 @@ describe("runAgent", () => {
       type: "answer",
       content: "Finale Antwort aus bisherigen Werkzeugergebnissen.",
     });
+    expectProtocolSafeMessages();
+  });
+
+  it("routes findok_verify_bfg_cases locally without calling MCP", async () => {
+    const { callTool } = mockMcpSession();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () =>
+        new Response(
+          JSON.stringify({
+            dokumentId: "121623",
+            segmentId: "segment",
+            indexName: "findok-bfg",
+            dokumentPdfMediaUrl: "findok/resources/pdf/segment/121623.pdf",
+            dokumentTitel: "BFG 01.01.2024, RV/7103053/2014",
+            titel: "Anrechnung von Quellensteuern",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        content: "1. BFG-Fundstelle prüfen",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Ich verifiziere.",
+        toolCalls: [
+          {
+            id: "call-findok",
+            name: "findok_verify_bfg_cases",
+            arguments: JSON.stringify({ gzs: ["RV/7103053/2014"] }),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        content: "- ~~BFG-Fundstelle prüfen~~",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Vorläufige Antwort mit RV/7103053/2014.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Selbstcheck: erledigt.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Finale Antwort mit RV/7103053/2014.",
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      apiKey: "test-key",
+      model: "deepseek-v4-pro",
+      systemPrompt: "System",
+      messages: [{ role: "user", content: "Frage" }],
+      mcpBearerToken: "mcp-token",
+    });
+
+    expect(callTool).not.toHaveBeenCalled();
+    expect(result.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          title: "BFG-Fundstellen werden verifiziert",
+          toolName: "findok_verify_bfg_cases",
+        }),
+        expect.objectContaining({
+          type: "tool_result",
+          title: "Findok-Verifikation",
+          toolName: "findok_verify_bfg_cases",
+          success: true,
+        }),
+      ]),
+    );
+    expect(result.answer).toBe(
+      "Finale Antwort mit [RV/7103053/2014](https://findok.bmf.gv.at/findok/resources/pdf/segment/121623.pdf).",
+    );
+    expectProtocolSafeMessages();
+  });
+
+  it("verifies BFG citations before final generation and removes unverified final citations", async () => {
+    mockMcpSession("Fundstellen: RV/7103053/2014 und RV/7103080/2015.");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("RV%2F7103053%2F2014")) {
+        return new Response(
+          JSON.stringify({
+            dokumentId: "121623",
+            segmentId: "segment",
+            indexName: "findok-bfg",
+            dokumentPdfMediaUrl: "findok/resources/pdf/segment/121623.pdf",
+            dokumentTitel: "BFG 01.01.2024, RV/7103053/2014",
+            titel: "Anrechnung von Quellensteuern",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response("nicht gefunden", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        content: "1. BFG-Fundstellen prüfen",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Ich recherchiere.",
+        toolCalls: [
+          {
+            id: "call-1",
+            name: "hybrid_search",
+            arguments: JSON.stringify({ query: "Quellensteuer RV/7103053/2014 RV/7103080/2015" }),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        content: "- ~~BFG-Fundstellen prüfen~~",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Vorläufig: RV/7103053/2014 und RV/7103080/2015.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Selbstcheck: Die Findok-Verifikation wurde berücksichtigt.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Final: RV/7103053/2014 ist verwendbar, RV/7103080/2015 nicht.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Final: RV/7103053/2014 ist verwendbar.",
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      apiKey: "test-key",
+      model: "deepseek-v4-pro",
+      systemPrompt: "System",
+      messages: [{ role: "user", content: "Frage" }],
+      mcpBearerToken: "mcp-token",
+    });
+
+    expect(result.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "citation_verification",
+          title: "BFG-Fundstellen geprüft",
+          content: "1 verifiziert, 1 verworfen.",
+        }),
+      ]),
+    );
+    expect(result.answer).toBe(
+      "Final: [RV/7103053/2014](https://findok.bmf.gv.at/findok/resources/pdf/segment/121623.pdf) ist verwendbar.",
+    );
+    expect(result.answer).not.toContain("RV/7103080/2015");
+    expect(mockedChatCompletion.mock.calls.at(-2)?.[0].messages.at(-1)?.content).toContain(
+      "Verifizierte BFG-Fundstellen mit offiziellen PDF-Links",
+    );
+    expect(mockedChatCompletion.mock.calls.at(-1)?.[0]).not.toHaveProperty("tools");
+    expectProtocolSafeMessages();
+  });
+
+  it("keeps verified GZ links intact when fallback removal handles a prefix-like unverified GZ", async () => {
+    mockMcpSession();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("RV%2F7103053%2F2014")) {
+        return new Response(
+          JSON.stringify({
+            dokumentId: "121623",
+            segmentId: "segment",
+            indexName: "findok-bfg",
+            dokumentPdfMediaUrl: "findok/resources/pdf/segment/121623.pdf",
+            dokumentTitel: "BFG 01.01.2024, RV/7103053/2014",
+            titel: "Anrechnung von Quellensteuern",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response("nicht gefunden", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        content: "1. BFG-Fundstellen prüfen",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Vorläufig: RV/7103053/2014 und RV/7103053/20.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Selbstcheck: Die Findok-Verifikation wurde berücksichtigt.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Final: RV/7103053/2014 und RV/7103053/20.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        content: "Final: RV/7103053/2014 und RV/7103053/20.",
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      apiKey: "test-key",
+      model: "deepseek-v4-pro",
+      systemPrompt: "System",
+      messages: [{ role: "user", content: "Frage" }],
+      mcpBearerToken: "mcp-token",
+    });
+
+    expect(result.answer).toBe(
+      "Final: [RV/7103053/2014](https://findok.bmf.gv.at/findok/resources/pdf/segment/121623.pdf) und nicht verifizierte Fundstelle.",
+    );
+    expect(result.answer).not.toMatch(/RV\/7103053\/20(?![0-9])/);
+    expect(result.answer).toContain("RV/7103053/2014");
     expectProtocolSafeMessages();
   });
 });

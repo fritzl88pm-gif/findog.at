@@ -4,6 +4,19 @@ import { McpClient } from "./mcp/client";
 import type { JsonObject } from "./mcp/tools";
 import type { ChatModel } from "./config";
 import {
+  extractBfgGzCandidates,
+  findUnverifiedBfgCitations,
+  linkVerifiedBfgCitations,
+  verifyBfgCitations,
+  type RejectedBfgCitation,
+  type VerifiedBfgCitation,
+} from "./findok/bfg-citations";
+import {
+  callFindokVerifier,
+  FINDOK_VERIFY_BFG_CASES_TOOL_NAME,
+  findokVerifyBfgCasesTool,
+} from "./findok/tool";
+import {
   summarizeStepText,
   summarizeToolArguments,
   type AgentRunResult,
@@ -51,6 +64,7 @@ function executionInstruction(plan: string): string {
   return [
     "Arbeite den Arbeitsplan systematisch ab.",
     "Nutze die verfügbaren Recherchefunktionen gezielt für die jeweils offenen Planpunkte und vermeide Recherche, die nicht zum Plan beiträgt.",
+    "Wenn du BFG-Fundstellen aus der Datenbank verwenden willst, verifiziere die Geschäftszahlen mit `findok_verify_bfg_cases`.",
     "Wenn ein Planpunkt erledigt ist, berücksichtige das in späteren Fortschritts- und Abschlussprüfungen.",
     "",
     "Arbeitsplan:",
@@ -86,6 +100,9 @@ function finalAnswerInstruction(plan: string): string {
     "Formuliere jetzt die finale Antwort aus Anfrage, Arbeitsplan, Werkzeugergebnissen und Selbstcheck.",
     "Nutze keine weiteren Rechercheabfragen.",
     "Wenn Planpunkte offen geblieben sind, benenne die Unsicherheit transparent.",
+    "BFG-Geschäftszahlen dürfen in der finalen Antwort nur aus der verifizierten Findok-Liste stammen.",
+    "Gib erlaubte BFG-Geschäftszahlen als Markdown-Link auf die offizielle PDF-URL aus.",
+    "Nenne keine nicht verifizierten BFG-Geschäftszahlen; falls eine Datenbank-Fundstelle nicht verifiziert wurde, beschreibe das nur allgemein ohne die Geschäftszahl.",
     "",
     "Arbeitsplan:",
     plan,
@@ -97,6 +114,11 @@ type ToolLogEntry = {
   arguments: string;
   result: string;
   success: boolean;
+};
+
+type BfgVerificationSummary = {
+  verified: VerifiedBfgCitation[];
+  rejected: RejectedBfgCitation[];
 };
 
 export type PdfContext = {
@@ -190,6 +212,98 @@ function formatToolLog(toolLog: ToolLogEntry[]): string {
     .join("\n\n");
 }
 
+function formatRejectedBfgSummary(rejected: RejectedBfgCitation[]): string {
+  if (rejected.length === 0) {
+    return "Keine nicht verwendbaren BFG-Fundstellen.";
+  }
+
+  const counts = new Map<string, number>();
+  for (const citation of rejected) {
+    counts.set(citation.status, (counts.get(citation.status) ?? 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .map(([status, count]) => `${count} ${status}`)
+    .join(", ");
+}
+
+function formatBfgVerificationForPrompt(verification: BfgVerificationSummary): string {
+  const verifiedLines =
+    verification.verified.length > 0
+      ? verification.verified.map((citation) =>
+          `- ${citation.gz} — ${citation.title} — PDF: ${citation.pdfUrl}`,
+        )
+      : ["- Keine verifizierten BFG-Fundstellen."];
+
+  return [
+    "Findok-Verifikation der BFG-Fundstellen:",
+    "Verifizierte BFG-Fundstellen mit offiziellen PDF-Links:",
+    ...verifiedLines,
+    "",
+    `Nicht verwendbare Fundstellen: ${formatRejectedBfgSummary(verification.rejected)}`,
+    "",
+    "Finale Antwort-Regel:",
+    "Du darfst BFG-Geschäftszahlen nur nennen, wenn sie in der Liste der verifizierten BFG-Fundstellen stehen.",
+    "Verwende die Geschäftszahl als Markdown-Link auf die angegebene PDF-URL.",
+    "Nenne nicht verwendbare oder nicht verifizierte BFG-Geschäftszahlen nicht.",
+  ].join("\n");
+}
+
+function bfgCandidateText(toolLog: ToolLogEntry[], draftAnswer?: string): string {
+  return [
+    ...toolLog.flatMap((entry) => [entry.arguments, entry.result]),
+    draftAnswer ?? "",
+  ].join("\n\n");
+}
+
+async function verifyBfgCitationsForFinalization(options: {
+  toolLog: ToolLogEntry[];
+  draftAnswer?: string;
+  steps: AgentStep[];
+  onStep?: AgentStepHandler;
+}): Promise<BfgVerificationSummary> {
+  const candidates = extractBfgGzCandidates(bfgCandidateText(options.toolLog, options.draftAnswer));
+  const verification = await verifyBfgCitations(candidates);
+  await appendAgentStep(options.steps, {
+    type: "citation_verification",
+    title: "BFG-Fundstellen geprüft",
+    content: `${verification.verified.length} verifiziert, ${verification.rejected.length} verworfen.`,
+  }, options.onStep);
+
+  return verification;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function removeUnverifiedBfgCitations(answer: string, verified: VerifiedBfgCitation[]): string {
+  let sanitized = answer;
+  for (const gz of findUnverifiedBfgCitations(answer, verified)) {
+    const escaped = escapeRegExp(gz);
+    sanitized = sanitized.replace(new RegExp(`\\[${escaped}\\]\\([^)]*\\)`, "gi"), "nicht verifizierte Fundstelle");
+    sanitized = sanitized.replace(
+      new RegExp(`(^|[^A-Z0-9])(${escaped})(?![A-Z0-9/])`, "gi"),
+      "$1nicht verifizierte Fundstelle",
+    );
+  }
+
+  return linkVerifiedBfgCitations(sanitized, verified);
+}
+
+function finalAnswerCorrectionInstruction(plan: string): string {
+  return [
+    "Überarbeite die vorläufige finale Antwort.",
+    "Entferne alle nicht verifizierten BFG-Geschäftszahlen vollständig und nenne sie nicht.",
+    "Nutze nur die verifizierten BFG-Fundstellen aus der Findok-Verifikationsliste.",
+    "Erlaubte BFG-Geschäftszahlen müssen als Markdown-Link auf die offizielle PDF-URL ausgegeben werden.",
+    "Behalte die übrige fachliche Antwort so weit wie möglich bei.",
+    "",
+    "Arbeitsplan:",
+    plan,
+  ].join("\n");
+}
+
 function supportMessages(options: {
   systemPrompt: string;
   conversation: AppChatMessage[];
@@ -197,6 +311,7 @@ function supportMessages(options: {
   toolLog: ToolLogEntry[];
   draftAnswer?: string;
   selfCheck?: string;
+  bfgVerification?: BfgVerificationSummary;
 }): DeepSeekMessage[] {
   const context = [
     "Chatverlauf:",
@@ -206,6 +321,9 @@ function supportMessages(options: {
     formatToolLog(options.toolLog),
   ];
 
+  if (options.bfgVerification) {
+    context.push("", formatBfgVerificationForPrompt(options.bfgVerification));
+  }
   if (options.draftAnswer) {
     context.push("", "Vorläufige Antwort des Agenten:", options.draftAnswer);
   }
@@ -223,6 +341,51 @@ function supportMessages(options: {
       content: [context.join("\n"), options.instruction].join("\n\n"),
     },
   ];
+}
+
+async function guardFinalAnswer(options: {
+  apiKey: string;
+  model: ChatModel;
+  systemPrompt: string;
+  conversation: AppChatMessage[];
+  toolLog: ToolLogEntry[];
+  plan: string;
+  selfCheck: string;
+  answer: string;
+  bfgVerification: BfgVerificationSummary;
+}): Promise<string> {
+  let guardedAnswer = linkVerifiedBfgCitations(options.answer, options.bfgVerification.verified);
+  let unverified = findUnverifiedBfgCitations(guardedAnswer, options.bfgVerification.verified);
+
+  if (unverified.length === 0) {
+    return guardedAnswer;
+  }
+
+  const correctionResult = await chatCompletion({
+    apiKey: options.apiKey,
+    model: options.model,
+    messages: supportMessages({
+      systemPrompt: options.systemPrompt,
+      conversation: options.conversation,
+      instruction: finalAnswerCorrectionInstruction(options.plan),
+      toolLog: options.toolLog,
+      draftAnswer: guardedAnswer,
+      selfCheck: options.selfCheck,
+      bfgVerification: options.bfgVerification,
+    }),
+  });
+  guardedAnswer = linkVerifiedBfgCitations(
+    requireModelContent(
+      correctionResult.content,
+      "DeepSeek konnte nicht verifizierte BFG-Fundstellen nicht aus der finalen Antwort entfernen.",
+    ),
+    options.bfgVerification.verified,
+  );
+  unverified = findUnverifiedBfgCitations(guardedAnswer, options.bfgVerification.verified);
+
+  return unverified.length === 0
+    ? guardedAnswer
+    : removeUnverifiedBfgCitations(guardedAnswer, options.bfgVerification.verified);
 }
 
 async function createProgressUpdate(options: {
@@ -284,6 +447,13 @@ async function finalizeAgentRun(options: {
     content: options.reason,
   }, options.onStep);
 
+  const bfgVerification = await verifyBfgCitationsForFinalization({
+    toolLog: options.toolLog,
+    draftAnswer: options.draftAnswer,
+    steps: options.steps,
+    onStep: options.onStep,
+  });
+
   const selfCheckResult = await chatCompletion({
     apiKey: options.apiKey,
     model: options.model,
@@ -297,6 +467,7 @@ async function finalizeAgentRun(options: {
       instruction: selfCheckInstruction(options.plan),
       toolLog: options.toolLog,
       draftAnswer: options.draftAnswer,
+      bfgVerification,
     }),
   });
   const selfCheck = requireModelContent(
@@ -323,12 +494,27 @@ async function finalizeAgentRun(options: {
       toolLog: options.toolLog,
       draftAnswer: options.draftAnswer,
       selfCheck,
+      bfgVerification,
     }),
   });
-  const answer = requireModelContent(
-    finalResult.content,
-    "DeepSeek konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
-  );
+  const answer = await guardFinalAnswer({
+    apiKey: options.apiKey,
+    model: options.model,
+    systemPrompt: systemPromptWithAttachmentContext({
+      systemPrompt: options.systemPrompt,
+      attachmentContexts: options.attachmentContexts,
+      pdfContext: options.pdfContext,
+    }),
+    conversation: options.conversation,
+    toolLog: options.toolLog,
+    plan: options.plan,
+    selfCheck,
+    bfgVerification,
+    answer: requireModelContent(
+      finalResult.content,
+      "DeepSeek konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
+    ),
+  });
 
   await appendAgentStep(options.steps, {
     type: "answer",
@@ -389,7 +575,8 @@ export async function runAgent(options: {
     content: summarizeStepText(plan),
   }, options.onStep);
   const session = await mcp.openToolSession(options.mcpBearerToken);
-  const toolNames = session.tools.map((tool) => tool.name);
+  const toolNames = [...session.tools.map((tool) => tool.name), FINDOK_VERIFY_BFG_CASES_TOOL_NAME];
+  const deepSeekTools = [...session.deepSeekTools, findokVerifyBfgCasesTool];
   await appendAgentStep(steps, {
     type: "tools",
     title: "Datenbank bereit",
@@ -411,7 +598,7 @@ export async function runAgent(options: {
       apiKey: options.apiKey,
       model: options.model,
       messages: [...messages],
-      tools: session.deepSeekTools,
+      tools: deepSeekTools,
     });
 
     if (result.toolCalls.length === 0) {
@@ -450,9 +637,10 @@ export async function runAgent(options: {
     for (const call of result.toolCalls) {
       const parsedArguments = parseToolArguments(call.name, call.arguments);
       const argumentSummary = summarizeToolArguments(parsedArguments);
+      const isFindokVerifierCall = call.name === FINDOK_VERIFY_BFG_CASES_TOOL_NAME;
       await appendAgentStep(steps, {
         type: "tool_call",
-        title: "Datenbank wird abgefragt",
+        title: isFindokVerifierCall ? "BFG-Fundstellen werden verifiziert" : "Datenbank wird abgefragt",
         content: `Argumente:\n${argumentSummary}`,
         toolName: call.name,
         arguments: argumentSummary,
@@ -460,16 +648,20 @@ export async function runAgent(options: {
 
       let toolResult: string;
       try {
-        toolResult = await mcp.callTool({
-          token: options.mcpBearerToken,
-          sessionId: session.sessionId,
-          name: call.name,
-          arguments: parsedArguments,
-        });
+        if (isFindokVerifierCall) {
+          toolResult = await callFindokVerifier(parsedArguments);
+        } else {
+          toolResult = await mcp.callTool({
+            token: options.mcpBearerToken,
+            sessionId: session.sessionId,
+            name: call.name,
+            arguments: parsedArguments,
+          });
+        }
       } catch (error) {
         await appendAgentStep(steps, {
           type: "tool_result",
-          title: "Datenbankfehler",
+          title: isFindokVerifierCall ? "Findok-Verifikation fehlgeschlagen" : "Datenbankfehler",
           content:
             error instanceof Error
               ? summarizeStepText(error.message)
@@ -489,7 +681,7 @@ export async function runAgent(options: {
       });
       await appendAgentStep(steps, {
         type: "tool_result",
-        title: success ? "Datenbankergebnis" : "Datenbankfehler",
+        title: isFindokVerifierCall ? "Findok-Verifikation" : success ? "Datenbankergebnis" : "Datenbankfehler",
         content: summarizeStepText(toolResult),
         toolName: call.name,
         success,

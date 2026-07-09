@@ -30,6 +30,7 @@ export function isAgentStep(value: unknown): value is AgentStep {
     value.type === "plan" ||
     value.type === "progress" ||
     value.type === "finalize" ||
+    value.type === "citation_verification" ||
     value.type === "self_check" ||
     value.type === "answer"
   ) {

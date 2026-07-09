@@ -22,6 +22,19 @@ describe("chat stream events", () => {
     expect(parseChatStreamLine("   ")).toBeNull();
   });
 
+  it("accepts citation verification steps", () => {
+    const event = {
+      type: "step" as const,
+      step: {
+        type: "citation_verification" as const,
+        title: "BFG-Fundstellen geprüft",
+        content: "1 verifiziert, 1 verworfen.",
+      },
+    };
+
+    expect(parseChatStreamLine(encodeChatStreamEvent(event))).toEqual(event);
+  });
+
   it("rejects malformed or unknown stream events", () => {
     expect(() => parseChatStreamLine("{")).toThrow("Ungültiges Streaming-Ereignis");
     expect(() => parseChatStreamLine(JSON.stringify({ type: "unknown" }))).toThrow(

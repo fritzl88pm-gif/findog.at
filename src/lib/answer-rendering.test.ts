@@ -76,4 +76,25 @@ describe("parseRichAnswer", () => {
       children: [{ type: "text", text: "Hinweis: Quellenstand offenlegen." }],
     });
   });
+
+  it("parses official Findok Markdown links and leaves other links as text", () => {
+    const blocks = parseRichAnswer(
+      "Siehe [RV/7103053/2014](https://findok.bmf.gv.at/findok/resources/pdf/segment/121623.pdf), [Findok Volltext](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F7103053%2F2014) und [extern](https://example.test).",
+    );
+
+    expect(blocks).toMatchObject([
+      {
+        type: "paragraph",
+        children: [
+          { type: "text", text: "Siehe " },
+          {
+            type: "link",
+            href: "https://findok.bmf.gv.at/findok/resources/pdf/segment/121623.pdf",
+            children: [{ type: "text", text: "RV/7103053/2014" }],
+          },
+          { type: "text", text: ", [Findok Volltext](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F7103053%2F2014) und [extern](https://example.test)." },
+        ],
+      },
+    ]);
+  });
 });

@@ -11,7 +11,9 @@ npm run dev
 
 Open `http://localhost:3000`, register or sign in with Supabase Auth, and use the fixed `deepseek-v4-pro` model through the server-side DeepSeek key. Users do not choose a model and do not provide DeepSeek API keys. The system prompt is stored in browser `localStorage`; the Settings panel can reset the prompt to the bundled Fred default. Local chat history is scoped by the authenticated Supabase user ID, and conversation IDs are verified server-side before use. BFG/WeKnora MCP access is fixed server-side and is not configurable by users.
 
-Assistant responses include a streaming agent-step panel with the plan, loaded MCP tools, tool calls, bounded tool-result snippets, optional attachment-context extraction status, and the final answer marker.
+Assistant responses include a streaming agent-step panel with the plan, loaded MCP tools, tool calls, bounded tool-result snippets, optional attachment-context extraction status, BFG citation verification, and the final answer marker.
+
+BFG case citations discovered through the fixed WeKnora/MCP knowledge base are verified server-side against the public Findok resolver (`/findok/api/volltext/gz`) before final output. Final answers may only name verified BFG Geschäftszahlen from the `findok-bfg` index, and verified `RV/...`/`RS/...`/`RM/...`/`AW/...`/`VH/...` citations are rendered as links to the official Findok PDF (`dokumentPdfMediaUrl`). Unverified or missing Findok cases are omitted from the final answer rather than linked or shown as plain citations.
 
 ## Environment
 

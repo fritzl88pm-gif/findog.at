@@ -631,6 +631,17 @@ textarea:focus {
   font-weight: 750;
 }
 
+.answer-content a {
+  color: var(--bmf-blue-dark);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+}
+
+.answer-content a:hover {
+  color: var(--bmf-blue-deep);
+}
+
 .answer-content code {
   border: 1px solid rgba(40, 111, 156, 0.14);
   border-radius: 5px;
