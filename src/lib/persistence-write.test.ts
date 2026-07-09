@@ -54,6 +54,7 @@ function persistenceClient(existingConversation: { client_id: string; title: str
     client: { from },
     upsert,
     update,
+    messagesInsert,
     runInsert,
     stepsInsert,
   };
@@ -125,5 +126,47 @@ describe("persistConversationTurn", () => {
 
     expect(fake.upsert).not.toHaveBeenCalled();
     expect(fake.update).toHaveBeenCalledWith({ updated_at: expect.any(String) });
+  });
+
+  it.each([
+    ["agent_runs", { code: "42P01", message: 'relation "public.agent_runs" does not exist' }],
+    [
+      "agent_steps",
+      { code: "PGRST205", message: "Could not find the table 'public.agent_steps' in the schema cache" },
+    ],
+  ])("quietly skips %s persistence when its relation is unavailable", async (table, error) => {
+    const fake = persistenceClient({ client_id: clientId, title: "Bestehender Titel" });
+    if (table === "agent_runs") {
+      fake.runInsert.mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: null, error }),
+        }),
+      });
+    } else {
+      fake.stepsInsert.mockResolvedValue({ error });
+    }
+    vi.mocked(getSupabaseServerClient).mockReturnValue(fake.client as never);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await persistConversationTurn({
+      conversationId,
+      clientId,
+      userMessage: "Folgefrage",
+      assistantMessage: "Antwort",
+      model: "deepseek-v4-pro",
+      steps: [
+        {
+          type: "tool_result",
+          title: "BFG-Vorabfrage",
+          content: "3 Treffer",
+          toolName: "hybrid_search",
+          success: true,
+        },
+      ],
+    });
+
+    expect(fake.messagesInsert).toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });

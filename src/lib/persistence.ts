@@ -91,6 +91,25 @@ type PersistedStep = {
   tools: string[] | null;
 };
 
+type DatabaseError = {
+  code?: unknown;
+  message?: unknown;
+};
+
+function isMissingAgentTraceRelation(
+  error: unknown,
+  relation: "agent_runs" | "agent_steps",
+): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const databaseError = error as DatabaseError;
+  const code = typeof databaseError.code === "string" ? databaseError.code : "";
+  const message = typeof databaseError.message === "string" ? databaseError.message : "";
+  return (code === "42P01" || code === "PGRST205")
+    && message.toLowerCase().includes(relation);
+}
+
 function sanitizeTraceText(value: unknown, maxLength: number): string {
   return summarizeStepText(value, maxLength * 2)
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [redacted]")
@@ -224,7 +243,9 @@ export async function persistConversationTurn(options: {
     .select("id")
     .single();
   if (runError || !agentRun) {
-    console.error("Supabase agent run persistence failed");
+    if (!isMissingAgentTraceRelation(runError, "agent_runs")) {
+      console.error("Supabase agent run persistence failed");
+    }
     return;
   }
 
@@ -233,7 +254,7 @@ export async function persistConversationTurn(options: {
     return;
   }
   const { error: stepsError } = await supabase.from("agent_steps").insert(steps);
-  if (stepsError) {
+  if (stepsError && !isMissingAgentTraceRelation(stepsError, "agent_steps")) {
     console.error("Supabase agent step persistence failed");
   }
 }
