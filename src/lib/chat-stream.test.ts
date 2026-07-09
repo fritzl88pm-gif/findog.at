@@ -35,6 +35,21 @@ describe("chat stream events", () => {
     expect(parseChatStreamLine(encodeChatStreamEvent(event))).toEqual(event);
   });
 
+  it("preserves the generated conversation title in final events", () => {
+    const event = {
+      type: "final" as const,
+      answer: "Antwort",
+      title: "Unterhaltsabsetzbetrag bei Drittstaatenkindern",
+      steps: [],
+      tools: ["hybrid_search"],
+      conversationId: "11111111-1111-4111-8111-111111111111",
+      model: "deepseek-v4-pro",
+      availableModels: ["deepseek-v4-pro"],
+    };
+
+    expect(parseChatStreamLine(encodeChatStreamEvent(event))).toEqual(event);
+  });
+
   it("rejects malformed or unknown stream events", () => {
     expect(() => parseChatStreamLine("{")).toThrow("Ungültiges Streaming-Ereignis");
     expect(() => parseChatStreamLine(JSON.stringify({ type: "unknown" }))).toThrow(

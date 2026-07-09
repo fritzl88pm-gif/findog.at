@@ -7,6 +7,7 @@ export type ChatStreamEvent =
   | {
       type: "final";
       answer: string;
+      title?: string;
       steps: AgentStep[];
       tools: string[];
       conversationId: string;
@@ -98,6 +99,7 @@ export function parseChatStreamLine(line: string): ChatStreamEvent | null {
     return {
       type: "final",
       answer: parsed.answer,
+      ...(typeof parsed.title === "string" ? { title: parsed.title } : {}),
       steps: parsed.steps,
       tools: parsed.tools,
       conversationId: parsed.conversationId,

@@ -177,11 +177,100 @@ button:disabled {
 
 .sidebar-content {
   flex: 1;
-  overflow-y: auto;
-  padding: 20px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 14px;
+}
+
+.new-conversation-button,
+.sidebar-settings-btn {
+  width: 100%;
+  gap: 8px;
+}
+
+.conversation-history {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conversation-history-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.history-loading {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.conversation-list {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 3px;
+}
+
+.conversation-empty {
+  margin: 8px 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.conversation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 42px;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  color: var(--ink);
+  text-align: left;
+  transition: var(--transition);
+}
+
+.conversation-row:hover:not(:disabled),
+.conversation-row.active {
+  background: rgba(40, 111, 156, 0.08);
+  color: var(--bmf-blue-deep);
+}
+
+.conversation-row.active {
+  box-shadow: inset 3px 0 0 var(--bmf-blue);
+}
+
+.conversation-row > span {
+  overflow: hidden;
+  font-size: 0.84rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-row time {
+  color: var(--muted);
+  font-size: 0.68rem;
 }
 
 .rail-content {
@@ -221,6 +310,52 @@ button:disabled {
 .sidebar.collapsed .sidebar-footer {
   padding: 12px 0;
   align-items: center;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(9, 31, 45, 0.56);
+  backdrop-filter: blur(3px);
+}
+
+.settings-dialog {
+  width: min(760px, 100%);
+  max-height: min(780px, calc(100dvh - 48px));
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-top: 4px solid var(--accent-yellow);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+  padding: 22px;
+}
+
+.settings-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.settings-dialog-header .eyebrow {
+  margin: 0 0 3px;
+  color: var(--bmf-blue);
+}
+
+.settings-dialog-header h2 {
+  margin: 0;
+  color: var(--bmf-blue-deep);
+  font-size: 1.35rem;
+}
+
+.settings-dialog textarea {
+  min-height: 360px;
 }
 
 .user-profile {

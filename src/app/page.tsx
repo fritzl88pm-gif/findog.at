@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, type ChangeEvent, type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { Fragment, type ChangeEvent, type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 
 import { chatHistoryStorageKey } from "@/lib/chat/storage";
@@ -34,7 +34,15 @@ type Settings = {
 
 type StoredHistory = {
   conversationId: string;
+  title?: string;
   messages: ChatMessage[];
+};
+
+type ConversationSummary = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 type StoredSettings = Pick<Settings, "systemPrompt">;
@@ -51,6 +59,7 @@ type ChatResponsePayload = {
   error?: unknown;
   steps?: unknown;
   conversationId?: unknown;
+  title?: unknown;
 };
 
 const SETTINGS_STORAGE_KEY = "findog.settings.v1";
@@ -177,6 +186,54 @@ function normalizeMessages(value: unknown): ChatMessage[] {
   });
 }
 
+function normalizeConversationSummaries(value: unknown): ConversationSummary[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item): ConversationSummary[] => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return [];
+    }
+    const conversation = item as Record<string, unknown>;
+    if (
+      typeof conversation.id !== "string" ||
+      typeof conversation.title !== "string" ||
+      typeof conversation.createdAt !== "string" ||
+      typeof conversation.updatedAt !== "string"
+    ) {
+      return [];
+    }
+    return [{
+      id: conversation.id,
+      title: conversation.title,
+      createdAt: conversation.createdAt,
+      updatedAt: conversation.updatedAt,
+    }];
+  });
+}
+
+async function fetchConversationHistory(accessToken: string, id: string): Promise<{
+  title: string;
+  messages: ChatMessage[];
+}> {
+  const response = await fetch(`/api/conversations/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    throw new Error(
+      typeof payload.error === "string" ? payload.error : "Gespräch konnte nicht geladen werden.",
+    );
+  }
+  const conversation = payload.conversation;
+  const title = conversation && typeof conversation === "object" && !Array.isArray(conversation)
+    && typeof (conversation as Record<string, unknown>).title === "string"
+    ? ((conversation as Record<string, unknown>).title as string)
+    : "Unterhaltung";
+  return { title, messages: normalizeMessages(payload.messages) };
+}
+
 function formatTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -186,6 +243,18 @@ function formatTime(value: string): string {
   return new Intl.DateTimeFormat("de-AT", {
     hour: "2-digit",
     minute: "2-digit",
+  }).format(date);
+}
+
+function formatHistoryDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return new Intl.DateTimeFormat("de-AT", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
   }).format(date);
 }
 
@@ -258,6 +327,7 @@ async function readChatStream(
       answer: event.answer,
       steps: event.steps,
       conversationId: event.conversationId,
+      ...(event.title ? { title: event.title } : {}),
     };
   };
 
@@ -498,6 +568,9 @@ export default function Home() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversationId, setConversationId] = useState("");
+  const [conversationTitle, setConversationTitle] = useState("");
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [composer, setComposer] = useState("");
   const [selectedPdfs, setSelectedPdfs] = useState<File[]>([]);
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
@@ -507,6 +580,7 @@ export default function Home() {
   const [pendingSteps, setPendingSteps] = useState<AgentStep[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(true);
+  const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthLoaded, setIsAuthLoaded] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>("sign-in");
@@ -518,8 +592,15 @@ export default function Home() {
   const transcriptRef = useRef<HTMLDivElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const settingsTriggerRef = useRef<HTMLButtonElement>(null);
+  const settingsDialogRef = useRef<HTMLElement>(null);
+  const settingsDialogCloseRef = useRef<HTMLButtonElement>(null);
   const user = session?.user ?? null;
   const signedInEmail = user?.email ?? "";
+  const closeSettingsDialog = useCallback(() => {
+    setIsSettingsDialogOpen(false);
+    requestAnimationFrame(() => settingsTriggerRef.current?.focus());
+  }, []);
 
   useEffect(() => {
     let isActive = true;
@@ -598,6 +679,8 @@ export default function Home() {
       if (!user?.id) {
         setHistoryOwnerId("");
         setConversationId("");
+        setConversationTitle("");
+        setConversations([]);
         setMessages([]);
         setComposer("");
         setIsSending(false);
@@ -608,18 +691,66 @@ export default function Home() {
 
       const storedHistory = readJson<Partial<StoredHistory>>(chatHistoryStorageKey(user.id));
       setHistoryOwnerId(user.id);
-      setConversationId(
-        typeof storedHistory?.conversationId === "string" && storedHistory.conversationId
-          ? storedHistory.conversationId
-          : "",
-      );
+      const storedConversationId = typeof storedHistory?.conversationId === "string"
+        ? storedHistory.conversationId
+        : "";
+      setConversationId(storedConversationId);
+      setConversationTitle(typeof storedHistory?.title === "string" ? storedHistory.title : "");
       setMessages(normalizeMessages(storedHistory?.messages));
+
+      const accessToken = session?.access_token;
+      if (!accessToken) {
+        return;
+      }
+      setIsHistoryLoading(true);
+      void (async () => {
+        try {
+          const response = await fetch("/api/conversations", {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+          if (!response.ok) {
+            throw new Error(
+              typeof payload.error === "string"
+                ? payload.error
+                : "Gesprächsverlauf konnte nicht geladen werden.",
+            );
+          }
+          if (!isActive) {
+            return;
+          }
+          const summaries = normalizeConversationSummaries(payload.conversations);
+          setConversations(summaries);
+
+          if (storedConversationId && summaries.some((item) => item.id === storedConversationId)) {
+            const history = await fetchConversationHistory(accessToken, storedConversationId);
+            if (isActive) {
+              setConversationTitle(history.title);
+              setMessages(history.messages);
+            }
+          } else if (storedConversationId) {
+            setConversationId("");
+            setConversationTitle("");
+            setMessages([]);
+          }
+        } catch (historyError) {
+          if (isActive) {
+            setError(historyError instanceof Error
+              ? historyError.message
+              : "Gesprächsverlauf konnte nicht geladen werden.");
+          }
+        } finally {
+          if (isActive) {
+            setIsHistoryLoading(false);
+          }
+        }
+      })();
     });
 
     return () => {
       isActive = false;
     };
-  }, [isAuthLoaded, isLoaded, user?.id]);
+  }, [isAuthLoaded, isLoaded, session?.access_token, user?.id]);
 
   useEffect(() => {
     if (isLoaded) {
@@ -633,10 +764,42 @@ export default function Home() {
     if (isLoaded && user?.id && historyOwnerId === user.id && conversationId) {
       writeJson(chatHistoryStorageKey(user.id), {
         conversationId,
+        title: conversationTitle,
         messages,
       });
     }
-  }, [conversationId, historyOwnerId, isLoaded, messages, user?.id]);
+  }, [conversationId, conversationTitle, historyOwnerId, isLoaded, messages, user?.id]);
+
+  useEffect(() => {
+    if (!isSettingsDialogOpen) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeSettingsDialog();
+        return;
+      }
+      if (event.key === "Tab") {
+        const focusable = Array.from(
+          settingsDialogRef.current?.querySelectorAll<HTMLElement>(
+            "button:not(:disabled), textarea:not(:disabled), input:not(:disabled), select:not(:disabled), [href]",
+          ) ?? [],
+        );
+        const first = focusable[0];
+        const last = focusable.at(-1);
+        if (first && last && event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (first && last && !event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    settingsDialogCloseRef.current?.focus();
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [closeSettingsDialog, isSettingsDialogOpen]);
 
   useEffect(() => {
     const prefersReducedMotion = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -743,6 +906,8 @@ export default function Home() {
       setSession(null);
       setHistoryOwnerId("");
       setConversationId("");
+      setConversationTitle("");
+      setConversations([]);
       setMessages([]);
       setComposer("");
       clearAttachments();
@@ -827,13 +992,51 @@ export default function Home() {
     setError("");
   }
 
-  function clearConversation() {
+  function startNewConversation() {
     setError("");
     setMessages([]);
     setConversationId("");
+    setConversationTitle("");
     setPendingStepText(INITIAL_PENDING_TEXT);
     setPendingSteps([]);
     clearAttachments();
+    if (user?.id) {
+      writeJson(chatHistoryStorageKey(user.id), { conversationId: "", title: "", messages: [] });
+    }
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
+  async function selectConversation(conversation: ConversationSummary) {
+    if (isSending || !session?.access_token) {
+      return;
+    }
+    setError("");
+    setIsHistoryLoading(true);
+    try {
+      const history = await fetchConversationHistory(session.access_token, conversation.id);
+      setConversationId(conversation.id);
+      setConversationTitle(history.title);
+      setMessages(history.messages);
+      setComposer("");
+      setPendingStepText(INITIAL_PENDING_TEXT);
+      setPendingSteps([]);
+      clearAttachments();
+      if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+        setSettingsOpen(false);
+      }
+    } catch (historyError) {
+      setError(historyError instanceof Error
+        ? historyError.message
+        : "Gespräch konnte nicht geladen werden.");
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  }
+
+  function openSettingsDialog() {
+    setIsSettingsDialogOpen(true);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -947,6 +1150,31 @@ export default function Home() {
 
       if (typeof payload.conversationId === "string" && payload.conversationId.trim()) {
         setConversationId(payload.conversationId.trim());
+      }
+      const responseConversationId = typeof payload.conversationId === "string"
+        ? payload.conversationId.trim()
+        : conversationId;
+      const responseTitle = typeof payload.title === "string" && payload.title.trim()
+        ? payload.title.trim()
+        : conversationTitle;
+      if (responseTitle) {
+        setConversationTitle(responseTitle);
+      }
+      if (responseConversationId) {
+        const now = new Date().toISOString();
+        setConversations((current) => {
+          const existing = current.find((item) => item.id === responseConversationId);
+          const title = responseTitle || existing?.title || "Neue Unterhaltung";
+          return [
+            {
+              id: responseConversationId,
+              title,
+              createdAt: existing?.createdAt ?? now,
+              updatedAt: now,
+            },
+            ...current.filter((item) => item.id !== responseConversationId),
+          ];
+        });
       }
       if (hasAttachments) {
         clearAttachments();
@@ -1138,6 +1366,142 @@ export default function Home() {
 
         {settingsOpen ? (
           <div className="sidebar-content">
+            <button
+              className="primary-button new-conversation-button"
+              type="button"
+              onClick={startNewConversation}
+              disabled={isSending}
+            >
+              <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              Neue Unterhaltung
+            </button>
+            <div className="conversation-history" aria-label="Gespeicherte Unterhaltungen">
+              <div className="conversation-history-heading">
+                <span>Unterhaltungen</span>
+                {isHistoryLoading ? <span className="history-loading">Lädt…</span> : null}
+              </div>
+              <div className="conversation-list">
+                {!isHistoryLoading && conversations.length === 0 ? (
+                  <p className="conversation-empty">Noch keine gespeicherten Unterhaltungen.</p>
+                ) : null}
+                {conversations.map((conversation) => (
+                  <button
+                    className={`conversation-row ${conversation.id === conversationId ? "active" : ""}`}
+                    type="button"
+                    key={conversation.id}
+                    onClick={() => void selectConversation(conversation)}
+                    disabled={isSending || isHistoryLoading}
+                    aria-current={conversation.id === conversationId ? "page" : undefined}
+                  >
+                    <span title={conversation.title}>{conversation.title}</span>
+                    <time dateTime={conversation.updatedAt}>{formatHistoryDate(conversation.updatedAt)}</time>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rail-content">
+            <button
+              className="icon-button rail-icon-btn"
+              type="button"
+              onClick={startNewConversation}
+              disabled={isSending}
+              title="Neue Unterhaltung"
+              aria-label="Neue Unterhaltung"
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+          </div>
+        )}
+
+        <div className="sidebar-footer">
+          {settingsOpen ? (
+            <>
+              <div className="user-profile">
+                <span className="user-email-label">Angemeldet als</span>
+                <span className="user-email" title={signedInEmail}>{signedInEmail}</span>
+              </div>
+              <button
+                ref={settingsTriggerRef}
+                className="secondary-button sidebar-settings-btn"
+                type="button"
+                onClick={openSettingsDialog}
+              >
+                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                Einstellungen
+              </button>
+              <button
+                className="secondary-button sidebar-signout-btn"
+                type="button"
+                onClick={handleSignOut}
+                disabled={isAuthSubmitting}
+                title="Abmelden"
+                aria-label="Abmelden"
+              >
+                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                Abmelden
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                ref={settingsTriggerRef}
+                className="icon-button rail-icon-btn"
+                type="button"
+                onClick={openSettingsDialog}
+                title="Einstellungen"
+                aria-label="Einstellungen"
+              >
+                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+              </button>
+              <button
+                className="icon-button rail-icon-btn sidebar-signout-btn"
+                type="button"
+                onClick={handleSignOut}
+                disabled={isAuthSubmitting}
+                title="Abmelden"
+                aria-label="Abmelden"
+              >
+                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+              </button>
+            </>
+          )}
+        </div>
+      </aside>
+
+      {isSettingsDialogOpen ? (
+        <div
+          className="dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeSettingsDialog();
+            }
+          }}
+        >
+          <section
+            ref={settingsDialogRef}
+            className="settings-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-dialog-title"
+          >
+            <div className="settings-dialog-header">
+              <div>
+                <p className="eyebrow">Konfiguration</p>
+                <h2 id="settings-dialog-title">Einstellungen</h2>
+              </div>
+              <button
+                ref={settingsDialogCloseRef}
+                className="icon-button"
+                type="button"
+                onClick={closeSettingsDialog}
+                aria-label="Einstellungen schließen"
+                title="Schließen"
+              >
+                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19"></line><line x1="19" y1="5" x2="5" y2="19"></line></svg>
+              </button>
+            </div>
             <div className="field-group">
               <div className="field-label-row">
                 <label htmlFor="system-prompt">System Prompt</label>
@@ -1154,81 +1518,16 @@ export default function Home() {
                 value={settings.systemPrompt}
                 onChange={(event) => updateSetting("systemPrompt", event.target.value)}
                 maxLength={MAX_SYSTEM_PROMPT_CHARS}
-                rows={12}
+                rows={16}
               />
               <span className="field-help">
                 {settings.systemPrompt.length.toLocaleString("de-AT")} /{" "}
                 {MAX_SYSTEM_PROMPT_CHARS.toLocaleString("de-AT")} Zeichen
               </span>
             </div>
-
-            <button
-              className="secondary-button danger-button"
-              type="button"
-              onClick={clearConversation}
-              disabled={!user}
-            >
-              <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-              Verlauf leeren
-            </button>
-          </div>
-        ) : (
-          <div className="rail-content">
-            <button
-              className="icon-button rail-icon-btn"
-              type="button"
-              onClick={clearConversation}
-              disabled={!user}
-              title="Verlauf leeren"
-              aria-label="Verlauf leeren"
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-            </button>
-            <button
-              className="icon-button rail-icon-btn"
-              type="button"
-              onClick={() => setSettingsOpen(true)}
-              title="Einstellungen einblenden"
-              aria-label="Einstellungen einblenden"
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-            </button>
-          </div>
-        )}
-
-        <div className="sidebar-footer">
-          {settingsOpen ? (
-            <>
-              <div className="user-profile">
-                <span className="user-email-label">Angemeldet als</span>
-                <span className="user-email" title={signedInEmail}>{signedInEmail}</span>
-              </div>
-              <button
-                className="secondary-button sidebar-signout-btn"
-                type="button"
-                onClick={handleSignOut}
-                disabled={isAuthSubmitting}
-                title="Abmelden"
-                aria-label="Abmelden"
-              >
-                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
-                Abmelden
-              </button>
-            </>
-          ) : (
-            <button
-              className="icon-button rail-icon-btn sidebar-signout-btn"
-              type="button"
-              onClick={handleSignOut}
-              disabled={isAuthSubmitting}
-              title="Abmelden"
-              aria-label="Abmelden"
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
-            </button>
-          )}
+          </section>
         </div>
-      </aside>
+      ) : null}
 
       <section className="chat-panel">
         <div className="transcript" ref={transcriptRef}>
@@ -1342,7 +1641,7 @@ export default function Home() {
               ))}
             </div>
             <div className="composer-actions">
-              <span>{messages.length} Nachrichten lokal für dieses Konto gespeichert</span>
+              <span>{messages.length} Nachrichten in dieser Unterhaltung</span>
               <button type="submit" disabled={!canSend}>
                 {isSending ? (
                   <>

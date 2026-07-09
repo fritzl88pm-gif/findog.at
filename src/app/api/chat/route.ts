@@ -20,7 +20,7 @@ import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { type AppChatMessage } from "@/lib/deepseek";
 import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
 import { UserVisibleError } from "@/lib/errors";
-import { persistConversationTurn, resolveConversationIdForClient } from "@/lib/persistence";
+import { persistConversationTurn, resolveConversationContextForClient } from "@/lib/persistence";
 import { runAgent, type AttachmentContext } from "@/lib/agent";
 import type { AgentStep } from "@/lib/agent-steps";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
@@ -28,6 +28,7 @@ import { getServerMcpBearerToken } from "@/lib/mcp/server-token";
 import { CHAT_STREAM_CONTENT_TYPE, encodeChatStreamEvent } from "@/lib/chat-stream";
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 import { createUnboundedDeadline, type Deadline } from "@/lib/deadline";
+import { generateConversationTitle } from "@/lib/conversation-title";
 
 export const runtime = "nodejs";
 
@@ -386,13 +387,24 @@ export async function POST(request: Request) {
       DEFAULT_SYSTEM_PROMPT;
     const messages = parseMessages(body.messages);
     const mcpBearerToken = getServerMcpBearerToken();
-    const conversationId = await resolveConversationIdForClient({
-      conversationId: asOptionalString(body.conversationId, 80, "Conversation ID"),
+    const requestedConversationId = asOptionalString(body.conversationId, 80, "Conversation ID");
+    const conversationContext = await resolveConversationContextForClient({
+      conversationId: requestedConversationId,
       clientId: authenticatedUser.id,
       supabase,
     });
+    const conversationId = conversationContext.id;
 
     const latestUserMessage = messages.findLast((message) => message.role === "user");
+    const isNewConversation = conversationContext.isNew;
+    const titlePromise = isNewConversation && latestUserMessage
+      ? generateConversationTitle({
+          apiKey: deepSeekApiKey,
+          model,
+          userRequest: latestUserMessage.content,
+          deadline,
+        })
+      : Promise.resolve(conversationContext.title);
 
     if (wantsStreamingResponse(request)) {
       disposeDeadline = false;
@@ -409,21 +421,27 @@ export async function POST(request: Request) {
               (step) => send({ type: "step", step }),
               deadline,
             );
-            const agentResult = await runAgent({
-              apiKey: deepSeekApiKey,
-              model,
-              systemPrompt,
-              messages,
-              mcpBearerToken,
-              attachmentContexts: attachmentAgentContext.attachmentContexts,
-              initialSteps: attachmentAgentContext.initialSteps,
-              deadline,
-              onStep: (step) => send({ type: "step", step }),
-            });
+            const startedAt = new Date().toISOString();
+            const [agentResult, title] = await Promise.all([
+              runAgent({
+                apiKey: deepSeekApiKey,
+                model,
+                systemPrompt,
+                messages,
+                mcpBearerToken,
+                attachmentContexts: attachmentAgentContext.attachmentContexts,
+                initialSteps: attachmentAgentContext.initialSteps,
+                deadline,
+                onStep: (step) => send({ type: "step", step }),
+              }),
+              titlePromise,
+            ]);
+            const completedAt = new Date().toISOString();
 
             send({
               type: "final",
               answer: agentResult.answer,
+              ...(title ? { title } : {}),
               steps: agentResult.steps,
               tools: agentResult.tools,
               conversationId,
@@ -436,6 +454,11 @@ export async function POST(request: Request) {
               clientId: authenticatedUser.id,
               userMessage: latestUserMessage?.content,
               assistantMessage: agentResult.answer,
+              title,
+              model,
+              steps: agentResult.steps,
+              startedAt,
+              completedAt,
             });
           } catch (streamError) {
             if (!(streamError instanceof UserVisibleError)) {
@@ -465,26 +488,37 @@ export async function POST(request: Request) {
     }
 
     const attachmentAgentContext = await prepareAttachmentContexts(attachmentUploads, undefined, deadline);
-    const agentResult = await runAgent({
-      apiKey: deepSeekApiKey,
-      model,
-      systemPrompt,
-      messages,
-      mcpBearerToken,
-      attachmentContexts: attachmentAgentContext.attachmentContexts,
-      initialSteps: attachmentAgentContext.initialSteps,
-      deadline,
-    });
+    const startedAt = new Date().toISOString();
+    const [agentResult, title] = await Promise.all([
+      runAgent({
+        apiKey: deepSeekApiKey,
+        model,
+        systemPrompt,
+        messages,
+        mcpBearerToken,
+        attachmentContexts: attachmentAgentContext.attachmentContexts,
+        initialSteps: attachmentAgentContext.initialSteps,
+        deadline,
+      }),
+      titlePromise,
+    ]);
+    const completedAt = new Date().toISOString();
 
     scheduleConversationPersistence({
       conversationId,
       clientId: authenticatedUser.id,
       userMessage: latestUserMessage?.content,
       assistantMessage: agentResult.answer,
+      title,
+      model,
+      steps: agentResult.steps,
+      startedAt,
+      completedAt,
     });
 
     return NextResponse.json({
       answer: agentResult.answer,
+      ...(title ? { title } : {}),
       steps: agentResult.steps,
       tools: agentResult.tools,
       conversationId,

@@ -17,6 +17,7 @@ import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 import { parseChatStreamLine } from "@/lib/chat-stream";
 import { persistConversationTurn } from "@/lib/persistence";
+import { generateConversationTitle } from "@/lib/conversation-title";
 import * as chatRoute from "./route";
 
 const { POST } = chatRoute;
@@ -29,9 +30,20 @@ vi.mock("@/lib/deepseek-key", () => ({
   resolveDeepSeekApiKey: vi.fn().mockReturnValue("deepseek-key"),
 }));
 
+vi.mock("@/lib/conversation-title", () => ({
+  generateConversationTitle: vi.fn().mockResolvedValue("Präziser Gesprächstitle"),
+}));
+
 vi.mock("@/lib/persistence", () => ({
   persistConversationTurn: vi.fn().mockResolvedValue(undefined),
   resolveConversationIdForClient: vi.fn().mockResolvedValue("conversation-1"),
+  resolveConversationContextForClient: vi.fn(({ conversationId }: { conversationId?: string }) =>
+    Promise.resolve(
+      conversationId
+        ? { id: conversationId, title: "Bestehender Titel", isNew: false }
+        : { id: "conversation-1", isNew: true },
+    ),
+  ),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -179,6 +191,7 @@ describe("POST /api/chat uploads", () => {
       type: "final",
       answer: "Antwort",
       conversationId: "conversation-1",
+      title: "Präziser Gesprächstitle",
     });
     expect(events.some((event) => event.type === "error")).toBe(false);
     expect(errorSpy).toHaveBeenCalledWith(
@@ -197,6 +210,7 @@ describe("POST /api/chat uploads", () => {
     await expect(response.json()).resolves.toMatchObject({
       answer: "Antwort",
       conversationId: "conversation-1",
+      title: "Präziser Gesprächstitle",
     });
     await Promise.resolve();
 
@@ -206,6 +220,33 @@ describe("POST /api/chat uploads", () => {
     );
 
     errorSpy.mockRestore();
+  });
+
+  it("generates and persists a title only when starting a new conversation", async () => {
+    const newResponse = await POST(jsonRequest(chatPayload()));
+    expect(newResponse.status).toBe(200);
+    expect(generateConversationTitle).toHaveBeenCalledWith(
+      expect.objectContaining({ userRequest: "Bitte auswerten." }),
+    );
+    expect(persistConversationTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        title: "Präziser Gesprächstitle",
+        model: "deepseek-v4-pro",
+        steps: [],
+      }),
+    );
+
+    vi.clearAllMocks();
+    vi.mocked(generateConversationTitle).mockResolvedValue("Darf nicht verwendet werden");
+    const existingResponse = await POST(
+      jsonRequest({ ...chatPayload(), conversationId: "33333333-3333-4333-8333-333333333333" }),
+    );
+    expect(existingResponse.status).toBe(200);
+    await expect(existingResponse.json()).resolves.toMatchObject({ title: "Bestehender Titel" });
+    expect(generateConversationTitle).not.toHaveBeenCalled();
+    expect(persistConversationTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: "Bestehender Titel" }),
+    );
   });
 
   it("accepts five PDFs without inspecting or blocking page count", async () => {
