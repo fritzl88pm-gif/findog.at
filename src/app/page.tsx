@@ -2303,7 +2303,7 @@ export default function Home() {
 
         <div className="composer-container">
           {error ? (
-            <div className="error-box" role="alert" aria-live="polite" style={{ maxWidth: "800px", margin: "0 auto 12px" }}>
+            <div className="error-box composer-error" role="alert" aria-live="polite">
               {error}
             </div>
           ) : null}
@@ -2330,7 +2330,7 @@ export default function Home() {
                 disabled={isSending}
               />
               <label className="attachment-button" htmlFor="pdf-upload" aria-disabled={isSending}>
-                PDFs anhängen
+                PDFs anhängen ({selectedPdfs.length}/{MAX_PDF_UPLOADS})
               </label>
               <input
                 ref={imageInputRef}
@@ -2343,8 +2343,11 @@ export default function Home() {
                 disabled={isSending}
               />
               <label className="attachment-button" htmlFor="image-upload" aria-disabled={isSending}>
-                Bilder anhängen
+                Bilder anhängen ({selectedImages.length}/{MAX_IMAGE_UPLOADS})
               </label>
+              <span className="attachment-help">
+                Unabhängige Limits: bis zu {MAX_PDF_UPLOADS} PDFs und zusätzlich bis zu {MAX_IMAGE_UPLOADS} Bilder pro Anfrage.
+              </span>
               {selectedPdfs.map((file, index) => (
                 <span className="attachment-chip" key={`pdf-${file.name}-${file.lastModified}-${index}`}>
                   <span title={file.name}>{ellipsizeFilename(file.name)}</span>

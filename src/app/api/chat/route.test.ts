@@ -363,6 +363,86 @@ describe("POST /api/chat uploads", () => {
     ]);
   });
 
+  it("accepts exactly five PDFs and five images with deterministic PDF-then-image context order", async () => {
+    const formData = new FormData();
+    formData.append("payload", JSON.stringify(chatPayload()));
+    for (let index = 1; index <= 5; index += 1) {
+      formData.append(
+        "pdf",
+        new File([new Uint8Array([37, 80, 68, 70])], `Dokument-${index}.pdf`, {
+          type: "application/pdf",
+        }),
+      );
+      formData.append(
+        "image",
+        new File([new Uint8Array([137, 80, 78, 71])], `Bild-${index}.png`, {
+          type: "image/png",
+        }),
+      );
+    }
+
+    const response = await POST(multipartRequest(formData));
+
+    expect(response.status).toBe(200);
+    expect(extractPdfContext).toHaveBeenCalledTimes(5);
+    expect(extractImageContext).toHaveBeenCalledTimes(5);
+    const agentOptions = vi.mocked(runAgent).mock.calls[0]?.[0] as {
+      attachmentContexts?: Array<{ type: string; filename: string; content: string }>;
+    };
+    expect(agentOptions.attachmentContexts).toEqual([
+      ...Array.from({ length: 5 }, (_, index) => ({
+        type: "pdf",
+        filename: `Dokument-${index + 1}.pdf`,
+        content: `PDF-Kontext Dokument-${index + 1}.pdf`,
+      })),
+      ...Array.from({ length: 5 }, (_, index) => ({
+        type: "image",
+        filename: `Bild-${index + 1}.png`,
+        content: `Bild-Kontext Bild-${index + 1}.png`,
+      })),
+    ]);
+  });
+
+  it("rejects a sixth PDF before attachment extraction or the agent runs", async () => {
+    const formData = new FormData();
+    formData.append("payload", JSON.stringify(chatPayload()));
+    for (let index = 1; index <= 6; index += 1) {
+      formData.append(
+        "pdf",
+        new File([new Uint8Array([37, 80, 68, 70])], `Dokument-${index}.pdf`, {
+          type: "application/pdf",
+        }),
+      );
+    }
+
+    const response = await POST(multipartRequest(formData));
+
+    expect(response.status).toBe(400);
+    expect(extractPdfContext).not.toHaveBeenCalled();
+    expect(extractImageContext).not.toHaveBeenCalled();
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
+  it("rejects a sixth image before attachment extraction or the agent runs", async () => {
+    const formData = new FormData();
+    formData.append("payload", JSON.stringify(chatPayload()));
+    for (let index = 1; index <= 6; index += 1) {
+      formData.append(
+        "image",
+        new File([new Uint8Array([137, 80, 78, 71])], `Bild-${index}.png`, {
+          type: "image/png",
+        }),
+      );
+    }
+
+    const response = await POST(multipartRequest(formData));
+
+    expect(response.status).toBe(400);
+    expect(extractPdfContext).not.toHaveBeenCalled();
+    expect(extractImageContext).not.toHaveBeenCalled();
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
   it("rejects images above the per-image upload limit", async () => {
     const oversizedImage = new File([new ArrayBuffer(MAX_IMAGE_UPLOAD_BYTES + 1)], "huge.png", {
       type: "image/png",

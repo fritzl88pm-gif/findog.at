@@ -1335,6 +1335,11 @@ textarea:focus {
   box-sizing: border-box;
 }
 
+.composer-error {
+  max-width: 800px;
+  margin: 0 auto 12px;
+}
+
 .composer {
   display: flex;
   flex-direction: column;
@@ -1618,6 +1623,14 @@ textarea:focus {
 }
 
 /* Responsive Media Queries */
+@media (min-width: 961px) {
+  .transcript-content,
+  .composer,
+  .composer-error {
+    max-width: 1240px;
+  }
+}
+
 @media (max-width: 960px) {
   .app-shell {
     position: relative;
