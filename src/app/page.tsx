@@ -26,6 +26,7 @@ import {
 } from "@/lib/chat/settings";
 import { ellipsizeFilename } from "@/lib/attachment-names";
 import type { AgentStep } from "@/lib/agent-steps";
+import { agentStepDisplayLabel } from "@/lib/agent-step-display";
 import { parseRichAnswer, type RichBlock, type RichInline } from "@/lib/answer-rendering";
 import {
   getSupabaseBrowserClient,
@@ -82,7 +83,7 @@ type ChatResponsePayload = {
 };
 
 const SETTINGS_STORAGE_KEY = "findog.settings.v1";
-const INITIAL_PENDING_TEXT = "Verbindung zum Rechercheagenten wird aufgebaut...";
+const INITIAL_PENDING_TEXT = "Recherche wird vorbereitet";
 
 function readJson<T>(key: string): T | null {
   try {
@@ -283,52 +284,6 @@ function formatHistoryDate(value: string): string {
   }).format(date);
 }
 
-function formatAgentTiming(run: AgentRunMetadata): string {
-  const startedAt = new Date(run.startedAt).getTime();
-  const completedAt = run.completedAt ? new Date(run.completedAt).getTime() : Number.NaN;
-  if (Number.isFinite(startedAt) && Number.isFinite(completedAt) && completedAt >= startedAt) {
-    return `${new Intl.NumberFormat("de-AT", { maximumFractionDigits: 1 }).format((completedAt - startedAt) / 1_000)} s`;
-  }
-  return Number.isFinite(startedAt) ? `Start ${formatTime(run.startedAt)}` : "Zeit nicht verfügbar";
-}
-
-function compactStatusText(value: string, maxLength = 220): string {
-  const compacted = value.replace(/\s+/g, " ").trim();
-  if (compacted.length <= maxLength) {
-    return compacted;
-  }
-
-  return `${compacted.slice(0, maxLength).trimEnd()}...`;
-}
-
-function pendingTextForStep(step: AgentStep): string {
-  const preview = compactStatusText(step.content);
-
-  switch (step.type) {
-    case "pdf_context":
-    case "attachment_context":
-      return `${step.title}: ${preview}`;
-    case "plan":
-      return `Arbeitsplan erstellt: ${preview}`;
-    case "tools":
-      return preview || step.title;
-    case "tool_call":
-      return `${step.title}: ${compactStatusText(step.content.replace(/^Argumente:\s*/i, ""))}`;
-    case "tool_result":
-      return `${step.title}: ${preview}`;
-    case "progress":
-      return `Fortschritt aktualisiert: ${preview}`;
-    case "finalize":
-      return "Recherche abgeschlossen. Die finale Antwort wird vorbereitet.";
-    case "citation_verification":
-      return `Findok-Verifikation: ${preview}`;
-    case "self_check":
-      return `Selbstcheck: ${preview}`;
-    case "answer":
-      return "Finale Antwort wird übernommen.";
-  }
-}
-
 async function readChatStream(
   response: Response,
   onStep: (step: AgentStep) => void,
@@ -387,54 +342,6 @@ async function readChatStream(
   }
 
   return finalPayload;
-}
-
-function stepTypeLabel(step: AgentStep): string {
-  switch (step.type) {
-    case "pdf_context":
-      return "PDF";
-    case "attachment_context":
-      return "Anhang";
-    case "plan":
-      return "Plan";
-    case "tools":
-      return "Datenbank";
-    case "tool_call":
-      return "Aufruf";
-    case "tool_result":
-      return step.success ? "Ergebnis" : "Fehler";
-    case "progress":
-      return "Fortschritt";
-    case "finalize":
-      return "Finalisierung";
-    case "citation_verification":
-      return "Findok";
-    case "self_check":
-      return "Selbstcheck";
-    case "answer":
-      return "Antwort";
-  }
-}
-
-function renderStepContent(content: string): ReactNode {
-  const nodes: ReactNode[] = [];
-  const strikePattern = /~~(.+?)~~/gs;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = strikePattern.exec(content)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(<span key={`text-${lastIndex}`}>{content.slice(lastIndex, match.index)}</span>);
-    }
-    nodes.push(<s key={`strike-${match.index}-${match[1]}`}>{match[1]}</s>);
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < content.length) {
-    nodes.push(<span key={`text-${lastIndex}`}>{content.slice(lastIndex)}</span>);
-  }
-
-  return nodes.length > 0 ? nodes : content;
 }
 
 function renderUserMessageContent(content: string): ReactNode {
@@ -574,37 +481,14 @@ function RichAnswer({ content }: { content: string }) {
   return <div className="answer-content">{blocks.map(renderRichBlock)}</div>;
 }
 
-function AgentStepsPanel({
-  steps,
-  agentRun,
-}: {
-  steps: AgentStep[];
-  agentRun?: AgentRunMetadata;
-}) {
-  if (steps.length === 0 && !agentRun) {
-    return null;
-  }
-
+function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
   return (
-    <details className="agent-steps" open>
-      <summary>Agentenschritte ({steps.length})</summary>
-      {agentRun ? (
-        <p className="agent-run-meta">
-          <span>{agentRun.model === "deepseek-v4-pro" ? "DeepSeek v4 Pro" : "DeepSeek v4 Flash"}</span>
-          <span>{agentRun.status === "completed" ? "Abgeschlossen" : "Fehlgeschlagen"}</span>
-          <span>{formatAgentTiming(agentRun)}</span>
-        </p>
-      ) : null}
+    <details className="agent-steps">
+      <summary>Rechercheverlauf ({steps.length})</summary>
       {steps.length > 0 ? (
         <ol>
           {steps.map((step, index) => (
-            <li className={`agent-step ${step.type}`} key={`${step.type}-${step.title}-${index}`}>
-              <div className="agent-step-header">
-                <span>{stepTypeLabel(step)}</span>
-                <strong>{step.title}</strong>
-              </div>
-              <pre>{renderStepContent(step.content)}</pre>
-            </li>
+            <li key={`${step.type}-${index}`}>{agentStepDisplayLabel(step)}</li>
           ))}
         </ol>
       ) : null}
@@ -1478,7 +1362,7 @@ export default function Home() {
       const payload = contentType.includes(CHAT_STREAM_CONTENT_TYPE)
         ? await readChatStream(response, (step) => {
             setPendingSteps((current) => [...current, step]);
-            setPendingStepText(pendingTextForStep(step));
+            setPendingStepText(agentStepDisplayLabel(step));
           })
         : ((await response.json().catch(() => ({}))) as ChatResponsePayload);
 
@@ -2061,7 +1945,7 @@ export default function Home() {
                     renderUserMessageContent(message.content)
                   )}
                   {message.role === "assistant" && (message.steps?.length || message.agentRun) ? (
-                    <AgentStepsPanel steps={message.steps ?? []} agentRun={message.agentRun} />
+                    <AgentStepsPanel steps={message.steps ?? []} />
                   ) : null}
                 </article>
               ))
