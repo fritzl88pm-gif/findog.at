@@ -19,6 +19,20 @@ function composerSource(): string {
 }
 
 describe("composer public UI", () => {
+  it("hides attachment file inputs from keyboard and assistive technology", () => {
+    const composer = composerSource();
+
+    for (const inputRef of ["pdfInputRef", "imageInputRef"]) {
+      const input = composer.match(
+        new RegExp(`<input[^>]*ref=\\{${inputRef}\\}[^>]*/>`),
+      )?.[0];
+
+      expect(input).toBeDefined();
+      expect(input).toContain("tabIndex={-1}");
+      expect(input).toContain("aria-hidden={true}");
+    }
+  });
+
   it("exposes only the two real attachment actions behind one compact trigger", () => {
     const composer = composerSource();
 

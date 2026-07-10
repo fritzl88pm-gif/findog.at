@@ -2549,6 +2549,8 @@ export default function Home() {
                   type="file"
                   accept="application/pdf"
                   multiple
+                  tabIndex={-1}
+                  aria-hidden={true}
                   onChange={handlePdfChange}
                   disabled={isSending}
                 />
@@ -2559,6 +2561,8 @@ export default function Home() {
                   type="file"
                   accept="image/*"
                   multiple
+                  tabIndex={-1}
+                  aria-hidden={true}
                   onChange={handleImageChange}
                   disabled={isSending}
                 />
