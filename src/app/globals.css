@@ -1354,8 +1354,11 @@ textarea:focus {
 }
 
 .composer textarea {
-  min-height: 60px;
-  resize: vertical;
+  box-sizing: border-box;
+  min-height: 48px;
+  max-height: 240px;
+  overflow-y: auto;
+  resize: none;
   font-size: 0.95rem;
   padding: 8px 12px;
   background-color: transparent;
@@ -1452,16 +1455,11 @@ textarea:focus {
 .composer-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 16px;
 }
 
-.composer-actions > span {
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
-.composer-status {
+.composer-model {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -1470,11 +1468,13 @@ textarea:focus {
   font-size: 0.82rem;
 }
 
-.composer-status label {
+.composer-model label {
   font-weight: 700;
 }
 
-.composer-status select {
+.composer-model select {
+  width: auto;
+  max-width: 100%;
   min-height: 34px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -1627,7 +1627,8 @@ textarea:focus {
   .transcript-content,
   .composer,
   .composer-error {
-    max-width: 1240px;
+    width: min(100%, 1600px);
+    max-width: none;
   }
 }
 

@@ -6,6 +6,10 @@ import type { Session } from "@supabase/supabase-js";
 import { chatHistoryStorageKey } from "@/lib/chat/storage";
 import { applyConversationDeletion } from "@/lib/chat/deletion";
 import {
+  clampComposerHeight,
+  COMPOSER_MIN_HEIGHT,
+} from "@/lib/chat/composer-height";
+import {
   normalizeAgentRun,
   type AgentRunMetadata,
 } from "@/lib/chat/agent-run";
@@ -571,6 +575,7 @@ export default function Home() {
   const [formNotice, setFormNotice] = useState("");
   const [isGeneratingForm, setIsGeneratingForm] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const formImageInputRef = useRef<HTMLInputElement>(null);
@@ -808,6 +813,16 @@ export default function Home() {
     settingsDialogCloseRef.current?.focus();
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [closeSettingsDialog, isSettingsDialogOpen]);
+
+  useEffect(() => {
+    const textarea = composerRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = `${COMPOSER_MIN_HEIGHT}px`;
+    textarea.style.height = `${clampComposerHeight(textarea.scrollHeight)}px`;
+  }, [composer]);
 
   useEffect(() => {
     const prefersReducedMotion = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -2312,11 +2327,12 @@ export default function Home() {
               Frage
             </label>
             <textarea
+              ref={composerRef}
               id="question"
               value={composer}
               onChange={(event) => setComposer(event.target.value)}
               placeholder="Frage zu BFG, EStG, UStG oder Verfahrensrecht..."
-              rows={3}
+              rows={2}
             />
             <div className="attachment-row">
               <input
@@ -2368,7 +2384,7 @@ export default function Home() {
               ))}
             </div>
             <div className="composer-actions">
-              <div className="composer-status">
+              <div className="composer-model">
                 <label htmlFor="composer-model">Modell</label>
                 <select
                   id="composer-model"
@@ -2382,7 +2398,6 @@ export default function Home() {
                     </option>
                   ))}
                 </select>
-                <span>{messages.length} Nachrichten</span>
               </div>
               <button type="submit" disabled={!canSend}>
                 {isSending ? (
