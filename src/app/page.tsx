@@ -32,6 +32,13 @@ import {
   isSupabaseBrowserConfigured,
 } from "@/lib/supabase/browser";
 import { CHAT_STREAM_CONTENT_TYPE, parseChatStreamLine } from "@/lib/chat-stream";
+import {
+  isPasswordRecoveryEvent,
+  isValidEmailAddress,
+  nextRecoveryMode,
+  validateNewPassword,
+} from "@/lib/auth/recovery";
+import { magicLinkOptions } from "@/lib/auth/magic-link";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -54,12 +61,16 @@ type ConversationSummary = {
   updatedAt: string;
 };
 
-type AuthMode = "sign-in" | "sign-up";
 type SettingsTab = "system-prompt" | "model";
 
 type AuthForm = {
   email: string;
   password: string;
+};
+
+type RecoveryForm = {
+  password: string;
+  confirmation: string;
 };
 
 type ChatResponsePayload = {
@@ -624,8 +635,12 @@ export default function Home() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("system-prompt");
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthLoaded, setIsAuthLoaded] = useState(false);
-  const [authMode, setAuthMode] = useState<AuthMode>("sign-in");
+  const [isRecoveryMode, setIsRecoveryMode] = useState(false);
   const [authForm, setAuthForm] = useState<AuthForm>({ email: "", password: "" });
+  const [recoveryForm, setRecoveryForm] = useState<RecoveryForm>({
+    password: "",
+    confirmation: "",
+  });
   const [authError, setAuthError] = useState("");
   const [authNotice, setAuthNotice] = useState("");
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
@@ -673,32 +688,57 @@ export default function Home() {
     }
 
     let isActive = true;
-
-    supabase.auth.getSession().then(({ data }) => {
-      if (!isActive) {
-        return;
-      }
-      setSession(data.session);
-      setIsAuthLoaded(true);
-    });
+    let initialSessionTimer: ReturnType<typeof setTimeout> | null = null;
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (!isActive) {
+        return;
+      }
+
       setSession(nextSession);
+      setIsRecoveryMode((currentMode) => nextRecoveryMode(currentMode, event));
       setError("");
       setAuthError("");
       setAuthNotice("");
+
+      if (isPasswordRecoveryEvent(event)) {
+        if (initialSessionTimer) {
+          clearTimeout(initialSessionTimer);
+          initialSessionTimer = null;
+        }
+        setRecoveryForm({ password: "", confirmation: "" });
+        setIsAuthLoaded(true);
+        return;
+      }
+
+      if (event === "INITIAL_SESSION") {
+        // Supabase emits PASSWORD_RECOVERY in a timer after detecting an implicit URL
+        // session. Delay the normal-session gate by one timer turn so recovery cannot
+        // briefly render the authenticated app shell first.
+        initialSessionTimer = setTimeout(() => {
+          if (isActive) {
+            setIsAuthLoaded(true);
+          }
+        }, 0);
+        return;
+      }
+
+      setIsAuthLoaded(true);
     });
 
     return () => {
       isActive = false;
+      if (initialSessionTimer) {
+        clearTimeout(initialSessionTimer);
+      }
       subscription.unsubscribe();
     };
   }, [supabase]);
 
   useEffect(() => {
-    if (!isLoaded || !isAuthLoaded) {
+    if (!isLoaded || !isAuthLoaded || isRecoveryMode) {
       return;
     }
 
@@ -784,7 +824,7 @@ export default function Home() {
     return () => {
       isActive = false;
     };
-  }, [isAuthLoaded, isLoaded, session?.access_token, user?.id]);
+  }, [isAuthLoaded, isLoaded, isRecoveryMode, session?.access_token, user?.id]);
 
   useEffect(() => {
     if (isLoaded) {
@@ -858,15 +898,19 @@ export default function Home() {
     }));
   }
 
-  function selectAuthMode(nextMode: AuthMode) {
-    setAuthMode(nextMode);
-    setAuthError("");
-    setAuthNotice("");
+  function updateRecoveryForm<Key extends keyof RecoveryForm>(key: Key, value: RecoveryForm[Key]) {
+    setRecoveryForm((current) => ({
+      ...current,
+      [key]: value,
+    }));
   }
 
   async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    if (isAuthSubmitting) {
+      return;
+    }
     if (!supabase) {
       setAuthError("Supabase Auth ist noch nicht konfiguriert.");
       return;
@@ -889,35 +933,186 @@ export default function Home() {
     setIsAuthSubmitting(true);
 
     try {
-      const { data, error: authSubmitError } =
-        authMode === "sign-in"
-          ? await supabase.auth.signInWithPassword({ email, password })
-          : await supabase.auth.signUp({
-              email,
-              password,
-              options: { emailRedirectTo: window.location.origin },
-            });
+      const { error: authSubmitError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
       if (authSubmitError) {
         throw authSubmitError;
       }
 
       setAuthForm({ email: "", password: "" });
+    } catch {
+      setAuthError("Anmeldung fehlgeschlagen. Bitte E-Mail und Passwort prüfen.");
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }
 
-      if (authMode === "sign-up") {
-        setAuthNotice(
-          data.session
-            ? "Registrierung abgeschlossen. Du bist angemeldet."
-            : "Registrierung erstellt. Bitte bestätige deine E-Mail-Adresse und melde dich danach an.",
-        );
+  async function handleForgotPassword() {
+    if (isAuthSubmitting) {
+      return;
+    }
+    if (!supabase) {
+      setAuthError("Supabase Auth ist noch nicht konfiguriert.");
+      return;
+    }
+
+    const email = authForm.email.trim();
+    if (!isValidEmailAddress(email)) {
+      setAuthError("Bitte eine gültige E-Mail-Adresse eingeben.");
+      setAuthNotice("");
+      return;
+    }
+
+    setAuthError("");
+    setAuthNotice("");
+    setIsAuthSubmitting(true);
+
+    try {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin,
+      });
+      if (resetError) {
+        throw resetError;
       }
-    } catch (caughtError) {
-      const fallbackMessage =
-        authMode === "sign-in"
-          ? "Anmeldung fehlgeschlagen. Bitte E-Mail und Passwort prüfen."
-          : "Registrierung fehlgeschlagen. Bitte Eingaben prüfen oder später erneut versuchen.";
-      const detail = caughtError instanceof Error ? caughtError.message.trim() : "";
-      setAuthError(detail ? `${fallbackMessage} Details: ${detail}` : fallbackMessage);
+
+      setAuthNotice(
+        "Falls ein Konto mit dieser E-Mail-Adresse existiert, wurde ein Link zum Zurücksetzen gesendet.",
+      );
+    } catch {
+      setAuthError("Die Anfrage konnte nicht gesendet werden. Bitte später erneut versuchen.");
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }
+
+  async function handleMagicLink() {
+    if (isAuthSubmitting) {
+      return;
+    }
+    if (!supabase) {
+      setAuthError("Supabase Auth ist noch nicht konfiguriert.");
+      return;
+    }
+
+    const email = authForm.email.trim();
+    if (!isValidEmailAddress(email)) {
+      setAuthError("Bitte eine gültige E-Mail-Adresse eingeben.");
+      setAuthNotice("");
+      return;
+    }
+
+    setAuthError("");
+    setAuthNotice("");
+    setIsAuthSubmitting(true);
+
+    try {
+      const { error: magicLinkError } = await supabase.auth.signInWithOtp({
+        email,
+        options: magicLinkOptions(window.location.origin),
+      });
+      if (magicLinkError) {
+        throw magicLinkError;
+      }
+
+      setAuthNotice(
+        "Falls ein Konto mit dieser E-Mail-Adresse existiert, wurde ein Magic Link gesendet.",
+      );
+    } catch {
+      setAuthError("Der Magic Link konnte nicht gesendet werden. Bitte später erneut versuchen.");
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }
+
+  async function signOutRecoverySession(): Promise<boolean> {
+    if (!supabase) {
+      return false;
+    }
+
+    const { error: signOutError } = await supabase.auth.signOut();
+    if (!signOutError) {
+      return true;
+    }
+
+    const { error: localSignOutError } = await supabase.auth.signOut({ scope: "local" });
+    return !localSignOutError;
+  }
+
+  async function handleRecoverySubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!supabase) {
+      setAuthError("Supabase Auth ist noch nicht konfiguriert.");
+      return;
+    }
+
+    const validationError = validateNewPassword(
+      recoveryForm.password,
+      recoveryForm.confirmation,
+    );
+    if (validationError) {
+      setAuthError(validationError);
+      setAuthNotice("");
+      return;
+    }
+
+    setAuthError("");
+    setAuthNotice("");
+    setIsAuthSubmitting(true);
+    let passwordWasUpdated = false;
+
+    try {
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: recoveryForm.password,
+      });
+      if (updateError) {
+        throw updateError;
+      }
+      passwordWasUpdated = true;
+
+      if (!(await signOutRecoverySession())) {
+        throw new Error("Recovery session sign-out failed");
+      }
+
+      setSession(null);
+      setIsRecoveryMode(false);
+      setRecoveryForm({ password: "", confirmation: "" });
+      setAuthForm({ email: "", password: "" });
+      setAuthNotice("Das Passwort wurde geändert. Du kannst dich jetzt anmelden.");
+    } catch {
+      setAuthError(
+        passwordWasUpdated
+          ? "Das Passwort wurde geändert, aber die Sitzung konnte nicht beendet werden. Bitte abbrechen und erneut anmelden."
+          : "Das Passwort konnte nicht geändert werden. Bitte den Link erneut öffnen oder später erneut versuchen.",
+      );
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }
+
+  async function handleRecoveryCancel() {
+    if (!supabase || isAuthSubmitting) {
+      return;
+    }
+
+    setAuthError("");
+    setAuthNotice("");
+    setIsAuthSubmitting(true);
+
+    try {
+      if (!(await signOutRecoverySession())) {
+        throw new Error("Recovery session sign-out failed");
+      }
+
+      setSession(null);
+      setIsRecoveryMode(false);
+      setRecoveryForm({ password: "", confirmation: "" });
+      setAuthForm({ email: "", password: "" });
+    } catch {
+      setAuthError("Die Wiederherstellung konnte nicht abgebrochen werden. Bitte erneut versuchen.");
     } finally {
       setIsAuthSubmitting(false);
     }
@@ -1373,37 +1568,82 @@ export default function Home() {
     );
   }
 
+  if (isRecoveryMode) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-card auth-card-standalone" aria-label="Passwort zurücksetzen">
+          <p className="eyebrow">findog.at</p>
+          <h1>Neues Passwort festlegen</h1>
+          <p className="auth-copy">
+            Lege ein neues Passwort mit mindestens 6 Zeichen fest.
+          </p>
+
+          {authError ? (
+            <div className="error-box auth-message" role="alert" aria-live="polite">
+              {authError}
+            </div>
+          ) : null}
+
+          <form className="auth-form" onSubmit={handleRecoverySubmit}>
+            <div className="field-group">
+              <label htmlFor="recovery-password">Neues Passwort</label>
+              <input
+                id="recovery-password"
+                type="password"
+                value={recoveryForm.password}
+                onChange={(event) => updateRecoveryForm("password", event.target.value)}
+                autoComplete="new-password"
+                placeholder="Mindestens 6 Zeichen"
+                minLength={6}
+                disabled={!isAppReady || isAuthSubmitting}
+              />
+            </div>
+            <div className="field-group">
+              <label htmlFor="recovery-confirmation">Passwort bestätigen</label>
+              <input
+                id="recovery-confirmation"
+                type="password"
+                value={recoveryForm.confirmation}
+                onChange={(event) => updateRecoveryForm("confirmation", event.target.value)}
+                autoComplete="new-password"
+                placeholder="Passwort wiederholen"
+                minLength={6}
+                disabled={!isAppReady || isAuthSubmitting}
+              />
+            </div>
+            <div className="auth-button-row">
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={!isAppReady || isAuthSubmitting}
+              >
+                {isAuthSubmitting ? "Bitte warten..." : "Passwort speichern"}
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void handleRecoveryCancel()}
+                disabled={!isAppReady || isAuthSubmitting}
+              >
+                Abbrechen
+              </button>
+            </div>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
   if (!user) {
     return (
       <main className="auth-shell">
         <section className="auth-card auth-card-standalone" aria-label="Anmeldung">
           <p className="eyebrow">findog.at</p>
-          <h1>{authMode === "sign-in" ? "Anmelden" : "Registrieren"}</h1>
+          <h1>Anmelden</h1>
           <p className="auth-copy">
-            Melde dich mit E-Mail und Passwort an. Der geschützte Bereich öffnet sich erst nach
-            erfolgreicher Anmeldung.
+            Melde dich mit E-Mail und Passwort oder per Magic Link an. Der geschützte Bereich
+            öffnet sich erst nach erfolgreicher Anmeldung.
           </p>
-
-          <div className="auth-tabs" role="tablist" aria-label="Authentifizierungsmodus">
-            <button
-              type="button"
-              role="tab"
-              className={authMode === "sign-in" ? "auth-tab active" : "auth-tab"}
-              onClick={() => selectAuthMode("sign-in")}
-              aria-selected={authMode === "sign-in"}
-            >
-              Anmelden
-            </button>
-            <button
-              type="button"
-              role="tab"
-              className={authMode === "sign-up" ? "auth-tab active" : "auth-tab"}
-              onClick={() => selectAuthMode("sign-up")}
-              aria-selected={authMode === "sign-up"}
-            >
-              Registrieren
-            </button>
-          </div>
 
           {!isAuthConfigured ? (
             <div className="error-box auth-message" role="alert">
@@ -1441,17 +1681,35 @@ export default function Home() {
                 type="password"
                 value={authForm.password}
                 onChange={(event) => updateAuthForm("password", event.target.value)}
-                autoComplete={authMode === "sign-in" ? "current-password" : "new-password"}
+                autoComplete="current-password"
                 placeholder="Mindestens 6 Zeichen"
                 disabled={!isAppReady || !isAuthConfigured || isAuthSubmitting}
               />
+            </div>
+            <div className="auth-link-row">
+              <button
+                className="auth-link-button"
+                type="button"
+                onClick={() => void handleForgotPassword()}
+                disabled={!isAppReady || !isAuthConfigured || isAuthSubmitting}
+              >
+                Passwort vergessen?
+              </button>
+              <button
+                className="auth-link-button"
+                type="button"
+                onClick={() => void handleMagicLink()}
+                disabled={!isAppReady || !isAuthConfigured || isAuthSubmitting}
+              >
+                Magic Link senden
+              </button>
             </div>
             <button
               className="primary-button"
               type="submit"
               disabled={!isAppReady || !isAuthConfigured || isAuthSubmitting}
             >
-              {isAuthSubmitting ? "Bitte warten..." : authMode === "sign-in" ? "Anmelden" : "Registrieren"}
+              {isAuthSubmitting ? "Bitte warten..." : "Anmelden"}
             </button>
           </form>
         </section>
