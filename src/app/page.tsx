@@ -42,13 +42,7 @@ import {
   isSupabaseBrowserConfigured,
 } from "@/lib/supabase/browser";
 import { CHAT_STREAM_CONTENT_TYPE, parseChatStreamLine } from "@/lib/chat-stream";
-import {
-  isPasswordRecoveryEvent,
-  isValidEmailAddress,
-  nextRecoveryMode,
-  validateNewPassword,
-} from "@/lib/auth/recovery";
-import { magicLinkOptions } from "@/lib/auth/magic-link";
+import { parsePasswordChangeBody } from "@/lib/auth/password";
 import {
   FORM_IMAGE_MIME_TYPES,
   isFormImageMimeType,
@@ -80,7 +74,7 @@ type ConversationSummary = {
   updatedAt: string;
 };
 
-type SettingsTab = "system-prompt" | "model";
+type SettingsTab = "system-prompt" | "model" | "password";
 type AppView = "chat" | "forms" | "administration";
 
 type AuthForm = {
@@ -88,8 +82,9 @@ type AuthForm = {
   password: string;
 };
 
-type RecoveryForm = {
-  password: string;
+type PasswordChangeForm = {
+  currentPassword: string;
+  newPassword: string;
   confirmation: string;
 };
 
@@ -593,14 +588,16 @@ export default function Home() {
   const [isAdminSettingsSaving, setIsAdminSettingsSaving] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthLoaded, setIsAuthLoaded] = useState(false);
-  const [isRecoveryMode, setIsRecoveryMode] = useState(false);
   const [authForm, setAuthForm] = useState<AuthForm>({ email: "", password: "" });
-  const [recoveryForm, setRecoveryForm] = useState<RecoveryForm>({
-    password: "",
+  const [passwordChangeForm, setPasswordChangeForm] = useState<PasswordChangeForm>({
+    currentPassword: "",
+    newPassword: "",
     confirmation: "",
   });
+  const [passwordChangeError, setPasswordChangeError] = useState("");
+  const [passwordChangeNotice, setPasswordChangeNotice] = useState("");
+  const [isPasswordChangeSubmitting, setIsPasswordChangeSubmitting] = useState(false);
   const [authError, setAuthError] = useState("");
-  const [authNotice, setAuthNotice] = useState("");
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [historyOwnerId, setHistoryOwnerId] = useState("");
   const [appView, setAppView] = useState<AppView>("chat");
@@ -655,57 +652,28 @@ export default function Home() {
     }
 
     let isActive = true;
-    let initialSessionTimer: ReturnType<typeof setTimeout> | null = null;
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       if (!isActive) {
         return;
       }
 
       setSession(nextSession);
-      setIsRecoveryMode((currentMode) => nextRecoveryMode(currentMode, event));
       setError("");
       setAuthError("");
-      setAuthNotice("");
-
-      if (isPasswordRecoveryEvent(event)) {
-        if (initialSessionTimer) {
-          clearTimeout(initialSessionTimer);
-          initialSessionTimer = null;
-        }
-        setRecoveryForm({ password: "", confirmation: "" });
-        setIsAuthLoaded(true);
-        return;
-      }
-
-      if (event === "INITIAL_SESSION") {
-        // Supabase emits PASSWORD_RECOVERY in a timer after detecting an implicit URL
-        // session. Delay the normal-session gate by one timer turn so recovery cannot
-        // briefly render the authenticated app shell first.
-        initialSessionTimer = setTimeout(() => {
-          if (isActive) {
-            setIsAuthLoaded(true);
-          }
-        }, 0);
-        return;
-      }
-
       setIsAuthLoaded(true);
     });
 
     return () => {
       isActive = false;
-      if (initialSessionTimer) {
-        clearTimeout(initialSessionTimer);
-      }
       subscription.unsubscribe();
     };
   }, [supabase]);
 
   useEffect(() => {
-    if (!isLoaded || !isAuthLoaded || isRecoveryMode) {
+    if (!isLoaded || !isAuthLoaded) {
       return;
     }
 
@@ -798,11 +766,11 @@ export default function Home() {
     return () => {
       isActive = false;
     };
-  }, [isAuthLoaded, isLoaded, isRecoveryMode, session?.access_token, user?.id]);
+  }, [isAuthLoaded, isLoaded, session?.access_token, user?.id]);
 
   useEffect(() => {
     const accessToken = session?.access_token;
-    if (!accessToken || !user?.id || isRecoveryMode) {
+    if (!accessToken || !user?.id) {
       queueMicrotask(() => {
         setGlobalSystemPrompt(DEFAULT_SYSTEM_PROMPT);
         setIsAdmin(false);
@@ -833,7 +801,7 @@ export default function Home() {
     return () => {
       isActive = false;
     };
-  }, [isRecoveryMode, session?.access_token, user?.id]);
+  }, [session?.access_token, user?.id]);
 
   useEffect(() => {
     if (isLoaded) {
@@ -918,11 +886,16 @@ export default function Home() {
     }));
   }
 
-  function updateRecoveryForm<Key extends keyof RecoveryForm>(key: Key, value: RecoveryForm[Key]) {
-    setRecoveryForm((current) => ({
+  function updatePasswordChangeForm<Key extends keyof PasswordChangeForm>(
+    key: Key,
+    value: PasswordChangeForm[Key],
+  ) {
+    setPasswordChangeForm((current) => ({
       ...current,
       [key]: value,
     }));
+    setPasswordChangeError("");
+    setPasswordChangeNotice("");
   }
 
   async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
@@ -949,7 +922,6 @@ export default function Home() {
     }
 
     setAuthError("");
-    setAuthNotice("");
     setIsAuthSubmitting(true);
 
     try {
@@ -970,171 +942,64 @@ export default function Home() {
     }
   }
 
-  async function handleForgotPassword() {
-    if (isAuthSubmitting) {
-      return;
-    }
-    if (!supabase) {
-      setAuthError("Supabase Auth ist noch nicht konfiguriert.");
-      return;
-    }
-
-    const email = authForm.email.trim();
-    if (!isValidEmailAddress(email)) {
-      setAuthError("Bitte eine gültige E-Mail-Adresse eingeben.");
-      setAuthNotice("");
-      return;
-    }
-
-    setAuthError("");
-    setAuthNotice("");
-    setIsAuthSubmitting(true);
-
-    try {
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: window.location.origin,
-      });
-      if (resetError) {
-        throw resetError;
-      }
-
-      setAuthNotice(
-        "Falls ein Konto mit dieser E-Mail-Adresse existiert, wurde ein Link zum Zurücksetzen gesendet.",
-      );
-    } catch {
-      setAuthError("Die Anfrage konnte nicht gesendet werden. Bitte später erneut versuchen.");
-    } finally {
-      setIsAuthSubmitting(false);
-    }
-  }
-
-  async function handleMagicLink() {
-    if (isAuthSubmitting) {
-      return;
-    }
-    if (!supabase) {
-      setAuthError("Supabase Auth ist noch nicht konfiguriert.");
-      return;
-    }
-
-    const email = authForm.email.trim();
-    if (!isValidEmailAddress(email)) {
-      setAuthError("Bitte eine gültige E-Mail-Adresse eingeben.");
-      setAuthNotice("");
-      return;
-    }
-
-    setAuthError("");
-    setAuthNotice("");
-    setIsAuthSubmitting(true);
-
-    try {
-      const { error: magicLinkError } = await supabase.auth.signInWithOtp({
-        email,
-        options: magicLinkOptions(window.location.origin),
-      });
-      if (magicLinkError) {
-        throw magicLinkError;
-      }
-
-      setAuthNotice(
-        "Falls ein Konto mit dieser E-Mail-Adresse existiert, wurde ein Magic Link gesendet.",
-      );
-    } catch {
-      setAuthError("Der Magic Link konnte nicht gesendet werden. Bitte später erneut versuchen.");
-    } finally {
-      setIsAuthSubmitting(false);
-    }
-  }
-
-  async function signOutRecoverySession(): Promise<boolean> {
-    if (!supabase) {
-      return false;
-    }
-
-    const { error: signOutError } = await supabase.auth.signOut();
-    if (!signOutError) {
-      return true;
-    }
-
-    const { error: localSignOutError } = await supabase.auth.signOut({ scope: "local" });
-    return !localSignOutError;
-  }
-
-  async function handleRecoverySubmit(event: FormEvent<HTMLFormElement>) {
+  async function handlePasswordChange(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!supabase) {
-      setAuthError("Supabase Auth ist noch nicht konfiguriert.");
+    if (isPasswordChangeSubmitting) {
       return;
     }
 
-    const validationError = validateNewPassword(
-      recoveryForm.password,
-      recoveryForm.confirmation,
-    );
-    if (validationError) {
-      setAuthError(validationError);
-      setAuthNotice("");
-      return;
-    }
-
-    setAuthError("");
-    setAuthNotice("");
-    setIsAuthSubmitting(true);
-    let passwordWasUpdated = false;
-
+    let input;
     try {
-      const { error: updateError } = await supabase.auth.updateUser({
-        password: recoveryForm.password,
+      input = parsePasswordChangeBody(passwordChangeForm);
+    } catch (validationError) {
+      setPasswordChangeError(
+        validationError instanceof Error
+          ? validationError.message
+          : "Die Passwortangaben sind ungültig.",
+      );
+      setPasswordChangeNotice("");
+      return;
+    }
+
+    const accessToken = session?.access_token;
+    if (!accessToken) {
+      setPasswordChangeError("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+      setPasswordChangeNotice("");
+      return;
+    }
+
+    setPasswordChangeError("");
+    setPasswordChangeNotice("");
+    setIsPasswordChangeSubmitting(true);
+    try {
+      const response = await fetch("/api/account/password", {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(input),
       });
-      if (updateError) {
-        throw updateError;
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok || payload.success !== true) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Das Passwort konnte nicht geändert werden.",
+        );
       }
-      passwordWasUpdated = true;
 
-      if (!(await signOutRecoverySession())) {
-        throw new Error("Recovery session sign-out failed");
-      }
-
-      setSession(null);
-      setIsRecoveryMode(false);
-      setRecoveryForm({ password: "", confirmation: "" });
-      setAuthForm({ email: "", password: "" });
-      setAuthNotice("Das Passwort wurde geändert. Du kannst dich jetzt anmelden.");
-    } catch {
-      setAuthError(
-        passwordWasUpdated
-          ? "Das Passwort wurde geändert, aber die Sitzung konnte nicht beendet werden. Bitte abbrechen und erneut anmelden."
-          : "Das Passwort konnte nicht geändert werden. Bitte den Link erneut öffnen oder später erneut versuchen.",
+      setPasswordChangeForm({ currentPassword: "", newPassword: "", confirmation: "" });
+      setPasswordChangeNotice("Das Passwort wurde erfolgreich geändert.");
+    } catch (passwordError) {
+      setPasswordChangeError(
+        passwordError instanceof Error
+          ? passwordError.message
+          : "Das Passwort konnte nicht geändert werden.",
       );
     } finally {
-      setIsAuthSubmitting(false);
-    }
-  }
-
-  async function handleRecoveryCancel() {
-    if (!supabase || isAuthSubmitting) {
-      return;
-    }
-
-    setAuthError("");
-    setAuthNotice("");
-    setIsAuthSubmitting(true);
-
-    try {
-      if (!(await signOutRecoverySession())) {
-        throw new Error("Recovery session sign-out failed");
-      }
-
-      setSession(null);
-      setIsRecoveryMode(false);
-      setRecoveryForm({ password: "", confirmation: "" });
-      setAuthForm({ email: "", password: "" });
-    } catch {
-      setAuthError("Die Wiederherstellung konnte nicht abgebrochen werden. Bitte erneut versuchen.");
-    } finally {
-      setIsAuthSubmitting(false);
+      setIsPasswordChangeSubmitting(false);
     }
   }
 
@@ -1144,7 +1009,6 @@ export default function Home() {
     }
 
     setAuthError("");
-    setAuthNotice("");
     setIsAuthSubmitting(true);
 
     try {
@@ -1634,7 +1498,7 @@ export default function Home() {
   }
 
   function handleSettingsTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
-    const tabs: SettingsTab[] = ["system-prompt", "model"];
+    const tabs: SettingsTab[] = ["system-prompt", "model", "password"];
     const currentIndex = tabs.indexOf(settingsTab);
     let nextTab: SettingsTab | undefined;
 
@@ -1850,72 +1714,6 @@ export default function Home() {
     );
   }
 
-  if (isRecoveryMode) {
-    return (
-      <main className="auth-shell">
-        <section className="auth-card auth-card-standalone" aria-label="Passwort zurücksetzen">
-          <p className="eyebrow">findog.at</p>
-          <h1>Neues Passwort festlegen</h1>
-          <p className="auth-copy">
-            Lege ein neues Passwort mit mindestens 6 Zeichen fest.
-          </p>
-
-          {authError ? (
-            <div className="error-box auth-message" role="alert" aria-live="polite">
-              {authError}
-            </div>
-          ) : null}
-
-          <form className="auth-form" onSubmit={handleRecoverySubmit}>
-            <div className="field-group">
-              <label htmlFor="recovery-password">Neues Passwort</label>
-              <input
-                id="recovery-password"
-                type="password"
-                value={recoveryForm.password}
-                onChange={(event) => updateRecoveryForm("password", event.target.value)}
-                autoComplete="new-password"
-                placeholder="Mindestens 6 Zeichen"
-                minLength={6}
-                disabled={!isAppReady || isAuthSubmitting}
-              />
-            </div>
-            <div className="field-group">
-              <label htmlFor="recovery-confirmation">Passwort bestätigen</label>
-              <input
-                id="recovery-confirmation"
-                type="password"
-                value={recoveryForm.confirmation}
-                onChange={(event) => updateRecoveryForm("confirmation", event.target.value)}
-                autoComplete="new-password"
-                placeholder="Passwort wiederholen"
-                minLength={6}
-                disabled={!isAppReady || isAuthSubmitting}
-              />
-            </div>
-            <div className="auth-button-row">
-              <button
-                className="primary-button"
-                type="submit"
-                disabled={!isAppReady || isAuthSubmitting}
-              >
-                {isAuthSubmitting ? "Bitte warten..." : "Passwort speichern"}
-              </button>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => void handleRecoveryCancel()}
-                disabled={!isAppReady || isAuthSubmitting}
-              >
-                Abbrechen
-              </button>
-            </div>
-          </form>
-        </section>
-      </main>
-    );
-  }
-
   if (!user) {
     return (
       <main className="auth-shell">
@@ -1923,8 +1721,8 @@ export default function Home() {
           <p className="eyebrow">findog.at</p>
           <h1>Anmelden</h1>
           <p className="auth-copy">
-            Melde dich mit E-Mail und Passwort oder per Magic Link an. Der geschützte Bereich
-            öffnet sich erst nach erfolgreicher Anmeldung.
+            Melde dich mit E-Mail und Passwort an. Der geschützte Bereich öffnet sich erst nach
+            erfolgreicher Anmeldung.
           </p>
 
           {!isAuthConfigured ? (
@@ -1937,12 +1735,6 @@ export default function Home() {
               {authError}
             </div>
           ) : null}
-          {authNotice ? (
-            <div className="notice-box auth-message" role="status" aria-live="polite">
-              {authNotice}
-            </div>
-          ) : null}
-
           <form className="auth-form" onSubmit={handleAuthSubmit}>
             <div className="field-group">
               <label htmlFor="auth-email">E-Mail-Adresse</label>
@@ -1967,24 +1759,6 @@ export default function Home() {
                 placeholder="Mindestens 6 Zeichen"
                 disabled={!isAppReady || !isAuthConfigured || isAuthSubmitting}
               />
-            </div>
-            <div className="auth-link-row">
-              <button
-                className="auth-link-button"
-                type="button"
-                onClick={() => void handleForgotPassword()}
-                disabled={!isAppReady || !isAuthConfigured || isAuthSubmitting}
-              >
-                Passwort vergessen?
-              </button>
-              <button
-                className="auth-link-button"
-                type="button"
-                onClick={() => void handleMagicLink()}
-                disabled={!isAppReady || !isAuthConfigured || isAuthSubmitting}
-              >
-                Magic Link senden
-              </button>
             </div>
             <button
               className="primary-button"
@@ -2299,6 +2073,19 @@ export default function Home() {
               >
                 Modell
               </button>
+              <button
+                id="settings-tab-password"
+                className={settingsTab === "password" ? "settings-tab active" : "settings-tab"}
+                type="button"
+                role="tab"
+                aria-selected={settingsTab === "password"}
+                aria-controls="settings-panel-password"
+                tabIndex={settingsTab === "password" ? 0 : -1}
+                onClick={() => setSettingsTab("password")}
+                onKeyDown={handleSettingsTabKeyDown}
+              >
+                Passwort
+              </button>
             </div>
             {settingsError ? (
               <div className="settings-inline-error" role="alert" aria-live="polite">
@@ -2336,7 +2123,7 @@ export default function Home() {
                   {settings.usesGlobalDefault ? " · Aktueller globaler Standard" : " · Persönliche Einstellung"}
                 </span>
               </div>
-            ) : (
+            ) : settingsTab === "model" ? (
               <div
                 className="field-group settings-tab-panel"
                 id="settings-panel-model"
@@ -2362,6 +2149,73 @@ export default function Home() {
                   ))}
                 </fieldset>
               </div>
+            ) : (
+              <form
+                className="password-settings-form settings-tab-panel"
+                id="settings-panel-password"
+                role="tabpanel"
+                aria-labelledby="settings-tab-password"
+                onSubmit={handlePasswordChange}
+              >
+                <p className="field-help">
+                  Gib dein aktuelles Passwort und ein neues Passwort mit mindestens 6 Zeichen ein.
+                </p>
+                {passwordChangeError ? (
+                  <div className="error-box" role="alert" aria-live="polite">
+                    {passwordChangeError}
+                  </div>
+                ) : null}
+                {passwordChangeNotice ? (
+                  <div className="notice-box" role="status" aria-live="polite">
+                    {passwordChangeNotice}
+                  </div>
+                ) : null}
+                <div className="field-group">
+                  <label htmlFor="current-password">Aktuelles Passwort</label>
+                  <input
+                    id="current-password"
+                    type="password"
+                    value={passwordChangeForm.currentPassword}
+                    onChange={(event) => updatePasswordChangeForm("currentPassword", event.target.value)}
+                    autoComplete="current-password"
+                    disabled={isPasswordChangeSubmitting}
+                    required
+                  />
+                </div>
+                <div className="field-group">
+                  <label htmlFor="new-password">Neues Passwort</label>
+                  <input
+                    id="new-password"
+                    type="password"
+                    value={passwordChangeForm.newPassword}
+                    onChange={(event) => updatePasswordChangeForm("newPassword", event.target.value)}
+                    autoComplete="new-password"
+                    minLength={6}
+                    disabled={isPasswordChangeSubmitting}
+                    required
+                  />
+                </div>
+                <div className="field-group">
+                  <label htmlFor="password-confirmation">Neues Passwort bestätigen</label>
+                  <input
+                    id="password-confirmation"
+                    type="password"
+                    value={passwordChangeForm.confirmation}
+                    onChange={(event) => updatePasswordChangeForm("confirmation", event.target.value)}
+                    autoComplete="new-password"
+                    minLength={6}
+                    disabled={isPasswordChangeSubmitting}
+                    required
+                  />
+                </div>
+                <button
+                  className="primary-button password-change-button"
+                  type="submit"
+                  disabled={isPasswordChangeSubmitting}
+                >
+                  {isPasswordChangeSubmitting ? "Bitte warten..." : "Passwort ändern"}
+                </button>
+              </form>
             )}
           </section>
         </div>

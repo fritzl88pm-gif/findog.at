@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`, sign in to a manually provisioned Supabase account with a password or Magic Link, and choose between `deepseek-v4-flash` and `deepseek-v4-pro` (the default). Both models use only the server-side DeepSeek key; users do not provide API keys. The selected model and system prompt are stored in browser `localStorage`, and the Settings panel can reset the prompt to the bundled Fred default. Local chat history is scoped by the authenticated Supabase user ID, and conversation IDs are verified server-side before use. BFG/WeKnora MCP access is fixed server-side and is not configurable by users.
+Open `http://localhost:3000`, sign in to a manually provisioned Supabase account with an email address and password, and choose between `deepseek-v4-flash` and `deepseek-v4-pro` (the default). Both models use only the server-side DeepSeek key; users do not provide API keys. The selected model and system prompt are stored in browser `localStorage`, and the Settings panel can reset the prompt to the bundled Fred default. Local chat history is scoped by the authenticated Supabase user ID, and conversation IDs are verified server-side before use. BFG/WeKnora MCP access is fixed server-side and is not configurable by users.
 
 Assistant responses include a streaming agent-step panel with the plan, loaded MCP tools, tool calls, bounded tool-result snippets, optional attachment-context extraction status, BFG citation verification, and the final answer marker.
 
@@ -21,7 +21,7 @@ Copy `.env.example` to `.env.local` and configure Supabase Auth before using the
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Browser-safe Supabase project URL for password, Magic Link, and recovery authentication. |
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Browser-safe Supabase project URL for password authentication. |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Browser-safe Supabase anon key for Auth calls. Do not use a service role key here. |
 | `SUPABASE_URL` | Yes | Server-side Supabase project URL for validating Auth access tokens and chat persistence. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Server-only Supabase service role key. Never expose it to the browser. |
@@ -36,13 +36,7 @@ PDF and image uploads are handled as a separate fixed server-side context layer:
 
 ## Authentication
 
-Harald provisions authorized accounts manually. Findog has no public registration or account-creation UI; unauthenticated users can sign in with their password or request a Magic Link, and can request a password reset.
-
-For passwordless login, enter the account email and select `Magic Link senden`; no password is required. Supabase returns the link to the normal signed-in Findog app. Magic Link requests explicitly disable automatic user creation, so only manually provisioned accounts can sign in.
-
-For password recovery, enter the account email on the sign-in form and select `Passwort vergessen?`. Supabase sends the recovery email, and its link returns to Findog. The browser opens a dedicated form for setting and confirming the new password, updates the Supabase user, signs out the temporary recovery session, and returns to the standard sign-in form.
-
-The app sends `window.location.origin` as the redirect target for both Magic Link login and password recovery. Every deployed Findog app origin that can initiate either flow must therefore be included in the allowed Redirect URLs under Supabase Auth URL configuration. Add the local origin separately when testing either flow on `http://localhost:3000`.
+Harald provisions authorized accounts manually. Findog supports only email/password sign-in and has no public registration. Authenticated users can change their password in the `Passwort` tab of the Einstellungen dialog after confirming their current password.
 
 ## Supabase Migration
 
@@ -51,7 +45,7 @@ Apply both migrations in order through the Supabase SQL editor or your migration
 1. `supabase/migrations/0001_chat_history.sql`
 2. `supabase/migrations/0002_agent_runs.sql`
 
-Supabase Auth must be enabled for email/password and Magic Link login. Authorized accounts are manually provisioned; the app does not expose self-service registration. Server persistence stores the authenticated Supabase `user.id` as `conversations.client_id`, `messages.client_id`, and `agent_runs.client_id`. Deleting an owned conversation cascades to its messages, agent runs, and agent steps.
+Supabase Auth must be enabled for email/password login. Authorized accounts are manually provisioned; the app does not expose self-service registration. Server persistence stores the authenticated Supabase `user.id` as `conversations.client_id`, `messages.client_id`, and `agent_runs.client_id`. Deleting an owned conversation cascades to its messages, agent runs, and agent steps.
 
 ## Verification
 
@@ -64,4 +58,4 @@ npm run build
 
 ## Deployment
 
-Deploy as a standard Vercel Next.js app. Configure the Supabase env vars plus server-only `DEEPSEEK_API_KEY` (or optional fallback `GLOBAL_DEEPSEEK_API_KEY`) and `BFG_MCP_BEARER_TOKEN` in the deployment environment. Add every deployed Findog app origin to the Supabase Auth redirect allow-list so Magic Link and recovery links can return to the originating deployment. Users never provide DeepSeek keys in the authenticated UI.
+Deploy as a standard Vercel Next.js app. Configure the Supabase env vars plus server-only `DEEPSEEK_API_KEY` (or optional fallback `GLOBAL_DEEPSEEK_API_KEY`) and `BFG_MCP_BEARER_TOKEN` in the deployment environment. Users never provide DeepSeek keys in the authenticated UI.

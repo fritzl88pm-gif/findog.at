@@ -483,6 +483,22 @@ button:disabled {
   min-height: 430px;
 }
 
+.password-settings-form {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  max-width: 480px;
+}
+
+.password-settings-form > .field-help {
+  margin: 0 0 2px;
+}
+
+.password-change-button {
+  justify-self: start;
+  margin-top: 4px;
+}
+
 .settings-inline-error {
   margin-bottom: 14px;
   border: 1px solid rgba(179, 38, 30, 0.2);
@@ -908,33 +924,6 @@ textarea:focus {
 .auth-form {
   display: grid;
   gap: 14px;
-}
-
-.auth-link-row {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 8px 16px;
-  margin-top: -4px;
-}
-
-.auth-link-button {
-  color: var(--bmf-blue-dark);
-  font-size: 0.85rem;
-  font-weight: 700;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.auth-link-button:hover:not(:disabled),
-.auth-link-button:focus-visible {
-  color: var(--bmf-blue);
-}
-
-.auth-button-row {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
 }
 
 .auth-message {

@@ -24,7 +24,7 @@ export function getSupabaseBrowserClient(): SupabaseClient | null {
     auth: {
       autoRefreshToken: true,
       persistSession: true,
-      detectSessionInUrl: true,
+      detectSessionInUrl: false,
     },
     global: {
       headers: {
