@@ -41,6 +41,15 @@ import {
   validateNewPassword,
 } from "@/lib/auth/recovery";
 import { magicLinkOptions } from "@/lib/auth/magic-link";
+import {
+  FORM_IMAGE_MIME_TYPES,
+  isFormImageMimeType,
+  MAX_FORM_IMAGE_BYTES,
+  MAX_SALDO_INPUT_CHARS,
+  VERF5_FORM_ID,
+  VERF5_FORM_NAME,
+} from "@/lib/forms/config";
+import { normalizeManualSaldo } from "@/lib/forms/values";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -64,6 +73,7 @@ type ConversationSummary = {
 };
 
 type SettingsTab = "system-prompt" | "model";
+type AppView = "chat" | "forms";
 
 type AuthForm = {
   email: string;
@@ -553,9 +563,17 @@ export default function Home() {
   const [authNotice, setAuthNotice] = useState("");
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [historyOwnerId, setHistoryOwnerId] = useState("");
+  const [appView, setAppView] = useState<AppView>("chat");
+  const [selectedFormId, setSelectedFormId] = useState<"" | typeof VERF5_FORM_ID>("");
+  const [formImage, setFormImage] = useState<File | null>(null);
+  const [formSaldo, setFormSaldo] = useState("");
+  const [formError, setFormError] = useState("");
+  const [formNotice, setFormNotice] = useState("");
+  const [isGeneratingForm, setIsGeneratingForm] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const formImageInputRef = useRef<HTMLInputElement>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const settingsDialogRef = useRef<HTMLElement>(null);
   const settingsDialogCloseRef = useRef<HTMLButtonElement>(null);
@@ -668,6 +686,13 @@ export default function Home() {
         setIsSending(false);
         setPendingStepText(INITIAL_PENDING_TEXT);
         setPendingSteps([]);
+        setAppView("chat");
+        setSelectedFormId("");
+        setFormImage(null);
+        setFormSaldo("");
+        setFormError("");
+        setFormNotice("");
+        setIsGeneratingForm(false);
         return;
       }
 
@@ -1131,7 +1156,157 @@ export default function Home() {
     setError("");
   }
 
+  function openFormsView() {
+    setAppView("forms");
+    setSelectedFormId("");
+    setFormImage(null);
+    setFormSaldo("");
+    setFormError("");
+    setFormNotice("");
+    if (formImageInputRef.current) {
+      formImageInputRef.current.value = "";
+    }
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
+  function selectVerf5Form() {
+    setSelectedFormId(VERF5_FORM_ID);
+    setFormImage(null);
+    setFormSaldo("");
+    setFormError("");
+    setFormNotice("");
+  }
+
+  function showFormSelection() {
+    if (isGeneratingForm) {
+      return;
+    }
+    setSelectedFormId("");
+    setFormImage(null);
+    setFormSaldo("");
+    setFormError("");
+    setFormNotice("");
+    if (formImageInputRef.current) {
+      formImageInputRef.current.value = "";
+    }
+  }
+
+  function handleFormImageChange(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    setFormNotice("");
+
+    if (files.length === 0) {
+      return;
+    }
+    if (files.length !== 1) {
+      event.target.value = "";
+      setFormImage(null);
+      setFormError("Bitte genau ein Bild auswählen.");
+      return;
+    }
+
+    const image = files[0];
+    if (!image || !isFormImageMimeType(image.type.toLowerCase())) {
+      event.target.value = "";
+      setFormImage(null);
+      setFormError("Bitte nur JPEG-, PNG- oder WebP-Bilder auswählen.");
+      return;
+    }
+    if (image.size > MAX_FORM_IMAGE_BYTES) {
+      event.target.value = "";
+      setFormImage(null);
+      setFormError("Das Bild ist zu groß. Maximal 5 MB sind erlaubt.");
+      return;
+    }
+
+    setFormImage(image);
+    setFormError("");
+  }
+
+  async function handleFormGenerate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (isGeneratingForm || selectedFormId !== VERF5_FORM_ID) {
+      return;
+    }
+    if (!formImage) {
+      setFormError("Bitte ein Bild auswählen.");
+      return;
+    }
+
+    try {
+      normalizeManualSaldo(formSaldo);
+    } catch (saldoError) {
+      setFormError(saldoError instanceof Error ? saldoError.message : "Der Saldo ist ungültig.");
+      return;
+    }
+
+    if (!supabase || !user) {
+      setFormError("Bitte zuerst anmelden.");
+      return;
+    }
+
+    setFormError("");
+    setFormNotice("");
+    setIsGeneratingForm(true);
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) {
+        throw new Error("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+      }
+      setSession(sessionData.session);
+
+      const formData = new FormData();
+      formData.append("formId", VERF5_FORM_ID);
+      formData.append("image", formImage, formImage.name);
+      formData.append("saldo", formSaldo);
+
+      const response = await fetch("/api/forms/generate", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: formData,
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Das Formular konnte nicht erstellt werden.",
+        );
+      }
+
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const filename = /filename="(Verf5_\d{2}\.\d{2}\.\d{4}\.docx)"/.exec(disposition)?.[1];
+      if (!filename) {
+        throw new Error("Die Formularantwort war ungültig. Bitte erneut versuchen.");
+      }
+
+      const documentBlob = await response.blob();
+      const downloadUrl = URL.createObjectURL(documentBlob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = filename;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+      setFormNotice("Das Formular wurde erstellt und heruntergeladen.");
+    } catch (generateError) {
+      setFormError(
+        generateError instanceof Error
+          ? generateError.message
+          : "Das Formular konnte nicht erstellt werden.",
+      );
+    } finally {
+      setIsGeneratingForm(false);
+    }
+  }
+
   function startNewConversation() {
+    setAppView("chat");
     setError("");
     setMessages([]);
     setConversationId("");
@@ -1155,6 +1330,7 @@ export default function Home() {
     setIsHistoryLoading(true);
     try {
       const history = await fetchConversationHistory(session.access_token, conversation.id);
+      setAppView("chat");
       setConversationId(conversation.id);
       setConversationTitle(history.title);
       setMessages(history.messages);
@@ -1717,7 +1893,7 @@ export default function Home() {
                 ) : null}
                 {conversations.map((conversation) => (
                   <div
-                    className={`conversation-row ${conversation.id === conversationId ? "active" : ""}`}
+                    className={`conversation-row ${appView === "chat" && conversation.id === conversationId ? "active" : ""}`}
                     key={conversation.id}
                   >
                     <input
@@ -1733,7 +1909,7 @@ export default function Home() {
                       type="button"
                       onClick={() => void selectConversation(conversation)}
                       disabled={historyControlsDisabled}
-                      aria-current={conversation.id === conversationId ? "page" : undefined}
+                      aria-current={appView === "chat" && conversation.id === conversationId ? "page" : undefined}
                     >
                       <span title={conversation.title}>{conversation.title}</span>
                       <time dateTime={conversation.updatedAt}>{formatHistoryDate(conversation.updatedAt)}</time>
@@ -1751,6 +1927,17 @@ export default function Home() {
                 ))}
               </div>
             </div>
+            <nav className="forms-navigation" aria-label="Formularbereich">
+              <button
+                className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
+                type="button"
+                onClick={openFormsView}
+                aria-current={appView === "forms" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
+                Formulare
+              </button>
+            </nav>
           </div>
         ) : (
           <div className="rail-content">
@@ -1763,6 +1950,16 @@ export default function Home() {
               aria-label="Neue Unterhaltung"
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+            <button
+              className={`icon-button rail-icon-btn rail-forms-button ${appView === "forms" ? "active" : ""}`}
+              type="button"
+              onClick={openFormsView}
+              title="Formulare"
+              aria-label="Formulare"
+              aria-current={appView === "forms" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
             </button>
           </div>
         )}
@@ -1942,6 +2139,120 @@ export default function Home() {
         </div>
       ) : null}
 
+      {appView === "forms" ? (
+        <section className="forms-panel" aria-labelledby="forms-view-title">
+          <div className="forms-view">
+            <header className="forms-view-header">
+              <p className="eyebrow">Dokumenterstellung</p>
+              <h1 id="forms-view-title">Formulare</h1>
+              <p>Wähle ein Formular und erstelle das ausgefüllte Word-Dokument aus einem Bild.</p>
+            </header>
+
+            {!selectedFormId ? (
+              <div className="form-choice-grid" aria-label="Verfügbare Formulare">
+                <button className="form-choice-card" type="button" onClick={selectVerf5Form}>
+                  <span className="form-choice-icon" aria-hidden="true">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                  </span>
+                  <span>
+                    <strong>{VERF5_FORM_NAME}</strong>
+                    <small>Formular auswählen</small>
+                  </span>
+                  <span aria-hidden="true">›</span>
+                </button>
+              </div>
+            ) : (
+              <div className="form-generator-card">
+                <button
+                  className="form-back-button"
+                  type="button"
+                  onClick={showFormSelection}
+                  disabled={isGeneratingForm}
+                >
+                  <span aria-hidden="true">←</span> Formularauswahl
+                </button>
+                <div className="form-generator-heading">
+                  <h2>{VERF5_FORM_NAME}</h2>
+                  <p>Lade ein gut lesbares Bild des Dokuments hoch. Fehlende Werte bleiben im Formular leer.</p>
+                </div>
+
+                {formError ? (
+                  <div className="error-box" role="alert" aria-live="polite">{formError}</div>
+                ) : null}
+                {formNotice ? (
+                  <div className="form-success-box" role="status" aria-live="polite">{formNotice}</div>
+                ) : null}
+
+                <form className="form-generator" onSubmit={handleFormGenerate}>
+                  <div className="field-group form-upload-field">
+                    <label htmlFor="verf5-image">Bild des Dokuments</label>
+                    <input
+                      ref={formImageInputRef}
+                      id="verf5-image"
+                      type="file"
+                      accept={FORM_IMAGE_MIME_TYPES.join(",")}
+                      onChange={handleFormImageChange}
+                      disabled={isGeneratingForm}
+                      required
+                    />
+                    <span className="field-help">JPEG, PNG oder WebP, maximal 5 MB.</span>
+                    {formImage ? (
+                      <span className="form-selected-file">
+                        <span title={formImage.name}>{ellipsizeFilename(formImage.name)}</span>
+                        <small>{(formImage.size / 1_048_576).toLocaleString("de-AT", { maximumFractionDigits: 1 })} MB</small>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFormImage(null);
+                            if (formImageInputRef.current) {
+                              formImageInputRef.current.value = "";
+                            }
+                          }}
+                          disabled={isGeneratingForm}
+                          aria-label={`Bild ${formImage.name} entfernen`}
+                        >
+                          Entfernen
+                        </button>
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="field-group">
+                    <label htmlFor="verf5-saldo">Saldo am Abgabenkonto per Todestag <span>(optional)</span></label>
+                    <input
+                      id="verf5-saldo"
+                      type="text"
+                      inputMode="decimal"
+                      value={formSaldo}
+                      onChange={(event) => {
+                        setFormSaldo(event.target.value);
+                        setFormError("");
+                        setFormNotice("");
+                      }}
+                      maxLength={MAX_SALDO_INPUT_CHARS}
+                      placeholder="z. B. 1234,56"
+                      disabled={isGeneratingForm}
+                    />
+                    <span className="field-help">Ziffern mit höchstens zwei Dezimalstellen; Komma oder Punkt sind möglich.</span>
+                  </div>
+
+                  <button
+                    className="primary-button form-generate-button"
+                    type="submit"
+                    disabled={!formImage || isGeneratingForm || !isAppReady || !user}
+                  >
+                    {isGeneratingForm ? (
+                      <><span className="spinner" aria-hidden="true"></span> Formular wird erstellt…</>
+                    ) : (
+                      "Formular generieren"
+                    )}
+                  </button>
+                </form>
+              </div>
+            )}
+          </div>
+        </section>
+      ) : (
       <section className="chat-panel">
         <div className="transcript" ref={transcriptRef}>
           <div className="transcript-content">
@@ -2087,6 +2398,7 @@ export default function Home() {
           </form>
         </div>
       </section>
+      )}
     </main>
   );
 }
