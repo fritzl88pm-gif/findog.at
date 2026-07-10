@@ -2334,85 +2334,88 @@ export default function Home() {
               placeholder="Frage zu BFG, EStG, UStG oder Verfahrensrecht..."
               rows={2}
             />
-            <div className="attachment-row">
-              <input
-                ref={pdfInputRef}
-                className="sr-only"
-                id="pdf-upload"
-                type="file"
-                accept="application/pdf"
-                multiple
-                onChange={handlePdfChange}
-                disabled={isSending}
-              />
-              <label className="attachment-button" htmlFor="pdf-upload" aria-disabled={isSending}>
-                PDFs anhängen ({selectedPdfs.length}/{MAX_PDF_UPLOADS})
-              </label>
-              <input
-                ref={imageInputRef}
-                className="sr-only"
-                id="image-upload"
-                type="file"
-                accept="image/*"
-                multiple
-                onChange={handleImageChange}
-                disabled={isSending}
-              />
-              <label className="attachment-button" htmlFor="image-upload" aria-disabled={isSending}>
-                Bilder anhängen ({selectedImages.length}/{MAX_IMAGE_UPLOADS})
-              </label>
-              <span className="attachment-help">
-                Unabhängige Limits: bis zu {MAX_PDF_UPLOADS} PDFs und zusätzlich bis zu {MAX_IMAGE_UPLOADS} Bilder pro Anfrage.
-              </span>
-              {selectedPdfs.map((file, index) => (
-                <span className="attachment-chip" key={`pdf-${file.name}-${file.lastModified}-${index}`}>
-                  <span title={file.name}>{ellipsizeFilename(file.name)}</span>
-                  <small>{(file.size / 1_048_576).toLocaleString("de-AT", { maximumFractionDigits: 1 })} MB</small>
-                  <button type="button" onClick={() => removePdfAttachment(index)} disabled={isSending} aria-label={`PDF ${file.name} entfernen`}>
-                    Entfernen
-                  </button>
-                </span>
-              ))}
-              {selectedImages.map((file, index) => (
-                <span className="attachment-chip image" key={`image-${file.name}-${file.lastModified}-${index}`}>
-                  <span title={file.name}>{ellipsizeFilename(file.name)}</span>
-                  <small>{(file.size / 1_048_576).toLocaleString("de-AT", { maximumFractionDigits: 1 })} MB</small>
-                  <button type="button" onClick={() => removeImageAttachment(index)} disabled={isSending} aria-label={`Bild ${file.name} entfernen`}>
-                    Entfernen
-                  </button>
-                </span>
-              ))}
-            </div>
-            <div className="composer-actions">
-              <div className="composer-model">
-                <label htmlFor="composer-model">Modell</label>
-                <select
-                  id="composer-model"
-                  value={settings.model}
-                  onChange={(event) => updateSetting("model", event.target.value as ChatModel)}
-                  disabled={isSending || isDeleting}
-                >
-                  {AVAILABLE_MODELS.map((model) => (
-                    <option key={model} value={model}>
-                      {model === "deepseek-v4-pro" ? "DeepSeek v4 Pro" : "DeepSeek v4 Flash"}
-                    </option>
-                  ))}
-                </select>
+            <div className="composer-toolbar">
+              <div className="attachment-controls">
+                <input
+                  ref={pdfInputRef}
+                  className="sr-only"
+                  id="pdf-upload"
+                  type="file"
+                  accept="application/pdf"
+                  multiple
+                  onChange={handlePdfChange}
+                  disabled={isSending}
+                />
+                <label className="attachment-button" htmlFor="pdf-upload" aria-disabled={isSending}>
+                  PDFs anhängen ({selectedPdfs.length}/{MAX_PDF_UPLOADS})
+                </label>
+                <input
+                  ref={imageInputRef}
+                  className="sr-only"
+                  id="image-upload"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleImageChange}
+                  disabled={isSending}
+                />
+                <label className="attachment-button" htmlFor="image-upload" aria-disabled={isSending}>
+                  Bilder anhängen ({selectedImages.length}/{MAX_IMAGE_UPLOADS})
+                </label>
               </div>
-              <button type="submit" disabled={!canSend}>
-                {isSending ? (
-                  <>
-                    <span className="spinner" aria-hidden="true"></span>
-                    Senden...
-                  </>
-                ) : (
-                  <>
-                    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-                    Senden
-                  </>
-                )}
-              </button>
+              <div className="composer-actions">
+                <div className="composer-model">
+                  <label htmlFor="composer-model">Modell</label>
+                  <select
+                    id="composer-model"
+                    value={settings.model}
+                    onChange={(event) => updateSetting("model", event.target.value as ChatModel)}
+                    disabled={isSending || isDeleting}
+                  >
+                    {AVAILABLE_MODELS.map((model) => (
+                      <option key={model} value={model}>
+                        {model === "deepseek-v4-pro" ? "DeepSeek v4 Pro" : "DeepSeek v4 Flash"}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button type="submit" disabled={!canSend}>
+                  {isSending ? (
+                    <>
+                      <span className="spinner" aria-hidden="true"></span>
+                      Senden...
+                    </>
+                  ) : (
+                    <>
+                      <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                      Senden
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
+            {selectedPdfs.length > 0 || selectedImages.length > 0 ? (
+              <div className="attachment-chips">
+                {selectedPdfs.map((file, index) => (
+                  <span className="attachment-chip" key={`pdf-${file.name}-${file.lastModified}-${index}`}>
+                    <span title={file.name}>{ellipsizeFilename(file.name)}</span>
+                    <small>{(file.size / 1_048_576).toLocaleString("de-AT", { maximumFractionDigits: 1 })} MB</small>
+                    <button type="button" onClick={() => removePdfAttachment(index)} disabled={isSending} aria-label={`PDF ${file.name} entfernen`}>
+                      Entfernen
+                    </button>
+                  </span>
+                ))}
+                {selectedImages.map((file, index) => (
+                  <span className="attachment-chip image" key={`image-${file.name}-${file.lastModified}-${index}`}>
+                    <span title={file.name}>{ellipsizeFilename(file.name)}</span>
+                    <small>{(file.size / 1_048_576).toLocaleString("de-AT", { maximumFractionDigits: 1 })} MB</small>
+                    <button type="button" onClick={() => removeImageAttachment(index)} disabled={isSending} aria-label={`Bild ${file.name} entfernen`}>
+                      Entfernen
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
           </form>
         </div>
       </section>
