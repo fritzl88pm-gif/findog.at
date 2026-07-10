@@ -1401,7 +1401,6 @@ textarea:focus {
   padding-top: 10px;
 }
 
-.attachment-controls,
 .attachment-chips {
   display: flex;
   flex-wrap: wrap;
@@ -1409,18 +1408,18 @@ textarea:focus {
   gap: 10px;
 }
 
-.attachment-controls {
+.composer-menu-control {
+  position: relative;
   min-width: 0;
 }
 
-.attachment-button {
+.composer-icon-button,
+.composer-model-trigger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 32px;
   border: 1px solid rgba(40, 111, 156, 0.2);
   border-radius: var(--radius-sm);
-  padding: 0 12px;
   color: var(--bmf-blue-dark);
   background: rgba(40, 111, 156, 0.04);
   font-size: 0.84rem;
@@ -1429,14 +1428,88 @@ textarea:focus {
   transition: var(--transition);
 }
 
-.attachment-button:hover {
+.composer-icon-button {
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.composer-model-trigger {
+  min-height: 34px;
+  max-width: 220px;
+  padding: 0 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-icon-button:hover:not(:disabled),
+.composer-model-trigger:hover:not(:disabled) {
   border-color: rgba(40, 111, 156, 0.35);
   background: rgba(40, 111, 156, 0.08);
 }
 
-.attachment-button[aria-disabled="true"] {
+.composer-icon-button:disabled,
+.composer-model-trigger:disabled {
   cursor: not-allowed;
   opacity: 0.58;
+}
+
+.composer-popover {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 8px);
+  display: grid;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  padding: 6px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  box-shadow: var(--shadow-md);
+}
+
+.attachment-menu {
+  left: 0;
+  width: min(170px, calc(100vw - 24px));
+}
+
+.model-menu {
+  right: 0;
+  width: min(210px, calc(100vw - 24px));
+}
+
+.composer-popover button {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  color: var(--bmf-blue-deep);
+  background: transparent;
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.composer-popover button:hover,
+.composer-popover button:focus-visible,
+.composer-popover button.is-active {
+  background: rgba(40, 111, 156, 0.08);
+}
+
+.model-menu-check {
+  width: 14px;
+  flex: 0 0 14px;
+  color: var(--bmf-blue);
+  font-weight: 800;
 }
 
 .attachment-chip {
@@ -1484,31 +1557,8 @@ textarea:focus {
   margin-left: auto;
 }
 
-.composer-model {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
-.composer-model label {
-  font-weight: 700;
-}
-
-.composer-model select {
-  width: auto;
-  max-width: 100%;
-  min-height: 34px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: #fff;
-  padding: 0 28px 0 10px;
-}
-
 /* Buttons Styling */
-.composer-actions button,
+.composer-send-button,
 .primary-button,
 .secondary-button {
   display: inline-flex;
@@ -1523,26 +1573,26 @@ textarea:focus {
 }
 
 /* Primary Button (Senden) */
-.composer-actions button,
+.composer-send-button,
 .primary-button {
   background: var(--bmf-blue);
   color: #ffffff;
   box-shadow: 0 2px 6px rgba(40, 111, 156, 0.15);
 }
 
-.composer-actions button:hover:not(:disabled),
+.composer-send-button:hover:not(:disabled),
 .primary-button:hover:not(:disabled) {
   background: var(--bmf-blue-dark);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(40, 111, 156, 0.25);
 }
 
-.composer-actions button:active:not(:disabled),
+.composer-send-button:active:not(:disabled),
 .primary-button:active:not(:disabled) {
   transform: translateY(0);
 }
 
-.composer-actions button:disabled,
+.composer-send-button:disabled,
 .primary-button:disabled {
   background: #cbd5e1;
   color: #94a3b8;
@@ -1745,38 +1795,30 @@ textarea:focus {
   }
 
   .composer-toolbar {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 10px;
-  }
-
-  .attachment-controls {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .attachment-button {
-    width: 100%;
+    flex-wrap: nowrap;
+    gap: 8px;
   }
 
   .composer-actions {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 10px;
-    margin-left: 0;
-    text-align: center;
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 8px;
   }
 
-  .composer-model {
-    align-items: stretch;
+  .model-menu-control {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
-  .composer-model select {
+  .composer-model-trigger {
     width: 100%;
+    max-width: min(42vw, 190px);
   }
 
-  .composer-actions button {
-    width: 100%;
+  .composer-send-button {
+    flex: 0 0 auto;
+    padding-right: 12px;
+    padding-left: 12px;
   }
 
   .forms-panel {

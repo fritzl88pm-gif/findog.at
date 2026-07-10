@@ -76,6 +76,7 @@ type ConversationSummary = {
 
 type SettingsTab = "system-prompt" | "model" | "password";
 type AppView = "chat" | "forms" | "administration";
+type ComposerMenu = "attachments" | "model" | null;
 
 type AuthForm = {
   email: string;
@@ -572,6 +573,7 @@ export default function Home() {
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
   const [error, setError] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [openComposerMenu, setOpenComposerMenu] = useState<ComposerMenu>(null);
   const [pendingStepText, setPendingStepText] = useState(INITIAL_PENDING_TEXT);
   const [pendingSteps, setPendingSteps] = useState<AgentStep[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -611,6 +613,10 @@ export default function Home() {
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const attachmentMenuControlRef = useRef<HTMLDivElement>(null);
+  const attachmentMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const modelMenuControlRef = useRef<HTMLDivElement>(null);
+  const modelMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const formImageInputRef = useRef<HTMLInputElement>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const settingsDialogRef = useRef<HTMLElement>(null);
@@ -853,6 +859,47 @@ export default function Home() {
     settingsDialogCloseRef.current?.focus();
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [closeSettingsDialog, isSettingsDialogOpen]);
+
+  useEffect(() => {
+    if (!openComposerMenu) {
+      return;
+    }
+
+    const controlRef = openComposerMenu === "attachments"
+      ? attachmentMenuControlRef
+      : modelMenuControlRef;
+    const triggerRef = openComposerMenu === "attachments"
+      ? attachmentMenuTriggerRef
+      : modelMenuTriggerRef;
+    const focusFrame = requestAnimationFrame(() => {
+      controlRef.current
+        ?.querySelector<HTMLButtonElement>('[role="menuitem"], [role="menuitemradio"]')
+        ?.focus();
+    });
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!controlRef.current?.contains(event.target as Node)) {
+        setOpenComposerMenu(null);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      event.preventDefault();
+      setOpenComposerMenu(null);
+      requestAnimationFrame(() => triggerRef.current?.focus());
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      cancelAnimationFrame(focusFrame);
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [openComposerMenu]);
 
   useEffect(() => {
     const textarea = composerRef.current;
@@ -1519,6 +1566,36 @@ export default function Home() {
     }
   }
 
+  function handleComposerMenuKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const items = Array.from(
+      event.currentTarget.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"], [role="menuitemradio"]',
+      ),
+    );
+    const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+    let nextIndex: number | undefined;
+
+    if (event.key === "ArrowDown") {
+      nextIndex = (currentIndex + 1) % items.length;
+    } else if (event.key === "ArrowUp") {
+      nextIndex = (currentIndex - 1 + items.length) % items.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = items.length - 1;
+    }
+
+    if (nextIndex !== undefined && items[nextIndex]) {
+      event.preventDefault();
+      items[nextIndex].focus();
+    }
+  }
+
+  function chooseAttachment(input: HTMLInputElement | null) {
+    setOpenComposerMenu(null);
+    input?.click();
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -1564,6 +1641,7 @@ export default function Home() {
 
     setComposer("");
     setError("");
+    setOpenComposerMenu(null);
     setIsSending(true);
     setPendingStepText(INITIAL_PENDING_TEXT);
     setPendingSteps([]);
@@ -1701,6 +1779,9 @@ export default function Home() {
   const hasSelectedAttachments = selectedPdfs.length > 0 || selectedImages.length > 0;
   const canSend = isAppReady && Boolean(user) && (composer.trim().length > 0 || hasSelectedAttachments) && !isSending && !isDeleting;
   const historyControlsDisabled = isSending || isHistoryLoading || isDeleting;
+  const currentModelName = settings.model === "deepseek-v4-pro"
+    ? "DeepSeek v4 Pro"
+    : "DeepSeek v4 Flash";
 
   if (!isAuthLoaded) {
     return (
@@ -2460,7 +2541,7 @@ export default function Home() {
               rows={2}
             />
             <div className="composer-toolbar">
-              <div className="attachment-controls">
+              <div className="composer-menu-control" ref={attachmentMenuControlRef}>
                 <input
                   ref={pdfInputRef}
                   className="sr-only"
@@ -2471,9 +2552,6 @@ export default function Home() {
                   onChange={handlePdfChange}
                   disabled={isSending}
                 />
-                <label className="attachment-button" htmlFor="pdf-upload" aria-disabled={isSending}>
-                  PDFs anhängen ({selectedPdfs.length}/{MAX_PDF_UPLOADS})
-                </label>
                 <input
                   ref={imageInputRef}
                   className="sr-only"
@@ -2484,27 +2562,93 @@ export default function Home() {
                   onChange={handleImageChange}
                   disabled={isSending}
                 />
-                <label className="attachment-button" htmlFor="image-upload" aria-disabled={isSending}>
-                  Bilder anhängen ({selectedImages.length}/{MAX_IMAGE_UPLOADS})
-                </label>
+                <button
+                  ref={attachmentMenuTriggerRef}
+                  className="composer-icon-button"
+                  type="button"
+                  aria-label="Anhänge hinzufügen"
+                  aria-haspopup="menu"
+                  aria-expanded={openComposerMenu === "attachments"}
+                  aria-controls="composer-attachment-menu"
+                  disabled={isSending}
+                  onClick={() => setOpenComposerMenu((current) =>
+                    current === "attachments" ? null : "attachments")}
+                >
+                  <span aria-hidden="true">+</span>
+                </button>
+                {openComposerMenu === "attachments" && !isSending ? (
+                  <div
+                    className="composer-popover attachment-menu"
+                    id="composer-attachment-menu"
+                    role="menu"
+                    aria-label="Anhang auswählen"
+                    onKeyDown={handleComposerMenuKeyDown}
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => chooseAttachment(pdfInputRef.current)}
+                    >
+                      PDF anhängen
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => chooseAttachment(imageInputRef.current)}
+                    >
+                      Bild anhängen
+                    </button>
+                  </div>
+                ) : null}
               </div>
               <div className="composer-actions">
-                <div className="composer-model">
-                  <label htmlFor="composer-model">Modell</label>
-                  <select
-                    id="composer-model"
-                    value={settings.model}
-                    onChange={(event) => updateSetting("model", event.target.value as ChatModel)}
+                <div className="composer-menu-control model-menu-control" ref={modelMenuControlRef}>
+                  <button
+                    ref={modelMenuTriggerRef}
+                    className="composer-model-trigger"
+                    type="button"
+                    aria-label={`Modell auswählen, aktuell ${currentModelName}`}
+                    aria-haspopup="menu"
+                    aria-expanded={openComposerMenu === "model"}
+                    aria-controls="composer-model-menu"
                     disabled={isSending || isDeleting}
+                    onClick={() => setOpenComposerMenu((current) =>
+                      current === "model" ? null : "model")}
                   >
-                    {AVAILABLE_MODELS.map((model) => (
-                      <option key={model} value={model}>
-                        {model === "deepseek-v4-pro" ? "DeepSeek v4 Pro" : "DeepSeek v4 Flash"}
-                      </option>
-                    ))}
-                  </select>
+                    {currentModelName}
+                  </button>
+                  {openComposerMenu === "model" && !isSending && !isDeleting ? (
+                    <div
+                      className="composer-popover model-menu"
+                      id="composer-model-menu"
+                      role="menu"
+                      aria-label="Modell auswählen"
+                      onKeyDown={handleComposerMenuKeyDown}
+                    >
+                      {AVAILABLE_MODELS.map((model) => (
+                        <button
+                          className={settings.model === model ? "is-active" : undefined}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={settings.model === model}
+                          key={model}
+                          onClick={() => {
+                            updateSetting("model", model);
+                            setOpenComposerMenu(null);
+                          }}
+                        >
+                          <span aria-hidden="true" className="model-menu-check">
+                            {settings.model === model ? "✓" : ""}
+                          </span>
+                          <span>
+                            {model === "deepseek-v4-pro" ? "DeepSeek v4 Pro" : "DeepSeek v4 Flash"}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
-                <button type="submit" disabled={!canSend}>
+                <button className="composer-send-button" type="submit" disabled={!canSend}>
                   {isSending ? (
                     <>
                       <span className="spinner" aria-hidden="true"></span>
