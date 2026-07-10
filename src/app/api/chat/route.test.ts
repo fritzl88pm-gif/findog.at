@@ -108,21 +108,72 @@ describe("POST /api/chat uploads", () => {
     vi.clearAllMocks();
   });
 
-  it("always uses server-keyed DeepSeek v4 Pro and ignores stale client model or key fields", async () => {
+  it("accepts DeepSeek v4 Flash and uses it throughout the response lifecycle", async () => {
     const response = await POST(
       jsonRequest({
         ...chatPayload(),
-        model: "obsolete-client-model",
+        model: "deepseek-v4-flash",
         deepSeekApiKey: "user-key",
       }),
     );
 
     expect(response.status).toBe(200);
     expect(resolveDeepSeekApiKey).toHaveBeenCalledWith();
+    expect(generateConversationTitle).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "deepseek-v4-flash" }),
+    );
     expect(runAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         apiKey: "deepseek-key",
-        model: "deepseek-v4-pro",
+        model: "deepseek-v4-flash",
+      }),
+    );
+    expect(persistConversationTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "deepseek-v4-flash" }),
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      model: "deepseek-v4-flash",
+      availableModels: ["deepseek-v4-flash", "deepseek-v4-pro"],
+    });
+  });
+
+  it("defaults to server-keyed DeepSeek v4 Pro and ignores stale client API keys", async () => {
+    const response = await POST(jsonRequest({ ...chatPayload(), deepSeekApiKey: "user-key" }));
+
+    expect(response.status).toBe(200);
+    expect(resolveDeepSeekApiKey).toHaveBeenCalledWith();
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "deepseek-key", model: "deepseek-v4-pro" }),
+    );
+  });
+
+  it.each(["obsolete-client-model", 42])(
+    "rejects an unsupported or non-string model value: %s",
+    async (model) => {
+      const response = await POST(jsonRequest({ ...chatPayload(), model }));
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "Das ausgewählte Modell wird nicht unterstützt.",
+      });
+      expect(runAgent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts a chat message longer than 6,000 characters within the request cap", async () => {
+    const longMessage = "a".repeat(6_001);
+
+    const response = await POST(
+      jsonRequest({
+        ...chatPayload(),
+        messages: [{ role: "user", content: longMessage }],
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [{ role: "user", content: longMessage }],
       }),
     );
   });

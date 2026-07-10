@@ -5,7 +5,6 @@ import {
   DEFAULT_MODEL,
   DEFAULT_SYSTEM_PROMPT,
   MAX_IMAGE_UPLOAD_BYTES,
-  MAX_MESSAGE_CHARS,
   MAX_IMAGE_UPLOADS,
   MAX_MESSAGES,
   MAX_MULTIPART_REQUEST_BYTES,
@@ -15,6 +14,8 @@ import {
   MAX_SYSTEM_PROMPT_CHARS,
   RATE_LIMIT_MAX_REQUESTS,
   RATE_LIMIT_WINDOW_MS,
+  isSupportedModel,
+  type ChatModel,
 } from "@/lib/config";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { type AppChatMessage } from "@/lib/deepseek";
@@ -36,6 +37,7 @@ type ChatRequestBody = {
   systemPrompt?: unknown;
   messages?: unknown;
   conversationId?: unknown;
+  model?: unknown;
 };
 
 type RateLimitEntry = {
@@ -177,9 +179,6 @@ function parseMessages(value: unknown): AppChatMessage[] {
       throw new UserVisibleError("Eine Chat-Nachricht hat eine ungültige Rolle oder keinen Text.", 400);
     }
     const content = item.content.trim();
-    if (content.length > MAX_MESSAGE_CHARS) {
-      throw new UserVisibleError(`Eine Chat-Nachricht ist länger als ${MAX_MESSAGE_CHARS} Zeichen.`, 400);
-    }
     return {
       role: item.role,
       content,
@@ -191,6 +190,16 @@ function parseMessages(value: unknown): AppChatMessage[] {
   }
 
   return messages;
+}
+
+function parseModel(value: unknown): ChatModel {
+  if (value === undefined) {
+    return DEFAULT_MODEL;
+  }
+  if (typeof value !== "string" || !isSupportedModel(value)) {
+    throw new UserVisibleError("Das ausgewählte Modell wird nicht unterstützt.", 400);
+  }
+  return value;
 }
 
 function sanitizeAttachmentFilename(value: string): string {
@@ -380,7 +389,7 @@ export async function POST(request: Request) {
     const authenticatedUser = await authenticateSupabaseRequest(request, supabase);
 
     const { body, attachmentUploads } = await parseChatRequest(request);
-    const model = DEFAULT_MODEL;
+    const model = parseModel(body.model);
     const deepSeekApiKey = resolveDeepSeekApiKey();
     const systemPrompt =
       asOptionalString(body.systemPrompt, MAX_SYSTEM_PROMPT_CHARS, "System Prompt") ??

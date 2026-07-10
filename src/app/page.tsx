@@ -4,14 +4,26 @@ import { Fragment, type ChangeEvent, type FormEvent, type ReactNode, useCallback
 import type { Session } from "@supabase/supabase-js";
 
 import { chatHistoryStorageKey } from "@/lib/chat/storage";
+import { applyConversationDeletion } from "@/lib/chat/deletion";
 import {
+  normalizeAgentRun,
+  type AgentRunMetadata,
+} from "@/lib/chat/agent-run";
+import {
+  AVAILABLE_MODELS,
   DEFAULT_SYSTEM_PROMPT,
   MAX_IMAGE_UPLOAD_BYTES,
   MAX_IMAGE_UPLOADS,
   MAX_PDF_UPLOAD_BYTES,
   MAX_PDF_UPLOADS,
   MAX_SYSTEM_PROMPT_CHARS,
+  type ChatModel,
 } from "@/lib/config";
+import {
+  DEFAULT_CHAT_SETTINGS,
+  normalizeStoredChatSettings,
+  type ChatSettings,
+} from "@/lib/chat/settings";
 import { ellipsizeFilename } from "@/lib/attachment-names";
 import type { AgentStep } from "@/lib/agent-steps";
 import { parseRichAnswer, type RichBlock, type RichInline } from "@/lib/answer-rendering";
@@ -26,10 +38,7 @@ type ChatMessage = {
   content: string;
   createdAt: string;
   steps?: AgentStep[];
-};
-
-type Settings = {
-  systemPrompt: string;
+  agentRun?: AgentRunMetadata;
 };
 
 type StoredHistory = {
@@ -45,9 +54,8 @@ type ConversationSummary = {
   updatedAt: string;
 };
 
-type StoredSettings = Pick<Settings, "systemPrompt">;
-
 type AuthMode = "sign-in" | "sign-up";
+type SettingsTab = "system-prompt" | "model";
 
 type AuthForm = {
   email: string;
@@ -65,10 +73,6 @@ type ChatResponsePayload = {
 const SETTINGS_STORAGE_KEY = "findog.settings.v1";
 const INITIAL_PENDING_TEXT = "Verbindung zum Rechercheagenten wird aufgebaut...";
 
-const DEFAULT_SETTINGS: Settings = {
-  systemPrompt: DEFAULT_SYSTEM_PROMPT,
-};
-
 function readJson<T>(key: string): T | null {
   try {
     const value = localStorage.getItem(key);
@@ -81,6 +85,14 @@ function readJson<T>(key: string): T | null {
 function writeJson(key: string, value: unknown): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // localStorage can fail in private browsing or constrained environments.
+  }
+}
+
+function removeStoredValue(key: string): void {
+  try {
+    localStorage.removeItem(key);
   } catch {
     // localStorage can fail in private browsing or constrained environments.
   }
@@ -174,12 +186,14 @@ function normalizeMessages(value: unknown): ChatMessage[] {
       return [];
     }
     const steps = item.role === "assistant" ? normalizeAgentSteps(item.steps) : [];
+    const agentRun = item.role === "assistant" ? normalizeAgentRun(item.agentRun) : undefined;
 
     return [
       {
         role: item.role,
         content: item.content,
         createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString(),
+        ...(agentRun ? { agentRun } : {}),
         ...(steps.length > 0 ? { steps } : {}),
       },
     ];
@@ -256,6 +270,15 @@ function formatHistoryDate(value: string): string {
     month: "2-digit",
     year: "2-digit",
   }).format(date);
+}
+
+function formatAgentTiming(run: AgentRunMetadata): string {
+  const startedAt = new Date(run.startedAt).getTime();
+  const completedAt = run.completedAt ? new Date(run.completedAt).getTime() : Number.NaN;
+  if (Number.isFinite(startedAt) && Number.isFinite(completedAt) && completedAt >= startedAt) {
+    return `${new Intl.NumberFormat("de-AT", { maximumFractionDigits: 1 }).format((completedAt - startedAt) / 1_000)} s`;
+  }
+  return Number.isFinite(startedAt) ? `Start ${formatTime(run.startedAt)}` : "Zeit nicht verfügbar";
 }
 
 function compactStatusText(value: string, maxLength = 220): string {
@@ -540,37 +563,54 @@ function RichAnswer({ content }: { content: string }) {
   return <div className="answer-content">{blocks.map(renderRichBlock)}</div>;
 }
 
-function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
-  if (steps.length === 0) {
+function AgentStepsPanel({
+  steps,
+  agentRun,
+}: {
+  steps: AgentStep[];
+  agentRun?: AgentRunMetadata;
+}) {
+  if (steps.length === 0 && !agentRun) {
     return null;
   }
 
   return (
     <details className="agent-steps" open>
       <summary>Agentenschritte ({steps.length})</summary>
-      <ol>
-        {steps.map((step, index) => (
-          <li className={`agent-step ${step.type}`} key={`${step.type}-${step.title}-${index}`}>
-            <div className="agent-step-header">
-              <span>{stepTypeLabel(step)}</span>
-              <strong>{step.title}</strong>
-            </div>
-            <pre>{renderStepContent(step.content)}</pre>
-          </li>
-        ))}
-      </ol>
+      {agentRun ? (
+        <p className="agent-run-meta">
+          <span>{agentRun.model === "deepseek-v4-pro" ? "DeepSeek v4 Pro" : "DeepSeek v4 Flash"}</span>
+          <span>{agentRun.status === "completed" ? "Abgeschlossen" : "Fehlgeschlagen"}</span>
+          <span>{formatAgentTiming(agentRun)}</span>
+        </p>
+      ) : null}
+      {steps.length > 0 ? (
+        <ol>
+          {steps.map((step, index) => (
+            <li className={`agent-step ${step.type}`} key={`${step.type}-${step.title}-${index}`}>
+              <div className="agent-step-header">
+                <span>{stepTypeLabel(step)}</span>
+                <strong>{step.title}</strong>
+              </div>
+              <pre>{renderStepContent(step.content)}</pre>
+            </li>
+          ))}
+        </ol>
+      ) : null}
     </details>
   );
 }
 
 export default function Home() {
   const supabase = getSupabaseBrowserClient();
-  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<ChatSettings>(DEFAULT_CHAT_SETTINGS);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversationId, setConversationId] = useState("");
   const [conversationTitle, setConversationTitle] = useState("");
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [selectedConversationIds, setSelectedConversationIds] = useState<string[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [composer, setComposer] = useState("");
   const [selectedPdfs, setSelectedPdfs] = useState<File[]>([]);
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
@@ -581,6 +621,7 @@ export default function Home() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(true);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("system-prompt");
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthLoaded, setIsAuthLoaded] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>("sign-in");
@@ -610,15 +651,7 @@ export default function Home() {
         return;
       }
 
-      const storedSettings = readJson<Partial<StoredSettings>>(SETTINGS_STORAGE_KEY);
-      if (storedSettings) {
-        setSettings({
-          systemPrompt:
-            typeof storedSettings.systemPrompt === "string" && storedSettings.systemPrompt.trim()
-              ? storedSettings.systemPrompt
-            : DEFAULT_SYSTEM_PROMPT,
-        });
-      }
+      setSettings(normalizeStoredChatSettings(readJson<unknown>(SETTINGS_STORAGE_KEY)));
 
       if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
         setSettingsOpen(false);
@@ -681,6 +714,7 @@ export default function Home() {
         setConversationId("");
         setConversationTitle("");
         setConversations([]);
+        setSelectedConversationIds([]);
         setMessages([]);
         setComposer("");
         setIsSending(false);
@@ -756,6 +790,7 @@ export default function Home() {
     if (isLoaded) {
       writeJson(SETTINGS_STORAGE_KEY, {
         systemPrompt: settings.systemPrompt,
+        model: settings.model,
       });
     }
   }, [isLoaded, settings]);
@@ -809,7 +844,7 @@ export default function Home() {
     });
   }, [isSending, messages, pendingStepText, pendingSteps]);
 
-  function updateSetting<Key extends keyof Settings>(key: Key, value: Settings[Key]) {
+  function updateSetting<Key extends keyof ChatSettings>(key: Key, value: ChatSettings[Key]) {
     setSettings((current) => ({
       ...current,
       [key]: value,
@@ -908,6 +943,7 @@ export default function Home() {
       setConversationId("");
       setConversationTitle("");
       setConversations([]);
+      setSelectedConversationIds([]);
       setMessages([]);
       setComposer("");
       clearAttachments();
@@ -1009,7 +1045,7 @@ export default function Home() {
   }
 
   async function selectConversation(conversation: ConversationSummary) {
-    if (isSending || !session?.access_token) {
+    if (isSending || isHistoryLoading || isDeleting || !session?.access_token) {
       return;
     }
     setError("");
@@ -1035,12 +1071,125 @@ export default function Home() {
     }
   }
 
+  function toggleConversationSelection(id: string) {
+    setSelectedConversationIds((current) =>
+      current.includes(id) ? current.filter((selectedId) => selectedId !== id) : [...current, id],
+    );
+  }
+
+  async function deleteConversations(ids: string[], useBulkEndpoint = false) {
+    if (
+      ids.length === 0
+      || isSending
+      || isHistoryLoading
+      || isDeleting
+      || !session?.access_token
+    ) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      ids.length === 1
+        ? "Diese Unterhaltung wirklich löschen? Alle Nachrichten und Agentenschritte werden entfernt."
+        : `${ids.length} Unterhaltungen wirklich löschen? Alle Nachrichten und Agentenschritte werden entfernt.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setError("");
+    setIsDeleting(true);
+    try {
+      const response = await fetch(
+        useBulkEndpoint
+          ? "/api/conversations"
+          : `/api/conversations/${encodeURIComponent(ids[0])}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            ...(useBulkEndpoint ? { "Content-Type": "application/json" } : {}),
+          },
+          ...(useBulkEndpoint ? { body: JSON.stringify({ ids }) } : {}),
+        },
+      );
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Unterhaltung konnte nicht gelöscht werden.",
+        );
+      }
+
+      const deletedIds = Array.isArray(payload.deletedIds)
+        ? payload.deletedIds.filter((id): id is string => typeof id === "string")
+        : [];
+      const result = applyConversationDeletion({
+        conversations,
+        selectedIds: selectedConversationIds,
+        activeConversationId: conversationId,
+        deletedIds,
+      });
+      setConversations(result.conversations);
+      setSelectedConversationIds(result.selectedIds);
+
+      if (result.activeConversationDeleted) {
+        setConversationId("");
+        setConversationTitle("");
+        setMessages([]);
+        setComposer("");
+        setIsSending(false);
+        setPendingStepText(INITIAL_PENDING_TEXT);
+        setPendingSteps([]);
+        clearAttachments();
+        if (user?.id) {
+          removeStoredValue(chatHistoryStorageKey(user.id));
+        }
+      }
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "Unterhaltung konnte nicht gelöscht werden.",
+      );
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
   function openSettingsDialog() {
     setIsSettingsDialogOpen(true);
   }
 
+  function handleSettingsTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    const tabs: SettingsTab[] = ["system-prompt", "model"];
+    const currentIndex = tabs.indexOf(settingsTab);
+    let nextTab: SettingsTab | undefined;
+
+    if (event.key === "ArrowRight") {
+      nextTab = tabs[(currentIndex + 1) % tabs.length];
+    } else if (event.key === "ArrowLeft") {
+      nextTab = tabs[(currentIndex - 1 + tabs.length) % tabs.length];
+    } else if (event.key === "Home") {
+      nextTab = tabs[0];
+    } else if (event.key === "End") {
+      nextTab = tabs.at(-1);
+    }
+
+    if (nextTab) {
+      event.preventDefault();
+      setSettingsTab(nextTab);
+      document.getElementById(`settings-tab-${nextTab}`)?.focus();
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    if (isDeleting) {
+      return;
+    }
 
     const question = composer.trim();
     const attachedPdfs = selectedPdfs;
@@ -1088,10 +1237,12 @@ export default function Home() {
     try {
       const requestBody: {
         systemPrompt: string;
+        model: ChatModel;
         messages: Array<Pick<ChatMessage, "role" | "content">>;
         conversationId?: string;
       } = {
         systemPrompt: settings.systemPrompt.trim() || DEFAULT_SYSTEM_PROMPT,
+        model: settings.model,
         messages: nextMessages.map((message) => ({
           role: message.role,
           content: message.content,
@@ -1207,7 +1358,8 @@ export default function Home() {
   const isAppReady = isLoaded && isAuthLoaded;
   const isAuthConfigured = isSupabaseBrowserConfigured();
   const hasSelectedAttachments = selectedPdfs.length > 0 || selectedImages.length > 0;
-  const canSend = isAppReady && Boolean(user) && (composer.trim().length > 0 || hasSelectedAttachments) && !isSending;
+  const canSend = isAppReady && Boolean(user) && (composer.trim().length > 0 || hasSelectedAttachments) && !isSending && !isDeleting;
+  const historyControlsDisabled = isSending || isHistoryLoading || isDeleting;
 
   if (!isAuthLoaded) {
     return (
@@ -1370,7 +1522,7 @@ export default function Home() {
               className="primary-button new-conversation-button"
               type="button"
               onClick={startNewConversation}
-              disabled={isSending}
+              disabled={historyControlsDisabled}
             >
               <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
               Neue Unterhaltung
@@ -1378,24 +1530,58 @@ export default function Home() {
             <div className="conversation-history" aria-label="Gespeicherte Unterhaltungen">
               <div className="conversation-history-heading">
                 <span>Unterhaltungen</span>
-                {isHistoryLoading ? <span className="history-loading">Lädt…</span> : null}
+                {isHistoryLoading || isDeleting ? (
+                  <span className="history-loading">{isDeleting ? "Löscht…" : "Lädt…"}</span>
+                ) : null}
+              </div>
+              <div className="conversation-bulk-actions">
+                <span>{selectedConversationIds.length} ausgewählt</span>
+                <button
+                  className="bulk-delete-button"
+                  type="button"
+                  onClick={() => void deleteConversations(selectedConversationIds, true)}
+                  disabled={historyControlsDisabled || selectedConversationIds.length === 0}
+                >
+                  Auswahl löschen
+                </button>
               </div>
               <div className="conversation-list">
                 {!isHistoryLoading && conversations.length === 0 ? (
                   <p className="conversation-empty">Noch keine gespeicherten Unterhaltungen.</p>
                 ) : null}
                 {conversations.map((conversation) => (
-                  <button
+                  <div
                     className={`conversation-row ${conversation.id === conversationId ? "active" : ""}`}
-                    type="button"
                     key={conversation.id}
-                    onClick={() => void selectConversation(conversation)}
-                    disabled={isSending || isHistoryLoading}
-                    aria-current={conversation.id === conversationId ? "page" : undefined}
                   >
-                    <span title={conversation.title}>{conversation.title}</span>
-                    <time dateTime={conversation.updatedAt}>{formatHistoryDate(conversation.updatedAt)}</time>
-                  </button>
+                    <input
+                      className="conversation-checkbox"
+                      type="checkbox"
+                      checked={selectedConversationIds.includes(conversation.id)}
+                      onChange={() => toggleConversationSelection(conversation.id)}
+                      disabled={historyControlsDisabled}
+                      aria-label={`Unterhaltung „${conversation.title}“ auswählen`}
+                    />
+                    <button
+                      className="conversation-open"
+                      type="button"
+                      onClick={() => void selectConversation(conversation)}
+                      disabled={historyControlsDisabled}
+                      aria-current={conversation.id === conversationId ? "page" : undefined}
+                    >
+                      <span title={conversation.title}>{conversation.title}</span>
+                      <time dateTime={conversation.updatedAt}>{formatHistoryDate(conversation.updatedAt)}</time>
+                    </button>
+                    <button
+                      className="conversation-delete"
+                      type="button"
+                      onClick={() => void deleteConversations([conversation.id])}
+                      disabled={historyControlsDisabled}
+                      aria-label={`Unterhaltung „${conversation.title}“ löschen`}
+                    >
+                      Löschen
+                    </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -1406,7 +1592,7 @@ export default function Home() {
               className="icon-button rail-icon-btn"
               type="button"
               onClick={startNewConversation}
-              disabled={isSending}
+              disabled={historyControlsDisabled}
               title="Neue Unterhaltung"
               aria-label="Neue Unterhaltung"
             >
@@ -1502,29 +1688,90 @@ export default function Home() {
                 <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19"></line><line x1="19" y1="5" x2="5" y2="19"></line></svg>
               </button>
             </div>
-            <div className="field-group">
-              <div className="field-label-row">
-                <label htmlFor="system-prompt">System Prompt</label>
-                <button
-                  className="secondary-button compact-button"
-                  type="button"
-                  onClick={() => updateSetting("systemPrompt", DEFAULT_SYSTEM_PROMPT)}
-                >
-                  Auf Standard zurücksetzen
-                </button>
-              </div>
-              <textarea
-                id="system-prompt"
-                value={settings.systemPrompt}
-                onChange={(event) => updateSetting("systemPrompt", event.target.value)}
-                maxLength={MAX_SYSTEM_PROMPT_CHARS}
-                rows={16}
-              />
-              <span className="field-help">
-                {settings.systemPrompt.length.toLocaleString("de-AT")} /{" "}
-                {MAX_SYSTEM_PROMPT_CHARS.toLocaleString("de-AT")} Zeichen
-              </span>
+            <div className="settings-tabs" role="tablist" aria-label="Einstellungsbereiche">
+              <button
+                id="settings-tab-system-prompt"
+                className={settingsTab === "system-prompt" ? "settings-tab active" : "settings-tab"}
+                type="button"
+                role="tab"
+                aria-selected={settingsTab === "system-prompt"}
+                aria-controls="settings-panel-system-prompt"
+                tabIndex={settingsTab === "system-prompt" ? 0 : -1}
+                onClick={() => setSettingsTab("system-prompt")}
+                onKeyDown={handleSettingsTabKeyDown}
+              >
+                System Prompt
+              </button>
+              <button
+                id="settings-tab-model"
+                className={settingsTab === "model" ? "settings-tab active" : "settings-tab"}
+                type="button"
+                role="tab"
+                aria-selected={settingsTab === "model"}
+                aria-controls="settings-panel-model"
+                tabIndex={settingsTab === "model" ? 0 : -1}
+                onClick={() => setSettingsTab("model")}
+                onKeyDown={handleSettingsTabKeyDown}
+              >
+                Modell
+              </button>
             </div>
+            {settingsTab === "system-prompt" ? (
+              <div
+                className="field-group settings-tab-panel"
+                id="settings-panel-system-prompt"
+                role="tabpanel"
+                aria-labelledby="settings-tab-system-prompt"
+              >
+                <div className="field-label-row">
+                  <label htmlFor="system-prompt">System Prompt</label>
+                  <button
+                    className="secondary-button compact-button"
+                    type="button"
+                    onClick={() => updateSetting("systemPrompt", DEFAULT_SYSTEM_PROMPT)}
+                  >
+                    Auf Standard zurücksetzen
+                  </button>
+                </div>
+                <textarea
+                  id="system-prompt"
+                  value={settings.systemPrompt}
+                  onChange={(event) => updateSetting("systemPrompt", event.target.value)}
+                  maxLength={MAX_SYSTEM_PROMPT_CHARS}
+                  rows={16}
+                />
+                <span className="field-help">
+                  {settings.systemPrompt.length.toLocaleString("de-AT")} /{" "}
+                  {MAX_SYSTEM_PROMPT_CHARS.toLocaleString("de-AT")} Zeichen
+                </span>
+              </div>
+            ) : (
+              <div
+                className="field-group settings-tab-panel"
+                id="settings-panel-model"
+                role="tabpanel"
+                aria-labelledby="settings-tab-model"
+              >
+                <fieldset className="model-options">
+                  <legend>DeepSeek-Modell</legend>
+                  {AVAILABLE_MODELS.map((model) => (
+                    <label className="model-option" key={model}>
+                      <input
+                        type="radio"
+                        name="settings-model"
+                        value={model}
+                        checked={settings.model === model}
+                        onChange={() => updateSetting("model", model)}
+                      />
+                      <span>
+                        <strong>{model === "deepseek-v4-pro" ? "DeepSeek v4 Pro" : "DeepSeek v4 Flash"}</strong>
+                        <small>{model === "deepseek-v4-pro" ? "Standardmodell für anspruchsvolle Recherche" : "Schnellere Variante für kompakte Anfragen"}</small>
+                      </span>
+                    </label>
+                  ))}
+                </fieldset>
+              </div>
+            )}
           </section>
         </div>
       ) : null}
@@ -1555,8 +1802,8 @@ export default function Home() {
                   ) : (
                     renderUserMessageContent(message.content)
                   )}
-                  {message.role === "assistant" && message.steps?.length ? (
-                    <AgentStepsPanel steps={message.steps} />
+                  {message.role === "assistant" && (message.steps?.length || message.agentRun) ? (
+                    <AgentStepsPanel steps={message.steps ?? []} agentRun={message.agentRun} />
                   ) : null}
                 </article>
               ))
@@ -1641,7 +1888,22 @@ export default function Home() {
               ))}
             </div>
             <div className="composer-actions">
-              <span>{messages.length} Nachrichten in dieser Unterhaltung</span>
+              <div className="composer-status">
+                <label htmlFor="composer-model">Modell</label>
+                <select
+                  id="composer-model"
+                  value={settings.model}
+                  onChange={(event) => updateSetting("model", event.target.value as ChatModel)}
+                  disabled={isSending || isDeleting}
+                >
+                  {AVAILABLE_MODELS.map((model) => (
+                    <option key={model} value={model}>
+                      {model === "deepseek-v4-pro" ? "DeepSeek v4 Pro" : "DeepSeek v4 Flash"}
+                    </option>
+                  ))}
+                </select>
+                <span>{messages.length} Nachrichten</span>
+              </div>
               <button type="submit" disabled={!canSend}>
                 {isSending ? (
                   <>

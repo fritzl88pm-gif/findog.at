@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { GET } from "./route";
+import { DELETE, GET } from "./route";
 
 vi.mock("@/lib/auth/server", () => ({
   authenticateSupabaseRequest: vi.fn(),
@@ -70,5 +70,75 @@ describe("GET /api/conversations", () => {
     expect(eq).toHaveBeenCalledWith("client_id", "11111111-1111-4111-8111-111111111111");
     expect(order).toHaveBeenCalledWith("updated_at", { ascending: false });
     expect(select).toHaveBeenCalledWith("id,title,created_at,updated_at");
+  });
+});
+
+describe("DELETE /api/conversations", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+    });
+  });
+
+  it.each([
+    { body: { ids: [] }, error: "Bitte mindestens eine Gespräch-ID zum Löschen auswählen." },
+    { body: { ids: ["not-a-uuid"] }, error: "Eine oder mehrere Gespräch-IDs sind ungültig." },
+    { body: { ids: Array.from({ length: 101 }, (_, index) => `invalid-${index}`) }, error: "Es können maximal 100 Unterhaltungen auf einmal gelöscht werden." },
+  ])("rejects invalid or unbounded bulk IDs", async ({ body, error }) => {
+    const from = vi.fn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from } as never);
+
+    const response = await DELETE(
+      new Request("http://localhost/api/conversations", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error });
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("de-duplicates IDs and bulk-deletes only rows owned by the authenticated user", async () => {
+    const firstId = "22222222-2222-4222-8222-222222222222";
+    const secondId = "33333333-3333-4333-8333-333333333333";
+    const select = vi.fn().mockResolvedValue({
+      data: [{ id: firstId }, { id: secondId }],
+      error: null,
+    });
+    const deleteQuery = {
+      in: vi.fn(() => deleteQuery),
+      eq: vi.fn(() => deleteQuery),
+      select,
+    };
+    const deleteRows = vi.fn(() => deleteQuery);
+    const from = vi.fn().mockReturnValue({ delete: deleteRows });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from } as never);
+
+    const request = new Request("http://localhost/api/conversations", {
+      method: "DELETE",
+      headers: {
+        Authorization: "Bearer access-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ids: [firstId, secondId, firstId] }),
+    });
+    const response = await DELETE(request);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ deletedIds: [firstId, secondId] });
+    expect(authenticateSupabaseRequest).toHaveBeenCalledWith(
+      request,
+      expect.objectContaining({ from }),
+    );
+    expect(deleteQuery.in).toHaveBeenCalledWith("id", [firstId, secondId]);
+    expect(deleteQuery.eq).toHaveBeenCalledWith(
+      "client_id",
+      "11111111-1111-4111-8111-111111111111",
+    );
+    expect(select).toHaveBeenCalledWith("id");
   });
 });

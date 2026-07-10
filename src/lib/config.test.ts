@@ -34,10 +34,12 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
 });
 
 describe("model policy", () => {
-  it("exposes DeepSeek v4 Pro as the only supported and default chat model", () => {
+  it("supports exactly DeepSeek v4 Flash and Pro, with Pro as the default", () => {
     expect(DEFAULT_MODEL).toBe("deepseek-v4-pro");
-    expect(AVAILABLE_MODELS).toEqual(["deepseek-v4-pro"]);
+    expect(AVAILABLE_MODELS).toEqual(["deepseek-v4-flash", "deepseek-v4-pro"]);
     expect(isSupportedModel("deepseek-v4-pro")).toBe(true);
-    expect(isSupportedModel("deepseek-v4-flash")).toBe(false);
+    expect(isSupportedModel("deepseek-v4-flash")).toBe(true);
+    expect(isSupportedModel("deepseek-chat")).toBe(false);
+    expect(isSupportedModel("obsolete-client-model")).toBe(false);
   });
 });

@@ -26,6 +26,10 @@ type MessageRow = {
 type AgentRunRow = {
   id: string;
   assistant_message_id: number | null;
+  model: string;
+  status: "completed" | "failed";
+  started_at: string;
+  completed_at: string | null;
 };
 
 type DatabaseError = {
@@ -111,7 +115,7 @@ export async function GET(
 
     const { data: runs, error: runsError } = await supabase
       .from("agent_runs")
-      .select("id,assistant_message_id")
+      .select("id,assistant_message_id,model,status,started_at,completed_at")
       .eq("conversation_id", conversationId)
       .eq("client_id", user.id)
       .order("created_at", { ascending: true });
@@ -145,10 +149,12 @@ export async function GET(
       }
     }
     const stepsByMessage = new Map<number, NonNullable<ReturnType<typeof stepFromRow>>[]>();
+    const runByMessage = new Map<number, AgentRunRow>();
     for (const run of runRows) {
       if (run.assistant_message_id === null) {
         continue;
       }
+      runByMessage.set(run.assistant_message_id, run);
       const steps = (stepsByRun.get(run.id) ?? []).filter(
         (step): step is NonNullable<typeof step> => step !== null,
       );
@@ -167,11 +173,20 @@ export async function GET(
       },
       messages: ((messages ?? []) as MessageRow[]).map((message) => {
         const steps = stepsByMessage.get(message.id);
+        const agentRun = message.role === "assistant" ? runByMessage.get(message.id) : undefined;
         return {
           id: message.id,
           role: message.role,
           content: message.content,
           createdAt: message.created_at,
+          ...(agentRun ? {
+            agentRun: {
+              model: agentRun.model,
+              status: agentRun.status,
+              startedAt: agentRun.started_at,
+              completedAt: agentRun.completed_at,
+            },
+          } : {}),
           ...(steps?.length ? { steps } : {}),
         };
       }),
@@ -181,5 +196,45 @@ export async function GET(
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
     return NextResponse.json({ error: "Gespräch konnte nicht geladen werden." }, { status: 500 });
+  }
+}
+
+export async function DELETE(
+  request: Request,
+  context: { params: Promise<{ conversationId: string }> },
+) {
+  try {
+    const { conversationId } = await context.params;
+    if (!uuidPattern.test(conversationId)) {
+      throw new UserVisibleError("Gespräch-ID ist ungültig.", 400);
+    }
+
+    const supabase = getSupabaseServerClient();
+    if (!supabase) {
+      throw new UserVisibleError("Gespräch kann derzeit nicht gelöscht werden.", 503);
+    }
+    const user = await authenticateSupabaseRequest(request, supabase);
+    const { data, error } = await supabase
+      .from("conversations")
+      .delete()
+      .eq("id", conversationId)
+      .eq("client_id", user.id)
+      .select("id");
+
+    if (error) {
+      throw new UserVisibleError("Gespräch konnte nicht gelöscht werden.", 503);
+    }
+
+    const deletedIds = ((data ?? []) as Array<{ id: string }>).map((row) => row.id);
+    if (deletedIds.length === 0) {
+      throw new UserVisibleError("Gespräch wurde nicht gefunden.", 404);
+    }
+
+    return NextResponse.json({ deletedIds });
+  } catch (error) {
+    if (error instanceof UserVisibleError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
+    return NextResponse.json({ error: "Gespräch konnte nicht gelöscht werden." }, { status: 500 });
   }
 }

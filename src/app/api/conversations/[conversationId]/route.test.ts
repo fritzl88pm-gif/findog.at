@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { GET } from "./route";
+import { DELETE, GET } from "./route";
 
 vi.mock("@/lib/auth/server", () => ({
   authenticateSupabaseRequest: vi.fn(),
@@ -31,7 +31,7 @@ describe("GET /api/conversations/:conversationId", () => {
     });
   });
 
-  it("returns chronological owned messages with persisted steps on their assistant response", async () => {
+  it("returns chronological owned messages with persisted run metadata and steps on their assistant response", async () => {
     const conversationQuery = queryResult({
       data: {
         id: "22222222-2222-4222-8222-222222222222",
@@ -59,7 +59,14 @@ describe("GET /api/conversations/:conversationId", () => {
       error: null,
     });
     const runsQuery = queryResult({
-      data: [{ id: "44444444-4444-4444-8444-444444444444", assistant_message_id: 11 }],
+      data: [{
+        id: "44444444-4444-4444-8444-444444444444",
+        assistant_message_id: 11,
+        model: "deepseek-v4-flash",
+        status: "completed",
+        started_at: "2026-07-09T09:01:10.000Z",
+        completed_at: "2026-07-09T09:02:00.000Z",
+      }],
       error: null,
     });
     const stepsQuery = queryResult({
@@ -101,6 +108,13 @@ describe("GET /api/conversations/:conversationId", () => {
       "user",
       "assistant",
     ]);
+    expect(payload.messages[0]).not.toHaveProperty("agentRun");
+    expect(payload.messages[1].agentRun).toEqual({
+      model: "deepseek-v4-flash",
+      status: "completed",
+      startedAt: "2026-07-09T09:01:10.000Z",
+      completedAt: "2026-07-09T09:02:00.000Z",
+    });
     expect(payload.messages[1].steps).toEqual([
       {
         type: "tool_result",
@@ -237,5 +251,71 @@ describe("GET /api/conversations/:conversationId", () => {
 
     expect(response.status).toBe(404);
     expect(from).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("DELETE /api/conversations/:conversationId", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+    });
+  });
+
+  it("rejects an invalid conversation UUID without issuing a delete", async () => {
+    const from = vi.fn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from } as never);
+
+    const response = await DELETE(
+      new Request("http://localhost/api/conversations/not-a-uuid", { method: "DELETE" }),
+      { params: Promise.resolve({ conversationId: "not-a-uuid" }) },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Gespräch-ID ist ungültig." });
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("deletes only the authenticated owner's conversation row", async () => {
+    const select = vi.fn().mockResolvedValue({
+      data: [{ id: "22222222-2222-4222-8222-222222222222" }],
+      error: null,
+    });
+    const deleteQuery = {
+      eq: vi.fn(() => deleteQuery),
+      select,
+    };
+    const deleteRows = vi.fn(() => deleteQuery);
+    const from = vi.fn().mockReturnValue({ delete: deleteRows });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from } as never);
+
+    const request = new Request(
+      "http://localhost/api/conversations/22222222-2222-4222-8222-222222222222",
+      {
+        method: "DELETE",
+        headers: { Authorization: "Bearer access-token" },
+      },
+    );
+    const response = await DELETE(request, {
+      params: Promise.resolve({ conversationId: "22222222-2222-4222-8222-222222222222" }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      deletedIds: ["22222222-2222-4222-8222-222222222222"],
+    });
+    expect(authenticateSupabaseRequest).toHaveBeenCalledWith(
+      request,
+      expect.objectContaining({ from }),
+    );
+    expect(deleteQuery.eq).toHaveBeenCalledWith(
+      "id",
+      "22222222-2222-4222-8222-222222222222",
+    );
+    expect(deleteQuery.eq).toHaveBeenCalledWith(
+      "client_id",
+      "11111111-1111-4111-8111-111111111111",
+    );
+    expect(select).toHaveBeenCalledWith("id");
   });
 });

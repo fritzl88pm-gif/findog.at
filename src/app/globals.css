@@ -238,19 +238,19 @@ button:disabled {
 
 .conversation-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   width: 100%;
   min-height: 42px;
   border-radius: var(--radius-sm);
-  padding: 8px 10px;
+  padding: 4px 6px;
   color: var(--ink);
   text-align: left;
   transition: var(--transition);
 }
 
-.conversation-row:hover:not(:disabled),
+.conversation-row:hover,
 .conversation-row.active {
   background: rgba(40, 111, 156, 0.08);
   color: var(--bmf-blue-deep);
@@ -260,7 +260,23 @@ button:disabled {
   box-shadow: inset 3px 0 0 var(--bmf-blue);
 }
 
-.conversation-row > span {
+.conversation-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--bmf-blue);
+}
+
+.conversation-open {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 2px;
+  text-align: left;
+}
+
+.conversation-open > span {
   overflow: hidden;
   font-size: 0.84rem;
   font-weight: 650;
@@ -268,9 +284,44 @@ button:disabled {
   white-space: nowrap;
 }
 
-.conversation-row time {
+.conversation-open time {
   color: var(--muted);
   font-size: 0.68rem;
+}
+
+.conversation-delete,
+.bulk-delete-button {
+  border-radius: 6px;
+  color: var(--danger);
+  font-size: 0.7rem;
+  font-weight: 750;
+}
+
+.conversation-delete {
+  min-height: 30px;
+  padding: 0 5px;
+}
+
+.conversation-delete:hover:not(:disabled),
+.bulk-delete-button:hover:not(:disabled) {
+  background: #fff0ef;
+}
+
+.conversation-bulk-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.bulk-delete-button {
+  min-height: 30px;
+  border: 1px solid rgba(179, 38, 30, 0.22);
+  padding: 0 8px;
+  background: #fff;
 }
 
 .rail-content {
@@ -356,6 +407,79 @@ button:disabled {
 
 .settings-dialog textarea {
   min-height: 360px;
+}
+
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.settings-tab {
+  min-height: 40px;
+  border-bottom: 3px solid transparent;
+  padding: 0 14px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.settings-tab:hover,
+.settings-tab:focus-visible,
+.settings-tab.active {
+  color: var(--bmf-blue-deep);
+  background: rgba(40, 111, 156, 0.05);
+}
+
+.settings-tab.active {
+  border-bottom-color: var(--bmf-blue);
+}
+
+.settings-tab-panel {
+  min-height: 430px;
+}
+
+.model-options {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.model-options legend {
+  margin-bottom: 12px;
+  color: var(--bmf-blue-deep);
+  font-weight: 750;
+}
+
+.model-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  cursor: pointer;
+}
+
+.model-option:has(input:checked) {
+  border-color: var(--bmf-blue);
+  background: rgba(40, 111, 156, 0.06);
+}
+
+.model-option input {
+  margin-top: 4px;
+}
+
+.model-option span {
+  display: grid;
+  gap: 4px;
+}
+
+.model-option small {
+  color: var(--muted);
 }
 
 .user-profile {
@@ -851,6 +975,21 @@ textarea:focus {
   font-weight: 700;
 }
 
+.agent-run-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 0 12px 10px;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.agent-run-meta span + span::before {
+  content: "·";
+  margin-right: 14px;
+}
+
 .agent-steps ol {
   display: grid;
   gap: 8px;
@@ -1069,9 +1208,30 @@ textarea:focus {
   gap: 16px;
 }
 
-.composer-actions span {
+.composer-actions > span {
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.composer-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.composer-status label {
+  font-weight: 700;
+}
+
+.composer-status select {
+  min-height: 34px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  padding: 0 28px 0 10px;
 }
 
 /* Buttons Styling */
