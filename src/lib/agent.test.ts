@@ -76,7 +76,7 @@ describe("runAgent", () => {
     return { callTool, openToolSession };
   }
 
-  it("uses compact deterministic steps without plan, progress-rewrite, or self-check LLM calls", async () => {
+  it("uses one compact deterministic plan without plan-related, progress-rewrite, or self-check LLM calls", async () => {
     const { callTool } = mockMcpSession();
     mockedChatCompletion
       .mockResolvedValueOnce({
@@ -103,6 +103,7 @@ describe("runAgent", () => {
     expect(result.answer).toBe("Finale Antwort.");
     expect(result.tools).toEqual(["hybrid_search", "findok_verify_bfg_cases"]);
     expect(result.steps.map((step) => step.type)).toEqual([
+      "plan",
       "tools",
       "tool_call",
       "tool_result",
@@ -140,6 +141,10 @@ describe("runAgent", () => {
 
     expect(onStep.mock.calls.map(([step]) => step.type)).toEqual(
       result.steps.map((step) => step.type),
+    );
+    expect(onStep).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ type: "plan", title: "Arbeitsplan" }),
     );
     expect(onStep).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -220,6 +225,7 @@ describe("runAgent", () => {
 
     expect(result.answer).toBe("Finale Antwort mit PDF-Kontext.");
     expect(result.steps[0]).toMatchObject({ type: "pdf_context" });
+    expect(result.steps[1]).toMatchObject({ type: "plan", title: "Arbeitsplan" });
     for (const [options] of mockedChatCompletion.mock.calls) {
       expect(options.messages[0]?.content).toContain("Bescheid.pdf");
       expect(options.messages[0]?.content).toContain("Extrahierter Bescheidinhalt");

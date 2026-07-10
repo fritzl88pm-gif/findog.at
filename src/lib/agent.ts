@@ -23,6 +23,7 @@ import {
   type AgentRunResult,
   type AgentStep,
 } from "./agent-steps";
+import { AGENT_PLAN_ITEMS } from "./agent-plan";
 
 const MAX_TOOL_ITERATIONS = 6;
 const AGENT_FINALIZATION_RESERVE_MS = 100_000;
@@ -502,6 +503,16 @@ export async function runAgent(options: {
   const latestQuestion = options.messages.findLast((message) => message.role === "user")?.content;
   const steps: AgentStep[] = [...(options.initialSteps ?? [])];
   const toolLog: ToolLogEntry[] = [];
+
+  await appendAgentStep(
+    steps,
+    {
+      type: "plan",
+      title: "Arbeitsplan",
+      content: AGENT_PLAN_ITEMS.join("\n"),
+    },
+    options.onStep,
+  );
 
   const session = await mcp.openToolSession(options.mcpBearerToken, { deadline: options.deadline });
   const toolNames = [...session.tools.map((tool) => tool.name), FINDOK_VERIFY_BFG_CASES_TOOL_NAME];

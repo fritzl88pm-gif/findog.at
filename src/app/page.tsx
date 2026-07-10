@@ -27,6 +27,7 @@ import {
 import { ellipsizeFilename } from "@/lib/attachment-names";
 import type { AgentStep } from "@/lib/agent-steps";
 import { agentStepDisplayLabel } from "@/lib/agent-step-display";
+import { AGENT_PLAN_ITEMS, completedAgentPlanItemCount } from "@/lib/agent-plan";
 import { parseRichAnswer, type RichBlock, type RichInline } from "@/lib/answer-rendering";
 import {
   getSupabaseBrowserClient,
@@ -482,12 +483,35 @@ function RichAnswer({ content }: { content: string }) {
 }
 
 function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
+  const hasPlan = steps.some((step) => step.type === "plan");
+  const completedPlanItems = completedAgentPlanItemCount(steps);
+  const progressSteps = hasPlan ? steps.filter((step) => step.type !== "plan") : steps;
+
   return (
     <details className="agent-steps">
       <summary>Rechercheverlauf ({steps.length})</summary>
-      {steps.length > 0 ? (
-        <ol>
-          {steps.map((step, index) => (
+      {hasPlan ? (
+        <ol className="agent-plan" aria-label="Arbeitsplan">
+          {AGENT_PLAN_ITEMS.map((item, index) => {
+            const isCompleted = index < completedPlanItems;
+            return (
+              <li
+                className={isCompleted ? "is-complete" : undefined}
+                aria-label={`${item}, ${isCompleted ? "abgeschlossen" : "ausstehend"}`}
+                key={item}
+              >
+                <span className="agent-plan-marker" aria-hidden="true">
+                  {isCompleted ? "✓" : ""}
+                </span>
+                <span className="agent-plan-label">{item}</span>
+              </li>
+            );
+          })}
+        </ol>
+      ) : null}
+      {progressSteps.length > 0 ? (
+        <ol className="agent-progress-list">
+          {progressSteps.map((step, index) => (
             <li key={`${step.type}-${index}`}>{agentStepDisplayLabel(step)}</li>
           ))}
         </ol>
