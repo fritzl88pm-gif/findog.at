@@ -26,24 +26,28 @@ function safeErrorDetails(error: unknown): Record<string, string> {
   return { message: String(error).slice(0, 500) };
 }
 
-function requireMultipartRequest(request: Request): void {
-  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
-  if (!contentType.startsWith("multipart/form-data")) {
+function validateMultipartRequest(request: Request): string {
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
     throw new UserVisibleError("Die Formularanfrage ist ungültig.", 400);
   }
 
   const rawContentLength = request.headers.get("content-length");
-  if (rawContentLength === null || !/^\d+$/.test(rawContentLength)) {
-    throw new UserVisibleError("Die Formularanfrage ist ungültig.", 400);
+  if (rawContentLength !== null) {
+    if (!/^\d+$/.test(rawContentLength)) {
+      throw new UserVisibleError("Die Formularanfrage ist ungültig.", 400);
+    }
+
+    const contentLength = Number(rawContentLength);
+    if (!Number.isSafeInteger(contentLength) || contentLength <= 0) {
+      throw new UserVisibleError("Die Formularanfrage ist ungültig.", 400);
+    }
+    if (contentLength > MAX_FORM_MULTIPART_BYTES) {
+      throw new UserVisibleError("Die Formularanfrage ist zu groß.", 413);
+    }
   }
 
-  const contentLength = Number(rawContentLength);
-  if (!Number.isSafeInteger(contentLength) || contentLength <= 0) {
-    throw new UserVisibleError("Die Formularanfrage ist ungültig.", 400);
-  }
-  if (contentLength > MAX_FORM_MULTIPART_BYTES) {
-    throw new UserVisibleError("Die Formularanfrage ist zu groß.", 413);
-  }
+  return contentType;
 }
 
 function singleTextField(formData: FormData, name: string, required: boolean): string {
@@ -61,25 +65,58 @@ function isUploadedFile(value: FormDataEntryValue): value is File {
   return typeof File !== "undefined" && value instanceof File;
 }
 
-async function parseFormRequest(request: Request): Promise<{
+async function readBoundedMultipartBody(request: Request): Promise<Uint8Array<ArrayBuffer>> {
+  if (!request.body) {
+    return new Uint8Array();
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_FORM_MULTIPART_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new UserVisibleError("Die Formularanfrage ist zu groß.", 413);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
+
+async function parseFormRequest(request: Request, contentType: string): Promise<{
   imageBytes: Uint8Array;
   imageMimeType: "image/jpeg" | "image/png" | "image/webp";
   saldo: string;
 }> {
+  const body = await readBoundedMultipartBody(request);
   let formData: FormData;
   try {
-    formData = await request.formData();
+    const boundedRequest = new Request(request.url, {
+      method: request.method,
+      headers: { "Content-Type": contentType },
+      body: body.buffer,
+    });
+    formData = await boundedRequest.formData();
   } catch {
     throw new UserVisibleError("Die Formularanfrage ist ungültig.", 400);
-  }
-
-  let measuredBytes = 0;
-  for (const [name, value] of formData.entries()) {
-    measuredBytes += Buffer.byteLength(name);
-    measuredBytes += typeof value === "string" ? Buffer.byteLength(value) : value.size;
-  }
-  if (measuredBytes > MAX_FORM_MULTIPART_BYTES) {
-    throw new UserVisibleError("Die Formularanfrage ist zu groß.", 413);
   }
 
   const formId = singleTextField(formData, "formId", true);
@@ -120,7 +157,7 @@ async function parseFormRequest(request: Request): Promise<{
 
 export async function POST(request: Request) {
   try {
-    requireMultipartRequest(request);
+    const contentType = validateMultipartRequest(request);
 
     const supabase = getSupabaseServerClient();
     if (!supabase) {
@@ -131,7 +168,7 @@ export async function POST(request: Request) {
     }
     await authenticateSupabaseRequest(request, supabase);
 
-    const parsedRequest = await parseFormRequest(request);
+    const parsedRequest = await parseFormRequest(request, contentType);
     const { data: template, error: templateError } = await supabase.storage
       .from(FORM_TEMPLATE_BUCKET)
       .download(VERF5_TEMPLATE_PATH);

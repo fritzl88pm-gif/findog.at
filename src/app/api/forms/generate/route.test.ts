@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
+import { MAX_FORM_MULTIPART_BYTES } from "@/lib/forms/config";
 import { renderVerf5Document } from "@/lib/forms/docx";
 import { extractVerf5ImageFields } from "@/lib/forms/extraction";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
@@ -90,18 +91,71 @@ describe("POST /api/forms/generate", () => {
   });
 
   it.each([
-    { label: "missing", contentLength: null, status: 400, error: "Die Formularanfrage ist ungültig." },
     { label: "malformed", contentLength: "1.5", status: 400, error: "Die Formularanfrage ist ungültig." },
     { label: "zero", contentLength: "0", status: 400, error: "Die Formularanfrage ist ungültig." },
-    { label: "over-limit", contentLength: "5100001", status: 413, error: "Die Formularanfrage ist zu groß." },
+    {
+      label: "over-limit",
+      contentLength: String(MAX_FORM_MULTIPART_BYTES + 1),
+      status: 413,
+      error: "Die Formularanfrage ist zu groß.",
+    },
   ])("rejects $label Content-Length before external services", async ({ contentLength, status, error }) => {
     const response = await POST(await generateRequest({ contentLength }));
 
     expect(response.status).toBe(status);
     await expect(response.json()).resolves.toEqual({ error });
+    expect(getSupabaseServerClient).not.toHaveBeenCalled();
+    expect(authenticateSupabaseRequest).not.toHaveBeenCalled();
     expect(extractVerf5ImageFields).not.toHaveBeenCalled();
     expect(storageFrom).not.toHaveBeenCalled();
     expect(download).not.toHaveBeenCalled();
+  });
+
+  it("accepts a valid multipart request without Content-Length", async () => {
+    const request = await generateRequest({ contentLength: null });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(authenticateSupabaseRequest).toHaveBeenCalledWith(
+      request,
+      expect.objectContaining({ storage: expect.anything() }),
+    );
+    expect(renderVerf5Document).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an oversized multipart body without Content-Length before storage or Gemini", async () => {
+    const response = await POST(await generateRequest({
+      contentLength: null,
+      image: new File(
+        [new Uint8Array(MAX_FORM_MULTIPART_BYTES)],
+        "beleg.png",
+        { type: "image/png" },
+      ),
+    }));
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: "Die Formularanfrage ist zu groß." });
+    expect(storageFrom).not.toHaveBeenCalled();
+    expect(download).not.toHaveBeenCalled();
+    expect(extractVerf5ImageFields).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized multipart body with an under-reported Content-Length", async () => {
+    const response = await POST(await generateRequest({
+      contentLength: "1",
+      image: new File(
+        [new Uint8Array([1])],
+        `${"x".repeat(MAX_FORM_MULTIPART_BYTES)}.png`,
+        { type: "image/png" },
+      ),
+    }));
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: "Die Formularanfrage ist zu groß." });
+    expect(storageFrom).not.toHaveBeenCalled();
+    expect(download).not.toHaveBeenCalled();
+    expect(extractVerf5ImageFields).not.toHaveBeenCalled();
   });
 
   it.each([
