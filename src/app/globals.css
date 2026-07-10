@@ -200,6 +200,8 @@ button:disabled {
 }
 
 .forms-navigation {
+  display: grid;
+  gap: 4px;
   flex-shrink: 0;
   border-top: 1px solid var(--border-color);
   padding-top: 14px;
@@ -481,6 +483,17 @@ button:disabled {
   min-height: 430px;
 }
 
+.settings-inline-error {
+  margin-bottom: 14px;
+  border: 1px solid rgba(179, 38, 30, 0.2);
+  border-left: 4px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: #fff6f5;
+  color: var(--danger);
+  padding: 10px 12px;
+  font-size: 0.84rem;
+}
+
 .model-options {
   display: grid;
   gap: 12px;
@@ -735,6 +748,20 @@ textarea:focus {
   background: var(--bg-surface);
   padding: 28px;
   box-shadow: var(--shadow-md);
+}
+
+.admin-settings-card textarea {
+  min-height: 420px;
+}
+
+.admin-settings-card .admin-message {
+  margin: 0;
+}
+
+.admin-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .form-back-button {

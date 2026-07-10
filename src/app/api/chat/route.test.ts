@@ -11,13 +11,14 @@ vi.mock("next/server", async () => {
   };
 });
 
-import { MAX_IMAGE_UPLOAD_BYTES } from "@/lib/config";
+import { DEFAULT_SYSTEM_PROMPT, MAX_IMAGE_UPLOAD_BYTES } from "@/lib/config";
 import { runAgent } from "@/lib/agent";
 import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 import { parseChatStreamLine } from "@/lib/chat-stream";
 import { persistConversationTurn } from "@/lib/persistence";
 import { generateConversationTitle } from "@/lib/conversation-title";
+import { getGlobalSystemPrompt } from "@/lib/admin-settings";
 import * as chatRoute from "./route";
 
 const { POST } = chatRoute;
@@ -28,6 +29,10 @@ vi.mock("@/lib/auth/server", () => ({
 
 vi.mock("@/lib/deepseek-key", () => ({
   resolveDeepSeekApiKey: vi.fn().mockReturnValue("deepseek-key"),
+}));
+
+vi.mock("@/lib/admin-settings", () => ({
+  getGlobalSystemPrompt: vi.fn().mockResolvedValue("Globaler System Prompt"),
 }));
 
 vi.mock("@/lib/conversation-title", () => ({
@@ -106,6 +111,50 @@ function multipartRequest(formData: FormData): Request {
 describe("POST /api/chat uploads", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("preserves a non-empty personal system prompt", async () => {
+    const request = jsonRequest(chatPayload());
+    request.headers.set("x-forwarded-for", "test-personal-prompt");
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(runAgent).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: "System" }));
+    expect(getGlobalSystemPrompt).not.toHaveBeenCalled();
+  });
+
+  it("preserves the default prompt text as personal when global-default mode is false", async () => {
+    const request = jsonRequest({
+      ...chatPayload(),
+      systemPrompt: DEFAULT_SYSTEM_PROMPT,
+      usesGlobalDefault: false,
+    });
+    request.headers.set("x-forwarded-for", "test-default-text-personal-prompt");
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ systemPrompt: DEFAULT_SYSTEM_PROMPT }),
+    );
+    expect(getGlobalSystemPrompt).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { payload: { ...chatPayload(), systemPrompt: undefined }, label: "missing" },
+    { payload: { ...chatPayload(), usesGlobalDefault: true }, label: "default-mode" },
+  ])("resolves a $label prompt through the server global settings helper", async ({ payload }) => {
+    const request = jsonRequest(payload);
+    request.headers.set(
+      "x-forwarded-for",
+      `test-global-prompt-${String("usesGlobalDefault" in payload && payload.usesGlobalDefault)}`,
+    );
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(getGlobalSystemPrompt).toHaveBeenCalledWith(expect.anything());
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ systemPrompt: "Globaler System Prompt" }),
+    );
   });
 
   it("accepts DeepSeek v4 Flash and uses it throughout the response lifecycle", async () => {

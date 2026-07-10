@@ -3,7 +3,6 @@ import { after, NextResponse } from "next/server";
 import {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
-  DEFAULT_SYSTEM_PROMPT,
   MAX_IMAGE_UPLOAD_BYTES,
   MAX_IMAGE_UPLOADS,
   MAX_MESSAGES,
@@ -30,11 +29,13 @@ import { CHAT_STREAM_CONTENT_TYPE, encodeChatStreamEvent } from "@/lib/chat-stre
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 import { createUnboundedDeadline, type Deadline } from "@/lib/deadline";
 import { generateConversationTitle } from "@/lib/conversation-title";
+import { getGlobalSystemPrompt } from "@/lib/admin-settings";
 
 export const runtime = "nodejs";
 
 type ChatRequestBody = {
   systemPrompt?: unknown;
+  usesGlobalDefault?: unknown;
   messages?: unknown;
   conversationId?: unknown;
   model?: unknown;
@@ -391,9 +392,15 @@ export async function POST(request: Request) {
     const { body, attachmentUploads } = await parseChatRequest(request);
     const model = parseModel(body.model);
     const deepSeekApiKey = resolveDeepSeekApiKey();
-    const systemPrompt =
-      asOptionalString(body.systemPrompt, MAX_SYSTEM_PROMPT_CHARS, "System Prompt") ??
-      DEFAULT_SYSTEM_PROMPT;
+    const personalSystemPrompt = asOptionalString(
+      body.systemPrompt,
+      MAX_SYSTEM_PROMPT_CHARS,
+      "System Prompt",
+    );
+    const usesGlobalDefault = body.usesGlobalDefault === true || !personalSystemPrompt;
+    const systemPrompt = usesGlobalDefault
+      ? await getGlobalSystemPrompt(supabase)
+      : personalSystemPrompt;
     const messages = parseMessages(body.messages);
     const mcpBearerToken = getServerMcpBearerToken();
     const requestedConversationId = asOptionalString(body.conversationId, 80, "Conversation ID");

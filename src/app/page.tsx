@@ -25,7 +25,11 @@ import {
 } from "@/lib/config";
 import {
   DEFAULT_CHAT_SETTINGS,
+  displayedSystemPrompt,
+  editPersonalSystemPrompt,
   normalizeStoredChatSettings,
+  resetToGlobalSystemPrompt,
+  systemPromptForChatRequest,
   type ChatSettings,
 } from "@/lib/chat/settings";
 import { ellipsizeFilename } from "@/lib/attachment-names";
@@ -77,7 +81,7 @@ type ConversationSummary = {
 };
 
 type SettingsTab = "system-prompt" | "model";
-type AppView = "chat" | "forms";
+type AppView = "chat" | "forms" | "administration";
 
 type AuthForm = {
   email: string;
@@ -95,6 +99,11 @@ type ChatResponsePayload = {
   steps?: unknown;
   conversationId?: unknown;
   title?: unknown;
+};
+
+type AuthenticatedSettings = {
+  globalSystemPrompt: string;
+  isAdmin: boolean;
 };
 
 const SETTINGS_STORAGE_KEY = "findog.settings.v1";
@@ -273,6 +282,25 @@ async function fetchConversationHistory(accessToken: string, id: string): Promis
     ? ((conversation as Record<string, unknown>).title as string)
     : "Unterhaltung";
   return { title, messages: normalizeMessages(payload.messages) };
+}
+
+async function fetchAuthenticatedSettings(accessToken: string): Promise<AuthenticatedSettings> {
+  const response = await fetch("/api/settings", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    throw new Error(
+      typeof payload.error === "string" ? payload.error : "Einstellungen konnten nicht geladen werden.",
+    );
+  }
+  if (typeof payload.globalSystemPrompt !== "string" || typeof payload.isAdmin !== "boolean") {
+    throw new Error("Die geladenen Einstellungen sind ungültig.");
+  }
+  return {
+    globalSystemPrompt: payload.globalSystemPrompt,
+    isAdmin: payload.isAdmin,
+  };
 }
 
 function formatTime(value: string): string {
@@ -555,6 +583,14 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(true);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("system-prompt");
+  const [globalSystemPrompt, setGlobalSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
+  const [adminSystemPrompt, setAdminSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
+  const [adminError, setAdminError] = useState("");
+  const [adminNotice, setAdminNotice] = useState("");
+  const [isAdminSettingsLoading, setIsAdminSettingsLoading] = useState(false);
+  const [isAdminSettingsSaving, setIsAdminSettingsSaving] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthLoaded, setIsAuthLoaded] = useState(false);
   const [isRecoveryMode, setIsRecoveryMode] = useState(false);
@@ -765,10 +801,46 @@ export default function Home() {
   }, [isAuthLoaded, isLoaded, isRecoveryMode, session?.access_token, user?.id]);
 
   useEffect(() => {
+    const accessToken = session?.access_token;
+    if (!accessToken || !user?.id || isRecoveryMode) {
+      queueMicrotask(() => {
+        setGlobalSystemPrompt(DEFAULT_SYSTEM_PROMPT);
+        setIsAdmin(false);
+        setAppView((current) => current === "administration" ? "chat" : current);
+      });
+      return;
+    }
+
+    let isActive = true;
+    void fetchAuthenticatedSettings(accessToken)
+      .then((loadedSettings) => {
+        if (!isActive) {
+          return;
+        }
+        setGlobalSystemPrompt(loadedSettings.globalSystemPrompt);
+        setIsAdmin(loadedSettings.isAdmin);
+        if (!loadedSettings.isAdmin) {
+          setAppView((current) => current === "administration" ? "chat" : current);
+        }
+      })
+      .catch(() => {
+        if (isActive) {
+          setIsAdmin(false);
+          setAppView((current) => current === "administration" ? "chat" : current);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [isRecoveryMode, session?.access_token, user?.id]);
+
+  useEffect(() => {
     if (isLoaded) {
       writeJson(SETTINGS_STORAGE_KEY, {
         systemPrompt: settings.systemPrompt,
         model: settings.model,
+        usesGlobalDefault: settings.usesGlobalDefault,
       });
     }
   }, [isLoaded, settings]);
@@ -1186,6 +1258,93 @@ export default function Home() {
     }
   }
 
+  async function refreshAuthenticatedSettings(): Promise<string> {
+    const accessToken = session?.access_token;
+    if (!accessToken) {
+      throw new Error("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+    }
+    const loadedSettings = await fetchAuthenticatedSettings(accessToken);
+    setGlobalSystemPrompt(loadedSettings.globalSystemPrompt);
+    setIsAdmin(loadedSettings.isAdmin);
+    if (!loadedSettings.isAdmin) {
+      setAppView((current) => current === "administration" ? "chat" : current);
+    }
+    return loadedSettings.globalSystemPrompt;
+  }
+
+  async function openAdministrationView() {
+    const accessToken = session?.access_token;
+    if (!isAdmin || !accessToken) {
+      return;
+    }
+    setAppView("administration");
+    setAdminError("");
+    setAdminNotice("");
+    setIsAdminSettingsLoading(true);
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+
+    try {
+      const response = await fetch("/api/admin/settings", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok || typeof payload.systemPrompt !== "string") {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Globale Einstellungen konnten nicht geladen werden.",
+        );
+      }
+      setAdminSystemPrompt(payload.systemPrompt);
+      setGlobalSystemPrompt(payload.systemPrompt);
+    } catch (adminSettingsError) {
+      setAdminError(adminSettingsError instanceof Error
+        ? adminSettingsError.message
+        : "Globale Einstellungen konnten nicht geladen werden.");
+    } finally {
+      setIsAdminSettingsLoading(false);
+    }
+  }
+
+  async function saveAdminSystemPrompt() {
+    const accessToken = session?.access_token;
+    if (!accessToken || isAdminSettingsSaving) {
+      return;
+    }
+    setAdminError("");
+    setAdminNotice("");
+    setIsAdminSettingsSaving(true);
+    try {
+      const response = await fetch("/api/admin/settings", {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ systemPrompt: adminSystemPrompt }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok || typeof payload.systemPrompt !== "string") {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Der globale System Prompt konnte nicht gespeichert werden.",
+        );
+      }
+      setAdminSystemPrompt(payload.systemPrompt);
+      setGlobalSystemPrompt(payload.systemPrompt);
+      setAdminNotice("Der globale System Prompt wurde gespeichert.");
+    } catch (adminSettingsError) {
+      setAdminError(adminSettingsError instanceof Error
+        ? adminSettingsError.message
+        : "Der globale System Prompt konnte nicht gespeichert werden.");
+    } finally {
+      setIsAdminSettingsSaving(false);
+    }
+  }
+
   function selectVerf5Form() {
     setSelectedFormId(VERF5_FORM_ID);
     setFormImage(null);
@@ -1454,6 +1613,24 @@ export default function Home() {
 
   function openSettingsDialog() {
     setIsSettingsDialogOpen(true);
+    setSettingsError("");
+    void refreshAuthenticatedSettings().catch((loadError) => {
+      setSettingsError(loadError instanceof Error
+        ? loadError.message
+        : "Der aktuelle globale System Prompt konnte nicht geladen werden.");
+    });
+  }
+
+  async function resetPersonalSystemPrompt() {
+    setSettingsError("");
+    try {
+      await refreshAuthenticatedSettings();
+      setSettings((current) => resetToGlobalSystemPrompt(current));
+    } catch (loadError) {
+      setSettingsError(loadError instanceof Error
+        ? loadError.message
+        : "Der aktuelle globale System Prompt konnte nicht geladen werden.");
+    }
   }
 
   function handleSettingsTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
@@ -1529,19 +1706,25 @@ export default function Home() {
     setMessages(nextMessages);
 
     try {
+      const personalSystemPrompt = systemPromptForChatRequest(settings);
       const requestBody: {
-        systemPrompt: string;
+        systemPrompt?: string;
+        usesGlobalDefault: boolean;
         model: ChatModel;
         messages: Array<Pick<ChatMessage, "role" | "content">>;
         conversationId?: string;
       } = {
-        systemPrompt: settings.systemPrompt.trim() || DEFAULT_SYSTEM_PROMPT,
+        usesGlobalDefault: settings.usesGlobalDefault || !personalSystemPrompt,
         model: settings.model,
         messages: nextMessages.map((message) => ({
           role: message.role,
           content: message.content,
         })),
       };
+
+      if (personalSystemPrompt) {
+        requestBody.systemPrompt = personalSystemPrompt;
+      }
 
       if (conversationId) {
         requestBody.conversationId = conversationId;
@@ -1942,7 +2125,7 @@ export default function Home() {
                 ))}
               </div>
             </div>
-            <nav className="forms-navigation" aria-label="Formularbereich">
+            <nav className="forms-navigation" aria-label="Anwendungsbereiche">
               <button
                 className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
                 type="button"
@@ -1952,6 +2135,17 @@ export default function Home() {
                 <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
                 Formulare
               </button>
+              {isAdmin ? (
+                <button
+                  className={`sidebar-view-button ${appView === "administration" ? "active" : ""}`}
+                  type="button"
+                  onClick={() => void openAdministrationView()}
+                  aria-current={appView === "administration" ? "page" : undefined}
+                >
+                  <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-4"></path></svg>
+                  Administration
+                </button>
+              ) : null}
             </nav>
           </div>
         ) : (
@@ -1976,6 +2170,18 @@ export default function Home() {
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
             </button>
+            {isAdmin ? (
+              <button
+                className={`icon-button rail-icon-btn rail-forms-button ${appView === "administration" ? "active" : ""}`}
+                type="button"
+                onClick={() => void openAdministrationView()}
+                title="Administration"
+                aria-label="Administration"
+                aria-current={appView === "administration" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-4"></path></svg>
+              </button>
+            ) : null}
           </div>
         )}
 
@@ -2094,6 +2300,11 @@ export default function Home() {
                 Modell
               </button>
             </div>
+            {settingsError ? (
+              <div className="settings-inline-error" role="alert" aria-live="polite">
+                {settingsError}
+              </div>
+            ) : null}
             {settingsTab === "system-prompt" ? (
               <div
                 className="field-group settings-tab-panel"
@@ -2106,21 +2317,23 @@ export default function Home() {
                   <button
                     className="secondary-button compact-button"
                     type="button"
-                    onClick={() => updateSetting("systemPrompt", DEFAULT_SYSTEM_PROMPT)}
+                    onClick={() => void resetPersonalSystemPrompt()}
                   >
                     Auf Standard zurücksetzen
                   </button>
                 </div>
                 <textarea
                   id="system-prompt"
-                  value={settings.systemPrompt}
-                  onChange={(event) => updateSetting("systemPrompt", event.target.value)}
+                  value={displayedSystemPrompt(settings, globalSystemPrompt)}
+                  onChange={(event) => setSettings((current) =>
+                    editPersonalSystemPrompt(current, event.target.value))}
                   maxLength={MAX_SYSTEM_PROMPT_CHARS}
                   rows={16}
                 />
                 <span className="field-help">
-                  {settings.systemPrompt.length.toLocaleString("de-AT")} /{" "}
+                  {displayedSystemPrompt(settings, globalSystemPrompt).length.toLocaleString("de-AT")} /{" "}
                   {MAX_SYSTEM_PROMPT_CHARS.toLocaleString("de-AT")} Zeichen
+                  {settings.usesGlobalDefault ? " · Aktueller globaler Standard" : " · Persönliche Einstellung"}
                 </span>
               </div>
             ) : (
@@ -2265,6 +2478,64 @@ export default function Home() {
                 </form>
               </div>
             )}
+          </div>
+        </section>
+      ) : appView === "administration" && isAdmin ? (
+        <section className="forms-panel" aria-labelledby="administration-view-title">
+          <div className="forms-view">
+            <header className="forms-view-header">
+              <p className="eyebrow">Systemkonfiguration</p>
+              <h1 id="administration-view-title">Administration</h1>
+            </header>
+            <div className="form-generator-card admin-settings-card">
+              {adminError ? (
+                <div className="admin-message error-box" role="alert" aria-live="polite">
+                  {adminError}
+                </div>
+              ) : null}
+              {adminNotice ? (
+                <div className="notice-box" role="status" aria-live="polite">
+                  {adminNotice}
+                </div>
+              ) : null}
+              <div className="field-group">
+                <label htmlFor="admin-system-prompt">Globaler System Prompt</label>
+                <textarea
+                  id="admin-system-prompt"
+                  value={adminSystemPrompt}
+                  onChange={(event) => {
+                    setAdminSystemPrompt(event.target.value);
+                    setAdminError("");
+                    setAdminNotice("");
+                  }}
+                  maxLength={MAX_SYSTEM_PROMPT_CHARS}
+                  rows={18}
+                  disabled={isAdminSettingsLoading || isAdminSettingsSaving}
+                />
+              </div>
+              <div className="admin-settings-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => {
+                    setAdminSystemPrompt(DEFAULT_SYSTEM_PROMPT);
+                    setAdminError("");
+                    setAdminNotice("");
+                  }}
+                  disabled={isAdminSettingsLoading || isAdminSettingsSaving}
+                >
+                  Auf integrierten Standard zurücksetzen
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => void saveAdminSystemPrompt()}
+                  disabled={isAdminSettingsLoading || isAdminSettingsSaving || !adminSystemPrompt.trim()}
+                >
+                  {isAdminSettingsSaving ? "Speichert…" : "Speichern"}
+                </button>
+              </div>
+            </div>
           </div>
         </section>
       ) : (
