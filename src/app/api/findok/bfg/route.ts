@@ -5,6 +5,8 @@ import {
   fetchBfgDecisions,
   FindokUpstreamError,
   normalizeFindokQuery,
+  type BfgSearchFilters,
+  type BfgSort,
 } from "@/lib/findok/bfg-decisions";
 import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
@@ -13,6 +15,9 @@ export const runtime = "nodejs";
 export const MAX_FINDOK_QUERY_CHARS = 200;
 export const MAX_FINDOK_PAGE = 1_000;
 export const MAX_FINDOK_PAGE_SIZE = 20;
+export const MAX_FINDOK_FILTER_CHARS = 200;
+
+const FINDOK_SORTS = new Set<BfgSort>(["1", "2", "3", "4", "7", "10"]);
 
 function invalidRequest(): UserVisibleError {
   return new UserVisibleError("Die Findok-Anfrage ist ungültig.", 400);
@@ -21,6 +26,14 @@ function invalidRequest(): UserVisibleError {
 function singleParameter(url: URL, key: string): string | null {
   const values = url.searchParams.getAll(key);
   return values.length === 1 ? values[0] ?? null : null;
+}
+
+function optionalParameter(url: URL, key: string): string | undefined {
+  const values = url.searchParams.getAll(key);
+  if (values.length > 1) {
+    throw invalidRequest();
+  }
+  return values[0];
 }
 
 function positiveInteger(value: string | null, maximum: number): number {
@@ -34,9 +47,51 @@ function positiveInteger(value: string | null, maximum: number): number {
   return parsed;
 }
 
-function requestParameters(request: Request): { query: string; page: number; pageSize: number } {
+function strictFilterValue(value: string | undefined): string | undefined {
+  if (typeof value === "undefined") {
+    return undefined;
+  }
+  if (
+    !value
+    || value.length > MAX_FINDOK_FILTER_CHARS
+    || value !== value.trim()
+    || value.includes(",")
+    || /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw invalidRequest();
+  }
+  return value;
+}
+
+function approvedSort(value: string | undefined): BfgSort | undefined {
+  if (typeof value === "undefined") {
+    return undefined;
+  }
+  if (!FINDOK_SORTS.has(value as BfgSort)) {
+    throw invalidRequest();
+  }
+  return value as BfgSort;
+}
+
+function requestParameters(request: Request): {
+  query: string;
+  page: number;
+  pageSize: number;
+  sort?: BfgSort;
+  filters?: BfgSearchFilters;
+} {
   const url = new URL(request.url);
-  const allowedParameters = new Set(["q", "page", "size"]);
+  const allowedParameters = new Set([
+    "q",
+    "page",
+    "size",
+    "sort",
+    "materie",
+    "documentType",
+    "norm",
+    "withHeadnote",
+    "timeframe",
+  ]);
   if (Array.from(url.searchParams.keys()).some((key) => !allowedParameters.has(key))) {
     throw invalidRequest();
   }
@@ -48,11 +103,38 @@ function requestParameters(request: Request): { query: string; page: number; pag
   if (!query || query.length > MAX_FINDOK_QUERY_CHARS) {
     throw invalidRequest();
   }
-  return {
+  const result: ReturnType<typeof requestParameters> = {
     query,
     page: positiveInteger(singleParameter(url, "page"), MAX_FINDOK_PAGE),
     pageSize: positiveInteger(singleParameter(url, "size"), MAX_FINDOK_PAGE_SIZE),
   };
+  const sort = approvedSort(optionalParameter(url, "sort"));
+  if (sort) {
+    result.sort = sort;
+  }
+
+  const materie = strictFilterValue(optionalParameter(url, "materie"));
+  const documentType = strictFilterValue(optionalParameter(url, "documentType"));
+  const norm = strictFilterValue(optionalParameter(url, "norm"));
+  const rawWithHeadnote = optionalParameter(url, "withHeadnote");
+  const rawTimeframe = optionalParameter(url, "timeframe");
+  if (typeof rawWithHeadnote !== "undefined" && rawWithHeadnote !== "true") {
+    throw invalidRequest();
+  }
+  if (typeof rawTimeframe !== "undefined" && !/^[1-7]$/.test(rawTimeframe)) {
+    throw invalidRequest();
+  }
+  const filters: BfgSearchFilters = {
+    ...(materie ? { materie } : {}),
+    ...(documentType ? { documentType } : {}),
+    ...(norm ? { norm } : {}),
+    ...(rawWithHeadnote ? { withHeadnote: rawWithHeadnote } : {}),
+    ...(rawTimeframe ? { timeframe: rawTimeframe as BfgSearchFilters["timeframe"] } : {}),
+  };
+  if (Object.keys(filters).length > 0) {
+    result.filters = filters;
+  }
+  return result;
 }
 
 export async function GET(request: Request) {

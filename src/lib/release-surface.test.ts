@@ -13,6 +13,25 @@ describe("approved release surface", () => {
     expect(pageSource).toContain('/api/findok/bfg');
   });
 
+  it("offers the approved compact BFG sort and collapsible facet controls", () => {
+    expect(pageSource).toContain('aria-label="Sortierung"');
+    expect(pageSource).toContain("Genehmigungsdatum absteigend");
+    expect(pageSource).toContain("Genehmigungsdatum aufsteigend");
+    expect(pageSource).toContain("In Findok seit absteigend");
+    expect(pageSource).toContain("In Findok seit aufsteigend");
+    expect(pageSource).toContain("Geschäftszahl");
+    expect(pageSource).toContain('aria-expanded={isBfgFilterPanelOpen}');
+    expect(pageSource).toContain("Materie");
+    expect(pageSource).toContain("Dokumenttyp");
+    expect(pageSource).toContain("Norm");
+    expect(pageSource).toContain("Zeitraum");
+    expect(pageSource).toContain("Mit Rechtssatz");
+    expect(pageSource).toContain("Anwenden");
+    expect(pageSource).toContain("Zurücksetzen");
+    expect(pageSource).toContain('parameters.set("sort", controls.sort)');
+    expect(pageSource).toContain("bfgAppliedFilters");
+  });
+
   it("renders the expanded findog.at brand as a home link with a Beta tag", () => {
     expect(pageSource).toMatch(
       /<Link className="sidebar-brand" href="\/">[\s\S]*className="austria-flag"[\s\S]*findog\.at[\s\S]*Beta[\s\S]*<\/Link>/,

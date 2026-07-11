@@ -81,6 +81,50 @@ describe("Findok BFG result mapping", () => {
     },
   );
 
+  it("prefers the public detail title over the technical document title", async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(sseResponse({
+        pageResults: {
+          searchResults: [{
+            dokumentId: "doc-1",
+            segmentId: "seg-1",
+            indexName: "findok",
+            title: "<em>Search decision title</em>",
+            dokumenttyp: "Erkenntnis",
+            snippet: "Snippet",
+          }],
+          currentPage: 0,
+          pageSize: 10,
+          totalPages: 1,
+          totalSize: 1,
+        },
+        aggregations: {},
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        bfg: true,
+        titel: "Abendgymnasium als Berufsausbildung",
+        dokumentTitel: {
+          titel: "Bescheidbeschwerde – Einzel – Erkenntnis des BFG vom 10.07.2026, RV/7100930/2024",
+          geschaeftszahl: "RV/7100930/2024",
+        },
+        dokumenttyp: "Erkenntnis",
+      }));
+
+    const result = await fetchBfgDecisions({
+      query: "Abendgymnasium",
+      page: 1,
+      pageSize: 10,
+      fetchImpl: fetchMock,
+    });
+
+    expect(result.results[0]).toMatchObject({
+      title: "Abendgymnasium als Berufsausbildung",
+      gz: "RV/7100930/2024",
+      documentType: "Erkenntnis",
+    });
+    expect(result.results[0]?.title).not.toContain("Bescheidbeschwerde");
+  });
+
   it("uses the fixed search request, enriches every displayed hit, filters non-BFG details, and maps pagination", async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(sseResponse({
@@ -146,7 +190,7 @@ describe("Findok BFG result mapping", () => {
       .toEqual(["https://findok.bmf.gv.at", "https://findok.bmf.gv.at"]);
     expect(result).toEqual({
       results: [{
-        title: "BFG vom 10.07.2026",
+        title: "Search title",
         gz: "RV/7100930/2024",
         documentType: "Entscheidung",
         publicationDate: "2026-07-10",
@@ -158,7 +202,188 @@ describe("Findok BFG result mapping", () => {
       pageSize: 2,
       totalPages: 7,
       totalCount: 13,
+      facets: {
+        materie: [],
+        documentType: [],
+        norm: [],
+        timeframe: [],
+        withHeadnote: [],
+      },
     });
+  });
+
+  it.each([
+    ["materie", "Einkommensteuer", "1.konseh.materien.bezeichnungAgg.keyword"],
+    ["documentType", "Erkenntnis", "1.konseh.dokumenttypAgg.keyword"],
+    ["norm", "§ 16 EStG 1988", "1.indexable.normenAgg.keyword"],
+    ["withHeadnote", "true", "1.dokument.bfg.mitRechtssaetzen.boolean"],
+    ["timeframe", "3", "1.dokument.appdatVon.date"],
+  ] as const)(
+    "maps the public %s filter only to its fixed prefixed BFG aggregation",
+    async (filter, value, aggregationName) => {
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(sseResponse({
+        pageResults: {
+          searchResults: [],
+          currentPage: 0,
+          pageSize: 10,
+          totalPages: 0,
+          totalSize: 0,
+        },
+        aggregations: {},
+      }));
+
+      await fetchBfgDecisions({
+        query: "Arbeitszimmer",
+        page: 1,
+        pageSize: 10,
+        sort: "2",
+        filters: { [filter]: value },
+        fetchImpl: fetchMock,
+      });
+
+      const searchUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+      expect(searchUrl.searchParams.get("sort.value")).toBe("2");
+      expect(searchUrl.searchParams.get("filter.aggregationsName")).toBe(aggregationName);
+      expect(searchUrl.searchParams.get("filter.aggregationsValues")).toBe(value);
+    },
+  );
+
+  it("pairs combined BFG aggregation names and values in deterministic order", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(sseResponse({
+      pageResults: {
+        searchResults: [],
+        currentPage: 0,
+        pageSize: 10,
+        totalPages: 0,
+        totalSize: 0,
+      },
+      aggregations: {},
+    }));
+
+    await fetchBfgDecisions({
+      query: "Arbeitszimmer",
+      page: 1,
+      pageSize: 10,
+      sort: "7",
+      filters: {
+        timeframe: "3",
+        withHeadnote: "true",
+        norm: "§ 16 EStG 1988",
+        documentType: "Erkenntnis",
+        materie: "Einkommensteuer",
+      },
+      fetchImpl: fetchMock,
+    });
+
+    const searchUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(searchUrl.searchParams.get("sort.value")).toBe("7");
+    expect(searchUrl.searchParams.get("filter.aggregationsName")).toBe([
+      "1.konseh.materien.bezeichnungAgg.keyword",
+      "1.konseh.dokumenttypAgg.keyword",
+      "1.indexable.normenAgg.keyword",
+      "1.dokument.bfg.mitRechtssaetzen.boolean",
+      "1.dokument.appdatVon.date",
+    ].join(","));
+    expect(searchUrl.searchParams.get("filter.aggregationsValues")).toBe([
+      "Einkommensteuer",
+      "Erkenntnis",
+      "§ 16 EStG 1988",
+      "true",
+      "3",
+    ].join(","));
+  });
+
+  it("maps only the five approved root aggregations to compact facets", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(sseResponse({
+      pageResults: {
+        searchResults: [],
+        currentPage: 0,
+        pageSize: 10,
+        totalPages: 0,
+        totalSize: 0,
+      },
+      aggregations: {
+        "konseh.materien.bezeichnungAgg.keyword": {
+          buckets: [{ key: "Einkommensteuer", label: "Einkommensteuer", doc_count: 12 }],
+        },
+        "konseh.dokumenttypAgg.keyword": {
+          buckets: [{ key: "Erkenntnis", label: "Erkenntnis", doc_count: 9 }],
+        },
+        "indexable.normenAgg.keyword": {
+          buckets: [{ key: "§ 16 EStG 1988", label: "§ 16 EStG 1988", doc_count: 7 }],
+        },
+        "dokument.appdatVon.date": {
+          buckets: [{ key: "3", label: "Letztes Jahr", doc_count: 5 }],
+        },
+        "dokument.bfg.mitRechtssaetzen.boolean": {
+          buckets: [
+            { key: "true", label: "Mit Rechtssatz", doc_count: 4 },
+            { key: "false", label: "Ohne Rechtssatz", doc_count: 8 },
+          ],
+        },
+        "unapproved.internal.field": {
+          buckets: [{ key: "secret", label: "Do not expose", doc_count: 99 }],
+        },
+      },
+    }));
+
+    const result = await fetchBfgDecisions({
+      query: "Arbeitszimmer",
+      page: 1,
+      pageSize: 10,
+      fetchImpl: fetchMock,
+    });
+
+    expect(result.facets).toEqual({
+      materie: [{ value: "Einkommensteuer", label: "Einkommensteuer", count: 12 }],
+      documentType: [{ value: "Erkenntnis", label: "Erkenntnis", count: 9 }],
+      norm: [{ value: "§ 16 EStG 1988", label: "§ 16 EStG 1988", count: 7 }],
+      timeframe: [{ value: "3", label: "Letztes Jahr", count: 5 }],
+      withHeadnote: [{ value: "true", label: "Mit Rechtssatz", count: 4 }],
+    });
+    expect(JSON.stringify(result.facets)).not.toContain("secret");
+  });
+
+  it("maps real Findok name and viewName aggregation entries", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(sseResponse({
+      pageResults: {
+        searchResults: [],
+        currentPage: 0,
+        pageSize: 10,
+        totalPages: 0,
+        totalSize: 0,
+      },
+      aggregations: [
+        {
+          titel: "Norm",
+          name: "indexable.normenAgg.keyword",
+          entries: [
+            { name: "EStG 1988 § 20", count: 293, viewName: "EStG 1988 § 20" },
+          ],
+        },
+        {
+          titel: "Zeitrahmen",
+          name: "dokument.appdatVon.date",
+          entries: [
+            { name: "3", count: 41, viewName: "Letztes Jahr" },
+          ],
+        },
+      ],
+    }));
+
+    const result = await fetchBfgDecisions({
+      query: "Arbeitszimmer",
+      page: 1,
+      pageSize: 10,
+      fetchImpl: fetchMock,
+    });
+
+    expect(result.facets.norm).toEqual([
+      { value: "EStG 1988 § 20", label: "EStG 1988 § 20", count: 293 },
+    ]);
+    expect(result.facets.timeframe).toEqual([
+      { value: "3", label: "Letztes Jahr", count: 41 },
+    ]);
   });
 
   it("uses the exact GZ endpoint instead of search and never guesses a PDF URL", async () => {
@@ -201,6 +426,13 @@ describe("Findok BFG result mapping", () => {
       pageSize: 20,
       totalPages: 1,
       totalCount: 1,
+      facets: {
+        materie: [],
+        documentType: [],
+        norm: [],
+        timeframe: [],
+        withHeadnote: [],
+      },
     });
   });
 

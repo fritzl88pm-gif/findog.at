@@ -3,6 +3,38 @@ const FINDOK_BASE_PATH = "/findok";
 const FINDOK_API_BASE = `${FINDOK_ORIGIN}${FINDOK_BASE_PATH}/api`;
 const MAX_SNIPPET_CHARS = 500;
 
+export type BfgSort = "1" | "2" | "3" | "4" | "7" | "10";
+
+export type BfgSearchFilters = {
+  materie?: string;
+  documentType?: string;
+  norm?: string;
+  withHeadnote?: "true";
+  timeframe?: "1" | "2" | "3" | "4" | "5" | "6" | "7";
+};
+
+export type BfgFacetOption = {
+  value: string;
+  label: string;
+  count: number;
+};
+
+export type BfgFilterFacets = {
+  materie: BfgFacetOption[];
+  documentType: BfgFacetOption[];
+  norm: BfgFacetOption[];
+  timeframe: BfgFacetOption[];
+  withHeadnote: BfgFacetOption[];
+};
+
+const FILTER_AGGREGATIONS = [
+  ["materie", "konseh.materien.bezeichnungAgg.keyword"],
+  ["documentType", "konseh.dokumenttypAgg.keyword"],
+  ["norm", "indexable.normenAgg.keyword"],
+  ["withHeadnote", "dokument.bfg.mitRechtssaetzen.boolean"],
+  ["timeframe", "dokument.appdatVon.date"],
+] as const satisfies ReadonlyArray<readonly [keyof BfgSearchFilters, string]>;
+
 type FetchLike = typeof fetch;
 
 type FindokSearchHit = {
@@ -30,6 +62,7 @@ export type BfgDecisionPage = {
   pageSize: number;
   totalPages: number;
   totalCount: number;
+  facets: BfgFilterFacets;
 };
 
 export class FindokUpstreamError extends Error {
@@ -51,6 +84,16 @@ function stringValue(record: Record<string, unknown>, key: string): string {
 function integerValue(record: Record<string, unknown>, key: string, fallback: number): number {
   const value = record[key];
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : fallback;
+}
+
+function emptyFacets(): BfgFilterFacets {
+  return {
+    materie: [],
+    documentType: [],
+    norm: [],
+    timeframe: [],
+    withHeadnote: [],
+  };
 }
 
 function decodeHtmlEntities(value: string): string {
@@ -172,10 +215,11 @@ function mapDetail(
     return null;
   }
   const heading = documentTitle(detail);
-  const title = heading.title || stringValue(detail, "titel") || fallback?.title || exactGz;
+  const title = stringValue(detail, "titel") || fallback?.title || heading.title || exactGz;
   const gz = heading.gz
     || stringValue(detail, "geschaeftszahl")
     || stringValue(detail, "gz")
+    || gzFromTitle(heading.title)
     || gzFromTitle(title)
     || exactGz;
   const publication = detail.zusatzinformationen;
@@ -238,7 +282,7 @@ async function fetchExactGz(
     throw new FindokUpstreamError(error instanceof Error ? error.message : undefined);
   }
   if (response.status === 404) {
-    return { results: [], page: 1, pageSize, totalPages: 0, totalCount: 0 };
+    return { results: [], page: 1, pageSize, totalPages: 0, totalCount: 0, facets: emptyFacets() };
   }
   const detail = await readJsonResponse(response);
   const decision = mapDetail(detail, undefined, gz);
@@ -248,7 +292,105 @@ async function fetchExactGz(
     pageSize,
     totalPages: decision ? 1 : 0,
     totalCount: decision ? 1 : 0,
+    facets: emptyFacets(),
   };
+}
+
+function primitiveString(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  return typeof value === "number" || typeof value === "boolean" ? String(value) : "";
+}
+
+function firstPrimitiveString(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = primitiveString(record[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function aggregationSource(aggregations: unknown, name: string): unknown {
+  if (isRecord(aggregations)) {
+    return aggregations[name];
+  }
+  if (!Array.isArray(aggregations)) {
+    return undefined;
+  }
+  const matches = aggregations.filter((entry) => isRecord(entry)
+    && firstPrimitiveString(
+      entry,
+      ["aggregationsName", "aggregationName", "name", "field", "key"],
+    ) === name);
+  return matches.length === 1 ? matches[0] : matches;
+}
+
+function aggregationBuckets(source: unknown): unknown[] {
+  if (Array.isArray(source)) {
+    return source;
+  }
+  if (!isRecord(source)) {
+    return [];
+  }
+  for (const key of ["buckets", "values", "items", "entries", "options", "aggregationValues"]) {
+    if (Array.isArray(source[key])) {
+      return source[key];
+    }
+  }
+  return typeof source.count === "number"
+    || typeof source.doc_count === "number"
+    || typeof source.docCount === "number"
+    || typeof source.anzahl === "number"
+    ? [source]
+    : [];
+}
+
+function facetOption(value: unknown): BfgFacetOption | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const optionValue = firstPrimitiveString(value, ["key", "value", "id", "name"]);
+  if (!optionValue) {
+    return null;
+  }
+  const rawCount = value.count ?? value.doc_count ?? value.docCount ?? value.anzahl;
+  if (typeof rawCount !== "number" || !Number.isSafeInteger(rawCount) || rawCount < 0) {
+    return null;
+  }
+  const explicitLabel = firstPrimitiveString(
+    value,
+    ["viewName", "label", "name", "bezeichnung", "key_as_string", "keyAsString", "displayValue"],
+  );
+  const valueAsLabel = typeof value.key !== "undefined" ? primitiveString(value.value) : "";
+  return {
+    value: optionValue,
+    label: explicitLabel || valueAsLabel || optionValue,
+    count: rawCount,
+  };
+}
+
+function facetOptions(aggregations: unknown, name: string): BfgFacetOption[] {
+  return aggregationBuckets(aggregationSource(aggregations, name))
+    .map(facetOption)
+    .filter((option): option is BfgFacetOption => option !== null);
+}
+
+function mapFilterFacets(aggregations: unknown): BfgFilterFacets {
+  const facets = emptyFacets();
+  for (const [key, aggregationName] of FILTER_AGGREGATIONS) {
+    const options = facetOptions(aggregations, aggregationName);
+    if (key === "withHeadnote") {
+      facets.withHeadnote = options.filter((option) => option.value.toLowerCase() === "true");
+    } else if (key === "timeframe") {
+      facets.timeframe = options.filter((option) => /^[1-7]$/.test(option.value));
+    } else {
+      facets[key] = options;
+    }
+  }
+  return facets;
 }
 
 function searchHits(value: unknown): FindokSearchHit[] {
@@ -289,6 +431,8 @@ async function fetchSearch(
   query: string,
   page: number,
   pageSize: number,
+  sort: BfgSort,
+  filters: BfgSearchFilters,
   fetchImpl: FetchLike,
 ): Promise<BfgDecisionPage> {
   const url = fixedApiUrl("/dokumente");
@@ -296,7 +440,21 @@ async function fetchSearch(
   url.searchParams.set("size", String(pageSize));
   url.searchParams.set("suchbegriff", query);
   url.searchParams.set("typen", "BFG");
-  url.searchParams.set("sort.value", "1");
+  url.searchParams.set("sort.value", sort);
+  const activeFilters = FILTER_AGGREGATIONS.flatMap(([key, aggregationName]) => {
+    const value = filters[key];
+    return value ? [{ aggregationName: `1.${aggregationName}`, value }] : [];
+  });
+  if (activeFilters.length > 0) {
+    url.searchParams.set(
+      "filter.aggregationsName",
+      activeFilters.map((filter) => filter.aggregationName).join(","),
+    );
+    url.searchParams.set(
+      "filter.aggregationsValues",
+      activeFilters.map((filter) => filter.value).join(","),
+    );
+  }
 
   let response: Response;
   try {
@@ -322,6 +480,7 @@ async function fetchSearch(
     pageSize: integerValue(pageResults, "pageSize", pageSize),
     totalPages: integerValue(pageResults, "totalPages", 0),
     totalCount: integerValue(pageResults, "totalSize", 0),
+    facets: mapFilterFacets(payload.aggregations),
   };
 }
 
@@ -329,16 +488,20 @@ export async function fetchBfgDecisions({
   query,
   page,
   pageSize,
+  sort = "1",
+  filters = {},
   fetchImpl = fetch,
 }: {
   query: string;
   page: number;
   pageSize: number;
+  sort?: BfgSort;
+  filters?: BfgSearchFilters;
   fetchImpl?: FetchLike;
 }): Promise<BfgDecisionPage> {
   const normalizedQuery = normalizeFindokQuery(query);
   const exactGz = detectExactFindokGz(normalizedQuery);
   return exactGz
     ? fetchExactGz(exactGz, pageSize, fetchImpl)
-    : fetchSearch(normalizedQuery, page, pageSize, fetchImpl);
+    : fetchSearch(normalizedQuery, page, pageSize, sort, filters, fetchImpl);
 }

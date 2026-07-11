@@ -29,6 +29,13 @@ const successPayload = {
   pageSize: 10,
   totalPages: 0,
   totalCount: 0,
+  facets: {
+    materie: [],
+    documentType: [],
+    norm: [],
+    timeframe: [],
+    withHeadnote: [],
+  },
 };
 
 describe("GET /api/findok/bfg", () => {
@@ -71,12 +78,61 @@ describe("GET /api/findok/bfg", () => {
     ["large page size", `?q=test&page=1&size=${MAX_FINDOK_PAGE_SIZE + 1}`],
     ["duplicate query", "?q=one&q=two&page=1&size=10"],
     ["user-provided URL", "?q=test&page=1&size=10&url=https%3A%2F%2Fevil.example"],
+    ["invalid sort", "?q=test&page=1&size=10&sort=5"],
+    ["duplicate sort", "?q=test&page=1&size=10&sort=1&sort=2"],
+    ["blank materie", "?q=test&page=1&size=10&materie="],
+    ["duplicate materie", "?q=test&page=1&size=10&materie=ESt&materie=USt"],
+    ["blank document type", "?q=test&page=1&size=10&documentType="],
+    ["duplicate document type", "?q=test&page=1&size=10&documentType=A&documentType=B"],
+    ["blank norm", "?q=test&page=1&size=10&norm="],
+    ["duplicate norm", "?q=test&page=1&size=10&norm=A&norm=B"],
+    ["false headnote", "?q=test&page=1&size=10&withHeadnote=false"],
+    ["duplicate headnote", "?q=test&page=1&size=10&withHeadnote=true&withHeadnote=true"],
+    ["unsupported timeframe", "?q=test&page=1&size=10&timeframe=8"],
+    ["duplicate timeframe", "?q=test&page=1&size=10&timeframe=1&timeframe=2"],
   ])("rejects bounded query validation: %s", async (_label, search) => {
     const response = await GET(request(search));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Die Findok-Anfrage ist ungültig." });
     expect(fetchBfgDecisions).not.toHaveBeenCalled();
+  });
+
+  it("accepts the approved sort and filters as a compact library request", async () => {
+    const incoming = request(
+      "?q=Arbeitszimmer&page=1&size=10&sort=10"
+      + "&materie=Einkommensteuer&documentType=Erkenntnis"
+      + "&norm=%C2%A7%2016%20EStG%201988&withHeadnote=true&timeframe=3",
+    );
+
+    const response = await GET(incoming);
+
+    expect(response.status).toBe(200);
+    expect(fetchBfgDecisions).toHaveBeenCalledWith({
+      query: "Arbeitszimmer",
+      page: 1,
+      pageSize: 10,
+      sort: "10",
+      filters: {
+        materie: "Einkommensteuer",
+        documentType: "Erkenntnis",
+        norm: "§ 16 EStG 1988",
+        withHeadnote: "true",
+        timeframe: "3",
+      },
+    });
+  });
+
+  it.each(["1", "2", "3", "4", "7", "10"])("accepts approved sort code %s", async (sort) => {
+    const response = await GET(request(`?q=test&page=1&size=10&sort=${sort}`));
+
+    expect(response.status).toBe(200);
+    expect(fetchBfgDecisions).toHaveBeenCalledWith({
+      query: "test",
+      page: 1,
+      pageSize: 10,
+      sort,
+    });
   });
 
   it("returns compact JSON for an authenticated valid request", async () => {

@@ -129,16 +129,68 @@ type BfgDecision = {
   pdfUrl: string | null;
 };
 
+type BfgSort = "1" | "2" | "3" | "4" | "7" | "10";
+
+type BfgFacetOption = {
+  value: string;
+  label: string;
+  count: number;
+};
+
+type BfgFilterFacets = {
+  materie: BfgFacetOption[];
+  documentType: BfgFacetOption[];
+  norm: BfgFacetOption[];
+  timeframe: BfgFacetOption[];
+  withHeadnote: BfgFacetOption[];
+};
+
+type BfgFilterSelection = {
+  materie: string;
+  documentType: string;
+  norm: string;
+  timeframe: string;
+  withHeadnote: boolean;
+};
+
 type BfgDecisionPage = {
   results: BfgDecision[];
   page: number;
   pageSize: number;
   totalPages: number;
   totalCount: number;
+  facets: BfgFilterFacets;
 };
 
 const SETTINGS_STORAGE_KEY = "findog.settings.v1";
 const INITIAL_PENDING_TEXT = "Recherche wird vorbereitet";
+const BFG_SORT_OPTIONS: ReadonlyArray<{ value: BfgSort; label: string }> = [
+  { value: "1", label: "Relevanz" },
+  { value: "2", label: "Genehmigungsdatum absteigend" },
+  { value: "7", label: "Genehmigungsdatum aufsteigend" },
+  { value: "3", label: "In Findok seit absteigend" },
+  { value: "4", label: "In Findok seit aufsteigend" },
+  { value: "10", label: "Geschäftszahl" },
+];
+
+function emptyBfgFilterSelection(): BfgFilterSelection {
+  return { materie: "", documentType: "", norm: "", timeframe: "", withHeadnote: false };
+}
+
+function availableBfgFilterSelection(
+  selection: BfgFilterSelection,
+  facets: BfgFilterFacets,
+): BfgFilterSelection {
+  const availableValue = (value: string, options: BfgFacetOption[]) =>
+    options.some((option) => option.value === value) ? value : "";
+  return {
+    materie: availableValue(selection.materie, facets.materie),
+    documentType: availableValue(selection.documentType, facets.documentType),
+    norm: availableValue(selection.norm, facets.norm),
+    timeframe: availableValue(selection.timeframe, facets.timeframe),
+    withHeadnote: selection.withHeadnote && facets.withHeadnote.some((option) => option.value === "true"),
+  };
+}
 
 function readJson<T>(key: string): T | null {
   try {
@@ -428,17 +480,57 @@ function normalizeAdminUserProfile(value: unknown): AdminUserProfile | null {
   return { user: profileUser, requestCount: payload.requestCount, requests };
 }
 
+function normalizeBfgFacetOptions(value: unknown): BfgFacetOption[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const options = value.flatMap((entry): BfgFacetOption[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const item = entry as Record<string, unknown>;
+    if (
+      typeof item.value !== "string"
+      || typeof item.label !== "string"
+      || typeof item.count !== "number"
+      || !Number.isSafeInteger(item.count)
+      || item.count < 0
+    ) {
+      return [];
+    }
+    return [{ value: item.value, label: item.label, count: item.count }];
+  });
+  return options.length === value.length ? options : null;
+}
+
+function normalizeBfgFacets(value: unknown): BfgFilterFacets | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const payload = value as Record<string, unknown>;
+  const materie = normalizeBfgFacetOptions(payload.materie);
+  const documentType = normalizeBfgFacetOptions(payload.documentType);
+  const norm = normalizeBfgFacetOptions(payload.norm);
+  const timeframe = normalizeBfgFacetOptions(payload.timeframe);
+  const withHeadnote = normalizeBfgFacetOptions(payload.withHeadnote);
+  return materie && documentType && norm && timeframe && withHeadnote
+    ? { materie, documentType, norm, timeframe, withHeadnote }
+    : null;
+}
+
 function normalizeBfgDecisionPage(value: unknown): BfgDecisionPage | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
   const payload = value as Record<string, unknown>;
+  const facets = normalizeBfgFacets(payload.facets);
   if (
     !Array.isArray(payload.results)
     || typeof payload.page !== "number"
     || typeof payload.pageSize !== "number"
     || typeof payload.totalPages !== "number"
     || typeof payload.totalCount !== "number"
+    || !facets
   ) {
     return null;
   }
@@ -475,6 +567,7 @@ function normalizeBfgDecisionPage(value: unknown): BfgDecisionPage | null {
         pageSize: payload.pageSize,
         totalPages: payload.totalPages,
         totalCount: payload.totalCount,
+        facets,
       }
     : null;
 }
@@ -781,6 +874,11 @@ export default function Home() {
   const [historyOwnerId, setHistoryOwnerId] = useState("");
   const [appView, setAppView] = useState<AppView>("chat");
   const [bfgQuery, setBfgQuery] = useState("");
+  const [bfgSort, setBfgSort] = useState<BfgSort>("1");
+  const [bfgAppliedSort, setBfgAppliedSort] = useState<BfgSort>("1");
+  const [bfgFilters, setBfgFilters] = useState<BfgFilterSelection>(emptyBfgFilterSelection);
+  const [bfgAppliedFilters, setBfgAppliedFilters] = useState<BfgFilterSelection>(emptyBfgFilterSelection);
+  const [isBfgFilterPanelOpen, setIsBfgFilterPanelOpen] = useState(false);
   const [bfgPage, setBfgPage] = useState<BfgDecisionPage | null>(null);
   const [bfgError, setBfgError] = useState("");
   const [hasSearchedBfg, setHasSearchedBfg] = useState(false);
@@ -1368,7 +1466,17 @@ export default function Home() {
     }
   }
 
-  async function searchBfgDecisions(page: number) {
+  function updateBfgFilter<Key extends keyof BfgFilterSelection>(
+    key: Key,
+    value: BfgFilterSelection[Key],
+  ) {
+    setBfgFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  async function searchBfgDecisions(
+    page: number,
+    controls = { sort: bfgAppliedSort, filters: bfgAppliedFilters },
+  ) {
     const query = bfgQuery.trim();
     const accessToken = session?.access_token;
     if (!query) {
@@ -1388,6 +1496,24 @@ export default function Home() {
         page: String(page),
         size: "10",
       });
+      parameters.set("sort", controls.sort);
+      if (controls.filters.materie) {
+        parameters.set("materie", controls.filters.materie);
+      }
+      if (controls.filters.documentType) {
+        parameters.set("documentType", controls.filters.documentType);
+      }
+      if (controls.filters.norm) {
+        parameters.set("norm", controls.filters.norm);
+      }
+      if (controls.filters.timeframe) {
+        parameters.set("timeframe", controls.filters.timeframe);
+      }
+      if (controls.filters.withHeadnote) {
+        parameters.set("withHeadnote", "true");
+      }
+      setBfgAppliedSort(controls.sort);
+      setBfgAppliedFilters(controls.filters);
       const response = await fetch(`/api/findok/bfg?${parameters.toString()}`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
@@ -1407,6 +1533,7 @@ export default function Home() {
         throw new Error("Findok lieferte eine ungültige Antwort.");
       }
       setBfgPage(normalized);
+      setBfgFilters((current) => availableBfgFilterSelection(current, normalized.facets));
       setHasSearchedBfg(true);
     } catch (searchError) {
       setBfgError(
@@ -1416,6 +1543,14 @@ export default function Home() {
       );
     } finally {
       setIsSearchingBfg(false);
+    }
+  }
+
+  function resetBfgFilters() {
+    const filters = emptyBfgFilterSelection();
+    setBfgFilters(filters);
+    if (hasSearchedBfg) {
+      void searchBfgDecisions(1, { sort: bfgSort, filters });
     }
   }
 
@@ -2826,11 +2961,11 @@ export default function Home() {
               className="bfg-search-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                void searchBfgDecisions(1);
+                void searchBfgDecisions(1, { sort: bfgSort, filters: bfgFilters });
               }}
             >
               <label htmlFor="bfg-search">Suchbegriff oder Geschäftszahl</label>
-              <div>
+              <div className="bfg-search-row">
                 <input
                   id="bfg-search"
                   type="search"
@@ -2847,6 +2982,127 @@ export default function Home() {
                   {isSearchingBfg ? "Sucht…" : "Suchen"}
                 </button>
               </div>
+              <div className="bfg-search-controls">
+                <select
+                  className="bfg-sort-select"
+                  aria-label="Sortierung"
+                  value={bfgSort}
+                  onChange={(event) => setBfgSort(event.target.value as BfgSort)}
+                  disabled={isSearchingBfg}
+                >
+                  {BFG_SORT_OPTIONS.map((option) => (
+                    <option value={option.value} key={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <button
+                  className="secondary-button compact-button"
+                  type="button"
+                  aria-expanded={isBfgFilterPanelOpen}
+                  aria-controls="bfg-filter-panel"
+                  onClick={() => setIsBfgFilterPanelOpen((open) => !open)}
+                  disabled={isSearchingBfg}
+                >
+                  Filter
+                </button>
+              </div>
+              {isBfgFilterPanelOpen ? (
+                <div className="bfg-filter-panel" id="bfg-filter-panel">
+                  <div className="bfg-filter-grid">
+                    {bfgPage?.facets.materie.length ? (
+                      <label>
+                        <span>Materie</span>
+                        <select
+                          value={bfgFilters.materie}
+                          onChange={(event) => updateBfgFilter("materie", event.target.value)}
+                          disabled={isSearchingBfg}
+                        >
+                          <option value="">Alle</option>
+                          {bfgPage.facets.materie.map((option) => (
+                            <option value={option.value} key={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                    {bfgPage?.facets.documentType.length ? (
+                      <label>
+                        <span>Dokumenttyp</span>
+                        <select
+                          value={bfgFilters.documentType}
+                          onChange={(event) => updateBfgFilter("documentType", event.target.value)}
+                          disabled={isSearchingBfg}
+                        >
+                          <option value="">Alle</option>
+                          {bfgPage.facets.documentType.map((option) => (
+                            <option value={option.value} key={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                    {bfgPage?.facets.norm.length ? (
+                      <label>
+                        <span>Norm</span>
+                        <select
+                          value={bfgFilters.norm}
+                          onChange={(event) => updateBfgFilter("norm", event.target.value)}
+                          disabled={isSearchingBfg}
+                        >
+                          <option value="">Alle</option>
+                          {bfgPage.facets.norm.map((option) => (
+                            <option value={option.value} key={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                    {bfgPage?.facets.timeframe.length ? (
+                      <label>
+                        <span>Zeitraum</span>
+                        <select
+                          value={bfgFilters.timeframe}
+                          onChange={(event) => updateBfgFilter("timeframe", event.target.value)}
+                          disabled={isSearchingBfg}
+                        >
+                          <option value="">Alle</option>
+                          {bfgPage.facets.timeframe.map((option) => (
+                            <option value={option.value} key={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                    {bfgPage?.facets.withHeadnote.length ? (
+                      <label className="bfg-headnote-filter">
+                        <input
+                          type="checkbox"
+                          checked={bfgFilters.withHeadnote}
+                          onChange={(event) => updateBfgFilter("withHeadnote", event.target.checked)}
+                          disabled={isSearchingBfg}
+                        />
+                        <span>Mit Rechtssatz</span>
+                      </label>
+                    ) : null}
+                  </div>
+                  <div className="bfg-filter-actions">
+                    <button
+                      className="primary-button compact-button"
+                      type="button"
+                      onClick={() => {
+                        setIsBfgFilterPanelOpen(false);
+                        void searchBfgDecisions(1, { sort: bfgSort, filters: bfgFilters });
+                      }}
+                      disabled={isSearchingBfg || !bfgQuery.trim()}
+                    >
+                      Anwenden
+                    </button>
+                    <button
+                      className="secondary-button compact-button"
+                      type="button"
+                      onClick={resetBfgFilters}
+                      disabled={isSearchingBfg}
+                    >
+                      Zurücksetzen
+                    </button>
+                  </div>
+                </div>
+              ) : null}
             </form>
 
             {bfgError ? (
