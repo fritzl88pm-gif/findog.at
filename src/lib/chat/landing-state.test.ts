@@ -51,10 +51,23 @@ describe("authenticated empty-chat landing", () => {
     const emptyPanelRule = cssRule(".chat-panel.empty-chat");
     const emptyContentRule = cssRule(".empty-chat .chat-content-group");
     const emptyComposerRule = cssRule(".empty-chat .composer-container");
+    const emptyStateRule = cssRule(".empty-state");
+    const fredRule = cssRule(".fred-welcome-image");
+    const greetingRule = cssRule(".welcome-greeting");
 
     expect(emptyPanelRule).toMatch(/justify-content:\s*center/);
     expect(emptyContentRule).toMatch(/align-items:\s*center/);
     expect(emptyContentRule).not.toMatch(/margin:\s*auto/);
     expect(emptyComposerRule).not.toMatch(/margin:\s*auto/);
+    expect(emptyStateRule).toMatch(/display:\s*flex/);
+    expect(emptyStateRule).toMatch(/flex-direction:\s*row/);
+    expect(emptyStateRule).toMatch(/align-items:\s*center/);
+    expect(emptyStateRule).toMatch(/justify-content:\s*center/);
+    expect(fredRule).toMatch(/flex:\s*0\s+1\s+auto/);
+    expect(greetingRule).toMatch(/flex:\s*0\s+1\s+auto/);
+    expect(greetingRule).toMatch(/min-width:\s*0/);
+    expect(stylesSource.match(/\.empty-state\s*\{[^}]*\}/g)).not.toContainEqual(
+      expect.stringMatching(/flex-direction:\s*column/),
+    );
   });
 });

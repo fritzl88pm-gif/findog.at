@@ -1003,10 +1003,11 @@ textarea:focus {
 
 .empty-state {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  text-align: center;
+  gap: clamp(12px, 3vw, 24px);
+  text-align: left;
   width: min(800px, 100%);
   margin: 0 auto;
   padding: 0 24px;
@@ -1014,13 +1015,15 @@ textarea:focus {
 
 .fred-welcome-image {
   display: block;
+  flex: 0 1 auto;
   width: clamp(120px, 18vw, 180px);
-  max-width: 100%;
+  max-width: 36%;
   height: auto;
-  margin-bottom: 14px;
 }
 
 .welcome-greeting {
+  flex: 0 1 auto;
+  min-width: 0;
   margin: 0;
   color: var(--bmf-blue-deep);
   font-size: clamp(1.15rem, 3vw, 1.45rem);
