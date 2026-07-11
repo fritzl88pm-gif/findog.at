@@ -40,12 +40,14 @@ Harald provisions authorized accounts manually. Findog supports only email/passw
 
 ## Supabase Migration
 
-Apply both migrations in order through the Supabase SQL editor or your migration flow:
+Apply all migrations in order through the Supabase SQL editor or your migration flow:
 
 1. `supabase/migrations/0001_chat_history.sql`
 2. `supabase/migrations/0002_agent_runs.sql`
+3. `supabase/migrations/0003_admin_settings.sql`
+4. `supabase/migrations/0004_admin_user_management.sql`
 
-Supabase Auth must be enabled for email/password login. Authorized accounts are manually provisioned; the app does not expose self-service registration. Server persistence stores the authenticated Supabase `user.id` as `conversations.client_id`, `messages.client_id`, and `agent_runs.client_id`. Deleting an owned conversation cascades to its messages, agent runs, and agent steps.
+Supabase Auth must be enabled for email/password login. Authorized accounts are manually provisioned; the app does not expose self-service registration. Server persistence stores the authenticated Supabase `user.id` as `conversations.client_id`, `messages.client_id`, and `agent_runs.client_id`. Deleting an owned conversation cascades to its messages, agent runs, and agent steps. The admin request audit records only submitted user prompts and is deliberately independent of conversation deletion; deleting the audit history does not remove a user's conversations.
 
 ## Verification
 

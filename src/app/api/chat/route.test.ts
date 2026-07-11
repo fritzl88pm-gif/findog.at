@@ -19,6 +19,8 @@ import { parseChatStreamLine } from "@/lib/chat-stream";
 import { persistConversationTurn } from "@/lib/persistence";
 import { generateConversationTitle } from "@/lib/conversation-title";
 import { getGlobalSystemPrompt } from "@/lib/admin-settings";
+import { recordAdminRequest } from "@/lib/admin-request-history";
+import { UserVisibleError } from "@/lib/errors";
 import * as chatRoute from "./route";
 
 const { POST } = chatRoute;
@@ -33,6 +35,10 @@ vi.mock("@/lib/deepseek-key", () => ({
 
 vi.mock("@/lib/admin-settings", () => ({
   getGlobalSystemPrompt: vi.fn().mockResolvedValue("Globaler System Prompt"),
+}));
+
+vi.mock("@/lib/admin-request-history", () => ({
+  recordAdminRequest: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/lib/conversation-title", () => ({
@@ -224,6 +230,64 @@ describe("POST /api/chat uploads", () => {
       expect.objectContaining({
         messages: [{ role: "user", content: longMessage }],
       }),
+    );
+  });
+
+  it("records the submitted user request before agent execution", async () => {
+    const executionOrder: string[] = [];
+    vi.mocked(recordAdminRequest).mockImplementationOnce(async () => {
+      executionOrder.push("audit");
+    });
+    vi.mocked(runAgent).mockImplementationOnce(async () => {
+      executionOrder.push("agent");
+      return { answer: "Antwort", steps: [], tools: [] };
+    });
+
+    const request = jsonRequest(chatPayload());
+    request.headers.set("x-forwarded-for", "test-audit-order");
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(recordAdminRequest).toHaveBeenCalledWith({
+      supabase: expect.anything(),
+      userId: "user-1",
+      conversationId: "conversation-1",
+      content: "Bitte auswerten.",
+    });
+    expect(executionOrder).toEqual(["audit", "agent"]);
+  });
+
+  it("does not execute the agent or title generation when request auditing fails", async () => {
+    vi.mocked(recordAdminRequest).mockRejectedValueOnce(
+      new UserVisibleError("Audit nicht verfügbar", 503),
+    );
+
+    const request = jsonRequest(chatPayload());
+    request.headers.set("x-forwarded-for", "test-audit-failure");
+    const response = await POST(request);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: "Audit nicht verfügbar" });
+    expect(generateConversationTitle).not.toHaveBeenCalled();
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(persistConversationTurn).not.toHaveBeenCalled();
+  });
+
+  it("passes the prior assistant answer to the agent on a follow-up request", async () => {
+    const messages = [
+      { role: "user", content: "Erste Frage" },
+      { role: "assistant", content: "Erste Antwort" },
+      { role: "user", content: "Nachfrage" },
+    ];
+
+    const request = jsonRequest({ ...chatPayload(), messages });
+    request.headers.set("x-forwarded-for", "test-multi-turn-context");
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(runAgent).toHaveBeenCalledWith(expect.objectContaining({ messages }));
+    expect(recordAdminRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "Nachfrage" }),
     );
   });
 

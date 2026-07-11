@@ -787,6 +787,155 @@ textarea:focus {
   gap: 10px;
 }
 
+.admin-user-management {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.8fr) minmax(280px, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.admin-create-user-card,
+.admin-user-list-card,
+.admin-user-profile-card {
+  padding: 22px;
+}
+
+.admin-create-user-form {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-create-user-form .primary-button {
+  justify-self: end;
+}
+
+.admin-user-profile-card {
+  grid-column: 1 / -1;
+}
+
+.admin-user-list,
+.admin-request-history ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-user-list {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.admin-user-list button {
+  display: grid;
+  width: 100%;
+  gap: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--bg-surface);
+  color: var(--bmf-blue-deep);
+  text-align: left;
+}
+
+.admin-user-list button:hover:not(:disabled),
+.admin-user-list button:focus-visible,
+.admin-user-list button.active {
+  border-color: var(--bmf-blue);
+  background: rgba(40, 111, 156, 0.07);
+}
+
+.admin-user-list small,
+.admin-request-history time,
+.admin-empty-state {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.admin-profile-metadata {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.admin-profile-metadata > div {
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.admin-profile-metadata dt {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.admin-profile-metadata dd {
+  overflow-wrap: anywhere;
+  margin: 5px 0 0;
+  color: var(--bmf-blue-deep);
+  font-weight: 700;
+}
+
+.admin-request-history {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-request-history h3 {
+  margin: 0;
+  color: var(--bmf-blue-deep);
+  font-size: 1rem;
+}
+
+.admin-request-history ol {
+  max-height: 440px;
+  overflow: auto;
+}
+
+.admin-request-history li {
+  border-left: 3px solid var(--accent-yellow);
+  background: rgba(40, 111, 156, 0.04);
+  padding: 12px 14px;
+}
+
+.admin-request-history p {
+  margin: 5px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.admin-profile-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 18px;
+}
+
+.danger-button {
+  border-color: rgba(167, 39, 39, 0.35);
+  color: #8d2020;
+}
+
+@media (max-width: 760px) {
+  .admin-user-management,
+  .admin-profile-metadata {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-profile-actions,
+  .admin-settings-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .form-back-button {
   justify-self: start;
   border-radius: 6px;

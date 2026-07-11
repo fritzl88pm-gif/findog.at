@@ -30,6 +30,7 @@ import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 import { createUnboundedDeadline, type Deadline } from "@/lib/deadline";
 import { generateConversationTitle } from "@/lib/conversation-title";
 import { getGlobalSystemPrompt } from "@/lib/admin-settings";
+import { recordAdminRequest } from "@/lib/admin-request-history";
 
 export const runtime = "nodejs";
 
@@ -411,7 +412,19 @@ export async function POST(request: Request) {
     });
     const conversationId = conversationContext.id;
 
-    const latestUserMessage = messages.findLast((message) => message.role === "user");
+    const latestUserMessage = messages.findLast(
+      (message) => message.role === "user" && Boolean(message.content),
+    );
+    if (!latestUserMessage) {
+      throw new UserVisibleError("Bitte zuerst eine Frage eingeben.", 400);
+    }
+    await recordAdminRequest({
+      supabase,
+      userId: authenticatedUser.id,
+      conversationId,
+      content: latestUserMessage.content,
+    });
+
     const isNewConversation = conversationContext.isNew;
     const titlePromise = isNewConversation && latestUserMessage
       ? generateConversationTitle({

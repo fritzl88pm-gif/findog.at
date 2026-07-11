@@ -97,6 +97,26 @@ type AuthenticatedSettings = {
   isAdmin: boolean;
 };
 
+type AdminUserSummary = {
+  id: string;
+  email: string;
+  createdAt: string;
+  lastSignInAt: string | null;
+};
+
+type AdminRequestHistoryEntry = {
+  id: number;
+  conversationId: string;
+  content: string;
+  createdAt: string;
+};
+
+type AdminUserProfile = {
+  user: AdminUserSummary;
+  requestCount: number;
+  requests: AdminRequestHistoryEntry[];
+};
+
 const SETTINGS_STORAGE_KEY = "findog.settings.v1";
 const INITIAL_PENDING_TEXT = "Recherche wird vorbereitet";
 
@@ -316,6 +336,76 @@ function formatHistoryDate(value: string): string {
     month: "2-digit",
     year: "2-digit",
   }).format(date);
+}
+
+function formatAdminDate(value: string | null): string {
+  if (!value) {
+    return "Noch nie";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "–";
+  }
+  return new Intl.DateTimeFormat("de-AT", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function normalizeAdminUser(value: unknown): AdminUserSummary | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const item = value as Record<string, unknown>;
+  if (
+    typeof item.id !== "string"
+    || typeof item.email !== "string"
+    || typeof item.createdAt !== "string"
+    || (item.lastSignInAt !== null && typeof item.lastSignInAt !== "string")
+  ) {
+    return null;
+  }
+  return {
+    id: item.id,
+    email: item.email,
+    createdAt: item.createdAt,
+    lastSignInAt: item.lastSignInAt,
+  };
+}
+
+function normalizeAdminUserProfile(value: unknown): AdminUserProfile | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const payload = value as Record<string, unknown>;
+  const profileUser = normalizeAdminUser(payload.user);
+  if (!profileUser || typeof payload.requestCount !== "number" || !Array.isArray(payload.requests)) {
+    return null;
+  }
+  const requests = payload.requests.flatMap((entry): AdminRequestHistoryEntry[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const item = entry as Record<string, unknown>;
+    if (
+      typeof item.id !== "number"
+      || typeof item.conversationId !== "string"
+      || typeof item.content !== "string"
+      || typeof item.createdAt !== "string"
+    ) {
+      return [];
+    }
+    return [{
+      id: item.id,
+      conversationId: item.conversationId,
+      content: item.content,
+      createdAt: item.createdAt,
+    }];
+  });
+  if (requests.length !== payload.requests.length || payload.requestCount !== requests.length) {
+    return null;
+  }
+  return { user: profileUser, requestCount: payload.requestCount, requests };
 }
 
 async function readChatStream(
@@ -583,6 +673,12 @@ export default function Home() {
   const [adminNotice, setAdminNotice] = useState("");
   const [isAdminSettingsLoading, setIsAdminSettingsLoading] = useState(false);
   const [isAdminSettingsSaving, setIsAdminSettingsSaving] = useState(false);
+  const [adminUsers, setAdminUsers] = useState<AdminUserSummary[]>([]);
+  const [adminUserProfile, setAdminUserProfile] = useState<AdminUserProfile | null>(null);
+  const [adminUserForm, setAdminUserForm] = useState({ email: "", password: "" });
+  const [isAdminUsersLoading, setIsAdminUsersLoading] = useState(false);
+  const [isAdminUserCreating, setIsAdminUserCreating] = useState(false);
+  const [isAdminUserMutationRunning, setIsAdminUserMutationRunning] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthLoaded, setIsAuthLoaded] = useState(false);
   const [authForm, setAuthForm] = useState<AuthForm>({ email: "", password: "" });
@@ -718,6 +814,9 @@ export default function Home() {
         setFormError("");
         setFormNotice("");
         setIsGeneratingForm(false);
+        setAdminUsers([]);
+        setAdminUserProfile(null);
+        setAdminUserForm({ email: "", password: "" });
         return;
       }
 
@@ -1187,30 +1286,202 @@ export default function Home() {
     setAdminError("");
     setAdminNotice("");
     setIsAdminSettingsLoading(true);
+    setIsAdminUsersLoading(true);
+    setAdminUserProfile(null);
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
     }
 
     try {
-      const response = await fetch("/api/admin/settings", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!response.ok || typeof payload.systemPrompt !== "string") {
+      const [settingsResponse, usersResponse] = await Promise.all([
+        fetch("/api/admin/settings", {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }),
+        fetch("/api/admin/users", {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }),
+      ]);
+      const settingsPayload = (await settingsResponse.json().catch(() => ({}))) as Record<string, unknown>;
+      const usersPayload = (await usersResponse.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!settingsResponse.ok || typeof settingsPayload.systemPrompt !== "string") {
         throw new Error(
-          typeof payload.error === "string"
-            ? payload.error
+          typeof settingsPayload.error === "string"
+            ? settingsPayload.error
             : "Globale Einstellungen konnten nicht geladen werden.",
         );
       }
-      setAdminSystemPrompt(payload.systemPrompt);
-      setGlobalSystemPrompt(payload.systemPrompt);
+      if (!usersResponse.ok || !Array.isArray(usersPayload.users)) {
+        throw new Error(
+          typeof usersPayload.error === "string"
+            ? usersPayload.error
+            : "Benutzer konnten nicht geladen werden.",
+        );
+      }
+      const loadedUsers = usersPayload.users.flatMap((item): AdminUserSummary[] => {
+        const loadedUser = normalizeAdminUser(item);
+        return loadedUser ? [loadedUser] : [];
+      });
+      if (loadedUsers.length !== usersPayload.users.length) {
+        throw new Error("Die geladenen Benutzerdaten sind ungültig.");
+      }
+      setAdminSystemPrompt(settingsPayload.systemPrompt);
+      setGlobalSystemPrompt(settingsPayload.systemPrompt);
+      setAdminUsers(loadedUsers);
     } catch (adminSettingsError) {
       setAdminError(adminSettingsError instanceof Error
         ? adminSettingsError.message
         : "Globale Einstellungen konnten nicht geladen werden.");
     } finally {
       setIsAdminSettingsLoading(false);
+      setIsAdminUsersLoading(false);
+    }
+  }
+
+  async function loadAdminUserProfile(userId: string) {
+    const accessToken = session?.access_token;
+    if (!accessToken || isAdminUserMutationRunning) {
+      return;
+    }
+    setAdminError("");
+    setAdminNotice("");
+    setIsAdminUsersLoading(true);
+    try {
+      const response = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      const profile = normalizeAdminUserProfile(payload);
+      if (!response.ok || !profile) {
+        throw new Error(
+          typeof payload.error === "string" ? payload.error : "Benutzerprofil konnte nicht geladen werden.",
+        );
+      }
+      setAdminUserProfile(profile);
+    } catch (profileError) {
+      setAdminError(profileError instanceof Error
+        ? profileError.message
+        : "Benutzerprofil konnte nicht geladen werden.");
+    } finally {
+      setIsAdminUsersLoading(false);
+    }
+  }
+
+  async function createAdminManagedUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const accessToken = session?.access_token;
+    if (!accessToken || isAdminUserCreating) {
+      return;
+    }
+    setAdminError("");
+    setAdminNotice("");
+    setIsAdminUserCreating(true);
+    try {
+      const response = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(adminUserForm),
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      const createdUser = normalizeAdminUser(payload.user);
+      if (!response.ok || !createdUser) {
+        throw new Error(
+          typeof payload.error === "string" ? payload.error : "Das Benutzerkonto konnte nicht erstellt werden.",
+        );
+      }
+      setAdminUsers((current) => [...current, createdUser]
+        .sort((left, right) => left.email.localeCompare(right.email, "de")));
+      setAdminUserForm({ email: "", password: "" });
+      setAdminNotice(`Das Benutzerkonto ${createdUser.email} wurde erstellt.`);
+      setAdminUserProfile({ user: createdUser, requestCount: 0, requests: [] });
+    } catch (createError) {
+      setAdminError(createError instanceof Error
+        ? createError.message
+        : "Das Benutzerkonto konnte nicht erstellt werden.");
+    } finally {
+      setIsAdminUserCreating(false);
+    }
+  }
+
+  async function deleteAdminRequestHistory() {
+    const accessToken = session?.access_token;
+    const profile = adminUserProfile;
+    if (!accessToken || !profile || isAdminUserMutationRunning) {
+      return;
+    }
+    if (!window.confirm(
+      `Den separaten Anfrageverlauf von ${profile.user.email} wirklich löschen? Die Unterhaltungen bleiben erhalten.`,
+    )) {
+      return;
+    }
+    setAdminError("");
+    setAdminNotice("");
+    setIsAdminUserMutationRunning(true);
+    try {
+      const response = await fetch(
+        `/api/admin/users/${encodeURIComponent(profile.user.id)}/requests`,
+        { method: "DELETE", headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok || payload.success !== true) {
+        throw new Error(
+          typeof payload.error === "string" ? payload.error : "Anfrageverlauf konnte nicht gelöscht werden.",
+        );
+      }
+      setAdminUserProfile((current) => current?.user.id === profile.user.id
+        ? { ...current, requestCount: 0, requests: [] }
+        : current);
+      setAdminNotice("Der separate Anfrageverlauf wurde gelöscht. Unterhaltungen bleiben erhalten.");
+    } catch (deleteError) {
+      setAdminError(deleteError instanceof Error
+        ? deleteError.message
+        : "Anfrageverlauf konnte nicht gelöscht werden.");
+    } finally {
+      setIsAdminUserMutationRunning(false);
+    }
+  }
+
+  async function deleteAdminManagedUser() {
+    const accessToken = session?.access_token;
+    const profile = adminUserProfile;
+    if (
+      !accessToken
+      || !profile
+      || profile.user.id === user?.id
+      || isAdminUserMutationRunning
+    ) {
+      return;
+    }
+    if (!window.confirm(
+      `Das Konto ${profile.user.email} wirklich löschen? Konto, Unterhaltungen und Anfrageverlauf werden dauerhaft entfernt.`,
+    )) {
+      return;
+    }
+    setAdminError("");
+    setAdminNotice("");
+    setIsAdminUserMutationRunning(true);
+    try {
+      const response = await fetch(`/api/admin/users/${encodeURIComponent(profile.user.id)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok || payload.success !== true) {
+        throw new Error(
+          typeof payload.error === "string" ? payload.error : "Das Benutzerkonto konnte nicht gelöscht werden.",
+        );
+      }
+      setAdminUsers((current) => current.filter((entry) => entry.id !== profile.user.id));
+      setAdminUserProfile(null);
+      setAdminNotice(`Das Benutzerkonto ${profile.user.email} wurde gelöscht.`);
+    } catch (deleteError) {
+      setAdminError(deleteError instanceof Error
+        ? deleteError.message
+        : "Das Benutzerkonto konnte nicht gelöscht werden.");
+    } finally {
+      setIsAdminUserMutationRunning(false);
     }
   }
 
@@ -2422,19 +2693,23 @@ export default function Home() {
               <p className="eyebrow">Systemkonfiguration</p>
               <h1 id="administration-view-title">Administration</h1>
             </header>
+            {adminError ? (
+              <div className="admin-message error-box" role="alert" aria-live="polite">
+                {adminError}
+              </div>
+            ) : null}
+            {adminNotice ? (
+              <div className="notice-box" role="status" aria-live="polite">
+                {adminNotice}
+              </div>
+            ) : null}
             <div className="form-generator-card admin-settings-card">
-              {adminError ? (
-                <div className="admin-message error-box" role="alert" aria-live="polite">
-                  {adminError}
-                </div>
-              ) : null}
-              {adminNotice ? (
-                <div className="notice-box" role="status" aria-live="polite">
-                  {adminNotice}
-                </div>
-              ) : null}
+              <div className="form-generator-heading">
+                <h2>Globaler System Prompt</h2>
+                <p>Diese Einstellung gilt für alle Benutzer, die den globalen Standard verwenden.</p>
+              </div>
               <div className="field-group">
-                <label htmlFor="admin-system-prompt">Globaler System Prompt</label>
+                <label htmlFor="admin-system-prompt">Prompt</label>
                 <textarea
                   id="admin-system-prompt"
                   value={adminSystemPrompt}
@@ -2469,6 +2744,138 @@ export default function Home() {
                 >
                   {isAdminSettingsSaving ? "Speichert…" : "Speichern"}
                 </button>
+              </div>
+            </div>
+            <div className="admin-user-management">
+              <div className="form-generator-card admin-create-user-card">
+                <div className="form-generator-heading">
+                  <h2>Benutzer anlegen</h2>
+                  <p>Erstellt ein bestätigtes Konto für die Anmeldung mit E-Mail und Passwort.</p>
+                </div>
+                <form className="admin-create-user-form" onSubmit={(event) => void createAdminManagedUser(event)}>
+                  <div className="field-group">
+                    <label htmlFor="admin-user-email">E-Mail</label>
+                    <input
+                      id="admin-user-email"
+                      type="email"
+                      autoComplete="off"
+                      value={adminUserForm.email}
+                      onChange={(event) => setAdminUserForm((current) => ({
+                        ...current,
+                        email: event.target.value,
+                      }))}
+                      required
+                      disabled={isAdminUserCreating}
+                    />
+                  </div>
+                  <div className="field-group">
+                    <label htmlFor="admin-user-password">Passwort</label>
+                    <input
+                      id="admin-user-password"
+                      type="password"
+                      autoComplete="new-password"
+                      minLength={6}
+                      maxLength={72}
+                      value={adminUserForm.password}
+                      onChange={(event) => setAdminUserForm((current) => ({
+                        ...current,
+                        password: event.target.value,
+                      }))}
+                      required
+                      disabled={isAdminUserCreating}
+                    />
+                  </div>
+                  <button
+                    className="primary-button"
+                    type="submit"
+                    disabled={isAdminUserCreating || !adminUserForm.email.trim() || adminUserForm.password.length < 6}
+                  >
+                    {isAdminUserCreating ? "Wird angelegt…" : "Benutzer anlegen"}
+                  </button>
+                </form>
+              </div>
+
+              <div className="form-generator-card admin-user-list-card">
+                <div className="form-generator-heading">
+                  <h2>Benutzer</h2>
+                  <p>{adminUsers.length} Konten</p>
+                </div>
+                {isAdminUsersLoading && adminUsers.length === 0 ? (
+                  <p className="admin-empty-state">Benutzer werden geladen…</p>
+                ) : adminUsers.length === 0 ? (
+                  <p className="admin-empty-state">Keine Benutzer gefunden.</p>
+                ) : (
+                  <ul className="admin-user-list">
+                    {adminUsers.map((adminUser) => (
+                      <li key={adminUser.id}>
+                        <button
+                          type="button"
+                          className={adminUserProfile?.user.id === adminUser.id ? "active" : undefined}
+                          onClick={() => void loadAdminUserProfile(adminUser.id)}
+                          disabled={isAdminUsersLoading || isAdminUserMutationRunning}
+                        >
+                          <strong>{adminUser.email || "Ohne E-Mail"}</strong>
+                          <small>Erstellt {formatAdminDate(adminUser.createdAt)}</small>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="form-generator-card admin-user-profile-card">
+                <div className="form-generator-heading">
+                  <h2>Benutzerprofil</h2>
+                  <p>Der Anfrageverlauf enthält ausschließlich Eingaben des Benutzers.</p>
+                </div>
+                {!adminUserProfile ? (
+                  <p className="admin-empty-state">Wähle einen Benutzer aus der Liste.</p>
+                ) : (
+                  <>
+                    <dl className="admin-profile-metadata">
+                      <div><dt>E-Mail</dt><dd>{adminUserProfile.user.email || "–"}</dd></div>
+                      <div><dt>Erstellt</dt><dd>{formatAdminDate(adminUserProfile.user.createdAt)}</dd></div>
+                      <div><dt>Letzte Anmeldung</dt><dd>{formatAdminDate(adminUserProfile.user.lastSignInAt)}</dd></div>
+                      <div><dt>Anfragen</dt><dd>{adminUserProfile.requestCount}</dd></div>
+                    </dl>
+                    <div className="admin-request-history">
+                      <h3>Anfrageverlauf</h3>
+                      {adminUserProfile.requests.length === 0 ? (
+                        <p className="admin-empty-state">Keine protokollierten Anfragen.</p>
+                      ) : (
+                        <ol>
+                          {adminUserProfile.requests.map((entry) => (
+                            <li key={entry.id}>
+                              <time dateTime={entry.createdAt}>{formatAdminDate(entry.createdAt)}</time>
+                              <p>{entry.content}</p>
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                    </div>
+                    <div className="admin-profile-actions">
+                      <button
+                        className="secondary-button danger-button"
+                        type="button"
+                        onClick={() => void deleteAdminRequestHistory()}
+                        disabled={isAdminUserMutationRunning || adminUserProfile.requestCount === 0}
+                      >
+                        Anfrageverlauf löschen
+                      </button>
+                      <button
+                        className="secondary-button danger-button"
+                        type="button"
+                        onClick={() => void deleteAdminManagedUser()}
+                        disabled={isAdminUserMutationRunning || adminUserProfile.user.id === user?.id}
+                        title={adminUserProfile.user.id === user?.id
+                          ? "Das eigene Administratorkonto kann nicht gelöscht werden."
+                          : undefined}
+                      >
+                        Konto löschen
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>
