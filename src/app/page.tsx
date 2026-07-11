@@ -43,6 +43,7 @@ import {
 } from "@/lib/supabase/browser";
 import { CHAT_STREAM_CONTENT_TYPE, parseChatStreamLine } from "@/lib/chat-stream";
 import { parsePasswordChangeBody } from "@/lib/auth/password";
+import { getWelcomeGreeting } from "@/lib/chat/welcome";
 import {
   FORM_IMAGE_MIME_TYPES,
   isFormImageMimeType,
@@ -59,12 +60,6 @@ type ChatMessage = {
   createdAt: string;
   steps?: AgentStep[];
   agentRun?: AgentRunMetadata;
-};
-
-type StoredHistory = {
-  conversationId: string;
-  title?: string;
-  messages: ChatMessage[];
 };
 
 type ConversationSummary = {
@@ -621,11 +616,23 @@ export default function Home() {
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const settingsDialogRef = useRef<HTMLElement>(null);
   const settingsDialogCloseRef = useRef<HTMLButtonElement>(null);
+  const authenticatedUserIdRef = useRef<string | null>(null);
   const user = session?.user ?? null;
   const signedInEmail = user?.email ?? "";
+  const [welcomeGreeting] = useState(() => getWelcomeGreeting());
   const closeSettingsDialog = useCallback(() => {
     setIsSettingsDialogOpen(false);
     requestAnimationFrame(() => settingsTriggerRef.current?.focus());
+  }, []);
+  const clearAttachments = useCallback(() => {
+    setSelectedPdfs([]);
+    setSelectedImages([]);
+    if (pdfInputRef.current) {
+      pdfInputRef.current.value = "";
+    }
+    if (imageInputRef.current) {
+      imageInputRef.current.value = "";
+    }
   }, []);
 
   useEffect(() => {
@@ -691,6 +698,7 @@ export default function Home() {
       }
 
       if (!user?.id) {
+        authenticatedUserIdRef.current = null;
         setHistoryOwnerId("");
         setConversationId("");
         setConversationTitle("");
@@ -698,6 +706,8 @@ export default function Home() {
         setSelectedConversationIds([]);
         setMessages([]);
         setComposer("");
+        setOpenComposerMenu(null);
+        clearAttachments();
         setIsSending(false);
         setPendingStepText(INITIAL_PENDING_TEXT);
         setPendingSteps([]);
@@ -711,14 +721,22 @@ export default function Home() {
         return;
       }
 
-      const storedHistory = readJson<Partial<StoredHistory>>(chatHistoryStorageKey(user.id));
+      const isFreshAuthenticatedLanding = authenticatedUserIdRef.current !== user.id;
+      authenticatedUserIdRef.current = user.id;
       setHistoryOwnerId(user.id);
-      const storedConversationId = typeof storedHistory?.conversationId === "string"
-        ? storedHistory.conversationId
-        : "";
-      setConversationId(storedConversationId);
-      setConversationTitle(typeof storedHistory?.title === "string" ? storedHistory.title : "");
-      setMessages(normalizeMessages(storedHistory?.messages));
+      if (isFreshAuthenticatedLanding) {
+        setConversationId("");
+        setConversationTitle("");
+        setMessages([]);
+        setComposer("");
+        setOpenComposerMenu(null);
+        setError("");
+        setIsSending(false);
+        setPendingStepText(INITIAL_PENDING_TEXT);
+        setPendingSteps([]);
+        clearAttachments();
+        removeStoredValue(chatHistoryStorageKey(user.id));
+      }
 
       const accessToken = session?.access_token;
       if (!accessToken) {
@@ -743,18 +761,6 @@ export default function Home() {
           }
           const summaries = normalizeConversationSummaries(payload.conversations);
           setConversations(summaries);
-
-          if (storedConversationId && summaries.some((item) => item.id === storedConversationId)) {
-            const history = await fetchConversationHistory(accessToken, storedConversationId);
-            if (isActive) {
-              setConversationTitle(history.title);
-              setMessages(history.messages);
-            }
-          } else if (storedConversationId) {
-            setConversationId("");
-            setConversationTitle("");
-            setMessages([]);
-          }
         } catch (historyError) {
           if (isActive) {
             setError(historyError instanceof Error
@@ -772,7 +778,7 @@ export default function Home() {
     return () => {
       isActive = false;
     };
-  }, [isAuthLoaded, isLoaded, session?.access_token, user?.id]);
+  }, [clearAttachments, isAuthLoaded, isLoaded, session?.access_token, user?.id]);
 
   useEffect(() => {
     const accessToken = session?.access_token;
@@ -1080,17 +1086,6 @@ export default function Home() {
       setAuthError("Abmeldung fehlgeschlagen. Bitte erneut versuchen.");
     } finally {
       setIsAuthSubmitting(false);
-    }
-  }
-
-  function clearAttachments() {
-    setSelectedPdfs([]);
-    setSelectedImages([]);
-    if (pdfInputRef.current) {
-      pdfInputRef.current.value = "";
-    }
-    if (imageInputRef.current) {
-      imageInputRef.current.value = "";
     }
   }
 
@@ -2474,14 +2469,20 @@ export default function Home() {
           </div>
         </section>
       ) : (
-      <section className="chat-panel">
+      <section className={`chat-panel ${messages.length === 0 ? "empty-chat" : ""}`}>
+        <div className="chat-content-group">
         <div className="transcript" ref={transcriptRef}>
           <div className="transcript-content">
             {messages.length === 0 ? (
               <div className="empty-state">
-                <svg aria-hidden="true" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="empty-state-icon" style={{ color: "var(--bmf-blue)", marginBottom: "16px", opacity: 0.8 }}><path d="M12 3v17" /><path d="M3 6h18" /><path d="M3 6l3 6h6L9 6" /><path d="M15 6l3 6h6l-3-6" /><path d="M9 21h6" /></svg>
-                <h3>Neue Anfrage</h3>
-                <p>Stelle eine konkrete steuerrechtliche Frage mit Sachverhalt und Zeitraum.</p>
+                {/* The supplied Fred asset must remain a regular responsive public image. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  className="fred-welcome-image"
+                  src="/fred.png"
+                  alt="Fred, der Findog-Steuerassistent"
+                />
+                <h1 className="welcome-greeting">{welcomeGreeting}</h1>
               </div>
             ) : (
               messages.map((message, index) => (
@@ -2690,6 +2691,7 @@ export default function Home() {
               </div>
             ) : null}
           </form>
+        </div>
         </div>
       </section>
       )}
