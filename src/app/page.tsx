@@ -44,6 +44,7 @@ import {
 import { CHAT_STREAM_CONTENT_TYPE, parseChatStreamLine } from "@/lib/chat-stream";
 import { parsePasswordChangeBody } from "@/lib/auth/password";
 import { getWelcomeGreeting } from "@/lib/chat/welcome";
+import { shouldOfferChatPdfDownload } from "@/lib/chat/pdf-request";
 import {
   FORM_IMAGE_MIME_TYPES,
   isFormImageMimeType,
@@ -700,6 +701,7 @@ export default function Home() {
   const [formError, setFormError] = useState("");
   const [formNotice, setFormNotice] = useState("");
   const [isGeneratingForm, setIsGeneratingForm] = useState(false);
+  const [downloadingPdfMessageIndex, setDownloadingPdfMessageIndex] = useState<number | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
@@ -2040,6 +2042,70 @@ export default function Home() {
     }
   }
 
+  async function downloadAssistantPdf(message: ChatMessage, messageIndex: number) {
+    if (downloadingPdfMessageIndex !== null) {
+      return;
+    }
+    if (!supabase || !user) {
+      setError("Bitte zuerst anmelden.");
+      return;
+    }
+
+    setError("");
+    setDownloadingPdfMessageIndex(messageIndex);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) {
+        throw new Error("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+      }
+      setSession(sessionData.session);
+
+      const response = await fetch("/api/documents/pdf", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: conversationTitle.trim().slice(0, 160) || "Fred – Antwort",
+          content: message.content,
+        }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Das PDF konnte nicht erstellt werden.",
+        );
+      }
+      if (!response.headers.get("content-type")?.toLowerCase().startsWith("application/pdf")) {
+        throw new Error("Die PDF-Antwort war ungültig. Bitte erneut versuchen.");
+      }
+
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const filename = /filename="([A-Za-z0-9_.-]+\.pdf)"/.exec(disposition)?.[1]
+        ?? "Findog_Antwort.pdf";
+      const downloadUrl = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = filename;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+    } catch (downloadError) {
+      setError(
+        downloadError instanceof Error
+          ? downloadError.message
+          : "Das PDF konnte nicht erstellt werden.",
+      );
+    } finally {
+      setDownloadingPdfMessageIndex(null);
+    }
+  }
+
   const isAppReady = isLoaded && isAuthLoaded;
   const isAuthConfigured = isSupabaseBrowserConfigured();
   const hasSelectedAttachments = selectedPdfs.length > 0 || selectedImages.length > 0;
@@ -2920,6 +2986,21 @@ export default function Home() {
                   ) : (
                     renderUserMessageContent(message.content)
                   )}
+                  {message.role === "assistant"
+                    && messages[index - 1]?.role === "user"
+                    && shouldOfferChatPdfDownload(messages[index - 1].content, message.content) ? (
+                      <div className="pdf-download-row">
+                        <button
+                          className="secondary-button compact-button pdf-download-button"
+                          type="button"
+                          onClick={() => void downloadAssistantPdf(message, index)}
+                          disabled={downloadingPdfMessageIndex !== null}
+                          aria-label="Antwort von Fred als PDF herunterladen"
+                        >
+                          PDF herunterladen
+                        </button>
+                      </div>
+                    ) : null}
                   {message.role === "assistant" && (message.steps?.length || message.agentRun) ? (
                     <AgentStepsPanel steps={message.steps ?? []} />
                   ) : null}

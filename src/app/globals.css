@@ -1397,6 +1397,15 @@ textarea:focus {
   padding: 0.05em 0.25em;
 }
 
+.pdf-download-row {
+  display: flex;
+  margin-top: 12px;
+}
+
+.pdf-download-button {
+  color: var(--bmf-blue-deep);
+}
+
 .answer-callout {
   border-left: 3px solid var(--bmf-blue);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
