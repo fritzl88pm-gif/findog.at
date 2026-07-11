@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 
 describe("approved release surface", () => {
   const pagePath = fileURLToPath(new URL("../app/page.tsx", import.meta.url));
+  const globalsPath = fileURLToPath(new URL("../app/globals.css", import.meta.url));
   const pageSource = readFileSync(pagePath, "utf8");
+  const globalsSource = readFileSync(globalsPath, "utf8");
 
   it("exposes the standalone BFG decisions view in expanded and collapsed navigation", () => {
     expect(pageSource.match(/BFG-Entscheidungen/g)?.length).toBeGreaterThanOrEqual(3);
@@ -41,5 +43,18 @@ describe("approved release surface", () => {
   it("keeps the client PDF fallback filename neutral", () => {
     expect(pageSource).toContain('?? "Antwort.pdf"');
     expect(pageSource).not.toContain("Findog_Antwort.pdf");
+  });
+
+  it("shows decorative link and red PDF icons in the BFG result actions", () => {
+    expect(pageSource).toMatch(
+      /<svg className="bfg-result-link-icon" aria-hidden="true"[\s\S]*?<\/svg>\s*Entscheidung öffnen/,
+    );
+    expect(pageSource).toMatch(
+      /<svg className="bfg-result-link-icon bfg-result-pdf-icon" aria-hidden="true"[\s\S]*?<\/svg>\s*PDF öffnen/,
+    );
+    expect(globalsSource).toMatch(
+      /\.bfg-result-links a \{[\s\S]*?display: inline-flex;[\s\S]*?align-items: center;[\s\S]*?gap:/,
+    );
+    expect(globalsSource).toMatch(/\.bfg-result-pdf-icon \{[\s\S]*?color: var\(--danger\);/);
   });
 });
