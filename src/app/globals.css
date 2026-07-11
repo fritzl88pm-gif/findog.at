@@ -928,6 +928,13 @@ textarea:focus {
   line-height: 1.5;
 }
 
+.fred-login-image {
+  display: block;
+  width: min(240px, 100%);
+  height: auto;
+  margin: 0 auto 4px;
+}
+
 .auth-form {
   display: grid;
   gap: 14px;
@@ -1110,6 +1117,15 @@ textarea:focus {
 .message.assistant .message-avatar {
   background: var(--accent-yellow);
   color: var(--bmf-blue-deep);
+}
+
+.fred-avatar {
+  display: block;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 .message-meta {

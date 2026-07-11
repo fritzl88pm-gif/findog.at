@@ -1794,8 +1794,13 @@ export default function Home() {
     return (
       <main className="auth-shell">
         <section className="auth-card auth-card-standalone" aria-label="Anmeldung">
-          <p className="eyebrow">findog.at</p>
-          <h1>Anmelden</h1>
+          {/* The supplied Fred asset must remain a regular responsive public image. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            className="fred-login-image"
+            src="/fred-login.png"
+            alt="Fred liest im Steuerkodex"
+          />
           <p className="auth-copy">
             Melde dich mit E-Mail und Passwort an. Der geschützte Bereich öffnet sich erst nach
             erfolgreicher Anmeldung.
@@ -2488,11 +2493,18 @@ export default function Home() {
               messages.map((message, index) => (
                 <article className={`message ${message.role}`} key={`${message.createdAt}-${index}`}>
                   <div className="message-header">
-                    <div className="message-avatar">
-                      {message.role === "user" ? "DU" : "FF"}
-                    </div>
+                    {message.role === "user" ? (
+                      <div className="message-avatar">DU</div>
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img className="message-avatar fred-avatar" src="/fred-avatar.png" alt="" />
+                    )}
                     <div className="message-meta">
-                      <span className="sender-name">{message.role === "user" ? "Du" : "Findog/Fred"}</span>
+                      {message.role === "user" ? (
+                        <span className="sender-name">Du</span>
+                      ) : (
+                        <span className="sender-name">Fred</span>
+                      )}
                       <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
                     </div>
                   </div>
@@ -2511,9 +2523,10 @@ export default function Home() {
             {isSending ? (
               <article className="message assistant pending" aria-live="polite">
                 <div className="message-header">
-                  <div className="message-avatar">FF</div>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img className="message-avatar fred-avatar" src="/fred-avatar.png" alt="" />
                   <div className="message-meta">
-                    <span className="sender-name">Findog/Fred</span>
+                    <span className="sender-name">Fred</span>
                   </div>
                 </div>
                 <p className="message-body">{pendingStepText}</p>
