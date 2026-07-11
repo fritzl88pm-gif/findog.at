@@ -22,16 +22,6 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     lineHeight: 1.55,
   },
-  brand: {
-    marginBottom: 24,
-    borderBottomWidth: 2,
-    borderBottomColor: "#ffd400",
-    paddingBottom: 9,
-    color: "#174f74",
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: 1.2,
-  },
   title: {
     marginBottom: 7,
     color: "#174f74",
@@ -157,11 +147,10 @@ function ChatPdfDocument({ title, content, date }: ChatPdfPayload) {
   const blocks = parseBlocks(content);
 
   return (
-    <Document title={title} author="Findog">
+    <Document title={title}>
       <Page size="A4" style={styles.page}>
-        <Text style={styles.brand}>FINDOG · DIGITALER STEUERASSISTENT</Text>
         <Text style={styles.title}>{title}</Text>
-        <Text style={styles.date}>Wien, {date}</Text>
+        <Text style={styles.date}>{date}</Text>
         {blocks.map((block, index) => {
           if (block.type === "heading") {
             return (
@@ -183,7 +172,7 @@ function ChatPdfDocument({ title, content, date }: ChatPdfPayload) {
         <Text
           fixed
           style={styles.footer}
-          render={({ pageNumber, totalPages }) => `findog.at · Seite ${pageNumber} von ${totalPages}`}
+          render={({ pageNumber, totalPages }) => `Seite ${pageNumber} von ${totalPages}`}
         />
       </Page>
     </Document>

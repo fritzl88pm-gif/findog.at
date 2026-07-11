@@ -110,7 +110,7 @@ function safeFilename(title: string, date: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^A-Za-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
-    .slice(0, 70) || "Findog_Antwort";
+    .slice(0, 70) || "Antwort";
   return `${stem}_${date}.pdf`;
 }
 

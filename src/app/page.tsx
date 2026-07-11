@@ -2,6 +2,7 @@
 
 import { Fragment, type ChangeEvent, type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
+import Link from "next/link";
 
 import { chatHistoryStorageKey } from "@/lib/chat/storage";
 import { applyConversationDeletion } from "@/lib/chat/deletion";
@@ -71,7 +72,7 @@ type ConversationSummary = {
 };
 
 type SettingsTab = "system-prompt" | "model" | "password";
-type AppView = "chat" | "forms" | "administration";
+type AppView = "chat" | "forms" | "bfg-decisions" | "administration";
 type ComposerMenu = "attachments" | "model" | null;
 
 type AuthForm = {
@@ -116,6 +117,24 @@ type AdminUserProfile = {
   user: AdminUserSummary;
   requestCount: number;
   requests: AdminRequestHistoryEntry[];
+};
+
+type BfgDecision = {
+  title: string;
+  gz: string;
+  documentType: string;
+  publicationDate: string;
+  snippet: string;
+  htmlUrl: string | null;
+  pdfUrl: string | null;
+};
+
+type BfgDecisionPage = {
+  results: BfgDecision[];
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  totalCount: number;
 };
 
 const SETTINGS_STORAGE_KEY = "findog.settings.v1";
@@ -409,6 +428,72 @@ function normalizeAdminUserProfile(value: unknown): AdminUserProfile | null {
   return { user: profileUser, requestCount: payload.requestCount, requests };
 }
 
+function normalizeBfgDecisionPage(value: unknown): BfgDecisionPage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const payload = value as Record<string, unknown>;
+  if (
+    !Array.isArray(payload.results)
+    || typeof payload.page !== "number"
+    || typeof payload.pageSize !== "number"
+    || typeof payload.totalPages !== "number"
+    || typeof payload.totalCount !== "number"
+  ) {
+    return null;
+  }
+  const results = payload.results.flatMap((value): BfgDecision[] => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return [];
+    }
+    const item = value as Record<string, unknown>;
+    if (
+      typeof item.title !== "string"
+      || typeof item.gz !== "string"
+      || typeof item.documentType !== "string"
+      || typeof item.publicationDate !== "string"
+      || typeof item.snippet !== "string"
+      || (item.htmlUrl !== null && typeof item.htmlUrl !== "string")
+      || (item.pdfUrl !== null && typeof item.pdfUrl !== "string")
+    ) {
+      return [];
+    }
+    return [{
+      title: item.title,
+      gz: item.gz,
+      documentType: item.documentType,
+      publicationDate: item.publicationDate,
+      snippet: item.snippet,
+      htmlUrl: item.htmlUrl,
+      pdfUrl: item.pdfUrl,
+    }];
+  });
+  return results.length === payload.results.length
+    ? {
+        results,
+        page: payload.page,
+        pageSize: payload.pageSize,
+        totalPages: payload.totalPages,
+        totalCount: payload.totalCount,
+      }
+    : null;
+}
+
+function formatBfgPublicationDate(value: string): string {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("de-AT", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+}
+
 async function readChatStream(
   response: Response,
   onStep: (step: AgentStep) => void,
@@ -695,6 +780,11 @@ export default function Home() {
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [historyOwnerId, setHistoryOwnerId] = useState("");
   const [appView, setAppView] = useState<AppView>("chat");
+  const [bfgQuery, setBfgQuery] = useState("");
+  const [bfgPage, setBfgPage] = useState<BfgDecisionPage | null>(null);
+  const [bfgError, setBfgError] = useState("");
+  const [hasSearchedBfg, setHasSearchedBfg] = useState(false);
+  const [isSearchingBfg, setIsSearchingBfg] = useState(false);
   const [selectedFormId, setSelectedFormId] = useState<"" | typeof VERF5_FORM_ID>("");
   const [formImage, setFormImage] = useState<File | null>(null);
   const [formSaldo, setFormSaldo] = useState("");
@@ -810,6 +900,11 @@ export default function Home() {
         setPendingStepText(INITIAL_PENDING_TEXT);
         setPendingSteps([]);
         setAppView("chat");
+        setBfgQuery("");
+        setBfgPage(null);
+        setBfgError("");
+        setHasSearchedBfg(false);
+        setIsSearchingBfg(false);
         setSelectedFormId("");
         setFormImage(null);
         setFormSaldo("");
@@ -1262,6 +1357,65 @@ export default function Home() {
     }
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
+    }
+  }
+
+  function openBfgDecisionsView() {
+    setAppView("bfg-decisions");
+    setBfgError("");
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
+  async function searchBfgDecisions(page: number) {
+    const query = bfgQuery.trim();
+    const accessToken = session?.access_token;
+    if (!query) {
+      setBfgError("Bitte einen Suchbegriff oder eine Geschäftszahl eingeben.");
+      return;
+    }
+    if (!accessToken) {
+      setBfgError("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+      return;
+    }
+
+    setBfgError("");
+    setIsSearchingBfg(true);
+    try {
+      const parameters = new URLSearchParams({
+        q: query,
+        page: String(page),
+        size: "10",
+      });
+      const response = await fetch(`/api/findok/bfg?${parameters.toString()}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const payload = (await response.json().catch(() => ({}))) as unknown;
+      if (!response.ok) {
+        const errorPayload = payload && typeof payload === "object" && !Array.isArray(payload)
+          ? payload as Record<string, unknown>
+          : {};
+        throw new Error(
+          typeof errorPayload.error === "string"
+            ? errorPayload.error
+            : "Die BFG-Suche konnte nicht durchgeführt werden.",
+        );
+      }
+      const normalized = normalizeBfgDecisionPage(payload);
+      if (!normalized) {
+        throw new Error("Findok lieferte eine ungültige Antwort.");
+      }
+      setBfgPage(normalized);
+      setHasSearchedBfg(true);
+    } catch (searchError) {
+      setBfgError(
+        searchError instanceof Error
+          ? searchError.message
+          : "Die BFG-Suche konnte nicht durchgeführt werden.",
+      );
+    } finally {
+      setIsSearchingBfg(false);
     }
   }
 
@@ -2068,7 +2222,7 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          title: conversationTitle.trim().slice(0, 160) || "Fred – Antwort",
+          title: conversationTitle.trim().slice(0, 160) || "Antwort",
           content: message.content,
         }),
       });
@@ -2086,7 +2240,7 @@ export default function Home() {
 
       const disposition = response.headers.get("content-disposition") ?? "";
       const filename = /filename="([A-Za-z0-9_.-]+\.pdf)"/.exec(disposition)?.[1]
-        ?? "Findog_Antwort.pdf";
+        ?? "Antwort.pdf";
       const downloadUrl = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
       link.href = downloadUrl;
@@ -2217,14 +2371,15 @@ export default function Home() {
         <div className="sidebar-header">
           {settingsOpen ? (
             <>
-              <div className="sidebar-brand">
+              <Link className="sidebar-brand" href="/">
                 <span className="austria-flag" aria-hidden="true">
                   <span className="red"></span>
                   <span className="white"></span>
                   <span className="red"></span>
                 </span>
                 <span className="brand-text">findog.at</span>
-              </div>
+                <span className="beta-tag">Beta</span>
+              </Link>
               <button
                 className="icon-button toggle-sidebar-btn"
                 type="button"
@@ -2319,6 +2474,15 @@ export default function Home() {
             </div>
             <nav className="forms-navigation" aria-label="Anwendungsbereiche">
               <button
+                className={`sidebar-view-button ${appView === "bfg-decisions" ? "active" : ""}`}
+                type="button"
+                onClick={openBfgDecisionsView}
+                aria-current={appView === "bfg-decisions" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="20" y1="20" x2="16.65" y2="16.65"></line><path d="M8 11h6M11 8v6"></path></svg>
+                BFG-Entscheidungen
+              </button>
+              <button
                 className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
                 type="button"
                 onClick={openFormsView}
@@ -2361,6 +2525,16 @@ export default function Home() {
               aria-current={appView === "forms" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
+            </button>
+            <button
+              className={`icon-button rail-icon-btn ${appView === "bfg-decisions" ? "active" : ""}`}
+              type="button"
+              onClick={openBfgDecisionsView}
+              title="BFG-Entscheidungen"
+              aria-label="BFG-Entscheidungen"
+              aria-current={appView === "bfg-decisions" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="20" y1="20" x2="16.65" y2="16.65"></line><path d="M8 11h6M11 8v6"></path></svg>
             </button>
             {isAdmin ? (
               <button
@@ -2639,7 +2813,108 @@ export default function Home() {
         </div>
       ) : null}
 
-      {appView === "forms" ? (
+      {appView === "bfg-decisions" ? (
+        <section className="forms-panel" aria-labelledby="bfg-decisions-view-title">
+          <div className="forms-view bfg-decisions-view">
+            <header className="forms-view-header">
+              <p className="eyebrow">Findok</p>
+              <h1 id="bfg-decisions-view-title">BFG-Entscheidungen</h1>
+              <p>Durchsuche veröffentlichte Entscheidungen des Bundesfinanzgerichts in Findok.</p>
+            </header>
+
+            <form
+              className="bfg-search-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void searchBfgDecisions(1);
+              }}
+            >
+              <label htmlFor="bfg-search">Suchbegriff oder Geschäftszahl</label>
+              <div>
+                <input
+                  id="bfg-search"
+                  type="search"
+                  value={bfgQuery}
+                  onChange={(event) => {
+                    setBfgQuery(event.target.value);
+                    setBfgError("");
+                  }}
+                  maxLength={200}
+                  placeholder="z. B. Umsatzsteuer oder RV/7100930/2024"
+                  disabled={isSearchingBfg}
+                />
+                <button className="primary-button" type="submit" disabled={isSearchingBfg || !bfgQuery.trim()}>
+                  {isSearchingBfg ? "Sucht…" : "Suchen"}
+                </button>
+              </div>
+            </form>
+
+            {bfgError ? (
+              <div className="error-box bfg-message" role="alert" aria-live="polite">{bfgError}</div>
+            ) : null}
+
+            {!bfgError && hasSearchedBfg && bfgPage?.results.length === 0 ? (
+              <p className="bfg-empty-state">Keine BFG-Entscheidung gefunden.</p>
+            ) : null}
+
+            {bfgPage && bfgPage.results.length > 0 ? (
+              <div className="bfg-results">
+                <p className="bfg-result-count">
+                  {bfgPage.totalCount.toLocaleString("de-AT")} {bfgPage.totalCount === 1 ? "Ergebnis" : "Ergebnisse"}
+                </p>
+                <ol className="bfg-result-list">
+                  {bfgPage.results.map((result, index) => (
+                    <li key={`${result.htmlUrl ?? result.gz}-${index}`}>
+                      <article>
+                        <h2>{result.title}</h2>
+                        <p className="bfg-result-meta">
+                          {[result.gz, result.documentType, result.publicationDate
+                            ? `Veröffentlicht am ${formatBfgPublicationDate(result.publicationDate)}`
+                            : ""].filter(Boolean).join(" · ")}
+                        </p>
+                        {result.snippet ? <p className="bfg-result-snippet">{result.snippet}</p> : null}
+                        <div className="bfg-result-links">
+                          {result.htmlUrl ? (
+                            <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener">
+                              Entscheidung öffnen
+                            </a>
+                          ) : null}
+                          {result.pdfUrl ? (
+                            <a href={result.pdfUrl} target="_blank" rel="noreferrer noopener">
+                              PDF öffnen
+                            </a>
+                          ) : null}
+                        </div>
+                      </article>
+                    </li>
+                  ))}
+                </ol>
+                {bfgPage.totalPages > 1 ? (
+                  <nav className="bfg-pagination" aria-label="Ergebnisseiten">
+                    <button
+                      className="secondary-button compact-button"
+                      type="button"
+                      onClick={() => void searchBfgDecisions(bfgPage.page - 1)}
+                      disabled={isSearchingBfg || bfgPage.page <= 1}
+                    >
+                      Zurück
+                    </button>
+                    <span>Seite {bfgPage.page} von {bfgPage.totalPages}</span>
+                    <button
+                      className="secondary-button compact-button"
+                      type="button"
+                      onClick={() => void searchBfgDecisions(bfgPage.page + 1)}
+                      disabled={isSearchingBfg || bfgPage.page >= bfgPage.totalPages}
+                    >
+                      Weiter
+                    </button>
+                  </nav>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </section>
+      ) : appView === "forms" ? (
         <section className="forms-panel" aria-labelledby="forms-view-title">
           <div className="forms-view">
             <header className="forms-view-header">

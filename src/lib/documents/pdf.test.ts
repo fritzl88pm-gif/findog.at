@@ -11,4 +11,7 @@ it("renders a PDF with the real renderer", async () => {
 
   expect(bytes.byteLength).toBeGreaterThan(0);
   expect(new TextDecoder().decode(bytes.subarray(0, 8))).toMatch(/^%PDF/);
+
+  const pdfSource = new TextDecoder("latin1").decode(bytes);
+  expect(pdfSource).not.toMatch(/Findog|FINDOG|findog\.at|Wien/);
 });

@@ -96,4 +96,16 @@ describe("POST /api/documents/pdf", () => {
       new Uint8Array([37, 80, 68, 70, 45]),
     );
   });
+
+  it("uses a neutral fallback filename when the title has no filename-safe characters", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-11T12:00:00.000Z"));
+
+    const response = await POST(pdfRequest({ title: "•••", content: "Inhalt" }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-disposition")).toBe(
+      'attachment; filename="Antwort_11.07.2026.pdf"',
+    );
+  });
 });

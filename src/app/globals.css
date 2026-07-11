@@ -167,12 +167,31 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
+  border-radius: 5px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.sidebar-brand:focus-visible {
+  outline: 3px solid rgba(40, 111, 156, 0.2);
+  outline-offset: 3px;
 }
 
 .brand-text {
   font-weight: 700;
   font-size: 1.1rem;
   color: var(--bmf-blue-deep);
+}
+
+.beta-tag {
+  border: 1px solid rgba(40, 111, 156, 0.22);
+  border-radius: 999px;
+  padding: 2px 6px;
+  color: var(--bmf-blue-dark);
+  font-size: 0.62rem;
+  font-weight: 750;
+  line-height: 1;
+  letter-spacing: 0.03em;
 }
 
 .sidebar-content {
@@ -707,6 +726,114 @@ textarea:focus {
   margin: 8px 0 0;
   color: var(--muted);
   line-height: 1.55;
+}
+
+/* Standalone Findok BFG decisions view */
+.bfg-decisions-view {
+  width: min(860px, 100%);
+}
+
+.bfg-search-form {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  padding: 18px;
+  box-shadow: var(--shadow-sm);
+}
+
+.bfg-search-form > label {
+  color: var(--bmf-blue-deep);
+  font-size: 0.84rem;
+  font-weight: 750;
+}
+
+.bfg-search-form > div {
+  display: flex;
+  gap: 10px;
+}
+
+.bfg-search-form input {
+  min-width: 0;
+  flex: 1;
+}
+
+.bfg-message {
+  margin: 0;
+}
+
+.bfg-empty-state,
+.bfg-result-count {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.bfg-results {
+  display: grid;
+  gap: 14px;
+}
+
+.bfg-result-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bfg-result-list article {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  padding: 20px;
+  box-shadow: var(--shadow-sm);
+}
+
+.bfg-result-list h2 {
+  margin: 0;
+  color: var(--bmf-blue-deep);
+  font-size: 1.08rem;
+  line-height: 1.35;
+}
+
+.bfg-result-meta {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.bfg-result-snippet {
+  margin: 12px 0 0;
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.bfg-result-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.bfg-result-links a {
+  color: var(--bmf-blue-dark);
+  font-size: 0.84rem;
+  font-weight: 750;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.bfg-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .form-choice-grid {
@@ -2060,6 +2187,15 @@ textarea:focus {
 
   .form-generate-button {
     width: 100%;
+  }
+
+  .bfg-search-form > div {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .bfg-pagination {
+    flex-wrap: wrap;
   }
 }
 
