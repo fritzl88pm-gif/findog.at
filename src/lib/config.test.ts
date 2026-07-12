@@ -21,6 +21,12 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
     expect(MAX_REQUEST_BYTES).toBeGreaterThanOrEqual(MAX_SYSTEM_PROMPT_CHARS * 2);
   });
 
+  it("tells Fred to fulfill explicit PDF document requests through the available download", () => {
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("# PDF-DOKUMENTE");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("PDF-Download");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("keine PDF-Erstellung möglich");
+  });
+
   it("keeps JSON requests bounded separately from PDF multipart uploads", () => {
     expect(MAX_REQUEST_BYTES).toBe(400_000);
     expect(MAX_PDF_UPLOAD_BYTES).toBe(50_000_000);
