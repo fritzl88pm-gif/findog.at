@@ -53,7 +53,7 @@ describe("BFG PRO query generation and reranking", () => {
     vi.mocked(chatCompletion)
       .mockResolvedValueOnce({ content: '{"query":"Arbeitszimmer Vorsteuer"}', toolCalls: [] })
       .mockResolvedValueOnce({
-        content: '{"selections":[{"candidateId":"candidate-1","score":87,"comment":"Behandelt ein Arbeitszimmer und den Vorsteuerabzug.","caseSummary":"Ein beruflich genutztes Arbeitszimmer im Wohnungsverband war zu beurteilen; das BFG entschied über den geltend gemachten Vorsteuerabzug."}]}',
+        content: '{"selections":[{"candidateId":"candidate-1","score":87,"comment":"Behandelt ein Arbeitszimmer und den Vorsteuerabzug.","caseFacts":"Ein beruflich genutztes Arbeitszimmer im Wohnungsverband war zu beurteilen.","outcome":"Das BFG entschied über den geltend gemachten Vorsteuerabzug."}]}',
         toolCalls: [],
       });
 
@@ -82,10 +82,16 @@ describe("BFG PRO query generation and reranking", () => {
   it.each([
     ["non-JSON reranking", "candidate-1"],
     ["missing comment", '{"selections":[{"candidateId":"candidate-1","score":50}]}'],
-    ["missing case summary", '{"selections":[{"candidateId":"candidate-1","score":50,"comment":"Relevant"}]}'],
-    ["blank case summary", '{"selections":[{"candidateId":"candidate-1","score":50,"comment":"Relevant","caseSummary":"  "}]}'],
-    ["oversized case summary", JSON.stringify({ selections: [{ candidateId: "candidate-1", score: 50, comment: "Relevant", caseSummary: "x".repeat(401) }] })],
-    ["unknown generated metadata", '{"selections":[{"candidateId":"candidate-1","score":50,"comment":"Relevant","gz":"FAKE/1","url":"https://evil.example"}]}'],
+    ["missing case facts", '{"selections":[{"candidateId":"candidate-1","score":50,"comment":"Relevant","outcome":"Stattgegeben."}]}'],
+    ["missing outcome", '{"selections":[{"candidateId":"candidate-1","score":50,"comment":"Relevant","caseFacts":"Ein Arbeitszimmer war strittig."}]}'],
+    ["blank comment", '{"selections":[{"candidateId":"candidate-1","score":50,"comment":"  ","caseFacts":"Ein Arbeitszimmer war strittig.","outcome":"Stattgegeben."}]}'],
+    ["blank case facts", '{"selections":[{"candidateId":"candidate-1","score":50,"comment":"Relevant","caseFacts":"  ","outcome":"Stattgegeben."}]}'],
+    ["blank outcome", '{"selections":[{"candidateId":"candidate-1","score":50,"comment":"Relevant","caseFacts":"Ein Arbeitszimmer war strittig.","outcome":"  "}]}'],
+    ["oversized case facts", JSON.stringify({ selections: [{ candidateId: "candidate-1", score: 50, comment: "Relevant", caseFacts: "x".repeat(701), outcome: "Stattgegeben." }] })],
+    ["oversized outcome", JSON.stringify({ selections: [{ candidateId: "candidate-1", score: 50, comment: "Relevant", caseFacts: "Ein Arbeitszimmer war strittig.", outcome: "x".repeat(281) }] })],
+    ["malformed score", '{"selections":[{"candidateId":"candidate-1","score":"50","comment":"Relevant","caseFacts":"Ein Arbeitszimmer war strittig.","outcome":"Stattgegeben."}]}'],
+    ["legacy case summary", '{"selections":[{"candidateId":"candidate-1","score":50,"comment":"Relevant","caseSummary":"Alter Kombinationswert.","caseFacts":"Ein Arbeitszimmer war strittig.","outcome":"Stattgegeben."}]}'],
+    ["unknown generated metadata", '{"selections":[{"candidateId":"candidate-1","score":50,"comment":"Relevant","caseFacts":"Ein Arbeitszimmer war strittig.","outcome":"Stattgegeben.","gz":"FAKE/1"}]}'],
   ])("rejects malformed reranker output: %s", async (_label, content) => {
     vi.mocked(chatCompletion)
       .mockResolvedValueOnce({ content: '{"query":"Arbeitszimmer"}', toolCalls: [] })
@@ -94,18 +100,45 @@ describe("BFG PRO query generation and reranking", () => {
     await expect(runBfgProSearch("Sachverhalt")).rejects.toBeInstanceOf(BfgProModelError);
   });
 
+  it("bounds a finite score and caps a non-empty comment", async () => {
+    const longComment = ` Passend. ${"lang ".repeat(100)}`;
+    vi.mocked(chatCompletion)
+      .mockResolvedValueOnce({ content: '{"query":"Arbeitszimmer"}', toolCalls: [] })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          selections: [{
+            candidateId: "candidate-1",
+            score: 999,
+            comment: longComment,
+            caseFacts: "Ein Arbeitszimmer war strittig.",
+            outcome: "Das BFG entschied über den Vorsteuerabzug.",
+          }],
+        }),
+        toolCalls: [],
+      });
+
+    const response = await runBfgProSearch("Sachverhalt");
+
+    expect(response.results[0]?.score).toBe(100);
+    expect(response.results[0]?.whyRelevant).toBe(
+      longComment.replace(/\s+/g, " ").trim().slice(0, 240),
+    );
+    expect(response.results[0]?.whyRelevant).toHaveLength(240);
+  });
+
   it("drops fabricated candidate IDs and returns an empty list when none remain", async () => {
     vi.mocked(chatCompletion)
       .mockResolvedValueOnce({ content: '{"query":"Arbeitszimmer"}', toolCalls: [] })
       .mockResolvedValueOnce({
-        content: '{"selections":[{"candidateId":"invented","score":99,"comment":"Erfundener Treffer","caseSummary":"Erfundener Sachverhalt mit erfundenem Ergebnis."}]}',
+        content: '{"selections":[{"candidateId":"invented","score":99,"comment":"Erfundener Treffer","caseFacts":"Erfundener Sachverhalt.","outcome":"Erfundenes Ergebnis."}]}',
         toolCalls: [],
       });
 
     await expect(runBfgProSearch("Sachverhalt")).resolves.toEqual({ results: [] });
   });
 
-  it("deduplicates selections, bounds generated values, and retains only official metadata and links", async () => {
+  it("deduplicates selections and retains only validated generated fields plus official metadata and links", async () => {
+    const longCaseFacts = `Ein Arbeitszimmer war Gegenstand des Verfahrens. ${"Weitere offizielle Einzelheit. ".repeat(18)}`.trim();
     vi.mocked(chatCompletion)
       .mockResolvedValueOnce({ content: '{"query":"Arbeitszimmer"}', toolCalls: [] })
       .mockResolvedValueOnce({
@@ -113,15 +146,17 @@ describe("BFG PRO query generation and reranking", () => {
           selections: [
             {
               candidateId: "candidate-1",
-              score: 999,
-              comment: ` Passend. ${"lang ".repeat(100)}`,
-              caseSummary: "Ein Arbeitszimmer im Wohnungsverband war Gegenstand des Verfahrens; das BFG entschied über den Vorsteuerabzug.",
+              score: 100,
+              comment: "Passend.",
+              caseFacts: longCaseFacts,
+              outcome: "Das BFG entschied über den Vorsteuerabzug.",
             },
             {
               candidateId: "candidate-1",
               score: 1,
               comment: "Duplikat",
-              caseSummary: "Duplikat.",
+              caseFacts: "Duplikat.",
+              outcome: "Duplikat verworfen.",
             },
           ],
         }),
@@ -140,17 +175,21 @@ describe("BFG PRO query generation and reranking", () => {
       htmlUrl: officialCandidate.htmlUrl,
       pdfUrl: officialCandidate.pdfUrl,
       score: 100,
-      caseSummary: "Ein Arbeitszimmer im Wohnungsverband war Gegenstand des Verfahrens; das BFG entschied über den Vorsteuerabzug.",
+      caseFacts: longCaseFacts,
+      outcome: "Das BFG entschied über den Vorsteuerabzug.",
     });
     expect(response.results[0]?.whyRelevant.length).toBeLessThanOrEqual(240);
-    expect(response.results[0]?.caseSummary.length).toBeLessThanOrEqual(400);
+    expect(response.results[0]?.caseFacts.length).toBeGreaterThan(400);
+    expect(response.results[0]?.caseFacts.length).toBeLessThanOrEqual(700);
+    expect(response.results[0]?.outcome.length).toBeLessThanOrEqual(280);
+    expect(response.results[0]).not.toHaveProperty("caseSummary");
   });
 
-  it("sends only the bounded excerpt to Flash and returns only the bounded generated summary", async () => {
+  it("sends only bounded official excerpts to Flash and returns no source or legacy fields", async () => {
     vi.mocked(chatCompletion)
       .mockResolvedValueOnce({ content: '{"query":"Arbeitszimmer"}', toolCalls: [] })
       .mockResolvedValueOnce({
-        content: '{"selections":[{"candidateId":"candidate-1","score":70,"comment":"Thematisch passend.","caseSummary":"Ein Arbeitszimmer im Wohnungsverband war strittig; das BFG entschied über dessen steuerliche Behandlung."}]}',
+        content: '{"selections":[{"candidateId":"candidate-1","score":70,"comment":"Thematisch passend.","caseFacts":"Ein Arbeitszimmer im Wohnungsverband war strittig.","outcome":"Das BFG entschied über dessen steuerliche Behandlung."}]}',
         toolCalls: [],
       });
 
@@ -160,8 +199,15 @@ describe("BFG PRO query generation and reranking", () => {
       .join(" ") ?? "";
 
     expect(rerankPrompt).not.toContain("FULL-CONTENT-SECRET");
+    expect(rerankPrompt).toContain('"caseFacts"');
+    expect(rerankPrompt).toContain('"outcome"');
+    expect(rerankPrompt).toContain("höchstens 700 Zeichen");
+    expect(rerankPrompt).toContain("höchstens 280 Zeichen");
+    expect(rerankPrompt).not.toContain("caseSummary");
     expect(JSON.stringify(response)).not.toContain("FULL-CONTENT-SECRET");
-    expect(response.results[0]?.caseSummary.length).toBeLessThanOrEqual(400);
+    expect(response.results[0]?.caseFacts.length).toBeLessThanOrEqual(700);
+    expect(response.results[0]?.outcome.length).toBeLessThanOrEqual(280);
+    expect(response.results[0]).not.toHaveProperty("caseSummary");
     expect(response.results[0]).not.toHaveProperty("excerpt");
     expect(response.results[0]).not.toHaveProperty("content");
   });

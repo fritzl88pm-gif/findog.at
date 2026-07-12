@@ -86,7 +86,9 @@ describe("POST /api/findok/bfg/pro", () => {
   });
 
   it("returns bounded no-store JSON for a valid scenario", async () => {
-    const payload = { results: [{ title: "Entscheidung", caseSummary: "Sachverhalt und Ergebnis", whyRelevant: "Passend" }] } as never;
+    const payload = {
+      results: [{ title: "Entscheidung", caseFacts: "Sachverhalt", outcome: "Ergebnis", whyRelevant: "Passend" }],
+    } as never;
     vi.mocked(runBfgProSearch).mockResolvedValueOnce(payload);
 
     const response = await POST(request(undefined, "192.0.2.5"));

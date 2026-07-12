@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ describe("approved release surface", () => {
   const adminSettingsPath = fileURLToPath(new URL("../app/api/admin/settings/route.ts", import.meta.url));
   const faviconPath = fileURLToPath(new URL("../../public/favicon.png", import.meta.url));
   const bfgIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-search.png", import.meta.url));
+  const bfgProIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-pro-search.png", import.meta.url));
   const pageSource = readFileSync(pagePath, "utf8");
   const globalsSource = readFileSync(globalsPath, "utf8");
   const layoutSource = readFileSync(layoutPath, "utf8");
@@ -38,8 +39,10 @@ describe("approved release surface", () => {
     expect(pageSource).toContain('htmlFor="bfg-pro-scenario"');
     expect(pageSource).toContain('<textarea');
     expect(pageSource).toContain('/api/findok/bfg/pro');
-    expect(pageSource).toContain('Warum relevant');
-    expect(pageSource).toContain('<h3>Sachverhalt</h3>');
+    expect(pageSource).toMatch(
+      /className="bfg-result-meta"[\s\S]*?<h3>Sachverhalt<\/h3>[\s\S]*?result\.caseFacts[\s\S]*?<h3>Ergebnis<\/h3>[\s\S]*?result\.outcome[\s\S]*?<h3>Warum relevant<\/h3>/,
+    );
+    expect(pageSource).not.toContain('caseSummary');
     expect(pageSource).not.toContain('Originaltext-Auszug');
     expect(pageSource).toContain('Keine relevanten BFG-Entscheidungen gefunden.');
     expect(pageSource).toContain('/api/findok/bfg?');
@@ -96,6 +99,16 @@ describe("approved release surface", () => {
     );
   });
 
+  it("shows the supplied decorative PRO illustration with the normal responsive header structure", () => {
+    expect(pageSource).toMatch(
+      /<header className="forms-view-header bfg-view-header">[\s\S]*?<div className="bfg-view-header-copy">[\s\S]*?<Image[\s\S]*?className="bfg-view-header-illustration"[\s\S]*?src="\/fred-bfg-pro-search\.png"[\s\S]*?alt=""[\s\S]*?unoptimized[\s\S]*?<\/header>/,
+    );
+    expect(existsSync(bfgProIllustrationPath)).toBe(true);
+    expect(readFileSync(bfgProIllustrationPath).subarray(0, 8)).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+  });
+
   it("keeps the BFG header illustration responsive without horizontal overflow", () => {
     expect(globalsSource).toMatch(
       /\.bfg-view-header \{[\s\S]*?display: grid;[\s\S]*?grid-template-columns: minmax\(0, 1fr\) minmax\(160px, 240px\);[\s\S]*?\}/,
@@ -139,9 +152,8 @@ describe("approved release surface", () => {
   });
 
   it("shows decorative link and red PDF icons in the BFG result actions", () => {
-    expect(pageSource).toMatch(
-      /<svg className="bfg-result-link-icon" aria-hidden="true"[\s\S]*?<\/svg>\s*Entscheidung öffnen/,
-    );
+    expect(pageSource.match(/<\/svg>\s*Urteil öffnen/g)).toHaveLength(2);
+    expect(pageSource).not.toContain("Entscheidung öffnen");
     expect(pageSource).toMatch(
       /<svg className="bfg-result-link-icon bfg-result-pdf-icon" aria-hidden="true"[\s\S]*?<\/svg>\s*PDF öffnen/,
     );
