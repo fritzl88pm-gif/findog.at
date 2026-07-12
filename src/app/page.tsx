@@ -54,6 +54,7 @@ import {
 import { normalizeManualSaldo } from "@/lib/forms/values";
 import {
   GERMAN_SV_PENSION_YEARS,
+  buildGermanSvPensionPdfDocument,
   calculateGermanSvPension,
   formatGermanSvEuro,
   formatGermanSvRate,
@@ -886,23 +887,58 @@ function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
   );
 }
 
-function GermanSvPensionView() {
+type GermanSvPensionViewProps = {
+  downloadError: string;
+  isDownloadingPdf: boolean;
+  onDownloadPdf: (
+    year: GermanSvPensionYear,
+    mode: GermanSvPensionMode,
+    amount: number,
+  ) => Promise<void>;
+};
+
+function GermanSvPensionView({
+  downloadError,
+  isDownloadingPdf,
+  onDownloadPdf,
+}: GermanSvPensionViewProps) {
   const [year, setYear] = useState<GermanSvPensionYear>(2026);
   const [mode, setMode] = useState<GermanSvPensionMode>("kv");
   const [amountInput, setAmountInput] = useState("");
+  const pdfDownloadPendingRef = useRef(false);
   const amount = parseGermanSvAmount(amountInput);
   const calculation = amount === null ? null : calculateGermanSvPension(year, mode, amount);
   const displayMoney = (value: number | undefined) =>
     value === undefined ? "— €" : formatGermanSvEuro(value);
   const inputLabel = mode === "kv" ? "KV-Beitrag" : "Rentenbrutto / AEOI-KM";
 
+  async function downloadPdf() {
+    if (amount === null || isDownloadingPdf || pdfDownloadPendingRef.current) {
+      return;
+    }
+    pdfDownloadPendingRef.current = true;
+    try {
+      await onDownloadPdf(year, mode, amount);
+    } finally {
+      pdfDownloadPendingRef.current = false;
+    }
+  }
+
   return (
     <section className="forms-panel" aria-labelledby="german-sv-pension-view-title">
       <div className="forms-view german-sv-pension-view">
-        <header className="forms-view-header german-sv-pension-header">
-          <p className="eyebrow">Kz-Tool · § 73a ASVG</p>
-          <h1 id="german-sv-pension-view-title">Kennzahl 453 &amp; 184</h1>
-          <p>Berechnung aus deutscher SV-Rente anhand KV-Bemessungsgrundlage bzw. AEOI-KM. Betrag entweder als österr. KV-Beitrag oder als Rentenbrutto (AEOI-KM/AJ-Web) eingeben — das Tool berechnet die jeweils andere Seite automatisch.</p>
+        <header className="forms-view-header bfg-view-header german-sv-pension-header">
+          <div className="bfg-view-header-copy">
+            <h1 id="german-sv-pension-view-title">Kennzahl 453 &amp; 184</h1>
+          </div>
+          <Image
+            className="bfg-view-header-illustration"
+            src="/fred-german-sv-pension.png"
+            alt=""
+            width={376}
+            height={376}
+            unoptimized
+          />
         </header>
 
         <div className="german-sv-year-control" role="group" aria-label="Veranlagungsjahr">
@@ -916,7 +952,7 @@ function GermanSvPensionView() {
                 onClick={() => setYear(option)}
                 key={option}
               >
-                {option}
+                {option === 2024 ? "bis 2024" : option}
               </button>
             ))}
           </div>
@@ -1021,11 +1057,23 @@ function GermanSvPensionView() {
               ? <>Vereinfachte Berechnung: Kz 453 = <strong>{(calculation.simplifiedFactor * 100).toLocaleString("de-AT", { maximumFractionDigits: 6 })} %</strong> von KV-Bmgl / AEOI-KM.</>
               : "Vereinfachte Kontrollrechnung erscheint hier, sobald ein Betrag eingegeben ist."}
           </p>
-        </div>
 
-        <div className="german-sv-notes" aria-label="Hinweise">
-          <p><span aria-hidden="true">!</span> Es kann zu Rundungsdifferenzen kommen — im deutschen Bescheid wird der Jahresbetrag der Rente abgerundet.</p>
-          <p><span aria-hidden="true">!</span> Nicht anwendbar bei Renten aus der Schweiz und Liechtenstein, da der Wechselkurs AJ-Web/PVA ≠ L17b ist.</p>
+          <div className="german-sv-pdf-actions">
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() => void downloadPdf()}
+              disabled={calculation === null || isDownloadingPdf}
+            >
+              {isDownloadingPdf ? "PDF wird erstellt…" : "Berechnung als PDF herunterladen"}
+            </button>
+          </div>
+
+          {downloadError ? (
+            <div className="error-box" role="alert" aria-live="polite">
+              {downloadError}
+            </div>
+          ) : null}
         </div>
 
         <p className="german-sv-source">Stand 26.06.2026</p>
@@ -1104,6 +1152,7 @@ export default function Home() {
   const [formNotice, setFormNotice] = useState("");
   const [isGeneratingForm, setIsGeneratingForm] = useState(false);
   const [downloadingPdfMessageIndex, setDownloadingPdfMessageIndex] = useState<number | null>(null);
+  const [isDownloadingGermanSvPensionPdf, setIsDownloadingGermanSvPensionPdf] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
@@ -1686,6 +1735,7 @@ export default function Home() {
 
   function openGermanSvPensionView() {
     setAppView("german-sv-pension");
+    setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
     }
@@ -2629,6 +2679,72 @@ export default function Home() {
     }
   }
 
+  async function downloadGermanSvPensionPdf(
+    year: GermanSvPensionYear,
+    mode: GermanSvPensionMode,
+    amount: number,
+  ) {
+    if (isDownloadingGermanSvPensionPdf) {
+      return;
+    }
+    if (!supabase || !user) {
+      setError("Bitte zuerst anmelden.");
+      return;
+    }
+
+    setError("");
+    setIsDownloadingGermanSvPensionPdf(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) {
+        throw new Error("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+      }
+      setSession(sessionData.session);
+
+      const pdfDocument = buildGermanSvPensionPdfDocument(year, mode, amount);
+      const response = await fetch("/api/documents/pdf", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(pdfDocument),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Das PDF konnte nicht erstellt werden.",
+        );
+      }
+      if (!response.headers.get("content-type")?.toLowerCase().startsWith("application/pdf")) {
+        throw new Error("Die PDF-Antwort war ungültig. Bitte erneut versuchen.");
+      }
+
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const filename = /filename="([A-Za-z0-9_.-]+\.pdf)"/.exec(disposition)?.[1]
+        ?? `Deutsche_SV_Rente_${year}.pdf`;
+      const downloadUrl = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = filename;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+    } catch (downloadError) {
+      setError(
+        downloadError instanceof Error
+          ? downloadError.message
+          : "Das PDF konnte nicht erstellt werden.",
+      );
+    } finally {
+      setIsDownloadingGermanSvPensionPdf(false);
+    }
+  }
+
   const isAppReady = isLoaded && isAuthLoaded;
   const isAuthConfigured = isSupabaseBrowserConfigured();
   const hasSelectedAttachments = selectedPdfs.length > 0 || selectedImages.length > 0;
@@ -3532,7 +3648,11 @@ export default function Home() {
           </div>
         </section>
       ) : appView === "german-sv-pension" ? (
-        <GermanSvPensionView />
+        <GermanSvPensionView
+          downloadError={error}
+          isDownloadingPdf={isDownloadingGermanSvPensionPdf}
+          onDownloadPdf={downloadGermanSvPensionPdf}
+        />
       ) : appView === "forms" ? (
         <section className="forms-panel" aria-labelledby="forms-view-title">
           <div className="forms-view">

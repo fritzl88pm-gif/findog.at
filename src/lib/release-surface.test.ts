@@ -13,6 +13,7 @@ describe("approved release surface", () => {
   const faviconPath = fileURLToPath(new URL("../../public/favicon.png", import.meta.url));
   const bfgIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-search.png", import.meta.url));
   const bfgProIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-pro-search.png", import.meta.url));
+  const germanSvPensionIllustrationPath = fileURLToPath(new URL("../../public/fred-german-sv-pension.png", import.meta.url));
   const germanSvPensionPath = fileURLToPath(new URL("./german-sv-pension.ts", import.meta.url));
   const pageSource = readFileSync(pagePath, "utf8");
   const globalsSource = readFileSync(globalsPath, "utf8");
@@ -58,14 +59,14 @@ describe("approved release surface", () => {
       pageSource.indexOf('<div className="sidebar-footer">'),
     );
     const pensionView = pageSource.slice(
-      pageSource.indexOf('function GermanSvPensionView()'),
+      pageSource.indexOf('function GermanSvPensionView('),
       pageSource.indexOf('export default function Home()'),
     );
 
     expect(expandedNavigation).toMatch(/BFG Suche PRO\s*<\/button>\s*<button[\s\S]*?appView === "german-sv-pension"[\s\S]*?Deutsche SV Rente\s*<\/button>/);
     expect(collapsedRail).toMatch(/title="BFG Suche PRO"[\s\S]*?<\/button>\s*<button[\s\S]*?title="Deutsche SV Rente"[\s\S]*?aria-label="Deutsche SV Rente"/);
     expect(pageSource).toContain('appView === "german-sv-pension"');
-    expect(pageSource).toContain('<GermanSvPensionView />');
+    expect(pageSource).toContain('<GermanSvPensionView');
     expect(pensionView).toContain('<fieldset className="german-sv-mode">');
     expect(pensionView.match(/type="radio"/g)).toHaveLength(2);
     expect(pensionView.match(/id="german-sv-pension-amount"/g)).toHaveLength(1);
@@ -76,12 +77,12 @@ describe("approved release surface", () => {
     expect(pensionView).not.toContain("/api/");
     expect(germanSvPensionSource).not.toContain("fetch(");
     expect(germanSvPensionSource).not.toContain("localStorage");
+    expect(pageSource).toContain('onDownloadPdf={downloadGermanSvPensionPdf}');
+    expect(pageSource).toContain('fetch("/api/documents/pdf"');
   });
 
-  it("preserves the authoritative Deutsche SV Rente copy and responsive results", () => {
+  it("updates the authoritative Deutsche SV Rente copy and preserves calculator output", () => {
     for (const requiredText of [
-      "Kz-Tool · § 73a ASVG",
-      "Berechnung aus deutscher SV-Rente anhand KV-Bemessungsgrundlage bzw. AEOI-KM.",
       "KV-Beitrag",
       "Rentenbrutto / AEOI-KM",
       "Krankenversicherung gem. § 73a ASVG",
@@ -91,13 +92,37 @@ describe("approved release surface", () => {
       "Sozialversicherungsbeiträge (KV-Beitrag)",
       "Kz 453",
       "Kz 184",
-      "Es kann zu Rundungsdifferenzen kommen — im deutschen Bescheid wird der Jahresbetrag der Rente abgerundet.",
-      "Nicht anwendbar bei Renten aus der Schweiz und Liechtenstein, da der Wechselkurs AJ-Web/PVA ≠ L17b ist.",
+      "Stand 26.06.2026",
     ]) {
       expect(pageSource).toContain(requiredText);
     }
 
+    expect(pageSource).not.toContain("Kz-Tool · § 73a ASVG");
+    expect(pageSource).not.toContain("Berechnung aus deutscher SV-Rente anhand KV-Bemessungsgrundlage bzw. AEOI-KM.");
+    expect(pageSource).not.toContain("Es kann zu Rundungsdifferenzen kommen — im deutschen Bescheid wird der Jahresbetrag der Rente abgerundet.");
+    expect(pageSource).not.toContain("Nicht anwendbar bei Renten aus der Schweiz und Liechtenstein, da der Wechselkurs AJ-Web/PVA ≠ L17b ist.");
+    expect(pageSource).toContain('{option === 2024 ? "bis 2024" : option}');
+    expect(pageSource).toContain('onClick={() => setYear(option)}');
+    expect(pageSource).toContain('disabled={calculation === null || isDownloadingPdf}');
+    expect(pageSource).toContain("Berechnung als PDF herunterladen");
     expect(globalsSource).toMatch(/@media \(max-width: 640px\) \{[\s\S]*?\.german-sv-mode,[\s\S]*?\.german-sv-results \{\s*grid-template-columns: 1fr;/);
+  });
+
+  it("shows the verified decorative SV-Rente illustration in the responsive header", () => {
+    const pensionView = pageSource.slice(
+      pageSource.indexOf('function GermanSvPensionView('),
+      pageSource.indexOf('export default function Home()'),
+    );
+
+    expect(pensionView).toMatch(
+      /<header className="forms-view-header bfg-view-header german-sv-pension-header">[\s\S]*?<h1 id="german-sv-pension-view-title">Kennzahl 453 &amp; 184<\/h1>[\s\S]*?<Image[\s\S]*?className="bfg-view-header-illustration"[\s\S]*?src="\/fred-german-sv-pension\.png"[\s\S]*?alt=""[\s\S]*?width=\{376\}[\s\S]*?height=\{376\}[\s\S]*?unoptimized[\s\S]*?<\/header>/,
+    );
+    expect(createHash("sha256").update(readFileSync(germanSvPensionIllustrationPath)).digest("hex")).toBe(
+      "6e7f0c0e7dc3b4c7fd12f8882d21c9bb0ed324b81e502fae5f4bddfd5afeec69",
+    );
+    expect(globalsSource).toMatch(
+      /\.bfg-view-header-illustration \{[\s\S]*?width: 100%;[\s\S]*?max-width: 240px;[\s\S]*?height: auto;[\s\S]*?\}/,
+    );
   });
 
   it("keeps system prompt controls and data on the admin-only surface", () => {

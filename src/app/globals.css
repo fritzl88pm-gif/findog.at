@@ -958,10 +958,6 @@ textarea:focus {
   width: min(820px, 100%);
 }
 
-.german-sv-pension-header > p:last-child {
-  max-width: 720px;
-}
-
 .german-sv-year-control {
   display: flex;
   align-items: center;
@@ -1260,27 +1256,9 @@ textarea:focus {
   color: var(--bmf-blue-deep);
 }
 
-.german-sv-notes {
-  display: grid;
-  gap: 10px;
-}
-
-.german-sv-notes p {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 8px;
-  margin: 0;
-  border: 1px solid rgba(179, 38, 30, 0.15);
-  border-radius: var(--radius-sm);
-  background: rgba(179, 38, 30, 0.04);
-  padding: 11px 13px;
-  color: #8d2020;
-  font-size: 0.78rem;
-  line-height: 1.5;
-}
-
-.german-sv-notes span {
-  font-weight: 800;
+.german-sv-pdf-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .german-sv-source {
@@ -2659,6 +2637,10 @@ textarea:focus {
 
   .german-sv-results h2 {
     min-height: 0;
+  }
+
+  .german-sv-pdf-actions .primary-button {
+    width: 100%;
   }
 
   .form-selected-file {

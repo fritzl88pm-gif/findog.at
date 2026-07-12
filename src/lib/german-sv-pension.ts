@@ -19,6 +19,11 @@ export type GermanSvPensionResult = {
   kz184: number;
 };
 
+export type GermanSvPensionPdfDocument = {
+  title: string;
+  content: string;
+};
+
 const RATES: Record<GermanSvPensionYear, GermanSvPensionRate> = {
   2024: { rate: 0.051, displayPrecision: 2 },
   2025: { rate: 0.0561395, displayPrecision: 5 },
@@ -106,4 +111,37 @@ export function formatGermanSvRate(year: GermanSvPensionYear): string {
     minimumFractionDigits: displayPrecision,
     maximumFractionDigits: displayPrecision,
   })} %`;
+}
+
+export function buildGermanSvPensionPdfDocument(
+  year: GermanSvPensionYear,
+  mode: GermanSvPensionMode,
+  amount: number,
+): GermanSvPensionPdfDocument {
+  const calculation = calculateGermanSvPension(year, mode, amount);
+  const inputType = mode === "kv" ? "KV-Beitrag" : "Rentenbrutto / AEOI-KM";
+  const simplifiedPercentage = (calculation.simplifiedFactor * 100).toLocaleString("de-AT", {
+    maximumFractionDigits: 6,
+  });
+
+  return {
+    title: `Deutsche SV Rente ${year}`,
+    content: [
+      "Deutsche SV Rente – Kennzahl 453 & 184",
+      "",
+      `Veranlagungsjahr: ${year}`,
+      `Eingabeart: ${inputType}`,
+      `Eingabewert: ${formatGermanSvEuro(amount)}`,
+      `KV-Beitragssatz lt. § 73a ASVG: ${formatGermanSvRate(year)}`,
+      "",
+      "Zwischenwerte der Berechnung",
+      `Krankenversicherung gem. § 73a ASVG: ${formatGermanSvEuro(calculation.kvBeitrag)}`,
+      `Deutscher Zuschuss zur Krankenversicherung: ${formatGermanSvEuro(calculation.zuschuss)}`,
+      `Deutscher Jahresbetrag der Rente / KV-Bemessungsgrundlage: ${formatGermanSvEuro(calculation.bmgl)}`,
+      `Vereinfachter Faktor für Kz 453: ${simplifiedPercentage} %`,
+      "",
+      `Kz 453 – Steuerpflichtige Einkünfte: ${formatGermanSvEuro(calculation.kz453)}`,
+      `Kz 184 – Sozialversicherungsbeiträge (KV-Beitrag): ${formatGermanSvEuro(calculation.kz184)}`,
+    ].join("\n"),
+  };
 }

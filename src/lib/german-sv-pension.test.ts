@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildGermanSvPensionPdfDocument,
   calculateGermanSvPension,
   formatGermanSvEuro,
   formatGermanSvRate,
@@ -46,5 +47,33 @@ describe("Deutsche SV Rente calculator", () => {
     expect(parseGermanSvAmount("")).toBeNull();
     expect(parseGermanSvAmount("abc")).toBeNull();
     expect(parseGermanSvAmount("-1,00")).toBeNull();
+  });
+
+  it("builds PDF content from the selected calculation", () => {
+    expect(buildGermanSvPensionPdfDocument(2024, "kv", 1308.7)).toEqual({
+      title: "Deutsche SV Rente 2024",
+      content: [
+        "Deutsche SV Rente – Kennzahl 453 & 184",
+        "",
+        "Veranlagungsjahr: 2024",
+        "Eingabeart: KV-Beitrag",
+        "Eingabewert: 1.308,70 €",
+        "KV-Beitragssatz lt. § 73a ASVG: 5,10 %",
+        "",
+        "Zwischenwerte der Berechnung",
+        "Krankenversicherung gem. § 73a ASVG: 1.308,70 €",
+        "Deutscher Zuschuss zur Krankenversicherung: 654,35 €",
+        "Deutscher Jahresbetrag der Rente / KV-Bemessungsgrundlage: 25.660,78 €",
+        "Vereinfachter Faktor für Kz 453: 97,45 %",
+        "",
+        "Kz 453 – Steuerpflichtige Einkünfte: 25.006,43 €",
+        "Kz 184 – Sozialversicherungsbeiträge (KV-Beitrag): 1.308,70 €",
+      ].join("\n"),
+    });
+
+    const pensionGrossDocument = buildGermanSvPensionPdfDocument(2025, "rentenbrutto", 29470);
+    expect(pensionGrossDocument.content).toContain("Veranlagungsjahr: 2025");
+    expect(pensionGrossDocument.content).toContain("Eingabeart: Rentenbrutto / AEOI-KM");
+    expect(pensionGrossDocument.content).toContain("Kz 453 – Steuerpflichtige Einkünfte: 28.642,78 €");
   });
 });
