@@ -164,8 +164,7 @@ type BfgProResult = {
   documentType: string;
   decisionDate: string;
   publicationDate: string;
-  caseFacts: string;
-  outcome: string;
+  caseSummary: string;
   whyRelevant: string;
   score: number;
   htmlUrl: string | null;
@@ -600,12 +599,9 @@ function normalizeBfgProResults(value: unknown): BfgProResult[] | null {
       || typeof item.documentType !== "string"
       || typeof item.decisionDate !== "string"
       || typeof item.publicationDate !== "string"
-      || typeof item.caseFacts !== "string"
-      || !item.caseFacts.trim()
-      || item.caseFacts.length > 700
-      || typeof item.outcome !== "string"
-      || !item.outcome.trim()
-      || item.outcome.length > 280
+      || typeof item.caseSummary !== "string"
+      || !item.caseSummary.trim()
+      || item.caseSummary.length > 400
       || typeof item.whyRelevant !== "string"
       || typeof item.score !== "number"
       || item.score < 0
@@ -621,8 +617,7 @@ function normalizeBfgProResults(value: unknown): BfgProResult[] | null {
       documentType: item.documentType,
       decisionDate: item.decisionDate,
       publicationDate: item.publicationDate,
-      caseFacts: item.caseFacts,
-      outcome: item.outcome,
+      caseSummary: item.caseSummary,
       whyRelevant: item.whyRelevant,
       score: item.score,
       htmlUrl: item.htmlUrl,
@@ -2996,20 +2991,10 @@ export default function Home() {
       {appView === "bfg-pro" ? (
         <section className="forms-panel" aria-labelledby="bfg-pro-view-title">
           <div className="forms-view bfg-decisions-view bfg-pro-view">
-            <header className="forms-view-header bfg-view-header">
-              <div className="bfg-view-header-copy">
-                <p className="eyebrow">Findok</p>
-                <h1 id="bfg-pro-view-title">BFG Suche PRO</h1>
-                <p>KI-gestützte Reihung auf Basis veröffentlichter Findok BFG-Entscheidungen</p>
-              </div>
-              <Image
-                className="bfg-view-header-illustration"
-                src="/fred-bfg-pro-search.png"
-                alt=""
-                width={313}
-                height={313}
-                unoptimized
-              />
+            <header className="forms-view-header">
+              <p className="eyebrow">Findok</p>
+              <h1 id="bfg-pro-view-title">BFG Suche PRO</h1>
+              <p>KI-gestützte Reihung auf Basis veröffentlichter Findok BFG-Entscheidungen</p>
             </header>
 
             <form
@@ -3073,18 +3058,16 @@ export default function Home() {
                                 : "",
                           ].filter(Boolean).join(" · ")}
                         </p>
-                        <div className="bfg-pro-excerpt">
-                          <h3>Sachverhalt</h3>
-                          <p>{result.caseFacts}</p>
-                        </div>
-                        <div className="bfg-pro-excerpt">
-                          <h3>Ergebnis</h3>
-                          <p>{result.outcome}</p>
-                        </div>
                         <div className="bfg-pro-relevance">
                           <h3>Warum relevant</h3>
                           <p>{result.whyRelevant}</p>
                         </div>
+                        {result.caseSummary ? (
+                          <div className="bfg-pro-excerpt">
+                            <h3>Sachverhalt</h3>
+                            <p>{result.caseSummary}</p>
+                          </div>
+                        ) : null}
                         <div className="bfg-result-links">
                           {result.htmlUrl ? (
                             <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener">
@@ -3093,7 +3076,7 @@ export default function Home() {
                                 <path d="M10 14 19 5" />
                                 <path d="M19 14v5H5V5h5" />
                               </svg>
-                              Urteil öffnen
+                              Entscheidung öffnen
                             </a>
                           ) : null}
                           {result.pdfUrl ? (
@@ -3313,7 +3296,7 @@ export default function Home() {
                                 <path d="M10 14 19 5" />
                                 <path d="M19 14v5H5V5h5" />
                               </svg>
-                              Urteil öffnen
+                              Entscheidung öffnen
                             </a>
                           ) : null}
                           {result.pdfUrl ? (
