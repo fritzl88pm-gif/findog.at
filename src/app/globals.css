@@ -953,6 +953,343 @@ textarea:focus {
   font-size: 0.82rem;
 }
 
+/* Deutsche SV Rente calculator view */
+.german-sv-pension-view {
+  width: min(820px, 100%);
+}
+
+.german-sv-pension-header > p:last-child {
+  max-width: 720px;
+}
+
+.german-sv-year-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.german-sv-year-control > span {
+  color: var(--bmf-blue-deep);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.german-sv-year-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(68px, 1fr));
+  gap: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-app);
+  padding: 4px;
+}
+
+.german-sv-year-options button {
+  min-height: 36px;
+  border-radius: 6px;
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 750;
+}
+
+.german-sv-year-options button:hover,
+.german-sv-year-options button.active {
+  background: var(--bg-surface);
+  color: var(--bmf-blue-deep);
+  box-shadow: var(--shadow-sm);
+}
+
+.german-sv-year-options button:focus-visible {
+  outline: 3px solid rgba(40, 111, 156, 0.2);
+  outline-offset: 1px;
+}
+
+.german-sv-calculator-card {
+  display: grid;
+  gap: 22px;
+  border: 1px solid var(--border-color);
+  border-top: 4px solid var(--accent-yellow);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  padding: 28px;
+  box-shadow: var(--shadow-md);
+}
+
+.german-sv-rate-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 18px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.german-sv-rate-line strong {
+  color: var(--bmf-blue-deep);
+}
+
+.german-sv-mode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.german-sv-mode legend {
+  grid-column: 1 / -1;
+  margin-bottom: 1px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.german-sv-mode label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: #fafbfc;
+  padding: 13px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.german-sv-mode label:hover,
+.german-sv-mode label.active {
+  border-color: var(--border-hover);
+  background: rgba(40, 111, 156, 0.06);
+}
+
+.german-sv-mode label.active {
+  border-color: var(--bmf-blue);
+}
+
+.german-sv-mode input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  padding: 0;
+  accent-color: var(--bmf-blue);
+}
+
+.german-sv-mode input:focus-visible {
+  outline: 3px solid rgba(40, 111, 156, 0.2);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+.german-sv-mode label > span {
+  display: grid;
+  gap: 3px;
+}
+
+.german-sv-mode strong {
+  color: var(--bmf-blue-deep);
+  font-size: 0.88rem;
+}
+
+.german-sv-mode small {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.german-sv-amount-field {
+  max-width: 480px;
+}
+
+.german-sv-amount-input {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: #fafbfc;
+}
+
+.german-sv-amount-input:focus-within {
+  border-color: var(--border-focus);
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 3px rgba(40, 111, 156, 0.12);
+}
+
+.german-sv-amount-input > span {
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  border-right: 1px solid var(--border-color);
+  padding: 0 13px;
+  color: var(--bmf-blue-dark);
+  font-weight: 750;
+}
+
+.german-sv-amount-input input {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  box-shadow: none;
+}
+
+.german-sv-amount-input input:hover,
+.german-sv-amount-input input:focus {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.german-sv-calculation-trail {
+  display: grid;
+  border-top: 1px solid var(--border-color);
+}
+
+.german-sv-calculation-trail > div {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--border-color);
+  padding: 12px 0;
+}
+
+.german-sv-step-number {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(40, 111, 156, 0.09);
+  color: var(--bmf-blue-dark);
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.german-sv-calculation-trail > div > span:nth-child(2) {
+  display: grid;
+  gap: 3px;
+}
+
+.german-sv-calculation-trail strong {
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.german-sv-calculation-trail small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.german-sv-calculation-trail output {
+  color: var(--bmf-blue-deep);
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.german-sv-results {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.german-sv-results article {
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-left: 4px solid var(--bmf-blue);
+  border-radius: var(--radius-md);
+  background: rgba(40, 111, 156, 0.06);
+  padding: 17px;
+}
+
+.german-sv-results p {
+  margin: 0 0 4px;
+  color: var(--bmf-blue-dark);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.german-sv-results h2 {
+  min-height: 2.7em;
+  margin: 0 0 9px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.german-sv-results output {
+  color: var(--bmf-blue-deep);
+  font-size: clamp(1.25rem, 4vw, 1.55rem);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.german-sv-check-line {
+  margin: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-app);
+  padding: 11px 13px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.german-sv-check-line strong {
+  color: var(--bmf-blue-deep);
+}
+
+.german-sv-notes {
+  display: grid;
+  gap: 10px;
+}
+
+.german-sv-notes p {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  margin: 0;
+  border: 1px solid rgba(179, 38, 30, 0.15);
+  border-radius: var(--radius-sm);
+  background: rgba(179, 38, 30, 0.04);
+  padding: 11px 13px;
+  color: #8d2020;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.german-sv-notes span {
+  font-weight: 800;
+}
+
+.german-sv-source {
+  margin: -10px 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-align: right;
+}
+
 .form-choice-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -2291,6 +2628,37 @@ textarea:focus {
 
   .form-generator-card {
     padding: 20px 16px;
+  }
+
+  .german-sv-year-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .german-sv-year-options {
+    width: 100%;
+  }
+
+  .german-sv-calculator-card {
+    padding: 20px 16px;
+  }
+
+  .german-sv-mode,
+  .german-sv-results {
+    grid-template-columns: 1fr;
+  }
+
+  .german-sv-calculation-trail > div {
+    grid-template-columns: 24px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .german-sv-calculation-trail output {
+    grid-column: 2;
+  }
+
+  .german-sv-results h2 {
+    min-height: 0;
   }
 
   .form-selected-file {

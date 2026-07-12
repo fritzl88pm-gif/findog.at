@@ -13,11 +13,13 @@ describe("approved release surface", () => {
   const faviconPath = fileURLToPath(new URL("../../public/favicon.png", import.meta.url));
   const bfgIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-search.png", import.meta.url));
   const bfgProIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-pro-search.png", import.meta.url));
+  const germanSvPensionPath = fileURLToPath(new URL("./german-sv-pension.ts", import.meta.url));
   const pageSource = readFileSync(pagePath, "utf8");
   const globalsSource = readFileSync(globalsPath, "utf8");
   const layoutSource = readFileSync(layoutPath, "utf8");
   const publicSettingsSource = readFileSync(publicSettingsPath, "utf8");
   const adminSettingsSource = readFileSync(adminSettingsPath, "utf8");
+  const germanSvPensionSource = readFileSync(germanSvPensionPath, "utf8");
 
   it("labels the standalone BFG view as BFG Suche in expanded and collapsed navigation", () => {
     expect(pageSource).toMatch(/className={`sidebar-view-button[\s\S]*?<\/svg>\s*BFG Suche\s*<\/button>/);
@@ -29,7 +31,7 @@ describe("approved release surface", () => {
   });
 
   it("adds a separate BFG Suche PRO view and controls without replacing the normal search", () => {
-    expect(pageSource).toContain('type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "administration"');
+    expect(pageSource).toContain('type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "administration"');
     expect(pageSource).toMatch(/className={`sidebar-view-button[\s\S]*?BFG Suche PRO\s*<\/button>/);
     expect(pageSource).toContain('title="BFG Suche PRO"');
     expect(pageSource).toContain('aria-label="BFG Suche PRO"');
@@ -44,6 +46,58 @@ describe("approved release surface", () => {
     expect(pageSource).not.toContain('Originaltext-Auszug');
     expect(pageSource).toContain('Keine relevanten BFG-Entscheidungen gefunden.');
     expect(pageSource).toContain('/api/findok/bfg?');
+  });
+
+  it("adds the local Deutsche SV Rente AppView directly below BFG Suche PRO", () => {
+    const expandedNavigation = pageSource.slice(
+      pageSource.indexOf('<nav className="forms-navigation"'),
+      pageSource.indexOf('</nav>', pageSource.indexOf('<nav className="forms-navigation"')),
+    );
+    const collapsedRail = pageSource.slice(
+      pageSource.indexOf('<div className="rail-content">'),
+      pageSource.indexOf('<div className="sidebar-footer">'),
+    );
+    const pensionView = pageSource.slice(
+      pageSource.indexOf('function GermanSvPensionView()'),
+      pageSource.indexOf('export default function Home()'),
+    );
+
+    expect(expandedNavigation).toMatch(/BFG Suche PRO\s*<\/button>\s*<button[\s\S]*?appView === "german-sv-pension"[\s\S]*?Deutsche SV Rente\s*<\/button>/);
+    expect(collapsedRail).toMatch(/title="BFG Suche PRO"[\s\S]*?<\/button>\s*<button[\s\S]*?title="Deutsche SV Rente"[\s\S]*?aria-label="Deutsche SV Rente"/);
+    expect(pageSource).toContain('appView === "german-sv-pension"');
+    expect(pageSource).toContain('<GermanSvPensionView />');
+    expect(pensionView).toContain('<fieldset className="german-sv-mode">');
+    expect(pensionView.match(/type="radio"/g)).toHaveLength(2);
+    expect(pensionView.match(/id="german-sv-pension-amount"/g)).toHaveLength(1);
+    expect(pensionView).toContain('inputMode="decimal"');
+    expect(pensionView).toContain('aria-live="polite"');
+    expect(pensionView).not.toContain("fetch(");
+    expect(pensionView).not.toContain("localStorage");
+    expect(pensionView).not.toContain("/api/");
+    expect(germanSvPensionSource).not.toContain("fetch(");
+    expect(germanSvPensionSource).not.toContain("localStorage");
+  });
+
+  it("preserves the authoritative Deutsche SV Rente copy and responsive results", () => {
+    for (const requiredText of [
+      "Kz-Tool · § 73a ASVG",
+      "Berechnung aus deutscher SV-Rente anhand KV-Bemessungsgrundlage bzw. AEOI-KM.",
+      "KV-Beitrag",
+      "Rentenbrutto / AEOI-KM",
+      "Krankenversicherung gem. § 73a ASVG",
+      "dt. Zuschuss zur Krankenversicherung",
+      "dt. „Jahresbetrag der Rente“ = Bmgl. KV",
+      "Steuerpflichtige Einkünfte",
+      "Sozialversicherungsbeiträge (KV-Beitrag)",
+      "Kz 453",
+      "Kz 184",
+      "Es kann zu Rundungsdifferenzen kommen — im deutschen Bescheid wird der Jahresbetrag der Rente abgerundet.",
+      "Nicht anwendbar bei Renten aus der Schweiz und Liechtenstein, da der Wechselkurs AJ-Web/PVA ≠ L17b ist.",
+    ]) {
+      expect(pageSource).toContain(requiredText);
+    }
+
+    expect(globalsSource).toMatch(/@media \(max-width: 640px\) \{[\s\S]*?\.german-sv-mode,[\s\S]*?\.german-sv-results \{\s*grid-template-columns: 1fr;/);
   });
 
   it("keeps system prompt controls and data on the admin-only surface", () => {

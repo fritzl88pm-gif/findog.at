@@ -52,6 +52,15 @@ import {
   VERF5_FORM_NAME,
 } from "@/lib/forms/config";
 import { normalizeManualSaldo } from "@/lib/forms/values";
+import {
+  GERMAN_SV_PENSION_YEARS,
+  calculateGermanSvPension,
+  formatGermanSvEuro,
+  formatGermanSvRate,
+  parseGermanSvAmount,
+  type GermanSvPensionMode,
+  type GermanSvPensionYear,
+} from "@/lib/german-sv-pension";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -69,7 +78,7 @@ type ConversationSummary = {
 };
 
 type SettingsTab = "model" | "password";
-type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "administration";
+type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "administration";
 type ComposerMenu = "attachments" | "model" | null;
 
 type AuthForm = {
@@ -877,6 +886,154 @@ function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
   );
 }
 
+function GermanSvPensionView() {
+  const [year, setYear] = useState<GermanSvPensionYear>(2026);
+  const [mode, setMode] = useState<GermanSvPensionMode>("kv");
+  const [amountInput, setAmountInput] = useState("");
+  const amount = parseGermanSvAmount(amountInput);
+  const calculation = amount === null ? null : calculateGermanSvPension(year, mode, amount);
+  const displayMoney = (value: number | undefined) =>
+    value === undefined ? "— €" : formatGermanSvEuro(value);
+  const inputLabel = mode === "kv" ? "KV-Beitrag" : "Rentenbrutto / AEOI-KM";
+
+  return (
+    <section className="forms-panel" aria-labelledby="german-sv-pension-view-title">
+      <div className="forms-view german-sv-pension-view">
+        <header className="forms-view-header german-sv-pension-header">
+          <p className="eyebrow">Kz-Tool · § 73a ASVG</p>
+          <h1 id="german-sv-pension-view-title">Kennzahl 453 &amp; 184</h1>
+          <p>Berechnung aus deutscher SV-Rente anhand KV-Bemessungsgrundlage bzw. AEOI-KM. Betrag entweder als österr. KV-Beitrag oder als Rentenbrutto (AEOI-KM/AJ-Web) eingeben — das Tool berechnet die jeweils andere Seite automatisch.</p>
+        </header>
+
+        <div className="german-sv-year-control" role="group" aria-label="Veranlagungsjahr">
+          <span>Veranlagungsjahr</span>
+          <div className="german-sv-year-options">
+            {GERMAN_SV_PENSION_YEARS.map((option) => (
+              <button
+                className={year === option ? "active" : undefined}
+                type="button"
+                aria-pressed={year === option}
+                onClick={() => setYear(option)}
+                key={option}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="german-sv-calculator-card">
+          <p className="german-sv-rate-line">
+            <span>KV-Beitragssatz lt. § 73a ASVG: <strong>{formatGermanSvRate(year)}</strong></span>
+            <span>Jahr: <strong>{year}</strong></span>
+          </p>
+
+          <fieldset className="german-sv-mode">
+            <legend>Eingabe entweder …</legend>
+            <label className={mode === "kv" ? "active" : undefined}>
+              <input
+                type="radio"
+                name="german-sv-pension-mode"
+                value="kv"
+                checked={mode === "kv"}
+                onChange={() => setMode("kv")}
+              />
+              <span>
+                <strong>KV-Beitrag</strong>
+                <small>österr. Krankenversicherungsbeitrag gem. § 73a ASVG</small>
+              </span>
+            </label>
+            <label className={mode === "rentenbrutto" ? "active" : undefined}>
+              <input
+                type="radio"
+                name="german-sv-pension-mode"
+                value="rentenbrutto"
+                checked={mode === "rentenbrutto"}
+                onChange={() => setMode("rentenbrutto")}
+              />
+              <span>
+                <strong>Rentenbrutto / AEOI-KM</strong>
+                <small>dt. Bemessungsgrundlage lt. AJ-Web bzw. KV-Bmgl</small>
+              </span>
+            </label>
+          </fieldset>
+
+          <div className="field-group german-sv-amount-field">
+            <label htmlFor="german-sv-pension-amount">{inputLabel}</label>
+            <div className="german-sv-amount-input">
+              <span aria-hidden="true">€</span>
+              <input
+                id="german-sv-pension-amount"
+                type="text"
+                inputMode="decimal"
+                value={amountInput}
+                onChange={(event) => setAmountInput(event.target.value)}
+                placeholder="0,00"
+                autoComplete="off"
+                aria-describedby="german-sv-pension-amount-help"
+              />
+            </div>
+            <span className="field-help" id="german-sv-pension-amount-help">Betrag in Euro, z. B. 1.308,70</span>
+          </div>
+
+          <div className="german-sv-calculation-trail" aria-label="Berechnungsschritte" aria-live="polite">
+            <div>
+              <span className="german-sv-step-number">1</span>
+              <span>
+                <strong>Krankenversicherung gem. § 73a ASVG</strong>
+                <small>{mode === "kv" ? "Eingabe" : "= Rentenbrutto × Beitragssatz"}</small>
+              </span>
+              <output>{displayMoney(calculation?.kvBeitrag)}</output>
+            </div>
+            <div>
+              <span className="german-sv-step-number">2</span>
+              <span>
+                <strong>dt. Zuschuss zur Krankenversicherung</strong>
+                <small>{mode === "kv" ? "= KV-Beitrag ÷ 2" : "= Rentenbrutto × halber Beitragssatz"}</small>
+              </span>
+              <output>{displayMoney(calculation?.zuschuss)}</output>
+            </div>
+            <div>
+              <span className="german-sv-step-number">3</span>
+              <span>
+                <strong>dt. „Jahresbetrag der Rente“ = Bmgl. KV</strong>
+                <small>{mode === "kv" ? "= KV-Beitrag ÷ Beitragssatz" : "Eingabe (Rentenbrutto / AEOI-KM)"}</small>
+              </span>
+              <output>{displayMoney(calculation?.bmgl)}</output>
+            </div>
+          </div>
+
+          <div className="german-sv-results" aria-live="polite">
+            <article>
+              <p>Kz 453</p>
+              <h2>Steuerpflichtige Einkünfte</h2>
+              <output>{displayMoney(calculation?.kz453)}</output>
+            </article>
+            <article>
+              <p>Kz 184</p>
+              <h2>Sozialversicherungsbeiträge (KV-Beitrag)</h2>
+              <output>{displayMoney(calculation?.kz184)}</output>
+            </article>
+          </div>
+
+          <p className="german-sv-check-line">
+            {calculation
+              ? <>Vereinfachte Berechnung: Kz 453 = <strong>{(calculation.simplifiedFactor * 100).toLocaleString("de-AT", { maximumFractionDigits: 6 })} %</strong> von KV-Bmgl / AEOI-KM.</>
+              : "Vereinfachte Kontrollrechnung erscheint hier, sobald ein Betrag eingegeben ist."}
+          </p>
+        </div>
+
+        <div className="german-sv-notes" aria-label="Hinweise">
+          <p><span aria-hidden="true">!</span> Es kann zu Rundungsdifferenzen kommen — im deutschen Bescheid wird der Jahresbetrag der Rente abgerundet.</p>
+          <p><span aria-hidden="true">!</span> Nicht anwendbar bei Renten aus der Schweiz und Liechtenstein, da der Wechselkurs AJ-Web/PVA ≠ L17b ist.</p>
+        </div>
+
+        <p className="german-sv-source">Stand 26.06.2026</p>
+      </div>
+    </section>
+  );
+}
+
 export default function Home() {
   const supabase = getSupabaseBrowserClient();
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_CHAT_SETTINGS);
@@ -1522,6 +1679,13 @@ export default function Home() {
   function openBfgProView() {
     setAppView("bfg-pro");
     setBfgProError("");
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
+  function openGermanSvPensionView() {
+    setAppView("german-sv-pension");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
     }
@@ -2697,6 +2861,15 @@ export default function Home() {
                 BFG Suche PRO
               </button>
               <button
+                className={`sidebar-view-button ${appView === "german-sv-pension" ? "active" : ""}`}
+                type="button"
+                onClick={openGermanSvPensionView}
+                aria-current={appView === "german-sv-pension" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"></rect><path d="M8 6h8M8 10h2M14 10h2M8 14h2M14 14h2M8 18h2M14 18h2"></path></svg>
+                Deutsche SV Rente
+              </button>
+              <button
                 className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
                 type="button"
                 onClick={openFormsView}
@@ -2759,6 +2932,16 @@ export default function Home() {
               aria-current={appView === "bfg-pro" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"></path><path d="m19 15 .75 2.25L22 18l-2.25.75L19 21l-.75-2.25L16 18l2.25-.75L19 15Z"></path></svg>
+            </button>
+            <button
+              className={`icon-button rail-icon-btn ${appView === "german-sv-pension" ? "active" : ""}`}
+              type="button"
+              onClick={openGermanSvPensionView}
+              title="Deutsche SV Rente"
+              aria-label="Deutsche SV Rente"
+              aria-current={appView === "german-sv-pension" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"></rect><path d="M8 6h8M8 10h2M14 10h2M8 14h2M14 14h2M8 18h2M14 18h2"></path></svg>
             </button>
             {isAdmin ? (
               <button
@@ -3348,6 +3531,8 @@ export default function Home() {
             ) : null}
           </div>
         </section>
+      ) : appView === "german-sv-pension" ? (
+        <GermanSvPensionView />
       ) : appView === "forms" ? (
         <section className="forms-panel" aria-labelledby="forms-view-title">
           <div className="forms-view">
