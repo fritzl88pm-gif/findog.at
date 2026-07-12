@@ -23,6 +23,22 @@ describe("approved release surface", () => {
     expect(pageSource).toContain('/api/findok/bfg');
   });
 
+  it("adds a separate BFG Suche PRO view and controls without replacing the normal search", () => {
+    expect(pageSource).toContain('type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "administration"');
+    expect(pageSource).toMatch(/className={`sidebar-view-button[\s\S]*?BFG Suche PRO\s*<\/button>/);
+    expect(pageSource).toContain('title="BFG Suche PRO"');
+    expect(pageSource).toContain('aria-label="BFG Suche PRO"');
+    expect(pageSource).toContain('appView === "bfg-pro"');
+    expect(pageSource).toContain('<h1 id="bfg-pro-view-title">BFG Suche PRO</h1>');
+    expect(pageSource).toContain("KI-gestützte Reihung auf Basis veröffentlichter Findok BFG-Entscheidungen");
+    expect(pageSource).toContain('htmlFor="bfg-pro-scenario"');
+    expect(pageSource).toContain('<textarea');
+    expect(pageSource).toContain('/api/findok/bfg/pro');
+    expect(pageSource).toContain('Warum relevant');
+    expect(pageSource).toContain('Keine relevanten BFG-Entscheidungen gefunden.');
+    expect(pageSource).toContain('/api/findok/bfg?');
+  });
+
   it("registers the supplied favicon and preserves the approved metadata copy", () => {
     expect(layoutSource).toContain('title: "Findog/Fred"');
     expect(layoutSource).toContain(

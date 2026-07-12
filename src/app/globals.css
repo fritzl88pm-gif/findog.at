@@ -775,6 +775,21 @@ textarea:focus {
   font-weight: 750;
 }
 
+.bfg-pro-form textarea {
+  min-height: 160px;
+  resize: vertical;
+}
+
+.bfg-pro-submit {
+  justify-self: end;
+}
+
+.bfg-pro-loading-state {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .bfg-search-row,
 .bfg-search-controls,
 .bfg-filter-actions {
@@ -894,6 +909,30 @@ textarea:focus {
   color: var(--ink);
   font-size: 0.9rem;
   line-height: 1.55;
+}
+
+.bfg-pro-relevance,
+.bfg-pro-excerpt {
+  margin-top: 12px;
+}
+
+.bfg-pro-relevance h3,
+.bfg-pro-excerpt h3 {
+  margin: 0 0 4px;
+  color: var(--bmf-blue-deep);
+  font-size: 0.82rem;
+}
+
+.bfg-pro-relevance p,
+.bfg-pro-excerpt p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.bfg-pro-excerpt p {
+  color: var(--muted);
 }
 
 .bfg-result-links {
@@ -2311,6 +2350,10 @@ textarea:focus {
 
   .bfg-pagination {
     flex-wrap: wrap;
+  }
+
+  .bfg-pro-submit {
+    width: 100%;
   }
 }
 

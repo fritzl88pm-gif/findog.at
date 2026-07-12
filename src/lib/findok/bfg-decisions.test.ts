@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   detectExactFindokGz,
   fetchBfgDecisions,
+  fetchBfgProCandidates,
   normalizeFindokQuery,
   parseFindokSseData,
 } from "./bfg-decisions";
@@ -54,6 +55,72 @@ describe("Findok SSE parsing", () => {
 });
 
 describe("Findok BFG result mapping", () => {
+  it("fetches at most two result pages and retains official metadata plus server-only content", async () => {
+    const firstPage = sseResponse({
+      pageResults: {
+        searchResults: [{
+          dokumentId: "doc-1",
+          segmentId: "seg-1",
+          indexName: "findok",
+          title: "Search title",
+          dokumenttyp: "Erkenntnis",
+          snippet: "Snippet",
+        }],
+        currentPage: 0,
+        pageSize: 20,
+        totalPages: 3,
+        totalSize: 41,
+      },
+    });
+    const secondPage = sseResponse({
+      pageResults: {
+        searchResults: [],
+        currentPage: 1,
+        pageSize: 20,
+        totalPages: 3,
+        totalSize: 41,
+      },
+    });
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(jsonResponse({
+        bfg: true,
+        dokumentId: "doc-1",
+        segmentId: "seg-1",
+        indexName: "findok",
+        titel: "Offizieller Titel",
+        dokumentTitel: {
+          titel: "Erkenntnis des BFG vom 03.04.2025, RV/7100001/2025",
+          geschaeftszahl: "RV/7100001/2025",
+        },
+        dokumenttyp: "Erkenntnis",
+        dokumentPdfMediaUrl: "/findok/resources/pdf/decision.pdf",
+        zusatzinformationen: { inFindokVeroeffentlichtAm: "10.04.2025" },
+        content: "Vollständiger offizieller Entscheidungstext für serverseitige Verarbeitung.",
+      }))
+      .mockResolvedValueOnce(secondPage);
+
+    const result = await fetchBfgProCandidates({ query: "Arbeitszimmer", fetchImpl: fetchMock });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const searchRequests = fetchMock.mock.calls
+      .map(([url]) => new URL(String(url)))
+      .filter((url) => url.pathname.endsWith("/dokumente"));
+    expect(searchRequests.map((url) => url.searchParams.get("page"))).toEqual(["1", "2"]);
+    expect(searchRequests.every((url) => url.searchParams.get("size") === "20")).toBe(true);
+    expect(result).toEqual([{
+      candidateId: "candidate-1",
+      title: "Offizieller Titel",
+      gz: "RV/7100001/2025",
+      documentType: "Erkenntnis",
+      decisionDate: "03.04.2025",
+      publicationDate: "10.04.2025",
+      content: "Vollständiger offizieller Entscheidungstext für serverseitige Verarbeitung.",
+      htmlUrl: "https://findok.bmf.gv.at/findok/volltext?dokumentId=doc-1&segmentId=seg-1&indexName=findok",
+      pdfUrl: "https://findok.bmf.gv.at/findok/resources/pdf/decision.pdf",
+    }]);
+  });
+
   it.each([
     { requestedPage: 1, upstreamPage: 0, expectedPage: 1 },
     { requestedPage: 2, upstreamPage: 1, expectedPage: 2 },

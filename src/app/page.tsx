@@ -73,7 +73,7 @@ type ConversationSummary = {
 };
 
 type SettingsTab = "system-prompt" | "model" | "password";
-type AppView = "chat" | "forms" | "bfg-decisions" | "administration";
+type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "administration";
 type ComposerMenu = "attachments" | "model" | null;
 
 type AuthForm = {
@@ -161,6 +161,19 @@ type BfgDecisionPage = {
   totalPages: number;
   totalCount: number;
   facets: BfgFilterFacets;
+};
+
+type BfgProResult = {
+  title: string;
+  gz: string;
+  documentType: string;
+  decisionDate: string;
+  publicationDate: string;
+  excerpt: string;
+  whyRelevant: string;
+  score: number;
+  htmlUrl: string | null;
+  pdfUrl: string | null;
 };
 
 const SETTINGS_STORAGE_KEY = "findog.settings.v1";
@@ -573,6 +586,51 @@ function normalizeBfgDecisionPage(value: unknown): BfgDecisionPage | null {
     : null;
 }
 
+function normalizeBfgProResults(value: unknown): BfgProResult[] | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const payload = value as Record<string, unknown>;
+  if (!Array.isArray(payload.results) || payload.results.length > 10) {
+    return null;
+  }
+  const results = payload.results.flatMap((value): BfgProResult[] => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return [];
+    }
+    const item = value as Record<string, unknown>;
+    if (
+      typeof item.title !== "string"
+      || typeof item.gz !== "string"
+      || typeof item.documentType !== "string"
+      || typeof item.decisionDate !== "string"
+      || typeof item.publicationDate !== "string"
+      || typeof item.excerpt !== "string"
+      || typeof item.whyRelevant !== "string"
+      || typeof item.score !== "number"
+      || item.score < 0
+      || item.score > 100
+      || (item.htmlUrl !== null && typeof item.htmlUrl !== "string")
+      || (item.pdfUrl !== null && typeof item.pdfUrl !== "string")
+    ) {
+      return [];
+    }
+    return [{
+      title: item.title,
+      gz: item.gz,
+      documentType: item.documentType,
+      decisionDate: item.decisionDate,
+      publicationDate: item.publicationDate,
+      excerpt: item.excerpt,
+      whyRelevant: item.whyRelevant,
+      score: item.score,
+      htmlUrl: item.htmlUrl,
+      pdfUrl: item.pdfUrl,
+    }];
+  });
+  return results.length === payload.results.length ? results : null;
+}
+
 function formatBfgPublicationDate(value: string): string {
   if (!value) {
     return "";
@@ -884,6 +942,10 @@ export default function Home() {
   const [bfgError, setBfgError] = useState("");
   const [hasSearchedBfg, setHasSearchedBfg] = useState(false);
   const [isSearchingBfg, setIsSearchingBfg] = useState(false);
+  const [bfgProScenario, setBfgProScenario] = useState("");
+  const [bfgProResults, setBfgProResults] = useState<BfgProResult[] | null>(null);
+  const [bfgProError, setBfgProError] = useState("");
+  const [isSearchingBfgPro, setIsSearchingBfgPro] = useState(false);
   const [selectedFormId, setSelectedFormId] = useState<"" | typeof VERF5_FORM_ID>("");
   const [formImage, setFormImage] = useState<File | null>(null);
   const [formSaldo, setFormSaldo] = useState("");
@@ -1464,6 +1526,65 @@ export default function Home() {
     setBfgError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
+    }
+  }
+
+  function openBfgProView() {
+    setAppView("bfg-pro");
+    setBfgProError("");
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
+  async function searchBfgPro() {
+    const scenario = bfgProScenario.trim();
+    const accessToken = session?.access_token;
+    if (!scenario) {
+      setBfgProError("Bitte einen Sachverhalt eingeben.");
+      return;
+    }
+    if (!accessToken) {
+      setBfgProError("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+      return;
+    }
+
+    setBfgProError("");
+    setBfgProResults(null);
+    setIsSearchingBfgPro(true);
+    try {
+      const response = await fetch("/api/findok/bfg/pro", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ scenario }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as unknown;
+      if (!response.ok) {
+        const errorPayload = payload && typeof payload === "object" && !Array.isArray(payload)
+          ? payload as Record<string, unknown>
+          : {};
+        throw new Error(
+          typeof errorPayload.error === "string"
+            ? errorPayload.error
+            : "Die BFG Suche PRO konnte nicht durchgeführt werden.",
+        );
+      }
+      const results = normalizeBfgProResults(payload);
+      if (!results) {
+        throw new Error("Die BFG Suche PRO lieferte eine ungültige Antwort.");
+      }
+      setBfgProResults(results);
+    } catch (searchError) {
+      setBfgProError(
+        searchError instanceof Error
+          ? searchError.message
+          : "Die BFG Suche PRO konnte nicht durchgeführt werden.",
+      );
+    } finally {
+      setIsSearchingBfgPro(false);
     }
   }
 
@@ -2619,6 +2740,15 @@ export default function Home() {
                 BFG Suche
               </button>
               <button
+                className={`sidebar-view-button ${appView === "bfg-pro" ? "active" : ""}`}
+                type="button"
+                onClick={openBfgProView}
+                aria-current={appView === "bfg-pro" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"></path><path d="m19 15 .75 2.25L22 18l-2.25.75L19 21l-.75-2.25L16 18l2.25-.75L19 15Z"></path></svg>
+                BFG Suche PRO
+              </button>
+              <button
                 className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
                 type="button"
                 onClick={openFormsView}
@@ -2671,6 +2801,16 @@ export default function Home() {
               aria-current={appView === "bfg-decisions" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="20" y1="20" x2="16.65" y2="16.65"></line><path d="M8 11h6M11 8v6"></path></svg>
+            </button>
+            <button
+              className={`icon-button rail-icon-btn ${appView === "bfg-pro" ? "active" : ""}`}
+              type="button"
+              onClick={openBfgProView}
+              title="BFG Suche PRO"
+              aria-label="BFG Suche PRO"
+              aria-current={appView === "bfg-pro" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"></path><path d="m19 15 .75 2.25L22 18l-2.25.75L19 21l-.75-2.25L16 18l2.25-.75L19 15Z"></path></svg>
             </button>
             {isAdmin ? (
               <button
@@ -2949,7 +3089,116 @@ export default function Home() {
         </div>
       ) : null}
 
-      {appView === "bfg-decisions" ? (
+      {appView === "bfg-pro" ? (
+        <section className="forms-panel" aria-labelledby="bfg-pro-view-title">
+          <div className="forms-view bfg-decisions-view bfg-pro-view">
+            <header className="forms-view-header">
+              <p className="eyebrow">Findok</p>
+              <h1 id="bfg-pro-view-title">BFG Suche PRO</h1>
+              <p>KI-gestützte Reihung auf Basis veröffentlichter Findok BFG-Entscheidungen</p>
+            </header>
+
+            <form
+              className="bfg-search-form bfg-pro-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void searchBfgPro();
+              }}
+            >
+              <label htmlFor="bfg-pro-scenario">Sachverhalt</label>
+              <textarea
+                id="bfg-pro-scenario"
+                value={bfgProScenario}
+                onChange={(event) => {
+                  setBfgProScenario(event.target.value);
+                  setBfgProError("");
+                }}
+                maxLength={2000}
+                rows={7}
+                placeholder="Beschreibe den steuerrechtlichen Sachverhalt in eigenen Worten."
+                disabled={isSearchingBfgPro}
+              />
+              <button
+                className="primary-button bfg-pro-submit"
+                type="submit"
+                disabled={isSearchingBfgPro || !bfgProScenario.trim()}
+              >
+                {isSearchingBfgPro ? "Wird gereiht…" : "Entscheidungen suchen"}
+              </button>
+            </form>
+
+            {isSearchingBfgPro ? (
+              <p className="bfg-pro-loading-state" role="status" aria-live="polite">
+                Passende BFG-Entscheidungen werden gesucht und gereiht…
+              </p>
+            ) : null}
+
+            {bfgProError ? (
+              <div className="error-box bfg-message" role="alert" aria-live="polite">{bfgProError}</div>
+            ) : null}
+
+            {!bfgProError && !isSearchingBfgPro && bfgProResults?.length === 0 ? (
+              <p className="bfg-empty-state">Keine relevanten BFG-Entscheidungen gefunden.</p>
+            ) : null}
+
+            {bfgProResults && bfgProResults.length > 0 ? (
+              <div className="bfg-results">
+                <ol className="bfg-result-list">
+                  {bfgProResults.map((result, index) => (
+                    <li key={`${result.htmlUrl ?? result.gz}-${index}`}>
+                      <article>
+                        <h2>{result.title}</h2>
+                        <p className="bfg-result-meta">
+                          {[
+                            result.gz,
+                            result.documentType,
+                            result.decisionDate
+                              ? `Entscheidung vom ${formatBfgPublicationDate(result.decisionDate)}`
+                              : result.publicationDate
+                                ? `Veröffentlicht am ${formatBfgPublicationDate(result.publicationDate)}`
+                                : "",
+                          ].filter(Boolean).join(" · ")}
+                        </p>
+                        <div className="bfg-pro-relevance">
+                          <h3>Warum relevant</h3>
+                          <p>{result.whyRelevant}</p>
+                        </div>
+                        {result.excerpt ? (
+                          <div className="bfg-pro-excerpt">
+                            <h3>Originaltext-Auszug</h3>
+                            <p>{result.excerpt}</p>
+                          </div>
+                        ) : null}
+                        <div className="bfg-result-links">
+                          {result.htmlUrl ? (
+                            <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener">
+                              <svg className="bfg-result-link-icon" aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M14 5h5v5" />
+                                <path d="M10 14 19 5" />
+                                <path d="M19 14v5H5V5h5" />
+                              </svg>
+                              Entscheidung öffnen
+                            </a>
+                          ) : null}
+                          {result.pdfUrl ? (
+                            <a href={result.pdfUrl} target="_blank" rel="noreferrer noopener">
+                              <svg className="bfg-result-link-icon bfg-result-pdf-icon" aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+                                <path d="M14 2v6h6" />
+                              </svg>
+                              PDF öffnen
+                            </a>
+                          ) : null}
+                        </div>
+                      </article>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
+          </div>
+        </section>
+      ) : appView === "bfg-decisions" ? (
         <section className="forms-panel" aria-labelledby="bfg-decisions-view-title">
           <div className="forms-view bfg-decisions-view">
             <header className="forms-view-header bfg-view-header">

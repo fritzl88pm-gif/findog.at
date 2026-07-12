@@ -2,6 +2,9 @@ const FINDOK_ORIGIN = "https://findok.bmf.gv.at";
 const FINDOK_BASE_PATH = "/findok";
 const FINDOK_API_BASE = `${FINDOK_ORIGIN}${FINDOK_BASE_PATH}/api`;
 const MAX_SNIPPET_CHARS = 500;
+const MAX_PRO_CONTENT_CHARS = 100_000;
+const BFG_PRO_RAW_PAGE_SIZE = 20;
+const BFG_PRO_MAX_PAGES = 2;
 
 export type BfgSort = "1" | "2" | "3" | "4" | "7" | "10";
 
@@ -65,6 +68,18 @@ export type BfgDecisionPage = {
   facets: BfgFilterFacets;
 };
 
+export type BfgProCandidate = {
+  candidateId: string;
+  title: string;
+  gz: string;
+  documentType: string;
+  decisionDate: string;
+  publicationDate: string;
+  content: string;
+  htmlUrl: string | null;
+  pdfUrl: string | null;
+};
+
 export class FindokUpstreamError extends Error {
   constructor(message = "Findok lieferte keine verwertbare Antwort.") {
     super(message);
@@ -112,11 +127,15 @@ function decodeHtmlEntities(value: string): string {
     });
 }
 
-function plainText(value: string): string {
+function plainTextWithLimit(value: string, maximum: number): string {
   return decodeHtmlEntities(value.replace(/<[^>]*>/g, " "))
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, MAX_SNIPPET_CHARS);
+    .slice(0, maximum);
+}
+
+function plainText(value: string): string {
+  return plainTextWithLimit(value, MAX_SNIPPET_CHARS);
 }
 
 export function normalizeFindokQuery(value: string): string {
@@ -204,6 +223,16 @@ function documentTitle(record: Record<string, unknown>): { title: string; gz: st
 function gzFromTitle(value: string): string {
   const match = /\b(R[VM]\/[A-Z0-9ÄÖÜ.-]+(?:\/[A-Z0-9ÄÖÜ.-]+)*\/\d{4})\b/iu.exec(value);
   return match?.[1]?.toUpperCase() ?? "";
+}
+
+function decisionDateFromDetail(detail: Record<string, unknown>, title: string): string {
+  for (const key of ["entscheidungsdatum", "genehmigungsdatum", "dokumentDatum", "datum"]) {
+    const value = stringValue(detail, key);
+    if (value) {
+      return plainText(value);
+    }
+  }
+  return /\bvom\s+(\d{1,2}\.\d{1,2}\.\d{4})\b/iu.exec(title)?.[1] ?? "";
 }
 
 function mapDetail(
@@ -425,6 +454,118 @@ async function fetchSearchDetail(hit: FindokSearchHit, fetchImpl: FetchLike): Pr
     throw new FindokUpstreamError(error instanceof Error ? error.message : undefined);
   }
   return mapDetail(await readJsonResponse(response), hit);
+}
+
+function mapProDetail(
+  detail: Record<string, unknown>,
+  hit: FindokSearchHit,
+): Omit<BfgProCandidate, "candidateId"> | null {
+  if (detail.bfg !== true) {
+    return null;
+  }
+  const heading = documentTitle(detail);
+  const title = stringValue(detail, "titel") || hit.title || heading.title;
+  const publication = detail.zusatzinformationen;
+  return {
+    title: plainText(title),
+    gz: plainText(
+      heading.gz
+      || stringValue(detail, "geschaeftszahl")
+      || stringValue(detail, "gz")
+      || gzFromTitle(heading.title)
+      || gzFromTitle(title),
+    ),
+    documentType: plainText(stringValue(detail, "dokumenttyp") || hit.dokumenttyp || "BFG"),
+    decisionDate: decisionDateFromDetail(detail, heading.title || title),
+    publicationDate: isRecord(publication)
+      ? plainText(stringValue(publication, "inFindokVeroeffentlichtAm"))
+      : "",
+    content: plainTextWithLimit(stringValue(detail, "content"), MAX_PRO_CONTENT_CHARS),
+    htmlUrl: officialHtmlUrl(detail)
+      || officialHtmlUrl(hit as unknown as Record<string, unknown>),
+    pdfUrl: officialPdfUrl(stringValue(detail, "dokumentPdfMediaUrl")),
+  };
+}
+
+async function fetchProSearchPage(
+  query: string,
+  page: number,
+  fetchImpl: FetchLike,
+): Promise<{ hits: FindokSearchHit[]; totalPages: number }> {
+  const url = fixedApiUrl("/dokumente");
+  url.searchParams.set("page", String(page));
+  url.searchParams.set("size", String(BFG_PRO_RAW_PAGE_SIZE));
+  url.searchParams.set("suchbegriff", query);
+  url.searchParams.set("typen", "BFG");
+  url.searchParams.set("sort.value", "1");
+
+  let response: Response;
+  try {
+    response = await fetchImpl(url.toString(), requestOptions("text/event-stream"));
+  } catch (error) {
+    throw new FindokUpstreamError(error instanceof Error ? error.message : undefined);
+  }
+  if (!response.ok) {
+    throw new FindokUpstreamError(`Findok antwortete mit HTTP ${response.status}.`);
+  }
+  const payload = parseFindokSseData(await response.text());
+  if (!isRecord(payload) || !isRecord(payload.pageResults)) {
+    throw new FindokUpstreamError();
+  }
+  return {
+    hits: searchHits(payload.pageResults.searchResults).slice(0, BFG_PRO_RAW_PAGE_SIZE),
+    totalPages: integerValue(payload.pageResults, "totalPages", 0),
+  };
+}
+
+async function fetchProDetails(
+  hits: FindokSearchHit[],
+  fetchImpl: FetchLike,
+): Promise<Array<Omit<BfgProCandidate, "candidateId"> | null>> {
+  return Promise.all(hits.map(async (hit) => {
+    const url = fixedApiUrl("/volltext");
+    url.searchParams.set("documentId", hit.dokumentId);
+    url.searchParams.set("segmentId", hit.segmentId);
+    url.searchParams.set("indexName", hit.indexName);
+    let response: Response;
+    try {
+      response = await fetchImpl(url.toString(), requestOptions("application/json"));
+    } catch (error) {
+      throw new FindokUpstreamError(error instanceof Error ? error.message : undefined);
+    }
+    return mapProDetail(await readJsonResponse(response), hit);
+  }));
+}
+
+export async function fetchBfgProCandidates({
+  query,
+  fetchImpl = fetch,
+}: {
+  query: string;
+  fetchImpl?: FetchLike;
+}): Promise<BfgProCandidate[]> {
+  const normalizedQuery = normalizeFindokQuery(query);
+  const candidates: Array<Omit<BfgProCandidate, "candidateId">> = [];
+  let totalPages = 1;
+
+  for (let page = 1; page <= BFG_PRO_MAX_PAGES && page <= totalPages; page += 1) {
+    const searchPage = await fetchProSearchPage(normalizedQuery, page, fetchImpl);
+    totalPages = Math.max(1, searchPage.totalPages);
+    const details = await fetchProDetails(searchPage.hits, fetchImpl);
+    candidates.push(...details.filter(
+      (candidate): candidate is Omit<BfgProCandidate, "candidateId"> => candidate !== null,
+    ));
+  }
+
+  const seen = new Set<string>();
+  return candidates.flatMap((candidate): BfgProCandidate[] => {
+    const identity = candidate.htmlUrl || `${candidate.gz}\u0000${candidate.title}`;
+    if (seen.has(identity)) {
+      return [];
+    }
+    seen.add(identity);
+    return [{ ...candidate, candidateId: `candidate-${seen.size}` }];
+  });
 }
 
 async function fetchSearch(
