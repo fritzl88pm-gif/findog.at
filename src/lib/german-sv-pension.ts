@@ -113,6 +113,12 @@ export function formatGermanSvRate(year: GermanSvPensionYear): string {
   })} %`;
 }
 
+function formatGermanSvPercentage(value: number): string {
+  return `${(value * 100).toLocaleString("de-AT", {
+    maximumFractionDigits: 6,
+  })} %`;
+}
+
 export function buildGermanSvPensionPdfDocument(
   year: GermanSvPensionYear,
   mode: GermanSvPensionMode,
@@ -120,28 +126,39 @@ export function buildGermanSvPensionPdfDocument(
 ): GermanSvPensionPdfDocument {
   const calculation = calculateGermanSvPension(year, mode, amount);
   const inputType = mode === "kv" ? "KV-Beitrag" : "Rentenbrutto / AEOI-KM";
-  const simplifiedPercentage = (calculation.simplifiedFactor * 100).toLocaleString("de-AT", {
-    maximumFractionDigits: 6,
-  });
+  const kvBasis = mode === "kv"
+    ? "Eingabewert (KV-Beitrag)"
+    : "Eingabewert (Rentenbrutto / AEOI-KM) × KV-Beitragssatz";
+  const subsidyBasis = mode === "kv"
+    ? "Österreichischer KV-Beitrag ÷ 2"
+    : "Eingabewert (Rentenbrutto / AEOI-KM) × halber Beitragssatz";
+  const assessmentBasis = mode === "kv"
+    ? "Österreichischer KV-Beitrag ÷ KV-Beitragssatz"
+    : "Eingabewert (Rentenbrutto / AEOI-KM)";
 
   return {
-    title: `Deutsche SV Rente ${year}`,
+    title: `Berechnungsblatt zur deutschen Sozialversicherungsrente ${year}`,
     content: [
-      "Deutsche SV Rente – Kennzahl 453 & 184",
+      "## Berechnungsgrundlagen",
       "",
-      `Veranlagungsjahr: ${year}`,
-      `Eingabeart: ${inputType}`,
-      `Eingabewert: ${formatGermanSvEuro(amount)}`,
-      `KV-Beitragssatz lt. § 73a ASVG: ${formatGermanSvRate(year)}`,
+      "| Grundlage | Wert |",
+      "| --- | ---: |",
+      `| Veranlagungsjahr | ${year} |`,
+      `| Eingabeart | ${inputType} |`,
+      `| Eingabewert | ${formatGermanSvEuro(amount)} |`,
+      `| KV-Beitragssatz (§ 73a ASVG) | ${formatGermanSvRate(year)} |`,
+      `| Halber Beitragssatz | ${formatGermanSvPercentage(calculation.halfRate)} |`,
+      `| Kz-453-Faktor | ${formatGermanSvPercentage(calculation.simplifiedFactor)} |`,
       "",
-      "Zwischenwerte der Berechnung",
-      `Krankenversicherung gem. § 73a ASVG: ${formatGermanSvEuro(calculation.kvBeitrag)}`,
-      `Deutscher Zuschuss zur Krankenversicherung: ${formatGermanSvEuro(calculation.zuschuss)}`,
-      `Deutscher Jahresbetrag der Rente / KV-Bemessungsgrundlage: ${formatGermanSvEuro(calculation.bmgl)}`,
-      `Vereinfachter Faktor für Kz 453: ${simplifiedPercentage} %`,
+      "## Berechnung und Kennzahlen",
       "",
-      `Kz 453 – Steuerpflichtige Einkünfte: ${formatGermanSvEuro(calculation.kz453)}`,
-      `Kz 184 – Sozialversicherungsbeiträge (KV-Beitrag): ${formatGermanSvEuro(calculation.kz184)}`,
+      "| Position | Grundlage | Betrag |",
+      "| --- | --- | ---: |",
+      `| Österreichischer KV-Beitrag | ${kvBasis} | ${formatGermanSvEuro(calculation.kvBeitrag)} |`,
+      `| Deutscher Zuschuss zur Krankenversicherung | ${subsidyBasis} | ${formatGermanSvEuro(calculation.zuschuss)} |`,
+      `| Deutscher Jahresbetrag der Rente bzw. KV-Bemessungsgrundlage | ${assessmentBasis} | ${formatGermanSvEuro(calculation.bmgl)} |`,
+      `| Kz 453 | KV-Bemessungsgrundlage × Kz-453-Faktor | ${formatGermanSvEuro(calculation.kz453)} |`,
+      `| Kz 184 | Österreichischer KV-Beitrag | ${formatGermanSvEuro(calculation.kz184)} |`,
     ].join("\n"),
   };
 }
