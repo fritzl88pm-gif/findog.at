@@ -13,6 +13,7 @@ describe("PDF request intent", () => {
     "Gib den Entwurf als PDF aus.",
     "Den Entwurf bitte als PDF exportieren.",
     "PDF herunterladen",
+    "Die Liste der Medikamente als PDF",
   ])("recognizes an explicit creation or export request: %s", (request) => {
     expect(isExplicitPdfCreationRequest(request)).toBe(true);
   });
