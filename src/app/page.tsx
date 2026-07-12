@@ -2,6 +2,7 @@
 
 import { Fragment, type ChangeEvent, type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
+import Image from "next/image";
 import Link from "next/link";
 
 import { chatHistoryStorageKey } from "@/lib/chat/storage";
@@ -2615,7 +2616,7 @@ export default function Home() {
                 aria-current={appView === "bfg-decisions" ? "page" : undefined}
               >
                 <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="20" y1="20" x2="16.65" y2="16.65"></line><path d="M8 11h6M11 8v6"></path></svg>
-                BFG-Entscheidungen
+                BFG Suche
               </button>
               <button
                 className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
@@ -2665,8 +2666,8 @@ export default function Home() {
               className={`icon-button rail-icon-btn ${appView === "bfg-decisions" ? "active" : ""}`}
               type="button"
               onClick={openBfgDecisionsView}
-              title="BFG-Entscheidungen"
-              aria-label="BFG-Entscheidungen"
+              title="BFG Suche"
+              aria-label="BFG Suche"
               aria-current={appView === "bfg-decisions" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="20" y1="20" x2="16.65" y2="16.65"></line><path d="M8 11h6M11 8v6"></path></svg>
@@ -2951,10 +2952,20 @@ export default function Home() {
       {appView === "bfg-decisions" ? (
         <section className="forms-panel" aria-labelledby="bfg-decisions-view-title">
           <div className="forms-view bfg-decisions-view">
-            <header className="forms-view-header">
-              <p className="eyebrow">Findok</p>
-              <h1 id="bfg-decisions-view-title">BFG-Entscheidungen</h1>
-              <p>Durchsuche veröffentlichte Entscheidungen des Bundesfinanzgerichts in Findok.</p>
+            <header className="forms-view-header bfg-view-header">
+              <div className="bfg-view-header-copy">
+                <p className="eyebrow">Findok</p>
+                <h1 id="bfg-decisions-view-title">BFG-Entscheidungen</h1>
+                <p>Durchsuche veröffentlichte Entscheidungen des Bundesfinanzgerichts in der Findok-Suche über das Suchfeld.</p>
+              </div>
+              <Image
+                className="bfg-view-header-illustration"
+                src="/fred-bfg-search.png"
+                alt=""
+                width={1254}
+                height={1254}
+                unoptimized
+              />
             </header>
 
             <form

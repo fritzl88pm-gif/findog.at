@@ -19,9 +19,9 @@ function cssRule(selector: string): string {
 
 describe("assistant identity", () => {
   it("uses Fred's decorative public avatar and exact sender name in messages and pending state", () => {
-    expect(pageSource.match(/className="message-avatar fred-avatar"/g)).toHaveLength(2);
-    expect(pageSource.match(/src="\/fred-avatar\.png"/g)).toHaveLength(2);
-    expect(pageSource.match(/alt=""/g)).toHaveLength(2);
+    expect(
+      pageSource.match(/<img className="message-avatar fred-avatar" src="\/fred-avatar\.png" alt="" \/>/g),
+    ).toHaveLength(2);
     expect(pageSource.match(/<span className="sender-name">Fred<\/span>/g)).toHaveLength(2);
     expect(pageSource).not.toContain("Findog/Fred");
     expect(pageSource).not.toMatch(/>FF</);

@@ -733,6 +733,32 @@ textarea:focus {
   width: min(860px, 100%);
 }
 
+.bfg-view-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 240px);
+  align-items: center;
+  gap: clamp(20px, 5vw, 48px);
+}
+
+.bfg-view-header-copy {
+  min-width: 0;
+}
+
+.bfg-view-header-copy > p:last-child {
+  max-width: 620px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.bfg-view-header-illustration {
+  display: block;
+  width: 100%;
+  max-width: 240px;
+  height: auto;
+  justify-self: end;
+}
+
 .bfg-search-form {
   display: grid;
   gap: 8px;
@@ -2257,6 +2283,16 @@ textarea:focus {
 
   .form-generate-button {
     width: 100%;
+  }
+
+  .bfg-view-header {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .bfg-view-header-illustration {
+    width: min(52vw, 190px);
+    justify-self: center;
   }
 
   .bfg-search-row {
