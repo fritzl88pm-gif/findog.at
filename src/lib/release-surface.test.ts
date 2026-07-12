@@ -12,6 +12,7 @@ describe("approved release surface", () => {
   const adminSettingsPath = fileURLToPath(new URL("../app/api/admin/settings/route.ts", import.meta.url));
   const faviconPath = fileURLToPath(new URL("../../public/favicon.png", import.meta.url));
   const bfgIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-search.png", import.meta.url));
+  const bfgProIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-pro-search.png", import.meta.url));
   const pageSource = readFileSync(pagePath, "utf8");
   const globalsSource = readFileSync(globalsPath, "utf8");
   const layoutSource = readFileSync(layoutPath, "utf8");
@@ -93,6 +94,22 @@ describe("approved release surface", () => {
     expect(pageSource).toMatch(/src="\/fred-bfg-search\.png"[\s\S]*?unoptimized/);
     expect(createHash("sha256").update(readFileSync(bfgIllustrationPath)).digest("hex")).toBe(
       "923769557c8c9e90c9f49055c1dc070886e4cf177778e940ca8cab6f04d6adae",
+    );
+  });
+
+  it("shows the verified decorative PRO illustration in the responsive BFG header", () => {
+    const bfgProHeader = pageSource.slice(
+      pageSource.indexOf('{appView === "bfg-pro" ? ('),
+      pageSource.indexOf(') : appView === "bfg-decisions" ? ('),
+    );
+
+    expect(bfgProHeader).toMatch(
+      /<header className="forms-view-header bfg-view-header">[\s\S]*?<div className="bfg-view-header-copy">[\s\S]*?<Image[\s\S]*?className="bfg-view-header-illustration"[\s\S]*?src="\/fred-bfg-pro-search\.png"[\s\S]*?alt=""[\s\S]*?width=\{313\}[\s\S]*?height=\{313\}[\s\S]*?unoptimized[\s\S]*?<\/header>/,
+    );
+    const illustration = readFileSync(bfgProIllustrationPath);
+    expect(illustration.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    expect(createHash("sha256").update(illustration).digest("hex")).toBe(
+      "bffb1e4813e1714c8af53d22512f2d6358723e1b10873d5e627c7757efad5fe2",
     );
   });
 

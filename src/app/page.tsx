@@ -2991,10 +2991,20 @@ export default function Home() {
       {appView === "bfg-pro" ? (
         <section className="forms-panel" aria-labelledby="bfg-pro-view-title">
           <div className="forms-view bfg-decisions-view bfg-pro-view">
-            <header className="forms-view-header">
-              <p className="eyebrow">Findok</p>
-              <h1 id="bfg-pro-view-title">BFG Suche PRO</h1>
-              <p>KI-gestützte Reihung auf Basis veröffentlichter Findok BFG-Entscheidungen</p>
+            <header className="forms-view-header bfg-view-header">
+              <div className="bfg-view-header-copy">
+                <p className="eyebrow">Findok</p>
+                <h1 id="bfg-pro-view-title">BFG Suche PRO</h1>
+                <p>KI-gestützte Reihung auf Basis veröffentlichter Findok BFG-Entscheidungen</p>
+              </div>
+              <Image
+                className="bfg-view-header-illustration"
+                src="/fred-bfg-pro-search.png"
+                alt=""
+                width={313}
+                height={313}
+                unoptimized
+              />
             </header>
 
             <form
