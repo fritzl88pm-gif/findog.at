@@ -93,7 +93,7 @@ describe("approved release surface", () => {
     );
     expect(pageSource).toMatch(/src="\/fred-bfg-search\.png"[\s\S]*?unoptimized/);
     expect(createHash("sha256").update(readFileSync(bfgIllustrationPath)).digest("hex")).toBe(
-      "923769557c8c9e90c9f49055c1dc070886e4cf177778e940ca8cab6f04d6adae",
+      "f8f6b10e32ae3375efc290e412c84104ec707687b3751a5954d2f9861b8be736",
     );
   });
 
