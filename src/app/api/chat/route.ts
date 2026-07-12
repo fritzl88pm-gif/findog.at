@@ -10,7 +10,6 @@ import {
   MAX_PDF_UPLOAD_BYTES,
   MAX_PDF_UPLOADS,
   MAX_REQUEST_BYTES,
-  MAX_SYSTEM_PROMPT_CHARS,
   RATE_LIMIT_MAX_REQUESTS,
   RATE_LIMIT_WINDOW_MS,
   isSupportedModel,
@@ -35,8 +34,6 @@ import { recordAdminRequest } from "@/lib/admin-request-history";
 export const runtime = "nodejs";
 
 type ChatRequestBody = {
-  systemPrompt?: unknown;
-  usesGlobalDefault?: unknown;
   messages?: unknown;
   conversationId?: unknown;
   model?: unknown;
@@ -393,15 +390,7 @@ export async function POST(request: Request) {
     const { body, attachmentUploads } = await parseChatRequest(request);
     const model = parseModel(body.model);
     const deepSeekApiKey = resolveDeepSeekApiKey();
-    const personalSystemPrompt = asOptionalString(
-      body.systemPrompt,
-      MAX_SYSTEM_PROMPT_CHARS,
-      "System Prompt",
-    );
-    const usesGlobalDefault = body.usesGlobalDefault === true || !personalSystemPrompt;
-    const systemPrompt = usesGlobalDefault
-      ? await getGlobalSystemPrompt(supabase)
-      : personalSystemPrompt;
+    const systemPrompt = await getGlobalSystemPrompt(supabase);
     const messages = parseMessages(body.messages);
     const mcpBearerToken = getServerMcpBearerToken();
     const requestedConversationId = asOptionalString(body.conversationId, 80, "Conversation ID");

@@ -11,7 +11,7 @@ vi.mock("next/server", async () => {
   };
 });
 
-import { DEFAULT_SYSTEM_PROMPT, MAX_IMAGE_UPLOAD_BYTES } from "@/lib/config";
+import { MAX_IMAGE_UPLOAD_BYTES } from "@/lib/config";
 import { runAgent } from "@/lib/agent";
 import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
@@ -80,7 +80,6 @@ vi.mock("@/lib/agent", () => ({
 
 function chatPayload() {
   return {
-    systemPrompt: "System",
     messages: [{ role: "user", content: "Bitte auswerten." }],
   };
 }
@@ -119,41 +118,28 @@ describe("POST /api/chat uploads", () => {
     vi.clearAllMocks();
   });
 
-  it("preserves a non-empty personal system prompt", async () => {
-    const request = jsonRequest(chatPayload());
-    request.headers.set("x-forwarded-for", "test-personal-prompt");
-    const response = await POST(request);
-
-    expect(response.status).toBe(200);
-    expect(runAgent).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: "System" }));
-    expect(getGlobalSystemPrompt).not.toHaveBeenCalled();
-  });
-
-  it("preserves the default prompt text as personal when global-default mode is false", async () => {
+  it("ignores stale client prompt fields and always uses the server global prompt", async () => {
     const request = jsonRequest({
       ...chatPayload(),
-      systemPrompt: DEFAULT_SYSTEM_PROMPT,
+      systemPrompt: "Staler persönlicher Prompt",
       usesGlobalDefault: false,
     });
-    request.headers.set("x-forwarded-for", "test-default-text-personal-prompt");
+    request.headers.set("x-forwarded-for", "test-stale-personal-prompt");
     const response = await POST(request);
 
     expect(response.status).toBe(200);
+    expect(getGlobalSystemPrompt).toHaveBeenCalledWith(expect.anything());
     expect(runAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ systemPrompt: DEFAULT_SYSTEM_PROMPT }),
+      expect.objectContaining({ systemPrompt: "Globaler System Prompt" }),
     );
-    expect(getGlobalSystemPrompt).not.toHaveBeenCalled();
+    const payload = await response.json();
+    expect(payload).not.toHaveProperty("systemPrompt");
+    expect(JSON.stringify(payload)).not.toContain("Globaler System Prompt");
   });
 
-  it.each([
-    { payload: { ...chatPayload(), systemPrompt: undefined }, label: "missing" },
-    { payload: { ...chatPayload(), usesGlobalDefault: true }, label: "default-mode" },
-  ])("resolves a $label prompt through the server global settings helper", async ({ payload }) => {
-    const request = jsonRequest(payload);
-    request.headers.set(
-      "x-forwarded-for",
-      `test-global-prompt-${String("usesGlobalDefault" in payload && payload.usesGlobalDefault)}`,
-    );
+  it("resolves a missing prompt through the server global settings helper", async () => {
+    const request = jsonRequest(chatPayload());
+    request.headers.set("x-forwarded-for", "test-global-prompt");
     const response = await POST(request);
 
     expect(response.status).toBe(200);

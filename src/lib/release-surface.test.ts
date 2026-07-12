@@ -8,11 +8,15 @@ describe("approved release surface", () => {
   const pagePath = fileURLToPath(new URL("../app/page.tsx", import.meta.url));
   const globalsPath = fileURLToPath(new URL("../app/globals.css", import.meta.url));
   const layoutPath = fileURLToPath(new URL("../app/layout.tsx", import.meta.url));
+  const publicSettingsPath = fileURLToPath(new URL("../app/api/settings/route.ts", import.meta.url));
+  const adminSettingsPath = fileURLToPath(new URL("../app/api/admin/settings/route.ts", import.meta.url));
   const faviconPath = fileURLToPath(new URL("../../public/favicon.png", import.meta.url));
   const bfgIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-search.png", import.meta.url));
   const pageSource = readFileSync(pagePath, "utf8");
   const globalsSource = readFileSync(globalsPath, "utf8");
   const layoutSource = readFileSync(layoutPath, "utf8");
+  const publicSettingsSource = readFileSync(publicSettingsPath, "utf8");
+  const adminSettingsSource = readFileSync(adminSettingsPath, "utf8");
 
   it("labels the standalone BFG view as BFG Suche in expanded and collapsed navigation", () => {
     expect(pageSource).toMatch(/className={`sidebar-view-button[\s\S]*?<\/svg>\s*BFG Suche\s*<\/button>/);
@@ -35,8 +39,37 @@ describe("approved release surface", () => {
     expect(pageSource).toContain('<textarea');
     expect(pageSource).toContain('/api/findok/bfg/pro');
     expect(pageSource).toContain('Warum relevant');
+    expect(pageSource).toContain('<h3>Sachverhalt</h3>');
+    expect(pageSource).not.toContain('Originaltext-Auszug');
     expect(pageSource).toContain('Keine relevanten BFG-Entscheidungen gefunden.');
     expect(pageSource).toContain('/api/findok/bfg?');
+  });
+
+  it("keeps system prompt controls and data on the admin-only surface", () => {
+    const settingsDialog = pageSource.slice(
+      pageSource.indexOf('{isSettingsDialogOpen ? ('),
+      pageSource.indexOf('{appView === "bfg-pro" ? ('),
+    );
+    const chatSubmit = pageSource.slice(
+      pageSource.indexOf('async function handleSubmit('),
+      pageSource.indexOf('async function handlePasswordChange('),
+    );
+
+    expect(settingsDialog).not.toContain('settings-tab-system-prompt');
+    expect(settingsDialog).not.toContain('id="system-prompt"');
+    expect(settingsDialog).not.toContain('Auf Standard zurücksetzen');
+    expect(settingsDialog).not.toContain('MAX_SYSTEM_PROMPT_CHARS');
+    expect(settingsDialog).not.toContain('<textarea');
+    expect(settingsDialog).toContain('settings-tab-model');
+    expect(settingsDialog).toContain('settings-tab-password');
+    expect(chatSubmit).not.toContain('systemPromptForChatRequest');
+    expect(chatSubmit).not.toContain('usesGlobalDefault');
+    expect(chatSubmit).not.toContain('requestBody.systemPrompt');
+    expect(publicSettingsSource).not.toContain('globalSystemPrompt');
+    expect(pageSource).toContain('<h2>Globaler System Prompt</h2>');
+    expect(pageSource).toContain('id="admin-system-prompt"');
+    expect(adminSettingsSource).toContain('getGlobalSystemPrompt');
+    expect(adminSettingsSource).toContain('updateGlobalSystemPrompt');
   });
 
   it("registers the supplied favicon and preserves the approved metadata copy", () => {

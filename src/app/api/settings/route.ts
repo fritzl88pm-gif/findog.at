@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getGlobalSystemPrompt, isAdminUser } from "@/lib/admin-settings";
+import { isAdminUser } from "@/lib/admin-settings";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
@@ -15,12 +15,9 @@ export async function GET(request: Request) {
     }
 
     const user = await authenticateSupabaseRequest(request, supabase);
-    const [globalSystemPrompt, isAdmin] = await Promise.all([
-      getGlobalSystemPrompt(supabase),
-      isAdminUser(supabase, user.id),
-    ]);
+    const isAdmin = await isAdminUser(supabase, user.id);
 
-    return NextResponse.json({ globalSystemPrompt, isAdmin });
+    return NextResponse.json({ isAdmin });
   } catch (error) {
     if (error instanceof UserVisibleError) {
       return NextResponse.json({ error: error.message }, { status: error.status });

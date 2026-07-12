@@ -53,7 +53,7 @@ describe("BFG PRO query generation and reranking", () => {
     vi.mocked(chatCompletion)
       .mockResolvedValueOnce({ content: '{"query":"Arbeitszimmer Vorsteuer"}', toolCalls: [] })
       .mockResolvedValueOnce({
-        content: '{"selections":[{"candidateId":"candidate-1","score":87,"comment":"Behandelt ein Arbeitszimmer und den Vorsteuerabzug."}]}',
+        content: '{"selections":[{"candidateId":"candidate-1","score":87,"comment":"Behandelt ein Arbeitszimmer und den Vorsteuerabzug.","caseSummary":"Ein beruflich genutztes Arbeitszimmer im Wohnungsverband war zu beurteilen; das BFG entschied über den geltend gemachten Vorsteuerabzug."}]}',
         toolCalls: [],
       });
 
@@ -82,6 +82,9 @@ describe("BFG PRO query generation and reranking", () => {
   it.each([
     ["non-JSON reranking", "candidate-1"],
     ["missing comment", '{"selections":[{"candidateId":"candidate-1","score":50}]}'],
+    ["missing case summary", '{"selections":[{"candidateId":"candidate-1","score":50,"comment":"Relevant"}]}'],
+    ["blank case summary", '{"selections":[{"candidateId":"candidate-1","score":50,"comment":"Relevant","caseSummary":"  "}]}'],
+    ["oversized case summary", JSON.stringify({ selections: [{ candidateId: "candidate-1", score: 50, comment: "Relevant", caseSummary: "x".repeat(401) }] })],
     ["unknown generated metadata", '{"selections":[{"candidateId":"candidate-1","score":50,"comment":"Relevant","gz":"FAKE/1","url":"https://evil.example"}]}'],
   ])("rejects malformed reranker output: %s", async (_label, content) => {
     vi.mocked(chatCompletion)
@@ -95,7 +98,7 @@ describe("BFG PRO query generation and reranking", () => {
     vi.mocked(chatCompletion)
       .mockResolvedValueOnce({ content: '{"query":"Arbeitszimmer"}', toolCalls: [] })
       .mockResolvedValueOnce({
-        content: '{"selections":[{"candidateId":"invented","score":99,"comment":"Erfundener Treffer"}]}',
+        content: '{"selections":[{"candidateId":"invented","score":99,"comment":"Erfundener Treffer","caseSummary":"Erfundener Sachverhalt mit erfundenem Ergebnis."}]}',
         toolCalls: [],
       });
 
@@ -108,8 +111,18 @@ describe("BFG PRO query generation and reranking", () => {
       .mockResolvedValueOnce({
         content: JSON.stringify({
           selections: [
-            { candidateId: "candidate-1", score: 999, comment: ` Passend. ${"lang ".repeat(100)}` },
-            { candidateId: "candidate-1", score: 1, comment: "Duplikat" },
+            {
+              candidateId: "candidate-1",
+              score: 999,
+              comment: ` Passend. ${"lang ".repeat(100)}`,
+              caseSummary: "Ein Arbeitszimmer im Wohnungsverband war Gegenstand des Verfahrens; das BFG entschied über den Vorsteuerabzug.",
+            },
+            {
+              candidateId: "candidate-1",
+              score: 1,
+              comment: "Duplikat",
+              caseSummary: "Duplikat.",
+            },
           ],
         }),
         toolCalls: [],
@@ -127,15 +140,17 @@ describe("BFG PRO query generation and reranking", () => {
       htmlUrl: officialCandidate.htmlUrl,
       pdfUrl: officialCandidate.pdfUrl,
       score: 100,
+      caseSummary: "Ein Arbeitszimmer im Wohnungsverband war Gegenstand des Verfahrens; das BFG entschied über den Vorsteuerabzug.",
     });
     expect(response.results[0]?.whyRelevant.length).toBeLessThanOrEqual(240);
+    expect(response.results[0]?.caseSummary.length).toBeLessThanOrEqual(400);
   });
 
-  it("never sends or returns full detail content beyond the bounded excerpt", async () => {
+  it("sends only the bounded excerpt to Flash and returns only the bounded generated summary", async () => {
     vi.mocked(chatCompletion)
       .mockResolvedValueOnce({ content: '{"query":"Arbeitszimmer"}', toolCalls: [] })
       .mockResolvedValueOnce({
-        content: '{"selections":[{"candidateId":"candidate-1","score":70,"comment":"Thematisch passend."}]}',
+        content: '{"selections":[{"candidateId":"candidate-1","score":70,"comment":"Thematisch passend.","caseSummary":"Ein Arbeitszimmer im Wohnungsverband war strittig; das BFG entschied über dessen steuerliche Behandlung."}]}',
         toolCalls: [],
       });
 
@@ -146,7 +161,8 @@ describe("BFG PRO query generation and reranking", () => {
 
     expect(rerankPrompt).not.toContain("FULL-CONTENT-SECRET");
     expect(JSON.stringify(response)).not.toContain("FULL-CONTENT-SECRET");
-    expect(response.results[0]?.excerpt.length).toBeLessThanOrEqual(700);
+    expect(response.results[0]?.caseSummary.length).toBeLessThanOrEqual(400);
+    expect(response.results[0]).not.toHaveProperty("excerpt");
     expect(response.results[0]).not.toHaveProperty("content");
   });
 

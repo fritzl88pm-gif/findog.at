@@ -518,17 +518,6 @@ button:disabled {
   margin-top: 4px;
 }
 
-.settings-inline-error {
-  margin-bottom: 14px;
-  border: 1px solid rgba(179, 38, 30, 0.2);
-  border-left: 4px solid var(--danger);
-  border-radius: var(--radius-sm);
-  background: #fff6f5;
-  color: var(--danger);
-  padding: 10px 12px;
-  font-size: 0.84rem;
-}
-
 .model-options {
   display: grid;
   gap: 12px;
@@ -623,13 +612,6 @@ button:disabled {
   color: var(--bmf-blue-deep);
   font-size: 0.85rem;
   font-weight: 600;
-}
-
-.field-label-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
 }
 
 input,
