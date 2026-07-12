@@ -55,6 +55,30 @@ describe("Findok SSE parsing", () => {
 });
 
 describe("Findok BFG result mapping", () => {
+  it("adds the proven BFG norm aggregation parameters to a PRO candidate search", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(sseResponse({
+      pageResults: {
+        searchResults: [],
+        currentPage: 0,
+        pageSize: 20,
+        totalPages: 0,
+        totalSize: 0,
+      },
+    }));
+
+    await fetchBfgProCandidates({
+      query: "Arbeitszimmer",
+      norm: "EStG 1988 § 20",
+      fetchImpl: fetchMock,
+    });
+
+    const searchUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(searchUrl.searchParams.get("filter.aggregationsName")).toBe(
+      "1.indexable.normenAgg.keyword",
+    );
+    expect(searchUrl.searchParams.get("filter.aggregationsValues")).toBe("EStG 1988 § 20");
+  });
+
   it("fetches at most two result pages and retains official metadata plus server-only content", async () => {
     const firstPage = sseResponse({
       pageResults: {

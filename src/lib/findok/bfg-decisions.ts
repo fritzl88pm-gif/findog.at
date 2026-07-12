@@ -489,6 +489,7 @@ function mapProDetail(
 
 async function fetchProSearchPage(
   query: string,
+  norm: string,
   page: number,
   fetchImpl: FetchLike,
 ): Promise<{ hits: FindokSearchHit[]; totalPages: number }> {
@@ -498,6 +499,10 @@ async function fetchProSearchPage(
   url.searchParams.set("suchbegriff", query);
   url.searchParams.set("typen", "BFG");
   url.searchParams.set("sort.value", "1");
+  if (norm) {
+    url.searchParams.set("filter.aggregationsName", "1.indexable.normenAgg.keyword");
+    url.searchParams.set("filter.aggregationsValues", norm);
+  }
 
   let response: Response;
   try {
@@ -539,17 +544,20 @@ async function fetchProDetails(
 
 export async function fetchBfgProCandidates({
   query,
+  norm,
   fetchImpl = fetch,
 }: {
   query: string;
+  norm?: string;
   fetchImpl?: FetchLike;
 }): Promise<BfgProCandidate[]> {
   const normalizedQuery = normalizeFindokQuery(query);
+  const normalizedNorm = normalizeFindokQuery(norm ?? "");
   const candidates: Array<Omit<BfgProCandidate, "candidateId">> = [];
   let totalPages = 1;
 
   for (let page = 1; page <= BFG_PRO_MAX_PAGES && page <= totalPages; page += 1) {
-    const searchPage = await fetchProSearchPage(normalizedQuery, page, fetchImpl);
+    const searchPage = await fetchProSearchPage(normalizedQuery, normalizedNorm, page, fetchImpl);
     totalPages = Math.max(1, searchPage.totalPages);
     const details = await fetchProDetails(searchPage.hits, fetchImpl);
     candidates.push(...details.filter(
