@@ -32,7 +32,7 @@ describe("approved release surface", () => {
   });
 
   it("adds a separate BFG Suche PRO view and controls without replacing the normal search", () => {
-    expect(pageSource).toContain('type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "administration"');
+    expect(pageSource).toContain('type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "administration"');
     expect(pageSource).toMatch(/className={`sidebar-view-button[\s\S]*?BFG Suche PRO\s*<\/button>/);
     expect(pageSource).toContain('title="BFG Suche PRO"');
     expect(pageSource).toContain('aria-label="BFG Suche PRO"');
@@ -245,5 +245,33 @@ describe("approved release surface", () => {
       /\.bfg-result-links a \{[\s\S]*?display: inline-flex;[\s\S]*?align-items: center;[\s\S]*?gap:/,
     );
     expect(globalsSource).toMatch(/\.bfg-result-pdf-icon \{[\s\S]*?color: var\(--danger\);/);
+  });
+
+  it("shows the L17b result card unconditionally with — placeholder for all invalid states", () => {
+    const l17bView = pageSource.slice(
+      pageSource.indexOf("function L17bCurrencyView("),
+      pageSource.indexOf("export default function Home()"),
+    );
+
+    // The result card is always rendered (not hidden/absent for invalid input)
+    expect(l17bView).toContain('className="german-sv-results l17b-result"');
+
+    // The — placeholder is the default rendered fallback for invalid states
+    expect(l17bView).toContain(": \"—\"}");
+
+    // The l17b-calculation-basis paragraph is preserved for valid results
+    expect(l17bView).toContain("l17b-calculation-basis");
+
+    // The validation error hint is preserved alongside the placeholder
+    expect(l17bView).toContain("Ungültige Eingabe. Bitte einen gültigen Zahlenwert eingeben (z. B. 1.308,70).");
+
+    // The result card must not be conditionally gated behind a : null ternary
+    // that would hide it for invalid or empty states. It should be a standalone
+    // <div> element, not a conditional expression.
+    const resultCardStart = l17bView.indexOf('className="german-sv-results l17b-result"');
+    const beforeCard = l17bView.slice(Math.max(0, resultCardStart - 80), resultCardStart);
+    // The result card must not be the false branch of a ternary (: null) —
+    // it should be rendered unconditionally after the input fields.
+    expect(beforeCard).not.toMatch(/: null\s*$/);
   });
 });

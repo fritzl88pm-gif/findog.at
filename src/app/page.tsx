@@ -62,6 +62,14 @@ import {
   type GermanSvPensionMode,
   type GermanSvPensionYear,
 } from "@/lib/german-sv-pension";
+import {
+  L17B_CURRENCY_2025_ENTRIES,
+  convertL17bCurrency,
+  formatL17bForeignAmount,
+  formatL17bEuro,
+  lookupL17bEntry,
+  parseL17bGermanAmount,
+} from "@/lib/l17b-currency-2025";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -79,7 +87,7 @@ type ConversationSummary = {
 };
 
 type SettingsTab = "model" | "password";
-type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "administration";
+type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "administration";
 type ComposerMenu = "attachments" | "model" | null;
 
 type AuthForm = {
@@ -884,6 +892,90 @@ function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
         </ol>
       ) : null}
     </details>
+  );
+}
+
+function L17bCurrencyView() {
+  const [selectedCode, setSelectedCode] = useState("");
+  const [amountInput, setAmountInput] = useState("");
+  const amount = parseL17bGermanAmount(amountInput);
+  const entry = selectedCode ? lookupL17bEntry(selectedCode) : undefined;
+  const result = entry !== undefined && amount !== null ? convertL17bCurrency(selectedCode, amount) : null;
+  const hasInvalidInput = amountInput.trim() !== "" && amount === null;
+
+  function handleCountryChange(event: React.ChangeEvent<HTMLSelectElement>) {
+    setSelectedCode(event.target.value);
+  }
+
+  function handleAmountChange(event: React.ChangeEvent<HTMLInputElement>) {
+    setAmountInput(event.target.value);
+  }
+
+  return (
+    <section className="forms-panel" aria-labelledby="l17b-currency-view-title">
+      <div className="forms-view l17b-currency-view">
+        <header className="forms-view-header bfg-view-header">
+          <div className="bfg-view-header-copy">
+            <h1 id="l17b-currency-view-title">L17b Währungsrechner</h1>
+          </div>
+        </header>
+        <div className="german-sv-calculator-card l17b-calculator-card">
+          <div className="field-group">
+            <label htmlFor="l17b-country-select">Land</label>
+            <select
+              id="l17b-country-select"
+              value={selectedCode}
+              onChange={handleCountryChange}
+              autoComplete="off"
+            >
+              <option value="">— Land auswählen —</option>
+              {L17B_CURRENCY_2025_ENTRIES.map((e) => (
+                <option key={e.currencyCode} value={e.currencyCode}>
+                  {e.country} ({e.currencyCode}, {e.currencyName})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field-group">
+            <label htmlFor="l17b-amount-input">
+              {entry
+                ? `Betrag in ${entry.currencyName} (${entry.currencyCode})`
+                : "Betrag"}
+            </label>
+            <input
+              id="l17b-amount-input"
+              type="text"
+              inputMode="decimal"
+              value={amountInput}
+              onChange={handleAmountChange}
+              placeholder="z. B. 1.308,70"
+              autoComplete="off"
+              aria-describedby={hasInvalidInput ? "l17b-amount-error" : undefined}
+            />
+            {hasInvalidInput ? (
+              <span className="field-help" id="l17b-amount-error" role="alert">
+                Ungültige Eingabe. Bitte einen gültigen Zahlenwert eingeben (z. B. 1.308,70).
+              </span>
+            ) : null}
+          </div>
+          <div className="german-sv-results l17b-result" aria-live="polite">
+            <article>
+              <h2>Ergebnis in Euro</h2>
+              <output>{entry !== undefined && result !== null ? formatL17bEuro(result) : "—"}</output>
+              {entry !== undefined && result !== null ? (
+                <p className="l17b-calculation-basis">
+                  Steuerwert {entry.steuerwertRaw} EUR/{entry.currencyCode} × {formatL17bForeignAmount(amount!, entry.currencyCode)} = {formatL17bEuro(result)}
+                </p>
+              ) : null}
+            </article>
+          </div>
+
+          <p className="l17b-source-note">
+            Quelle: L 17b-2025, Version vom 28.01.2026. Verwendet wird ausschließlich der Steuerwert 2025.
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -1735,6 +1827,14 @@ export default function Home() {
 
   function openGermanSvPensionView() {
     setAppView("german-sv-pension");
+    setError("");
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
+  function openL17bCurrencyView() {
+    setAppView("l17b-currency");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
@@ -2986,6 +3086,15 @@ export default function Home() {
                 Deutsche SV Rente
               </button>
               <button
+                className={`sidebar-view-button ${appView === "l17b-currency" ? "active" : ""}`}
+                type="button"
+                onClick={openL17bCurrencyView}
+                aria-current={appView === "l17b-currency" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v12M8 10h8"></path></svg>
+                L17b Währungsrechner
+              </button>
+              <button
                 className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
                 type="button"
                 onClick={openFormsView}
@@ -3058,6 +3167,16 @@ export default function Home() {
               aria-current={appView === "german-sv-pension" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"></rect><path d="M8 6h8M8 10h2M14 10h2M8 14h2M14 14h2M8 18h2M14 18h2"></path></svg>
+            </button>
+            <button
+              className={`icon-button rail-icon-btn ${appView === "l17b-currency" ? "active" : ""}`}
+              type="button"
+              onClick={openL17bCurrencyView}
+              title="L17b Währungsrechner"
+              aria-label="L17b Währungsrechner"
+              aria-current={appView === "l17b-currency" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v12M8 10h8"></path></svg>
             </button>
             {isAdmin ? (
               <button
@@ -3647,6 +3766,8 @@ export default function Home() {
             ) : null}
           </div>
         </section>
+      ) : appView === "l17b-currency" ? (
+        <L17bCurrencyView />
       ) : appView === "german-sv-pension" ? (
         <GermanSvPensionView
           downloadError={error}
