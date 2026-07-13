@@ -63,13 +63,15 @@ import {
   type GermanSvPensionYear,
 } from "@/lib/german-sv-pension";
 import {
-  L17B_CURRENCY_2025_ENTRIES,
+  L17B_YEARS,
+  getL17bYearEntries,
   convertL17bCurrency,
   formatL17bForeignAmount,
   formatL17bEuro,
   lookupL17bEntry,
+  getL17bSourceNote,
   parseL17bGermanAmount,
-} from "@/lib/l17b-currency-2025";
+} from "@/lib/l17b-currency";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -896,12 +898,25 @@ function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
 }
 
 function L17bCurrencyView() {
+  const [selectedYear, setSelectedYear] = useState("2025");
   const [selectedCode, setSelectedCode] = useState("");
   const [amountInput, setAmountInput] = useState("");
+
+  const entries = getL17bYearEntries(selectedYear) ?? [];
   const amount = parseL17bGermanAmount(amountInput);
-  const entry = selectedCode ? lookupL17bEntry(selectedCode) : undefined;
-  const result = entry !== undefined && amount !== null ? convertL17bCurrency(selectedCode, amount) : null;
+  const entry = selectedCode ? lookupL17bEntry(selectedYear, selectedCode) : undefined;
+  const result = entry !== undefined && amount !== null ? convertL17bCurrency(selectedYear, selectedCode, amount) : null;
   const hasInvalidInput = amountInput.trim() !== "" && amount === null;
+
+  function handleYearChange(event: React.ChangeEvent<HTMLSelectElement>) {
+    const newYear = event.target.value;
+    setSelectedYear(newYear);
+    const newEntries = getL17bYearEntries(newYear) ?? [];
+    const stillAvailable = selectedCode && newEntries.some((e) => e.currencyCode === selectedCode);
+    if (!stillAvailable) {
+      setSelectedCode("");
+    }
+  }
 
   function handleCountryChange(event: React.ChangeEvent<HTMLSelectElement>) {
     setSelectedCode(event.target.value);
@@ -921,6 +936,19 @@ function L17bCurrencyView() {
         </header>
         <div className="german-sv-calculator-card l17b-calculator-card">
           <div className="field-group">
+            <label htmlFor="l17b-year-select">Jahr</label>
+            <select
+              id="l17b-year-select"
+              value={selectedYear}
+              onChange={handleYearChange}
+              autoComplete="off"
+            >
+              {L17B_YEARS.map((year) => (
+                <option key={year} value={year}>{year}</option>
+              ))}
+            </select>
+          </div>
+          <div className="field-group">
             <label htmlFor="l17b-country-select">Land</label>
             <select
               id="l17b-country-select"
@@ -929,7 +957,7 @@ function L17bCurrencyView() {
               autoComplete="off"
             >
               <option value="">— Land auswählen —</option>
-              {L17B_CURRENCY_2025_ENTRIES.map((e) => (
+              {entries.map((e) => (
                 <option key={e.currencyCode} value={e.currencyCode}>
                   {e.country} ({e.currencyCode}, {e.currencyName})
                 </option>
@@ -971,7 +999,7 @@ function L17bCurrencyView() {
           </div>
 
           <p className="l17b-source-note">
-            Quelle: L 17b-2025, Version vom 28.01.2026. Verwendet wird ausschließlich der Steuerwert 2025.
+            Quelle: {getL17bSourceNote(selectedYear)}. Verwendet wird ausschließlich der Steuerwert {selectedYear}.
           </p>
         </div>
       </div>
