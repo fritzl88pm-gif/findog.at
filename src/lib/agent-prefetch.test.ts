@@ -197,7 +197,7 @@ describe("runAgent BFG prefetch", () => {
       expect.arrayContaining([
         expect.objectContaining({
           type: "tool_result",
-          toolName: "hybrid_search",
+          toolName: "bfg_prefetch",
           success: false,
           content: "BFG-Vorabfrage fehlgeschlagen.",
         }),
