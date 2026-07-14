@@ -35,23 +35,6 @@ const KB_NAME_ALIASES = [
 const ALL_KB_ALIASES = [...KB_ID_ALIASES, ...KB_NAME_ALIASES] as const;
 
 const DEFAULT_RESULT_LIMIT = 5;
-const YEAR_ALIASES = ["year", "tax_year", "reference_year"] as const;
-const DATE_ALIASES = ["as_of", "stichtag", "effective_at", "valid_at"] as const;
-const LIMIT_ALIASES = [
-  "limit",
-  "count",
-  "max_results",
-  "maxResults",
-  "match_count",
-  "top_k",
-  "max_chunks",
-] as const;
-
-export type TrustedSemanticScope = {
-  referenceYear?: string;
-  referenceDate?: string;
-  limit?: number;
-};
 
 /** Find which KB-parameter alias the raw schema declares, if any. */
 function findKbParamAlias(
@@ -145,7 +128,8 @@ function buildSchemaAwareArgs(
     rawArgs[slugParam] = String(semanticArgs.slug);
   }
 
-  // Inject default result limit (never exposed publicly)
+  // Keep law/guideline retrieval uncapped by the application. Other source
+  // types retain the existing conservative default.
   const limitParam = findParamAlias(
     props,
     "limit",
@@ -153,44 +137,13 @@ function buildSchemaAwareArgs(
     "max_results",
     "maxResults",
   );
-  if (limitParam && !(limitParam in semanticArgs)) {
+  if (limitParam
+    && source.kbId !== RESEARCH_SOURCES.GESETZE.kbId
+    && !(limitParam in semanticArgs)) {
     rawArgs[limitParam] = DEFAULT_RESULT_LIMIT;
   }
 
   return rawArgs;
-}
-
-function addTrustedScope(
-  rawTool: McpTool,
-  rawArgs: JsonObject,
-  trustedScope: TrustedSemanticScope,
-): JsonObject {
-  const schema = rawTool.inputSchema as Record<string, unknown> | undefined;
-  const props = (schema?.properties as Record<string, unknown> | undefined) ?? {};
-  const scopedArgs: JsonObject = { ...rawArgs };
-
-  const yearParam = findParamAlias(props, ...YEAR_ALIASES);
-  if (yearParam && trustedScope.referenceYear) {
-    const property = props[yearParam];
-    const propertyType = property && typeof property === "object" && !Array.isArray(property)
-      ? (property as Record<string, unknown>).type
-      : undefined;
-    scopedArgs[yearParam] = propertyType === "number" || propertyType === "integer"
-      ? Number(trustedScope.referenceYear)
-      : trustedScope.referenceYear;
-  }
-
-  const dateParam = findParamAlias(props, ...DATE_ALIASES);
-  if (dateParam && trustedScope.referenceDate) {
-    scopedArgs[dateParam] = trustedScope.referenceDate;
-  }
-
-  const limitParam = findParamAlias(props, ...LIMIT_ALIASES);
-  if (limitParam && trustedScope.limit !== undefined) {
-    scopedArgs[limitParam] = Math.max(1, Math.min(DEFAULT_RESULT_LIMIT, Math.trunc(trustedScope.limit)));
-  }
-
-  return scopedArgs;
 }
 
 /* ------------------------------------------------------------------ */
@@ -630,30 +583,6 @@ export class SemanticToolRegistry {
     return {
       name: def.rawName,
       arguments: def.buildRawArgs(semanticArgs, rawMcpTool),
-    };
-  }
-
-  /**
-   * Routes a server-selected call and adds trusted temporal filters only
-   * when the raw MCP schema declares them. Model-provided arguments never
-   * reach these fields.
-   */
-  routeDeterministicToolCall(
-    publicName: string,
-    publicArgs: JsonObject,
-    trustedScope: TrustedSemanticScope,
-  ): { name: string; arguments: JsonObject } | undefined {
-    const def = this.byPublicName.get(publicName);
-    if (!def) return undefined;
-
-    const rawMcpTool = this.rawToolByName.get(def.rawName);
-    if (!rawMcpTool) return undefined;
-
-    const source = def.resolveSource?.(publicArgs);
-    const baseArgs = def.buildRawArgs(publicArgs, rawMcpTool, source);
-    return {
-      name: def.rawName,
-      arguments: addTrustedScope(rawMcpTool, baseArgs, trustedScope),
     };
   }
 

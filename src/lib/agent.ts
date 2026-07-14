@@ -6,14 +6,7 @@ import type { JsonObject } from "./mcp/tools";
 import type { ChatModel } from "./config";
 import { SemanticToolRegistry } from "./semantic-tools";
 import { RESEARCH_SOURCES } from "./research-sources";
-import {
-  extractBfgGzCandidates,
-  findUnverifiedBfgCitations,
-  linkVerifiedBfgCitations,
-  verifyBfgCitations,
-  type RejectedBfgCitation,
-  type VerifiedBfgCitation,
-} from "./findok/bfg-citations";
+import { extractBfgGzCandidates } from "./findok/bfg-citations";
 import {
   summarizeStepText,
   summarizeToolArguments,
@@ -22,25 +15,28 @@ import {
 } from "./agent-steps";
 
 const MAX_TOOL_ITERATIONS = 6;
-const MAX_TOTAL_TOOL_CALLS = 6;
 const SIMPLE_AMOUNT_MAX_TOOL_ITERATIONS = 2;
 const SIMPLE_AMOUNT_MAX_TOOL_CALLS = 2;
-const MAX_BFG_CITATION_CANDIDATES = 10;
 const AGENT_FINALIZATION_RESERVE_MS = 100_000;
 const AGENT_MIN_ITERATION_BUDGET_MS = AGENT_FINALIZATION_RESERVE_MS + 30_000;
 const QUERY_ARGUMENT_NAMES = ["query", "question", "search_query"] as const;
 const KB_ID_ARGUMENT_NAMES = ["kb_id", "knowledge_base_id", "knowledgeBaseId"] as const;
 const KB_NAME_ARGUMENT_NAMES = ["kb_name", "knowledge_base_name", "knowledgeBaseName"] as const;
-const REFERENCE_YEAR_ARGUMENT_NAMES = ["year", "tax_year", "reference_year"] as const;
-const REFERENCE_DATE_ARGUMENT_NAMES = ["as_of", "stichtag", "effective_at", "valid_at"] as const;
 const REFERENCE_DATE_MARKER_PATTERN = "(?:zum\\s+stichtag|stichtag(?:\\s+(?:am|zum))?|rechtsstand(?:\\s+(?:am|zum))?|gultig\\s+am|zum)";
 const REFERENCE_DATE_VALUE_PATTERN = "(?:(?:19|20)\\d{2}-\\d{2}-\\d{2}|\\d{1,2}\\.\\d{1,2}\\.(?:19|20)\\d{2})";
 const AMOUNT_CONCEPT_PATTERN = /\b(?:[a-z]*absetzbetrag|[a-z]*freibetrag|[a-z]*grenzbetrag|[a-z]*pauschale|[a-z]*grenze|pauschbetrag|familienbeihilfe|familienbonus(?: plus)?|haushaltsersparnis|kindermehrbetrag|mehrkindzuschlag|pendlereuro|kilometergeld|taggeld|nachtigungsgeld)\b/u;
+const RESEARCH_POLICY_PROMPT = [
+  "# VERBINDLICHER RECHERCHEUMFANG",
+  "Diese Regeln ersetzen entgegenstehende Recherche- und Ausgabevorgaben weiter oben.",
+  "Bei Fachfragen ist die vollständige Nutzerfrage gegen die gesamte Quelle Gesetze und Verordnungen einschließlich aller enthaltenen Richtlinien zu recherchieren. Erzeuge keine zusätzlichen Richtlinienabfragen allein aufgrund einzelner Wörter.",
+  "Begrenze Richtlinien- und Gesetzestreffer nicht anwendungsseitig und kürze die vom Recherchewerkzeug gelieferten Treffer im finalen Antwortkontext nicht. Berücksichtige und nenne alle sachlich einschlägigen gelieferten Treffer.",
+  "Eine nachgelagerte automatische BFG-/Findok-Verifikation findet nicht statt. Die BFG-Recherchefunktion bleibt für Fachfragen regulär verfügbar.",
+  "Berücksichtige den Stichtag ausdrücklich. Bei jahresabhängigen Beträgen bestimmt das genannte Jahr den maßgeblichen Rechtsstand; ein Tagesdatum ist nur nötig, wenn der Nutzer es vorgibt oder es für die Rechtsfrage entscheidend ist. Die starre Formulierung ‚Maßgeblicher Stichtag‘ ist nicht verpflichtend.",
+].join("\n");
 
 type AgentRetrievalPolicy = {
   kind: "simple_amount" | "general";
-  allowBfg: boolean;
-  maxToolCalls: number;
+  maxToolCalls?: number;
   maxToolIterations: number;
   referenceYears: string[];
   referenceYear?: string;
@@ -49,8 +45,8 @@ type AgentRetrievalPolicy = {
 };
 
 type SimpleAmountRetrievalTarget = {
-  semanticToolName: "search_amount_table" | "search_laws";
-  sourceKey: "BETRAGSTABELLE" | "GESETZE";
+  semanticToolName: "search_amount_table";
+  sourceKey: "BETRAGSTABELLE";
   referenceYear: string;
   referenceDate?: string;
 };
@@ -60,11 +56,6 @@ type ToolLogEntry = {
   arguments: string;
   result: string;
   success: boolean;
-};
-
-type BfgVerificationSummary = {
-  verified: VerifiedBfgCitation[];
-  rejected: RejectedBfgCitation[];
 };
 
 export type PdfContext = {
@@ -174,6 +165,22 @@ function currentViennaDate(): string {
   return `${values.year}-${values.month}-${values.day}`;
 }
 
+function isPureAmountQuestion(question: string): boolean {
+  const withoutDatesAndYears = question
+    .replace(/\b(?:19|20)\d{2}-\d{2}-\d{2}\b/g, " ")
+    .replace(/\b\d{1,2}\.\d{1,2}\.(?:19|20)\d{2}\b/g, " ")
+    .replace(/\b(?:19|20)\d{2}\b/g, " ");
+  const withoutQuestionFrame = withoutDatesAndYears
+    .replace(/\b(?:wie|hoch|viel|wieviel|welcher|betrag|ist|sind|war|waren|betragt|betragen|der|die|das|ein|eine|fur|im|jahr|veranlagungsjahr|rechtsstand|zum|stichtag|am|und|oder)\b/g, " ")
+    .replace(/[?!.,:;()\-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!AMOUNT_CONCEPT_PATTERN.test(withoutQuestionFrame)) {
+    return false;
+  }
+  return withoutQuestionFrame.replace(AMOUNT_CONCEPT_PATTERN, " ").trim() === "";
+}
+
 function retrievalPolicy(options: {
   latestQuestion?: string;
   hasAttachments: boolean;
@@ -188,30 +195,26 @@ function retrievalPolicy(options: {
   const namesAmountConcept = AMOUNT_CONCEPT_PATTERN.test(question);
   const asksForAmount = /\b(?:wie hoch|wie viel|wieviel|welcher betrag|monatswert|jahreswert|monatlich|jahrlich)\b/.test(question)
     || Boolean(namesAmountConcept && referenceYears.length > 0 && question.length <= 160);
-  const needsLegalAssessment = /\b(?:bfg|vwg?h|vfgh|judikatur|rechtsprechung|rechtssatz|ecli|geschaftszahl|entscheidungen?|urteile?|erkenntnis|beschluss|beschwerde|bescheid|vorhalt|begrundung|streitig|strittig|drittstaat|dba|verfassung|unionsrecht|auslegung|voraussetzungen?|unter welchen|warum|und wann|und wo|wenn|falls|obwohl|trotz|haushalt|ausland|deutschland|gemeinsam|anspruch|bezahlt)\b/.test(question);
   const isSimpleAmount = Boolean(
     question
     && question.length <= 500
     && asksForAmount
     && namesAmountConcept
-    && !needsLegalAssessment
+    && isPureAmountQuestion(question)
     && referenceYears.length <= SIMPLE_AMOUNT_MAX_TOOL_CALLS
     && !options.hasAttachments
   );
 
   if (isSimpleAmount) {
-    const effectiveReferenceDate = referenceDate ?? (referenceYears.length === 0 ? currentViennaDate() : undefined);
+    const effectiveReferenceDate = referenceDate;
     const effectiveReferenceYears = referenceYears.length > 0
       ? referenceYears
-      : effectiveReferenceDate
-        ? [effectiveReferenceDate.slice(0, 4)]
-        : [];
+      : [currentViennaDate().slice(0, 4)];
     const effectiveReferenceYear = effectiveReferenceYears.length === 1
       ? effectiveReferenceYears[0]
       : undefined;
     return {
       kind: "simple_amount",
-      allowBfg: false,
       maxToolCalls: SIMPLE_AMOUNT_MAX_TOOL_CALLS,
       maxToolIterations: SIMPLE_AMOUNT_MAX_TOOL_ITERATIONS,
       referenceYears: effectiveReferenceYears,
@@ -223,8 +226,6 @@ function retrievalPolicy(options: {
 
   return {
     kind: "general",
-    allowBfg: true,
-    maxToolCalls: MAX_TOTAL_TOOL_CALLS,
     maxToolIterations: MAX_TOOL_ITERATIONS,
     referenceYears,
     ...(referenceYear ? { referenceYear } : {}),
@@ -327,38 +328,10 @@ function formatToolLog(toolLog: ToolLogEntry[]): string {
       [
         `${index + 1}. ${entry.success ? "Erfolg" : "Fehler"}: ${entry.toolName}`,
         `Argumente: ${entry.arguments}`,
-        `Ergebnis: ${summarizeStepText(entry.result, 4_000)}`,
+        `Ergebnis: ${entry.result}`,
       ].join("\n"),
     )
     .join("\n\n");
-}
-
-function formatRejectedBfgSummary(rejected: RejectedBfgCitation[]): string {
-  if (rejected.length === 0) {
-    return "Keine nicht verwendbaren BFG-Fundstellen.";
-  }
-
-  const counts = new Map<string, number>();
-  for (const citation of rejected) {
-    counts.set(citation.status, (counts.get(citation.status) ?? 0) + 1);
-  }
-  return Array.from(counts.entries()).map(([status, count]) => `${count} ${status}`).join(", ");
-}
-
-function formatBfgVerificationForPrompt(verification: BfgVerificationSummary): string {
-  const verifiedLines = verification.verified.length > 0
-    ? verification.verified.map(
-        (citation) => `- ${citation.gz} — ${citation.title} — PDF: ${citation.pdfUrl}`,
-      )
-    : ["- Keine verifizierten BFG-Fundstellen."];
-
-  return [
-    "Findok-Verifikation der BFG-Fundstellen:",
-    "Verifizierte BFG-Fundstellen mit offiziellen PDF-Links:",
-    ...verifiedLines,
-    "",
-    `Nicht verwendbare Fundstellen: ${formatRejectedBfgSummary(verification.rejected)}`,
-  ].join("\n");
 }
 
 function supportMessages(options: {
@@ -367,7 +340,6 @@ function supportMessages(options: {
   conversation: AppChatMessage[];
   toolLog: ToolLogEntry[];
   draftAnswer?: string;
-  bfgVerification?: BfgVerificationSummary;
   correctionInstruction?: string;
 }): DeepSeekMessage[] {
   const context = [
@@ -377,9 +349,6 @@ function supportMessages(options: {
     "Bisherige Rechercheergebnisse:",
     formatToolLog(options.toolLog),
   ];
-  if (options.bfgVerification) {
-    context.push("", formatBfgVerificationForPrompt(options.bfgVerification));
-  }
   if (options.draftAnswer) {
     context.push("", "Vorläufige Antwort des Agenten:", options.draftAnswer);
   }
@@ -399,52 +368,6 @@ function supportMessages(options: {
     result.push({ role: "user", content: contextText });
   }
   return result;
-}
-function bfgCandidateText(toolLog: ToolLogEntry[], draftAnswer?: string): string {
-  return [...toolLog.flatMap((entry) => [entry.arguments, entry.result]), draftAnswer ?? ""].join("\n\n");
-}
-
-async function verifyBfgCitationsForFinalization(options: {
-  toolLog: ToolLogEntry[];
-  draftAnswer?: string;
-  steps: AgentStep[];
-  onStep?: AgentStepHandler;
-  deadline?: Deadline;
-}): Promise<BfgVerificationSummary> {
-  const candidates = extractBfgGzCandidates(
-    bfgCandidateText(options.toolLog, options.draftAnswer),
-  ).slice(0, MAX_BFG_CITATION_CANDIDATES);
-  if (candidates.length === 0) {
-    return { verified: [], rejected: [] };
-  }
-  const verification = await verifyBfgCitations(candidates, fetch, { deadline: options.deadline });
-  await appendAgentStep(
-    options.steps,
-    {
-      type: "citation_verification",
-      title: "BFG-Fundstellen geprüft",
-      content: `${verification.verified.length} verifiziert, ${verification.rejected.length} verworfen.`,
-    },
-    options.onStep,
-  );
-  return verification;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function removeUnverifiedBfgCitations(answer: string, verified: VerifiedBfgCitation[]): string {
-  let sanitized = answer;
-  for (const gz of findUnverifiedBfgCitations(answer, verified)) {
-    const escaped = escapeRegExp(gz);
-    sanitized = sanitized.replace(new RegExp(`\\[${escaped}\\]\\([^)]*\\)`, "gi"), "nicht verifizierte Fundstelle");
-    sanitized = sanitized.replace(
-      new RegExp(`(^|[^A-Z0-9])(${escaped})(?![A-Z0-9/])`, "gi"),
-      "$1nicht verifizierte Fundstelle",
-    );
-  }
-  return linkVerifiedBfgCitations(sanitized, verified);
 }
 
 function containsJudicatureReference(answer: string): boolean {
@@ -523,10 +446,8 @@ function isSecureSimpleAmountRoute(
   const query = QUERY_ARGUMENT_NAMES
     .map((key) => routed.arguments[key])
     .find((value): value is string => typeof value === "string" && value.trim().length > 0);
-  const hasYear = hasArgumentValue(routed.arguments, REFERENCE_YEAR_ARGUMENT_NAMES, target.referenceYear)
-    || Boolean(query && new RegExp(`\\b${target.referenceYear}\\b`, "u").test(query));
+  const hasYear = Boolean(query && new RegExp(`\\b${target.referenceYear}\\b`, "u").test(query));
   const hasDate = !target.referenceDate
-    || hasArgumentValue(routed.arguments, REFERENCE_DATE_ARGUMENT_NAMES, target.referenceDate)
     || Boolean(query?.includes(target.referenceDate));
   return hasSourceScope && Boolean(query) && hasYear && hasDate;
 }
@@ -571,13 +492,6 @@ function simpleAmountRetrievalTargets(policy: AgentRetrievalPolicy): SimpleAmoun
   }));
 }
 
-function simpleAmountFallbackTarget(target: SimpleAmountRetrievalTarget): SimpleAmountRetrievalTarget {
-  return {
-    ...target,
-    semanticToolName: "search_laws",
-    sourceKey: "GESETZE",
-  };
-}
 async function finalizeAgentRun(options: {
   apiKey: string;
   model: ChatModel;
@@ -600,24 +514,12 @@ async function finalizeAgentRun(options: {
     options.onStep,
   );
 
-  const verification = options.policy.allowBfg
-    ? await verifyBfgCitationsForFinalization({
-        toolLog: options.toolLog,
-        draftAnswer: options.draftAnswer,
-        steps: options.steps,
-        onStep: options.onStep,
-        deadline: options.deadline,
-      })
-    : { verified: [], rejected: [] };
-  const hasBfgVerification = verification.verified.length > 0 || verification.rejected.length > 0;
-
   const finalMessages = supportMessages({
     systemPrompt: options.effectiveSystemPrompt,
     attachmentUserMessage: options.attachmentUserMessage,
     conversation: options.conversation,
     toolLog: options.toolLog,
     draftAnswer: options.draftAnswer,
-    ...(hasBfgVerification ? { bfgVerification: verification } : {}),
   });
   const finalResult = await chatCompletion({
     apiKey: options.apiKey,
@@ -658,7 +560,7 @@ async function finalizeAgentRun(options: {
       );
     }
   }
-  const answer = removeUnverifiedBfgCitations(modelAnswer, verification.verified);
+  const answer = modelAnswer;
 
   await appendAgentStep(
     options.steps,
@@ -680,8 +582,7 @@ export async function runAgent(options: {
   deadline?: Deadline;
 }): Promise<AgentRunResult> {
   const mcp = new McpClient();
-  // System prompt stays byte-for-byte unchanged — never append attachments.
-  const effectiveSystemPrompt = options.systemPrompt;
+  const effectiveSystemPrompt = `${options.systemPrompt}\n\n${RESEARCH_POLICY_PROMPT}`;
   // Build a separate user-role message for attachment/PDF context.
   const attachmentUserMessage = formatAttachmentUserMessage({
     attachmentContexts: options.attachmentContexts,
@@ -724,23 +625,15 @@ export async function runAgent(options: {
 
     for (const primaryTarget of retrievalTargets) {
       let targetSucceeded = false;
-      const candidates = [primaryTarget, simpleAmountFallbackTarget(primaryTarget)];
+      const candidates = [primaryTarget];
       for (const target of candidates) {
-        if (executedToolCallCount >= policy.maxToolCalls
+        if (executedToolCallCount >= (policy.maxToolCalls ?? SIMPLE_AMOUNT_MAX_TOOL_CALLS)
           || !hasDeadlineTime(options.deadline, AGENT_FINALIZATION_RESERVE_MS)) {
           break;
         }
 
         const query = simpleAmountQuery(policy, target);
-        const routed = registry.routeDeterministicToolCall(
-          target.semanticToolName,
-          { query },
-          {
-            referenceYear: target.referenceYear,
-            referenceDate: target.referenceDate,
-            limit: 3,
-          },
-        );
+        const routed = registry.routeToolCall(target.semanticToolName, { query });
         if (!routed || !isSecureSimpleAmountRoute(routed, target)) {
           continue;
         }
@@ -851,7 +744,7 @@ export async function runAgent(options: {
   } else {
     messages.push(...conversationMessages);
   }
-  let executedToolCallCount = 0;
+  let hasRunFullLawSearch = false;
   for (let iteration = 0; iteration < policy.maxToolIterations; iteration += 1) {
     if (!hasDeadlineTime(options.deadline, AGENT_MIN_ITERATION_BUDGET_MS)) {
       return finalizeAgentRun({
@@ -897,32 +790,17 @@ export async function runAgent(options: {
       });
     }
 
-    const remainingToolCalls = policy.maxToolCalls - executedToolCallCount;
-    const selectedToolCalls = result.toolCalls.slice(0, Math.max(0, remainingToolCalls)).map((call) => {
+    const selectedToolCalls = result.toolCalls.map((call) => {
       if (!allowedToolNames.has(call.name)) {
         throw new UserVisibleError(`DeepSeek wählte eine nicht erlaubte Recherchefunktion: ${call.name}.`, 502);
       }
-      return { ...call, parsedArguments: parseToolArguments(call.name, call.arguments) };
+      const parsedArguments = parseToolArguments(call.name, call.arguments);
+      if (call.name === "search_laws" && !hasRunFullLawSearch && latestQuestion?.trim()) {
+        parsedArguments.query = latestQuestion.trim();
+        hasRunFullLawSearch = true;
+      }
+      return { ...call, parsedArguments };
     });
-    const toolCallLimitReached = selectedToolCalls.length < result.toolCalls.length;
-
-    if (selectedToolCalls.length === 0) {
-      return finalizeAgentRun({
-        apiKey: options.apiKey,
-        model: options.model,
-        effectiveSystemPrompt,
-        attachmentUserMessage,
-        conversation: options.messages,
-        toolLog,
-        draftAnswer: result.content?.trim(),
-        steps,
-        tools: allToolNames,
-        onStep: options.onStep,
-        deadline: options.deadline,
-        policy,
-        reason: "Das Werkzeuglimit ist erreicht; es werden keine weiteren Recherchefunktionen aufgerufen.",
-      });
-    }
 
     messages.push({
       role: "assistant",
@@ -955,7 +833,6 @@ export async function runAgent(options: {
 
       const parsedArguments = call.parsedArguments;
       const argumentSummary = summarizeToolArguments(parsedArguments);
-      executedToolCallCount += 1;
       await appendAgentStep(
         steps,
         {
@@ -1024,22 +901,6 @@ export async function runAgent(options: {
       options.onStep,
     );
 
-    if (toolCallLimitReached || executedToolCallCount >= policy.maxToolCalls) {
-      return finalizeAgentRun({
-        apiKey: options.apiKey,
-        model: options.model,
-        effectiveSystemPrompt,
-        attachmentUserMessage,
-        conversation: options.messages,
-        toolLog,
-        steps,
-        tools: allToolNames,
-        onStep: options.onStep,
-        deadline: options.deadline,
-        policy,
-        reason: "Das begrenzte Werkzeuglimit ist erreicht; die bisherigen Ergebnisse werden verwendet.",
-      });
-    }
   }
 
   return finalizeAgentRun({
@@ -1054,6 +915,6 @@ export async function runAgent(options: {
     onStep: options.onStep,
     deadline: options.deadline,
     policy,
-    reason: "Das begrenzte Werkzeuglimit ist erreicht; die bisherigen Ergebnisse werden verwendet.",
+    reason: "Die maximale Zahl an Recherche-Runden ist erreicht; die bisherigen Ergebnisse werden verwendet.",
   });
 }

@@ -23,8 +23,6 @@ function rawSearchTool(name: "faq_search" | "hybrid_search") {
       properties: {
         query: { type: "string" },
         kb_id: { type: "string" },
-        year: { type: "integer" },
-        as_of: { type: "string" },
         limit: { type: "integer" },
       },
     },
@@ -33,7 +31,7 @@ function rawSearchTool(name: "faq_search" | "hybrid_search") {
 
 function mockSession(
   callTool = vi.fn().mockImplementation(async (request: { arguments: Record<string, unknown> }) =>
-    `Amtlicher Betragswert für ${String(request.arguments.year)} mit nachvollziehbarer Quelle.`,
+    `Amtlicher Betragswert für ${String(request.arguments.query)} mit nachvollziehbarer Quelle.`,
   ),
 ) {
   MockedMcpClient.mockImplementation(function MockMcpClient() {
@@ -83,10 +81,10 @@ describe("runAgent retrieval policy", () => {
       name: "faq_search",
       arguments: expect.objectContaining({
         kb_id: RESEARCH_SOURCES.BETRAGSTABELLE.kbId,
-        year: 2024,
         query: expect.stringContaining("2024"),
       }),
     }));
+    expect(callTool.mock.calls[0]?.[0].arguments).not.toHaveProperty("year");
     expect(callTool.mock.calls[0]?.[0].arguments).not.toHaveProperty("as_of");
     expect(JSON.stringify(callTool.mock.calls)).not.toContain(RESEARCH_SOURCES.BFG.kbId);
     expect(result.tools).toEqual(["search_amount_table"]);
@@ -139,13 +137,13 @@ describe("runAgent retrieval policy", () => {
     }));
   });
 
-  it("uses the current Vienna date when a simple amount question omits the year", async () => {
+  it("uses the current Vienna year when a simple amount question omits the year", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-14T12:00:00Z"));
     try {
       const callTool = mockSession();
       mockedChatCompletion.mockResolvedValueOnce({
-        content: "Kurzantwort mit Stichtag 2026-07-14.",
+        content: "Kurzantwort für das Jahr 2026.",
         toolCalls: [],
       });
 
@@ -161,13 +159,14 @@ describe("runAgent retrieval policy", () => {
         name: "faq_search",
         arguments: expect.objectContaining({
           kb_id: RESEARCH_SOURCES.BETRAGSTABELLE.kbId,
-          year: 2026,
-          as_of: "2026-07-14",
-          query: expect.stringMatching(/2026.*2026-07-14/u),
+          query: expect.stringContaining("2026"),
         }),
       }));
+      expect(callTool.mock.calls[0]?.[0].arguments).not.toHaveProperty("year");
+      expect(callTool.mock.calls[0]?.[0].arguments).not.toHaveProperty("as_of");
       expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
-      expect(finalPrompt()).toContain("Stichtag 2026-07-14");
+      expect(finalPrompt()).toContain("Veranlagungsjahr 2026");
+      expect(finalPrompt()).not.toContain("Stichtag 2026-07-14");
     } finally {
       vi.useRealTimers();
     }
@@ -176,7 +175,7 @@ describe("runAgent retrieval policy", () => {
   it("preserves an explicitly requested daily cutoff without inventing a year-end date", async () => {
     const callTool = mockSession();
     mockedChatCompletion.mockResolvedValueOnce({
-      content: "Kurzantwort mit Stichtag 01.07.2024.",
+      content: "Der Unterhaltsabsetzbetrag gilt am Stichtag 2024-07-01.",
       toolCalls: [],
     });
 
@@ -191,17 +190,17 @@ describe("runAgent retrieval policy", () => {
     const request = callTool.mock.calls[0]?.[0];
     expect(request.arguments).toEqual(expect.objectContaining({
       kb_id: RESEARCH_SOURCES.BETRAGSTABELLE.kbId,
-      year: 2024,
-      as_of: "2024-07-01",
       query: expect.stringContaining("2024-07-01"),
     }));
+    expect(request.arguments).not.toHaveProperty("year");
+    expect(request.arguments).not.toHaveProperty("as_of");
     expect(JSON.stringify(request.arguments)).not.toContain("2024-12-31");
   });
 
   it("checks two requested years separately and never exceeds two calls", async () => {
     const callTool = mockSession();
     mockedChatCompletion.mockResolvedValueOnce({
-      content: "Getrennter Vergleich für 2023 und 2024.",
+      content: "Unterhaltsabsetzbetrag: Veranlagungsjahr 2023 und Veranlagungsjahr 2024.",
       toolCalls: [],
     });
 
@@ -214,13 +213,14 @@ describe("runAgent retrieval policy", () => {
 
     expect(callTool).toHaveBeenCalledTimes(2);
     expect(callTool.mock.calls.map(([request]) => request.name)).toEqual(["faq_search", "faq_search"]);
-    expect(callTool.mock.calls.map(([request]) => request.arguments.year)).toEqual([2023, 2024]);
     for (const [index, [request]] of callTool.mock.calls.entries()) {
       const expectedYear = index === 0 ? "2023" : "2024";
       const otherYear = index === 0 ? "2024" : "2023";
       expect(request.arguments.kb_id).toBe(RESEARCH_SOURCES.BETRAGSTABELLE.kbId);
       expect(request.arguments.query).toContain(expectedYear);
       expect(request.arguments.query).not.toContain(otherYear);
+      expect(request.arguments).not.toHaveProperty("year");
+      expect(request.arguments).not.toHaveProperty("as_of");
       expect(JSON.stringify(request.arguments)).not.toContain(RESEARCH_SOURCES.BFG.kbId);
     }
     expect(result.tools).toEqual(["search_amount_table"]);
@@ -228,35 +228,27 @@ describe("runAgent retrieval policy", () => {
     expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back once from the amount table to laws without querying BFG", async () => {
-    const callTool = mockSession(
-      vi.fn()
-        .mockResolvedValueOnce("Keine relevanten Treffer gefunden.")
-        .mockResolvedValueOnce("Gesetzesfundstelle 2024 mit amtlichem Betragswert."),
-    );
-    mockedChatCompletion.mockResolvedValueOnce({
-      content: "Der Betrag gilt im Veranlagungsjahr 2024.",
-      toolCalls: [],
-    });
+  it("does not fall back from a pure amount question to laws or BFG", async () => {
+    const callTool = mockSession(vi.fn().mockResolvedValue("Keine relevanten Treffer gefunden."));
 
-    const result = await runAgent({
+    await expect(runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
       systemPrompt: "System",
       messages: [{ role: "user", content: "Unterhaltsabsetzbetrag 2024?" }],
-    });
+    })).rejects.toMatchObject({ status: 502 });
 
-    expect(callTool).toHaveBeenCalledTimes(2);
-    expect(callTool.mock.calls.map(([request]) => request.name)).toEqual(["faq_search", "hybrid_search"]);
-    expect(callTool.mock.calls.map(([request]) => request.arguments.kb_id)).toEqual([
-      RESEARCH_SOURCES.BETRAGSTABELLE.kbId,
-      RESEARCH_SOURCES.GESETZE.kbId,
-    ]);
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(callTool.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      name: "faq_search",
+      arguments: expect.objectContaining({ kb_id: RESEARCH_SOURCES.BETRAGSTABELLE.kbId }),
+    }));
     expect(JSON.stringify(callTool.mock.calls)).not.toContain(RESEARCH_SOURCES.BFG.kbId);
-    expect(result.tools).toEqual(["search_amount_table", "search_laws"]);
+    expect(JSON.stringify(callTool.mock.calls)).not.toContain(RESEARCH_SOURCES.GESETZE.kbId);
+    expect(mockedChatCompletion).not.toHaveBeenCalled();
   });
 
-  it("does not answer when both scoped sources lack a reliable result", async () => {
+  it("does not answer when the scoped amount source lacks a reliable result", async () => {
     const callTool = mockSession(vi.fn().mockResolvedValue("Keine Treffer."));
 
     await expect(runAgent({
@@ -266,7 +258,7 @@ describe("runAgent retrieval policy", () => {
       messages: [{ role: "user", content: "Wie hoch ist der Unterhaltsabsetzbetrag 2024?" }],
     })).rejects.toMatchObject({ status: 502 });
 
-    expect(callTool).toHaveBeenCalledTimes(2);
+    expect(callTool).toHaveBeenCalledTimes(1);
     expect(mockedChatCompletion).not.toHaveBeenCalled();
   });
 
@@ -312,12 +304,20 @@ describe("runAgent retrieval policy", () => {
     expect(mockedChatCompletion).not.toHaveBeenCalled();
   });
 
-  it("keeps a child's birth date as factual context instead of using it as the legal cutoff", async () => {
+  it("treats a contextual amount question as a Fachfrage and searches laws with the full question", async () => {
     const callTool = mockSession();
-    mockedChatCompletion.mockResolvedValueOnce({
-      content: "Familienbeihilfe im Jahr 2024.",
-      toolCalls: [],
-    });
+    const question = "Wie hoch ist die Familienbeihilfe 2024 für ein am 1.7.2010 geborenes Kind?";
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        content: "Recherchiere Rechtsgrundlagen.",
+        toolCalls: [{
+          id: "laws-1",
+          name: "search_laws",
+          arguments: JSON.stringify({ query: "Familienbeihilfe Kind" }),
+        }],
+      })
+      .mockResolvedValueOnce({ content: "Vorläufige Antwort.", toolCalls: [] })
+      .mockResolvedValueOnce({ content: "Familienbeihilfe im Jahr 2024.", toolCalls: [] });
 
     await runAgent({
       apiKey: "server-key",
@@ -325,15 +325,18 @@ describe("runAgent retrieval policy", () => {
       systemPrompt: "System",
       messages: [{
         role: "user",
-        content: "Wie hoch ist die Familienbeihilfe 2024 für ein am 1.7.2010 geborenes Kind?",
+        content: question,
       }],
     });
 
     expect(callTool).toHaveBeenCalledTimes(1);
     const request = callTool.mock.calls[0]?.[0];
-    expect(request.arguments.year).toBe(2024);
-    expect(request.arguments.query).toContain("1.7.2010");
+    expect(request.name).toBe("hybrid_search");
+    expect(request.arguments.kb_id).toBe(RESEARCH_SOURCES.GESETZE.kbId);
+    expect(request.arguments.query).toBe(question);
+    expect(request.arguments).not.toHaveProperty("year");
     expect(request.arguments).not.toHaveProperty("as_of");
+    expect(request.arguments).not.toHaveProperty("limit");
   });
 
   it("rewrites a forbidden judicature reference before returning a simple amount answer", async () => {
@@ -379,17 +382,11 @@ describe("runAgent retrieval policy", () => {
     expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
   });
 
-  it("queries and verifies BFG only when the model selects the semantic BFG tool", async () => {
+  it("queries BFG when selected without a post-retrieval Findok verification", async () => {
     const gz = "RV/2100543/2025";
     const callTool = mockSession(vi.fn().mockResolvedValue(`Treffer: ${gz}`));
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      dokumentId: "21005432025",
-      segmentId: "segment",
-      indexName: "findok-bfg",
-      dokumentPdfMediaUrl: "findok/resources/pdf/segment/21005432025.pdf",
-      dokumentTitel: `BFG, ${gz}`,
-      titel: "Unterhaltsabsetzbetrag für Kinder in Drittstaaten",
-    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
     mockedChatCompletion
       .mockResolvedValueOnce({
         content: "BFG-Recherche.",
@@ -422,9 +419,8 @@ describe("runAgent retrieval policy", () => {
     }));
     expect(result.answer).toBe("Finale Antwort ohne BFG-Zitat.");
     expect(result.answer).not.toContain(gz);
-    expect(result.steps).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "citation_verification", content: "1 verifiziert, 0 verworfen." }),
-    ]));
+    expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(result.steps.some((step) => "toolName" in step && step.toolName === "bfg_prefetch")).toBe(false);
   });
 });

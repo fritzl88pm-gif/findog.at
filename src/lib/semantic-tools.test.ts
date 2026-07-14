@@ -506,7 +506,7 @@ describe("SemanticToolRegistry", () => {
       expect(routed!.arguments).not.toHaveProperty("query");
     });
 
-    it("adds default limit when raw schema has a limit property", () => {
+    it("does not add an application limit to search_laws when the raw schema has one", () => {
       const tools = [
         rawTool("hybrid_search", {
           kb_id: { type: "string" },
@@ -517,22 +517,21 @@ describe("SemanticToolRegistry", () => {
       const registry = new SemanticToolRegistry(tools);
       const routed = registry.routeToolCall("search_laws", { query: "EStG" });
       expect(routed).toBeDefined();
-      expect(routed!.arguments.limit).toBe(5);
+      expect(routed!.arguments).not.toHaveProperty("limit");
     });
 
-    it("adds default count when raw schema uses count instead of limit", () => {
+    it("keeps the existing default limit for search_bfg", () => {
       const tools = [
         rawTool("hybrid_search", {
           kb_id: { type: "string" },
           query: { type: "string" },
-          count: { type: "number" },
+          limit: { type: "number" },
         }),
       ];
       const registry = new SemanticToolRegistry(tools);
-      const routed = registry.routeToolCall("search_laws", { query: "EStG" });
+      const routed = registry.routeToolCall("search_bfg", { query: "Pendlerpauschale" });
       expect(routed).toBeDefined();
-      expect(routed!.arguments).not.toHaveProperty("limit");
-      expect(routed!.arguments.count).toBe(5);
+      expect(routed!.arguments.limit).toBe(5);
     });
 
     it("does not override a user-supplied document_id override with default limit", () => {
@@ -550,125 +549,6 @@ describe("SemanticToolRegistry", () => {
       });
       expect(routed).toBeDefined();
       expect(routed!.arguments.knowledge_id).toBe("custom-id");
-    });
-  });
-
-  describe("(g) trusted deterministic scope", () => {
-    it("keeps temporal and result-limit controls out of every public schema", () => {
-      const registry = new SemanticToolRegistry(allProductionRawTools());
-      const hiddenScopeKeys = [
-        "year",
-        "tax_year",
-        "reference_year",
-        "as_of",
-        "stichtag",
-        "effective_at",
-        "valid_at",
-        "limit",
-        "count",
-        "max_results",
-        "maxResults",
-        "match_count",
-        "top_k",
-        "max_chunks",
-      ];
-
-      for (const tool of registry.getModelTools()) {
-        const parameters = tool.function.parameters as Record<string, unknown>;
-        const properties = parameters.properties as Record<string, unknown> | undefined;
-        const publicKeys = Object.keys(properties ?? {});
-
-        for (const hiddenKey of hiddenScopeKeys) {
-          expect(publicKeys).not.toContain(hiddenKey);
-        }
-      }
-    });
-
-    it("ignores model-provided year and as_of in normal semantic routing", () => {
-      const registry = new SemanticToolRegistry([
-        rawTool("hybrid_search", {
-          kb_id: { type: "string" },
-          query: { type: "string" },
-          year: { type: "integer" },
-          as_of: { type: "string" },
-          limit: { type: "integer" },
-        }),
-      ]);
-
-      const routed = registry.routeToolCall("search_laws", {
-        query: "Unterhaltsabsetzbetrag 2024",
-        year: 1999,
-        as_of: "1999-01-01",
-      });
-
-      expect(routed).toBeDefined();
-      expect(routed!.arguments.kb_id).toBe(RESEARCH_SOURCES.GESETZE.kbId);
-      expect(routed!.arguments.query).toBe("Unterhaltsabsetzbetrag 2024");
-      expect(routed!.arguments).not.toHaveProperty("year");
-      expect(routed!.arguments).not.toHaveProperty("as_of");
-      expect(routed!.arguments.limit).toBe(5);
-    });
-
-    it("injects trusted year, date, and limit when the raw schema supports them", () => {
-      const registry = new SemanticToolRegistry([
-        rawTool("faq_search", {
-          kb_id: { type: "string" },
-          query: { type: "string" },
-          year: { type: "integer" },
-          as_of: { type: "string" },
-          limit: { type: "integer" },
-        }),
-      ]);
-
-      const routed = registry.routeDeterministicToolCall(
-        "search_amount_table",
-        {
-          query: "Unterhaltsabsetzbetrag 2024",
-          year: 1999,
-          as_of: "1999-01-01",
-          limit: 99,
-        },
-        {
-          referenceYear: "2024",
-          referenceDate: "2024-12-31",
-          limit: 2,
-        },
-      );
-
-      expect(routed).toBeDefined();
-      expect(routed!.name).toBe("faq_search");
-      expect(routed!.arguments.kb_id).toBe(RESEARCH_SOURCES.BETRAGSTABELLE.kbId);
-      expect(routed!.arguments.query).toBe("Unterhaltsabsetzbetrag 2024");
-      expect(routed!.arguments.year).toBe(2024);
-      expect(routed!.arguments.as_of).toBe("2024-12-31");
-      expect(routed!.arguments.limit).toBe(2);
-    });
-
-    it("maps trusted scope through supported aliases and clamps the limit", () => {
-      const registry = new SemanticToolRegistry([
-        rawTool("hybrid_search", {
-          kb_id: { type: "string" },
-          query: { type: "string" },
-          reference_year: { type: "string" },
-          effective_at: { type: "string" },
-          top_k: { type: "integer" },
-        }),
-      ]);
-
-      const routed = registry.routeDeterministicToolCall(
-        "search_laws",
-        { query: "EStG 2024" },
-        {
-          referenceYear: "2024",
-          referenceDate: "2024-06-30",
-          limit: 500,
-        },
-      );
-
-      expect(routed).toBeDefined();
-      expect(routed!.arguments.reference_year).toBe("2024");
-      expect(routed!.arguments.effective_at).toBe("2024-06-30");
-      expect(routed!.arguments.top_k).toBe(5);
     });
   });
 });
