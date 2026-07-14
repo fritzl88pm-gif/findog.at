@@ -4,7 +4,7 @@ import { MissingMcpBearerTokenError, UserVisibleError } from "../errors";
 import { extractJsonPayloads } from "./parser";
 import type { JsonObject, McpTool } from "./tools";
 
-export const MCP_HTTP_TIMEOUT_MS = 30_000;
+export const MCP_HTTP_TIMEOUT_MS = 60_000;
 
 type McpHttpResult = {
   payloads: JsonObject[];

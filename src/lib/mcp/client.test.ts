@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createDeadline } from "../deadline";
+import { MCP_HTTP_TIMEOUT_MS } from "./client";
 import { McpClient } from "./client";
 
 function jsonRpcResponse(body: unknown, headers?: HeadersInit): Response {
@@ -12,6 +13,13 @@ function jsonRpcResponse(body: unknown, headers?: HeadersInit): Response {
     },
   });
 }
+
+
+describe("MCP timeout constants", () => {
+  it("MCP_HTTP_TIMEOUT_MS is 60_000", () => {
+    expect(MCP_HTTP_TIMEOUT_MS).toBe(60_000);
+  });
+});
 
 describe("McpClient", () => {
   beforeEach(() => {

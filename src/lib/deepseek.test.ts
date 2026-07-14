@@ -30,6 +30,7 @@ describe("chatCompletion", () => {
         JSON.stringify({
           choices: [
             {
+              finish_reason: "stop",
               message: {
                 content: "Antwort",
               },

@@ -130,10 +130,12 @@ describe("BFG PRO query generation and reranking", () => {
       .mockResolvedValueOnce({
         content: '{"queries":["Arbeitszimmer Vorsteuer"],"norm":null}',
         toolCalls: [],
+        finishReason: "stop",
       })
       .mockResolvedValueOnce({
         content: '{"selections":[{"candidateId":"candidate-1","score":87,"comment":"Behandelt ein Arbeitszimmer und den Vorsteuerabzug.","caseSummary":"Ein beruflich genutztes Arbeitszimmer im Wohnungsverband war zu beurteilen; das BFG entschied über den geltend gemachten Vorsteuerabzug."}]}',
         toolCalls: [],
+        finishReason: "stop",
       });
 
     await runBfgProSearch("Ein Raum meiner Wohnung wird ausschließlich beruflich genutzt.");
@@ -160,7 +162,7 @@ describe("BFG PRO query generation and reranking", () => {
     ["blank norm", JSON.stringify({ queries: ["Arbeitszimmer"], norm: "  " })],
     ["oversized norm", JSON.stringify({ queries: ["Arbeitszimmer"], norm: "x".repeat(121) })],
   ])("rejects malformed query model output: %s", async (_label, content) => {
-    vi.mocked(chatCompletion).mockResolvedValueOnce({ content, toolCalls: [] });
+    vi.mocked(chatCompletion).mockResolvedValueOnce({ content, toolCalls: [], finishReason: "stop" });
 
     await expect(runBfgProSearch("Sachverhalt")).rejects.toBeInstanceOf(BfgProModelError);
     expect(fetchBfgProCandidates).not.toHaveBeenCalled();
@@ -174,6 +176,7 @@ describe("BFG PRO query generation and reranking", () => {
         norm: null,
       }),
       toolCalls: [],
+      finishReason: "stop",
     });
 
     await expect(runBfgProSearch("Sachverhalt")).resolves.toEqual({ results: [] });
@@ -194,10 +197,12 @@ describe("BFG PRO query generation and reranking", () => {
           norm: "  EStG 1988 § 20  ",
         }),
         toolCalls: [],
+        finishReason: "stop",
       })
       .mockResolvedValueOnce({
         content: '{"selections":[{"candidateId":"candidate-1","score":80,"comment":"Passend.","caseSummary":"Ein Arbeitszimmer war strittig; das BFG entschied darüber."}]}',
         toolCalls: [],
+        finishReason: "stop",
       });
 
     await runBfgProSearch("Sachverhalt");
@@ -219,10 +224,12 @@ describe("BFG PRO query generation and reranking", () => {
           norm: null,
         }),
         toolCalls: [],
+        finishReason: "stop",
       })
       .mockResolvedValueOnce({
         content: '{"selections":[{"candidateId":"candidate-1","score":80,"comment":"Passend.","caseSummary":"Der offizielle Fall war einschlägig; das BFG entschied darüber."}]}',
         toolCalls: [],
+        finishReason: "stop",
       });
 
     await runBfgProSearch("Sachverhalt");
@@ -245,10 +252,12 @@ describe("BFG PRO query generation and reranking", () => {
           norm: null,
         }),
         toolCalls: [],
+        finishReason: "stop",
       })
       .mockResolvedValueOnce({
         content: '{"selections":[{"candidateId":"candidate-1","score":80,"comment":"Passend.","caseSummary":"Der offizielle Fall war einschlägig; das BFG entschied darüber."}]}',
         toolCalls: [],
+        finishReason: "stop",
       });
 
     await runBfgProSearch("Sachverhalt");
@@ -280,8 +289,9 @@ describe("BFG PRO query generation and reranking", () => {
       .mockResolvedValueOnce({
         content: '{"queries":["Arbeitszimmer"],"norm":null}',
         toolCalls: [],
+        finishReason: "stop",
       })
-      .mockResolvedValueOnce({ content, toolCalls: [] });
+      .mockResolvedValueOnce({ content, toolCalls: [], finishReason: "stop" });
 
     await expect(runBfgProSearch("Sachverhalt")).rejects.toBeInstanceOf(BfgProModelError);
   });
@@ -294,6 +304,7 @@ describe("BFG PRO query generation and reranking", () => {
       .mockResolvedValueOnce({
         content: '{"queries":["Arbeitszimmer"],"norm":null}',
         toolCalls: [],
+        finishReason: "stop",
       })
       .mockResolvedValueOnce({
         content: JSON.stringify({
@@ -305,6 +316,7 @@ describe("BFG PRO query generation and reranking", () => {
           })),
         }),
         toolCalls: [],
+        finishReason: "stop",
       });
 
     const response = await runBfgProSearch("Arbeitszimmer im Wohnungsverband");
@@ -321,6 +333,7 @@ describe("BFG PRO query generation and reranking", () => {
       .mockResolvedValueOnce({
         content: '{"queries":["Arbeitszimmer"],"norm":null}',
         toolCalls: [],
+        finishReason: "stop",
       })
       .mockResolvedValueOnce({
         content: JSON.stringify({
@@ -340,6 +353,7 @@ describe("BFG PRO query generation and reranking", () => {
           ],
         }),
         toolCalls: [],
+        finishReason: "stop",
       });
 
     const response = await runBfgProSearch("Arbeitszimmer");
@@ -353,10 +367,12 @@ describe("BFG PRO query generation and reranking", () => {
       .mockResolvedValueOnce({
         content: '{"queries":["Arbeitszimmer"],"norm":null}',
         toolCalls: [],
+        finishReason: "stop",
       })
       .mockResolvedValueOnce({
         content: '{"selections":[{"candidateId":"invented","score":99,"comment":"Erfundener Treffer","caseSummary":"Erfundener Sachverhalt mit erfundenem Ergebnis."}]}',
         toolCalls: [],
+        finishReason: "stop",
       });
 
     await expect(runBfgProSearch("Sachverhalt")).resolves.toEqual({ results: [] });
@@ -367,6 +383,7 @@ describe("BFG PRO query generation and reranking", () => {
       .mockResolvedValueOnce({
         content: '{"queries":["Arbeitszimmer"],"norm":null}',
         toolCalls: [],
+        finishReason: "stop",
       })
       .mockResolvedValueOnce({
         content: JSON.stringify({
@@ -386,6 +403,7 @@ describe("BFG PRO query generation and reranking", () => {
           ],
         }),
         toolCalls: [],
+        finishReason: "stop",
       });
 
     const response = await runBfgProSearch("Arbeitszimmer im Wohnungsverband");
@@ -411,10 +429,12 @@ describe("BFG PRO query generation and reranking", () => {
       .mockResolvedValueOnce({
         content: '{"queries":["Arbeitszimmer"],"norm":null}',
         toolCalls: [],
+        finishReason: "stop",
       })
       .mockResolvedValueOnce({
         content: '{"selections":[{"candidateId":"candidate-1","score":70,"comment":"Thematisch passend.","caseSummary":"Ein Arbeitszimmer im Wohnungsverband war strittig; das BFG entschied über dessen steuerliche Behandlung."}]}',
         toolCalls: [],
+        finishReason: "stop",
       });
 
     const response = await runBfgProSearch("Arbeitszimmer");
@@ -453,10 +473,12 @@ describe("BFG PRO query generation and reranking", () => {
           norm: null,
         }),
         toolCalls: [],
+        finishReason: "stop",
       })
       .mockResolvedValueOnce({
         content: '{"selections":[{"candidateId":"candidate-1","score":70,"comment":"Thematisch passend.","caseSummary":"Ein DBA war entscheidend; das BFG entschied den Fall."}]}',
         toolCalls: [],
+        finishReason: "stop",
       });
 
     await runBfgProSearch("Unterhaltsabsetzbetrag Drittstaat DBA");
@@ -473,6 +495,7 @@ describe("BFG PRO query generation and reranking", () => {
     vi.mocked(chatCompletion).mockResolvedValueOnce({
       content: '{"queries":["Arbeitszimmer"],"norm":null}',
       toolCalls: [],
+      finishReason: "stop",
     });
 
     await expect(runBfgProSearch("Sachverhalt")).resolves.toEqual({ results: [] });

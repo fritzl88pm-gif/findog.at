@@ -82,6 +82,7 @@ describe("runAgent retrieval policy", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "stop",
       content: "Der Betrag gilt im Veranlagungsjahr 2024.",
       toolCalls: [],
     });
@@ -120,6 +121,7 @@ describe("runAgent retrieval policy", () => {
   ])("expands the amount abbreviation %s before the scoped amount-table query", async (abbreviation, expandedTerm) => {
     const callTool = mockSession();
     mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "stop",
       content: "Der Betrag gilt im Veranlagungsjahr 2024.",
       toolCalls: [],
     });
@@ -160,6 +162,7 @@ describe("runAgent retrieval policy", () => {
       } as unknown as McpClient;
     });
     mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "stop",
       content: "Der Betrag gilt im Veranlagungsjahr 2024.",
       toolCalls: [],
     });
@@ -185,6 +188,7 @@ describe("runAgent retrieval policy", () => {
     try {
       const callTool = mockSession();
       mockedChatCompletion.mockResolvedValueOnce({
+        finishReason: "stop",
         content: "Kurzantwort für das Jahr 2026.",
         toolCalls: [],
       });
@@ -215,6 +219,7 @@ describe("runAgent retrieval policy", () => {
   it("preserves an explicitly requested daily cutoff without inventing a year-end date", async () => {
     const callTool = mockSession();
     mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "stop",
       content: "Der Unterhaltsabsetzbetrag gilt am Stichtag 2024-07-01.",
       toolCalls: [],
     });
@@ -238,6 +243,7 @@ describe("runAgent retrieval policy", () => {
   it("checks two requested years separately and never exceeds two calls", async () => {
     const callTool = mockSession();
     mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "stop",
       content: "Unterhaltsabsetzbetrag: Veranlagungsjahr 2023 und Veranlagungsjahr 2024.",
       toolCalls: [],
     });
@@ -342,6 +348,7 @@ describe("runAgent retrieval policy", () => {
     const question = "Wie hoch ist die Familienbeihilfe 2024 für ein am 1.7.2010 geborenes Kind?";
     mockedChatCompletion
       .mockResolvedValueOnce({
+        finishReason: "tool_calls",
         content: "Recherchiere Rechtsgrundlagen.",
         toolCalls: [{
           id: "laws-1",
@@ -349,8 +356,8 @@ describe("runAgent retrieval policy", () => {
           arguments: JSON.stringify({ query: "Familienbeihilfe Kind" }),
         }],
       })
-      .mockResolvedValueOnce({ content: "Vorläufige Antwort.", toolCalls: [] })
-      .mockResolvedValueOnce({ content: "Familienbeihilfe im Jahr 2024.", toolCalls: [] });
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort.", toolCalls: [] })
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Familienbeihilfe im Jahr 2024.", toolCalls: [] });
 
     await runAgent({
       runtime: TEST_RUNTIME,
@@ -373,6 +380,7 @@ describe("runAgent retrieval policy", () => {
   it("returns a simple amount answer without a second post-answer validation call", async () => {
     mockSession();
     mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "stop",
       content: "Im angefragten Rechtsstand beträgt der Wert EUR 1.",
       toolCalls: [],
     });
@@ -389,8 +397,8 @@ describe("runAgent retrieval policy", () => {
   it("performs no hidden BFG prefetch for a general question", async () => {
     const callTool = mockSession();
     mockedChatCompletion
-      .mockResolvedValueOnce({ content: "Vorläufige Antwort.", toolCalls: [] })
-      .mockResolvedValueOnce({ content: "Finale Antwort.", toolCalls: [] });
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort.", toolCalls: [] })
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
@@ -410,6 +418,7 @@ describe("runAgent retrieval policy", () => {
     vi.stubGlobal("fetch", fetchMock);
     mockedChatCompletion
       .mockResolvedValueOnce({
+        finishReason: "tool_calls",
         content: "BFG-Recherche.",
         toolCalls: [{
           id: "bfg-1",
@@ -417,8 +426,8 @@ describe("runAgent retrieval policy", () => {
           arguments: JSON.stringify({ query: "Unterhaltsabsetzbetrag Drittstaat" }),
         }],
       })
-      .mockResolvedValueOnce({ content: "Vorläufige Antwort ohne Geschäftszahl.", toolCalls: [] })
-      .mockResolvedValueOnce({ content: "Finale Antwort ohne BFG-Zitat.", toolCalls: [] });
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort ohne Geschäftszahl.", toolCalls: [] })
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort ohne BFG-Zitat.", toolCalls: [] });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,

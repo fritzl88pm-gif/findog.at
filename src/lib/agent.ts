@@ -553,11 +553,31 @@ async function finalizeAgentRun(options: {
     toolLog: options.toolLog,
     draftAnswer: options.draftAnswer,
   });
-  const finalResult = await chatCompletion({
+  let finalResult = await chatCompletion({
     runtime: options.runtime,
     deadline: options.deadline,
     messages: finalMessages,
   });
+  if (finalResult.finishReason === "length") {
+    finalResult = await chatCompletion({
+      runtime: options.runtime,
+      deadline: options.deadline,
+      messages: [
+        ...finalMessages,
+        { role: "assistant", content: finalResult.content },
+        {
+          role: "user",
+          content: "Erstellen Sie jetzt eine vollständige, abschließende Antwort auf Basis des gesamten verifizierten Kontexts.",
+        },
+      ],
+    });
+  }
+  if (finalResult.finishReason !== "stop") {
+    throw new UserVisibleError(
+      "Das Modell konnte die finale Antwort nicht vollständig abschließen. Bitte erneut versuchen.",
+      502,
+    );
+  }
   const modelAnswer = requireModelContent(
     finalResult.content,
     "Das Modell konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
@@ -774,7 +794,14 @@ export async function runAgent(options: {
       tools: allModelTools,
     });
 
-    if (result.toolCalls.length === 0) {
+    if (result.finishReason === "length") {
+      throw new UserVisibleError(
+        "Das Modell konnte den Rechercheschritt nicht vollständig abschließen. Bitte erneut versuchen.",
+        502,
+      );
+    }
+
+    if (result.finishReason === "stop" || result.toolCalls.length === 0) {
       return finalizeAgentRun({
         runtime: options.runtime,
         attachmentUserMessage,

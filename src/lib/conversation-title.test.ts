@@ -31,6 +31,7 @@ describe("generateConversationTitle", () => {
     mockedChatCompletion.mockResolvedValueOnce({
       content: "Unterhaltsabsetzbetrag bei Drittstaatenkindern",
       toolCalls: [],
+      finishReason: "stop",
     });
 
     await expect(

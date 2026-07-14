@@ -3,8 +3,8 @@ import { UserVisibleError } from "../errors";
 import type { DeepSeekTool, JsonObject } from "../mcp/tools";
 import type { LlmRuntime } from "./runtime";
 
-export const LLM_CHAT_TIMEOUT_MS = 90_000;
-export const LLM_THINKING_TIMEOUT_MS = 180_000;
+export const LLM_CHAT_TIMEOUT_MS = 100_000;
+export const LLM_THINKING_TIMEOUT_MS = 190_000;
 
 export type AppChatMessage = {
   role: "user" | "assistant";
@@ -32,10 +32,18 @@ export type LlmMessage = {
   }>;
 };
 
+export type FinishReason =
+  | "stop"
+  | "length"
+  | "tool_calls"
+  | "content_filter"
+  | (string & {});
+
 export type LlmResult = {
   content: string | null;
   reasoningContent?: string | null;
   toolCalls: LlmToolCall[];
+  finishReason: FinishReason;
 };
 
 function providerLabel(runtime: LlmRuntime): string {
@@ -167,6 +175,7 @@ export async function chatCompletion(options: {
 
   const choices = Array.isArray(parsed.choices) ? parsed.choices : [];
   const firstChoice = choices[0] as JsonObject | undefined;
+  const finishReason = typeof firstChoice?.finish_reason === "string" ? firstChoice.finish_reason : "";
   const message = firstChoice?.message as JsonObject | undefined;
   if (!message) {
     throw new UserVisibleError(
@@ -205,5 +214,29 @@ export async function chatCompletion(options: {
     ? message.reasoning_content
     : null;
 
-  return { content, reasoningContent, toolCalls };
+  if (finishReason === "tool_calls" && toolCalls.length === 0) {
+    throw new UserVisibleError(
+      `${providerLabel(options.runtime)} hat eine unvollständige Werkzeugauswahl geliefert.`,
+      502,
+    );
+  }
+  if (finishReason === "content_filter") {
+    throw new UserVisibleError(
+      `${providerLabel(options.runtime)} hat die Antwort aufgrund eines Sicherheitsfilters abgelehnt.`,
+      502,
+    );
+  }
+  if (!["stop", "length", "tool_calls"].includes(finishReason)) {
+    throw new UserVisibleError(
+      `${providerLabel(options.runtime)} hat die Antwort mit einem unbekannten Status beendet.`,
+      502,
+    );
+  }
+
+  return {
+    content,
+    reasoningContent,
+    toolCalls,
+    finishReason: finishReason as FinishReason,
+  };
 }

@@ -4,6 +4,18 @@ import type { DeepSeekTool } from "../mcp/tools";
 import { chatCompletion } from "./client";
 import type { LlmRuntime } from "./runtime";
 
+import { LLM_CHAT_TIMEOUT_MS, LLM_THINKING_TIMEOUT_MS } from "./client";
+
+describe("LLM timeout constants", () => {
+  it("LLM_CHAT_TIMEOUT_MS is 100_000", () => {
+    expect(LLM_CHAT_TIMEOUT_MS).toBe(100_000);
+  });
+
+  it("LLM_THINKING_TIMEOUT_MS is 190_000", () => {
+    expect(LLM_THINKING_TIMEOUT_MS).toBe(190_000);
+  });
+});
+
 const TOOL: DeepSeekTool = {
   type: "function",
   function: {
@@ -22,8 +34,15 @@ const FLASH_RUNTIME = {
   reasoning: "disabled",
 } satisfies LlmRuntime;
 
-function responseMessage(message: Record<string, unknown>, status = 200): Response {
-  return new Response(JSON.stringify({ choices: [{ message }] }), { status });
+function responseMessage(
+  message: Record<string, unknown>,
+  finishReason = "stop",
+  status = 200,
+): Response {
+  return new Response(
+    JSON.stringify({ choices: [{ message, finish_reason: finishReason }] }),
+    { status },
+  );
 }
 
 function requestBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
@@ -33,6 +52,141 @@ function requestBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknow
   }
   return JSON.parse(raw) as Record<string, unknown>;
 }
+
+describe("finish_reason parsing and guards", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns finishReason stop for a complete answer", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
+
+    const result = await chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    });
+
+    expect(result.finishReason).toBe("stop");
+    expect(result.content).toBe("Antwort");
+    expect(result.toolCalls).toEqual([]);
+  });
+
+  it("returns finishReason tool_calls when valid tool calls are present", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(
+      responseMessage(
+        {
+          content: null,
+          tool_calls: [{
+            id: "call-1",
+            type: "function",
+            function: { name: "search_laws", arguments: { query: "EStG" } },
+          }],
+        },
+        "tool_calls",
+      ),
+    );
+
+    const result = await chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+      tools: [TOOL],
+    });
+
+    expect(result.finishReason).toBe("tool_calls");
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].name).toBe("search_laws");
+  });
+
+  it("throws for tool_calls finish_reason without valid tool calls", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(
+      responseMessage(
+        { content: null, tool_calls: [{ id: "bad", type: "function", function: { name: "", arguments: "{}" } }] },
+        "tool_calls",
+      ),
+    );
+
+    await expect(chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow("unvollständige Werkzeugauswahl");
+  });
+
+  it("throws for content_filter finish_reason", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "" }, "content_filter"));
+
+    await expect(chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow("Sicherheitsfilters");
+  });
+
+  it("throws for unknown terminal finish_reason", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "" }, "other_unknown_reason"));
+
+    await expect(chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow("unbekannten Status");
+  });
+
+  it("throws for missing finish_reason", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ choices: [{ message: { content: "Hi" } }] }), { status: 200 }),
+    );
+
+    await expect(chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow("unbekannten Status");
+  });
+
+  it("returns length without automatically retrying", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(
+      responseMessage({ content: "Antwort angefangen," }, "length"),
+    );
+
+    const result = await chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+      tools: [TOOL],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      finishReason: "length",
+      content: "Antwort angefangen,",
+      reasoningContent: null,
+      toolCalls: [],
+    });
+  });
+
+  it("includes finishReason in result for stop", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "Fertig." }, "stop"));
+
+    const result = await chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    });
+
+    expect(result).toMatchObject({
+      content: "Fertig.",
+      finishReason: "stop",
+      toolCalls: [],
+    });
+  });
+});
 
 describe("provider-neutral chatCompletion", () => {
   beforeEach(() => {
@@ -45,7 +199,7 @@ describe("provider-neutral chatCompletion", () => {
 
   it("uses non-thinking sampling and automatic tool choice only when reasoning is disabled", async () => {
     const fetchMock = vi.mocked(fetch);
-    fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }));
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
 
     await chatCompletion({
       runtime: FLASH_RUNTIME,
@@ -73,7 +227,7 @@ describe("provider-neutral chatCompletion", () => {
         type: "function",
         function: { name: "search_laws", arguments: { query: "EStG" } },
       }],
-    }));
+    }, "tool_calls"));
     const runtime = { ...FLASH_RUNTIME, reasoning: "max" } satisfies LlmRuntime;
 
     const result = await chatCompletion({
@@ -92,13 +246,14 @@ describe("provider-neutral chatCompletion", () => {
     expect(result).toEqual({
       content: "Recherche",
       reasoningContent: "Unveränderte Reasoning-Sequenz",
+      finishReason: "tool_calls",
       toolCalls: [{ id: "call-1", name: "search_laws", arguments: '{"query":"EStG"}' }],
     });
   });
 
   it("uses the Z.AI Coding endpoint and sends Turbo's enabled mode without an invented effort", async () => {
     const fetchMock = vi.mocked(fetch);
-    fetchMock.mockResolvedValueOnce(responseMessage({ content: "GLM-Antwort" }));
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "GLM-Antwort" }, "stop"));
     const runtime = {
       model: "glm-5-turbo",
       provider: "zai",
