@@ -97,6 +97,37 @@ describe("runAgent retrieval policy", () => {
     expect(finalPrompt()).not.toContain("Findok-Verifikation der BFG-Fundstellen");
   });
 
+  it.each([
+    ["AVAB", "Alleinverdienerabsetzbetrag"],
+    ["AEAB", "Alleinerzieherabsetzbetrag"],
+    ["UAB", "Unterhaltsabsetzbetrag"],
+  ])("expands the amount abbreviation %s before the scoped amount-table query", async (abbreviation, expandedTerm) => {
+    const callTool = mockSession();
+    mockedChatCompletion.mockResolvedValueOnce({
+      content: "Der Betrag gilt im Veranlagungsjahr 2024.",
+      toolCalls: [],
+    });
+
+    const result = await runAgent({
+      apiKey: "server-key",
+      model: "deepseek-v4-pro",
+      systemPrompt: "System",
+      messages: [{ role: "user", content: `Wie hoch ist der ${abbreviation} 2024?` }],
+    });
+
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+      name: "faq_search",
+      arguments: expect.objectContaining({
+        kb_id: RESEARCH_SOURCES.BETRAGSTABELLE.kbId,
+        query: expect.stringContaining(expandedTerm),
+      }),
+    }));
+    expect(JSON.stringify(callTool.mock.calls)).not.toContain(RESEARCH_SOURCES.GESETZE.kbId);
+    expect(JSON.stringify(callTool.mock.calls)).not.toContain(RESEARCH_SOURCES.BFG.kbId);
+    expect(result.tools).toEqual(["search_amount_table"]);
+  });
+
   it("uses the year-segmented amount KB when the MCP exposes no separate year field", async () => {
     const callTool = vi.fn().mockResolvedValue("Unterhaltsabsetzbetrag 2024: belegter Jahreswert.");
     MockedMcpClient.mockImplementation(function MockMcpClient() {

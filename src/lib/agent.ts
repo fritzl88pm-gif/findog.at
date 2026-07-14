@@ -24,6 +24,11 @@ const KB_NAME_ARGUMENT_NAMES = ["kb_name", "knowledge_base_name", "knowledgeBase
 const REFERENCE_DATE_MARKER_PATTERN = "(?:zum\\s+stichtag|stichtag(?:\\s+(?:am|zum))?|rechtsstand(?:\\s+(?:am|zum))?|gultig\\s+am|zum)";
 const REFERENCE_DATE_VALUE_PATTERN = "(?:(?:19|20)\\d{2}-\\d{2}-\\d{2}|\\d{1,2}\\.\\d{1,2}\\.(?:19|20)\\d{2})";
 const AMOUNT_CONCEPT_PATTERN = /\b(?:[a-z]*absetzbetrag|[a-z]*freibetrag|[a-z]*grenzbetrag|[a-z]*pauschale|[a-z]*grenze|pauschbetrag|familienbeihilfe|familienbonus(?: plus)?|haushaltsersparnis|kindermehrbetrag|mehrkindzuschlag|pendlereuro|kilometergeld|taggeld|nachtigungsgeld)\b/u;
+const AMOUNT_ABBREVIATIONS: Record<string, string> = {
+  AVAB: "Alleinverdienerabsetzbetrag",
+  AEAB: "Alleinerzieherabsetzbetrag",
+  UAB: "Unterhaltsabsetzbetrag",
+};
 const RESEARCH_POLICY_PROMPT = [
   "# VERBINDLICHER RECHERCHEUMFANG",
   "Diese Regeln ersetzen entgegenstehende Recherche- und Ausgabevorgaben weiter oben.",
@@ -31,6 +36,23 @@ const RESEARCH_POLICY_PROMPT = [
   "Begrenze Richtlinien- und Gesetzestreffer nicht anwendungsseitig und kürze die vom Recherchewerkzeug gelieferten Treffer im finalen Antwortkontext nicht. Berücksichtige und nenne alle sachlich einschlägigen gelieferten Treffer.",
   "Eine nachgelagerte automatische BFG-/Findok-Verifikation findet nicht statt. Die BFG-Recherchefunktion bleibt für Fachfragen regulär verfügbar.",
   "Berücksichtige den Stichtag ausdrücklich. Bei jahresabhängigen Beträgen bestimmt das genannte Jahr den maßgeblichen Rechtsstand; ein Tagesdatum ist nur nötig, wenn der Nutzer es vorgibt oder es für die Rechtsfrage entscheidend ist. Die starre Formulierung ‚Maßgeblicher Stichtag‘ ist nicht verpflichtend.",
+].join("\n");
+const ABBREVIATION_POLICY_PROMPT = [
+  "# VERBINDLICHE FACHABKÜRZUNGEN",
+  "Verstehe die folgenden Abkürzungen in Nutzerfragen, Rechercheplanung und Antworten im österreichischen Abgabenrecht:",
+  "- `AVAB` = Alleinverdienerabsetzbetrag",
+  "- `AEAB` = Alleinerzieherabsetzbetrag",
+  "- `UAB` = Unterhaltsabsetzbetrag",
+  "- `AEH` = Aussetzung der Einhebung",
+  "- `AS` = Abgabensicherung",
+  "- `FAÖ` = Finanzamt Österreich",
+  "- `Bf.` = Beschwerdeführer",
+  "- `BFG` = Bundesfinanzgericht",
+  "- `LStR` = Lohnsteuerrichtlinien",
+  "- `EStG` = Einkommensteuergesetz",
+  "- `agbs`, `agB` oder `agBs` = außergewöhnliche Belastungen",
+  "- `WK` oder `WKs` = Werbungskosten",
+  "Schreibe eine Abkürzung bei Bedarf beim ersten Auftreten aus, ohne Fundstellen, Dokumenttitel oder wörtliche Zitate mechanisch umzuschreiben. Deute `AS` nur als eigenständige Großbuchstaben-Abkürzung im passenden abgabenrechtlichen Kontext. Löse allein wegen einer Abkürzung keine zusätzlichen Quellen- oder Datenbankabfragen aus.",
 ].join("\n");
 const OUTPUT_FORMAT_POLICY_PROMPT = [
   "# VERBINDLICHES ANTWORTFORMAT",
@@ -87,6 +109,12 @@ function normalizedQuestion(value: string): string {
     .toLocaleLowerCase("de-AT")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function expandAmountAbbreviations(value: string): string {
+  return value.replace(/\b(?:AVAB|AEAB|UAB)\b/giu, (abbreviation) =>
+    AMOUNT_ABBREVIATIONS[abbreviation.toLocaleUpperCase("de-AT")] ?? abbreviation,
+  );
 }
 
 function requestedReferenceYears(question: string): string[] {
@@ -194,7 +222,8 @@ function retrievalPolicy(options: {
   latestQuestion?: string;
   hasAttachments: boolean;
 }): AgentRetrievalPolicy {
-  const question = normalizedQuestion(options.latestQuestion ?? "");
+  const expandedSourceQuestion = expandAmountAbbreviations(options.latestQuestion ?? "");
+  const question = normalizedQuestion(expandedSourceQuestion);
   const referenceYears = requestedReferenceYears(question);
   const referenceYear = referenceYears.length === 1 ? referenceYears[0] : undefined;
   const referenceDate = requestedReferenceDate(question);
@@ -229,7 +258,7 @@ function retrievalPolicy(options: {
       referenceYears: effectiveReferenceYears,
       ...(effectiveReferenceYear ? { referenceYear: effectiveReferenceYear } : {}),
       ...(effectiveReferenceDate ? { referenceDate: effectiveReferenceDate } : {}),
-      ...(options.latestQuestion?.trim() ? { sourceQuestion: options.latestQuestion.trim() } : {}),
+      ...(expandedSourceQuestion.trim() ? { sourceQuestion: expandedSourceQuestion.trim() } : {}),
     };
   }
 
@@ -519,7 +548,7 @@ export async function runAgent(options: {
   deadline?: Deadline;
 }): Promise<AgentRunResult> {
   const mcp = new McpClient();
-  const effectiveSystemPrompt = `${options.systemPrompt}\n\n${RESEARCH_POLICY_PROMPT}\n\n${OUTPUT_FORMAT_POLICY_PROMPT}`;
+  const effectiveSystemPrompt = `${options.systemPrompt}\n\n${RESEARCH_POLICY_PROMPT}\n\n${ABBREVIATION_POLICY_PROMPT}\n\n${OUTPUT_FORMAT_POLICY_PROMPT}`;
   // Build a separate user-role message for attachment/PDF context.
   const attachmentUserMessage = formatAttachmentUserMessage({
     attachmentContexts: options.attachmentContexts,

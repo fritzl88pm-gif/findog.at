@@ -22,6 +22,23 @@ const RESEARCH_POLICY_PROMPT_SUFFIX = [
   "Eine nachgelagerte automatische BFG-/Findok-Verifikation findet nicht statt. Die BFG-Recherchefunktion bleibt für Fachfragen regulär verfügbar.",
   "Berücksichtige den Stichtag ausdrücklich. Bei jahresabhängigen Beträgen bestimmt das genannte Jahr den maßgeblichen Rechtsstand; ein Tagesdatum ist nur nötig, wenn der Nutzer es vorgibt oder es für die Rechtsfrage entscheidend ist. Die starre Formulierung ‚Maßgeblicher Stichtag‘ ist nicht verpflichtend.",
 ].join("\n");
+const ABBREVIATION_POLICY_PROMPT_SUFFIX = [
+  "# VERBINDLICHE FACHABKÜRZUNGEN",
+  "Verstehe die folgenden Abkürzungen in Nutzerfragen, Rechercheplanung und Antworten im österreichischen Abgabenrecht:",
+  "- `AVAB` = Alleinverdienerabsetzbetrag",
+  "- `AEAB` = Alleinerzieherabsetzbetrag",
+  "- `UAB` = Unterhaltsabsetzbetrag",
+  "- `AEH` = Aussetzung der Einhebung",
+  "- `AS` = Abgabensicherung",
+  "- `FAÖ` = Finanzamt Österreich",
+  "- `Bf.` = Beschwerdeführer",
+  "- `BFG` = Bundesfinanzgericht",
+  "- `LStR` = Lohnsteuerrichtlinien",
+  "- `EStG` = Einkommensteuergesetz",
+  "- `agbs`, `agB` oder `agBs` = außergewöhnliche Belastungen",
+  "- `WK` oder `WKs` = Werbungskosten",
+  "Schreibe eine Abkürzung bei Bedarf beim ersten Auftreten aus, ohne Fundstellen, Dokumenttitel oder wörtliche Zitate mechanisch umzuschreiben. Deute `AS` nur als eigenständige Großbuchstaben-Abkürzung im passenden abgabenrechtlichen Kontext. Löse allein wegen einer Abkürzung keine zusätzlichen Quellen- oder Datenbankabfragen aus.",
+].join("\n");
 const OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX = [
   "# VERBINDLICHES ANTWORTFORMAT",
   "Diese Regeln ersetzen entgegenstehende Überschriften-, Symbol- und Darstellungsregeln weiter oben.",
@@ -140,7 +157,7 @@ describe("runAgent", () => {
     // Runtime policies are appended, while attachment content remains outside the system prompt.
     expect(mockedChatCompletion.mock.calls[0][0].messages[0]).toEqual({
       role: "system",
-      content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
+      content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${ABBREVIATION_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
     });
 
     expect(callTool).toHaveBeenCalledWith(
@@ -263,7 +280,7 @@ describe("runAgent", () => {
     const systemMessage = mockedChatCompletion.mock.calls[0]?.[0].messages[0];
     expect(systemMessage).toEqual({
       role: "system",
-      content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
+      content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${ABBREVIATION_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
     });
     expect(systemMessage?.content).not.toContain("Bescheid.pdf");
     expect(systemMessage?.content).not.toContain("Extrahierter Bescheidinhalt");
@@ -282,7 +299,7 @@ describe("runAgent", () => {
       const systemMsg = messages[0];
       expect(systemMsg).toEqual({
         role: "system",
-        content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
+        content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${ABBREVIATION_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
       });
       // Attachment context is in the same user message as synthesis context
       if (options.messages.length > 1) {
@@ -312,7 +329,7 @@ describe("runAgent", () => {
     const systemMessage = mockedChatCompletion.mock.calls[0]?.[0].messages[0];
     expect(systemMessage).toEqual({
       role: "system",
-      content: `System\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
+      content: `System\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${ABBREVIATION_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
     });
     expect(systemMessage?.content).not.toContain("Bescheid.pdf");
     expect(systemMessage?.content).not.toContain("Beleg.png");
