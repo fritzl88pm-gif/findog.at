@@ -99,6 +99,46 @@ describe("runAgent retrieval policy", () => {
     expect(finalPrompt()).not.toContain("Findok-Verifikation der BFG-Fundstellen");
   });
 
+  it("uses the year-segmented amount KB when the MCP exposes no separate year field", async () => {
+    const callTool = vi.fn().mockResolvedValue("Unterhaltsabsetzbetrag 2024: belegter Jahreswert.");
+    MockedMcpClient.mockImplementation(function MockMcpClient() {
+      return {
+        openToolSession: vi.fn().mockResolvedValue({
+          sessionId: "session-1",
+          tools: ["faq_search", "hybrid_search"].map((name) => ({
+            name,
+            inputSchema: {
+              type: "object",
+              properties: { query: { type: "string" }, kb_id: { type: "string" } },
+            },
+          })),
+          deepSeekTools: [],
+        }),
+        callTool,
+      } as unknown as McpClient;
+    });
+    mockedChatCompletion.mockResolvedValueOnce({
+      content: "Der Betrag gilt im Veranlagungsjahr 2024.",
+      toolCalls: [],
+    });
+
+    await runAgent({
+      apiKey: "server-key",
+      model: "deepseek-v4-pro",
+      systemPrompt: "System",
+      messages: [{ role: "user", content: "Wie hoch ist der Unterhaltsabsetzbetrag 2024?" }],
+    });
+
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+      name: "faq_search",
+      arguments: {
+        query: expect.stringContaining("2024"),
+        kb_id: RESEARCH_SOURCES.BETRAGSTABELLE.kbId,
+      },
+    }));
+  });
+
   it("uses the current Vienna date when a simple amount question omits the year", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-14T12:00:00Z"));

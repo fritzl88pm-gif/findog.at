@@ -520,14 +520,15 @@ function isSecureSimpleAmountRoute(
   const source = RESEARCH_SOURCES[target.sourceKey];
   const hasSourceScope = hasArgumentValue(routed.arguments, KB_ID_ARGUMENT_NAMES, source.kbId)
     || hasArgumentValue(routed.arguments, KB_NAME_ARGUMENT_NAMES, source.name);
-  const hasQuery = QUERY_ARGUMENT_NAMES.some((key) =>
-    typeof routed.arguments[key] === "string" && String(routed.arguments[key]).trim().length > 0,
-  );
-  const hasYear = Boolean(target.referenceYear)
-    && hasArgumentValue(routed.arguments, REFERENCE_YEAR_ARGUMENT_NAMES, target.referenceYear ?? "");
+  const query = QUERY_ARGUMENT_NAMES
+    .map((key) => routed.arguments[key])
+    .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const hasYear = hasArgumentValue(routed.arguments, REFERENCE_YEAR_ARGUMENT_NAMES, target.referenceYear)
+    || Boolean(query && new RegExp(`\\b${target.referenceYear}\\b`, "u").test(query));
   const hasDate = !target.referenceDate
-    || hasArgumentValue(routed.arguments, REFERENCE_DATE_ARGUMENT_NAMES, target.referenceDate);
-  return hasSourceScope && hasQuery && hasYear && hasDate;
+    || hasArgumentValue(routed.arguments, REFERENCE_DATE_ARGUMENT_NAMES, target.referenceDate)
+    || Boolean(query?.includes(target.referenceDate));
+  return hasSourceScope && Boolean(query) && hasYear && hasDate;
 }
 
 function simpleAmountLogArguments(query: string, target: SimpleAmountRetrievalTarget): JsonObject {
