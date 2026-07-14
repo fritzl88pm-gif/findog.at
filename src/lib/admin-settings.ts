@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { DEFAULT_SYSTEM_PROMPT, MAX_SYSTEM_PROMPT_CHARS } from "./config";
+import { DEFAULT_SYSTEM_PROMPT } from "./config";
 import { UserVisibleError } from "./errors";
 
 type ServerSupabaseClient = Pick<SupabaseClient, "from">;
@@ -49,9 +49,6 @@ export async function updateGlobalSystemPrompt(
   }
 
   const systemPrompt = value.trim();
-  if (systemPrompt.length > MAX_SYSTEM_PROMPT_CHARS) {
-    throw new UserVisibleError("Der globale System Prompt ist zu lang.", 400);
-  }
 
   const { data, error } = await supabase
     .from("global_settings")

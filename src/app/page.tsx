@@ -22,7 +22,6 @@ import {
   MAX_IMAGE_UPLOADS,
   MAX_PDF_UPLOAD_BYTES,
   MAX_PDF_UPLOADS,
-  MAX_SYSTEM_PROMPT_CHARS,
   type ChatModel,
 } from "@/lib/config";
 import {
@@ -4173,7 +4172,6 @@ export default function Home() {
                     setAdminError("");
                     setAdminNotice("");
                   }}
-                  maxLength={MAX_SYSTEM_PROMPT_CHARS}
                   rows={18}
                   disabled={isAdminSettingsLoading || isAdminSettingsSaving}
                 />
