@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { DEFAULT_SYSTEM_PROMPT, MAX_SYSTEM_PROMPT_CHARS } from "./config";
+import { DEFAULT_SYSTEM_PROMPT } from "./config";
 import {
   getGlobalSystemPrompt,
   isAdminUser,
@@ -48,11 +48,32 @@ describe("admin settings helper", () => {
     );
   });
 
-  it.each(["", "   ", "x".repeat(MAX_SYSTEM_PROMPT_CHARS + 1)])(
-    "rejects an empty or overlong global prompt",
+  it.each(["", "   "])(
+    "rejects an empty global prompt",
     async (prompt) => {
       await expect(updateGlobalSystemPrompt({ from: vi.fn() } as never, "admin-1", prompt))
         .rejects.toMatchObject({ status: 400 });
     },
   );
+
+  it("accepts a global prompt far exceeding the former 40 000 character limit", async () => {
+    const longPrompt = "x".repeat(100_000);
+    const maybeSingle = vi.fn().mockResolvedValue({
+      data: { system_prompt: longPrompt },
+      error: null,
+    });
+    const select = vi.fn().mockReturnValue({ maybeSingle });
+    const upsert = vi.fn().mockReturnValue({ select });
+    const from = vi.fn().mockReturnValue({ upsert });
+
+    await expect(updateGlobalSystemPrompt(
+      { from } as never,
+      "admin-1",
+      longPrompt,
+    )).resolves.toBe(longPrompt);
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ id: true, system_prompt: longPrompt, updated_by: "admin-1" }),
+      { onConflict: "id" },
+    );
+  });
 });
