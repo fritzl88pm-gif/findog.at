@@ -7,8 +7,8 @@ describe("agent plan", () => {
   it("exposes the fixed four phases in user-facing order", () => {
     expect(AGENT_PLAN_ITEMS).toEqual([
       "Anfrage prüfen",
-      "Datenbank und Richtlinien durchsuchen",
-      "Fundstellen prüfen",
+      "Erforderliche Quellen gezielt prüfen",
+      "Rechtsstand und Fundstellen absichern",
       "Antwort erstellen",
     ]);
   });

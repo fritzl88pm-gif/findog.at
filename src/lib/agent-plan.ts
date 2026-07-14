@@ -2,8 +2,8 @@ import type { AgentStep } from "./agent-steps";
 
 export const AGENT_PLAN_ITEMS = [
   "Anfrage prüfen",
-  "Datenbank und Richtlinien durchsuchen",
-  "Fundstellen prüfen",
+  "Erforderliche Quellen gezielt prüfen",
+  "Rechtsstand und Fundstellen absichern",
   "Antwort erstellen",
 ] as const;
 
