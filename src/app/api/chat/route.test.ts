@@ -13,7 +13,12 @@ vi.mock("next/server", async () => {
 
 import { MAX_IMAGE_UPLOAD_BYTES } from "@/lib/config";
 import { runAgent } from "@/lib/agent";
-import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
+import { resolveLlmRuntime } from "@/lib/llm/runtime";
+import {
+  flashOnlyModelSettings,
+  readEffectiveModelSettings,
+  type ModelSettingsSnapshot,
+} from "@/lib/model-settings";
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 import { parseChatStreamLine } from "@/lib/chat-stream";
 import { persistConversationTurn } from "@/lib/persistence";
@@ -28,9 +33,25 @@ vi.mock("@/lib/auth/server", () => ({
   authenticateSupabaseRequest: vi.fn().mockResolvedValue({ id: "user-1" }),
 }));
 
-vi.mock("@/lib/deepseek-key", () => ({
-  resolveDeepSeekApiKey: vi.fn().mockReturnValue("deepseek-key"),
+vi.mock("@/lib/llm/runtime", () => ({
+  isModelProviderConfigured: vi.fn().mockReturnValue(true),
+  resolveLlmRuntime: vi.fn((options: { model: string; reasoning?: string }) => {
+    const provider = options.model.startsWith("glm-") ? "zai" : "deepseek";
+    return {
+      model: options.model,
+      provider,
+      upstreamModel: options.model,
+      baseUrl: provider === "zai" ? "https://api.z.ai" : "https://api.deepseek.com",
+      apiKey: `${provider}-server-key`,
+      reasoning: options.reasoning ?? "disabled",
+    };
+  }),
 }));
+
+vi.mock("@/lib/model-settings", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/model-settings")>("@/lib/model-settings");
+  return { ...actual, readEffectiveModelSettings: vi.fn() };
+});
 
 vi.mock("@/lib/admin-request-history", () => ({
   recordAdminRequest: vi.fn().mockResolvedValue(undefined),
@@ -79,11 +100,59 @@ function chatPayload() {
   };
 }
 
+function databaseModelSettings(): ModelSettingsSnapshot {
+  return {
+    source: "database",
+    models: [
+      {
+        id: "deepseek-v4-flash",
+        enabled: true,
+        reasoning: "disabled",
+        revision: 1,
+        updatedAt: "2026-07-14T12:00:01Z",
+        updatedBy: null,
+      },
+      {
+        id: "deepseek-v4-pro",
+        enabled: true,
+        reasoning: "high",
+        revision: 2,
+        updatedAt: "2026-07-14T12:00:02Z",
+        updatedBy: null,
+      },
+      {
+        id: "glm-5.2",
+        enabled: false,
+        reasoning: "max",
+        revision: 3,
+        updatedAt: "2026-07-14T12:00:03Z",
+        updatedBy: null,
+      },
+      {
+        id: "glm-5-turbo",
+        enabled: false,
+        reasoning: "enabled",
+        revision: 4,
+        updatedAt: "2026-07-14T12:00:04Z",
+        updatedBy: null,
+      },
+    ],
+  };
+}
+
+let requestSequence = 0;
+
+function uniqueTestClientIp(): string {
+  requestSequence += 1;
+  return `192.0.2.${requestSequence}`;
+}
+
 function jsonRequest(payload: Record<string, unknown>, signal?: AbortSignal): Request {
   return new Request("http://localhost/api/chat", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "x-forwarded-for": uniqueTestClientIp(),
     },
     body: JSON.stringify(payload),
     signal,
@@ -96,6 +165,7 @@ function streamingJsonRequest(payload: Record<string, unknown>): Request {
     headers: {
       Accept: "application/x-ndjson",
       "Content-Type": "application/json",
+      "x-forwarded-for": uniqueTestClientIp(),
     },
     body: JSON.stringify(payload),
   });
@@ -104,6 +174,7 @@ function streamingJsonRequest(payload: Record<string, unknown>): Request {
 function multipartRequest(formData: FormData): Request {
   return new Request("http://localhost/api/chat", {
     method: "POST",
+    headers: { "x-forwarded-for": uniqueTestClientIp() },
     body: formData,
   });
 }
@@ -111,6 +182,7 @@ function multipartRequest(formData: FormData): Request {
 describe("POST /api/chat uploads", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(readEffectiveModelSettings).mockResolvedValue(databaseModelSettings());
   });
 
   it("ignores stale client prompt fields and never forwards them to the agent", async () => {
@@ -150,18 +222,35 @@ describe("POST /api/chat uploads", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(resolveDeepSeekApiKey).toHaveBeenCalledWith();
+    expect(resolveLlmRuntime).toHaveBeenCalledWith({
+      model: "deepseek-v4-flash",
+      reasoning: "disabled",
+    });
     expect(generateConversationTitle).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "deepseek-v4-flash" }),
+      expect.objectContaining({
+        runtime: expect.objectContaining({ model: "deepseek-v4-flash", reasoning: "disabled" }),
+      }),
     );
     expect(runAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        apiKey: "deepseek-key",
-        model: "deepseek-v4-flash",
+        runtime: expect.objectContaining({
+          model: "deepseek-v4-flash",
+          provider: "deepseek",
+          reasoning: "disabled",
+        }),
       }),
     );
     expect(persistConversationTurn).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "deepseek-v4-flash" }),
+      expect.objectContaining({
+        modelProvenance: {
+          model: "deepseek-v4-flash",
+          provider: "deepseek",
+          upstreamModel: "deepseek-v4-flash",
+          reasoning: "disabled",
+          settingsRevision: 1,
+          settingsSource: "database",
+        },
+      }),
     );
     await expect(response.json()).resolves.toMatchObject({
       model: "deepseek-v4-flash",
@@ -169,14 +258,86 @@ describe("POST /api/chat uploads", () => {
     });
   });
 
-  it("defaults to server-keyed DeepSeek v4 Pro and ignores stale client API keys", async () => {
+  it("defaults to server-keyed DeepSeek v4 Flash and ignores stale client API keys", async () => {
     const response = await POST(jsonRequest({ ...chatPayload(), deepSeekApiKey: "user-key" }));
 
     expect(response.status).toBe(200);
-    expect(resolveDeepSeekApiKey).toHaveBeenCalledWith();
     expect(runAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ apiKey: "deepseek-key", model: "deepseek-v4-pro" }),
+      expect.objectContaining({
+        runtime: expect.objectContaining({ model: "deepseek-v4-flash", provider: "deepseek" }),
+      }),
     );
+  });
+
+  it("uses an enabled GLM runtime only for the agent and Flash for title generation", async () => {
+    const snapshot = databaseModelSettings();
+    snapshot.models = snapshot.models.map((setting) => setting.id === "glm-5.2"
+      ? { ...setting, enabled: true }
+      : setting);
+    vi.mocked(readEffectiveModelSettings).mockResolvedValueOnce(snapshot);
+
+    const response = await POST(jsonRequest({ ...chatPayload(), model: "glm-5.2" }));
+
+    expect(response.status).toBe(200);
+    expect(runAgent).toHaveBeenCalledWith(expect.objectContaining({
+      runtime: expect.objectContaining({
+        model: "glm-5.2",
+        provider: "zai",
+        reasoning: "max",
+      }),
+    }));
+    expect(generateConversationTitle).toHaveBeenCalledWith(expect.objectContaining({
+      runtime: expect.objectContaining({
+        model: "deepseek-v4-flash",
+        provider: "deepseek",
+        reasoning: "disabled",
+      }),
+    }));
+    expect(persistConversationTurn).toHaveBeenCalledWith(expect.objectContaining({
+      modelProvenance: {
+        model: "glm-5.2",
+        provider: "zai",
+        upstreamModel: "glm-5.2",
+        reasoning: "max",
+        settingsRevision: 3,
+        settingsSource: "database",
+      },
+    }));
+    await expect(response.json()).resolves.toMatchObject({
+      model: "glm-5.2",
+      availableModels: ["deepseek-v4-flash", "deepseek-v4-pro", "glm-5.2"],
+    });
+  });
+
+  it("rejects a catalog model that is disabled in central settings", async () => {
+    const response = await POST(jsonRequest({ ...chatPayload(), model: "glm-5.2" }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Das ausgewählte Modell ist derzeit nicht aktiviert.",
+    });
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed to Flash only when model settings cannot be read", async () => {
+    vi.mocked(readEffectiveModelSettings).mockResolvedValueOnce(flashOnlyModelSettings());
+    const flashResponse = await POST(jsonRequest(chatPayload()));
+
+    expect(flashResponse.status).toBe(200);
+    expect(persistConversationTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+      modelProvenance: expect.objectContaining({
+        model: "deepseek-v4-flash",
+        settingsRevision: null,
+        settingsSource: "fallback",
+      }),
+    }));
+
+    vi.clearAllMocks();
+    vi.mocked(readEffectiveModelSettings).mockResolvedValueOnce(flashOnlyModelSettings());
+    const proResponse = await POST(jsonRequest({ ...chatPayload(), model: "deepseek-v4-pro" }));
+
+    expect(proResponse.status).toBe(400);
+    expect(runAgent).not.toHaveBeenCalled();
   });
 
   it.each(["obsolete-client-model", 42])(
@@ -372,7 +533,7 @@ describe("POST /api/chat uploads", () => {
     expect(persistConversationTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         title: "Präziser Gesprächstitle",
-        model: "deepseek-v4-pro",
+        modelProvenance: expect.objectContaining({ model: "deepseek-v4-flash" }),
         steps: [],
       }),
     );

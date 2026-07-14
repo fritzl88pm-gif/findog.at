@@ -2,6 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createDeadline } from "./deadline";
 import { chatCompletion } from "./deepseek";
+import type { LlmRuntime } from "./llm/runtime";
+
+const TEST_RUNTIME = {
+  model: "deepseek-v4-pro",
+  provider: "deepseek",
+  upstreamModel: "deepseek-v4-pro",
+  baseUrl: "https://api.deepseek.com",
+  apiKey: "deepseek-key",
+  reasoning: "disabled",
+} satisfies LlmRuntime;
 
 describe("chatCompletion", () => {
   beforeEach(() => {
@@ -32,8 +42,7 @@ describe("chatCompletion", () => {
 
     await expect(
       chatCompletion({
-        apiKey: "deepseek-key",
-        model: "deepseek-v4-pro",
+        runtime: TEST_RUNTIME,
         messages: [{ role: "user", content: "Frage" }],
         deadline,
       }),

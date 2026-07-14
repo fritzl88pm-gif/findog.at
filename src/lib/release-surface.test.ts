@@ -158,8 +158,13 @@ describe("approved release surface", () => {
     expect(settingsDialog).not.toContain('Auf Standard zurücksetzen');
     expect(settingsDialog).not.toContain('MAX_SYSTEM_PROMPT_CHARS');
     expect(settingsDialog).not.toContain('<textarea');
-    expect(settingsDialog).toContain('settings-tab-model');
-    expect(settingsDialog).toContain('settings-tab-password');
+    expect(settingsDialog).not.toContain('settings-tab-model');
+    expect(settingsDialog).not.toContain('settings-panel-model');
+    expect(settingsDialog).not.toContain('settings-model');
+    expect(settingsDialog).toContain('id="password-settings-title"');
+    expect(settingsDialog).toContain('id="account-deletion-title"');
+    expect(pageSource).toContain('fetch("/api/account"');
+    expect(pageSource).toContain('window.confirm');
     expect(chatSubmit).not.toContain('systemPromptForChatRequest');
     expect(chatSubmit).not.toContain('usesGlobalDefault');
     expect(chatSubmit).not.toContain('requestBody.systemPrompt');
@@ -180,6 +185,30 @@ describe("approved release surface", () => {
     expect(agentSource).not.toContain('ABBREVIATION_POLICY_PROMPT');
     expect(agentSource).not.toContain('OUTPUT_FORMAT_POLICY_PROMPT');
     expect(agentSource).not.toContain('effectiveSystemPrompt');
+  });
+
+  it("uses safe central model descriptors in the composer and capability-aware admin controls", () => {
+    const composer = pageSource.slice(
+      pageSource.indexOf('<form className="composer"'),
+      pageSource.indexOf("</form>", pageSource.indexOf('<form className="composer"')),
+    );
+    const administration = pageSource.slice(
+      pageSource.indexOf('appView === "administration" && isAdmin'),
+      pageSource.indexOf('<section className={`chat-panel', pageSource.indexOf('appView === "administration" && isAdmin')),
+    );
+
+    expect(composer).toContain("enabledModels.map((model) => (");
+    expect(composer).toContain("{model.label}");
+    expect(composer).not.toContain("AVAILABLE_MODELS");
+    expect(pageSource).toContain('fetch("/api/settings"');
+    expect(administration).toContain('id="admin-model-settings-title"');
+    expect(administration).toContain("model.alwaysEnabled");
+    expect(administration).toContain("model.reasoningOptions.map((option) => (");
+    expect(administration).toContain("model.providerConfigured");
+    expect(administration).toContain('aria-label={`Reasoning für ${model.label}`}');
+    expect(pageSource).toContain("revision: model.revision");
+    expect(pageSource).toContain('fetch("/api/admin/models"');
+    expect(pageSource).toContain('method: "PATCH"');
   });
 
   it("registers the supplied favicon and preserves the approved metadata copy", () => {

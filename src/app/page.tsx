@@ -16,11 +16,11 @@ import {
   type AgentRunMetadata,
 } from "@/lib/chat/agent-run";
 import {
-  AVAILABLE_MODELS,
   MAX_IMAGE_UPLOAD_BYTES,
   MAX_IMAGE_UPLOADS,
   MAX_PDF_UPLOAD_BYTES,
   MAX_PDF_UPLOADS,
+  isSupportedModel,
   type ChatModel,
 } from "@/lib/config";
 import {
@@ -93,7 +93,6 @@ type ConversationSummary = {
   updatedAt: string;
 };
 
-type SettingsTab = "model" | "password";
 type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "administration";
 type ComposerMenu = "attachments" | "model" | null;
 
@@ -118,6 +117,29 @@ type ChatResponsePayload = {
 
 type AuthenticatedSettings = {
   isAdmin: boolean;
+  enabledModels: EnabledModelDescriptor[];
+};
+
+type EnabledModelDescriptor = {
+  id: ChatModel;
+  label: string;
+};
+
+type AdminReasoningOption = {
+  value: string;
+  label: string;
+};
+
+type AdminModelSetting = {
+  id: ChatModel;
+  label: string;
+  enabled: boolean;
+  alwaysEnabled: boolean;
+  reasoning: string | null;
+  reasoningOptions: AdminReasoningOption[];
+  providerConfigured: boolean;
+  revision: number;
+  updatedAt: string | null;
 };
 
 type AdminUserSummary = {
@@ -197,6 +219,7 @@ type BfgProResult = {
 };
 
 const SETTINGS_STORAGE_KEY = "findog.settings.v1";
+const FLASH_MODEL: ChatModel = "deepseek-v4-flash";
 const INITIAL_PENDING_TEXT = "Recherche wird vorbereitet";
 const BFG_SORT_OPTIONS: ReadonlyArray<{ value: BfgSort; label: string }> = [
   { value: "1", label: "Relevanz" },
@@ -401,6 +424,33 @@ async function fetchConversationHistory(accessToken: string, id: string): Promis
   return { title, messages: normalizeMessages(payload.messages) };
 }
 
+function normalizeEnabledModelDescriptors(value: unknown): EnabledModelDescriptor[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  return value.flatMap((entry): EnabledModelDescriptor[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+
+    const item = entry as Record<string, unknown>;
+    const label = typeof item.label === "string" ? item.label.trim() : "";
+    if (
+      typeof item.id !== "string"
+      || !isSupportedModel(item.id)
+      || !label
+      || seen.has(item.id)
+    ) {
+      return [];
+    }
+
+    seen.add(item.id);
+    return [{ id: item.id, label }];
+  });
+}
+
 async function fetchAuthenticatedSettings(accessToken: string): Promise<AuthenticatedSettings> {
   const response = await fetch("/api/settings", {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -411,11 +461,17 @@ async function fetchAuthenticatedSettings(accessToken: string): Promise<Authenti
       typeof payload.error === "string" ? payload.error : "Einstellungen konnten nicht geladen werden.",
     );
   }
-  if (typeof payload.isAdmin !== "boolean") {
+  const enabledModels = normalizeEnabledModelDescriptors(payload.enabledModels);
+  if (
+    typeof payload.isAdmin !== "boolean"
+    || enabledModels.length !== (Array.isArray(payload.enabledModels) ? payload.enabledModels.length : -1)
+    || !enabledModels.some((model) => model.id === "deepseek-v4-flash")
+  ) {
     throw new Error("Die geladenen Einstellungen sind ungültig.");
   }
   return {
     isAdmin: payload.isAdmin,
+    enabledModels,
   };
 }
 
@@ -511,6 +567,80 @@ function normalizeAdminUserProfile(value: unknown): AdminUserProfile | null {
     return null;
   }
   return { user: profileUser, requestCount: payload.requestCount, requests };
+}
+
+function normalizeAdminModels(value: unknown): AdminModelSetting[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const seenModels = new Set<ChatModel>();
+  const models = value.flatMap((entry): AdminModelSetting[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+
+    const item = entry as Record<string, unknown>;
+    if (
+      typeof item.id !== "string"
+      || !isSupportedModel(item.id)
+      || seenModels.has(item.id)
+      || typeof item.label !== "string"
+      || !item.label.trim()
+      || typeof item.enabled !== "boolean"
+      || typeof item.alwaysEnabled !== "boolean"
+      || (item.reasoning !== null && typeof item.reasoning !== "string")
+      || !Array.isArray(item.reasoningOptions)
+      || typeof item.providerConfigured !== "boolean"
+      || typeof item.revision !== "number"
+      || !Number.isSafeInteger(item.revision)
+      || item.revision <= 0
+      || (item.updatedAt !== null && typeof item.updatedAt !== "string")
+    ) {
+      return [];
+    }
+
+    const seenOptions = new Set<string>();
+    const reasoningOptions = item.reasoningOptions.flatMap((entry): AdminReasoningOption[] => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return [];
+      }
+      const option = entry as Record<string, unknown>;
+      if (
+        typeof option.value !== "string"
+        || !option.value
+        || seenOptions.has(option.value)
+        || typeof option.label !== "string"
+        || !option.label.trim()
+      ) {
+        return [];
+      }
+      seenOptions.add(option.value);
+      return [{ value: option.value, label: option.label.trim() }];
+    });
+
+    if (
+      reasoningOptions.length !== item.reasoningOptions.length
+      || (item.reasoning !== null && !seenOptions.has(item.reasoning))
+    ) {
+      return [];
+    }
+
+    seenModels.add(item.id);
+    return [{
+      id: item.id,
+      label: item.label.trim(),
+      enabled: item.alwaysEnabled ? true : item.enabled,
+      alwaysEnabled: item.alwaysEnabled,
+      reasoning: item.reasoning,
+      reasoningOptions,
+      providerConfigured: item.providerConfigured,
+      revision: item.revision,
+      updatedAt: item.updatedAt,
+    }];
+  });
+
+  return models.length === value.length ? models : null;
 }
 
 function normalizeBfgFacetOptions(value: unknown): BfgFacetOption[] | null {
@@ -1456,10 +1586,14 @@ export default function Home() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(true);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("model");
+  const [enabledModels, setEnabledModels] = useState<EnabledModelDescriptor[]>([]);
+  const [isModelPolicyLoaded, setIsModelPolicyLoaded] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminError, setAdminError] = useState("");
   const [adminNotice, setAdminNotice] = useState("");
+  const [adminModels, setAdminModels] = useState<AdminModelSetting[]>([]);
+  const [isAdminModelsLoading, setIsAdminModelsLoading] = useState(false);
+  const [isAdminModelsSaving, setIsAdminModelsSaving] = useState(false);
   const [adminUsers, setAdminUsers] = useState<AdminUserSummary[]>([]);
   const [adminUserProfile, setAdminUserProfile] = useState<AdminUserProfile | null>(null);
   const [adminUserForm, setAdminUserForm] = useState({ email: "", password: "" });
@@ -1477,6 +1611,8 @@ export default function Home() {
   const [passwordChangeError, setPasswordChangeError] = useState("");
   const [passwordChangeNotice, setPasswordChangeNotice] = useState("");
   const [isPasswordChangeSubmitting, setIsPasswordChangeSubmitting] = useState(false);
+  const [accountDeletionError, setAccountDeletionError] = useState("");
+  const [isAccountDeletionSubmitting, setIsAccountDeletionSubmitting] = useState(false);
   const [authError, setAuthError] = useState("");
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [historyOwnerId, setHistoryOwnerId] = useState("");
@@ -1622,6 +1758,9 @@ export default function Home() {
         setFormError("");
         setFormNotice("");
         setIsGeneratingForm(false);
+        setEnabledModels([]);
+        setIsModelPolicyLoaded(false);
+        setAdminModels([]);
         setAdminUsers([]);
         setAdminUserProfile(null);
         setAdminUserForm({ email: "", password: "" });
@@ -1692,18 +1831,30 @@ export default function Home() {
     if (!accessToken || !user?.id) {
       queueMicrotask(() => {
         setIsAdmin(false);
+        setEnabledModels([]);
+        setIsModelPolicyLoaded(false);
         setAppView((current) => current === "administration" ? "chat" : current);
       });
       return;
     }
 
     let isActive = true;
+    queueMicrotask(() => {
+      if (isActive) {
+        setIsModelPolicyLoaded(false);
+      }
+    });
     void fetchAuthenticatedSettings(accessToken)
       .then((loadedSettings) => {
         if (!isActive) {
           return;
         }
         setIsAdmin(loadedSettings.isAdmin);
+        setEnabledModels(loadedSettings.enabledModels);
+        setSettings((current) => loadedSettings.enabledModels.some((model) => model.id === current.model)
+          ? current
+          : { ...current, model: FLASH_MODEL });
+        setIsModelPolicyLoaded(true);
         if (!loadedSettings.isAdmin) {
           setAppView((current) => current === "administration" ? "chat" : current);
         }
@@ -1711,6 +1862,8 @@ export default function Home() {
       .catch(() => {
         if (isActive) {
           setIsAdmin(false);
+          setEnabledModels([]);
+          setIsModelPolicyLoaded(false);
           setAppView((current) => current === "administration" ? "chat" : current);
         }
       });
@@ -1835,6 +1988,37 @@ export default function Home() {
     }));
   }
 
+  function applyEnabledModels(models: EnabledModelDescriptor[]) {
+    setEnabledModels(models);
+    setSettings((current) => models.some((model) => model.id === current.model)
+      ? current
+      : { ...current, model: FLASH_MODEL });
+    setIsModelPolicyLoaded(true);
+  }
+
+  async function toggleComposerModelMenu() {
+    if (openComposerMenu === "model") {
+      setOpenComposerMenu(null);
+      return;
+    }
+
+    const accessToken = session?.access_token;
+    if (!accessToken) {
+      setError("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+      return;
+    }
+
+    try {
+      const loadedSettings = await fetchAuthenticatedSettings(accessToken);
+      setIsAdmin(loadedSettings.isAdmin);
+      applyEnabledModels(loadedSettings.enabledModels);
+      setOpenComposerMenu("model");
+    } catch {
+      setError("Die freigegebenen Modelle konnten nicht geladen werden.");
+      setOpenComposerMenu(null);
+    }
+  }
+
   function updateAuthForm<Key extends keyof AuthForm>(key: Key, value: AuthForm[Key]) {
     setAuthForm((current) => ({
       ...current,
@@ -1956,6 +2140,72 @@ export default function Home() {
       );
     } finally {
       setIsPasswordChangeSubmitting(false);
+    }
+  }
+
+  async function deleteOwnAccount() {
+    if (isAccountDeletionSubmitting) {
+      return;
+    }
+    if (!window.confirm(
+      "Dein Konto wirklich dauerhaft löschen? Konto, Unterhaltungen und Anfrageverlauf werden unwiderruflich entfernt.",
+    )) {
+      return;
+    }
+
+    const accessToken = session?.access_token;
+    if (!accessToken || !user?.id) {
+      setAccountDeletionError("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+      return;
+    }
+
+    setAccountDeletionError("");
+    setIsAccountDeletionSubmitting(true);
+    try {
+      const response = await fetch("/api/account", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok || payload.success !== true) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Das Benutzerkonto konnte nicht gelöscht werden.",
+        );
+      }
+
+      try {
+        await supabase?.auth.signOut({ scope: "local" });
+      } catch {
+        // The server has already deleted the user; local cleanup must still complete.
+      }
+      removeStoredValue(SETTINGS_STORAGE_KEY);
+      removeStoredValue(chatHistoryStorageKey(user.id));
+      setSettings({ ...DEFAULT_CHAT_SETTINGS, model: FLASH_MODEL });
+      setEnabledModels([]);
+      setIsModelPolicyLoaded(false);
+      setSession(null);
+      setHistoryOwnerId("");
+      setConversationId("");
+      setConversationTitle("");
+      setConversations([]);
+      setSelectedConversationIds([]);
+      setMessages([]);
+      setComposer("");
+      setAdminModels([]);
+      setIsAdmin(false);
+      setAppView("chat");
+      clearAttachments();
+      closeSettingsDialog();
+    } catch (deletionError) {
+      setAccountDeletionError(
+        deletionError instanceof Error
+          ? deletionError.message
+          : "Das Benutzerkonto konnte nicht gelöscht werden.",
+      );
+    } finally {
+      setIsAccountDeletionSubmitting(false);
     }
   }
 
@@ -2249,6 +2499,94 @@ export default function Home() {
     }
   }
 
+  async function loadAdminModels(accessToken: string) {
+    setIsAdminModelsLoading(true);
+    try {
+      const response = await fetch("/api/admin/models", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      const models = normalizeAdminModels(payload.models);
+      if (!response.ok || !models) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Modelleinstellungen konnten nicht geladen werden.",
+        );
+      }
+      setAdminModels(models);
+    } catch (modelSettingsError) {
+      setAdminModels([]);
+      setAdminError(modelSettingsError instanceof Error
+        ? modelSettingsError.message
+        : "Modelleinstellungen konnten nicht geladen werden.");
+    } finally {
+      setIsAdminModelsLoading(false);
+    }
+  }
+
+  function updateAdminModelEnabled(modelId: string, enabled: boolean) {
+    setAdminModels((current) => current.map((model) => model.id === modelId
+      ? { ...model, enabled: model.alwaysEnabled ? true : enabled }
+      : model));
+  }
+
+  function updateAdminModelReasoning(modelId: string, reasoning: string) {
+    setAdminModels((current) => current.map((model) => model.id === modelId
+      && model.reasoningOptions.some((option) => option.value === reasoning)
+      ? { ...model, reasoning }
+      : model));
+  }
+
+  async function saveAdminModels() {
+    const accessToken = session?.access_token;
+    if (!accessToken || !isAdmin || isAdminModelsSaving || adminModels.length === 0) {
+      return;
+    }
+
+    setAdminError("");
+    setAdminNotice("");
+    setIsAdminModelsSaving(true);
+    try {
+      const response = await fetch("/api/admin/models", {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          models: adminModels.map((model) => ({
+            id: model.id,
+            enabled: model.alwaysEnabled ? true : model.enabled,
+            reasoning: model.reasoning,
+            revision: model.revision,
+          })),
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      const models = normalizeAdminModels(payload.models);
+      if (!response.ok || !models) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Modelleinstellungen konnten nicht gespeichert werden.",
+        );
+      }
+
+      setAdminModels(models);
+      const publicSettings = await fetchAuthenticatedSettings(accessToken);
+      setIsAdmin(publicSettings.isAdmin);
+      applyEnabledModels(publicSettings.enabledModels);
+      setAdminNotice("Die Modelleinstellungen wurden gespeichert.");
+    } catch (saveError) {
+      setAdminError(saveError instanceof Error
+        ? saveError.message
+        : "Modelleinstellungen konnten nicht gespeichert werden.");
+    } finally {
+      setIsAdminModelsSaving(false);
+    }
+  }
+
   async function openAdministrationView() {
     const accessToken = session?.access_token;
     if (!isAdmin || !accessToken) {
@@ -2259,6 +2597,7 @@ export default function Home() {
     setAdminNotice("");
     setIsAdminUsersLoading(true);
     setAdminUserProfile(null);
+    void loadAdminModels(accessToken);
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
     }
@@ -2707,29 +3046,8 @@ export default function Home() {
   }
 
   function openSettingsDialog() {
+    setAccountDeletionError("");
     setIsSettingsDialogOpen(true);
-  }
-
-  function handleSettingsTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
-    const tabs: SettingsTab[] = ["model", "password"];
-    const currentIndex = tabs.indexOf(settingsTab);
-    let nextTab: SettingsTab | undefined;
-
-    if (event.key === "ArrowRight") {
-      nextTab = tabs[(currentIndex + 1) % tabs.length];
-    } else if (event.key === "ArrowLeft") {
-      nextTab = tabs[(currentIndex - 1 + tabs.length) % tabs.length];
-    } else if (event.key === "Home") {
-      nextTab = tabs[0];
-    } else if (event.key === "End") {
-      nextTab = tabs.at(-1);
-    }
-
-    if (nextTab) {
-      event.preventDefault();
-      setSettingsTab(nextTab);
-      document.getElementById(`settings-tab-${nextTab}`)?.focus();
-    }
   }
 
   function handleComposerMenuKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
@@ -3065,11 +3383,16 @@ export default function Home() {
   const isAppReady = isLoaded && isAuthLoaded;
   const isAuthConfigured = isSupabaseBrowserConfigured();
   const hasSelectedAttachments = selectedPdfs.length > 0 || selectedImages.length > 0;
-  const canSend = isAppReady && Boolean(user) && (composer.trim().length > 0 || hasSelectedAttachments) && !isSending && !isDeleting;
+  const canSend = isAppReady
+    && isModelPolicyLoaded
+    && enabledModels.some((model) => model.id === settings.model)
+    && Boolean(user)
+    && (composer.trim().length > 0 || hasSelectedAttachments)
+    && !isSending
+    && !isDeleting;
   const historyControlsDisabled = isSending || isHistoryLoading || isDeleting;
-  const currentModelName = settings.model === "deepseek-v4-pro"
-    ? "DeepSeek v4 Pro"
-    : "DeepSeek v4 Flash";
+  const currentModelName = enabledModels.find((model) => model.id === settings.model)?.label
+    ?? "Modell wird geladen…";
 
   if (!isAuthLoaded) {
     return (
@@ -3483,7 +3806,7 @@ export default function Home() {
           >
             <div className="settings-dialog-header">
               <div>
-                <p className="eyebrow">Konfiguration</p>
+                <p className="eyebrow">Konto</p>
                 <h2 id="settings-dialog-title">Einstellungen</h2>
               </div>
               <button
@@ -3497,66 +3820,11 @@ export default function Home() {
                 <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19"></line><line x1="19" y1="5" x2="5" y2="19"></line></svg>
               </button>
             </div>
-            <div className="settings-tabs" role="tablist" aria-label="Einstellungsbereiche">
-              <button
-                id="settings-tab-model"
-                className={settingsTab === "model" ? "settings-tab active" : "settings-tab"}
-                type="button"
-                role="tab"
-                aria-selected={settingsTab === "model"}
-                aria-controls="settings-panel-model"
-                tabIndex={settingsTab === "model" ? 0 : -1}
-                onClick={() => setSettingsTab("model")}
-                onKeyDown={handleSettingsTabKeyDown}
-              >
-                Modell
-              </button>
-              <button
-                id="settings-tab-password"
-                className={settingsTab === "password" ? "settings-tab active" : "settings-tab"}
-                type="button"
-                role="tab"
-                aria-selected={settingsTab === "password"}
-                aria-controls="settings-panel-password"
-                tabIndex={settingsTab === "password" ? 0 : -1}
-                onClick={() => setSettingsTab("password")}
-                onKeyDown={handleSettingsTabKeyDown}
-              >
-                Passwort
-              </button>
-            </div>
-            {settingsTab === "model" ? (
-              <div
-                className="field-group settings-tab-panel"
-                id="settings-panel-model"
-                role="tabpanel"
-                aria-labelledby="settings-tab-model"
-              >
-                <fieldset className="model-options">
-                  <legend>DeepSeek-Modell</legend>
-                  {AVAILABLE_MODELS.map((model) => (
-                    <label className="model-option" key={model}>
-                      <input
-                        type="radio"
-                        name="settings-model"
-                        value={model}
-                        checked={settings.model === model}
-                        onChange={() => updateSetting("model", model)}
-                      />
-                      <span>
-                        <strong>{model === "deepseek-v4-pro" ? "DeepSeek v4 Pro" : "DeepSeek v4 Flash"}</strong>
-                        <small>{model === "deepseek-v4-pro" ? "Standardmodell für anspruchsvolle Recherche" : "Schnellere Variante für kompakte Anfragen"}</small>
-                      </span>
-                    </label>
-                  ))}
-                </fieldset>
-              </div>
-            ) : (
+            <div className="account-settings-content">
+              <section className="account-settings-section" aria-labelledby="password-settings-title">
+                <h3 id="password-settings-title">Passwort ändern</h3>
               <form
-                className="password-settings-form settings-tab-panel"
-                id="settings-panel-password"
-                role="tabpanel"
-                aria-labelledby="settings-tab-password"
+                className="password-settings-form"
                 onSubmit={handlePasswordChange}
               >
                 <p className="field-help">
@@ -3618,7 +3886,28 @@ export default function Home() {
                   {isPasswordChangeSubmitting ? "Bitte warten..." : "Passwort ändern"}
                 </button>
               </form>
-            )}
+              </section>
+              <section className="account-settings-section account-deletion-section" aria-labelledby="account-deletion-title">
+                <h3 id="account-deletion-title">Konto löschen</h3>
+                <p>
+                  Löscht dein Konto, alle Unterhaltungen und den Anfrageverlauf dauerhaft.
+                  Vor dem Löschen musst du den Vorgang ausdrücklich bestätigen.
+                </p>
+                {accountDeletionError ? (
+                  <div className="error-box" role="alert" aria-live="polite">
+                    {accountDeletionError}
+                  </div>
+                ) : null}
+                <button
+                  className="secondary-button danger-button account-delete-button"
+                  type="button"
+                  onClick={() => void deleteOwnAccount()}
+                  disabled={isAccountDeletionSubmitting}
+                >
+                  {isAccountDeletionSubmitting ? "Konto wird gelöscht…" : "Konto dauerhaft löschen"}
+                </button>
+              </section>
+            </div>
           </section>
         </div>
       ) : null}
@@ -4121,6 +4410,77 @@ export default function Home() {
                 {adminNotice}
               </div>
             ) : null}
+            <section className="form-generator-card admin-model-settings-card" aria-labelledby="admin-model-settings-title">
+              <div className="form-generator-heading">
+                <h2 id="admin-model-settings-title">Modelle</h2>
+                <p>Legt zentral fest, welche Modelle im Chat auswählbar sind und welche Reasoning-Stufe sie verwenden.</p>
+              </div>
+              {isAdminModelsLoading ? (
+                <p className="admin-empty-state">Modelleinstellungen werden geladen…</p>
+              ) : adminModels.length === 0 ? (
+                <p className="admin-empty-state">Keine Modelleinstellungen verfügbar.</p>
+              ) : (
+                <div className="admin-model-settings-list">
+                  {adminModels.map((model, modelIndex) => (
+                    <div className="admin-model-setting" key={model.id}>
+                      <label className="admin-model-toggle">
+                        <input
+                          type="checkbox"
+                          checked={model.alwaysEnabled || model.enabled}
+                          onChange={(event) => updateAdminModelEnabled(model.id, event.target.checked)}
+                          disabled={
+                            model.alwaysEnabled
+                            || (!model.providerConfigured && !model.enabled)
+                            || isAdminModelsSaving
+                          }
+                        />
+                        <span>
+                          <strong>{model.label}</strong>
+                          <small>
+                            {model.alwaysEnabled
+                              ? model.providerConfigured
+                                ? "Immer aktiviert"
+                                : "Immer aktiviert · Provider nicht konfiguriert"
+                              : model.providerConfigured
+                                ? "Zentral aktivierbar"
+                                : "Provider nicht konfiguriert"}
+                          </small>
+                        </span>
+                      </label>
+                      <div className="field-group admin-model-reasoning">
+                        <label htmlFor={`admin-model-reasoning-${modelIndex}`}>Reasoning</label>
+                        {model.reasoningOptions.length > 0 ? (
+                          <select
+                            id={`admin-model-reasoning-${modelIndex}`}
+                            aria-label={`Reasoning für ${model.label}`}
+                            value={model.reasoning ?? ""}
+                            onChange={(event) => updateAdminModelReasoning(model.id, event.target.value)}
+                            disabled={!model.providerConfigured || isAdminModelsSaving}
+                          >
+                            {model.reasoning === null ? <option value="" disabled>Auswählen</option> : null}
+                            {model.reasoningOptions.map((option) => (
+                              <option value={option.value} key={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="admin-model-no-reasoning">Nicht unterstützt</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="admin-model-actions">
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => void saveAdminModels()}
+                  disabled={isAdminModelsLoading || isAdminModelsSaving || adminModels.length === 0}
+                >
+                  {isAdminModelsSaving ? "Wird gespeichert…" : "Modelleinstellungen speichern"}
+                </button>
+              </div>
+            </section>
             <div className="admin-user-management">
               <div className="form-generator-card admin-create-user-card">
                 <div className="form-generator-heading">
@@ -4427,9 +4787,8 @@ export default function Home() {
                     aria-haspopup="menu"
                     aria-expanded={openComposerMenu === "model"}
                     aria-controls="composer-model-menu"
-                    disabled={isSending || isDeleting}
-                    onClick={() => setOpenComposerMenu((current) =>
-                      current === "model" ? null : "model")}
+                    disabled={isSending || isDeleting || !isModelPolicyLoaded}
+                    onClick={() => void toggleComposerModelMenu()}
                   >
                     {currentModelName}
                   </button>
@@ -4441,24 +4800,22 @@ export default function Home() {
                       aria-label="Modell auswählen"
                       onKeyDown={handleComposerMenuKeyDown}
                     >
-                      {AVAILABLE_MODELS.map((model) => (
+                      {enabledModels.map((model) => (
                         <button
-                          className={settings.model === model ? "is-active" : undefined}
+                          className={settings.model === model.id ? "is-active" : undefined}
                           type="button"
                           role="menuitemradio"
-                          aria-checked={settings.model === model}
-                          key={model}
+                          aria-checked={settings.model === model.id}
+                          key={model.id}
                           onClick={() => {
-                            updateSetting("model", model);
+                            updateSetting("model", model.id);
                             setOpenComposerMenu(null);
                           }}
                         >
                           <span aria-hidden="true" className="model-menu-check">
-                            {settings.model === model ? "✓" : ""}
+                            {settings.model === model.id ? "✓" : ""}
                           </span>
-                          <span>
-                            {model === "deepseek-v4-pro" ? "DeepSeek v4 Pro" : "DeepSeek v4 Flash"}
-                          </span>
+                          <span>{model.label}</span>
                         </button>
                       ))}
                     </div>

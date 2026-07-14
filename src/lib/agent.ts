@@ -4,7 +4,7 @@ import { DEFAULT_SYSTEM_PROMPT } from "./default-system-prompt";
 import { UserVisibleError } from "./errors";
 import { McpClient } from "./mcp/client";
 import type { JsonObject } from "./mcp/tools";
-import type { ChatModel } from "./config";
+import type { LlmRuntime } from "./llm/runtime";
 import { SemanticToolRegistry } from "./semantic-tools";
 import { RESEARCH_SOURCES } from "./research-sources";
 import {
@@ -330,10 +330,10 @@ function parseToolArguments(name: string, rawArguments: string): JsonObject {
       return parsed as JsonObject;
     }
   } catch {
-    throw new UserVisibleError(`DeepSeek lieferte ungültige Rechercheargumente für ${name}.`, 502);
+    throw new UserVisibleError(`Das Modell lieferte ungültige Rechercheargumente für ${name}.`, 502);
   }
 
-  throw new UserVisibleError(`DeepSeek lieferte ungültige Rechercheargumente für ${name}.`, 502);
+  throw new UserVisibleError(`Das Modell lieferte ungültige Rechercheargumente für ${name}.`, 502);
 }
 
 async function appendAgentStep(
@@ -528,8 +528,7 @@ function simpleAmountRetrievalTargets(policy: AgentRetrievalPolicy): SimpleAmoun
 }
 
 async function finalizeAgentRun(options: {
-  apiKey: string;
-  model: ChatModel;
+  runtime: LlmRuntime;
   attachmentUserMessage?: string;
   conversation: AppChatMessage[];
   toolLog: ToolLogEntry[];
@@ -555,14 +554,13 @@ async function finalizeAgentRun(options: {
     draftAnswer: options.draftAnswer,
   });
   const finalResult = await chatCompletion({
-    apiKey: options.apiKey,
-    model: options.model,
+    runtime: options.runtime,
     deadline: options.deadline,
     messages: finalMessages,
   });
   const modelAnswer = requireModelContent(
     finalResult.content,
-    "DeepSeek konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
+    "Das Modell konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
   );
   const latestQuestion = options.conversation.findLast((message) => message.role === "user")?.content ?? "";
   const answerWithoutUnrequestedNotice = removeUnrequestedGuidelineNatureNotice(
@@ -582,8 +580,7 @@ async function finalizeAgentRun(options: {
   return { answer, steps: options.steps, tools: options.tools };
 }
 export async function runAgent(options: {
-  apiKey: string;
-  model: ChatModel;
+  runtime: LlmRuntime;
   messages: AppChatMessage[];
   mcpBearerToken?: string;
   onStep?: AgentStepHandler;
@@ -721,8 +718,7 @@ export async function runAgent(options: {
     }
 
     return finalizeAgentRun({
-      apiKey: options.apiKey,
-      model: options.model,
+      runtime: options.runtime,
       attachmentUserMessage,
       conversation: options.messages,
       toolLog,
@@ -757,8 +753,7 @@ export async function runAgent(options: {
   for (let iteration = 0; iteration < policy.maxToolIterations; iteration += 1) {
     if (!hasDeadlineTime(options.deadline, AGENT_MIN_ITERATION_BUDGET_MS)) {
       return finalizeAgentRun({
-        apiKey: options.apiKey,
-        model: options.model,
+        runtime: options.runtime,
         attachmentUserMessage,
         conversation: options.messages,
         toolLog,
@@ -772,8 +767,7 @@ export async function runAgent(options: {
     }
 
     const result = await chatCompletion({
-      apiKey: options.apiKey,
-      model: options.model,
+      runtime: options.runtime,
       deadline: options.deadline,
       reserveMs: AGENT_FINALIZATION_RESERVE_MS,
       messages: [...messages],
@@ -782,8 +776,7 @@ export async function runAgent(options: {
 
     if (result.toolCalls.length === 0) {
       return finalizeAgentRun({
-        apiKey: options.apiKey,
-        model: options.model,
+        runtime: options.runtime,
         attachmentUserMessage,
         conversation: options.messages,
         toolLog,
@@ -799,7 +792,7 @@ export async function runAgent(options: {
 
     const selectedToolCalls = result.toolCalls.map((call) => {
       if (!allowedToolNames.has(call.name)) {
-        throw new UserVisibleError(`DeepSeek wählte eine nicht erlaubte Recherchefunktion: ${call.name}.`, 502);
+        throw new UserVisibleError(`Das Modell wählte eine nicht erlaubte Recherchefunktion: ${call.name}.`, 502);
       }
       const parsedArguments = parseToolArguments(call.name, call.arguments);
       if (call.name === "search_laws" && !hasRunFullLawSearch && latestQuestion?.trim()) {
@@ -812,6 +805,9 @@ export async function runAgent(options: {
     messages.push({
       role: "assistant",
       content: result.content,
+      ...(result.reasoningContent !== null && result.reasoningContent !== undefined
+        ? { reasoning_content: result.reasoningContent }
+        : {}),
       tool_calls: selectedToolCalls.map((call) => ({
         id: call.id,
         type: "function",
@@ -822,8 +818,7 @@ export async function runAgent(options: {
     for (const call of selectedToolCalls) {
       if (!hasDeadlineTime(options.deadline, AGENT_FINALIZATION_RESERVE_MS)) {
         return finalizeAgentRun({
-          apiKey: options.apiKey,
-          model: options.model,
+          runtime: options.runtime,
           attachmentUserMessage,
           conversation: options.messages,
           toolLog,
@@ -910,8 +905,7 @@ export async function runAgent(options: {
   }
 
   return finalizeAgentRun({
-    apiKey: options.apiKey,
-    model: options.model,
+    runtime: options.runtime,
     attachmentUserMessage,
     conversation: options.messages,
     toolLog,

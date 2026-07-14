@@ -471,35 +471,24 @@ button:disabled {
   min-height: 360px;
 }
 
-.settings-tabs {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 18px;
-  border-bottom: 1px solid var(--border-color);
+.account-settings-content {
+  display: grid;
+  gap: 24px;
 }
 
-.settings-tab {
-  min-height: 40px;
-  border-bottom: 3px solid transparent;
-  padding: 0 14px;
-  color: var(--muted);
-  font-size: 0.9rem;
-  font-weight: 700;
+.account-settings-section {
+  display: grid;
+  gap: 14px;
 }
 
-.settings-tab:hover,
-.settings-tab:focus-visible,
-.settings-tab.active {
+.account-settings-section h3,
+.account-settings-section p {
+  margin: 0;
+}
+
+.account-settings-section h3 {
   color: var(--bmf-blue-deep);
-  background: rgba(40, 111, 156, 0.05);
-}
-
-.settings-tab.active {
-  border-bottom-color: var(--bmf-blue);
-}
-
-.settings-tab-panel {
-  min-height: 430px;
+  font-size: 1rem;
 }
 
 .password-settings-form {
@@ -518,46 +507,21 @@ button:disabled {
   margin-top: 4px;
 }
 
-.model-options {
+.account-deletion-section {
   display: grid;
   gap: 12px;
-  margin: 0;
-  border: 0;
-  padding: 0;
+  border-top: 1px solid var(--border-color);
+  padding-top: 22px;
 }
 
-.model-options legend {
-  margin-bottom: 12px;
-  color: var(--bmf-blue-deep);
-  font-weight: 750;
-}
-
-.model-option {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: 14px;
-  cursor: pointer;
-}
-
-.model-option:has(input:checked) {
-  border-color: var(--bmf-blue);
-  background: rgba(40, 111, 156, 0.06);
-}
-
-.model-option input {
-  margin-top: 4px;
-}
-
-.model-option span {
-  display: grid;
-  gap: 4px;
-}
-
-.model-option small {
+.account-deletion-section p {
+  max-width: 58ch;
   color: var(--muted);
+  line-height: 1.55;
+}
+
+.account-delete-button {
+  justify-self: start;
 }
 
 .user-profile {
@@ -1548,6 +1512,58 @@ textarea:focus {
   align-items: start;
 }
 
+.admin-model-settings-card {
+  margin-bottom: 20px;
+  padding: 22px;
+}
+
+.admin-model-settings-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-model-setting {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.65fr);
+  gap: 18px;
+  align-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.admin-model-toggle {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 11px;
+}
+
+.admin-model-toggle input {
+  margin-top: 4px;
+}
+
+.admin-model-toggle span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.admin-model-toggle small,
+.admin-model-no-reasoning {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.admin-model-reasoning {
+  gap: 5px;
+}
+
+.admin-model-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .admin-create-user-card,
 .admin-user-list-card,
 .admin-user-profile-card {
@@ -1679,7 +1695,8 @@ textarea:focus {
 
 @media (max-width: 760px) {
   .admin-user-management,
-  .admin-profile-metadata {
+  .admin-profile-metadata,
+  .admin-model-setting {
     grid-template-columns: 1fr;
   }
 

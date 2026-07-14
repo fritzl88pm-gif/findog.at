@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentStep } from "./agent-steps";
 import { summarizeStepText } from "./agent-steps";
 import { UserVisibleError } from "./errors";
+import type { ModelRunProvenance } from "./model-settings";
 import { getSupabaseServerClient } from "./supabase/server";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -143,13 +144,19 @@ export async function persistConversationTurn(options: {
   userMessage?: string;
   assistantMessage: string;
   title?: string;
-  model?: string;
+  modelProvenance?: ModelRunProvenance;
   steps?: AgentStep[];
   startedAt?: string;
   completedAt?: string;
 }): Promise<void> {
   const supabase = getSupabaseServerClient();
-  if (!supabase || !options.conversationId || !options.clientId || !options.userMessage) {
+  if (
+    !supabase
+    || !options.conversationId
+    || !options.clientId
+    || !options.userMessage
+    || !options.modelProvenance
+  ) {
     return;
   }
   if (!isUuid(options.conversationId) || !isUuid(options.clientId)) {
@@ -200,6 +207,7 @@ export async function persistConversationTurn(options: {
     }
   }
 
+  const provenance = options.modelProvenance;
   const { data: insertedMessages, error: messageError } = await supabase
     .from("messages")
     .insert([
@@ -214,6 +222,12 @@ export async function persistConversationTurn(options: {
         client_id: options.clientId,
         role: "assistant",
         content: options.assistantMessage,
+        model: provenance.model,
+        model_provider: provenance.provider,
+        upstream_model: provenance.upstreamModel,
+        reasoning_setting: provenance.reasoning,
+        model_settings_revision: provenance.settingsRevision,
+        model_settings_source: provenance.settingsSource,
       },
     ])
     .select("id,role");
@@ -225,7 +239,7 @@ export async function persistConversationTurn(options: {
   const assistantMessageId = (insertedMessages ?? []).find(
     (message) => message.role === "assistant",
   )?.id;
-  if (!assistantMessageId || !options.model) {
+  if (!assistantMessageId) {
     return;
   }
 
@@ -235,7 +249,6 @@ export async function persistConversationTurn(options: {
       conversation_id: options.conversationId,
       client_id: options.clientId,
       assistant_message_id: assistantMessageId,
-      model: options.model,
       status: "completed",
       started_at: options.startedAt ?? now,
       completed_at: now,

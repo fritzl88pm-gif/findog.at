@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chatCompletion } from "@/lib/deepseek";
-import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
+import { resolveLlmRuntime, type LlmRuntime } from "@/lib/llm/runtime";
 import { fetchBfgProCandidates } from "./bfg-decisions";
 import {
   BfgProModelError,
@@ -10,7 +10,10 @@ import {
 } from "./bfg-pro";
 
 vi.mock("@/lib/deepseek", () => ({ chatCompletion: vi.fn() }));
-vi.mock("@/lib/deepseek-key", () => ({ resolveDeepSeekApiKey: vi.fn() }));
+vi.mock("@/lib/llm/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/llm/runtime")>();
+  return { ...actual, resolveLlmRuntime: vi.fn() };
+});
 vi.mock("./bfg-decisions", async (importOriginal) => {
   const original = await importOriginal<typeof import("./bfg-decisions")>();
   return { ...original, fetchBfgProCandidates: vi.fn() };
@@ -27,6 +30,15 @@ const officialCandidate = {
   pdfUrl: "https://findok.bmf.gv.at/findok/resources/pdf/decision.pdf",
   content: `Arbeitszimmer im Wohnungsverband. ${"Unwichtiger Text. ".repeat(100)}FULL-CONTENT-SECRET`,
 };
+
+const FIXED_RUNTIME = {
+  model: "deepseek-v4-flash",
+  provider: "deepseek",
+  upstreamModel: "deepseek-v4-flash",
+  baseUrl: "https://api.deepseek.com",
+  apiKey: "server-only-key",
+  reasoning: "disabled",
+} satisfies LlmRuntime;
 
 function candidate(number: number) {
   return {
@@ -109,7 +121,7 @@ describe("deterministic BFG PRO excerpts", () => {
 describe("BFG PRO query generation and reranking", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(resolveDeepSeekApiKey).mockReturnValue("server-only-key");
+    vi.mocked(resolveLlmRuntime).mockReturnValue(FIXED_RUNTIME);
     vi.mocked(fetchBfgProCandidates).mockResolvedValue([officialCandidate]);
   });
 
@@ -126,10 +138,13 @@ describe("BFG PRO query generation and reranking", () => {
 
     await runBfgProSearch("Ein Raum meiner Wohnung wird ausschließlich beruflich genutzt.");
 
-    expect(resolveDeepSeekApiKey).toHaveBeenCalledTimes(1);
+    expect(resolveLlmRuntime).toHaveBeenCalledWith({
+      model: "deepseek-v4-flash",
+      reasoning: "disabled",
+    });
     expect(chatCompletion).toHaveBeenCalledTimes(2);
     for (const [options] of vi.mocked(chatCompletion).mock.calls) {
-      expect(options).toMatchObject({ apiKey: "server-only-key", model: "deepseek-v4-flash" });
+      expect(options).toMatchObject({ runtime: FIXED_RUNTIME });
       expect(options.tools).toBeUndefined();
     }
     expect(fetchBfgProCandidates).toHaveBeenCalledWith({ query: "Arbeitszimmer Vorsteuer" });

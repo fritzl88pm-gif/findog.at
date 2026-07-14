@@ -1,5 +1,5 @@
 import { chatCompletion, type DeepSeekMessage } from "@/lib/deepseek";
-import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
+import { resolveLlmRuntime, type LlmRuntime } from "@/lib/llm/runtime";
 import {
   fetchBfgProCandidates,
   type BfgProCandidate,
@@ -361,11 +361,10 @@ function mergeOfficialCandidates(
   }
 }
 
-async function completeJson(apiKey: string, messages: DeepSeekMessage[]): Promise<string | null> {
+async function completeJson(runtime: LlmRuntime, messages: DeepSeekMessage[]): Promise<string | null> {
   try {
     const response = await chatCompletion({
-      apiKey,
-      model: BFG_PRO_MODEL,
+      runtime,
       messages,
     });
     return response.content;
@@ -423,15 +422,15 @@ function rerankMessages(
 }
 
 export async function runBfgProSearch(scenario: string): Promise<BfgProResponse> {
-  let apiKey: string;
+  let runtime: LlmRuntime;
   try {
-    apiKey = resolveDeepSeekApiKey();
+    runtime = resolveLlmRuntime({ model: BFG_PRO_MODEL, reasoning: "disabled" });
   } catch {
     throw new BfgProModelError();
   }
 
   const queryPlan = parseGeneratedQueryPlan(
-    await completeJson(apiKey, queryMessages(scenario)),
+    await completeJson(runtime, queryMessages(scenario)),
   );
   const query = queryPlan.queries[0];
   const officialCandidates: BfgProCandidate[] = [];
@@ -460,7 +459,7 @@ export async function runBfgProSearch(scenario: string): Promise<BfgProResponse>
   const candidates = reduceCandidates(officialCandidates, scenario, query);
   const candidateById = new Map(candidates.map((candidate) => [candidate.candidateId, candidate]));
   const selections = parseSelections(
-    await completeJson(apiKey, rerankMessages(scenario, candidates)),
+    await completeJson(runtime, rerankMessages(scenario, candidates)),
   );
   const seen = new Set<string>();
   const validSelections = selections

@@ -4,6 +4,7 @@ import { runAgent } from "./agent";
 import { chatCompletion } from "./deepseek";
 import { DEFAULT_SYSTEM_PROMPT } from "./default-system-prompt";
 import { createDeadline } from "./deadline";
+import type { LlmRuntime } from "./llm/runtime";
 import { McpClient } from "./mcp/client";
 
 vi.mock("./deepseek", async (importOriginal) => {
@@ -15,6 +16,14 @@ vi.mock("./mcp/client", () => ({ McpClient: vi.fn() }));
 
 const mockedChatCompletion = vi.mocked(chatCompletion);
 const MockedMcpClient = vi.mocked(McpClient);
+const TEST_RUNTIME = {
+  model: "deepseek-v4-pro",
+  provider: "deepseek",
+  upstreamModel: "deepseek-v4-pro",
+  baseUrl: "https://api.deepseek.com",
+  apiKey: "server-key",
+  reasoning: "disabled",
+} satisfies LlmRuntime;
 const withOverview = (content: string) => `# 📘 Überblick\n\n${content}`;
 
 function expectCanonicalSystemMessages(): void {
@@ -85,6 +94,7 @@ describe("runAgent", () => {
     mockedChatCompletion
       .mockResolvedValueOnce({
         content: "Recherche",
+        reasoningContent: "Unveränderte interne Werkzeugbegründung",
         toolCalls: [
           {
             id: "call-1",
@@ -97,8 +107,7 @@ describe("runAgent", () => {
       .mockResolvedValueOnce({ content: "# 📘 Antwort\n\nFinale Antwort.", toolCalls: [] });
 
     const result = await runAgent({
-      apiKey: "server-key",
-      model: "deepseek-v4-pro",
+      runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "EStG § 33" }],
       mcpBearerToken: "mcp-token",
     });
@@ -121,6 +130,12 @@ describe("runAgent", () => {
       .toContain("search_laws");
     expect(mockedChatCompletion.mock.calls[0]?.[0].tools?.map((tool) => tool.function.name))
       .not.toContain("findok_verify_bfg_cases");
+    expect(mockedChatCompletion.mock.calls[1]?.[0].messages).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        reasoning_content: "Unveränderte interne Werkzeugbegründung",
+      }),
+    );
 
     // The runtime uses the canonical prompt byte-for-byte; attachment content stays outside it.
     expect(mockedChatCompletion.mock.calls[0][0].messages[0]).toEqual({
@@ -148,8 +163,7 @@ describe("runAgent", () => {
       .mockResolvedValueOnce({ content: "Finale Antwort.", toolCalls: [] });
 
     const result = await runAgent({
-      apiKey: "server-key",
-      model: "deepseek-v4-pro",
+      runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
       onStep,
     });
@@ -173,8 +187,7 @@ describe("runAgent", () => {
       .mockResolvedValueOnce({ content: welcome, toolCalls: [] });
 
     const result = await runAgent({
-      apiKey: "server-key",
-      model: "deepseek-v4-pro",
+      runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "Hallo" }],
     });
 
@@ -202,8 +215,7 @@ describe("runAgent", () => {
       .mockResolvedValueOnce({ content: finalAnswer, toolCalls: [] });
 
     const result = await runAgent({
-      apiKey: "server-key",
-      model: "deepseek-v4-pro",
+      runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "Kann eine Tagesmutter Werbungskosten geltend machen?" }],
     });
 
@@ -220,8 +232,7 @@ describe("runAgent", () => {
       .mockResolvedValueOnce({ content: finalAnswer, toolCalls: [] });
 
     const result = await runAgent({
-      apiKey: "server-key",
-      model: "deepseek-v4-pro",
+      runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "Welche Rechtsnatur haben die LStR?" }],
     });
 
@@ -245,8 +256,7 @@ describe("runAgent", () => {
       .mockResolvedValueOnce({ content: "Finale Antwort.", toolCalls: [] });
 
     await runAgent({
-      apiKey: "server-key",
-      model: "deepseek-v4-pro",
+      runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
       mcpBearerToken: "mcp-token",
       deadline,
@@ -271,8 +281,7 @@ describe("runAgent", () => {
     mockedChatCompletion.mockResolvedValueOnce({ content: "Finale Antwort.", toolCalls: [] });
 
     const result = await runAgent({
-      apiKey: "server-key",
-      model: "deepseek-v4-pro",
+      runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
       deadline,
     });
@@ -293,8 +302,7 @@ describe("runAgent", () => {
       .mockResolvedValueOnce({ content: "Finale Antwort mit PDF-Kontext.", toolCalls: [] });
 
     const result = await runAgent({
-      apiKey: "server-key",
-      model: "deepseek-v4-pro",
+      runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "Bitte PDF prüfen" }],
       pdfContext: { filename: "Bescheid.pdf", content: "Extrahierter Bescheidinhalt" },
       initialSteps: [{ type: "pdf_context", title: "PDF gelesen", content: "Bescheid.pdf" }],
@@ -344,8 +352,7 @@ describe("runAgent", () => {
       .mockResolvedValueOnce({ content: "Finale Antwort mit Anhängen.", toolCalls: [] });
 
     await runAgent({
-      apiKey: "server-key",
-      model: "deepseek-v4-pro",
+      runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "Anhänge prüfen" }],
       attachmentContexts: [
         { type: "pdf", filename: "Bescheid.pdf", content: "PDF-Inhalt" },
@@ -386,8 +393,7 @@ describe("runAgent", () => {
       .mockResolvedValueOnce({ content: "Finale Antwort nach sieben Aufrufen.", toolCalls: [] });
 
     const result = await runAgent({
-      apiKey: "server-key",
-      model: "deepseek-v4-pro",
+      runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
     });
 
@@ -423,8 +429,7 @@ describe("runAgent", () => {
       .mockResolvedValueOnce({ content: "Finale Antwort ohne Fundstelle.", toolCalls: [] });
 
     const result = await runAgent({
-      apiKey: "server-key",
-      model: "deepseek-v4-pro",
+      runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "Welche BFG-Rechtsprechung ist einschlägig?" }],
     });
 
@@ -454,8 +459,7 @@ describe("runAgent", () => {
       });
 
     const result = await runAgent({
-      apiKey: "server-key",
-      model: "deepseek-v4-pro",
+      runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
     });
 

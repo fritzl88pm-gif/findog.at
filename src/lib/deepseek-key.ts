@@ -14,18 +14,18 @@ function validateKeyLength(value: string, label: string): string {
   return value;
 }
 
-function getServerDeepSeekProKey(): string {
+function getServerDeepSeekKey(): string {
   const key = trimOptional(process.env.DEEPSEEK_API_KEY) ?? trimOptional(process.env.GLOBAL_DEEPSEEK_API_KEY);
   if (!key) {
     throw new UserVisibleError(
-      "Serverseitige DeepSeek Pro Konfiguration fehlt. Bitte Administrator kontaktieren.",
+      "Serverseitige DeepSeek-Konfiguration fehlt. Bitte Administrator kontaktieren.",
       503,
     );
   }
 
-  return validateKeyLength(key, "DeepSeek Pro API Key");
+  return validateKeyLength(key, "DeepSeek API Key");
 }
 
 export function resolveDeepSeekApiKey(): string {
-  return getServerDeepSeekProKey();
+  return getServerDeepSeekKey();
 }

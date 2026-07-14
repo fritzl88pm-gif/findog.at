@@ -1,7 +1,6 @@
 import { after, NextResponse } from "next/server";
 
 import {
-  AVAILABLE_MODELS,
   DEFAULT_MODEL,
   MAX_IMAGE_UPLOAD_BYTES,
   MAX_IMAGE_UPLOADS,
@@ -17,8 +16,14 @@ import {
 } from "@/lib/config";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { type AppChatMessage } from "@/lib/deepseek";
-import { resolveDeepSeekApiKey } from "@/lib/deepseek-key";
 import { UserVisibleError } from "@/lib/errors";
+import { resolveLlmRuntime } from "@/lib/llm/runtime";
+import {
+  enabledModelSetting,
+  publicEnabledModelDtos,
+  readEffectiveModelSettings,
+  type ModelRunProvenance,
+} from "@/lib/model-settings";
 import { persistConversationTurn, resolveConversationContextForClient } from "@/lib/persistence";
 import { runAgent, type AttachmentContext } from "@/lib/agent";
 import type { AgentStep } from "@/lib/agent-steps";
@@ -27,7 +32,7 @@ import { getServerMcpBearerToken } from "@/lib/mcp/server-token";
 import { CHAT_STREAM_CONTENT_TYPE, encodeChatStreamEvent } from "@/lib/chat-stream";
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 import { createUnboundedDeadline, type Deadline } from "@/lib/deadline";
-import { generateConversationTitle } from "@/lib/conversation-title";
+import { fallbackConversationTitle, generateConversationTitle } from "@/lib/conversation-title";
 import { recordAdminRequest } from "@/lib/admin-request-history";
 
 export const runtime = "nodejs";
@@ -388,8 +393,22 @@ export async function POST(request: Request) {
 
     const { body, attachmentUploads } = await parseChatRequest(request);
     const model = parseModel(body.model);
-    const deepSeekApiKey = resolveDeepSeekApiKey();
     const messages = parseMessages(body.messages);
+    const modelSettings = await readEffectiveModelSettings(supabase);
+    const selectedSetting = enabledModelSetting(modelSettings, model);
+    const selectedRuntime = resolveLlmRuntime({
+      model,
+      reasoning: selectedSetting.reasoning,
+    });
+    const modelProvenance: ModelRunProvenance = {
+      model: selectedRuntime.model,
+      provider: selectedRuntime.provider,
+      upstreamModel: selectedRuntime.upstreamModel,
+      reasoning: selectedRuntime.reasoning,
+      settingsRevision: selectedSetting.revision,
+      settingsSource: modelSettings.source,
+    };
+    const availableModels = publicEnabledModelDtos(modelSettings).map((entry) => entry.id);
     const mcpBearerToken = getServerMcpBearerToken();
     const requestedConversationId = asOptionalString(body.conversationId, 80, "Conversation ID");
     const conversationContext = await resolveConversationContextForClient({
@@ -414,12 +433,17 @@ export async function POST(request: Request) {
 
     const isNewConversation = conversationContext.isNew;
     const titlePromise = isNewConversation && latestUserMessage
-      ? generateConversationTitle({
-          apiKey: deepSeekApiKey,
-          model,
-          userRequest: latestUserMessage.content,
-          deadline,
-        })
+      ? (async () => {
+          try {
+            return await generateConversationTitle({
+              runtime: resolveLlmRuntime({ model: DEFAULT_MODEL, reasoning: "disabled" }),
+              userRequest: latestUserMessage.content,
+              deadline,
+            });
+          } catch {
+            return fallbackConversationTitle(latestUserMessage.content);
+          }
+        })()
       : Promise.resolve(conversationContext.title);
 
     if (wantsStreamingResponse(request)) {
@@ -440,8 +464,7 @@ export async function POST(request: Request) {
             const startedAt = new Date().toISOString();
             const [agentResult, title] = await Promise.all([
               runAgent({
-                apiKey: deepSeekApiKey,
-                model,
+                runtime: selectedRuntime,
                 messages,
                 mcpBearerToken,
                 attachmentContexts: attachmentAgentContext.attachmentContexts,
@@ -461,7 +484,7 @@ export async function POST(request: Request) {
               tools: agentResult.tools,
               conversationId,
               model,
-              availableModels: AVAILABLE_MODELS,
+              availableModels,
             });
 
             scheduleConversationPersistence({
@@ -470,7 +493,7 @@ export async function POST(request: Request) {
               userMessage: latestUserMessage?.content,
               assistantMessage: agentResult.answer,
               title,
-              model,
+              modelProvenance,
               steps: agentResult.steps,
               startedAt,
               completedAt,
@@ -506,8 +529,7 @@ export async function POST(request: Request) {
     const startedAt = new Date().toISOString();
     const [agentResult, title] = await Promise.all([
       runAgent({
-        apiKey: deepSeekApiKey,
-        model,
+        runtime: selectedRuntime,
         messages,
         mcpBearerToken,
         attachmentContexts: attachmentAgentContext.attachmentContexts,
@@ -524,7 +546,7 @@ export async function POST(request: Request) {
       userMessage: latestUserMessage?.content,
       assistantMessage: agentResult.answer,
       title,
-      model,
+      modelProvenance,
       steps: agentResult.steps,
       startedAt,
       completedAt,
@@ -537,7 +559,7 @@ export async function POST(request: Request) {
       tools: agentResult.tools,
       conversationId,
       model,
-      availableModels: AVAILABLE_MODELS,
+      availableModels,
     });
   } catch (error) {
     if (error instanceof UserVisibleError) {

@@ -75,7 +75,14 @@ describe("persistConversationTurn", () => {
       userMessage: "Frage",
       assistantMessage: "Antwort",
       title: "Präziser Titel",
-      model: "deepseek-v4-pro",
+      modelProvenance: {
+        model: "deepseek-v4-pro",
+        provider: "deepseek",
+        upstreamModel: "deepseek-v4-pro",
+        reasoning: "high",
+        settingsRevision: 12,
+        settingsSource: "database",
+      },
       startedAt: "2026-07-09T10:00:00.000Z",
       completedAt: "2026-07-09T10:01:00.000Z",
       steps: [
@@ -93,13 +100,32 @@ describe("persistConversationTurn", () => {
       expect.objectContaining({ title: "Präziser Titel" }),
       { onConflict: "id" },
     );
+    expect(fake.messagesInsert).toHaveBeenCalledWith([
+      expect.objectContaining({ role: "user", content: "Frage" }),
+      expect.objectContaining({
+        role: "assistant",
+        content: "Antwort",
+        model: "deepseek-v4-pro",
+        model_provider: "deepseek",
+        upstream_model: "deepseek-v4-pro",
+        reasoning_setting: "high",
+        model_settings_revision: 12,
+        model_settings_source: "database",
+      }),
+    ]);
     expect(fake.runInsert).toHaveBeenCalledWith(
       expect.objectContaining({
         assistant_message_id: 2,
-        model: "deepseek-v4-pro",
         status: "completed",
       }),
     );
+    const runPayload = fake.runInsert.mock.calls[0]?.[0];
+    expect(runPayload).not.toHaveProperty("model");
+    expect(runPayload).not.toHaveProperty("model_provider");
+    expect(runPayload).not.toHaveProperty("upstream_model");
+    expect(runPayload).not.toHaveProperty("reasoning_setting");
+    expect(runPayload).not.toHaveProperty("model_settings_revision");
+    expect(runPayload).not.toHaveProperty("model_settings_source");
     expect(fake.stepsInsert).toHaveBeenCalledWith([
       expect.objectContaining({
         step_order: 0,
@@ -120,7 +146,14 @@ describe("persistConversationTurn", () => {
       userMessage: "Folgefrage",
       assistantMessage: "Antwort",
       title: "Darf nicht überschreiben",
-      model: "deepseek-v4-pro",
+      modelProvenance: {
+        model: "deepseek-v4-pro",
+        provider: "deepseek",
+        upstreamModel: "deepseek-v4-pro",
+        reasoning: "high",
+        settingsRevision: 12,
+        settingsSource: "database",
+      },
       steps: [],
     });
 
@@ -153,7 +186,14 @@ describe("persistConversationTurn", () => {
       clientId,
       userMessage: "Folgefrage",
       assistantMessage: "Antwort",
-      model: "deepseek-v4-pro",
+      modelProvenance: {
+        model: "deepseek-v4-pro",
+        provider: "deepseek",
+        upstreamModel: "deepseek-v4-pro",
+        reasoning: "high",
+        settingsRevision: 12,
+        settingsSource: "database",
+      },
       steps: [
         {
           type: "tool_result",

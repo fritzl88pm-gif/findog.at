@@ -57,13 +57,15 @@ describe("composer public UI", () => {
     expect(attachmentHandlers).not.toContain("preventDefault");
   });
 
-  it("renders exactly the available real models in an accessible custom menu", () => {
+  it("renders only centrally enabled model descriptors in an accessible custom menu", () => {
     const composer = composerSource();
 
-    expect(composer).toContain("AVAILABLE_MODELS.map((model) => (");
+    expect(composer).toContain("enabledModels.map((model) => (");
+    expect(composer).toContain("{model.label}");
+    expect(composer).toContain('updateSetting("model", model.id)');
     expect(composer).toContain('role="menuitemradio"');
-    expect(composer.match(/DeepSeek v4 Flash/g)).toHaveLength(1);
-    expect(composer.match(/DeepSeek v4 Pro/g)).toHaveLength(1);
+    expect(composer).not.toContain("AVAILABLE_MODELS");
+    expect(composer).not.toContain('model === "deepseek-v4-pro"');
     expect(composer).not.toContain('id="composer-model"');
     expect(composer).not.toMatch(/<select\b/);
     expect(composer).not.toMatch(/>Modell</);

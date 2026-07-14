@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
+  MODEL_CATALOG,
   MAX_IMAGE_UPLOAD_BYTES,
   MAX_IMAGE_UPLOADS,
   MAX_MULTIPART_REQUEST_BYTES,
@@ -164,11 +165,25 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
 });
 
 describe("model policy", () => {
-  it("supports exactly DeepSeek v4 Flash and Pro, with Pro as the default", () => {
-    expect(DEFAULT_MODEL).toBe("deepseek-v4-pro");
-    expect(AVAILABLE_MODELS).toEqual(["deepseek-v4-flash", "deepseek-v4-pro"]);
+  it("supports the fixed provider catalog, with Flash always enabled and default", () => {
+    expect(DEFAULT_MODEL).toBe("deepseek-v4-flash");
+    expect(AVAILABLE_MODELS).toEqual([
+      "deepseek-v4-flash",
+      "deepseek-v4-pro",
+      "glm-5.2",
+      "glm-5-turbo",
+    ]);
+    expect(MODEL_CATALOG["deepseek-v4-flash"]).toMatchObject({
+      alwaysEnabled: true,
+      defaultReasoning: "disabled",
+    });
+    expect(MODEL_CATALOG["deepseek-v4-pro"].defaultReasoning).toBe("high");
+    expect(MODEL_CATALOG["glm-5.2"].defaultReasoning).toBe("max");
+    expect(MODEL_CATALOG["glm-5-turbo"].reasoningOptions).toEqual(["disabled", "enabled"]);
     expect(isSupportedModel("deepseek-v4-pro")).toBe(true);
     expect(isSupportedModel("deepseek-v4-flash")).toBe(true);
+    expect(isSupportedModel("glm-5.2")).toBe(true);
+    expect(isSupportedModel("glm-5-turbo")).toBe(true);
     expect(isSupportedModel("deepseek-chat")).toBe(false);
     expect(isSupportedModel("obsolete-client-model")).toBe(false);
   });

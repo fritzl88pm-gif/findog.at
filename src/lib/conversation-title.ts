@@ -1,6 +1,6 @@
-import type { ChatModel } from "./config";
-import { chatCompletion } from "./deepseek";
 import type { Deadline } from "./deadline";
+import { chatCompletion } from "./deepseek";
+import { withRuntimeReasoning, type LlmRuntime } from "./llm/runtime";
 
 export const MAX_CONVERSATION_TITLE_CHARS = 80;
 
@@ -35,8 +35,7 @@ function normalizeGeneratedTitle(value: string | null, fallback: string): string
 }
 
 export async function generateConversationTitle(options: {
-  apiKey: string;
-  model: ChatModel;
+  runtime: LlmRuntime;
   userRequest: string;
   deadline?: Deadline;
 }): Promise<string> {
@@ -44,8 +43,7 @@ export async function generateConversationTitle(options: {
 
   try {
     const result = await chatCompletion({
-      apiKey: options.apiKey,
-      model: options.model,
+      runtime: withRuntimeReasoning(options.runtime, "disabled"),
       deadline: options.deadline,
       messages: [
         {

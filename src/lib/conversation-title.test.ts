@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chatCompletion } from "./deepseek";
 import { generateConversationTitle } from "./conversation-title";
+import type { LlmRuntime } from "./llm/runtime";
 
 vi.mock("./deepseek", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./deepseek")>();
@@ -12,6 +13,14 @@ vi.mock("./deepseek", async (importOriginal) => {
 });
 
 const mockedChatCompletion = vi.mocked(chatCompletion);
+const TEST_RUNTIME = {
+  model: "deepseek-v4-pro",
+  provider: "deepseek",
+  upstreamModel: "deepseek-v4-pro",
+  baseUrl: "https://api.deepseek.com",
+  apiKey: "server-key",
+  reasoning: "max",
+} satisfies LlmRuntime;
 
 describe("generateConversationTitle", () => {
   beforeEach(() => {
@@ -26,8 +35,7 @@ describe("generateConversationTitle", () => {
 
     await expect(
       generateConversationTitle({
-        apiKey: "server-key",
-        model: "deepseek-v4-pro",
+        runtime: TEST_RUNTIME,
         userRequest: "Unterhaltsabsetzbetrag für Kinder in Drittstaaten",
       }),
     ).resolves.toBe("Unterhaltsabsetzbetrag bei Drittstaatenkindern");
@@ -42,6 +50,7 @@ describe("generateConversationTitle", () => {
       ]),
     );
     expect(prompt?.map((message) => message.content).join("\n")).not.toContain("Antworttext");
+    expect(mockedChatCompletion.mock.calls[0]?.[0].runtime.reasoning).toBe("disabled");
   });
 
   it("falls back deterministically and never exceeds 80 characters", async () => {
@@ -50,8 +59,7 @@ describe("generateConversationTitle", () => {
       "  Bitte   prüfe den Unterhaltsabsetzbetrag für Kinder in Drittstaaten anhand der aktuellen Rechtslage und Rechtsprechung.  ";
 
     const title = await generateConversationTitle({
-      apiKey: "server-key",
-      model: "deepseek-v4-pro",
+      runtime: TEST_RUNTIME,
       userRequest: request,
     });
 

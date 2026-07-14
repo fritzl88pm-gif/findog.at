@@ -44,13 +44,13 @@ describe("resolveDeepSeekApiKey", () => {
 
     expect(() => resolveDeepSeekApiKey()).toThrow(UserVisibleError);
     expect(() => resolveDeepSeekApiKey()).toThrow(
-      "Serverseitige DeepSeek Pro Konfiguration fehlt. Bitte Administrator kontaktieren.",
+      "Serverseitige DeepSeek-Konfiguration fehlt. Bitte Administrator kontaktieren.",
     );
   });
 
   it("validates Pro server key length", () => {
     process.env.DEEPSEEK_API_KEY = "x".repeat(MAX_DEEPSEEK_KEY_CHARS + 1);
 
-    expect(() => resolveDeepSeekApiKey()).toThrow("DeepSeek Pro API Key ist zu lang.");
+    expect(() => resolveDeepSeekApiKey()).toThrow("DeepSeek API Key ist zu lang.");
   });
 });

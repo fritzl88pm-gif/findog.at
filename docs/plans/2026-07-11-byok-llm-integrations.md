@@ -1,6 +1,11 @@
 # OpenAI-Compatible BYOK LLM Integration Plan
 
-> **For Hermes:** Execute this plan with `subagent-driven-development` task-by-task. Use Codex CLI for implementation and an independent model for every review.
+> **Status: superseded.** Findog uses centrally managed platform models and
+> server-side provider credentials. Users cannot add API connections or keys.
+> Model availability and supported reasoning modes are configured only by an
+> administrator; the chat composer contains the user-facing model selection.
+
+> **Historical record only:** Do not execute this superseded plan.
 
 **Goal:** Let authenticated Findog users create, test, edit, delete, and select their own OpenAI-compatible API connections and models for the Findog chat/agent runtime without exposing, logging, or storing plaintext API keys.
 

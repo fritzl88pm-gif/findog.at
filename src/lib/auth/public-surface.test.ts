@@ -9,7 +9,10 @@ describe("public auth surface", () => {
 
   function unauthenticatedLoginSource(): string {
     const start = source.indexOf("  if (!user) {");
-    const end = source.indexOf("\n  return (\n    <main className=\"app-shell\">", start);
+    const appShellReturn = /\r?\n  return \(\r?\n    <main className="app-shell">/u.exec(
+      source.slice(start),
+    );
+    const end = appShellReturn ? start + appShellReturn.index : -1;
 
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);

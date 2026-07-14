@@ -8,7 +8,7 @@ import {
 describe("normalizeStoredChatSettings", () => {
   it("ignores legacy personal prompt fields and keeps only the selected model", () => {
     expect(normalizeStoredChatSettings({ systemPrompt: "Mein Prompt" })).toEqual({
-      model: "deepseek-v4-pro",
+      model: "deepseek-v4-flash",
     });
     expect(normalizeStoredChatSettings({
       systemPrompt: "Mein Prompt",
@@ -27,7 +27,7 @@ describe("normalizeStoredChatSettings", () => {
   });
 
   it("has no client-side prompt state in its public settings contract", () => {
-    expect(DEFAULT_CHAT_SETTINGS).toEqual({ model: "deepseek-v4-pro" });
+    expect(DEFAULT_CHAT_SETTINGS).toEqual({ model: "deepseek-v4-flash" });
     expect(DEFAULT_CHAT_SETTINGS).not.toHaveProperty("systemPrompt");
     expect(DEFAULT_CHAT_SETTINGS).not.toHaveProperty("usesGlobalDefault");
   });
