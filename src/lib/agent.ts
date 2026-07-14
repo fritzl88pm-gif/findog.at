@@ -244,6 +244,81 @@ function requireModelContent(content: string | null, errorMessage: string): stri
   return text;
 }
 
+const OVERVIEW_HEADING = "# 📘 Überblick";
+const OVERVIEW_LIKE_HEADING_PATTERN =
+  /^#{1,3}\s+(?:(?:📘|📕|📙)\s*)?(?:Überblick|Antwort|Kurzantwort|Ergebnis|Vorläufige Einschätzung)\s*:?\s*$/u;
+const EXACT_OVERVIEW_HEADING_PATTERN = /^#{1,3}\s+📘\s*Überblick\s*:?\s*$/u;
+
+function ensureRequiredOverview(answer: string, required: boolean): string {
+  if (!required) {
+    return answer;
+  }
+
+  const lines = answer.split("\n");
+  const firstContentIndex = lines.findIndex((line) => line.trim().length > 0);
+  if (firstContentIndex < 0) {
+    return OVERVIEW_HEADING;
+  }
+
+  const firstContent = lines[firstContentIndex].trim();
+  if (EXACT_OVERVIEW_HEADING_PATTERN.test(firstContent)) {
+    lines[firstContentIndex] = OVERVIEW_HEADING;
+    return lines.join("\n").trim();
+  }
+  if (OVERVIEW_LIKE_HEADING_PATTERN.test(firstContent)) {
+    lines[firstContentIndex] = OVERVIEW_HEADING;
+    return lines.join("\n").trim();
+  }
+
+  const existingOverviewIndex = lines.findIndex((line, index) =>
+    index !== firstContentIndex && EXACT_OVERVIEW_HEADING_PATTERN.test(line.trim()),
+  );
+  if (existingOverviewIndex >= 0) {
+    lines.splice(existingOverviewIndex, 1);
+  }
+
+  return `${OVERVIEW_HEADING}\n\n${lines.join("\n").trim()}`;
+}
+
+function isNonFachResponse(answer: string): boolean {
+  const normalized = answer.trim();
+  return /^#\s+👋\s+Willkommen\b/u.test(normalized)
+    || /^Willkommen!/u.test(normalized)
+    || /^(?:Der|Dieser) Assistent unterstützt ausschließlich bei Fragen des österreichischen Steuerrechts/u.test(normalized);
+}
+
+const GUIDELINE_NATURE_QUERY_PATTERN =
+  /\b(?:Rechtsnatur|rechtsverbindlich|Bindungswirkung|bindend|Auslegungsbehelf|Verwaltungsauslegung|Gesetzesrang|Quellenhierarchie)\b/iu;
+const GUIDELINE_NATURE_NOTICE_PATTERN =
+  /^(?:#{1,6}\s*)?(?:📒\s*)?(?:\*\*)?Hinweis\s+zur\s+Rechtsnatur\b/iu;
+
+function removeUnrequestedGuidelineNatureNotice(answer: string, question: string): string {
+  if (GUIDELINE_NATURE_QUERY_PATTERN.test(question)) {
+    return answer;
+  }
+
+  const lines = answer.split("\n");
+  const kept: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!GUIDELINE_NATURE_NOTICE_PATTERN.test(line.trim())) {
+      kept.push(line);
+      continue;
+    }
+
+    const textAfterColon = line.slice(line.indexOf(":") + 1).replace(/[\s*_\`]/g, "");
+    if (line.includes(":") && textAfterColon.length > 0) {
+      continue;
+    }
+
+    while (index + 1 < lines.length && !/^#{1,6}\s+/u.test(lines[index + 1].trim())) {
+      index += 1;
+    }
+  }
+
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function parseToolArguments(name: string, rawArguments: string): JsonObject {
   if (!rawArguments.trim()) {
     return {};
@@ -485,9 +560,18 @@ async function finalizeAgentRun(options: {
     deadline: options.deadline,
     messages: finalMessages,
   });
-  const answer = requireModelContent(
+  const modelAnswer = requireModelContent(
     finalResult.content,
     "DeepSeek konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
+  );
+  const latestQuestion = options.conversation.findLast((message) => message.role === "user")?.content ?? "";
+  const answerWithoutUnrequestedNotice = removeUnrequestedGuidelineNatureNotice(
+    modelAnswer,
+    latestQuestion,
+  );
+  const answer = ensureRequiredOverview(
+    answerWithoutUnrequestedNotice,
+    !isNonFachResponse(answerWithoutUnrequestedNotice),
   );
 
   await appendAgentStep(

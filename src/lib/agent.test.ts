@@ -15,6 +15,7 @@ vi.mock("./mcp/client", () => ({ McpClient: vi.fn() }));
 
 const mockedChatCompletion = vi.mocked(chatCompletion);
 const MockedMcpClient = vi.mocked(McpClient);
+const withOverview = (content: string) => `# 📘 Überblick\n\n${content}`;
 
 function expectCanonicalSystemMessages(): void {
   for (const [callIndex, [options]] of mockedChatCompletion.mock.calls.entries()) {
@@ -93,7 +94,7 @@ describe("runAgent", () => {
         ],
       })
       .mockResolvedValueOnce({ content: "Vorläufige Antwort.", toolCalls: [] })
-      .mockResolvedValueOnce({ content: "Finale Antwort.", toolCalls: [] });
+      .mockResolvedValueOnce({ content: "# 📘 Antwort\n\nFinale Antwort.", toolCalls: [] });
 
     const result = await runAgent({
       apiKey: "server-key",
@@ -102,7 +103,7 @@ describe("runAgent", () => {
       mcpBearerToken: "mcp-token",
     });
 
-    expect(result.answer).toBe("Finale Antwort.");
+    expect(result.answer).toBe(withOverview("Finale Antwort."));
     expect(result.steps.map((step) => step.type)).toEqual([
       "tools",
       "tool_call",
@@ -160,8 +161,72 @@ describe("runAgent", () => {
     expect(callTool).not.toHaveBeenCalled();
     expect(result.steps.some((step) => step.type === "tool_call")).toBe(false);
     expect(onStep).toHaveBeenLastCalledWith(
-      expect.objectContaining({ type: "answer", content: "Finale Antwort." }),
+      expect.objectContaining({ type: "answer", content: withOverview("Finale Antwort.") }),
     );
+  });
+
+  it("keeps the non-specialist welcome response free of an overview block", async () => {
+    mockMcpSession();
+    const welcome = "# 👋 Willkommen\n\nWillkommen! Wie kann ich Ihnen helfen?";
+    mockedChatCompletion
+      .mockResolvedValueOnce({ content: welcome, toolCalls: [] })
+      .mockResolvedValueOnce({ content: welcome, toolCalls: [] });
+
+    const result = await runAgent({
+      apiKey: "server-key",
+      model: "deepseek-v4-pro",
+      messages: [{ role: "user", content: "Hallo" }],
+    });
+
+    expect(result.answer).toBe(welcome);
+    expect(result.answer).not.toContain("# 📘 Überblick");
+  });
+
+  it("removes a standalone guideline-nature lesson from an ordinary specialist answer", async () => {
+    mockMcpSession();
+    const finalAnswer = [
+      "# 📘 Überblick",
+      "",
+      "Ja, die Aufwendungen können dem Grunde nach Werbungskosten sein.",
+      "",
+      "📒 **Hinweis zur Rechtsnatur der LStR:**",
+      "",
+      "Die Lohnsteuerrichtlinien sind ein Auslegungsbehelf der Verwaltung.",
+      "",
+      "# ⚖️ Gesetzliche Grundlagen",
+      "",
+      "Die Voraussetzungen sind anhand des EStG zu prüfen.",
+    ].join("\n");
+    mockedChatCompletion
+      .mockResolvedValueOnce({ content: "Vorläufig.", toolCalls: [] })
+      .mockResolvedValueOnce({ content: finalAnswer, toolCalls: [] });
+
+    const result = await runAgent({
+      apiKey: "server-key",
+      model: "deepseek-v4-pro",
+      messages: [{ role: "user", content: "Kann eine Tagesmutter Werbungskosten geltend machen?" }],
+    });
+
+    expect(result.answer).not.toContain("Hinweis zur Rechtsnatur");
+    expect(result.answer).not.toContain("Auslegungsbehelf der Verwaltung");
+    expect(result.answer).toContain("# ⚖️ Gesetzliche Grundlagen");
+  });
+
+  it("keeps guideline-nature information when the user explicitly asks for it", async () => {
+    mockMcpSession();
+    const finalAnswer = "# 📘 Überblick\n\nHinweis zur Rechtsnatur: Die LStR sind ein Auslegungsbehelf.";
+    mockedChatCompletion
+      .mockResolvedValueOnce({ content: "Vorläufig.", toolCalls: [] })
+      .mockResolvedValueOnce({ content: finalAnswer, toolCalls: [] });
+
+    const result = await runAgent({
+      apiKey: "server-key",
+      model: "deepseek-v4-pro",
+      messages: [{ role: "user", content: "Welche Rechtsnatur haben die LStR?" }],
+    });
+
+    expect(result.answer).toContain("Hinweis zur Rechtsnatur");
+    expect(result.answer).toContain("Auslegungsbehelf");
   });
 
   it("passes the request deadline to model, session, and tool calls", async () => {
@@ -212,7 +277,7 @@ describe("runAgent", () => {
       deadline,
     });
 
-    expect(result.answer).toBe("Finale Antwort.");
+    expect(result.answer).toBe(withOverview("Finale Antwort."));
     expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
     expect(result.steps).toEqual(
       expect.arrayContaining([
@@ -235,7 +300,7 @@ describe("runAgent", () => {
       initialSteps: [{ type: "pdf_context", title: "PDF gelesen", content: "Bescheid.pdf" }],
     });
 
-    expect(result.answer).toBe("Finale Antwort mit PDF-Kontext.");
+    expect(result.answer).toBe(withOverview("Finale Antwort mit PDF-Kontext."));
     expect(result.steps[0]).toMatchObject({ type: "pdf_context" });
     expect(result.steps[1]).toMatchObject({ type: "tools", title: "Datenbank bereit" });
 
@@ -326,7 +391,7 @@ describe("runAgent", () => {
       messages: [{ role: "user", content: "Frage" }],
     });
 
-    expect(result.answer).toBe("Finale Antwort nach sieben Aufrufen.");
+    expect(result.answer).toBe(withOverview("Finale Antwort nach sieben Aufrufen."));
     expect(callTool).toHaveBeenCalledTimes(7);
     expect(result.steps.filter((step) => step.type === "tool_call")).toHaveLength(7);
     expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
@@ -363,7 +428,7 @@ describe("runAgent", () => {
       messages: [{ role: "user", content: "Welche BFG-Rechtsprechung ist einschlägig?" }],
     });
 
-    expect(result.answer).toBe("Finale Antwort ohne Fundstelle.");
+    expect(result.answer).toBe(withOverview("Finale Antwort ohne Fundstelle."));
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
     expectProtocolSafeMessages();
@@ -394,7 +459,7 @@ describe("runAgent", () => {
       messages: [{ role: "user", content: "Frage" }],
     });
 
-    expect(result.answer).toBe("Siehe RV/7103053/2014 und RV/7103080/2015.");
+    expect(result.answer).toBe(withOverview("Siehe RV/7103053/2014 und RV/7103080/2015."));
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
   });

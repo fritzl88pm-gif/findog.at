@@ -15,6 +15,7 @@ vi.mock("./mcp/client", () => ({ McpClient: vi.fn() }));
 
 const mockedChatCompletion = vi.mocked(chatCompletion);
 const MockedMcpClient = vi.mocked(McpClient);
+const withOverview = (content: string) => `# 📘 Überblick\n\n${content}`;
 
 function rawSearchTool(name: "faq_search" | "hybrid_search") {
   return {
@@ -95,7 +96,7 @@ describe("runAgent retrieval policy", () => {
     expect(callTool.mock.calls[0]?.[0].arguments).not.toHaveProperty("as_of");
     expect(JSON.stringify(callTool.mock.calls)).not.toContain(RESEARCH_SOURCES.BFG.kbId);
     expect(result.tools).toEqual(["search_amount_table"]);
-    expect(result.answer).toBe("Der Betrag gilt im Veranlagungsjahr 2024.");
+    expect(result.answer).toBe(withOverview("Der Betrag gilt im Veranlagungsjahr 2024."));
     expect(result.answer).not.toMatch(/\bBFG\b|RV\/\d+/u);
     expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -384,7 +385,7 @@ describe("runAgent retrieval policy", () => {
       messages: [{ role: "user", content: "Wie hoch ist der Unterhaltsabsetzbetrag 2024?" }],
     });
 
-    expect(result.answer).toBe("Im angefragten Rechtsstand beträgt der Wert EUR 1.");
+    expect(result.answer).toBe(withOverview("Im angefragten Rechtsstand beträgt der Wert EUR 1."));
     expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
   });
 
@@ -401,7 +402,7 @@ describe("runAgent retrieval policy", () => {
     });
 
     expect(callTool).not.toHaveBeenCalled();
-    expect(result.answer).toBe("Finale Antwort.");
+    expect(result.answer).toBe(withOverview("Finale Antwort."));
     expect(result.steps.some((step) => "toolName" in step && step.toolName === "bfg_prefetch")).toBe(false);
     expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
   });
@@ -440,7 +441,7 @@ describe("runAgent retrieval policy", () => {
         kb_id: RESEARCH_SOURCES.BFG.kbId,
       }),
     }));
-    expect(result.answer).toBe("Finale Antwort ohne BFG-Zitat.");
+    expect(result.answer).toBe(withOverview("Finale Antwort ohne BFG-Zitat."));
     expect(result.answer).not.toContain(gz);
     expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();

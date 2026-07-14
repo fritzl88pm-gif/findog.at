@@ -95,6 +95,8 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
   });
 
   it("uses the approved headings, tables, icons, and annual time rule", () => {
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("Jede Fachantwort der Varianten 2a, 2, 3 und 4 beginnt ausnahmslos mit `# 📘 Überblick`");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("darf bei einer Fachantwort niemals entfallen");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("# 📘 Überblick");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("# 🏛️ BFG-Rechtsprechung");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("# 🗂️ Interne Verwaltungspraxis");
@@ -104,8 +106,16 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain("Alle sachlich einschlägigen gelieferten Richtlinientreffer sind aufzunehmen");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("Bei jahresabhängigen Werten genügen Jahr und Rechtsstand");
     expect(DEFAULT_SYSTEM_PROMPT).not.toContain("BFG-Rechtsprechung / Recherchebefund");
+    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("# 📘 Antwort");
     expect(DEFAULT_SYSTEM_PROMPT).not.toContain("📘 **Kurzantwort**");
     expect(DEFAULT_SYSTEM_PROMPT).not.toContain("⚠️ **Interne Verwaltungspraxis");
+  });
+
+  it("does not teach professional users the legal nature of guidelines unless it matters", () => {
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("nicht ungefragt in einem eigenen Hinweis zu erklären");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("kein eigener „Hinweis zur Rechtsnatur“");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("ausdrücklicher Nachfrage, konkretem Quellenkonflikt oder Ergebnisrelevanz");
+    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("Sie sind als Verwaltungsauslegung zu kennzeichnen");
   });
 
   it("contains a compact high-level research-sources section without technical tool inventory", () => {
