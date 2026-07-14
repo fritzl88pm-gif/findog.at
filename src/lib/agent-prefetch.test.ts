@@ -339,17 +339,12 @@ describe("runAgent retrieval policy", () => {
     expect(request.arguments).not.toHaveProperty("limit");
   });
 
-  it("rewrites a forbidden judicature reference before returning a simple amount answer", async () => {
+  it("returns a simple amount answer without a second post-answer validation call", async () => {
     mockSession();
-    mockedChatCompletion
-      .mockResolvedValueOnce({
-        content: "Nach RV/7103053/2014 beträgt der Wert EUR 1.",
-        toolCalls: [],
-      })
-      .mockResolvedValueOnce({
-        content: "Der Wert beträgt im Veranlagungsjahr 2024 EUR 1.",
-        toolCalls: [],
-      });
+    mockedChatCompletion.mockResolvedValueOnce({
+      content: "Im angefragten Rechtsstand beträgt der Wert EUR 1.",
+      toolCalls: [],
+    });
 
     const result = await runAgent({
       apiKey: "server-key",
@@ -358,9 +353,8 @@ describe("runAgent retrieval policy", () => {
       messages: [{ role: "user", content: "Wie hoch ist der Unterhaltsabsetzbetrag 2024?" }],
     });
 
-    expect(result.answer).toBe("Der Wert beträgt im Veranlagungsjahr 2024 EUR 1.");
-    expect(result.answer).not.toMatch(/BFG|Judikatur|Rechtsprechung|RV\//u);
-    expect(mockedChatCompletion).toHaveBeenCalledTimes(2);
+    expect(result.answer).toBe("Im angefragten Rechtsstand beträgt der Wert EUR 1.");
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
   });
 
   it("performs no hidden BFG prefetch for a general question", async () => {

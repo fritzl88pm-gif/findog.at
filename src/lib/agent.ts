@@ -6,7 +6,6 @@ import type { JsonObject } from "./mcp/tools";
 import type { ChatModel } from "./config";
 import { SemanticToolRegistry } from "./semantic-tools";
 import { RESEARCH_SOURCES } from "./research-sources";
-import { extractBfgGzCandidates } from "./findok/bfg-citations";
 import {
   summarizeStepText,
   summarizeToolArguments,
@@ -340,7 +339,6 @@ function supportMessages(options: {
   conversation: AppChatMessage[];
   toolLog: ToolLogEntry[];
   draftAnswer?: string;
-  correctionInstruction?: string;
 }): DeepSeekMessage[] {
   const context = [
     "Chatverlauf:",
@@ -352,10 +350,6 @@ function supportMessages(options: {
   if (options.draftAnswer) {
     context.push("", "Vorläufige Antwort des Agenten:", options.draftAnswer);
   }
-  if (options.correctionInstruction) {
-    context.push("", "Verbindliche Korrekturvorgabe:", options.correctionInstruction);
-  }
-
   const result: DeepSeekMessage[] = [
     { role: "system", content: options.systemPrompt },
   ];
@@ -368,43 +362,6 @@ function supportMessages(options: {
     result.push({ role: "user", content: contextText });
   }
   return result;
-}
-
-function containsJudicatureReference(answer: string): boolean {
-  return extractBfgGzCandidates(answer).length > 0
-    || /\b(?:bfg|bundesfinanzgericht|finanzgericht|vwg?h|verwaltungsgerichtshof|vfgh|verfassungsgerichtshof|judikatur|rechtsprechung|rechtssatz|ecli|geschaftszahl|gerichtsentscheidungen?|gerichtsurteile?|entscheidungen?|urteile?|erkenntnis|beschluss)\b/iu
-      .test(normalizedQuestion(answer));
-}
-
-function answerMentionsReferenceDate(answer: string, referenceDate: string): boolean {
-  if (answer.includes(referenceDate)) {
-    return true;
-  }
-  const [year, month, day] = referenceDate.split("-");
-  return Boolean(year && month && day)
-    && new RegExp(`\\b0?${Number(day)}\\.0?${Number(month)}\\.${year}\\b`, "u").test(answer);
-}
-
-function simpleAmountAnswerViolations(answer: string, policy: AgentRetrievalPolicy): string[] {
-  const violations: string[] = [];
-  if (containsJudicatureReference(answer)) {
-    violations.push("Judikaturhinweis");
-  }
-  if (policy.referenceDate && !answerMentionsReferenceDate(answer, policy.referenceDate)) {
-    violations.push(`fehlender Stichtag ${policy.referenceDate}`);
-  } else if (!policy.referenceDate) {
-    for (const year of policy.referenceYears) {
-      if (!new RegExp(`\\b${year}\\b`, "u").test(answer)) {
-        violations.push(`fehlender Rechtsstand ${year}`);
-      }
-    }
-  }
-  for (const answerYear of requestedReferenceYears(normalizedQuestion(answer))) {
-    if (!policy.referenceYears.includes(answerYear)) {
-      violations.push(`widersprüchlicher Rechtsstand ${answerYear}`);
-    }
-  }
-  return violations;
 }
 
 function simpleAmountQuery(
@@ -527,40 +484,10 @@ async function finalizeAgentRun(options: {
     deadline: options.deadline,
     messages: finalMessages,
   });
-  let modelAnswer = requireModelContent(
+  const answer = requireModelContent(
     finalResult.content,
     "DeepSeek konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
   );
-  let simpleAmountViolations = options.policy.kind === "simple_amount"
-    ? simpleAmountAnswerViolations(modelAnswer, options.policy)
-    : [];
-  if (simpleAmountViolations.length > 0) {
-    const correctedResult = await chatCompletion({
-      apiKey: options.apiKey,
-      model: options.model,
-      deadline: options.deadline,
-      messages: supportMessages({
-        systemPrompt: options.effectiveSystemPrompt,
-        attachmentUserMessage: options.attachmentUserMessage,
-        conversation: options.conversation,
-        toolLog: options.toolLog,
-        draftAnswer: modelAnswer,
-        correctionInstruction: `Die vorige Fassung war nicht regelkonform (${simpleAmountViolations.join(", ")}). Formuliere sie vollständig neu, nenne ausschließlich den verlangten Rechtsstand ${options.policy.referenceDate ?? options.policy.referenceYears.join(" und ")} und erwähne weder Gerichte noch Judikatur, Rechtsprechung, Entscheidungen oder Geschäftszahlen.`,
-      }),
-    });
-    modelAnswer = requireModelContent(
-      correctedResult.content,
-      "DeepSeek konnte die kurze Betragsantwort nicht regelkonform korrigieren.",
-    );
-    simpleAmountViolations = simpleAmountAnswerViolations(modelAnswer, options.policy);
-    if (simpleAmountViolations.length > 0) {
-      throw new UserVisibleError(
-        "Die kurze Betragsantwort erfüllte die Vorgaben zu Rechtsstand und Judikatur nicht und wurde nicht ausgegeben.",
-        502,
-      );
-    }
-  }
-  const answer = modelAnswer;
 
   await appendAgentStep(
     options.steps,
