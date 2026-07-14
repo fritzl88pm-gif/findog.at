@@ -3,6 +3,47 @@ import { describe, expect, it } from "vitest";
 import { parseRichAnswer } from "./answer-rendering";
 
 describe("parseRichAnswer", () => {
+  it("renders the standardized legal answer sections and their tables as distinct blocks", () => {
+    const blocks = parseRichAnswer(`# 📘 Überblick
+
+Ergebnis.
+
+# 📄 Richtlinien / Erlässe
+
+| Richtlinie / Fundstelle | Aussage | Stand / Stichtagsbezug | Relevanz |
+| --- | --- | --- | --- |
+| LStR Rz 1 | Aussage | 2024 | tragend |
+
+# 🏛️ BFG-Rechtsprechung
+
+| Entscheidung / Fundtyp | Kernaussage | Stichtags- und Sachverhaltsbezug | Relevanz / Verwertung |
+| --- | --- | --- | --- |
+| BFG, RV/1; Entscheidungschunk | Aussage | vergleichbar | stützend |
+
+# 🗂️ Interne Verwaltungspraxis
+
+Keine Bindungswirkung.
+
+# 🧭 Abgrenzungen / Praxispunkte
+
+- Praxispunkt`);
+
+    expect(blocks.map((block) => block.type)).toEqual([
+      "heading",
+      "paragraph",
+      "heading",
+      "table",
+      "heading",
+      "table",
+      "heading",
+      "paragraph",
+      "heading",
+      "unordered-list",
+    ]);
+    expect(blocks.filter((block) => block.type === "heading")).toHaveLength(5);
+    expect(blocks.filter((block) => block.type === "table")).toHaveLength(2);
+  });
+
   it("turns common Markdown-like answer structure into semantic blocks", () => {
     const blocks = parseRichAnswer(`# Überblick
 

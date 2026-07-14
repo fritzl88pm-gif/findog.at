@@ -22,6 +22,16 @@ const RESEARCH_POLICY_PROMPT_SUFFIX = [
   "Eine nachgelagerte automatische BFG-/Findok-Verifikation findet nicht statt. Die BFG-Recherchefunktion bleibt für Fachfragen regulär verfügbar.",
   "Berücksichtige den Stichtag ausdrücklich. Bei jahresabhängigen Beträgen bestimmt das genannte Jahr den maßgeblichen Rechtsstand; ein Tagesdatum ist nur nötig, wenn der Nutzer es vorgibt oder es für die Rechtsfrage entscheidend ist. Die starre Formulierung ‚Maßgeblicher Stichtag‘ ist nicht verpflichtend.",
 ].join("\n");
+const OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX = [
+  "# VERBINDLICHES ANTWORTFORMAT",
+  "Diese Regeln ersetzen entgegenstehende Überschriften-, Symbol- und Darstellungsregeln weiter oben.",
+  "Formatiere jede tatsächlich verwendete Abschnittsüberschrift als eigene Markdown-Überschrift erster Ebene im Format `# <Icon> <Titel>`. Nicht einschlägige Abschnitte bleiben vollständig weg.",
+  "Verwende `# 📘 Überblick` statt ‚Kurzantwort‘.",
+  "Verwende ausschließlich `# 🏛️ BFG-Rechtsprechung` statt ‚BFG-Rechtsprechung / Recherchebefund‘. Eine gezielte einzelne BFG-Fundstellenabfrage darf weiterhin als ‚BFG-Fundstelle / Recherchebefund‘ bezeichnet werden.",
+  "Sind BFG-Entscheidungen einschlägig, stelle alle verwerteten Entscheidungen als Markdown-Tabelle mit den Spalten `Entscheidung / Fundtyp`, `Kernaussage`, `Stichtags- und Sachverhaltsbezug` und `Relevanz / Verwertung` dar. Jede Zeile nennt, soweit geliefert, Gericht, Datum, Geschäftszahl oder ECLI, Quellenkennung und die Einordnung als Rechtssatz oder Entscheidungschunk. Bei keinem einschlägigen Treffer gib unter der BFG-Überschrift einen knappen qualifizierten Negativbefund aus und keine leere Tabelle.",
+  "Stelle den Abschnitt `Richtlinien / Erlässe` immer als Markdown-Tabelle mit den Spalten `Richtlinie / Fundstelle`, `Aussage`, `Stand / Stichtagsbezug` und `Relevanz` dar. Nimm alle sachlich einschlägigen gelieferten Richtlinientreffer auf; bei keinem einschlägigen Treffer entfällt der Abschnitt.",
+  "Verwende `# 🗂️ Interne Verwaltungspraxis` und `# 🧭 Abgrenzungen / Praxispunkte`. Verwende für diese beiden Abschnitte sowie für WinANV und FEXklusiv kein Warnsymbol. Hinweise auf fehlende Bindungswirkung bleiben als neutrale fachliche Einordnung erhalten. Echte Risiken, Unsicherheiten oder offene Klärungspunkte dürfen weiterhin passend gekennzeichnet werden.",
+].join("\n");
 
 function expectProtocolSafeMessages(): void {
   for (const [callIndex, call] of mockedChatCompletion.mock.calls.entries()) {
@@ -127,10 +137,10 @@ describe("runAgent", () => {
     expect(mockedChatCompletion.mock.calls[0]?.[0].tools?.map((tool) => tool.function.name))
       .not.toContain("findok_verify_bfg_cases");
 
-    // System prompt unchanged — no attachment content appended
+    // Runtime policies are appended, while attachment content remains outside the system prompt.
     expect(mockedChatCompletion.mock.calls[0][0].messages[0]).toEqual({
       role: "system",
-      content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}`,
+      content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
     });
 
     expect(callTool).toHaveBeenCalledWith(
@@ -253,7 +263,7 @@ describe("runAgent", () => {
     const systemMessage = mockedChatCompletion.mock.calls[0]?.[0].messages[0];
     expect(systemMessage).toEqual({
       role: "system",
-      content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}`,
+      content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
     });
     expect(systemMessage?.content).not.toContain("Bescheid.pdf");
     expect(systemMessage?.content).not.toContain("Extrahierter Bescheidinhalt");
@@ -272,7 +282,7 @@ describe("runAgent", () => {
       const systemMsg = messages[0];
       expect(systemMsg).toEqual({
         role: "system",
-        content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}`,
+        content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
       });
       // Attachment context is in the same user message as synthesis context
       if (options.messages.length > 1) {
@@ -302,7 +312,7 @@ describe("runAgent", () => {
     const systemMessage = mockedChatCompletion.mock.calls[0]?.[0].messages[0];
     expect(systemMessage).toEqual({
       role: "system",
-      content: `System\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}`,
+      content: `System\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
     });
     expect(systemMessage?.content).not.toContain("Bescheid.pdf");
     expect(systemMessage?.content).not.toContain("Beleg.png");

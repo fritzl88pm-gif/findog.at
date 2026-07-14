@@ -2111,6 +2111,12 @@ textarea:focus {
   font-size: 1.12rem;
 }
 
+.answer-content > h2 ~ h2 {
+  border-top: 1px solid rgba(40, 111, 156, 0.18);
+  margin-top: 6px;
+  padding-top: 16px;
+}
+
 .answer-content h3 {
   margin-top: 2px;
   font-size: 1.02rem;
