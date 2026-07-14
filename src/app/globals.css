@@ -1268,6 +1268,215 @@ textarea:focus {
   text-align: right;
 }
 
+
+.german-option-card {
+  margin-top: 28px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 24px;
+}
+
+.german-option-heading {
+  margin: 0 0 16px;
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--bmf-blue-deep);
+}
+
+.german-option-subheading {
+  margin: -12px 0 18px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.german-option-field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+
+.german-option-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--bmf-blue-dark);
+}
+
+.german-option-input-wrap {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: white;
+  transition: border-color 0.15s;
+}
+
+.german-option-input-wrap:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px rgba(40, 111, 156, 0.15);
+}
+
+.german-option-input-wrap > span {
+  padding: 0 6px 0 11px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  user-select: none;
+}
+
+.german-option-input-wrap input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 9px 11px 9px 0;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+}
+
+.german-option-input-wrap input::placeholder {
+  color: #b0bec5;
+}
+
+.german-option-step-group {
+  margin-top: 18px;
+}
+
+.german-option-step {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.german-option-step:last-child {
+  border-bottom: none;
+}
+
+.german-option-step-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bmf-blue);
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.german-option-step-label {
+  font-size: 0.82rem;
+}
+
+.german-option-step-label strong {
+  display: block;
+  color: var(--bmf-blue-deep);
+}
+
+.german-option-step-label small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.german-option-step-value {
+  font-weight: 750;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.german-option-result-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.german-option-result-item {
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-left: 4px solid var(--bmf-blue);
+  border-radius: var(--radius-md);
+  background: rgba(40, 111, 156, 0.06);
+  padding: 17px;
+}
+
+.german-option-result-item.label-l1i {
+  border-left-color: #2e7d32;
+}
+
+.german-option-result-item p {
+  margin: 0 0 4px;
+  color: var(--bmf-blue-dark);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.german-option-result-item h3 {
+  margin: 0 0 9px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  font-weight: 400;
+}
+
+.german-option-result-item output {
+  display: block;
+  color: var(--bmf-blue-deep);
+  font-size: clamp(1.05rem, 3.5vw, 1.35rem);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.german-option-result-item.output-yes output {
+  color: #2e7d32;
+}
+
+.german-option-result-item.output-no output {
+  color: #b71c1c;
+}
+
+.german-option-disclaimer {
+  margin: 18px 0 0;
+  border-radius: var(--radius-sm);
+  background: #fff8e1;
+  border: 1px solid #ffe082;
+  padding: 11px 13px;
+  color: #6d4c00;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.german-option-empty {
+  margin: 14px 0 0;
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-app);
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.german-option-data-unavailable {
+  margin: 14px 0 0;
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  background: #fff3e0;
+  border: 1px solid #ffcc80;
+  color: #bf360c;
+  font-size: 0.82rem;
+  text-align: center;
+}
+
 .form-choice-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -2687,6 +2896,15 @@ textarea:focus {
   .bfg-pro-submit {
     width: 100%;
   }
+
+  .german-option-field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .german-option-result-grid {
+    grid-template-columns: 1fr;
+  }
+
 }
 
 @media (prefers-reduced-motion: reduce) {

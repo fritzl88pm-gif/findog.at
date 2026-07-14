@@ -63,6 +63,12 @@ import {
   type GermanSvPensionYear,
 } from "@/lib/german-sv-pension";
 import {
+  calculateGermanPensionOption,
+  parseGermanPensionAmount,
+  formatGermanPensionEuro,
+} from "@/lib/german-pension-option";
+
+import {
   L17B_YEARS,
   getL17bYearEntries,
   convertL17bCurrency,
@@ -1197,10 +1203,230 @@ function GermanSvPensionView({
         </div>
 
         <p className="german-sv-source">Stand 26.06.2026</p>
+
+        <GermanPensionOptionView />
+
       </div>
     </section>
   );
 }
+
+function GermanPensionOptionView() {
+  const [currentYearInput, setCurrentYearInput] = useState("");
+  const [firstFullYearInput, setFirstFullYearInput] = useState("");
+  const [firstFullGrossInput, setFirstFullGrossInput] = useState("");
+  const [currentAnnualGrossInput, setCurrentAnnualGrossInput] = useState("");
+
+  const parseYear = (value: string): number | null => {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const n = Number(trimmed);
+    return Number.isFinite(n) && Number.isInteger(n) ? n : null;
+  };
+
+  const currentYear = parseYear(currentYearInput);
+  const firstFullPensionYear = parseYear(firstFullYearInput);
+  const firstFullGrossPension = parseGermanPensionAmount(firstFullGrossInput);
+  const currentAnnualGrossPension = parseGermanPensionAmount(currentAnnualGrossInput);
+
+  const inputReady = currentYear !== null
+    && firstFullPensionYear !== null
+    && firstFullGrossPension !== null
+    && currentAnnualGrossPension !== null;
+
+  const calculation = inputReady
+    ? calculateGermanPensionOption({
+        currentYear,
+        firstFullPensionYear,
+        firstFullGrossPension,
+        currentAnnualGrossPension,
+      })
+    : null;
+
+  const displayEuro = (value: number | undefined): string =>
+    value === undefined ? "—" : formatGermanPensionEuro(value);
+
+  const displayBool = (value: boolean | undefined): string => {
+    if (value === undefined) return "—";
+    return value ? "Ja" : "Nein";
+  };
+
+  const formatPercent = (value: number): string =>
+    `${(value * 100).toLocaleString("de-AT", {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 2,
+    })} %`;
+
+  const hasResult = calculation?.available === true;
+
+  return (
+    <div className="german-option-card">
+      <h2 className="german-option-heading">Optionsmöglichkeit in Deutschland</h2>
+      <p className="german-option-subheading">
+        Vereinfachter Schnellcheck — keine vollständige Prüfung nach § 1 Abs. 3
+        EStG / 90-%-Test. Dieser Rechner prüft ausschließlich den Vergleich der
+        österreichischen Pension mit dem deutschen Grundfreibetrag.
+      </p>
+
+      <div className="german-option-field-grid">
+        <div className="field-group">
+          <label className="german-option-label" htmlFor="gpo-current-year">
+            Aktuelles Jahr
+          </label>
+          <div className="german-option-input-wrap">
+            <input
+              id="gpo-current-year"
+              type="text"
+              inputMode="numeric"
+              value={currentYearInput}
+              onChange={(e) => setCurrentYearInput(e.target.value)}
+              placeholder="z. B. 2026"
+              autoComplete="off"
+            />
+          </div>
+        </div>
+        <div className="field-group">
+          <label className="german-option-label" htmlFor="gpo-first-full-year">
+            Erstes volles Bezugsjahr
+          </label>
+          <div className="german-option-input-wrap">
+            <input
+              id="gpo-first-full-year"
+              type="text"
+              inputMode="numeric"
+              value={firstFullYearInput}
+              onChange={(e) => setFirstFullYearInput(e.target.value)}
+              placeholder="z. B. 2016"
+              autoComplete="off"
+            />
+          </div>
+        </div>
+        <div className="field-group">
+          <label className="german-option-label" htmlFor="gpo-first-full-gross">
+            Pension brutto im ersten vollen Bezugsjahr
+          </label>
+          <div className="german-option-input-wrap">
+            <span aria-hidden="true">€</span>
+            <input
+              id="gpo-first-full-gross"
+              type="text"
+              inputMode="decimal"
+              value={firstFullGrossInput}
+              onChange={(e) => setFirstFullGrossInput(e.target.value)}
+              placeholder="0,00"
+              autoComplete="off"
+            />
+          </div>
+        </div>
+        <div className="field-group">
+          <label className="german-option-label" htmlFor="gpo-current-gross">
+            Aktuelle österreichische PVA/SVA-Bruttopension
+          </label>
+          <div className="german-option-input-wrap">
+            <span aria-hidden="true">€</span>
+            <input
+              id="gpo-current-gross"
+              type="text"
+              inputMode="decimal"
+              value={currentAnnualGrossInput}
+              onChange={(e) => setCurrentAnnualGrossInput(e.target.value)}
+              placeholder="0,00"
+              autoComplete="off"
+            />
+          </div>
+        </div>
+      </div>
+
+      {calculation === null ? (
+        <div className="german-option-empty" aria-live="polite">
+          Bitte alle Felder ausfüllen, um den Schnellcheck durchzuführen.
+        </div>
+      ) : !calculation.available ? (
+        <div className="german-option-data-unavailable" role="alert" aria-live="polite">
+          {calculation.unavailableReason}
+        </div>
+      ) : null}
+
+      <div
+        className="german-option-step-group"
+        aria-label="Berechnungsschritte"
+        aria-live="polite"
+      >
+        <div className="german-option-step">
+          <span className="german-option-step-num">1</span>
+          <span className="german-option-step-label">
+            <strong>Rentenfreibetragssatz</strong>
+            <small>Jahr des ersten vollen Bezugs: {firstFullPensionYear ?? "—"}</small>
+          </span>
+          <span className="german-option-step-value">
+            {hasResult ? formatPercent(calculation.exemptionRate) : "—"}
+          </span>
+        </div>
+        <div className="german-option-step">
+          <span className="german-option-step-num">2</span>
+          <span className="german-option-step-label">
+            <strong>Fixer Rentenfreibetrag (EUR)</strong>
+            <small>Pension 1. Jahr × Freibetragssatz</small>
+          </span>
+          <span className="german-option-step-value">
+            {hasResult ? displayEuro(calculation.fixedPensionExemptionEur) : "—"}
+          </span>
+        </div>
+        <div className="german-option-step">
+          <span className="german-option-step-num">3</span>
+          <span className="german-option-step-label">
+            <strong>Progressionsvorbehalt (EUR)</strong>
+            <small>Aktuelle Bruttopension − fixer Freibetrag</small>
+          </span>
+          <span className="german-option-step-value">
+            {hasResult ? displayEuro(calculation.progressionIncomeEur) : "—"}
+          </span>
+        </div>
+        <div className="german-option-step">
+          <span className="german-option-step-num">4</span>
+          <span className="german-option-step-label">
+            <strong>Individueller Grundfreibetrag (EUR)</strong>
+            <small>Jahr: {currentYear ?? "—"}</small>
+          </span>
+          <span className="german-option-step-value">
+            {hasResult ? displayEuro(calculation.basicAllowanceEur) : "—"}
+          </span>
+        </div>
+        <div className="german-option-step">
+          <span className="german-option-step-num">5</span>
+          <span className="german-option-step-label">
+            <strong>Differenz zum Grundfreibetrag (EUR)</strong>
+            <small>Progressionsvorbehalt − Grundfreibetrag</small>
+          </span>
+          <span className="german-option-step-value">
+            {hasResult ? displayEuro(calculation.differenceToBasicAllowanceEur) : "—"}
+          </span>
+        </div>
+      </div>
+
+      <div className="german-option-result-grid" aria-live="polite">
+        <div className={`german-option-result-item${hasResult ? (calculation.optionPossible ? " output-yes" : " output-no") : ""}`}>
+          <p>Prüfung</p>
+          <h3>Option möglich</h3>
+          <output>Option möglich: {hasResult ? displayBool(calculation.optionPossible) : "—"}</output>
+        </div>
+        <div className={`german-option-result-item label-l1i${hasResult ? (calculation.optionPossible ? " output-yes" : " output-no") : ""}`}>
+          <p>Kennzahl</p>
+          <h3>L1i Feld 4.2</h3>
+          <output>L1i Feld 4.2: {hasResult ? displayBool(calculation.optionPossible) : "—"}</output>
+        </div>
+      </div>
+
+      <div className="german-option-disclaimer" role="note">
+        <strong>Hinweis:</strong> Dieser Schnellcheck prüft ausschließlich den
+        Vergleich der differenzbesteuerten österreichischen Pension mit dem
+        deutschen Grundfreibetrag. Es wird keine vollständige Prüfung nach § 1
+        Abs. 3 EStG / 90-%-Test durchgeführt.
+      </div>
+    </div>
+  );
+}
+
 
 export default function Home() {
   const supabase = getSupabaseBrowserClient();
