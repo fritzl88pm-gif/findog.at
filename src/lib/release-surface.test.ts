@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -10,16 +10,20 @@ describe("approved release surface", () => {
   const layoutPath = fileURLToPath(new URL("../app/layout.tsx", import.meta.url));
   const publicSettingsPath = fileURLToPath(new URL("../app/api/settings/route.ts", import.meta.url));
   const adminSettingsPath = fileURLToPath(new URL("../app/api/admin/settings/route.ts", import.meta.url));
+  const chatRoutePath = fileURLToPath(new URL("../app/api/chat/route.ts", import.meta.url));
+  const agentPath = fileURLToPath(new URL("./agent.ts", import.meta.url));
   const faviconPath = fileURLToPath(new URL("../../public/favicon.png", import.meta.url));
   const bfgIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-search.png", import.meta.url));
   const bfgProIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-pro-search.png", import.meta.url));
   const germanSvPensionIllustrationPath = fileURLToPath(new URL("../../public/fred-german-sv-pension.png", import.meta.url));
+  const l17bIllustrationPath = fileURLToPath(new URL("../../public/fred_l17b.png", import.meta.url));
   const germanSvPensionPath = fileURLToPath(new URL("./german-sv-pension.ts", import.meta.url));
   const pageSource = readFileSync(pagePath, "utf8");
   const globalsSource = readFileSync(globalsPath, "utf8");
   const layoutSource = readFileSync(layoutPath, "utf8");
   const publicSettingsSource = readFileSync(publicSettingsPath, "utf8");
-  const adminSettingsSource = readFileSync(adminSettingsPath, "utf8");
+  const chatRouteSource = readFileSync(chatRoutePath, "utf8");
+  const agentSource = readFileSync(agentPath, "utf8");
   const germanSvPensionSource = readFileSync(germanSvPensionPath, "utf8");
 
   it("labels the standalone BFG view as BFG Suche in expanded and collapsed navigation", () => {
@@ -125,7 +129,21 @@ describe("approved release surface", () => {
     );
   });
 
-  it("keeps system prompt controls and data on the admin-only surface", () => {
+  it("shows the supplied L17b illustration to the right of the currency title", () => {
+    const l17bView = pageSource.slice(
+      pageSource.indexOf("function L17bCurrencyView("),
+      pageSource.indexOf("type GermanSvPensionViewProps"),
+    );
+
+    expect(l17bView).toMatch(
+      /<header className="forms-view-header bfg-view-header">[\s\S]*?<h1 id="l17b-currency-view-title">L17b Währungsrechner<\/h1>[\s\S]*?<Image[\s\S]*?className="bfg-view-header-illustration"[\s\S]*?src="\/fred_l17b\.png"[\s\S]*?alt=""[\s\S]*?width=\{376\}[\s\S]*?height=\{376\}[\s\S]*?unoptimized[\s\S]*?<\/header>/,
+    );
+    expect(createHash("sha256").update(readFileSync(l17bIllustrationPath)).digest("hex")).toBe(
+      "53c605e85e7ec054edea95492a78386a03eac86e746cfb2a0961d99384963845",
+    );
+  });
+
+  it("exposes no mutable system-prompt surface and uses one canonical runtime source", () => {
     const settingsDialog = pageSource.slice(
       pageSource.indexOf('{isSettingsDialogOpen ? ('),
       pageSource.indexOf('{appView === "bfg-pro" ? ('),
@@ -146,10 +164,22 @@ describe("approved release surface", () => {
     expect(chatSubmit).not.toContain('usesGlobalDefault');
     expect(chatSubmit).not.toContain('requestBody.systemPrompt');
     expect(publicSettingsSource).not.toContain('globalSystemPrompt');
-    expect(pageSource).toContain('<h2>Globaler System Prompt</h2>');
-    expect(pageSource).toContain('id="admin-system-prompt"');
-    expect(adminSettingsSource).toContain('getGlobalSystemPrompt');
-    expect(adminSettingsSource).toContain('updateGlobalSystemPrompt');
+    expect(pageSource).not.toContain('adminSystemPrompt');
+    expect(pageSource).not.toContain('saveAdminSystemPrompt');
+    expect(pageSource).not.toContain('/api/admin/settings');
+    expect(pageSource).not.toContain('Globaler System Prompt');
+    expect(pageSource).not.toContain('admin-system-prompt');
+    expect(pageSource).not.toContain('DEFAULT_SYSTEM_PROMPT');
+    expect(pageSource).toContain('<p className="eyebrow">Benutzerverwaltung</p>');
+    expect(pageSource).toContain('fetch("/api/admin/users"');
+    expect(existsSync(adminSettingsPath)).toBe(false);
+    expect(chatRouteSource).not.toContain('getGlobalSystemPrompt');
+    expect(chatRouteSource).not.toContain('systemPrompt');
+    expect(agentSource).toContain('import { DEFAULT_SYSTEM_PROMPT } from "./default-system-prompt"');
+    expect(agentSource).not.toContain('RESEARCH_POLICY_PROMPT');
+    expect(agentSource).not.toContain('ABBREVIATION_POLICY_PROMPT');
+    expect(agentSource).not.toContain('OUTPUT_FORMAT_POLICY_PROMPT');
+    expect(agentSource).not.toContain('effectiveSystemPrompt');
   });
 
   it("registers the supplied favicon and preserves the approved metadata copy", () => {

@@ -18,7 +18,6 @@ import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 import { parseChatStreamLine } from "@/lib/chat-stream";
 import { persistConversationTurn } from "@/lib/persistence";
 import { generateConversationTitle } from "@/lib/conversation-title";
-import { getGlobalSystemPrompt } from "@/lib/admin-settings";
 import { recordAdminRequest } from "@/lib/admin-request-history";
 import { UserVisibleError } from "@/lib/errors";
 import * as chatRoute from "./route";
@@ -31,10 +30,6 @@ vi.mock("@/lib/auth/server", () => ({
 
 vi.mock("@/lib/deepseek-key", () => ({
   resolveDeepSeekApiKey: vi.fn().mockReturnValue("deepseek-key"),
-}));
-
-vi.mock("@/lib/admin-settings", () => ({
-  getGlobalSystemPrompt: vi.fn().mockResolvedValue("Globaler System Prompt"),
 }));
 
 vi.mock("@/lib/admin-request-history", () => ({
@@ -118,7 +113,7 @@ describe("POST /api/chat uploads", () => {
     vi.clearAllMocks();
   });
 
-  it("ignores stale client prompt fields and always uses the server global prompt", async () => {
+  it("ignores stale client prompt fields and never forwards them to the agent", async () => {
     const request = jsonRequest({
       ...chatPayload(),
       systemPrompt: "Staler persönlicher Prompt",
@@ -128,25 +123,21 @@ describe("POST /api/chat uploads", () => {
     const response = await POST(request);
 
     expect(response.status).toBe(200);
-    expect(getGlobalSystemPrompt).toHaveBeenCalledWith(expect.anything());
-    expect(runAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ systemPrompt: "Globaler System Prompt" }),
-    );
+    const agentOptions = vi.mocked(runAgent).mock.calls[0]?.[0];
+    expect(agentOptions).not.toHaveProperty("systemPrompt");
     const payload = await response.json();
     expect(payload).not.toHaveProperty("systemPrompt");
-    expect(JSON.stringify(payload)).not.toContain("Globaler System Prompt");
+    expect(JSON.stringify(payload)).not.toContain("Staler persönlicher Prompt");
   });
 
-  it("resolves a missing prompt through the server global settings helper", async () => {
+  it("does not load or forward an external prompt when the request has none", async () => {
     const request = jsonRequest(chatPayload());
     request.headers.set("x-forwarded-for", "test-global-prompt");
     const response = await POST(request);
 
     expect(response.status).toBe(200);
-    expect(getGlobalSystemPrompt).toHaveBeenCalledWith(expect.anything());
-    expect(runAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ systemPrompt: "Globaler System Prompt" }),
-    );
+    const agentOptions = vi.mocked(runAgent).mock.calls[0]?.[0];
+    expect(agentOptions).not.toHaveProperty("systemPrompt");
   });
 
   it("accepts DeepSeek v4 Flash and uses it throughout the response lifecycle", async () => {

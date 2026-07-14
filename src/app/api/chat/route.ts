@@ -28,7 +28,6 @@ import { CHAT_STREAM_CONTENT_TYPE, encodeChatStreamEvent } from "@/lib/chat-stre
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 import { createUnboundedDeadline, type Deadline } from "@/lib/deadline";
 import { generateConversationTitle } from "@/lib/conversation-title";
-import { getGlobalSystemPrompt } from "@/lib/admin-settings";
 import { recordAdminRequest } from "@/lib/admin-request-history";
 
 export const runtime = "nodejs";
@@ -390,7 +389,6 @@ export async function POST(request: Request) {
     const { body, attachmentUploads } = await parseChatRequest(request);
     const model = parseModel(body.model);
     const deepSeekApiKey = resolveDeepSeekApiKey();
-    const systemPrompt = await getGlobalSystemPrompt(supabase);
     const messages = parseMessages(body.messages);
     const mcpBearerToken = getServerMcpBearerToken();
     const requestedConversationId = asOptionalString(body.conversationId, 80, "Conversation ID");
@@ -444,7 +442,6 @@ export async function POST(request: Request) {
               runAgent({
                 apiKey: deepSeekApiKey,
                 model,
-                systemPrompt,
                 messages,
                 mcpBearerToken,
                 attachmentContexts: attachmentAgentContext.attachmentContexts,
@@ -511,7 +508,6 @@ export async function POST(request: Request) {
       runAgent({
         apiKey: deepSeekApiKey,
         model,
-        systemPrompt,
         messages,
         mcpBearerToken,
         attachmentContexts: attachmentAgentContext.attachmentContexts,

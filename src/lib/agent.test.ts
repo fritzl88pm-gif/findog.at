@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runAgent } from "./agent";
 import { chatCompletion } from "./deepseek";
+import { DEFAULT_SYSTEM_PROMPT } from "./default-system-prompt";
 import { createDeadline } from "./deadline";
 import { McpClient } from "./mcp/client";
 
@@ -14,41 +15,14 @@ vi.mock("./mcp/client", () => ({ McpClient: vi.fn() }));
 
 const mockedChatCompletion = vi.mocked(chatCompletion);
 const MockedMcpClient = vi.mocked(McpClient);
-const RESEARCH_POLICY_PROMPT_SUFFIX = [
-  "# VERBINDLICHER RECHERCHEUMFANG",
-  "Diese Regeln ersetzen entgegenstehende Recherche- und Ausgabevorgaben weiter oben.",
-  "Bei Fachfragen ist die vollständige Nutzerfrage gegen die gesamte Quelle Gesetze und Verordnungen einschließlich aller enthaltenen Richtlinien zu recherchieren. Erzeuge keine zusätzlichen Richtlinienabfragen allein aufgrund einzelner Wörter.",
-  "Begrenze Richtlinien- und Gesetzestreffer nicht anwendungsseitig und kürze die vom Recherchewerkzeug gelieferten Treffer im finalen Antwortkontext nicht. Berücksichtige und nenne alle sachlich einschlägigen gelieferten Treffer.",
-  "Eine nachgelagerte automatische BFG-/Findok-Verifikation findet nicht statt. Die BFG-Recherchefunktion bleibt für Fachfragen regulär verfügbar.",
-  "Berücksichtige den Stichtag ausdrücklich. Bei jahresabhängigen Beträgen bestimmt das genannte Jahr den maßgeblichen Rechtsstand; ein Tagesdatum ist nur nötig, wenn der Nutzer es vorgibt oder es für die Rechtsfrage entscheidend ist. Die starre Formulierung ‚Maßgeblicher Stichtag‘ ist nicht verpflichtend.",
-].join("\n");
-const ABBREVIATION_POLICY_PROMPT_SUFFIX = [
-  "# VERBINDLICHE FACHABKÜRZUNGEN",
-  "Verstehe die folgenden Abkürzungen in Nutzerfragen, Rechercheplanung und Antworten im österreichischen Abgabenrecht:",
-  "- `AVAB` = Alleinverdienerabsetzbetrag",
-  "- `AEAB` = Alleinerzieherabsetzbetrag",
-  "- `UAB` = Unterhaltsabsetzbetrag",
-  "- `AEH` = Aussetzung der Einhebung",
-  "- `AS` = Abgabensicherung",
-  "- `FAÖ` = Finanzamt Österreich",
-  "- `Bf.` = Beschwerdeführer",
-  "- `BFG` = Bundesfinanzgericht",
-  "- `LStR` = Lohnsteuerrichtlinien",
-  "- `EStG` = Einkommensteuergesetz",
-  "- `agbs`, `agB` oder `agBs` = außergewöhnliche Belastungen",
-  "- `WK` oder `WKs` = Werbungskosten",
-  "Schreibe eine Abkürzung bei Bedarf beim ersten Auftreten aus, ohne Fundstellen, Dokumenttitel oder wörtliche Zitate mechanisch umzuschreiben. Deute `AS` nur als eigenständige Großbuchstaben-Abkürzung im passenden abgabenrechtlichen Kontext. Löse allein wegen einer Abkürzung keine zusätzlichen Quellen- oder Datenbankabfragen aus.",
-].join("\n");
-const OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX = [
-  "# VERBINDLICHES ANTWORTFORMAT",
-  "Diese Regeln ersetzen entgegenstehende Überschriften-, Symbol- und Darstellungsregeln weiter oben.",
-  "Formatiere jede tatsächlich verwendete Abschnittsüberschrift als eigene Markdown-Überschrift erster Ebene im Format `# <Icon> <Titel>`. Nicht einschlägige Abschnitte bleiben vollständig weg.",
-  "Verwende `# 📘 Überblick` statt ‚Kurzantwort‘.",
-  "Verwende ausschließlich `# 🏛️ BFG-Rechtsprechung` statt ‚BFG-Rechtsprechung / Recherchebefund‘. Eine gezielte einzelne BFG-Fundstellenabfrage darf weiterhin als ‚BFG-Fundstelle / Recherchebefund‘ bezeichnet werden.",
-  "Sind BFG-Entscheidungen einschlägig, stelle alle verwerteten Entscheidungen als Markdown-Tabelle mit den Spalten `Entscheidung / Fundtyp`, `Kernaussage`, `Stichtags- und Sachverhaltsbezug` und `Relevanz / Verwertung` dar. Jede Zeile nennt, soweit geliefert, Gericht, Datum, Geschäftszahl oder ECLI, Quellenkennung und die Einordnung als Rechtssatz oder Entscheidungschunk. Bei keinem einschlägigen Treffer gib unter der BFG-Überschrift einen knappen qualifizierten Negativbefund aus und keine leere Tabelle.",
-  "Stelle den Abschnitt `Richtlinien / Erlässe` immer als Markdown-Tabelle mit den Spalten `Richtlinie / Fundstelle`, `Aussage`, `Stand / Stichtagsbezug` und `Relevanz` dar. Nimm alle sachlich einschlägigen gelieferten Richtlinientreffer auf; bei keinem einschlägigen Treffer entfällt der Abschnitt.",
-  "Verwende `# 🗂️ Interne Verwaltungspraxis` und `# 🧭 Abgrenzungen / Praxispunkte`. Verwende für diese beiden Abschnitte sowie für WinANV und FEXklusiv kein Warnsymbol. Hinweise auf fehlende Bindungswirkung bleiben als neutrale fachliche Einordnung erhalten. Echte Risiken, Unsicherheiten oder offene Klärungspunkte dürfen weiterhin passend gekennzeichnet werden.",
-].join("\n");
+
+function expectCanonicalSystemMessages(): void {
+  for (const [callIndex, [options]] of mockedChatCompletion.mock.calls.entries()) {
+    const systemMessages = options.messages.filter((message) => message.role === "system");
+    expect(systemMessages, `chatCompletion call ${callIndex} must have exactly one system message`)
+      .toEqual([{ role: "system", content: DEFAULT_SYSTEM_PROMPT }]);
+  }
+}
 
 function expectProtocolSafeMessages(): void {
   for (const [callIndex, call] of mockedChatCompletion.mock.calls.entries()) {
@@ -72,6 +46,10 @@ describe("runAgent", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  afterEach(() => {
+    expectCanonicalSystemMessages();
   });
 
   function mockMcpSession(toolResult = "Gefundene Fachinformation ohne Geschäftszahl.") {
@@ -101,7 +79,7 @@ describe("runAgent", () => {
     return { callTool, openToolSession };
   }
 
-  it("uses semantic tool names and appends the research policy to attachment-free system prompts", async () => {
+  it("uses semantic tool names and the canonical prompt for attachment-free requests", async () => {
     const { callTool } = mockMcpSession();
     mockedChatCompletion
       .mockResolvedValueOnce({
@@ -120,7 +98,6 @@ describe("runAgent", () => {
     const result = await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System-Prompt-Inhalt",
       messages: [{ role: "user", content: "EStG § 33" }],
       mcpBearerToken: "mcp-token",
     });
@@ -144,10 +121,10 @@ describe("runAgent", () => {
     expect(mockedChatCompletion.mock.calls[0]?.[0].tools?.map((tool) => tool.function.name))
       .not.toContain("findok_verify_bfg_cases");
 
-    // Runtime policies are appended, while attachment content remains outside the system prompt.
+    // The runtime uses the canonical prompt byte-for-byte; attachment content stays outside it.
     expect(mockedChatCompletion.mock.calls[0][0].messages[0]).toEqual({
       role: "system",
-      content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${ABBREVIATION_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
+      content: DEFAULT_SYSTEM_PROMPT,
     });
 
     expect(callTool).toHaveBeenCalledWith(
@@ -172,7 +149,6 @@ describe("runAgent", () => {
     const result = await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Frage" }],
       onStep,
     });
@@ -206,7 +182,6 @@ describe("runAgent", () => {
     await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Frage" }],
       mcpBearerToken: "mcp-token",
       deadline,
@@ -233,7 +208,6 @@ describe("runAgent", () => {
     const result = await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Frage" }],
       deadline,
     });
@@ -256,7 +230,6 @@ describe("runAgent", () => {
     const result = await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System-Prompt-Inhalt",
       messages: [{ role: "user", content: "Bitte PDF prüfen" }],
       pdfContext: { filename: "Bescheid.pdf", content: "Extrahierter Bescheidinhalt" },
       initialSteps: [{ type: "pdf_context", title: "PDF gelesen", content: "Bescheid.pdf" }],
@@ -270,7 +243,7 @@ describe("runAgent", () => {
     const systemMessage = mockedChatCompletion.mock.calls[0]?.[0].messages[0];
     expect(systemMessage).toEqual({
       role: "system",
-      content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${ABBREVIATION_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
+      content: DEFAULT_SYSTEM_PROMPT,
     });
     expect(systemMessage?.content).not.toContain("Bescheid.pdf");
     expect(systemMessage?.content).not.toContain("Extrahierter Bescheidinhalt");
@@ -289,7 +262,7 @@ describe("runAgent", () => {
       const systemMsg = messages[0];
       expect(systemMsg).toEqual({
         role: "system",
-        content: `System-Prompt-Inhalt\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${ABBREVIATION_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
+        content: DEFAULT_SYSTEM_PROMPT,
       });
       // Attachment context is in the same user message as synthesis context
       if (options.messages.length > 1) {
@@ -308,7 +281,6 @@ describe("runAgent", () => {
     await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Anhänge prüfen" }],
       attachmentContexts: [
         { type: "pdf", filename: "Bescheid.pdf", content: "PDF-Inhalt" },
@@ -319,7 +291,7 @@ describe("runAgent", () => {
     const systemMessage = mockedChatCompletion.mock.calls[0]?.[0].messages[0];
     expect(systemMessage).toEqual({
       role: "system",
-      content: `System\n\n${RESEARCH_POLICY_PROMPT_SUFFIX}\n\n${ABBREVIATION_POLICY_PROMPT_SUFFIX}\n\n${OUTPUT_FORMAT_POLICY_PROMPT_SUFFIX}`,
+      content: DEFAULT_SYSTEM_PROMPT,
     });
     expect(systemMessage?.content).not.toContain("Bescheid.pdf");
     expect(systemMessage?.content).not.toContain("Beleg.png");
@@ -351,7 +323,6 @@ describe("runAgent", () => {
     const result = await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Frage" }],
     });
 
@@ -389,7 +360,6 @@ describe("runAgent", () => {
     const result = await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Welche BFG-Rechtsprechung ist einschlägig?" }],
     });
 
@@ -421,7 +391,6 @@ describe("runAgent", () => {
     const result = await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Frage" }],
     });
 

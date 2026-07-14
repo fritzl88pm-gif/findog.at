@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
-  DEFAULT_SYSTEM_PROMPT,
   MAX_IMAGE_UPLOAD_BYTES,
   MAX_IMAGE_UPLOADS,
   MAX_MULTIPART_REQUEST_BYTES,
@@ -12,6 +11,7 @@ import {
   MAX_REQUEST_BYTES,
   isSupportedModel,
 } from "./config";
+import { DEFAULT_SYSTEM_PROMPT } from "./default-system-prompt";
 
 describe("DEFAULT_SYSTEM_PROMPT", () => {
   it("contains the full system prompt and fits within the accepted request bounds", () => {
@@ -56,6 +56,56 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
     expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/Websuche/i);
     expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/Live-Recherche/i);
     expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/externe Recherche angek(?:ü|\u00fc)ndigt/i);
+  });
+
+  it("contains the confirmed tax abbreviations without triggering extra research", () => {
+    for (const [abbreviation, expansion] of [
+      ["AVAB", "Alleinverdienerabsetzbetrag"],
+      ["AEAB", "Alleinerzieherabsetzbetrag"],
+      ["UAB", "Unterhaltsabsetzbetrag"],
+      ["AEH", "Aussetzung der Einhebung"],
+      ["AS", "Abgabensicherung"],
+      ["FAÖ", "Finanzamt Österreich"],
+      ["Bf.", "Beschwerdeführer"],
+      ["BFG", "Bundesfinanzgericht"],
+      ["LStR", "Lohnsteuerrichtlinien"],
+      ["EStG", "Einkommensteuergesetz"],
+    ]) {
+      expect(DEFAULT_SYSTEM_PROMPT).toContain(`\`${abbreviation}\` = ${expansion}`);
+    }
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("`agbs`, `agB`, `agBs` = außergewöhnliche Belastungen");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("`WK`, `WKs` = Werbungskosten");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("Löse allein wegen einer Abkürzung keine zusätzlichen Quellen- oder Datenbankabfragen aus");
+  });
+
+  it("keeps the simple amount shortcut separate from full specialist research", () => {
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("ausschließlich in der `Betragstabelle FAQ` für das maßgebliche Jahr");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("keine zusätzliche Gesetzes-, Richtlinien-, BFG-, Arbeitsbehelf- oder Wiki-Suche");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("Außerhalb des Betrags-Kurzschlusses ist die vollständige Nutzerfrage");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("Gesetzes- und Richtlinientreffer werden nicht anwendungsseitig begrenzt");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("Alle sachlich einschlägigen gelieferten Treffer sind zu berücksichtigen und auszugeben");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("nicht allein aus einzelnen Wörtern");
+  });
+
+  it("keeps BFG research available without an automatic verification gate", () => {
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("Die BFG-Recherchefunktion bleibt für Fachfragen regulär verfügbar");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("Eine nachgelagerte automatische BFG-/Findok-Verifikation findet nicht statt");
+    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("Judikatur-Gate");
+    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("Bei Variante 2, 3 und 4 ist nach Schritt 1");
+  });
+
+  it("uses the approved headings, tables, icons, and annual time rule", () => {
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("# 📘 Überblick");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("# 🏛️ BFG-Rechtsprechung");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("# 🗂️ Interne Verwaltungspraxis");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("# 🧭 Abgrenzungen / Praxispunkte");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("| Entscheidung / Fundtyp | Kernaussage | Stichtags- und Sachverhaltsbezug | Relevanz / Verwertung |");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("| Richtlinie / Fundstelle | Aussage | Stand / Stichtagsbezug | Relevanz |");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("Alle sachlich einschlägigen gelieferten Richtlinientreffer sind aufzunehmen");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("Bei jahresabhängigen Werten genügen Jahr und Rechtsstand");
+    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("BFG-Rechtsprechung / Recherchebefund");
+    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("📘 **Kurzantwort**");
+    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("⚠️ **Interne Verwaltungspraxis");
   });
 
   it("contains a compact high-level research-sources section without technical tool inventory", () => {

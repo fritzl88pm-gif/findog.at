@@ -44,6 +44,19 @@ describe("composer public UI", () => {
     expect(composer).not.toContain("Bilder anhängen");
   });
 
+  it("accepts pasted clipboard images through the existing image attachment pipeline", () => {
+    const composer = composerSource();
+    const attachmentHandlers = pageSource.slice(
+      pageSource.indexOf("function addImageAttachments("),
+      pageSource.indexOf("function openFormsView("),
+    );
+
+    expect(composer).toContain("onPaste={handleComposerPaste}");
+    expect(attachmentHandlers).toContain("clipboardImageFiles(event.clipboardData.items)");
+    expect(attachmentHandlers.match(/addImageAttachments\(files\)/g)).toHaveLength(1);
+    expect(attachmentHandlers).not.toContain("preventDefault");
+  });
+
   it("renders exactly the available real models in an accessible custom menu", () => {
     const composer = composerSource();
 

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { isAdminUser } from "@/lib/admin-settings";
+import { isAdminUser } from "@/lib/admin-auth";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";

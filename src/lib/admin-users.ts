@@ -1,6 +1,6 @@
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 
-import { isAdminUser } from "./admin-settings";
+import { isAdminUser } from "./admin-auth";
 import { authenticateSupabaseRequest, type AuthenticatedUser } from "./auth/server";
 import { UserVisibleError } from "./errors";
 

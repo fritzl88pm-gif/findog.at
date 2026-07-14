@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { isAdminUser } from "./admin-settings";
+import { isAdminUser } from "./admin-auth";
 import { authenticateSupabaseRequest } from "./auth/server";
 import {
   authenticateAdminRequest,
@@ -9,7 +9,7 @@ import {
   parseManagedUserInput,
 } from "./admin-users";
 
-vi.mock("./admin-settings", () => ({ isAdminUser: vi.fn() }));
+vi.mock("./admin-auth", () => ({ isAdminUser: vi.fn() }));
 vi.mock("./auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
 
 describe("admin user management helpers", () => {

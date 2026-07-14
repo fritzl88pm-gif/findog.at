@@ -1,5 +1,6 @@
 import { chatCompletion, type AppChatMessage, type DeepSeekMessage } from "./deepseek";
 import { type Deadline, hasDeadlineTime } from "./deadline";
+import { DEFAULT_SYSTEM_PROMPT } from "./default-system-prompt";
 import { UserVisibleError } from "./errors";
 import { McpClient } from "./mcp/client";
 import type { JsonObject } from "./mcp/tools";
@@ -29,42 +30,6 @@ const AMOUNT_ABBREVIATIONS: Record<string, string> = {
   AEAB: "Alleinerzieherabsetzbetrag",
   UAB: "Unterhaltsabsetzbetrag",
 };
-const RESEARCH_POLICY_PROMPT = [
-  "# VERBINDLICHER RECHERCHEUMFANG",
-  "Diese Regeln ersetzen entgegenstehende Recherche- und Ausgabevorgaben weiter oben.",
-  "Bei Fachfragen ist die vollständige Nutzerfrage gegen die gesamte Quelle Gesetze und Verordnungen einschließlich aller enthaltenen Richtlinien zu recherchieren. Erzeuge keine zusätzlichen Richtlinienabfragen allein aufgrund einzelner Wörter.",
-  "Begrenze Richtlinien- und Gesetzestreffer nicht anwendungsseitig und kürze die vom Recherchewerkzeug gelieferten Treffer im finalen Antwortkontext nicht. Berücksichtige und nenne alle sachlich einschlägigen gelieferten Treffer.",
-  "Eine nachgelagerte automatische BFG-/Findok-Verifikation findet nicht statt. Die BFG-Recherchefunktion bleibt für Fachfragen regulär verfügbar.",
-  "Berücksichtige den Stichtag ausdrücklich. Bei jahresabhängigen Beträgen bestimmt das genannte Jahr den maßgeblichen Rechtsstand; ein Tagesdatum ist nur nötig, wenn der Nutzer es vorgibt oder es für die Rechtsfrage entscheidend ist. Die starre Formulierung ‚Maßgeblicher Stichtag‘ ist nicht verpflichtend.",
-].join("\n");
-const ABBREVIATION_POLICY_PROMPT = [
-  "# VERBINDLICHE FACHABKÜRZUNGEN",
-  "Verstehe die folgenden Abkürzungen in Nutzerfragen, Rechercheplanung und Antworten im österreichischen Abgabenrecht:",
-  "- `AVAB` = Alleinverdienerabsetzbetrag",
-  "- `AEAB` = Alleinerzieherabsetzbetrag",
-  "- `UAB` = Unterhaltsabsetzbetrag",
-  "- `AEH` = Aussetzung der Einhebung",
-  "- `AS` = Abgabensicherung",
-  "- `FAÖ` = Finanzamt Österreich",
-  "- `Bf.` = Beschwerdeführer",
-  "- `BFG` = Bundesfinanzgericht",
-  "- `LStR` = Lohnsteuerrichtlinien",
-  "- `EStG` = Einkommensteuergesetz",
-  "- `agbs`, `agB` oder `agBs` = außergewöhnliche Belastungen",
-  "- `WK` oder `WKs` = Werbungskosten",
-  "Schreibe eine Abkürzung bei Bedarf beim ersten Auftreten aus, ohne Fundstellen, Dokumenttitel oder wörtliche Zitate mechanisch umzuschreiben. Deute `AS` nur als eigenständige Großbuchstaben-Abkürzung im passenden abgabenrechtlichen Kontext. Löse allein wegen einer Abkürzung keine zusätzlichen Quellen- oder Datenbankabfragen aus.",
-].join("\n");
-const OUTPUT_FORMAT_POLICY_PROMPT = [
-  "# VERBINDLICHES ANTWORTFORMAT",
-  "Diese Regeln ersetzen entgegenstehende Überschriften-, Symbol- und Darstellungsregeln weiter oben.",
-  "Formatiere jede tatsächlich verwendete Abschnittsüberschrift als eigene Markdown-Überschrift erster Ebene im Format `# <Icon> <Titel>`. Nicht einschlägige Abschnitte bleiben vollständig weg.",
-  "Verwende `# 📘 Überblick` statt ‚Kurzantwort‘.",
-  "Verwende ausschließlich `# 🏛️ BFG-Rechtsprechung` statt ‚BFG-Rechtsprechung / Recherchebefund‘. Eine gezielte einzelne BFG-Fundstellenabfrage darf weiterhin als ‚BFG-Fundstelle / Recherchebefund‘ bezeichnet werden.",
-  "Sind BFG-Entscheidungen einschlägig, stelle alle verwerteten Entscheidungen als Markdown-Tabelle mit den Spalten `Entscheidung / Fundtyp`, `Kernaussage`, `Stichtags- und Sachverhaltsbezug` und `Relevanz / Verwertung` dar. Jede Zeile nennt, soweit geliefert, Gericht, Datum, Geschäftszahl oder ECLI, Quellenkennung und die Einordnung als Rechtssatz oder Entscheidungschunk. Bei keinem einschlägigen Treffer gib unter der BFG-Überschrift einen knappen qualifizierten Negativbefund aus und keine leere Tabelle.",
-  "Stelle den Abschnitt `Richtlinien / Erlässe` immer als Markdown-Tabelle mit den Spalten `Richtlinie / Fundstelle`, `Aussage`, `Stand / Stichtagsbezug` und `Relevanz` dar. Nimm alle sachlich einschlägigen gelieferten Richtlinientreffer auf; bei keinem einschlägigen Treffer entfällt der Abschnitt.",
-  "Verwende `# 🗂️ Interne Verwaltungspraxis` und `# 🧭 Abgrenzungen / Praxispunkte`. Verwende für diese beiden Abschnitte sowie für WinANV und FEXklusiv kein Warnsymbol. Hinweise auf fehlende Bindungswirkung bleiben als neutrale fachliche Einordnung erhalten. Echte Risiken, Unsicherheiten oder offene Klärungspunkte dürfen weiterhin passend gekennzeichnet werden.",
-].join("\n");
-
 type AgentRetrievalPolicy = {
   kind: "simple_amount" | "general";
   maxToolCalls?: number;
@@ -373,7 +338,6 @@ function formatToolLog(toolLog: ToolLogEntry[]): string {
 }
 
 function supportMessages(options: {
-  systemPrompt: string;
   attachmentUserMessage?: string;
   conversation: AppChatMessage[];
   toolLog: ToolLogEntry[];
@@ -390,7 +354,7 @@ function supportMessages(options: {
     context.push("", "Vorläufige Antwort des Agenten:", options.draftAnswer);
   }
   const result: DeepSeekMessage[] = [
-    { role: "system", content: options.systemPrompt },
+    { role: "system", content: DEFAULT_SYSTEM_PROMPT },
   ];
   // For final synthesis, combine attachment context and generated context into one user message
   // to avoid consecutive same-role messages (system → one user message)
@@ -491,7 +455,6 @@ function simpleAmountRetrievalTargets(policy: AgentRetrievalPolicy): SimpleAmoun
 async function finalizeAgentRun(options: {
   apiKey: string;
   model: ChatModel;
-  effectiveSystemPrompt: string;
   attachmentUserMessage?: string;
   conversation: AppChatMessage[];
   toolLog: ToolLogEntry[];
@@ -511,7 +474,6 @@ async function finalizeAgentRun(options: {
   );
 
   const finalMessages = supportMessages({
-    systemPrompt: options.effectiveSystemPrompt,
     attachmentUserMessage: options.attachmentUserMessage,
     conversation: options.conversation,
     toolLog: options.toolLog,
@@ -538,7 +500,6 @@ async function finalizeAgentRun(options: {
 export async function runAgent(options: {
   apiKey: string;
   model: ChatModel;
-  systemPrompt: string;
   messages: AppChatMessage[];
   mcpBearerToken?: string;
   onStep?: AgentStepHandler;
@@ -548,7 +509,6 @@ export async function runAgent(options: {
   deadline?: Deadline;
 }): Promise<AgentRunResult> {
   const mcp = new McpClient();
-  const effectiveSystemPrompt = `${options.systemPrompt}\n\n${RESEARCH_POLICY_PROMPT}\n\n${ABBREVIATION_POLICY_PROMPT}\n\n${OUTPUT_FORMAT_POLICY_PROMPT}`;
   // Build a separate user-role message for attachment/PDF context.
   const attachmentUserMessage = formatAttachmentUserMessage({
     attachmentContexts: options.attachmentContexts,
@@ -665,13 +625,13 @@ export async function runAgent(options: {
 
     if (!secureRouteFound) {
       throw new UserVisibleError(
-        "Für die Betragsfrage ist derzeit keine sicher eingegrenzte Rechtsstandsrecherche verfügbar.",
+        "Die Betragstabelle ist für diese Anfrage derzeit nicht verfügbar.",
         503,
       );
     }
     if (successfulResults < retrievalTargets.length) {
       throw new UserVisibleError(
-        "Der maßgebliche Betrag konnte für den angefragten Rechtsstand nicht verlässlich belegt werden.",
+        "In der Betragstabelle wurde für das angefragte Jahr kein eindeutig belegter Betrag gefunden.",
         502,
       );
     }
@@ -679,7 +639,6 @@ export async function runAgent(options: {
     return finalizeAgentRun({
       apiKey: options.apiKey,
       model: options.model,
-      effectiveSystemPrompt,
       attachmentUserMessage,
       conversation: options.messages,
       toolLog,
@@ -696,7 +655,7 @@ export async function runAgent(options: {
   // If attachment context exists and the first conversation message is a user message,
   // combine them to avoid consecutive same-role messages.
   const messages: DeepSeekMessage[] = [
-    { role: "system", content: effectiveSystemPrompt },
+    { role: "system", content: DEFAULT_SYSTEM_PROMPT },
   ];
   if (attachmentUserMessage && conversationMessages.length > 0 && conversationMessages[0].role === "user") {
     messages.push({
@@ -716,7 +675,6 @@ export async function runAgent(options: {
       return finalizeAgentRun({
         apiKey: options.apiKey,
         model: options.model,
-        effectiveSystemPrompt,
         attachmentUserMessage,
         conversation: options.messages,
         toolLog,
@@ -742,7 +700,6 @@ export async function runAgent(options: {
       return finalizeAgentRun({
         apiKey: options.apiKey,
         model: options.model,
-        effectiveSystemPrompt,
         attachmentUserMessage,
         conversation: options.messages,
         toolLog,
@@ -783,7 +740,6 @@ export async function runAgent(options: {
         return finalizeAgentRun({
           apiKey: options.apiKey,
           model: options.model,
-          effectiveSystemPrompt,
           attachmentUserMessage,
           conversation: options.messages,
           toolLog,
@@ -872,7 +828,6 @@ export async function runAgent(options: {
   return finalizeAgentRun({
     apiKey: options.apiKey,
     model: options.model,
-    effectiveSystemPrompt,
     attachmentUserMessage,
     conversation: options.messages,
     toolLog,

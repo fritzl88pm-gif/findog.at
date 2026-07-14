@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runAgent } from "./agent";
 import { chatCompletion } from "./deepseek";
+import { DEFAULT_SYSTEM_PROMPT } from "./default-system-prompt";
 import { McpClient } from "./mcp/client";
 import { RESEARCH_SOURCES } from "./research-sources";
 
@@ -58,6 +59,14 @@ describe("runAgent retrieval policy", () => {
     vi.unstubAllGlobals();
   });
 
+  afterEach(() => {
+    for (const [callIndex, [options]] of mockedChatCompletion.mock.calls.entries()) {
+      const systemMessages = options.messages.filter((message) => message.role === "system");
+      expect(systemMessages, `chatCompletion call ${callIndex} must have exactly one system message`)
+        .toEqual([{ role: "system", content: DEFAULT_SYSTEM_PROMPT }]);
+    }
+  });
+
   it("routes the 2024 Unterhaltsabsetzbetrag question once to the scoped amount-table FAQ", async () => {
     const callTool = mockSession();
     const fetchMock = vi.fn();
@@ -70,7 +79,6 @@ describe("runAgent retrieval policy", () => {
     const result = await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Wie hoch ist der Unterhaltsabsetzbetrag 2024?" }],
       mcpBearerToken: "mcp-token",
     });
@@ -110,7 +118,6 @@ describe("runAgent retrieval policy", () => {
     const result = await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: `Wie hoch ist der ${abbreviation} 2024?` }],
     });
 
@@ -152,7 +159,6 @@ describe("runAgent retrieval policy", () => {
     await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Wie hoch ist der Unterhaltsabsetzbetrag 2024?" }],
     });
 
@@ -179,7 +185,6 @@ describe("runAgent retrieval policy", () => {
       await runAgent({
         apiKey: "server-key",
         model: "deepseek-v4-pro",
-        systemPrompt: "System",
         messages: [{ role: "user", content: "Wie hoch ist der Unterhaltsabsetzbetrag?" }],
       });
 
@@ -211,7 +216,6 @@ describe("runAgent retrieval policy", () => {
     await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Wie hoch war der Unterhaltsabsetzbetrag am 1.7.2024?" }],
     });
 
@@ -236,7 +240,6 @@ describe("runAgent retrieval policy", () => {
     const result = await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Wie hoch war der Unterhaltsabsetzbetrag 2023 und 2024?" }],
     });
 
@@ -263,7 +266,6 @@ describe("runAgent retrieval policy", () => {
     await expect(runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Unterhaltsabsetzbetrag 2024?" }],
     })).rejects.toMatchObject({ status: 502 });
 
@@ -283,9 +285,11 @@ describe("runAgent retrieval policy", () => {
     await expect(runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Wie hoch ist der Unterhaltsabsetzbetrag 2024?" }],
-    })).rejects.toMatchObject({ status: 502 });
+    })).rejects.toMatchObject({
+      message: "In der Betragstabelle wurde für das angefragte Jahr kein eindeutig belegter Betrag gefunden.",
+      status: 502,
+    });
 
     expect(callTool).toHaveBeenCalledTimes(1);
     expect(mockedChatCompletion).not.toHaveBeenCalled();
@@ -309,9 +313,11 @@ describe("runAgent retrieval policy", () => {
     await expect(runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Wie hoch ist der Unterhaltsabsetzbetrag 2024?" }],
-    })).rejects.toMatchObject({ status: 503 });
+    })).rejects.toMatchObject({
+      message: "Die Betragstabelle ist für diese Anfrage derzeit nicht verfügbar.",
+      status: 503,
+    });
     expect(callTool).not.toHaveBeenCalled();
     expect(mockedChatCompletion).not.toHaveBeenCalled();
   });
@@ -325,7 +331,6 @@ describe("runAgent retrieval policy", () => {
     await expect(runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: question }],
     })).rejects.toMatchObject({ status: 400 });
     expect(callTool).not.toHaveBeenCalled();
@@ -350,7 +355,6 @@ describe("runAgent retrieval policy", () => {
     await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{
         role: "user",
         content: question,
@@ -377,7 +381,6 @@ describe("runAgent retrieval policy", () => {
     const result = await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Wie hoch ist der Unterhaltsabsetzbetrag 2024?" }],
     });
 
@@ -394,7 +397,6 @@ describe("runAgent retrieval policy", () => {
     const result = await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{ role: "user", content: "Welche Voraussetzungen gelten für Werbungskosten?" }],
     });
 
@@ -424,7 +426,6 @@ describe("runAgent retrieval policy", () => {
     const result = await runAgent({
       apiKey: "server-key",
       model: "deepseek-v4-pro",
-      systemPrompt: "System",
       messages: [{
         role: "user",
         content: "Welche BFG-Rechtsprechung gilt für den Unterhaltsabsetzbetrag bei Kindern in Drittstaaten?",

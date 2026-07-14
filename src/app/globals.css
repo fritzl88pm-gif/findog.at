@@ -1541,20 +1541,6 @@ textarea:focus {
   box-shadow: var(--shadow-md);
 }
 
-.admin-settings-card textarea {
-  min-height: 420px;
-}
-
-.admin-settings-card .admin-message {
-  margin: 0;
-}
-
-.admin-settings-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
 .admin-user-management {
   display: grid;
   grid-template-columns: minmax(250px, 0.8fr) minmax(280px, 1fr);
@@ -1697,8 +1683,7 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
-  .admin-profile-actions,
-  .admin-settings-actions {
+  .admin-profile-actions {
     align-items: stretch;
     flex-direction: column;
   }

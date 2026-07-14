@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, type ChangeEvent, type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, type ChangeEvent, type ClipboardEvent, type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import Image from "next/image";
 import Link from "next/link";
@@ -17,7 +17,6 @@ import {
 } from "@/lib/chat/agent-run";
 import {
   AVAILABLE_MODELS,
-  DEFAULT_SYSTEM_PROMPT,
   MAX_IMAGE_UPLOAD_BYTES,
   MAX_IMAGE_UPLOADS,
   MAX_PDF_UPLOAD_BYTES,
@@ -30,6 +29,7 @@ import {
   type ChatSettings,
 } from "@/lib/chat/settings";
 import { ellipsizeFilename } from "@/lib/attachment-names";
+import { clipboardImageFiles } from "@/lib/chat/clipboard-images";
 import type { AgentStep } from "@/lib/agent-steps";
 import { agentStepDisplayLabel } from "@/lib/agent-step-display";
 import { AGENT_PLAN_ITEMS, completedAgentPlanItemCount } from "@/lib/agent-plan";
@@ -938,6 +938,14 @@ function L17bCurrencyView() {
           <div className="bfg-view-header-copy">
             <h1 id="l17b-currency-view-title">L17b Währungsrechner</h1>
           </div>
+          <Image
+            className="bfg-view-header-illustration"
+            src="/fred_l17b.png"
+            alt=""
+            width={376}
+            height={376}
+            unoptimized
+          />
         </header>
         <div className="german-sv-calculator-card l17b-calculator-card">
           <div className="field-group">
@@ -1450,11 +1458,8 @@ export default function Home() {
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("model");
   const [isAdmin, setIsAdmin] = useState(false);
-  const [adminSystemPrompt, setAdminSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
   const [adminError, setAdminError] = useState("");
   const [adminNotice, setAdminNotice] = useState("");
-  const [isAdminSettingsLoading, setIsAdminSettingsLoading] = useState(false);
-  const [isAdminSettingsSaving, setIsAdminSettingsSaving] = useState(false);
   const [adminUsers, setAdminUsers] = useState<AdminUserSummary[]>([]);
   const [adminUserProfile, setAdminUserProfile] = useState<AdminUserProfile | null>(null);
   const [adminUserForm, setAdminUserForm] = useState({ email: "", password: "" });
@@ -2022,10 +2027,7 @@ export default function Home() {
     setError("");
   }
 
-  function handleImageChange(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? []);
-    event.target.value = "";
-
+  function addImageAttachments(files: File[]) {
     if (files.length === 0) {
       return;
     }
@@ -2045,6 +2047,20 @@ export default function Home() {
 
     setSelectedImages((current) => [...current, ...files]);
     setError("");
+  }
+
+  function handleImageChange(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    addImageAttachments(files);
+  }
+
+  function handleComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (isSending || isDeleting) {
+      return;
+    }
+
+    addImageAttachments(clipboardImageFiles(event.clipboardData.items));
   }
 
   function openFormsView() {
@@ -2241,7 +2257,6 @@ export default function Home() {
     setAppView("administration");
     setAdminError("");
     setAdminNotice("");
-    setIsAdminSettingsLoading(true);
     setIsAdminUsersLoading(true);
     setAdminUserProfile(null);
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -2249,23 +2264,10 @@ export default function Home() {
     }
 
     try {
-      const [settingsResponse, usersResponse] = await Promise.all([
-        fetch("/api/admin/settings", {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        }),
-        fetch("/api/admin/users", {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        }),
-      ]);
-      const settingsPayload = (await settingsResponse.json().catch(() => ({}))) as Record<string, unknown>;
+      const usersResponse = await fetch("/api/admin/users", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
       const usersPayload = (await usersResponse.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!settingsResponse.ok || typeof settingsPayload.systemPrompt !== "string") {
-        throw new Error(
-          typeof settingsPayload.error === "string"
-            ? settingsPayload.error
-            : "Globale Einstellungen konnten nicht geladen werden.",
-        );
-      }
       if (!usersResponse.ok || !Array.isArray(usersPayload.users)) {
         throw new Error(
           typeof usersPayload.error === "string"
@@ -2280,14 +2282,12 @@ export default function Home() {
       if (loadedUsers.length !== usersPayload.users.length) {
         throw new Error("Die geladenen Benutzerdaten sind ungültig.");
       }
-      setAdminSystemPrompt(settingsPayload.systemPrompt);
       setAdminUsers(loadedUsers);
-    } catch (adminSettingsError) {
-      setAdminError(adminSettingsError instanceof Error
-        ? adminSettingsError.message
-        : "Globale Einstellungen konnten nicht geladen werden.");
+    } catch (adminUsersError) {
+      setAdminError(adminUsersError instanceof Error
+        ? adminUsersError.message
+        : "Benutzer konnten nicht geladen werden.");
     } finally {
-      setIsAdminSettingsLoading(false);
       setIsAdminUsersLoading(false);
     }
   }
@@ -2437,42 +2437,6 @@ export default function Home() {
         : "Das Benutzerkonto konnte nicht gelöscht werden.");
     } finally {
       setIsAdminUserMutationRunning(false);
-    }
-  }
-
-  async function saveAdminSystemPrompt() {
-    const accessToken = session?.access_token;
-    if (!accessToken || isAdminSettingsSaving) {
-      return;
-    }
-    setAdminError("");
-    setAdminNotice("");
-    setIsAdminSettingsSaving(true);
-    try {
-      const response = await fetch("/api/admin/settings", {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ systemPrompt: adminSystemPrompt }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!response.ok || typeof payload.systemPrompt !== "string") {
-        throw new Error(
-          typeof payload.error === "string"
-            ? payload.error
-            : "Der globale System Prompt konnte nicht gespeichert werden.",
-        );
-      }
-      setAdminSystemPrompt(payload.systemPrompt);
-      setAdminNotice("Der globale System Prompt wurde gespeichert.");
-    } catch (adminSettingsError) {
-      setAdminError(adminSettingsError instanceof Error
-        ? adminSettingsError.message
-        : "Der globale System Prompt konnte nicht gespeichert werden.");
-    } finally {
-      setIsAdminSettingsSaving(false);
     }
   }
 
@@ -4144,7 +4108,7 @@ export default function Home() {
         <section className="forms-panel" aria-labelledby="administration-view-title">
           <div className="forms-view">
             <header className="forms-view-header">
-              <p className="eyebrow">Systemkonfiguration</p>
+              <p className="eyebrow">Benutzerverwaltung</p>
               <h1 id="administration-view-title">Administration</h1>
             </header>
             {adminError ? (
@@ -4157,48 +4121,6 @@ export default function Home() {
                 {adminNotice}
               </div>
             ) : null}
-            <div className="form-generator-card admin-settings-card">
-              <div className="form-generator-heading">
-                <h2>Globaler System Prompt</h2>
-                <p>Diese Einstellung gilt für alle Benutzer.</p>
-              </div>
-              <div className="field-group">
-                <label htmlFor="admin-system-prompt">Prompt</label>
-                <textarea
-                  id="admin-system-prompt"
-                  value={adminSystemPrompt}
-                  onChange={(event) => {
-                    setAdminSystemPrompt(event.target.value);
-                    setAdminError("");
-                    setAdminNotice("");
-                  }}
-                  rows={18}
-                  disabled={isAdminSettingsLoading || isAdminSettingsSaving}
-                />
-              </div>
-              <div className="admin-settings-actions">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => {
-                    setAdminSystemPrompt(DEFAULT_SYSTEM_PROMPT);
-                    setAdminError("");
-                    setAdminNotice("");
-                  }}
-                  disabled={isAdminSettingsLoading || isAdminSettingsSaving}
-                >
-                  Auf integrierten Standard zurücksetzen
-                </button>
-                <button
-                  className="primary-button"
-                  type="button"
-                  onClick={() => void saveAdminSystemPrompt()}
-                  disabled={isAdminSettingsLoading || isAdminSettingsSaving || !adminSystemPrompt.trim()}
-                >
-                  {isAdminSettingsSaving ? "Speichert…" : "Speichern"}
-                </button>
-              </div>
-            </div>
             <div className="admin-user-management">
               <div className="form-generator-card admin-create-user-card">
                 <div className="form-generator-heading">
@@ -4426,6 +4348,7 @@ export default function Home() {
               id="question"
               value={composer}
               onChange={(event) => setComposer(event.target.value)}
+              onPaste={handleComposerPaste}
               placeholder="Frage zu BFG, EStG, UStG oder Verfahrensrecht..."
               rows={2}
             />

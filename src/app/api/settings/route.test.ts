@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { isAdminUser } from "@/lib/admin-settings";
+import { isAdminUser } from "@/lib/admin-auth";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { GET } from "./route";
 
-vi.mock("@/lib/admin-settings", () => ({
+vi.mock("@/lib/admin-auth", () => ({
   isAdminUser: vi.fn(),
 }));
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
