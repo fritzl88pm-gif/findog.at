@@ -103,7 +103,6 @@ describe("runAgent", () => {
     expect(result.answer).toBe("Finale Antwort.");
     expect(result.tools).toEqual(["hybrid_search", "findok_verify_bfg_cases"]);
     expect(result.steps.map((step) => step.type)).toEqual([
-      "plan",
       "tools",
       "tool_call",
       "tool_result",
@@ -114,6 +113,14 @@ describe("runAgent", () => {
       "citation_verification",
       "answer",
     ]);
+    expect(mockedChatCompletion.mock.calls[0][0].messages[0]).toEqual(
+      { role: "system", content: "System" },
+    );
+    const finalCallMessages = mockedChatCompletion.mock.calls.at(-1)?.[0].messages;
+    const finalUserMessage = finalCallMessages?.findLast((m) => m.role === "user");
+    expect(finalUserMessage?.content).not.toContain("Bearbeite die Nutzeranfrage");
+    expect(finalUserMessage?.content).not.toContain("Formuliere jetzt die finale Antwort");
+    expect(finalUserMessage?.content).not.toContain("Nutze keine weiteren Rechercheabfragen");
     expect(callTool).toHaveBeenCalledTimes(2);
     const prompts = mockedChatCompletion.mock.calls
       .flatMap(([options]) => options.messages.map((message) => message.content ?? ""))
@@ -142,10 +149,7 @@ describe("runAgent", () => {
     expect(onStep.mock.calls.map(([step]) => step.type)).toEqual(
       result.steps.map((step) => step.type),
     );
-    expect(onStep).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ type: "plan", title: "Arbeitsplan" }),
-    );
+    expect(onStep.mock.calls.map(([step]) => step.type)).not.toContain("plan");
     expect(onStep).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "tool_call",
@@ -225,7 +229,7 @@ describe("runAgent", () => {
 
     expect(result.answer).toBe("Finale Antwort mit PDF-Kontext.");
     expect(result.steps[0]).toMatchObject({ type: "pdf_context" });
-    expect(result.steps[1]).toMatchObject({ type: "plan", title: "Arbeitsplan" });
+    expect(result.steps[1]).toMatchObject({ type: "tools", title: "Datenbank bereit" });
     for (const [options] of mockedChatCompletion.mock.calls) {
       expect(options.messages[0]?.content).toContain("Bescheid.pdf");
       expect(options.messages[0]?.content).toContain("Extrahierter Bescheidinhalt");

@@ -23,7 +23,6 @@ import {
   type AgentRunResult,
   type AgentStep,
 } from "./agent-steps";
-import { AGENT_PLAN_ITEMS } from "./agent-plan";
 
 const MAX_TOOL_ITERATIONS = 6;
 const AGENT_FINALIZATION_RESERVE_MS = 100_000;
@@ -144,24 +143,6 @@ function systemPromptWithAttachmentContext(options: {
   return attachmentText ? [options.systemPrompt, attachmentText].join("\n\n---\n\n") : options.systemPrompt;
 }
 
-function executionInstruction(): string {
-  return [
-    "Bearbeite die Nutzeranfrage kompakt und gezielt mit den verfügbaren Recherchefunktionen.",
-    "Berücksichtige die bereits serverseitig ausgeführte BFG-Vorabfrage in den Werkzeugergebnissen.",
-    "Rufe nur weitere Werkzeuge auf, wenn sie für eine belastbare Antwort erforderlich sind.",
-    "BFG-Geschäftszahlen dürfen nur nach offizieller Findok-Verifikation verwendet werden.",
-  ].join("\n");
-}
-
-function finalAnswerInstruction(): string {
-  return [
-    "Formuliere jetzt die finale Antwort aus der Anfrage und den Werkzeugergebnissen.",
-    "Nutze keine weiteren Rechercheabfragen.",
-    "BFG-Geschäftszahlen dürfen nur aus der verifizierten Findok-Liste stammen.",
-    "Gib erlaubte BFG-Geschäftszahlen als Markdown-Link auf die offizielle PDF-URL aus.",
-    "Nenne keine nicht verifizierten BFG-Geschäftszahlen.",
-  ].join("\n");
-}
 
 function formatToolLog(toolLog: ToolLogEntry[]): string {
   if (toolLog.length === 0) {
@@ -210,7 +191,6 @@ function formatBfgVerificationForPrompt(verification: BfgVerificationSummary): s
 function supportMessages(options: {
   systemPrompt: string;
   conversation: AppChatMessage[];
-  instruction: string;
   toolLog: ToolLogEntry[];
   draftAnswer?: string;
   bfgVerification?: BfgVerificationSummary;
@@ -231,7 +211,7 @@ function supportMessages(options: {
 
   return [
     { role: "system", content: options.systemPrompt },
-    { role: "user", content: [context.join("\n"), options.instruction].join("\n\n") },
+    { role: "user", content: context.join("\n") },
   ];
 }
 
@@ -457,7 +437,6 @@ async function finalizeAgentRun(options: {
     messages: supportMessages({
       systemPrompt: options.effectiveSystemPrompt,
       conversation: options.conversation,
-      instruction: finalAnswerInstruction(),
       toolLog: options.toolLog,
       draftAnswer: options.draftAnswer,
       bfgVerification: verification,
@@ -504,16 +483,6 @@ export async function runAgent(options: {
   const steps: AgentStep[] = [...(options.initialSteps ?? [])];
   const toolLog: ToolLogEntry[] = [];
 
-  await appendAgentStep(
-    steps,
-    {
-      type: "plan",
-      title: "Arbeitsplan",
-      content: AGENT_PLAN_ITEMS.join("\n"),
-    },
-    options.onStep,
-  );
-
   const session = await mcp.openToolSession(options.mcpBearerToken, { deadline: options.deadline });
   const toolNames = [...session.tools.map((tool) => tool.name), FINDOK_VERIFY_BFG_CASES_TOOL_NAME];
   const deepSeekTools = [...session.deepSeekTools, findokVerifyBfgCasesTool];
@@ -541,7 +510,7 @@ export async function runAgent(options: {
   });
 
   const messages: DeepSeekMessage[] = [
-    { role: "system", content: [effectiveSystemPrompt, executionInstruction()].join("\n\n") },
+    { role: "system", content: effectiveSystemPrompt },
     ...conversationMessages,
   ];
 
