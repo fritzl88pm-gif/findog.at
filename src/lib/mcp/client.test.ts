@@ -56,10 +56,12 @@ describe("McpClient", () => {
         ),
       );
 
-    await expect(new McpClient().openToolSession("mcp-token", { deadline })).resolves.toMatchObject({
+    const session = await new McpClient().openToolSession("mcp-token", { deadline });
+    expect(session).toMatchObject({
       sessionId: "session-1",
       tools: [{ name: "hybrid_search" }],
     });
+    expect(session).not.toHaveProperty("deepSeekTools");
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     for (const call of fetchMock.mock.calls) {

@@ -5,6 +5,33 @@ import { UserVisibleError } from "./errors";
 
 type ServerSupabaseClient = Pick<SupabaseClient, "from">;
 
+const LEGACY_SYSTEM_PROMPT_REPLACEMENTS: ReadonlyArray<readonly [string, string]> = [
+  [
+    "Eine Live- oder Websuche steht auf findog.at nicht zur Verfügung – auch nicht auf ausdrücklichen Wunsch des Nutzers.",
+    "",
+  ],
+  [
+    "Eine Websuche/Live-Recherche steht auf findog.at nicht zur Verfügung – auch nicht auf ausdrücklichen Wunsch des Nutzers.",
+    "",
+  ],
+  [
+    "es darf keine externe Recherche angekündigt und keine VwGH-Entscheidung oder kein Rechtssatz behauptet werden.",
+    "es darf keine VwGH-Entscheidung und kein Rechtssatz behauptet werden.",
+  ],
+];
+
+export function sanitizeGlobalSystemPrompt(value: string): string {
+  const sanitized = LEGACY_SYSTEM_PROMPT_REPLACEMENTS.reduce(
+    (prompt, [obsoleteText, replacement]) => prompt.replaceAll(obsoleteText, replacement),
+    value,
+  );
+
+  return sanitized
+    .replace(/^-[ \t]{2,}/gm, "- ")
+    .replace(/[ \t]+(?=\r?$)/gm, "")
+    .trim();
+}
+
 export async function isAdminUser(
   supabase: ServerSupabaseClient,
   userId: string,
@@ -35,7 +62,9 @@ export async function getGlobalSystemPrompt(
     throw new UserVisibleError("Globale Einstellungen konnten nicht geladen werden.", 503);
   }
 
-  const prompt = typeof data?.system_prompt === "string" ? data.system_prompt.trim() : "";
+  const prompt = typeof data?.system_prompt === "string"
+    ? sanitizeGlobalSystemPrompt(data.system_prompt)
+    : "";
   return prompt || DEFAULT_SYSTEM_PROMPT;
 }
 
@@ -44,11 +73,14 @@ export async function updateGlobalSystemPrompt(
   userId: string,
   value: unknown,
 ): Promise<string> {
-  if (typeof value !== "string" || !value.trim()) {
+  if (typeof value !== "string") {
     throw new UserVisibleError("Der globale System Prompt darf nicht leer sein.", 400);
   }
 
-  const systemPrompt = value.trim();
+  const systemPrompt = sanitizeGlobalSystemPrompt(value);
+  if (!systemPrompt) {
+    throw new UserVisibleError("Der globale System Prompt darf nicht leer sein.", 400);
+  }
 
   const { data, error } = await supabase
     .from("global_settings")
@@ -65,5 +97,5 @@ export async function updateGlobalSystemPrompt(
     throw new UserVisibleError("Globale Einstellungen konnten nicht gespeichert werden.", 503);
   }
 
-  return data.system_prompt;
+  return sanitizeGlobalSystemPrompt(data.system_prompt);
 }

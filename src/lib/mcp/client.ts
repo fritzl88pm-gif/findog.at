@@ -2,7 +2,7 @@ import { BFG_MCP_ENDPOINT, MCP_PROTOCOL_VERSION } from "./config";
 import { type Deadline, runWithTimeout } from "../deadline";
 import { MissingMcpBearerTokenError, UserVisibleError } from "../errors";
 import { extractJsonPayloads } from "./parser";
-import { mcpToolToDeepSeekTool, type DeepSeekTool, type JsonObject, type McpTool } from "./tools";
+import type { JsonObject, McpTool } from "./tools";
 
 export const MCP_HTTP_TIMEOUT_MS = 30_000;
 
@@ -14,7 +14,6 @@ type McpHttpResult = {
 type McpSession = {
   sessionId?: string;
   tools: McpTool[];
-  deepSeekTools: DeepSeekTool[];
 };
 
 type JsonRpcError = {
@@ -153,7 +152,6 @@ export class McpClient {
     return {
       sessionId,
       tools,
-      deepSeekTools: tools.map(mcpToolToDeepSeekTool),
     };
   }
 

@@ -31,6 +31,9 @@ function allProductionRawTools(): McpTool[] {
     rawTool("faq_search", {
       kb_id: { type: "string" },
       query: { type: "string" },
+      only_recommended: { type: "boolean" },
+      first_priority_tag_ids: { type: "array", items: { type: "string" } },
+      second_priority_tag_ids: { type: "array", items: { type: "string" } },
     }),
     rawTool("faq_entries_search", {
       kb_id: { type: "string" },
@@ -89,8 +92,33 @@ describe("SemanticToolRegistry", () => {
           expect(propKeys).not.toContain("vector_threshold");
           expect(propKeys).not.toContain("keyword_threshold");
           expect(propKeys).not.toContain("match_count");
+          expect(propKeys).not.toContain("only_recommended");
+          expect(propKeys).not.toContain("first_priority_tag_ids");
+          expect(propKeys).not.toContain("second_priority_tag_ids");
         }
       }
+    });
+
+    it("keeps optional raw FAQ ranking parameters out of the model schema and routed calls", () => {
+      const registry = new SemanticToolRegistry(allProductionRawTools());
+      const faqTools = registry.getModelTools().filter((tool) =>
+        ["search_win_anv", "search_amount_table"].includes(tool.function.name),
+      );
+
+      expect(faqTools).toHaveLength(2);
+      for (const tool of faqTools) {
+        const parameters = tool.function.parameters as {
+          properties?: Record<string, unknown>;
+        };
+        expect(Object.keys(parameters.properties ?? {})).toEqual(["query"]);
+      }
+
+      const routed = registry.routeToolCall("search_amount_table", {
+        query: "Unterhaltsabsetzbetrag 2024",
+      });
+      expect(routed?.arguments).not.toHaveProperty("only_recommended");
+      expect(routed?.arguments).not.toHaveProperty("first_priority_tag_ids");
+      expect(routed?.arguments).not.toHaveProperty("second_priority_tag_ids");
     });
 
     it("exposes expected semantic tools for all configured sources when raw tools are available", () => {

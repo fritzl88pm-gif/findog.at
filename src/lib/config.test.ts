@@ -37,6 +37,9 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
     expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\blist_knowledge\b/);
     expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\blist_chunks\b/);
     expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bget_knowledge\b/);
+    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bonly_recommended\b/);
+    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bfirst_priority_tag_ids\b/);
+    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bsecond_priority_tag_ids\b/);
     // No empty parentheses placeholders
     expect(DEFAULT_SYSTEM_PROMPT).not.toContain("()");
     // No broken "der Dokumentsuche" prefix
@@ -47,6 +50,12 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
     // No stripped "Hermes Memory" sentence — the Hermes reference must be intact
     expect(DEFAULT_SYSTEM_PROMPT).toContain("Hermes Memory");
     expect(DEFAULT_SYSTEM_PROMPT).toMatch(/nichts mit Steuerrecht zu tun/);
+  });
+
+  it("contains no references to unavailable web or live research", () => {
+    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/Websuche/i);
+    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/Live-Recherche/i);
+    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/externe Recherche angek(?:ü|\u00fc)ndigt/i);
   });
 
   it("contains a compact high-level research-sources section without technical tool inventory", () => {

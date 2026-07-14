@@ -93,16 +93,6 @@ describe("runAgent", () => {
           },
         },
       ],
-      deepSeekTools: [
-        {
-          type: "function",
-          function: {
-            name: "hybrid_search",
-            description: "Search scoped knowledge bases",
-            parameters: { type: "object", properties: {} },
-          },
-        },
-      ],
     });
     const callTool = vi.fn().mockResolvedValue(toolResult);
     MockedMcpClient.mockImplementation(function MockMcpClient() {

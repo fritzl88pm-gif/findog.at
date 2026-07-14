@@ -39,7 +39,6 @@ function mockSession(
       openToolSession: vi.fn().mockResolvedValue({
         sessionId: "session-1",
         tools: [rawSearchTool("faq_search"), rawSearchTool("hybrid_search")],
-        deepSeekTools: [],
       }),
       callTool,
     } as unknown as McpClient;
@@ -141,7 +140,6 @@ describe("runAgent retrieval policy", () => {
               properties: { query: { type: "string" }, kb_id: { type: "string" } },
             },
           })),
-          deepSeekTools: [],
         }),
         callTool,
       } as unknown as McpClient;
@@ -303,7 +301,6 @@ describe("runAgent retrieval policy", () => {
             { name: "faq_search", inputSchema: { type: "object", properties: { query: { type: "string" } } } },
             { name: "hybrid_search", inputSchema: { type: "object", properties: { query: { type: "string" } } } },
           ],
-          deepSeekTools: [],
         }),
         callTool,
       } as unknown as McpClient;
