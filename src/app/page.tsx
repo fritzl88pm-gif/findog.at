@@ -445,7 +445,7 @@ function normalizeEnabledModelDescriptors(value: unknown): EnabledModelDescripto
     const label = typeof item.label === "string" ? item.label.trim() : "";
     if (
       typeof item.id !== "string"
-      || !isSupportedModel(item.id)
+      || (!isSupportedModel(item.id) && !isDynamicModelId(item.id))
       || !label
       || seen.has(item.id)
     ) {

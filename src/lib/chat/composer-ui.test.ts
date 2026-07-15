@@ -57,6 +57,15 @@ describe("composer public UI", () => {
     expect(attachmentHandlers).not.toContain("preventDefault");
   });
 
+  it("accepts built-in and opaque dynamic model descriptors from authenticated settings", () => {
+    const normalizer = pageSource.slice(
+      pageSource.indexOf("function normalizeEnabledModelDescriptors("),
+      pageSource.indexOf("async function fetchAuthenticatedSettings("),
+    );
+
+    expect(normalizer).toContain("(!isSupportedModel(item.id) && !isDynamicModelId(item.id))");
+  });
+
   it("renders only centrally enabled model descriptors in an accessible custom menu", () => {
     const composer = composerSource();
 
