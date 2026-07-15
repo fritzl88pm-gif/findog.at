@@ -1,0 +1,19 @@
+{
+  "source": {
+    "file": "Fred-spritesheet.zip",
+    "sha256": "DCD8D61B48B88FE525DA2D151544B8B8C859C9E3E222DEE18732E160E1A9F735",
+    "includedAnimations": [
+      "walk_right",
+      "jump_right",
+      "Victory"
+    ]
+  },
+  "atlas": {
+    "cellSize": 192,
+    "columns": 8,
+    "rows": 8,
+    "frameCount": 64,
+    "anchor": "bottom-center",
+    "sharedScale": 0.421801
+  }
+}

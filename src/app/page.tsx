@@ -78,6 +78,7 @@ import {
   getL17bSourceNote,
   parseL17bGermanAmount,
 } from "@/lib/l17b-currency";
+import FredRunView from "@/components/fredrun-view";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -94,7 +95,7 @@ type ConversationSummary = {
   updatedAt: string;
 };
 
-type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "administration";
+type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "administration";
 type ComposerMenu = "attachments" | "model" | null;
 
 type AuthForm = {
@@ -2498,6 +2499,14 @@ export default function Home() {
     }
   }
 
+  function openFredRunView() {
+    setAppView("fredrun");
+    setError("");
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
   async function searchBfgPro() {
     const scenario = bfgProScenario.trim();
     const accessToken = session?.access_token;
@@ -4017,6 +4026,15 @@ export default function Home() {
                 L17b Währungsrechner
               </button>
               <button
+                className={`sidebar-view-button ${appView === "fredrun" ? "active" : ""}`}
+                type="button"
+                onClick={openFredRunView}
+                aria-current={appView === "fredrun" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17h3l2-4 3 2 2-5 2 4h4"></path><path d="M5 7h.01M9 5h.01M13 7h.01"></path></svg>
+                Fredrun
+              </button>
+              <button
                 className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
                 type="button"
                 onClick={openFormsView}
@@ -4099,6 +4117,16 @@ export default function Home() {
               aria-current={appView === "l17b-currency" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v12M8 10h8"></path></svg>
+            </button>
+            <button
+              className={`icon-button rail-icon-btn ${appView === "fredrun" ? "active" : ""}`}
+              type="button"
+              onClick={openFredRunView}
+              title="Fredrun"
+              aria-label="Fredrun"
+              aria-current={appView === "fredrun" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17h3l2-4 3 2 2-5 2 4h4"></path><path d="M5 7h.01M9 5h.01M13 7h.01"></path></svg>
             </button>
             {isAdmin ? (
               <button
@@ -4656,6 +4684,8 @@ export default function Home() {
         </section>
       ) : appView === "l17b-currency" ? (
         <L17bCurrencyView />
+      ) : appView === "fredrun" ? (
+        <FredRunView />
       ) : appView === "german-sv-pension" ? (
         <GermanSvPensionView
           downloadError={error}
