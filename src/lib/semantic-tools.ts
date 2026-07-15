@@ -15,6 +15,7 @@ import type { DeepSeekTool, JsonObject, McpTool } from "./mcp/tools";
 import {
   RESEARCH_SOURCES,
   type ResearchSource,
+  getSourceByKbId,
   getSourceByKey,
 } from "./research-sources";
 
@@ -59,9 +60,9 @@ function findParamAlias(
   return undefined;
 }
 
-/** Resolve a source_key to a ResearchSource; throw on unknown. */
+/** Resolve a source key or a known KB id to a ResearchSource; throw on unknown. */
 function resolveSourceKey(key: string): ResearchSource {
-  const source = getSourceByKey(key.toUpperCase());
+  const source = getSourceByKey(key.toUpperCase()) ?? getSourceByKbId(key);
   if (!source) {
     throw new Error(
       `Unbekannter Quellenschlüssel: „${key}“. Verwende list_research_sources, um verfügbare Quellen zu ermitteln.`,

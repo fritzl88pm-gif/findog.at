@@ -246,6 +246,15 @@ describe("SemanticToolRegistry", () => {
       expect(routed!.arguments.kb_id).toBe(RESEARCH_SOURCES.GESETZE.kbId);
     });
 
+    it("accepts a known KB id when the model supplies it as source_key", () => {
+      const registry = new SemanticToolRegistry(allProductionRawTools());
+      const routed = registry.routeToolCall("inspect_research_source", {
+        source_key: RESEARCH_SOURCES.ARBEITSBEHELFE.kbId,
+      });
+      expect(routed!.name).toBe("get_knowledge_base");
+      expect(routed!.arguments.kb_id).toBe(RESEARCH_SOURCES.ARBEITSBEHELFE.kbId);
+    });
+
     it("returns undefined for unknown public tool names", () => {
       const registry = new SemanticToolRegistry(allProductionRawTools());
       expect(registry.routeToolCall("nonexistent_tool", {})).toBeUndefined();
