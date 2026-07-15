@@ -1,7 +1,6 @@
 import { after, NextResponse } from "next/server";
 
 import {
-  DEFAULT_MODEL,
   MAX_IMAGE_UPLOAD_BYTES,
   MAX_IMAGE_UPLOADS,
   MAX_MESSAGES,
@@ -22,8 +21,10 @@ import { UserVisibleError } from "@/lib/errors";
 import { resolveDynamicLlmRuntime, resolveLlmRuntime } from "@/lib/llm/runtime";
 import {
   enabledModelSetting,
+  globalDefaultModelSetting,
   publicEnabledModelDtos,
   readEffectiveModelSettings,
+  readModelDefaultPolicy,
   type DynamicModelSetting,
   type ModelRunProvenance,
 } from "@/lib/model-settings";
@@ -198,9 +199,9 @@ function parseMessages(value: unknown): AppChatMessage[] {
   return messages;
 }
 
-function parseModel(value: unknown): string {
+function parseModel(value: unknown): string | null {
   if (value === undefined) {
-    return DEFAULT_MODEL;
+    return null;
   }
   if (typeof value !== "string") {
     throw new UserVisibleError("Das ausgewählte Modell wird nicht unterstützt.", 400);
@@ -400,10 +401,17 @@ export async function POST(request: Request) {
     const isAdmin = await isAdminUser(supabase, authenticatedUser.id);
 
     const { body, attachmentUploads } = await parseChatRequest(request);
-    const model = parseModel(body.model);
+    const requestedModel = parseModel(body.model);
     const messages = parseMessages(body.messages);
-    const modelSettings = await readEffectiveModelSettings(supabase);
-    const selectedSetting = enabledModelSetting(modelSettings, model, isAdmin);
+    const [modelSettings, defaultPolicy] = await Promise.all([
+      readEffectiveModelSettings(supabase),
+      readModelDefaultPolicy(supabase),
+    ]);
+    const defaultSetting = globalDefaultModelSetting(modelSettings, defaultPolicy);
+    const model = requestedModel ?? defaultSetting.id;
+    const selectedSetting = requestedModel
+      ? enabledModelSetting(modelSettings, requestedModel, isAdmin)
+      : defaultSetting;
     const selectedRuntime = selectedSetting.isDynamic
       ? resolveDynamicLlmRuntime(selectedSetting as DynamicModelSetting)
       : resolveLlmRuntime({
@@ -446,7 +454,7 @@ export async function POST(request: Request) {
       ? (async () => {
           try {
             return await generateConversationTitle({
-              runtime: resolveLlmRuntime({ model: DEFAULT_MODEL, reasoning: "disabled" }),
+              runtime: { ...selectedRuntime, reasoning: "disabled" },
               userRequest: latestUserMessage.content,
               deadline,
             });

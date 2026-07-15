@@ -22,7 +22,7 @@ const originalCredentialsKey = process.env.OPENAI_COMPATIBLE_CREDENTIALS_KEY;
 
 function builtins() {
   return [
-    ["deepseek-v4-flash", "deepseek", true, true, "disabled", 1],
+    ["deepseek-v4-flash", "deepseek", false, true, "disabled", 1],
     ["deepseek-v4-pro", "deepseek", false, true, "high", 2],
     ["glm-5.2", "zai", false, false, "max", 3],
     ["glm-5-turbo", "zai", false, false, "enabled", 4],
@@ -145,6 +145,7 @@ describe("OpenAI-compatible settings and DTOs", () => {
     expect(publicDto).toEqual({
       id: "openai:00000000-0000-4000-8000-000000000001",
       label: "vendor-model",
+      imageAssetId: null,
     });
     expect(adminDto).toMatchObject({
       displayName: null,

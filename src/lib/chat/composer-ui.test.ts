@@ -71,7 +71,8 @@ describe("composer public UI", () => {
 
     expect(composer).toContain("enabledModels.map((model) => (");
     expect(composer).toContain("{model.label}");
-    expect(composer).toContain('updateSetting("model", model.id)');
+    expect(composer).toContain('setSettings({ model: model.id, followsDefault: false })');
+    expect(composer).toContain('className="composer-model-icon"');
     expect(composer).toContain('role="menuitemradio"');
     expect(composer).not.toContain("AVAILABLE_MODELS");
     expect(composer).not.toContain('model === "deepseek-v4-pro"');

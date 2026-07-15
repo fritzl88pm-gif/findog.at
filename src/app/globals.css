@@ -1522,6 +1522,40 @@ textarea:focus {
   gap: 10px;
 }
 
+.admin-model-global-controls {
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+  background: rgba(40, 111, 156, 0.035);
+}
+
+.admin-model-image-assignments {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-model-image-assignment {
+  display: grid;
+  grid-template-columns: 32px minmax(160px, 0.8fr) minmax(180px, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.admin-model-image-assignment img,
+.admin-model-image-placeholder {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  object-fit: contain;
+}
+
+.admin-model-image-placeholder {
+  border: 1px dashed var(--border-color);
+  background: var(--bg-surface);
+}
+
 .admin-model-setting {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.65fr);
@@ -2526,6 +2560,25 @@ textarea:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  gap: 6px;
+}
+
+.composer-model-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-model-icon {
+  width: auto;
+  height: 1em;
+  max-width: 1.4em;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
+.model-menu .composer-model-icon {
+  margin-left: auto;
 }
 
 .composer-icon-button:hover:not(:disabled),
@@ -2894,6 +2947,14 @@ textarea:focus {
   .composer-model-trigger {
     width: 100%;
     max-width: min(42vw, 190px);
+  }
+
+  .admin-model-image-assignment {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .admin-model-image-assignment select {
+    grid-column: 1 / -1;
   }
 
   .composer-send-button {

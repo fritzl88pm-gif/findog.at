@@ -28,10 +28,10 @@ export const MODEL_CATALOG: Readonly<Record<ChatModel, ModelDefinition>> = {
   "deepseek-v4-flash": {
     id: "deepseek-v4-flash",
     label: "DeepSeek v4 Flash",
-    description: "Schnelles Standardmodell",
+    description: "Schnelles Modell",
     provider: "deepseek",
     upstreamModel: "deepseek-v4-flash",
-    alwaysEnabled: true,
+    alwaysEnabled: false,
     reasoningOptions: ["disabled", "high", "max"],
     defaultReasoning: "disabled",
   },
@@ -67,7 +67,6 @@ export const MODEL_CATALOG: Readonly<Record<ChatModel, ModelDefinition>> = {
   },
 };
 
-export const DEFAULT_MODEL: ChatModel = "deepseek-v4-flash";
 export const AVAILABLE_MODELS = MODEL_IDS;
 export const MAX_REQUEST_BYTES = 400_000;
 export const MAX_PDF_UPLOAD_BYTES = 50_000_000;

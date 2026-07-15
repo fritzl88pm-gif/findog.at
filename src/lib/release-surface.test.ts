@@ -18,6 +18,7 @@ describe("approved release surface", () => {
   const germanSvPensionIllustrationPath = fileURLToPath(new URL("../../public/fred-german-sv-pension.png", import.meta.url));
   const l17bIllustrationPath = fileURLToPath(new URL("../../public/fred_l17b.png", import.meta.url));
   const germanSvPensionPath = fileURLToPath(new URL("./german-sv-pension.ts", import.meta.url));
+  const nextConfigPath = fileURLToPath(new URL("../../next.config.ts", import.meta.url));
   const pageSource = readFileSync(pagePath, "utf8");
   const globalsSource = readFileSync(globalsPath, "utf8");
   const layoutSource = readFileSync(layoutPath, "utf8");
@@ -25,6 +26,7 @@ describe("approved release surface", () => {
   const chatRouteSource = readFileSync(chatRoutePath, "utf8");
   const agentSource = readFileSync(agentPath, "utf8");
   const germanSvPensionSource = readFileSync(germanSvPensionPath, "utf8");
+  const nextConfigSource = readFileSync(nextConfigPath, "utf8");
 
   it("labels the standalone BFG view as BFG Suche in expanded and collapsed navigation", () => {
     expect(pageSource).toMatch(/className={`sidebar-view-button[\s\S]*?<\/svg>\s*BFG Suche\s*<\/button>/);
@@ -201,8 +203,11 @@ describe("approved release surface", () => {
     expect(composer).toContain("{model.label}");
     expect(composer).not.toContain("AVAILABLE_MODELS");
     expect(pageSource).toContain('fetch("/api/settings"');
+    expect(nextConfigSource).toContain("img-src 'self' data: ${supabaseImageSources.join(\" \")}");
     expect(administration).toContain('id="admin-model-settings-title"');
-    expect(administration).toContain("model.alwaysEnabled");
+    expect(administration).toContain("model.id === adminDefaultModelId");
+    expect(administration).toContain('id="admin-default-model"');
+    expect(administration).toContain("admin-model-image-assignments");
     expect(administration).toContain("model.reasoningOptions.map((option) => (");
     expect(administration).toContain("model.providerConfigured");
     expect(administration).toContain('aria-label={`Reasoning für ${model.label}`}');

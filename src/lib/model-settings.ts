@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
-  DEFAULT_MODEL,
   MAX_PROVIDER_KEY_CHARS,
   MODEL_IDS,
   getModelDefinition,
@@ -34,6 +33,7 @@ const MODEL_SETTINGS_COLUMNS = [
   "base_url",
   "access_scope",
   "api_key_ciphertext",
+  "image_asset_id",
   "revision",
   "updated_at",
   "updated_by",
@@ -49,6 +49,8 @@ const REASONING_LABELS: Readonly<Record<ReasoningSetting, string>> = {
 const MODEL_TEXT_MAX_LENGTH = 120;
 const BASE_URL_MAX_LENGTH = 2048;
 const CONTROL_CHARACTERS = /[\x00-\x1f\x7f]/u;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const MODEL_DEFAULT_POLICY_COLUMNS = "model_id,revision,updated_at,updated_by";
 
 export type ModelSettingsSource = "database" | "fallback";
 export type OpenAICompatibleAccessScope = "disabled" | "admins" | "all";
@@ -71,6 +73,7 @@ export type BuiltinModelSetting = {
   alwaysEnabled: boolean;
   enabled: boolean;
   reasoning: ReasoningSetting;
+  imageAssetId?: string | null;
   revision: number | null;
   updatedAt: string | null;
   updatedBy: string | null;
@@ -88,6 +91,7 @@ export type DynamicModelSetting = {
   alwaysEnabled: false;
   enabled: boolean;
   reasoning: "disabled";
+  imageAssetId?: string | null;
   revision: number | null;
   updatedAt: string | null;
   updatedBy: string | null;
@@ -98,7 +102,7 @@ export type ModelSettingsSnapshot = { models: ModelSetting[]; source: ModelSetti
 export type ModelSettingMutation = Pick<BuiltinModelSetting, "id" | "enabled" | "reasoning"> & {
   revision: number;
 };
-export type PublicModelDto = { id: string; label: string };
+export type PublicModelDto = { id: string; label: string; imageAssetId?: string | null };
 export type AdminModelDto = {
   id: string;
   label: string;
@@ -114,6 +118,14 @@ export type AdminModelDto = {
   upstreamModel?: string;
   baseUrl?: string;
   accessScope?: OpenAICompatibleAccessScope;
+  imageAssetId: string | null;
+};
+
+export type ModelDefaultPolicy = {
+  modelId: string;
+  revision: number;
+  updatedAt: string;
+  updatedBy: string | null;
 };
 
 export type OpenAICompatibleModelInput = {
@@ -152,6 +164,11 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[])
 
 function isPositiveRevision(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function normalizeImageAssetId(value: unknown): string | null | undefined {
+  if (value === null || value === undefined) return null;
+  return typeof value === "string" && UUID_PATTERN.test(value) ? value : undefined;
 }
 
 function isValidModelText(value: string): boolean {
@@ -286,6 +303,7 @@ function normalizeBuiltinRow(value: Record<string, unknown>): BuiltinModelSettin
   const revision = value.revision;
   const updatedAt = value.updated_at;
   const updatedBy = value.updated_by;
+  const imageAssetId = normalizeImageAssetId(value.image_asset_id);
   if (
     value.is_dynamic === true
     || typeof id !== "string"
@@ -298,6 +316,7 @@ function normalizeBuiltinRow(value: Record<string, unknown>): BuiltinModelSettin
     || (updatedBy !== null && typeof updatedBy !== "string")
     || typeof value.provider !== "string"
     || typeof value.upstream_model !== "string"
+    || imageAssetId === undefined
   ) {
     return null;
   }
@@ -319,6 +338,7 @@ function normalizeBuiltinRow(value: Record<string, unknown>): BuiltinModelSettin
     alwaysEnabled: definition.alwaysEnabled,
     enabled: value.enabled,
     reasoning,
+    imageAssetId,
     revision,
     updatedAt,
     updatedBy,
@@ -335,6 +355,7 @@ function normalizeDynamicRow(value: Record<string, unknown>): DynamicModelSettin
   const revision = value.revision;
   const updatedAt = value.updated_at;
   const updatedBy = value.updated_by;
+  const imageAssetId = normalizeImageAssetId(value.image_asset_id);
   if (
     value.is_dynamic !== true
     || typeof modelId !== "string"
@@ -354,6 +375,7 @@ function normalizeDynamicRow(value: Record<string, unknown>): DynamicModelSettin
     || !isPositiveRevision(revision)
     || typeof updatedAt !== "string"
     || (updatedBy !== null && typeof updatedBy !== "string")
+    || imageAssetId === undefined
   ) {
     return null;
   }
@@ -369,6 +391,7 @@ function normalizeDynamicRow(value: Record<string, unknown>): DynamicModelSettin
     alwaysEnabled: false,
     enabled: accessScope !== "disabled",
     reasoning: "disabled",
+    imageAssetId,
     revision,
     updatedAt,
     updatedBy,
@@ -395,26 +418,6 @@ function normalizeStoredRows(value: unknown): ModelSetting[] | null {
   return [...MODEL_IDS.map((id) => builtinById.get(id)!), ...dynamicModels];
 }
 
-export function flashOnlyModelSettings(): ModelSettingsSnapshot {
-  const definition = getModelDefinition(DEFAULT_MODEL);
-  return {
-    source: "fallback",
-    models: [{
-      id: definition.id,
-      displayName: null,
-      provider: definition.provider,
-      upstreamModel: definition.upstreamModel,
-      isDynamic: false,
-      alwaysEnabled: definition.alwaysEnabled,
-      enabled: true,
-      reasoning: definition.defaultReasoning,
-      revision: null,
-      updatedAt: null,
-      updatedBy: null,
-    }],
-  };
-}
-
 export async function readModelSettings(supabase: ServerSupabaseClient): Promise<ModelSettingsSnapshot> {
   const { data, error } = await supabase.from("model_settings").select(MODEL_SETTINGS_COLUMNS);
   if (error) throw unavailableSettingsError();
@@ -424,11 +427,133 @@ export async function readModelSettings(supabase: ServerSupabaseClient): Promise
 }
 
 export async function readEffectiveModelSettings(supabase: ServerSupabaseClient): Promise<ModelSettingsSnapshot> {
-  try {
-    return await readModelSettings(supabase);
-  } catch {
-    return flashOnlyModelSettings();
+  return readModelSettings(supabase);
+}
+
+function normalizeDefaultPolicy(value: unknown): ModelDefaultPolicy | null {
+  if (!Array.isArray(value) || value.length !== 1 || !isRecord(value[0])) return null;
+  const row = value[0];
+  if (
+    typeof row.model_id !== "string"
+    || (!isSupportedModel(row.model_id) && !isDynamicModelId(row.model_id))
+    || !isPositiveRevision(row.revision)
+    || typeof row.updated_at !== "string"
+    || (row.updated_by !== null && typeof row.updated_by !== "string")
+  ) return null;
+  return {
+    modelId: row.model_id,
+    revision: row.revision,
+    updatedAt: row.updated_at,
+    updatedBy: row.updated_by,
+  };
+}
+
+export async function readModelDefaultPolicy(
+  supabase: ServerSupabaseClient,
+): Promise<ModelDefaultPolicy> {
+  const { data, error } = await supabase
+    .from("model_default_policy")
+    .select(MODEL_DEFAULT_POLICY_COLUMNS)
+    .eq("id", true);
+  if (error) throw unavailableSettingsError();
+  const policy = normalizeDefaultPolicy(data);
+  if (!policy) throw unavailableSettingsError();
+  return policy;
+}
+
+export function globalDefaultModelSetting(
+  snapshot: ModelSettingsSnapshot,
+  policy: ModelDefaultPolicy,
+): ModelSetting {
+  const setting = enabledModelSetting(snapshot, policy.modelId, false);
+  if (setting.isDynamic && setting.accessScope !== "all") throw unavailableSettingsError();
+  return setting;
+}
+
+export function parseDefaultModelPatch(body: unknown): { modelId: string; revision: number } {
+  if (
+    !isRecord(body)
+    || !hasExactKeys(body, ["modelId", "revision"])
+    || typeof body.modelId !== "string"
+    || (!isSupportedModel(body.modelId) && !isDynamicModelId(body.modelId))
+    || !isPositiveRevision(body.revision)
+  ) {
+    throw new UserVisibleError("Die Standardmodell-Konfiguration ist ungültig.", 400);
   }
+  return { modelId: body.modelId, revision: body.revision };
+}
+
+export async function updateGlobalDefaultModel(options: {
+  supabase: ServerSupabaseClient;
+  adminUserId: string;
+  modelId: string;
+  revision: number;
+}): Promise<ModelDefaultPolicy> {
+  const target = enabledModelSetting(await readModelSettings(options.supabase), options.modelId, false);
+  if (target.isDynamic && target.accessScope !== "all") {
+    throw new UserVisibleError(
+      "Das Standardmodell muss aktiviert und für alle Benutzer verfügbar sein.",
+      400,
+    );
+  }
+  const { error } = await options.supabase.rpc("update_global_default_model", {
+    p_admin_user_id: options.adminUserId,
+    p_model_id: options.modelId,
+    p_expected_revision: options.revision,
+  });
+  if (error) {
+    if (typeof error === "object" && error.code === "40001") throw revisionConflictError();
+    if (typeof error === "object" && (error.code === "23503" || error.code === "23514")) {
+      throw new UserVisibleError(
+        "Das Standardmodell muss aktiviert und für alle Benutzer verfügbar sein.",
+        400,
+      );
+    }
+    throw new UserVisibleError("Das Standardmodell konnte nicht gespeichert werden.", 503);
+  }
+  return readModelDefaultPolicy(options.supabase);
+}
+
+export function parseModelImagePatch(body: unknown): { imageAssetId: string | null; revision: number } {
+  const imageAssetId = isRecord(body) ? normalizeImageAssetId(body.imageAssetId) : undefined;
+  if (
+    !isRecord(body)
+    || !hasExactKeys(body, ["imageAssetId", "revision"])
+    || imageAssetId === undefined
+    || !isPositiveRevision(body.revision)
+  ) {
+    throw new UserVisibleError("Die Modellbild-Konfiguration ist ungültig.", 400);
+  }
+  return { imageAssetId, revision: body.revision };
+}
+
+export async function updateModelImage(options: {
+  supabase: ServerSupabaseClient;
+  adminUserId: string;
+  modelId: string;
+  imageAssetId: string | null;
+  revision: number;
+}): Promise<ModelSetting> {
+  if (!isSupportedModel(options.modelId) && !isDynamicModelId(options.modelId)) {
+    throw new UserVisibleError("Das Modell wurde nicht gefunden.", 404);
+  }
+  const { error } = await options.supabase.rpc("update_model_image", {
+    p_admin_user_id: options.adminUserId,
+    p_model_id: options.modelId,
+    p_expected_revision: options.revision,
+    p_image_asset_id: options.imageAssetId,
+  });
+  if (error) {
+    if (typeof error === "object" && error.code === "40001") throw revisionConflictError();
+    if (typeof error === "object" && error.code === "23503") {
+      throw new UserVisibleError("Das ausgewählte Bild wurde nicht gefunden.", 404);
+    }
+    throw new UserVisibleError("Das Modellbild konnte nicht gespeichert werden.", 503);
+  }
+  const snapshot = await readModelSettings(options.supabase);
+  const setting = snapshot.models.find((candidate) => candidate.id === options.modelId);
+  if (!setting) throw new UserVisibleError("Das Modell konnte nicht geladen werden.", 503);
+  return setting;
 }
 
 export function parseModelSettingsPatch(body: unknown): ModelSettingMutation[] {
@@ -451,9 +576,6 @@ export function parseModelSettingsPatch(body: unknown): ModelSettingMutation[] {
       || !isPositiveRevision(value.revision) || byId.has(id)
     ) {
       throw new UserVisibleError("Die Modellkonfiguration enthält ungültige Werte.", 400);
-    }
-    if (getModelDefinition(id).alwaysEnabled && !value.enabled) {
-      throw new UserVisibleError("Das Standardmodell kann nicht deaktiviert werden.", 400);
     }
     byId.set(id, { id, enabled: value.enabled, reasoning, revision: value.revision });
   }
@@ -504,6 +626,9 @@ export async function updateModelSettings(options: {
   });
   if (error) {
     if (typeof error === "object" && error.code === "40001") throw revisionConflictError();
+    if (typeof error === "object" && error.code === "23514") {
+      throw new UserVisibleError("Zuerst muss ein anderes Standardmodell gewählt werden.", 409);
+    }
     throw new UserVisibleError("Die Modellkonfiguration konnte nicht gespeichert werden.", 503);
   }
   return readModelSettings(options.supabase);
@@ -526,10 +651,18 @@ export function publicEnabledModelDtos(snapshot: ModelSettingsSnapshot, isAdmin 
     if (!setting.enabled) return [];
     if (setting.isDynamic) {
       if (!dynamicVisible(setting, isAdmin) || !dynamicCredentialConfigured(setting)) return [];
-      return [{ id: setting.id, label: setting.displayName ?? setting.upstreamModel }];
+      return [{
+        id: setting.id,
+        label: setting.displayName ?? setting.upstreamModel,
+        imageAssetId: setting.imageAssetId ?? null,
+      }];
     }
-    if (!setting.alwaysEnabled && !isModelProviderConfigured(setting.id)) return [];
-    return [{ id: setting.id, label: getModelDefinition(setting.id).label }];
+    if (!isModelProviderConfigured(setting.id)) return [];
+    return [{
+      id: setting.id,
+      label: getModelDefinition(setting.id).label,
+      imageAssetId: setting.imageAssetId ?? null,
+    }];
   });
 }
 
@@ -552,6 +685,7 @@ export function adminModelDtos(snapshot: ModelSettingsSnapshot): AdminModelDto[]
         upstreamModel: setting.upstreamModel,
         baseUrl: setting.baseUrl,
         accessScope: setting.accessScope,
+        imageAssetId: setting.imageAssetId ?? null,
       };
     }
     const definition = getModelDefinition(setting.id);
@@ -565,6 +699,7 @@ export function adminModelDtos(snapshot: ModelSettingsSnapshot): AdminModelDto[]
       providerConfigured: isModelProviderConfigured(setting.id),
       revision: setting.revision,
       updatedAt: setting.updatedAt,
+      imageAssetId: setting.imageAssetId ?? null,
     };
   });
 }
@@ -587,7 +722,7 @@ export function enabledModelSetting(
     }
     return setting;
   }
-  if (!setting.alwaysEnabled && !isModelProviderConfigured(setting.id)) {
+  if (!isModelProviderConfigured(setting.id)) {
     throw new UserVisibleError("Das ausgewählte Modell ist derzeit nicht verfügbar.", 503);
   }
   return setting;
@@ -648,6 +783,9 @@ export async function updateOpenAICompatibleModel(options: {
   });
   if (error) {
     if (typeof error === "object" && error.code === "40001") throw revisionConflictError();
+    if (typeof error === "object" && error.code === "23514") {
+      throw new UserVisibleError("Zuerst muss ein anderes Standardmodell gewählt werden.", 409);
+    }
     if (typeof error === "object" && error.code === "23505") {
       throw new UserVisibleError("Diese Modell-ID ist bereits konfiguriert.", 409);
     }
@@ -675,6 +813,9 @@ export async function deleteOpenAICompatibleModel(options: {
   });
   if (error) {
     if (typeof error === "object" && error.code === "40001") throw revisionConflictError();
+    if (typeof error === "object" && error.code === "23514") {
+      throw new UserVisibleError("Zuerst muss ein anderes Standardmodell gewählt werden.", 409);
+    }
     throw new UserVisibleError("Das Modell konnte nicht gelöscht werden.", 503);
   }
 }

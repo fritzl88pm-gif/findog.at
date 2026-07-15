@@ -8,9 +8,11 @@ import {
   createOpenAICompatibleModel,
   parseCreateOpenAICompatibleModelBody,
   parseModelSettingsPatch,
+  readModelDefaultPolicy,
   readModelSettings,
   updateModelSettings,
 } from "@/lib/model-settings";
+import { modelImageAssetDtos, modelImageUrlMap, readModelImageAssets } from "@/lib/model-images";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { GET, PATCH, POST } from "./route";
 
@@ -27,10 +29,16 @@ vi.mock("@/lib/model-settings", async () => {
     createOpenAICompatibleModel: vi.fn(),
     parseCreateOpenAICompatibleModelBody: vi.fn(),
     parseModelSettingsPatch: vi.fn(),
+    readModelDefaultPolicy: vi.fn(),
     readModelSettings: vi.fn(),
     updateModelSettings: vi.fn(),
   };
 });
+vi.mock("@/lib/model-images", () => ({
+  modelImageAssetDtos: vi.fn(),
+  modelImageUrlMap: vi.fn(),
+  readModelImageAssets: vi.fn(),
+}));
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
 
 const input = {
@@ -56,6 +64,12 @@ beforeEach(() => {
   vi.mocked(parseCreateOpenAICompatibleModelBody).mockReturnValue(input);
   vi.mocked(createOpenAICompatibleModel).mockResolvedValue({ id: "openai:00000000-0000-4000-8000-000000000001" } as never);
   vi.mocked(adminModelDtos).mockReturnValue([{ id: "openai:1", label: "vendor-model" }] as never);
+  vi.mocked(readModelDefaultPolicy).mockResolvedValue({
+    modelId: "deepseek-v4-pro", revision: 1, updatedAt: "2026-07-15T00:00:00Z", updatedBy: null,
+  });
+  vi.mocked(readModelImageAssets).mockResolvedValue([]);
+  vi.mocked(modelImageUrlMap).mockReturnValue(new Map());
+  vi.mocked(modelImageAssetDtos).mockReturnValue([]);
 });
 
 describe("admin OpenAI-compatible model collection route", () => {

@@ -7,8 +7,6 @@ import { encryptOpenAICompatibleApiKey } from "./openai-compatible-credentials";
 import {
   adminModelDtos,
   assertConfiguredModelsCanBeEnabled,
-  enabledModelSetting,
-  flashOnlyModelSettings,
   parseModelSettingsPatch,
   publicEnabledModelDtos,
   readEffectiveModelSettings,
@@ -90,7 +88,7 @@ function storedRows() {
         provider: "deepseek",
         upstream_model: "deepseek-v4-flash",
         is_dynamic: false,
-        always_enabled: true,
+        always_enabled: false,
         enabled: true,
         reasoning_setting: "disabled",
         revision: 1,
@@ -131,16 +129,12 @@ describe("model settings repository", () => {
     expect(fake.from).toHaveBeenCalledWith("model_settings");
   });
 
-  it("fails closed to Flash only when the table read fails or is incomplete", async () => {
+  it("fails closed when the table read fails or is incomplete", async () => {
     const failed = readClient({ data: null, error: new Error("offline") });
     const incomplete = readClient({ data: storedRows().slice(0, 3), error: null });
 
-    await expect(readEffectiveModelSettings(failed.client as never)).resolves.toEqual(
-      flashOnlyModelSettings(),
-    );
-    await expect(readEffectiveModelSettings(incomplete.client as never)).resolves.toEqual(
-      flashOnlyModelSettings(),
-    );
+    await expect(readEffectiveModelSettings(failed.client as never)).rejects.toMatchObject({ status: 503 });
+    await expect(readEffectiveModelSettings(incomplete.client as never)).rejects.toMatchObject({ status: 503 });
     await expect(readModelSettings(failed.client as never)).rejects.toMatchObject({ status: 503 });
   });
 
@@ -152,7 +146,7 @@ describe("model settings repository", () => {
       models: requestedSettings().map((setting) => setting.id === "deepseek-v4-flash"
         ? { ...setting, enabled: false }
         : setting),
-    })).toThrow("Standardmodell");
+    })).not.toThrow();
     expect(() => parseModelSettingsPatch({
       models: requestedSettings().map((setting) => setting.id === "glm-5-turbo"
         ? { ...setting, reasoning: "max" }
@@ -250,8 +244,8 @@ describe("model settings repository", () => {
     const snapshot = await readModelSettings(readClient({ data: storedRows(), error: null }).client as never);
 
     expect(publicEnabledModelDtos(snapshot)).toEqual([
-      { id: "deepseek-v4-flash", label: "DeepSeek v4 Flash" },
-      { id: "deepseek-v4-pro", label: "DeepSeek v4 Pro" },
+      { id: "deepseek-v4-flash", label: "DeepSeek v4 Flash", imageAssetId: null },
+      { id: "deepseek-v4-pro", label: "DeepSeek v4 Pro", imageAssetId: null },
     ]);
     expect(adminModelDtos(snapshot)).toContainEqual(expect.objectContaining({
       id: "glm-5.2",
@@ -268,12 +262,6 @@ describe("model settings repository", () => {
     expect(JSON.stringify(adminModelDtos(snapshot))).not.toContain("zai-secret");
   });
 
-  it("rejects non-Flash selection from a fallback snapshot", () => {
-    expect(enabledModelSetting(flashOnlyModelSettings(), "deepseek-v4-flash").reasoning)
-      .toBe("disabled");
-    expect(() => enabledModelSetting(flashOnlyModelSettings(), "deepseek-v4-pro"))
-      .toThrow("nicht aktiviert");
-  });
 });
 
 describe("admin model DTO separation", () => {
@@ -287,7 +275,7 @@ describe("admin model DTO separation", () => {
           provider: "deepseek",
           upstreamModel: "deepseek-v4-flash",
           isDynamic: false,
-          alwaysEnabled: true,
+          alwaysEnabled: false,
           enabled: true,
           reasoning: "disabled",
           revision: 1,
@@ -361,9 +349,10 @@ describe("admin model DTO separation", () => {
     expect(dynamicDtos[0]).toEqual({
       id: "openai:00000000-0000-4000-8000-000000000002",
       label: "Qwen3 Gateway",
+      imageAssetId: null,
     });
-    // The normal user menu renders only model.label - no extra fields
-    expect(Object.keys(dynamicDtos[0])).toEqual(["id", "label"]);
+    // The normal user menu receives only presentation fields, never provider credentials.
+    expect(Object.keys(dynamicDtos[0])).toEqual(["id", "label", "imageAssetId"]);
   });
 
   it("adminModelDtos separates dynamic models with provider metadata", () => {
@@ -376,7 +365,7 @@ describe("admin model DTO separation", () => {
           provider: "deepseek",
           upstreamModel: "deepseek-v4-flash",
           isDynamic: false,
-          alwaysEnabled: true,
+          alwaysEnabled: false,
           enabled: true,
           reasoning: "disabled",
           revision: 1,

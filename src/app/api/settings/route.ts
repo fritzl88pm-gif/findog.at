@@ -3,7 +3,13 @@ import { NextResponse } from "next/server";
 import { isAdminUser } from "@/lib/admin-auth";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
-import { publicEnabledModelDtos, readEffectiveModelSettings } from "@/lib/model-settings";
+import { modelImageUrlMap, readModelImageAssets } from "@/lib/model-images";
+import {
+  globalDefaultModelSetting,
+  publicEnabledModelDtos,
+  readEffectiveModelSettings,
+  readModelDefaultPolicy,
+} from "@/lib/model-settings";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -16,14 +22,26 @@ export async function GET(request: Request) {
     }
 
     const user = await authenticateSupabaseRequest(request, supabase);
-    const [isAdmin, modelSettings] = await Promise.all([
+    const [isAdmin, modelSettings, defaultPolicy, imageAssets] = await Promise.all([
       isAdminUser(supabase, user.id),
       readEffectiveModelSettings(supabase),
+      readModelDefaultPolicy(supabase),
+      readModelImageAssets(supabase),
     ]);
+    const defaultSetting = globalDefaultModelSetting(modelSettings, defaultPolicy);
+    const imageUrls = modelImageUrlMap(supabase, imageAssets);
+    const enabledModels = publicEnabledModelDtos(modelSettings, isAdmin).map((model) => ({
+      id: model.id,
+      label: model.label,
+      imageUrl: model.imageAssetId ? imageUrls.get(model.imageAssetId) ?? null : null,
+    }));
+    const defaultModel = enabledModels.find((model) => model.id === defaultSetting.id);
+    if (!defaultModel) throw new UserVisibleError("Das Standardmodell ist derzeit nicht verfügbar.", 503);
 
     return NextResponse.json({
       isAdmin,
-      enabledModels: publicEnabledModelDtos(modelSettings, isAdmin),
+      enabledModels,
+      defaultModel,
     });
   } catch (error) {
     if (error instanceof UserVisibleError) {

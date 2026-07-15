@@ -2,18 +2,30 @@ import { NextResponse } from "next/server";
 
 import { authenticateAdminRequest, adminUsersErrorResponse } from "@/lib/admin-users";
 import { UserVisibleError } from "@/lib/errors";
+import { modelImageAssetDtos, modelImageUrlMap, readModelImageAssets } from "@/lib/model-images";
 import {
   adminModelDtos,
   assertConfiguredModelsCanBeEnabled,
   createOpenAICompatibleModel,
   parseCreateOpenAICompatibleModelBody,
   parseModelSettingsPatch,
+  readModelDefaultPolicy,
   readModelSettings,
   updateModelSettings,
 } from "@/lib/model-settings";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
+
+function modelDtosWithImages(
+  models: ReturnType<typeof adminModelDtos>,
+  imageUrls: ReadonlyMap<string, string>,
+) {
+  return models.map((model) => ({
+    ...model,
+    imageUrl: model.imageAssetId ? imageUrls.get(model.imageAssetId) ?? null : null,
+  }));
+}
 
 function serverClient() {
   const supabase = getSupabaseServerClient();
@@ -48,7 +60,18 @@ export async function GET(request: Request) {
   try {
     const supabase = serverClient();
     await authenticateAdminRequest(request, supabase);
-    return NextResponse.json({ models: adminModelDtos(await readModelSettings(supabase)) });
+    const [settings, defaultPolicy, imageAssets] = await Promise.all([
+      readModelSettings(supabase),
+      readModelDefaultPolicy(supabase),
+      readModelImageAssets(supabase),
+    ]);
+    const imageUrls = modelImageUrlMap(supabase, imageAssets);
+    return NextResponse.json({
+      models: modelDtosWithImages(adminModelDtos(settings), imageUrls),
+      defaultModelId: defaultPolicy.modelId,
+      defaultRevision: defaultPolicy.revision,
+      images: modelImageAssetDtos(supabase, imageAssets),
+    });
   } catch (error) {
     return adminUsersErrorResponse(error, "Die Modellkonfiguration konnte nicht geladen werden.");
   }
@@ -68,7 +91,10 @@ export async function PATCH(request: Request) {
     const current = await readModelSettings(supabase);
     assertConfiguredModelsCanBeEnabled(current, requested);
     const updated = await updateModelSettings({ supabase, adminUserId: admin.id, current, requested });
-    return NextResponse.json({ models: adminModelDtos(updated) });
+    const imageAssets = await readModelImageAssets(supabase);
+    return NextResponse.json({
+      models: modelDtosWithImages(adminModelDtos(updated), modelImageUrlMap(supabase, imageAssets)),
+    });
   } catch (error) {
     return adminUsersErrorResponse(error, "Die Modellkonfiguration konnte nicht gespeichert werden.");
   }

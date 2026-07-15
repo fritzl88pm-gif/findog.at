@@ -22,7 +22,6 @@ import {
   MAX_PDF_UPLOADS,
   isDynamicModelId,
   isSupportedModel,
-  type ChatModel,
 } from "@/lib/config";
 import {
   DEFAULT_CHAT_SETTINGS,
@@ -120,11 +119,13 @@ type ChatResponsePayload = {
 type AuthenticatedSettings = {
   isAdmin: boolean;
   enabledModels: EnabledModelDescriptor[];
+  defaultModel: EnabledModelDescriptor;
 };
 
 type EnabledModelDescriptor = {
   id: string;
   label: string;
+  imageUrl: string | null;
 };
 
 type AdminReasoningOption = {
@@ -147,6 +148,17 @@ type AdminModelSetting = {
   displayName?: string | null;
   baseUrl?: string;
   accessScope?: "disabled" | "admins" | "all";
+  imageAssetId: string | null;
+  imageUrl: string | null;
+};
+
+type AdminModelImage = {
+  id: string;
+  originalFilename: string;
+  mimeType: string;
+  byteSize: number;
+  createdAt: string;
+  url: string;
 };
 
 type AdminUserSummary = {
@@ -226,7 +238,6 @@ type BfgProResult = {
 };
 
 const SETTINGS_STORAGE_KEY = "findog.settings.v1";
-const FLASH_MODEL: ChatModel = "deepseek-v4-flash";
 const INITIAL_PENDING_TEXT = "Recherche wird vorbereitet";
 const BFG_SORT_OPTIONS: ReadonlyArray<{ value: BfgSort; label: string }> = [
   { value: "1", label: "Relevanz" },
@@ -454,7 +465,8 @@ function normalizeEnabledModelDescriptors(value: unknown): EnabledModelDescripto
     }
 
     seen.add(item.id);
-    return [{ id: item.id, label }];
+    if (item.imageUrl !== null && typeof item.imageUrl !== "string") return [];
+    return [{ id: item.id, label, imageUrl: item.imageUrl }];
   });
 }
 
@@ -469,16 +481,19 @@ async function fetchAuthenticatedSettings(accessToken: string): Promise<Authenti
     );
   }
   const enabledModels = normalizeEnabledModelDescriptors(payload.enabledModels);
+  const defaultModels = normalizeEnabledModelDescriptors([payload.defaultModel]);
   if (
     typeof payload.isAdmin !== "boolean"
     || enabledModels.length !== (Array.isArray(payload.enabledModels) ? payload.enabledModels.length : -1)
-    || !enabledModels.some((model) => model.id === "deepseek-v4-flash")
+    || defaultModels.length !== 1
+    || !enabledModels.some((model) => model.id === defaultModels[0]?.id)
   ) {
     throw new Error("Die geladenen Einstellungen sind ungültig.");
   }
   return {
     isAdmin: payload.isAdmin,
     enabledModels,
+    defaultModel: defaultModels[0]!,
   };
 }
 
@@ -603,6 +618,8 @@ function normalizeAdminModels(value: unknown): AdminModelSetting[] | null {
       || !Number.isSafeInteger(item.revision)
       || item.revision <= 0
       || (item.updatedAt !== null && typeof item.updatedAt !== "string")
+      || (item.imageAssetId !== null && typeof item.imageAssetId !== "string")
+      || (item.imageUrl !== null && typeof item.imageUrl !== "string")
     ) {
       return [];
     }
@@ -644,6 +661,8 @@ function normalizeAdminModels(value: unknown): AdminModelSetting[] | null {
       providerConfigured: item.providerConfigured,
       revision: item.revision,
       updatedAt: item.updatedAt,
+      imageAssetId: item.imageAssetId,
+      imageUrl: item.imageUrl,
       ...(typeof item.provider === "string" ? { provider: item.provider } : {}),
       ...(typeof item.upstreamModel === "string" ? { upstreamModel: item.upstreamModel } : {}),
       ...((typeof item.displayName === "string" || item.displayName === null) ? { displayName: item.displayName } : {}),
@@ -653,6 +672,31 @@ function normalizeAdminModels(value: unknown): AdminModelSetting[] | null {
   });
 
   return models.length === value.length ? models : null;
+}
+
+function normalizeAdminModelImages(value: unknown): AdminModelImage[] | null {
+  if (!Array.isArray(value)) return null;
+  const images = value.flatMap((entry): AdminModelImage[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const item = entry as Record<string, unknown>;
+    if (
+      typeof item.id !== "string"
+      || typeof item.originalFilename !== "string"
+      || typeof item.mimeType !== "string"
+      || typeof item.byteSize !== "number"
+      || typeof item.createdAt !== "string"
+      || typeof item.url !== "string"
+    ) return [];
+    return [{
+      id: item.id,
+      originalFilename: item.originalFilename,
+      mimeType: item.mimeType,
+      byteSize: item.byteSize,
+      createdAt: item.createdAt,
+      url: item.url,
+    }];
+  });
+  return images.length === value.length ? images : null;
 }
 
 function normalizeBfgFacetOptions(value: unknown): BfgFacetOption[] | null {
@@ -1609,6 +1653,10 @@ export default function Home() {
   const [adminError, setAdminError] = useState("");
   const [adminNotice, setAdminNotice] = useState("");
   const [adminModels, setAdminModels] = useState<AdminModelSetting[]>([]);
+  const [adminDefaultModelId, setAdminDefaultModelId] = useState("");
+  const [adminDefaultRevision, setAdminDefaultRevision] = useState(0);
+  const [adminModelImages, setAdminModelImages] = useState<AdminModelImage[]>([]);
+  const [isAdminModelImageUploading, setIsAdminModelImageUploading] = useState(false);
   const [isAdminModelsLoading, setIsAdminModelsLoading] = useState(false);
   const [isAdminModelsSaving, setIsAdminModelsSaving] = useState(false);
   const [adminCreateModel, setAdminCreateModel] = useState({ upstreamModel: "", displayName: "", baseUrl: "", apiKey: "", accessScope: "disabled" as "disabled" | "admins" | "all" });
@@ -1794,6 +1842,9 @@ export default function Home() {
         setEnabledModels([]);
         setIsModelPolicyLoaded(false);
         setAdminModels([]);
+        setAdminDefaultModelId("");
+        setAdminDefaultRevision(0);
+        setAdminModelImages([]);
         setAdminUsers([]);
         setAdminUserProfile(null);
         setAdminUserForm({ email: "", password: "" });
@@ -1884,9 +1935,14 @@ export default function Home() {
         }
         setIsAdmin(loadedSettings.isAdmin);
         setEnabledModels(loadedSettings.enabledModels);
-        setSettings((current) => loadedSettings.enabledModels.some((model) => model.id === current.model)
-          ? current
-          : { ...current, model: FLASH_MODEL });
+        setSettings((current) => {
+          if (current.followsDefault) {
+            return { model: loadedSettings.defaultModel.id, followsDefault: true };
+          }
+          return loadedSettings.enabledModels.some((model) => model.id === current.model)
+            ? current
+            : { model: loadedSettings.defaultModel.id, followsDefault: true };
+        });
         setIsModelPolicyLoaded(true);
         if (!loadedSettings.isAdmin) {
           setAppView((current) => current === "administration" ? "chat" : current);
@@ -1909,7 +1965,8 @@ export default function Home() {
   useEffect(() => {
     if (isLoaded) {
       writeJson(SETTINGS_STORAGE_KEY, {
-        model: settings.model,
+        model: settings.model!,
+        followsDefault: settings.followsDefault,
       });
     }
   }, [isLoaded, settings]);
@@ -2066,18 +2123,14 @@ export default function Home() {
     });
   }, [isSending, messages, pendingStepText, pendingSteps]);
 
-  function updateSetting<Key extends keyof ChatSettings>(key: Key, value: ChatSettings[Key]) {
-    setSettings((current) => ({
-      ...current,
-      [key]: value,
-    }));
-  }
-
-  function applyEnabledModels(models: EnabledModelDescriptor[]) {
+  function applyEnabledModels(models: EnabledModelDescriptor[], defaultModel: EnabledModelDescriptor) {
     setEnabledModels(models);
-    setSettings((current) => models.some((model) => model.id === current.model)
-      ? current
-      : { ...current, model: FLASH_MODEL });
+    setSettings((current) => {
+      if (current.followsDefault) return { model: defaultModel.id, followsDefault: true };
+      return models.some((model) => model.id === current.model)
+        ? current
+        : { model: defaultModel.id, followsDefault: true };
+    });
     setIsModelPolicyLoaded(true);
   }
 
@@ -2096,7 +2149,7 @@ export default function Home() {
     try {
       const loadedSettings = await fetchAuthenticatedSettings(accessToken);
       setIsAdmin(loadedSettings.isAdmin);
-      applyEnabledModels(loadedSettings.enabledModels);
+      applyEnabledModels(loadedSettings.enabledModels, loadedSettings.defaultModel);
       setOpenComposerMenu("model");
     } catch {
       setError("Die freigegebenen Modelle konnten nicht geladen werden.");
@@ -2267,7 +2320,7 @@ export default function Home() {
       }
       removeStoredValue(SETTINGS_STORAGE_KEY);
       removeStoredValue(chatHistoryStorageKey(user.id));
-      setSettings({ ...DEFAULT_CHAT_SETTINGS, model: FLASH_MODEL });
+      setSettings(DEFAULT_CHAT_SETTINGS);
       setEnabledModels([]);
       setIsModelPolicyLoaded(false);
       setSession(null);
@@ -2592,7 +2645,17 @@ export default function Home() {
       });
       const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       const models = normalizeAdminModels(payload.models);
-      if (!response.ok || !models) {
+      const images = normalizeAdminModelImages(payload.images);
+      if (
+        !response.ok
+        || !models
+        || !images
+        || typeof payload.defaultModelId !== "string"
+        || !models.some((model) => model.id === payload.defaultModelId)
+        || typeof payload.defaultRevision !== "number"
+        || !Number.isSafeInteger(payload.defaultRevision)
+        || payload.defaultRevision <= 0
+      ) {
         throw new Error(
           typeof payload.error === "string"
             ? payload.error
@@ -2600,8 +2663,14 @@ export default function Home() {
         );
       }
       setAdminModels(models);
+      setAdminDefaultModelId(payload.defaultModelId);
+      setAdminDefaultRevision(payload.defaultRevision);
+      setAdminModelImages(images);
     } catch (modelSettingsError) {
       setAdminModels([]);
+      setAdminDefaultModelId("");
+      setAdminDefaultRevision(0);
+      setAdminModelImages([]);
       setAdminError(modelSettingsError instanceof Error
         ? modelSettingsError.message
         : "Modelleinstellungen konnten nicht geladen werden.");
@@ -2612,7 +2681,7 @@ export default function Home() {
 
   function updateAdminModelEnabled(modelId: string, enabled: boolean) {
     setAdminModels((current) => current.map((model) => model.id === modelId
-      ? { ...model, enabled: model.alwaysEnabled ? true : enabled }
+      ? { ...model, enabled }
       : model));
   }
 
@@ -2644,7 +2713,7 @@ export default function Home() {
             .filter((model) => !isDynamicModelId(model.id))
             .map((model) => ({
               id: model.id,
-              enabled: model.alwaysEnabled ? true : model.enabled,
+              enabled: model.enabled,
               reasoning: model.reasoning,
               revision: model.revision,
             })),
@@ -2663,7 +2732,7 @@ export default function Home() {
       setAdminModels(models);
       const publicSettings = await fetchAuthenticatedSettings(accessToken);
       setIsAdmin(publicSettings.isAdmin);
-      applyEnabledModels(publicSettings.enabledModels);
+      applyEnabledModels(publicSettings.enabledModels, publicSettings.defaultModel);
       setAdminNotice("Die Modelleinstellungen wurden gespeichert.");
     } catch (saveError) {
       setAdminError(saveError instanceof Error
@@ -2678,7 +2747,86 @@ export default function Home() {
     await loadAdminModels(accessToken);
     const publicSettings = await fetchAuthenticatedSettings(accessToken);
     setIsAdmin(publicSettings.isAdmin);
-    applyEnabledModels(publicSettings.enabledModels);
+    applyEnabledModels(publicSettings.enabledModels, publicSettings.defaultModel);
+  }
+
+  async function saveAdminDefaultModel(modelId: string) {
+    const accessToken = session?.access_token;
+    if (!accessToken || !isAdmin || isAdminModelsSaving || adminDefaultRevision <= 0) return;
+    setAdminError("");
+    setAdminNotice("");
+    setIsAdminModelsSaving(true);
+    try {
+      const response = await fetch("/api/admin/models/default", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ modelId, revision: adminDefaultRevision }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) {
+        throw new Error(typeof payload.error === "string" ? payload.error : "Das Standardmodell konnte nicht gespeichert werden.");
+      }
+      await refreshModelSettings(accessToken);
+      setAdminNotice("Das Standardmodell wurde gespeichert.");
+    } catch (defaultError) {
+      setAdminError(defaultError instanceof Error ? defaultError.message : "Das Standardmodell konnte nicht gespeichert werden.");
+    } finally {
+      setIsAdminModelsSaving(false);
+    }
+  }
+
+  async function saveAdminModelImage(model: AdminModelSetting, imageAssetId: string | null) {
+    const accessToken = session?.access_token;
+    if (!accessToken || !isAdmin || isAdminModelsSaving) return;
+    setAdminError("");
+    setAdminNotice("");
+    setIsAdminModelsSaving(true);
+    try {
+      const response = await fetch(`/api/admin/models/${encodeURIComponent(model.id)}/image`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ imageAssetId, revision: model.revision }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) {
+        throw new Error(typeof payload.error === "string" ? payload.error : "Das Modellbild konnte nicht gespeichert werden.");
+      }
+      await refreshModelSettings(accessToken);
+      setAdminNotice("Das Modellbild wurde gespeichert.");
+    } catch (imageError) {
+      setAdminError(imageError instanceof Error ? imageError.message : "Das Modellbild konnte nicht gespeichert werden.");
+    } finally {
+      setIsAdminModelsSaving(false);
+    }
+  }
+
+  async function uploadAdminModelImage(event: ChangeEvent<HTMLInputElement>) {
+    const accessToken = session?.access_token;
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!accessToken || !isAdmin || !file || isAdminModelImageUploading) return;
+    setAdminError("");
+    setAdminNotice("");
+    setIsAdminModelImageUploading(true);
+    try {
+      const formData = new FormData();
+      formData.set("image", file);
+      const response = await fetch("/api/admin/model-images", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: formData,
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) {
+        throw new Error(typeof payload.error === "string" ? payload.error : "Das Modellbild konnte nicht hochgeladen werden.");
+      }
+      await loadAdminModels(accessToken);
+      setAdminNotice("Das Modellbild wurde hochgeladen und kann jetzt ausgewählt werden.");
+    } catch (uploadError) {
+      setAdminError(uploadError instanceof Error ? uploadError.message : "Das Modellbild konnte nicht hochgeladen werden.");
+    } finally {
+      setIsAdminModelImageUploading(false);
+    }
   }
 
   async function createOpenAICompatibleModel() {
@@ -3371,7 +3519,7 @@ export default function Home() {
         messages: Array<Pick<ChatMessage, "role" | "content">>;
         conversationId?: string;
       } = {
-        model: settings.model,
+        model: settings.model!,
         messages: nextMessages.map((message) => ({
           role: message.role,
           content: message.content,
@@ -3625,8 +3773,8 @@ export default function Home() {
     && !isSending
     && !isDeleting;
   const historyControlsDisabled = isSending || isHistoryLoading || isDeleting;
-  const currentModelName = enabledModels.find((model) => model.id === settings.model)?.label
-    ?? "Modell wird geladen…";
+  const currentModel = enabledModels.find((model) => model.id === settings.model);
+  const currentModelName = currentModel?.label ?? "Modell wird geladen…";
 
   if (!isAuthLoaded) {
     return (
@@ -4649,6 +4797,58 @@ export default function Home() {
                 <h2 id="admin-model-settings-title">Modelle</h2>
                 <p>Legt zentral fest, welche Modelle im Chat auswählbar sind und welche Reasoning-Stufe sie verwenden.</p>
               </div>
+              {adminModels.length > 0 ? (
+                <div className="admin-model-global-controls">
+                  <div className="field-group">
+                    <label htmlFor="admin-default-model">Standardmodell für alle Benutzer</label>
+                    <select
+                      id="admin-default-model"
+                      value={adminDefaultModelId}
+                      onChange={(event) => void saveAdminDefaultModel(event.target.value)}
+                      disabled={isAdminModelsSaving || adminDefaultRevision <= 0}
+                    >
+                      {adminModels.filter((model) => model.enabled
+                        && model.providerConfigured
+                        && (!isDynamicModelId(model.id) || model.accessScope === "all"))
+                        .map((model) => <option value={model.id} key={model.id}>{model.label}</option>)}
+                    </select>
+                    <small>Gilt für neue Benutzer und für Benutzer, die weiterhin dem Standard folgen.</small>
+                  </div>
+                  <div className="field-group">
+                    <label htmlFor="admin-model-image-upload">Neues Modellbild hochladen</label>
+                    <input
+                      id="admin-model-image-upload"
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/avif"
+                      onChange={(event) => void uploadAdminModelImage(event)}
+                      disabled={isAdminModelImageUploading || isAdminModelsSaving}
+                    />
+                    <small>PNG, JPEG, WebP oder AVIF, maximal 1 MB. Bilder können mehrfach verwendet werden.</small>
+                  </div>
+                  <div className="admin-model-image-assignments">
+                    {adminModels.map((model) => (
+                      <div className="admin-model-image-assignment" key={`image-${model.id}`}>
+                        {model.imageUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={model.imageUrl} alt="" />
+                        ) : <span className="admin-model-image-placeholder" aria-hidden="true" />}
+                        <label htmlFor={`admin-model-image-${model.id}`}>{model.label}</label>
+                        <select
+                          id={`admin-model-image-${model.id}`}
+                          value={model.imageAssetId ?? ""}
+                          onChange={(event) => void saveAdminModelImage(model, event.target.value || null)}
+                          disabled={isAdminModelsSaving || isAdminModelImageUploading}
+                        >
+                          <option value="">Kein Bild</option>
+                          {adminModelImages.map((image) => (
+                            <option value={image.id} key={image.id}>{image.originalFilename}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               {isAdminModelsLoading ? (
                 <p className="admin-empty-state">Modelleinstellungen werden geladen…</p>
               ) : adminModels.length === 0 ? (
@@ -4660,10 +4860,10 @@ export default function Home() {
                       <label className="admin-model-toggle">
                         <input
                           type="checkbox"
-                          checked={model.alwaysEnabled || model.enabled}
+                          checked={model.enabled}
                           onChange={(event) => updateAdminModelEnabled(model.id, event.target.checked)}
                           disabled={
-                            model.alwaysEnabled
+                            model.id === adminDefaultModelId
                             || (!model.providerConfigured && !model.enabled)
                             || isAdminModelsSaving
                           }
@@ -4671,10 +4871,8 @@ export default function Home() {
                         <span>
                           <strong>{model.label}</strong>
                           <small>
-                            {model.alwaysEnabled
-                              ? model.providerConfigured
-                                ? "Immer aktiviert"
-                                : "Immer aktiviert · Provider nicht konfiguriert"
+                            {model.id === adminDefaultModelId
+                              ? "Aktuelles Standardmodell"
                               : model.providerConfigured
                                 ? "Zentral aktivierbar"
                                 : "Provider nicht konfiguriert"}
@@ -5247,7 +5445,11 @@ export default function Home() {
                     disabled={isSending || isDeleting || !isModelPolicyLoaded}
                     onClick={() => void toggleComposerModelMenu()}
                   >
-                    {currentModelName}
+                    <span>{currentModelName}</span>
+                    {currentModel?.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img className="composer-model-icon" src={currentModel.imageUrl} alt="" />
+                    ) : null}
                   </button>
                   {openComposerMenu === "model" && !isSending && !isDeleting ? (
                     <div
@@ -5265,7 +5467,7 @@ export default function Home() {
                           aria-checked={settings.model === model.id}
                           key={model.id}
                           onClick={() => {
-                            updateSetting("model", model.id);
+                            setSettings({ model: model.id, followsDefault: false });
                             setOpenComposerMenu(null);
                           }}
                         >
@@ -5273,6 +5475,10 @@ export default function Home() {
                             {settings.model === model.id ? "✓" : ""}
                           </span>
                           <span>{model.label}</span>
+                          {model.imageUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img className="composer-model-icon" src={model.imageUrl} alt="" />
+                          ) : null}
                         </button>
                       ))}
                     </div>

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   AVAILABLE_MODELS,
-  DEFAULT_MODEL,
   MODEL_CATALOG,
   MAX_IMAGE_UPLOAD_BYTES,
   MAX_IMAGE_UPLOADS,
@@ -177,8 +176,7 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
 });
 
 describe("model policy", () => {
-  it("supports the fixed provider catalog, with Flash always enabled and default", () => {
-    expect(DEFAULT_MODEL).toBe("deepseek-v4-flash");
+  it("supports the fixed provider catalog without a privileged built-in default", () => {
     expect(AVAILABLE_MODELS).toEqual([
       "deepseek-v4-flash",
       "deepseek-v4-pro",
@@ -186,9 +184,10 @@ describe("model policy", () => {
       "glm-5-turbo",
     ]);
     expect(MODEL_CATALOG["deepseek-v4-flash"]).toMatchObject({
-      alwaysEnabled: true,
+      alwaysEnabled: false,
       defaultReasoning: "disabled",
     });
+    expect(Object.values(MODEL_CATALOG).every((model) => !model.alwaysEnabled)).toBe(true);
     expect(MODEL_CATALOG["deepseek-v4-pro"].defaultReasoning).toBe("high");
     expect(MODEL_CATALOG["glm-5.2"].defaultReasoning).toBe("max");
     expect(MODEL_CATALOG["glm-5-turbo"].reasoningOptions).toEqual(["disabled", "enabled"]);

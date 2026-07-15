@@ -16,8 +16,8 @@ import { isAdminUser } from "@/lib/admin-auth";
 import { runAgent } from "@/lib/agent";
 import { resolveLlmRuntime } from "@/lib/llm/runtime";
 import {
-  flashOnlyModelSettings,
   readEffectiveModelSettings,
+  readModelDefaultPolicy,
   type ModelSettingsSnapshot,
 } from "@/lib/model-settings";
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
@@ -63,7 +63,7 @@ vi.mock("@/lib/llm/runtime", () => ({
 
 vi.mock("@/lib/model-settings", async () => {
   const actual = await vi.importActual<typeof import("@/lib/model-settings")>("@/lib/model-settings");
-  return { ...actual, readEffectiveModelSettings: vi.fn() };
+  return { ...actual, readEffectiveModelSettings: vi.fn(), readModelDefaultPolicy: vi.fn() };
 });
 
 vi.mock("@/lib/admin-request-history", () => ({
@@ -123,7 +123,7 @@ function databaseModelSettings(): ModelSettingsSnapshot {
         provider: "deepseek",
         upstreamModel: "deepseek-v4-flash",
         isDynamic: false,
-        alwaysEnabled: true,
+        alwaysEnabled: false,
         enabled: true,
         reasoning: "disabled",
         revision: 1,
@@ -216,6 +216,12 @@ describe("POST /api/chat uploads", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(readEffectiveModelSettings).mockResolvedValue(databaseModelSettings());
+    vi.mocked(readModelDefaultPolicy).mockResolvedValue({
+      modelId: "deepseek-v4-pro",
+      revision: 1,
+      updatedAt: "2026-07-15T12:00:00Z",
+      updatedBy: null,
+    });
   });
 
   it("ignores stale client prompt fields and never forwards them to the agent", async () => {
@@ -291,18 +297,18 @@ describe("POST /api/chat uploads", () => {
     });
   });
 
-  it("defaults to server-keyed DeepSeek v4 Flash and ignores stale client API keys", async () => {
+  it("uses the centrally configured default and ignores stale client API keys", async () => {
     const response = await POST(jsonRequest({ ...chatPayload(), deepSeekApiKey: "user-key" }));
 
     expect(response.status).toBe(200);
     expect(runAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        runtime: expect.objectContaining({ model: "deepseek-v4-flash", provider: "deepseek" }),
+        runtime: expect.objectContaining({ model: "deepseek-v4-pro", provider: "deepseek" }),
       }),
     );
   });
 
-  it("uses an enabled GLM runtime only for the agent and Flash for title generation", async () => {
+  it("uses the selected GLM runtime with disabled reasoning for title generation", async () => {
     const snapshot = databaseModelSettings();
     snapshot.models = snapshot.models.map((setting) => setting.id === "glm-5.2"
       ? { ...setting, enabled: true }
@@ -321,8 +327,8 @@ describe("POST /api/chat uploads", () => {
     }));
     expect(generateConversationTitle).toHaveBeenCalledWith(expect.objectContaining({
       runtime: expect.objectContaining({
-        model: "deepseek-v4-flash",
-        provider: "deepseek",
+        model: "glm-5.2",
+        provider: "zai",
         reasoning: "disabled",
       }),
     }));
@@ -352,24 +358,13 @@ describe("POST /api/chat uploads", () => {
     expect(runAgent).not.toHaveBeenCalled();
   });
 
-  it("fails closed to Flash only when model settings cannot be read", async () => {
-    vi.mocked(readEffectiveModelSettings).mockResolvedValueOnce(flashOnlyModelSettings());
-    const flashResponse = await POST(jsonRequest(chatPayload()));
+  it("fails closed when model settings cannot be read", async () => {
+    vi.mocked(readEffectiveModelSettings).mockRejectedValueOnce(
+      new UserVisibleError("Die Modellkonfiguration konnte nicht geladen werden.", 503),
+    );
+    const response = await POST(jsonRequest(chatPayload()));
 
-    expect(flashResponse.status).toBe(200);
-    expect(persistConversationTurn).toHaveBeenLastCalledWith(expect.objectContaining({
-      modelProvenance: expect.objectContaining({
-        model: "deepseek-v4-flash",
-        settingsRevision: null,
-        settingsSource: "fallback",
-      }),
-    }));
-
-    vi.clearAllMocks();
-    vi.mocked(readEffectiveModelSettings).mockResolvedValueOnce(flashOnlyModelSettings());
-    const proResponse = await POST(jsonRequest({ ...chatPayload(), model: "deepseek-v4-pro" }));
-
-    expect(proResponse.status).toBe(400);
+    expect(response.status).toBe(503);
     expect(runAgent).not.toHaveBeenCalled();
   });
 
@@ -566,7 +561,7 @@ describe("POST /api/chat uploads", () => {
     expect(persistConversationTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         title: "Präziser Gesprächstitle",
-        modelProvenance: expect.objectContaining({ model: "deepseek-v4-flash" }),
+        modelProvenance: expect.objectContaining({ model: "deepseek-v4-pro" }),
         steps: [],
       }),
     );
@@ -785,7 +780,7 @@ describe("POST /api/chat dynamic models", () => {
           provider: "deepseek",
           upstreamModel: "deepseek-v4-flash",
           isDynamic: false,
-          alwaysEnabled: true,
+          alwaysEnabled: false,
           enabled: true,
           reasoning: "disabled",
           revision: 1,
@@ -946,7 +941,7 @@ describe("POST /api/chat dynamic models", () => {
           provider: "deepseek",
           upstreamModel: "deepseek-v4-flash",
           isDynamic: false,
-          alwaysEnabled: true,
+          alwaysEnabled: false,
           enabled: true,
           reasoning: "disabled",
           revision: 1,
@@ -1045,7 +1040,7 @@ describe("POST /api/chat dynamic models", () => {
           provider: "deepseek",
           upstreamModel: "deepseek-v4-flash",
           isDynamic: false,
-          alwaysEnabled: true,
+          alwaysEnabled: false,
           enabled: true,
           reasoning: "disabled",
           revision: 1,
