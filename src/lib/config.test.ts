@@ -19,6 +19,18 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
     expect(DEFAULT_SYSTEM_PROMPT.length).toBeGreaterThan(24_000);
   });
 
+  it("includes internal organization and business allocation questions in scope", () => {
+    expect(DEFAULT_SYSTEM_PROMPT).toContain(
+      "Interne Organisations- und Geschäftsverteilungsfragen gehören ebenfalls zu deinem Zuständigkeitsbereich.",
+    );
+    expect(DEFAULT_SYSTEM_PROMPT).toContain(
+      "Interne Organisations- und Geschäftsverteilungsfragen sind primär in `Arbeitsbehelfe und interne Dokumente` zu recherchieren.",
+    );
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("OHB, Dienststellenzuständigkeiten, Kundenservice, Schalterdienst oder CC Scan");
+    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("Du beantwortest ausschließlich Fragen des österreichischen Steuerrechts");
+    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("Der Assistent unterstützt ausschließlich bei Fragen des österreichischen Steuerrechts");
+  });
+
   it("tells the assistant to fulfill explicit PDF document requests through the available download", () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain("# PDF-DOKUMENTE");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("PDF-Download");
