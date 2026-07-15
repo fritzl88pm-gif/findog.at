@@ -47,12 +47,17 @@ export type LlmResult = {
 };
 
 function providerLabel(runtime: LlmRuntime): string {
-  return runtime.provider === "deepseek" ? "DeepSeek" : "Z.AI";
+  if (runtime.provider === "deepseek") return "DeepSeek";
+  if (runtime.provider === "laozhang") return "LaoZhang";
+  return "Z.AI";
 }
 
 function providerError(runtime: LlmRuntime, status: number): string {
   const label = providerLabel(runtime);
   if (status === 401 || status === 403) {
+    if (runtime.provider === "laozhang") {
+      return "LaoZhang API-Zugang wurde abgelehnt. Bitte Administrator kontaktieren.";
+    }
     return `${label} API-Zugang wurde abgelehnt. Bitte Administrator kontaktieren.`;
   }
   if (status === 429) {
@@ -88,24 +93,30 @@ function completionPayload(
   tools: DeepSeekTool[],
 ): JsonObject {
   const usesThinking = thinkingEnabled(runtime);
+  const isLaoZhang = runtime.provider === "laozhang";
   const payload: JsonObject = {
     model: runtime.upstreamModel,
     messages,
-    thinking: { type: usesThinking ? "enabled" : "disabled" },
     stream: false,
   };
 
-  if (usesThinking) {
-    if (runtime.reasoning === "high" || runtime.reasoning === "max") {
-      payload.reasoning_effort = runtime.reasoning;
-    }
-  } else {
+  if (isLaoZhang) {
     payload.temperature = 0.2;
+  } else {
+    payload.thinking = { type: usesThinking ? "enabled" : "disabled" };
+
+    if (usesThinking) {
+      if (runtime.reasoning === "high" || runtime.reasoning === "max") {
+        payload.reasoning_effort = runtime.reasoning;
+      }
+    } else {
+      payload.temperature = 0.2;
+    }
   }
 
   if (tools.length > 0) {
     payload.tools = tools;
-    if (!usesThinking) {
+    if (!usesThinking && !isLaoZhang) {
       payload.tool_choice = "auto";
     }
   }

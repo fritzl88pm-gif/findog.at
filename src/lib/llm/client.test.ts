@@ -295,3 +295,173 @@ describe("provider-neutral chatCompletion", () => {
     })).rejects.toThrow("DeepSeek Anfrage ist mit HTTP 400 fehlgeschlagen.");
   });
 });
+
+describe("LaoZhang chat completion", () => {
+  const LAOZHANG_RUNTIME = {
+    model: "laozhang:00000000-0000-4000-8000-000000000001",
+    provider: "laozhang",
+    upstreamModel: "glm-5.2",
+    baseUrl: "https://api.laozhang.ai/v1",
+    apiKey: "lz-secret-key",
+    reasoning: "disabled",
+  } satisfies LlmRuntime;
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the correct LaoZhang API endpoint URL", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
+
+    await chatCompletion({
+      runtime: LAOZHANG_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.laozhang.ai/v1/chat/completions",
+    );
+  });
+
+  it("sends the upstream model in the request body", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
+
+    await chatCompletion({
+      runtime: LAOZHANG_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    });
+
+    const body = requestBody(fetchMock);
+    expect(body.model).toBe("glm-5.2");
+  });
+
+  it("includes bearer authorization header", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
+
+    await chatCompletion({
+      runtime: LAOZHANG_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    });
+
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers).toMatchObject({
+      Authorization: "Bearer lz-secret-key",
+    });
+  });
+
+  it("omits thinking and reasoning_effort from the payload", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
+
+    await chatCompletion({
+      runtime: LAOZHANG_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    });
+
+    const body = requestBody(fetchMock);
+    expect(body).not.toHaveProperty("thinking");
+    expect(body).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("keeps standard OpenAI-compatible fields (model, messages, stream, temperature)", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
+
+    await chatCompletion({
+      runtime: LAOZHANG_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    });
+
+    const body = requestBody(fetchMock);
+    expect(body).toMatchObject({
+      model: "glm-5.2",
+      messages: [{ role: "user", content: "Frage" }],
+      stream: false,
+      temperature: 0.2,
+    });
+  });
+
+  it("supports tool calling for laozhang", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(
+      responseMessage(
+        {
+          content: null,
+          tool_calls: [{
+            id: "call-1",
+            type: "function",
+            function: { name: "search_laws", arguments: { query: "EStG" } },
+          }],
+        },
+        "tool_calls",
+      ),
+    );
+
+    const result = await chatCompletion({
+      runtime: LAOZHANG_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+      tools: [TOOL],
+    });
+
+    expect(result.finishReason).toBe("tool_calls");
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].name).toBe("search_laws");
+  });
+
+  it("uses LaoZhang-specific error text for auth failures", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(new Response("Unauthorized", { status: 401 }));
+
+    await expect(chatCompletion({
+      runtime: LAOZHANG_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow("LaoZhang API-Zugang wurde abgelehnt");
+  });
+
+  it("uses LaoZhang-specific error text for forbidden failures", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(new Response("Forbidden", { status: 403 }));
+
+    await expect(chatCompletion({
+      runtime: LAOZHANG_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow("LaoZhang API-Zugang wurde abgelehnt");
+  });
+
+  it("includes tools in the payload when provided", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
+
+    await chatCompletion({
+      runtime: LAOZHANG_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+      tools: [TOOL],
+    });
+
+    const body = requestBody(fetchMock);
+    expect(body.tools).toBeDefined();
+    expect(Array.isArray(body.tools)).toBe(true);
+    expect(body.tools).toHaveLength(1);
+  });
+
+  it("does not set a tool_choice for laozhang", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
+
+    await chatCompletion({
+      runtime: LAOZHANG_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+      tools: [TOOL],
+    });
+
+    const body = requestBody(fetchMock);
+    expect(body).not.toHaveProperty("tool_choice");
+  });
+});

@@ -5,6 +5,8 @@ import { UserVisibleError } from "@/lib/errors";
 import {
   adminModelDtos,
   assertConfiguredModelsCanBeEnabled,
+  createDynamicModel,
+  parseCreateDynamicModelBody,
   parseModelSettingsPatch,
   readModelSettings,
   updateModelSettings,
@@ -19,6 +21,39 @@ function serverClient() {
     throw new UserVisibleError("Die Modellkonfiguration ist derzeit nicht verfügbar.", 503);
   }
   return supabase;
+}
+
+
+export async function POST(request: Request) {
+  try {
+    const supabase = serverClient();
+    const admin = await authenticateAdminRequest(request, supabase);
+
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      throw new UserVisibleError("Die Anfrage ist ungültig.", 400);
+    }
+
+    const input = parseCreateDynamicModelBody(body);
+
+    const created = await createDynamicModel({
+      supabase,
+      adminUserId: admin.id,
+      input,
+    });
+
+    return NextResponse.json({ model: adminModelDtos({
+      source: "database",
+      models: [created],
+    })[0] }, { status: 201 });
+  } catch (error) {
+    return adminUsersErrorResponse(
+      error,
+      "Das Modell konnte nicht angelegt werden.",
+    );
+  }
 }
 
 export async function GET(request: Request) {

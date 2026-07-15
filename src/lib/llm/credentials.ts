@@ -5,6 +5,7 @@ import {
   type ModelProvider,
 } from "../config";
 import { resolveDeepSeekApiKey } from "../deepseek-key";
+import { resolveLaoZhangApiKey } from "../laozhang-key";
 import { UserVisibleError } from "../errors";
 
 function normalizedKey(value: string | undefined): string | undefined {
@@ -31,7 +32,14 @@ function resolveZaiApiKey(): string {
 }
 
 export function resolveProviderApiKey(provider: ModelProvider): string {
-  return provider === "deepseek" ? resolveDeepSeekApiKey() : resolveZaiApiKey();
+  switch (provider) {
+    case "deepseek":
+      return resolveDeepSeekApiKey();
+    case "zai":
+      return resolveZaiApiKey();
+    case "laozhang":
+      return resolveLaoZhangApiKey();
+  }
 }
 
 export function isProviderConfigured(provider: ModelProvider): boolean {

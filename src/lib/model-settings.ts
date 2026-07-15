@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
   DEFAULT_MODEL,
   MODEL_IDS,
   getModelDefinition,
+  isDynamicModelId,
   isReasoningSettingForModel,
   isSupportedModel,
   type ChatModel,
@@ -11,12 +13,17 @@ import {
   type ReasoningSetting,
 } from "./config";
 import { UserVisibleError } from "./errors";
-import { isModelProviderConfigured } from "./llm/runtime";
+import { isModelProviderConfigured, isProviderConfigured } from "./llm/runtime";
 
 type ServerSupabaseClient = Pick<SupabaseClient, "from" | "rpc">;
 
 const MODEL_SETTINGS_COLUMNS = [
   "model_id",
+  "display_name",
+  "provider",
+  "upstream_model",
+  "is_dynamic",
+  "always_enabled",
   "enabled",
   "reasoning_setting",
   "revision",
@@ -34,7 +41,7 @@ const REASONING_LABELS: Readonly<Record<ReasoningSetting, string>> = {
 export type ModelSettingsSource = "database" | "fallback";
 
 export type ModelRunProvenance = {
-  model: ChatModel;
+  model: string;
   provider: ModelProvider;
   upstreamModel: string;
   reasoning: ReasoningSetting;
@@ -42,8 +49,13 @@ export type ModelRunProvenance = {
   settingsSource: ModelSettingsSource;
 };
 
-export type ModelSetting = {
+export type BuiltinModelSetting = {
   id: ChatModel;
+  displayName: null;
+  provider: ModelProvider;
+  upstreamModel: string;
+  isDynamic: false;
+  alwaysEnabled: boolean;
   enabled: boolean;
   reasoning: ReasoningSetting;
   revision: number | null;
@@ -51,30 +63,48 @@ export type ModelSetting = {
   updatedBy: string | null;
 };
 
+export type DynamicModelSetting = {
+  id: string;
+  displayName: string;
+  provider: "laozhang";
+  upstreamModel: string;
+  isDynamic: true;
+  alwaysEnabled: false;
+  enabled: boolean;
+  reasoning: "disabled";
+  revision: number | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+};
+
+export type ModelSetting = BuiltinModelSetting | DynamicModelSetting;
+
 export type ModelSettingsSnapshot = {
   models: ModelSetting[];
   source: ModelSettingsSource;
 };
 
-export type ModelSettingMutation = Pick<ModelSetting, "id" | "enabled" | "reasoning"> & {
+export type ModelSettingMutation = Pick<BuiltinModelSetting, "id" | "enabled" | "reasoning"> & {
   revision: number;
 };
 
 export type PublicModelDto = {
-  id: ChatModel;
+  id: string;
   label: string;
 };
 
 export type AdminModelDto = {
-  id: ChatModel;
+  id: string;
   label: string;
   enabled: boolean;
   alwaysEnabled: boolean;
-  reasoning: ReasoningSetting;
+  reasoning: ReasoningSetting | null;
   reasoningOptions: Array<{ value: ReasoningSetting; label: string }>;
   providerConfigured: boolean;
   revision: number;
   updatedAt: string | null;
+  provider?: string;
+  upstreamModel?: string;
 };
 
 function unavailableSettingsError(): UserVisibleError {
@@ -91,7 +121,7 @@ function hasExactKeys(value: Record<string, unknown>, expected: readonly string[
     && keys.every((key, index) => key === [...expected].sort()[index]);
 }
 
-function normalizeStoredRow(value: unknown): ModelSetting | null {
+function normalizeBuiltinRow(value: unknown): BuiltinModelSetting | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -101,8 +131,10 @@ function normalizeStoredRow(value: unknown): ModelSetting | null {
   const revision = value.revision;
   const updatedAt = value.updated_at;
   const updatedBy = value.updated_by;
+  const isDynamic = value.is_dynamic === true;
   if (
-    typeof id !== "string"
+    isDynamic
+    || typeof id !== "string"
     || !isSupportedModel(id)
     || typeof value.enabled !== "boolean"
     || typeof reasoning !== "string"
@@ -112,6 +144,8 @@ function normalizeStoredRow(value: unknown): ModelSetting | null {
     || revision <= 0
     || typeof updatedAt !== "string"
     || (updatedBy !== null && typeof updatedBy !== "string")
+    || typeof value.provider !== "string"
+    || typeof value.upstream_model !== "string"
   ) {
     return null;
   }
@@ -121,8 +155,20 @@ function normalizeStoredRow(value: unknown): ModelSetting | null {
     return null;
   }
 
+  if (value.provider !== definition.provider
+    || value.upstream_model !== definition.upstreamModel
+    || value.always_enabled !== definition.alwaysEnabled
+  ) {
+    return null;
+  }
+
   return {
     id,
+    displayName: null,
+    provider: value.provider as ModelProvider,
+    upstreamModel: value.upstream_model,
+    isDynamic: false as const,
+    alwaysEnabled: definition.alwaysEnabled,
     enabled: value.enabled,
     reasoning,
     revision,
@@ -131,24 +177,92 @@ function normalizeStoredRow(value: unknown): ModelSetting | null {
   };
 }
 
-function normalizeStoredRows(value: unknown): ModelSetting[] | null {
-  if (!Array.isArray(value) || value.length !== MODEL_IDS.length) {
+function normalizeDynamicRow(value: unknown): DynamicModelSetting | null {
+  if (!isRecord(value)) {
     return null;
   }
 
-  const byId = new Map<ChatModel, ModelSetting>();
+  const modelId = value.model_id;
+  const displayName = value.display_name;
+  const provider = value.provider;
+  const upstreamModel = value.upstream_model;
+  const isDynamic = value.is_dynamic === true;
+  const alwaysEnabled = value.always_enabled === true;
+  const enabled = value.enabled;
+  const reasoning = value.reasoning_setting;
+  const revision = value.revision;
+  const updatedAt = value.updated_at;
+  const updatedBy = value.updated_by;
+  if (
+    !isDynamic
+    || typeof modelId !== "string"
+    || !isDynamicModelId(modelId)
+    || typeof displayName !== "string"
+    || !isValidDynamicDisplayName(displayName)
+    || provider !== "laozhang"
+    || typeof upstreamModel !== "string"
+    || !isValidUpstreamModelId(upstreamModel)
+    || alwaysEnabled
+    || typeof enabled !== "boolean"
+    || reasoning !== "disabled"
+    || typeof revision !== "number"
+    || !Number.isSafeInteger(revision)
+    || revision <= 0
+    || typeof updatedAt !== "string"
+    || (updatedBy !== null && typeof updatedBy !== "string")
+  ) {
+    return null;
+  }
+
+  return {
+    id: modelId,
+    displayName: displayName.trim(),
+    provider: "laozhang",
+    upstreamModel: upstreamModel.trim(),
+    isDynamic: true as const,
+    alwaysEnabled: false as const,
+    enabled,
+    reasoning: "disabled" as const,
+    revision,
+    updatedAt,
+    updatedBy,
+  };
+}
+
+function normalizeStoredRows(value: unknown): ModelSetting[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const builtinById = new Map<ChatModel, BuiltinModelSetting>();
+  const dynamicModels: DynamicModelSetting[] = [];
+
   for (const item of value) {
-    const setting = normalizeStoredRow(item);
-    if (!setting || byId.has(setting.id)) {
+    if (!isRecord(item)) {
       return null;
     }
-    byId.set(setting.id, setting);
+
+    if (item.is_dynamic === true) {
+      const dynamic = normalizeDynamicRow(item);
+      if (!dynamic) {
+        return null;
+      }
+      dynamicModels.push(dynamic);
+    } else {
+      const builtin = normalizeBuiltinRow(item);
+      if (!builtin || builtinById.has(builtin.id)) {
+        return null;
+      }
+      builtinById.set(builtin.id, builtin);
+    }
   }
 
-  if (MODEL_IDS.some((id) => !byId.has(id))) {
+  if (MODEL_IDS.some((id) => !builtinById.has(id))) {
     return null;
   }
-  return MODEL_IDS.map((id) => byId.get(id)!);
+
+  const builtinModels = MODEL_IDS.map((id) => builtinById.get(id)!);
+  return [...builtinModels, ...dynamicModels];
 }
 
 export function flashOnlyModelSettings(): ModelSettingsSnapshot {
@@ -157,6 +271,11 @@ export function flashOnlyModelSettings(): ModelSettingsSnapshot {
     source: "fallback",
     models: [{
       id: definition.id,
+      displayName: null,
+      provider: definition.provider,
+      upstreamModel: definition.upstreamModel,
+      isDynamic: false as const,
+      alwaysEnabled: definition.alwaysEnabled,
       enabled: true,
       reasoning: definition.defaultReasoning,
       revision: null,
@@ -244,9 +363,10 @@ export function assertConfiguredModelsCanBeEnabled(
 ): void {
   const currentById = new Map(current.models.map((setting) => [setting.id, setting]));
   for (const setting of requested) {
-    if (setting.enabled && !currentById.get(setting.id)?.enabled && !isConfigured(setting.id)) {
+    const currentSetting = currentById.get(setting.id);
+    if (setting.enabled && !currentSetting?.enabled && !isConfigured(setting.id as ChatModel)) {
       throw new UserVisibleError(
-        `${getModelDefinition(setting.id).label} kann ohne konfigurierten Provider nicht aktiviert werden.`,
+        `${getModelDefinition(setting.id as ChatModel).label} kann ohne konfigurierten Provider nicht aktiviert werden.`,
         400,
       );
     }
@@ -265,7 +385,7 @@ export async function updateModelSettings(options: {
 
   const currentById = new Map(options.current.models.map((setting) => [setting.id, setting]));
   const changed = options.requested.filter((setting) => {
-    const previous = currentById.get(setting.id);
+    const previous = currentById.get(setting.id) as BuiltinModelSetting | undefined;
     return !previous
       || previous.enabled !== setting.enabled
       || previous.reasoning !== setting.reasoning;
@@ -302,13 +422,15 @@ export async function updateModelSettings(options: {
 
 export function publicEnabledModelDtos(snapshot: ModelSettingsSnapshot): PublicModelDto[] {
   return snapshot.models.flatMap((setting) => {
-    const definition = getModelDefinition(setting.id);
-    if (
-      !setting.enabled
-      || (!definition.alwaysEnabled && !isModelProviderConfigured(setting.id))
-    ) {
+    if (!setting.enabled || (!setting.alwaysEnabled && !isProviderConfigured(setting.provider))) {
       return [];
     }
+
+    if (setting.isDynamic) {
+      return [{ id: setting.id, label: setting.displayName }];
+    }
+
+    const definition = getModelDefinition(setting.id);
     return [{ id: setting.id, label: definition.label }];
   });
 }
@@ -318,6 +440,23 @@ export function adminModelDtos(snapshot: ModelSettingsSnapshot): AdminModelDto[]
     if (setting.revision === null) {
       throw unavailableSettingsError();
     }
+
+    if (setting.isDynamic) {
+      return {
+        id: setting.id,
+        label: setting.displayName,
+        enabled: setting.enabled,
+        alwaysEnabled: false,
+        reasoning: "disabled",
+        reasoningOptions: [{ value: "disabled", label: "Deaktiviert" }],
+        providerConfigured: isProviderConfigured("laozhang"),
+        revision: setting.revision,
+        updatedAt: setting.updatedAt,
+        provider: "laozhang",
+        upstreamModel: setting.upstreamModel,
+      };
+    }
+
     const definition = getModelDefinition(setting.id);
     return {
       id: setting.id,
@@ -338,16 +477,120 @@ export function adminModelDtos(snapshot: ModelSettingsSnapshot): AdminModelDto[]
 
 export function enabledModelSetting(
   snapshot: ModelSettingsSnapshot,
-  model: ChatModel,
+  model: string,
 ): ModelSetting {
   const setting = snapshot.models.find((candidate) => candidate.id === model);
   if (!setting?.enabled) {
     throw new UserVisibleError("Das ausgewählte Modell ist derzeit nicht aktiviert.", 400);
   }
 
-  const definition = getModelDefinition(model);
-  if (!definition.alwaysEnabled && !isModelProviderConfigured(model)) {
+  if (setting.isDynamic) {
+    if (!isProviderConfigured("laozhang")) {
+      throw new UserVisibleError("Das ausgewählte Modell ist derzeit nicht verfügbar.", 503);
+    }
+    return setting;
+  }
+
+  const definition = getModelDefinition(setting.id);
+  if (!definition.alwaysEnabled && !isModelProviderConfigured(setting.id)) {
     throw new UserVisibleError("Das ausgewählte Modell ist derzeit nicht verfügbar.", 503);
   }
   return setting;
+}
+
+const DYNAMIC_MODEL_DISPLAY_NAME_MAX_LENGTH = 120;
+const DYNAMIC_MODEL_UPSTREAM_MAX_LENGTH = 120;
+
+export function isValidDynamicDisplayName(value: string): boolean {
+  return (
+    typeof value === "string"
+    && value.trim().length > 0
+    && value.trim().length <= DYNAMIC_MODEL_DISPLAY_NAME_MAX_LENGTH
+    && !/[\x00-\x1f\x7f]/u.test(value)
+  );
+}
+
+export function isValidUpstreamModelId(value: string): boolean {
+  return (
+    typeof value === "string"
+    && value.trim().length > 0
+    && value.trim().length <= DYNAMIC_MODEL_UPSTREAM_MAX_LENGTH
+    && !/[\x00-\x1f\x7f]/u.test(value)
+  );
+}
+
+export type CreateDynamicModelInput = {
+  displayName: string;
+  upstreamModel: string;
+};
+
+export function parseCreateDynamicModelBody(body: unknown): CreateDynamicModelInput {
+  if (!isRecord(body) || !hasExactKeys(body, ["displayName", "upstreamModel"])) {
+    throw new UserVisibleError("Die Anfrage muss displayName und upstreamModel enthalten.", 400);
+  }
+
+  if (typeof body.displayName !== "string" || !isValidDynamicDisplayName(body.displayName)) {
+    throw new UserVisibleError("Der Anzeigename ist ungültig.", 400);
+  }
+
+  if (typeof body.upstreamModel !== "string" || !isValidUpstreamModelId(body.upstreamModel)) {
+    throw new UserVisibleError("Die Modell-ID ist ungültig.", 400);
+  }
+
+  return {
+    displayName: body.displayName.trim(),
+    upstreamModel: body.upstreamModel.trim(),
+  };
+}
+
+function generateOpaqueModelId(): string {
+  return `laozhang:${randomUUID()}`;
+}
+
+export async function createDynamicModel(options: {
+  supabase: ServerSupabaseClient;
+  adminUserId: string;
+  input: CreateDynamicModelInput;
+}): Promise<DynamicModelSetting> {
+  const modelId = generateOpaqueModelId();
+
+  const { error } = await options.supabase.rpc("create_dynamic_model", {
+    p_model_id: modelId,
+    p_display_name: options.input.displayName,
+    p_upstream_model: options.input.upstreamModel,
+    p_created_by: options.adminUserId,
+  });
+
+  if (error) {
+    const pgError = error as { code?: string; message?: string };
+    if (pgError.code === "23505") {
+      throw new UserVisibleError(
+        "Ein Modell mit derselben LaoZhang-Modell-ID ist bereits konfiguriert.",
+        409,
+      );
+    }
+    throw new UserVisibleError("Das Modell konnte nicht angelegt werden.", 503);
+  }
+
+  const snapshot = await readModelSettings(options.supabase);
+  const created = snapshot.models.find(
+    (m): m is DynamicModelSetting => m.isDynamic && m.id === modelId,
+  );
+  if (!created) {
+    throw new UserVisibleError("Das Modell wurde angelegt, konnte aber nicht geladen werden.", 503);
+  }
+
+  return created;
+}
+
+export function parseDynamicModelEnablePatch(body: unknown): { enabled: boolean } {
+  if (!isRecord(body) || !hasExactKeys(body, ["enabled"])) {
+    throw new UserVisibleError("Der PATCH-Body muss enabled enthalten.", 400);
+  }
+
+  if (typeof body.enabled !== "boolean") {
+    throw new UserVisibleError("enabled muss ein Boolean sein.", 400);
+  }
+
+  return { enabled: body.enabled };
 }

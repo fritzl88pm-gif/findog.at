@@ -11,17 +11,19 @@ import {
   MAX_REQUEST_BYTES,
   RATE_LIMIT_MAX_REQUESTS,
   RATE_LIMIT_WINDOW_MS,
+  isDynamicModelId,
   isSupportedModel,
   type ChatModel,
 } from "@/lib/config";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { type AppChatMessage } from "@/lib/deepseek";
 import { UserVisibleError } from "@/lib/errors";
-import { resolveLlmRuntime } from "@/lib/llm/runtime";
+import { resolveDynamicLlmRuntime, resolveLlmRuntime } from "@/lib/llm/runtime";
 import {
   enabledModelSetting,
   publicEnabledModelDtos,
   readEffectiveModelSettings,
+  type DynamicModelSetting,
   type ModelRunProvenance,
 } from "@/lib/model-settings";
 import { persistConversationTurn, resolveConversationContextForClient } from "@/lib/persistence";
@@ -195,11 +197,14 @@ function parseMessages(value: unknown): AppChatMessage[] {
   return messages;
 }
 
-function parseModel(value: unknown): ChatModel {
+function parseModel(value: unknown): string {
   if (value === undefined) {
     return DEFAULT_MODEL;
   }
-  if (typeof value !== "string" || !isSupportedModel(value)) {
+  if (typeof value !== "string") {
+    throw new UserVisibleError("Das ausgewählte Modell wird nicht unterstützt.", 400);
+  }
+  if (!isSupportedModel(value) && !isDynamicModelId(value)) {
     throw new UserVisibleError("Das ausgewählte Modell wird nicht unterstützt.", 400);
   }
   return value;
@@ -396,10 +401,12 @@ export async function POST(request: Request) {
     const messages = parseMessages(body.messages);
     const modelSettings = await readEffectiveModelSettings(supabase);
     const selectedSetting = enabledModelSetting(modelSettings, model);
-    const selectedRuntime = resolveLlmRuntime({
-      model,
-      reasoning: selectedSetting.reasoning,
-    });
+    const selectedRuntime = selectedSetting.isDynamic
+      ? resolveDynamicLlmRuntime(selectedSetting as DynamicModelSetting)
+      : resolveLlmRuntime({
+          model: model as ChatModel,
+          reasoning: selectedSetting.reasoning,
+        });
     const modelProvenance: ModelRunProvenance = {
       model: selectedRuntime.model,
       provider: selectedRuntime.provider,

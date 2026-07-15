@@ -1,11 +1,11 @@
 import {
   DEFAULT_MODEL,
+  isDynamicModelId,
   isSupportedModel,
-  type ChatModel,
 } from "../config";
 
 export type ChatSettings = {
-  model: ChatModel;
+  model: string;
 };
 
 export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
@@ -20,7 +20,7 @@ export function normalizeStoredChatSettings(value: unknown): ChatSettings {
   const stored = value as Record<string, unknown>;
   return {
     model:
-      typeof stored.model === "string" && isSupportedModel(stored.model)
+      typeof stored.model === "string" && (isSupportedModel(stored.model) || isDynamicModelId(stored.model))
         ? stored.model
         : DEFAULT_MODEL,
   };

@@ -11,6 +11,7 @@ import {
   readModelSettings,
   updateModelSettings,
   type ModelSettingMutation,
+  type ModelSettingsSnapshot,
 } from "./model-settings";
 
 const originalDeepSeekKey = process.env.DEEPSEEK_API_KEY;
@@ -32,41 +33,61 @@ afterEach(() => {
 });
 
 function storedRows() {
-  return [
-    {
-      model_id: "glm-5-turbo",
-      enabled: false,
-      reasoning_setting: "enabled",
-      revision: 4,
-      updated_at: "2026-07-14T12:00:04.000Z",
-      updated_by: null,
-    },
-    {
-      model_id: "deepseek-v4-pro",
-      enabled: true,
-      reasoning_setting: "high",
-      revision: 2,
-      updated_at: "2026-07-14T12:00:02.000Z",
-      updated_by: null,
-    },
-    {
-      model_id: "glm-5.2",
-      enabled: false,
-      reasoning_setting: "max",
-      revision: 3,
-      updated_at: "2026-07-14T12:00:03.000Z",
-      updated_by: null,
-    },
-    {
-      model_id: "deepseek-v4-flash",
-      enabled: true,
-      reasoning_setting: "disabled",
-      revision: 1,
-      updated_at: "2026-07-14T12:00:01.000Z",
-      updated_by: null,
-    },
-  ];
-}
+    return [
+      {
+        model_id: "glm-5-turbo",
+        display_name: null,
+        provider: "zai",
+        upstream_model: "glm-5-turbo",
+        is_dynamic: false,
+        always_enabled: false,
+        enabled: false,
+        reasoning_setting: "enabled",
+        revision: 4,
+        updated_at: "2026-07-14T12:00:04.000Z",
+        updated_by: null,
+      },
+      {
+        model_id: "deepseek-v4-pro",
+        display_name: null,
+        provider: "deepseek",
+        upstream_model: "deepseek-v4-pro",
+        is_dynamic: false,
+        always_enabled: false,
+        enabled: true,
+        reasoning_setting: "high",
+        revision: 2,
+        updated_at: "2026-07-14T12:00:02.000Z",
+        updated_by: null,
+      },
+      {
+        model_id: "glm-5.2",
+        display_name: null,
+        provider: "zai",
+        upstream_model: "glm-5.2",
+        is_dynamic: false,
+        always_enabled: false,
+        enabled: false,
+        reasoning_setting: "max",
+        revision: 3,
+        updated_at: "2026-07-14T12:00:03.000Z",
+        updated_by: null,
+      },
+      {
+        model_id: "deepseek-v4-flash",
+        display_name: null,
+        provider: "deepseek",
+        upstream_model: "deepseek-v4-flash",
+        is_dynamic: false,
+        always_enabled: true,
+        enabled: true,
+        reasoning_setting: "disabled",
+        revision: 1,
+        updated_at: "2026-07-14T12:00:01.000Z",
+        updated_by: null,
+      },
+    ];
+  }
 
 function requestedSettings(): ModelSettingMutation[] {
   return [
@@ -241,5 +262,184 @@ describe("model settings repository", () => {
       .toBe("disabled");
     expect(() => enabledModelSetting(flashOnlyModelSettings(), "deepseek-v4-pro"))
       .toThrow("nicht aktiviert");
+  });
+});
+
+describe("admin model DTO separation", () => {
+  it("publicEnabledModelDtos returns only model label for dynamic rows, no provider/upstream", () => {
+    const snapshot: ModelSettingsSnapshot = {
+      source: "database",
+      models: [
+        {
+          id: "deepseek-v4-flash",
+          displayName: null,
+          provider: "deepseek",
+          upstreamModel: "deepseek-v4-flash",
+          isDynamic: false,
+          alwaysEnabled: true,
+          enabled: true,
+          reasoning: "disabled",
+          revision: 1,
+          updatedAt: "2026-07-14T12:00:01Z",
+          updatedBy: null,
+        },
+        {
+          id: "deepseek-v4-pro",
+          displayName: null,
+          provider: "deepseek",
+          upstreamModel: "deepseek-v4-pro",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: true,
+          reasoning: "high",
+          revision: 2,
+          updatedAt: "2026-07-14T12:00:02Z",
+          updatedBy: null,
+        },
+        {
+          id: "glm-5.2",
+          displayName: null,
+          provider: "zai",
+          upstreamModel: "glm-5.2",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: false,
+          reasoning: "max",
+          revision: 3,
+          updatedAt: "2026-07-14T12:00:03Z",
+          updatedBy: null,
+        },
+        {
+          id: "glm-5-turbo",
+          displayName: null,
+          provider: "zai",
+          upstreamModel: "glm-5-turbo",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: false,
+          reasoning: "enabled",
+          revision: 4,
+          updatedAt: "2026-07-14T12:00:04Z",
+          updatedBy: null,
+        },
+        {
+          id: "laozhang:00000000-0000-4000-8000-000000000002",
+          displayName: "Qwen3 (LaoZhang)",
+          provider: "laozhang",
+          upstreamModel: "qwen3-72b",
+          isDynamic: true,
+          alwaysEnabled: false,
+          enabled: true,
+          reasoning: "disabled",
+          revision: 6,
+          updatedAt: "2026-07-15T12:00:01Z",
+          updatedBy: null,
+        },
+      ],
+    };
+
+    process.env.DEEPSEEK_API_KEY = "ds-secret";
+    process.env.ZAI_API_KEY = "zai-secret";
+    process.env.LAOZHANG_API_KEY = "lz-secret";
+
+    const dtos = publicEnabledModelDtos(snapshot);
+    const dynamicDtos = dtos.filter((d) => d.id.startsWith("laozhang:"));
+    expect(dynamicDtos).toHaveLength(1);
+    expect(dynamicDtos[0]).toEqual({
+      id: "laozhang:00000000-0000-4000-8000-000000000002",
+      label: "Qwen3 (LaoZhang)",
+    });
+    // The normal user menu renders only model.label - no extra fields
+    expect(Object.keys(dynamicDtos[0])).toEqual(["id", "label"]);
+  });
+
+  it("adminModelDtos separates dynamic models with provider metadata", () => {
+    const snapshot: ModelSettingsSnapshot = {
+      source: "database",
+      models: [
+        {
+          id: "deepseek-v4-flash",
+          displayName: null,
+          provider: "deepseek",
+          upstreamModel: "deepseek-v4-flash",
+          isDynamic: false,
+          alwaysEnabled: true,
+          enabled: true,
+          reasoning: "disabled",
+          revision: 1,
+          updatedAt: "2026-07-14T12:00:01Z",
+          updatedBy: null,
+        },
+        {
+          id: "deepseek-v4-pro",
+          displayName: null,
+          provider: "deepseek",
+          upstreamModel: "deepseek-v4-pro",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: true,
+          reasoning: "high",
+          revision: 2,
+          updatedAt: "2026-07-14T12:00:02Z",
+          updatedBy: null,
+        },
+        {
+          id: "glm-5.2",
+          displayName: null,
+          provider: "zai",
+          upstreamModel: "glm-5.2",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: false,
+          reasoning: "max",
+          revision: 3,
+          updatedAt: "2026-07-14T12:00:03Z",
+          updatedBy: null,
+        },
+        {
+          id: "glm-5-turbo",
+          displayName: null,
+          provider: "zai",
+          upstreamModel: "glm-5-turbo",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: false,
+          reasoning: "enabled",
+          revision: 4,
+          updatedAt: "2026-07-14T12:00:04Z",
+          updatedBy: null,
+        },
+        {
+          id: "laozhang:00000000-0000-4000-8000-000000000002",
+          displayName: "Qwen3 (LaoZhang)",
+          provider: "laozhang",
+          upstreamModel: "qwen3-72b",
+          isDynamic: true,
+          alwaysEnabled: false,
+          enabled: true,
+          reasoning: "disabled",
+          revision: 6,
+          updatedAt: "2026-07-15T12:00:01Z",
+          updatedBy: null,
+        },
+      ],
+    };
+
+    process.env.DEEPSEEK_API_KEY = "ds-secret";
+    process.env.ZAI_API_KEY = "zai-secret";
+    process.env.LAOZHANG_API_KEY = "lz-secret";
+
+    const dtos = adminModelDtos(snapshot);
+    const builtinDtos = dtos.filter((d) => !d.provider || d.provider !== "laozhang");
+    const dynamicDtos = dtos.filter((d) => d.provider === "laozhang");
+
+    expect(builtinDtos).toHaveLength(4);
+    expect(dynamicDtos).toHaveLength(1);
+    expect(dynamicDtos[0]).toMatchObject({
+      id: "laozhang:00000000-0000-4000-8000-000000000002",
+      label: "Qwen3 (LaoZhang)",
+      alwaysEnabled: false,
+      provider: "laozhang",
+    });
   });
 });

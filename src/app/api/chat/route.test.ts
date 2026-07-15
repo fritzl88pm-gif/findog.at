@@ -35,6 +35,7 @@ vi.mock("@/lib/auth/server", () => ({
 
 vi.mock("@/lib/llm/runtime", () => ({
   isModelProviderConfigured: vi.fn().mockReturnValue(true),
+  isProviderConfigured: vi.fn().mockReturnValue(true),
   resolveLlmRuntime: vi.fn((options: { model: string; reasoning?: string }) => {
     const provider = options.model.startsWith("glm-") ? "zai" : "deepseek";
     return {
@@ -46,6 +47,7 @@ vi.mock("@/lib/llm/runtime", () => ({
       reasoning: options.reasoning ?? "disabled",
     };
   }),
+  resolveDynamicLlmRuntime: vi.fn(),
 }));
 
 vi.mock("@/lib/model-settings", async () => {
@@ -106,6 +108,11 @@ function databaseModelSettings(): ModelSettingsSnapshot {
     models: [
       {
         id: "deepseek-v4-flash",
+        displayName: null,
+        provider: "deepseek",
+        upstreamModel: "deepseek-v4-flash",
+        isDynamic: false,
+        alwaysEnabled: true,
         enabled: true,
         reasoning: "disabled",
         revision: 1,
@@ -114,6 +121,11 @@ function databaseModelSettings(): ModelSettingsSnapshot {
       },
       {
         id: "deepseek-v4-pro",
+        displayName: null,
+        provider: "deepseek",
+        upstreamModel: "deepseek-v4-pro",
+        isDynamic: false,
+        alwaysEnabled: false,
         enabled: true,
         reasoning: "high",
         revision: 2,
@@ -122,6 +134,11 @@ function databaseModelSettings(): ModelSettingsSnapshot {
       },
       {
         id: "glm-5.2",
+        displayName: null,
+        provider: "zai",
+        upstreamModel: "glm-5.2",
+        isDynamic: false,
+        alwaysEnabled: false,
         enabled: false,
         reasoning: "max",
         revision: 3,
@@ -130,6 +147,11 @@ function databaseModelSettings(): ModelSettingsSnapshot {
       },
       {
         id: "glm-5-turbo",
+        displayName: null,
+        provider: "zai",
+        upstreamModel: "glm-5-turbo",
+        isDynamic: false,
+        alwaysEnabled: false,
         enabled: false,
         reasoning: "enabled",
         revision: 4,
@@ -724,5 +746,342 @@ describe("POST /api/chat uploads", () => {
     expect(response.status).toBe(200);
     const pdfOptions = vi.mocked(extractPdfContext).mock.calls[0]?.[0] as { filename: string };
     expect(pdfOptions.filename.length).toBeLessThanOrEqual(255);
+  });
+});
+
+describe("POST /api/chat dynamic models", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("resolves an enabled dynamic database setting through resolveDynamicLlmRuntime using server-side metadata", async () => {
+    const { resolveDynamicLlmRuntime } = await import("@/lib/llm/runtime");
+    vi.mocked(resolveDynamicLlmRuntime).mockReturnValue({
+      model: "laozhang:00000000-0000-4000-8000-000000000002",
+      provider: "laozhang",
+      upstreamModel: "qwen3-72b",
+      baseUrl: "https://api.laozhang.ai/v1",
+      apiKey: "lz-server-key",
+      reasoning: "disabled",
+    });
+
+    const snapshot: ModelSettingsSnapshot = {
+      source: "database",
+      models: [
+        {
+          id: "deepseek-v4-flash",
+          displayName: null,
+          provider: "deepseek",
+          upstreamModel: "deepseek-v4-flash",
+          isDynamic: false,
+          alwaysEnabled: true,
+          enabled: true,
+          reasoning: "disabled",
+          revision: 1,
+          updatedAt: "2026-07-14T12:00:01Z",
+          updatedBy: null,
+        },
+        {
+          id: "deepseek-v4-pro",
+          displayName: null,
+          provider: "deepseek",
+          upstreamModel: "deepseek-v4-pro",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: true,
+          reasoning: "high",
+          revision: 2,
+          updatedAt: "2026-07-14T12:00:02Z",
+          updatedBy: null,
+        },
+        {
+          id: "glm-5.2",
+          displayName: null,
+          provider: "zai",
+          upstreamModel: "glm-5.2",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: false,
+          reasoning: "max",
+          revision: 3,
+          updatedAt: "2026-07-14T12:00:03Z",
+          updatedBy: null,
+        },
+        {
+          id: "glm-5-turbo",
+          displayName: null,
+          provider: "zai",
+          upstreamModel: "glm-5-turbo",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: false,
+          reasoning: "enabled",
+          revision: 4,
+          updatedAt: "2026-07-14T12:00:04Z",
+          updatedBy: null,
+        },
+        {
+          id: "laozhang:00000000-0000-4000-8000-000000000002",
+          displayName: "Qwen3 (LaoZhang)",
+          provider: "laozhang",
+          upstreamModel: "qwen3-72b",
+          isDynamic: true,
+          alwaysEnabled: false,
+          enabled: true,
+          reasoning: "disabled",
+          revision: 6,
+          updatedAt: "2026-07-15T12:00:01Z",
+          updatedBy: null,
+        },
+      ],
+    };
+    vi.mocked(readEffectiveModelSettings).mockResolvedValue(snapshot);
+
+    const response = await POST(jsonRequest({
+      ...chatPayload(),
+      model: "laozhang:00000000-0000-4000-8000-000000000002",
+    }));
+
+    expect(response.status).toBe(200);
+    expect(resolveDynamicLlmRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "laozhang:00000000-0000-4000-8000-000000000002",
+        displayName: "Qwen3 (LaoZhang)",
+        provider: "laozhang",
+        upstreamModel: "qwen3-72b",
+        enabled: true,
+      }),
+    );
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: expect.objectContaining({
+          model: "laozhang:00000000-0000-4000-8000-000000000002",
+          provider: "laozhang",
+          upstreamModel: "qwen3-72b",
+          reasoning: "disabled",
+        }),
+      }),
+    );
+    expect(persistConversationTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelProvenance: {
+          model: "laozhang:00000000-0000-4000-8000-000000000002",
+          provider: "laozhang",
+          upstreamModel: "qwen3-72b",
+          reasoning: "disabled",
+          settingsRevision: 6,
+          settingsSource: "database",
+        },
+      }),
+    );
+  });
+
+  it("rejects an unknown dynamic model ID", async () => {
+    vi.mocked(readEffectiveModelSettings).mockResolvedValue(databaseModelSettings());
+
+    const response = await POST(jsonRequest({
+      ...chatPayload(),
+      model: "laozhang:ffffffff-ffff-4fff-bfff-ffffffffffff",
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Das ausgewählte Modell ist derzeit nicht aktiviert.",
+    });
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(persistConversationTurn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a disabled dynamic model ID", async () => {
+    const snapshot: ModelSettingsSnapshot = {
+      source: "database",
+      models: [
+        {
+          id: "deepseek-v4-flash",
+          displayName: null,
+          provider: "deepseek",
+          upstreamModel: "deepseek-v4-flash",
+          isDynamic: false,
+          alwaysEnabled: true,
+          enabled: true,
+          reasoning: "disabled",
+          revision: 1,
+          updatedAt: "2026-07-14T12:00:01Z",
+          updatedBy: null,
+        },
+        {
+          id: "deepseek-v4-pro",
+          displayName: null,
+          provider: "deepseek",
+          upstreamModel: "deepseek-v4-pro",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: true,
+          reasoning: "high",
+          revision: 2,
+          updatedAt: "2026-07-14T12:00:02Z",
+          updatedBy: null,
+        },
+        {
+          id: "glm-5.2",
+          displayName: null,
+          provider: "zai",
+          upstreamModel: "glm-5.2",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: false,
+          reasoning: "max",
+          revision: 3,
+          updatedAt: "2026-07-14T12:00:03Z",
+          updatedBy: null,
+        },
+        {
+          id: "glm-5-turbo",
+          displayName: null,
+          provider: "zai",
+          upstreamModel: "glm-5-turbo",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: false,
+          reasoning: "enabled",
+          revision: 4,
+          updatedAt: "2026-07-14T12:00:04Z",
+          updatedBy: null,
+        },
+        {
+          id: "laozhang:00000000-0000-4000-8000-000000000001",
+          displayName: "GLM-5.2 (LaoZhang)",
+          provider: "laozhang",
+          upstreamModel: "glm-5.2",
+          isDynamic: true,
+          alwaysEnabled: false,
+          enabled: false,
+          reasoning: "disabled",
+          revision: 5,
+          updatedAt: "2026-07-15T12:00:00Z",
+          updatedBy: null,
+        },
+      ],
+    };
+    vi.mocked(readEffectiveModelSettings).mockResolvedValue(snapshot);
+
+    const response = await POST(jsonRequest({
+      ...chatPayload(),
+      model: "laozhang:00000000-0000-4000-8000-000000000001",
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Das ausgewählte Modell ist derzeit nicht aktiviert.",
+    });
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(persistConversationTurn).not.toHaveBeenCalled();
+  });
+
+  it("ignores client-supplied provider/upstream fields and uses server-side metadata", async () => {
+    const { resolveDynamicLlmRuntime } = await import("@/lib/llm/runtime");
+    vi.mocked(resolveDynamicLlmRuntime).mockReturnValue({
+      model: "laozhang:00000000-0000-4000-8000-000000000002",
+      provider: "laozhang",
+      upstreamModel: "qwen3-72b",
+      baseUrl: "https://api.laozhang.ai/v1",
+      apiKey: "lz-server-key",
+      reasoning: "disabled",
+    });
+
+    const snapshot: ModelSettingsSnapshot = {
+      source: "database",
+      models: [
+        {
+          id: "deepseek-v4-flash",
+          displayName: null,
+          provider: "deepseek",
+          upstreamModel: "deepseek-v4-flash",
+          isDynamic: false,
+          alwaysEnabled: true,
+          enabled: true,
+          reasoning: "disabled",
+          revision: 1,
+          updatedAt: "2026-07-14T12:00:01Z",
+          updatedBy: null,
+        },
+        {
+          id: "deepseek-v4-pro",
+          displayName: null,
+          provider: "deepseek",
+          upstreamModel: "deepseek-v4-pro",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: true,
+          reasoning: "high",
+          revision: 2,
+          updatedAt: "2026-07-14T12:00:02Z",
+          updatedBy: null,
+        },
+        {
+          id: "glm-5.2",
+          displayName: null,
+          provider: "zai",
+          upstreamModel: "glm-5.2",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: false,
+          reasoning: "max",
+          revision: 3,
+          updatedAt: "2026-07-14T12:00:03Z",
+          updatedBy: null,
+        },
+        {
+          id: "glm-5-turbo",
+          displayName: null,
+          provider: "zai",
+          upstreamModel: "glm-5-turbo",
+          isDynamic: false,
+          alwaysEnabled: false,
+          enabled: false,
+          reasoning: "enabled",
+          revision: 4,
+          updatedAt: "2026-07-14T12:00:04Z",
+          updatedBy: null,
+        },
+        {
+          id: "laozhang:00000000-0000-4000-8000-000000000002",
+          displayName: "Qwen3 (LaoZhang)",
+          provider: "laozhang",
+          upstreamModel: "qwen3-72b",
+          isDynamic: true,
+          alwaysEnabled: false,
+          enabled: true,
+          reasoning: "disabled",
+          revision: 6,
+          updatedAt: "2026-07-15T12:00:01Z",
+          updatedBy: null,
+        },
+      ],
+    };
+    vi.mocked(readEffectiveModelSettings).mockResolvedValue(snapshot);
+
+    const response = await POST(jsonRequest({
+      ...chatPayload(),
+      model: "laozhang:00000000-0000-4000-8000-000000000002",
+      // Client-supplied fields that should be ignored
+      provider: "deepseek",
+      upstreamModel: "fake-model",
+    }));
+
+    expect(response.status).toBe(200);
+    // The server-side metadata (qwen3-72b) should be used, not the client-supplied "fake-model"
+    expect(resolveDynamicLlmRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        upstreamModel: "qwen3-72b",
+      }),
+    );
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: expect.objectContaining({
+          upstreamModel: "qwen3-72b",
+        }),
+      }),
+    );
   });
 });

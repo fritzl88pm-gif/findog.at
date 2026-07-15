@@ -20,6 +20,7 @@ import {
   MAX_IMAGE_UPLOADS,
   MAX_PDF_UPLOAD_BYTES,
   MAX_PDF_UPLOADS,
+  isDynamicModelId,
   isSupportedModel,
   type ChatModel,
 } from "@/lib/config";
@@ -122,7 +123,7 @@ type AuthenticatedSettings = {
 };
 
 type EnabledModelDescriptor = {
-  id: ChatModel;
+  id: string;
   label: string;
 };
 
@@ -132,7 +133,7 @@ type AdminReasoningOption = {
 };
 
 type AdminModelSetting = {
-  id: ChatModel;
+  id: string;
   label: string;
   enabled: boolean;
   alwaysEnabled: boolean;
@@ -141,6 +142,10 @@ type AdminModelSetting = {
   providerConfigured: boolean;
   revision: number;
   updatedAt: string | null;
+  /** Present for dynamic models */
+  provider?: string;
+  /** Present for dynamic models */
+  upstreamModel?: string;
 };
 
 type AdminUserSummary = {
@@ -575,7 +580,7 @@ function normalizeAdminModels(value: unknown): AdminModelSetting[] | null {
     return null;
   }
 
-  const seenModels = new Set<ChatModel>();
+  const seenModels = new Set<string>();
   const models = value.flatMap((entry): AdminModelSetting[] => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       return [];
@@ -584,7 +589,7 @@ function normalizeAdminModels(value: unknown): AdminModelSetting[] | null {
     const item = entry as Record<string, unknown>;
     if (
       typeof item.id !== "string"
-      || !isSupportedModel(item.id)
+      || (!isSupportedModel(item.id) && !isDynamicModelId(item.id))
       || seenModels.has(item.id)
       || typeof item.label !== "string"
       || !item.label.trim()
@@ -638,6 +643,8 @@ function normalizeAdminModels(value: unknown): AdminModelSetting[] | null {
       providerConfigured: item.providerConfigured,
       revision: item.revision,
       updatedAt: item.updatedAt,
+      ...(typeof item.provider === "string" ? { provider: item.provider } : {}),
+      ...(typeof item.upstreamModel === "string" ? { upstreamModel: item.upstreamModel } : {}),
     }];
   });
 
@@ -1600,6 +1607,9 @@ export default function Home() {
   const [adminModels, setAdminModels] = useState<AdminModelSetting[]>([]);
   const [isAdminModelsLoading, setIsAdminModelsLoading] = useState(false);
   const [isAdminModelsSaving, setIsAdminModelsSaving] = useState(false);
+  const [adminCreateModelDisplayName, setAdminCreateModelDisplayName] = useState("");
+  const [adminCreateModelUpstreamId, setAdminCreateModelUpstreamId] = useState("");
+  const [isAdminCreatingModel, setIsAdminCreatingModel] = useState(false);
   const [adminUsers, setAdminUsers] = useState<AdminUserSummary[]>([]);
   const [adminUserProfile, setAdminUserProfile] = useState<AdminUserProfile | null>(null);
   const [adminUserForm, setAdminUserForm] = useState({ email: "", password: "" });
@@ -2625,12 +2635,14 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          models: adminModels.map((model) => ({
-            id: model.id,
-            enabled: model.alwaysEnabled ? true : model.enabled,
-            reasoning: model.reasoning,
-            revision: model.revision,
-          })),
+          models: adminModels
+            .filter((model) => !isDynamicModelId(model.id))
+            .map((model) => ({
+              id: model.id,
+              enabled: model.alwaysEnabled ? true : model.enabled,
+              reasoning: model.reasoning,
+              revision: model.revision,
+            })),
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -2652,6 +2664,86 @@ export default function Home() {
       setAdminError(saveError instanceof Error
         ? saveError.message
         : "Modelleinstellungen konnten nicht gespeichert werden.");
+    } finally {
+      setIsAdminModelsSaving(false);
+    }
+  }
+
+  async function createLaoZhangModel() {
+    const accessToken = session?.access_token;
+    if (!accessToken || !isAdmin || isAdminCreatingModel || !adminCreateModelDisplayName.trim() || !adminCreateModelUpstreamId.trim()) {
+      return;
+    }
+    setAdminError("");
+    setAdminNotice("");
+    setIsAdminCreatingModel(true);
+    try {
+      const response = await fetch("/api/admin/models", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          displayName: adminCreateModelDisplayName.trim(),
+          upstreamModel: adminCreateModelUpstreamId.trim(),
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Das Modell konnte nicht angelegt werden.",
+        );
+      }
+      setAdminCreateModelDisplayName("");
+      setAdminCreateModelUpstreamId("");
+      await loadAdminModels(accessToken);
+      setAdminNotice("LaoZhang-Modell wurde angelegt.");
+    } catch (createError) {
+      setAdminError(createError instanceof Error
+        ? createError.message
+        : "Das Modell konnte nicht angelegt werden.");
+    } finally {
+      setIsAdminCreatingModel(false);
+    }
+  }
+
+  async function toggleDynamicModelEnabled(modelId: string, enabled: boolean) {
+    const accessToken = session?.access_token;
+    if (!accessToken || !isAdmin || isAdminModelsSaving) {
+      return;
+    }
+    setAdminError("");
+    setAdminNotice("");
+    setIsAdminModelsSaving(true);
+    try {
+      const response = await fetch(`/api/admin/models/${encodeURIComponent(modelId)}`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ enabled }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Die Modellkonfiguration konnte nicht gespeichert werden.",
+        );
+      }
+      await loadAdminModels(accessToken);
+      const publicSettings = await fetchAuthenticatedSettings(accessToken);
+      setIsAdmin(publicSettings.isAdmin);
+      applyEnabledModels(publicSettings.enabledModels);
+      setAdminNotice("Die Modellkonfiguration wurde gespeichert.");
+    } catch (toggleError) {
+      setAdminError(toggleError instanceof Error
+        ? toggleError.message
+        : "Die Modellkonfiguration konnte nicht gespeichert werden.");
     } finally {
       setIsAdminModelsSaving(false);
     }
@@ -3264,7 +3356,7 @@ export default function Home() {
 
     try {
       const requestBody: {
-        model: ChatModel;
+        model: string;
         messages: Array<Pick<ChatMessage, "role" | "content">>;
         conversationId?: string;
       } = {
@@ -4552,7 +4644,7 @@ export default function Home() {
                 <p className="admin-empty-state">Keine Modelleinstellungen verfügbar.</p>
               ) : (
                 <div className="admin-model-settings-list">
-                  {adminModels.map((model, modelIndex) => (
+                  {adminModels.filter((m) => !isDynamicModelId(m.id)).map((model, modelIndex) => (
                     <div className="admin-model-setting" key={model.id}>
                       <label className="admin-model-toggle">
                         <input
@@ -4611,6 +4703,66 @@ export default function Home() {
                   {isAdminModelsSaving ? "Wird gespeichert…" : "Modelleinstellungen speichern"}
                 </button>
               </div>
+              <details className="admin-laozhang-section">
+                <summary className="admin-laozhang-summary">LaoZhang-Modelle verwalten</summary>
+                <div className="admin-laozhang-create-form">
+                  <div className="field-group">
+                    <label htmlFor="laozhang-display-name">Name</label>
+                    <input
+                      id="laozhang-display-name"
+                      type="text"
+                      value={adminCreateModelDisplayName}
+                      onChange={(e) => setAdminCreateModelDisplayName(e.target.value)}
+                      placeholder="z.B. GLM-5.2 (LaoZhang)"
+                      disabled={isAdminCreatingModel}
+                      maxLength={120}
+                    />
+                  </div>
+                  <div className="field-group">
+                    <label htmlFor="laozhang-upstream-id">Modell-ID</label>
+                    <input
+                      id="laozhang-upstream-id"
+                      type="text"
+                      value={adminCreateModelUpstreamId}
+                      onChange={(e) => setAdminCreateModelUpstreamId(e.target.value)}
+                      placeholder="z.B. glm-5.2"
+                      disabled={isAdminCreatingModel}
+                      maxLength={120}
+                    />
+                  </div>
+                  <button
+                    className="primary-button compact-button"
+                    type="button"
+                    onClick={() => void createLaoZhangModel()}
+                    disabled={isAdminCreatingModel || !adminCreateModelDisplayName.trim() || !adminCreateModelUpstreamId.trim()}
+                  >
+                    {isAdminCreatingModel ? "Wird angelegt…" : "Modell hinzufügen"}
+                  </button>
+                </div>
+                {adminModels.filter((m) => isDynamicModelId(m.id)).length > 0 ? (
+                  <div className="admin-laozhang-model-list">
+                    {adminModels.filter((m) => isDynamicModelId(m.id)).map((model) => (
+                      <div className="admin-model-setting" key={model.id}>
+                        <label className="admin-model-toggle">
+                          <input
+                            type="checkbox"
+                            checked={model.enabled}
+                            onChange={(event) => void toggleDynamicModelEnabled(model.id, event.target.checked)}
+                            disabled={(!model.providerConfigured && !model.enabled) || isAdminModelsSaving}
+                          />
+                          <span>
+                            <strong>{model.label}</strong>
+                            <small>LaoZhang · {model.upstreamModel ?? "–"}</small>
+                          </span>
+                        </label>
+                        <div className="field-group admin-model-reasoning">
+                          <span className="admin-model-no-reasoning">Reasoning deaktiviert</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </details>
             </section>
             <div className="admin-user-management">
               <div className="form-generator-card admin-create-user-card">

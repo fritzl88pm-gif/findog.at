@@ -1,7 +1,7 @@
-import { isSupportedModel, type ChatModel } from "../config";
+import { isDynamicModelId, isSupportedModel } from "../config";
 
 export type AgentRunMetadata = {
-  model: ChatModel;
+  model: string;
   status: "completed" | "failed";
   startedAt: string;
   completedAt: string | null;
@@ -15,7 +15,7 @@ export function normalizeAgentRun(value: unknown): AgentRunMetadata | undefined 
   const run = value as Record<string, unknown>;
   if (
     typeof run.model !== "string"
-    || !isSupportedModel(run.model)
+    || (!isSupportedModel(run.model) && !isDynamicModelId(run.model))
     || (run.status !== "completed" && run.status !== "failed")
     || typeof run.startedAt !== "string"
     || (run.completedAt !== null && typeof run.completedAt !== "string")
