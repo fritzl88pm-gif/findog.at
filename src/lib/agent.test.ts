@@ -155,6 +155,31 @@ describe("runAgent", () => {
     expectProtocolSafeMessages();
   });
 
+  it("persists tool-result evidence up to the dedicated 32,000-character audit limit", async () => {
+    const toolResult = "x".repeat(32_001);
+    mockMcpSession(toolResult);
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        finishReason: "tool_calls",
+        content: "Recherche",
+        toolCalls: [{
+          id: "long-result-call",
+          name: "search_laws",
+          arguments: JSON.stringify({ query: "EStG § 33" }),
+        }],
+      })
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort.", toolCalls: [] })
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "EStG § 33" }],
+    });
+    const persistedToolResult = result.steps.find((step) => step.type === "tool_result");
+
+    expect(persistedToolResult?.content).toBe(`${"x".repeat(32_000)}... [gekürzt]`);
+  });
+
   it("notifies callers for every visible deterministic step", async () => {
     const { callTool } = mockMcpSession();
     const onStep = vi.fn();

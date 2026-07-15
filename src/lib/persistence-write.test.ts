@@ -136,6 +136,45 @@ describe("persistConversationTurn", () => {
     ]);
   });
 
+  it("persists extended tool evidence without expanding ordinary trace steps", async () => {
+    const fake = persistenceClient({ client_id: clientId, title: "Bestehender Titel" });
+    vi.mocked(getSupabaseServerClient).mockReturnValue(fake.client as never);
+    const toolEvidence = `${"x".repeat(32_000)}... [gekürzt]`;
+
+    await persistConversationTurn({
+      conversationId,
+      clientId,
+      userMessage: "Frage",
+      assistantMessage: "Antwort",
+      modelProvenance: {
+        model: "deepseek-v4-pro",
+        provider: "deepseek",
+        upstreamModel: "deepseek-v4-pro",
+        reasoning: "high",
+        settingsRevision: 12,
+        settingsSource: "database",
+      },
+      steps: [
+        {
+          type: "tool_result",
+          title: "Datenbankergebnis",
+          content: toolEvidence,
+          toolName: "search_laws",
+          success: true,
+        },
+        {
+          type: "progress",
+          title: "Recherche fortgesetzt",
+          content: "y".repeat(5_000),
+        },
+      ],
+    });
+
+    const persistedSteps = fake.stepsInsert.mock.calls[0]?.[0];
+    expect(persistedSteps?.[0]?.content).toBe(toolEvidence);
+    expect(persistedSteps?.[1]?.content).toHaveLength(4_000);
+  });
+
   it("updates an established conversation without overwriting its title", async () => {
     const fake = persistenceClient({ client_id: clientId, title: "Bestehender Titel" });
     vi.mocked(getSupabaseServerClient).mockReturnValue(fake.client as never);

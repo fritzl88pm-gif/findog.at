@@ -152,6 +152,15 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain("# PDF-DOKUMENTE");
   });
 
+  it("requires a final claim-to-evidence gate before every specialist answer", () => {
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("# VERBINDLICHER EVIDENZCHECK VOR DER FINALEN ANTWORT");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("Ein wörtliches Zitat ist nur zulässig, wenn die exakte Zeichenfolge");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("Fundstelle, Seitennummer, Randzahl, Chunknummer, Geschäftszahl oder ECLI");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("Widerspricht eine Quelle der geplanten Aussage");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("Rechenwerte sind vor der Ausgabe dezimalgenau nachzurechnen");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("Kann eine tragende Aussage nicht auf einen tatsächlich vorliegenden Beleg zurückgeführt werden");
+  });
+
   it("keeps JSON requests bounded separately from PDF multipart uploads", () => {
     expect(MAX_REQUEST_BYTES).toBe(400_000);
     expect(MAX_PDF_UPLOAD_BYTES).toBe(50_000_000);

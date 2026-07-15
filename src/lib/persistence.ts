@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import type { AgentStep } from "./agent-steps";
-import { summarizeStepText } from "./agent-steps";
+import {
+  MAX_PERSISTED_TOOL_RESULT_STEP_TEXT_CHARS,
+  summarizeStepText,
+} from "./agent-steps";
 import { UserVisibleError } from "./errors";
 import type { ModelRunProvenance } from "./model-settings";
 import { getSupabaseServerClient } from "./supabase/server";
@@ -124,7 +127,10 @@ function sanitizeSteps(agentRunId: string, steps: AgentStep[]): PersistedStep[] 
     step_order: index,
     step_type: step.type,
     title: sanitizeTraceText(step.title, 200),
-    content: sanitizeTraceText(step.content, 4_000),
+    content: sanitizeTraceText(
+      step.content,
+      step.type === "tool_result" ? MAX_PERSISTED_TOOL_RESULT_STEP_TEXT_CHARS : 4_000,
+    ),
     tool_name: step.type === "tool_call" || step.type === "tool_result"
       ? sanitizeTraceText(step.toolName, 120)
       : null,

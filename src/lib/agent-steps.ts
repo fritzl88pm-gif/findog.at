@@ -19,6 +19,10 @@ export type AgentRunResult = {
 
 const DEFAULT_STEP_TEXT_LIMIT = 1_200;
 const DEFAULT_ARGUMENT_LIMIT = 800;
+const STEP_TEXT_TRUNCATION_SUFFIX = "... [gekürzt]";
+export const MAX_TOOL_RESULT_STEP_TEXT_CHARS = 32_000;
+export const MAX_PERSISTED_TOOL_RESULT_STEP_TEXT_CHARS =
+  MAX_TOOL_RESULT_STEP_TEXT_CHARS + STEP_TEXT_TRUNCATION_SUFFIX.length;
 function stringifyUnknown(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -37,9 +41,13 @@ export function summarizeStepText(value: unknown, maxLength = DEFAULT_STEP_TEXT_
     return text;
   }
 
-  return `${text.slice(0, maxLength).trimEnd()}... [gekürzt]`;
+  return `${text.slice(0, maxLength).trimEnd()}${STEP_TEXT_TRUNCATION_SUFFIX}`;
 }
 
 export function summarizeToolArguments(value: unknown): string {
   return summarizeStepText(value, DEFAULT_ARGUMENT_LIMIT);
+}
+
+export function summarizeToolResult(value: unknown): string {
+  return summarizeStepText(value, MAX_TOOL_RESULT_STEP_TEXT_CHARS);
 }

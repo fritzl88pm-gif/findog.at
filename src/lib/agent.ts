@@ -10,6 +10,7 @@ import { RESEARCH_SOURCES } from "./research-sources";
 import {
   summarizeStepText,
   summarizeToolArguments,
+  summarizeToolResult,
   type AgentRunResult,
   type AgentStep,
 } from "./agent-steps";
@@ -704,7 +705,7 @@ export async function runAgent(options: {
           {
             type: "tool_result",
             title: success ? "Betragsquelle ausgewertet" : "Betragsquelle fehlgeschlagen",
-            content: summarizeStepText(toolResult),
+            content: summarizeToolResult(toolResult),
             toolName: target.semanticToolName,
             success,
           },
@@ -910,7 +911,7 @@ export async function runAgent(options: {
         {
           type: "tool_result",
           title: success ? "Datenbankergebnis" : "Datenbankfehler",
-          content: summarizeStepText(toolResult),
+          content: summarizeToolResult(toolResult),
           toolName: call.name,
           success,
         },
