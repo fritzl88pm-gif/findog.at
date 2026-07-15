@@ -35,9 +35,20 @@ describe("Fredrun simulation", () => {
     expect(jumping.grounded).toBe(false);
     expect(jumpFredRun(jumping)).toBe(jumping);
 
-    const landed = advanceFor(1.2, jumping);
+    let landed = jumping;
+    let peakHeight = 0;
+    let airTime = 0;
+    while (!landed.grounded && airTime < 2) {
+      landed = advanceFredRun(landed, 1 / 120, () => 0.5);
+      peakHeight = Math.max(peakHeight, landed.playerHeight);
+      airTime += 1 / 120;
+    }
     expect(landed.grounded).toBe(true);
     expect(landed.playerHeight).toBe(0);
+    expect(peakHeight).toBeGreaterThan(130);
+    expect(peakHeight).toBeLessThan(140);
+    expect(airTime).toBeGreaterThan(0.8);
+    expect(airTime).toBeLessThan(0.85);
   });
 
   it("spawns only ground obstacles with a safe following distance", () => {

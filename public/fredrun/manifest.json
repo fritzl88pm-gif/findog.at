@@ -1,19 +1,66 @@
 {
   "source": {
-    "file": "Fred-spritesheet.zip",
-    "sha256": "DCD8D61B48B88FE525DA2D151544B8B8C859C9E3E222DEE18732E160E1A9F735",
-    "includedAnimations": [
-      "walk_right",
-      "jump_right",
-      "Victory"
-    ]
+    "archive": {
+      "file": "Fred-spritesheet.zip",
+      "sha256": "DCD8D61B48B88FE525DA2D151544B8B8C859C9E3E222DEE18732E160E1A9F735",
+      "includedAnimations": [
+        "walk_right",
+        "Victory"
+      ]
+    },
+    "jumpSheet": {
+      "file": "Fred-jump.png",
+      "sha256": "F16512E534978A7F3E0081A455DC1EE57064383AC2D4C8C994050EB087670789",
+      "sourceGrid": "7x7",
+      "sourceFrameCount": 49,
+      "selectedFrameIndices": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        13,
+        15,
+        17,
+        19,
+        21,
+        23,
+        25,
+        27,
+        29,
+        31,
+        33,
+        35,
+        38,
+        40,
+        42,
+        44,
+        46,
+        48
+      ]
+    }
   },
   "atlas": {
     "cellSize": 192,
-    "columns": 8,
-    "rows": 8,
-    "frameCount": 64,
     "anchor": "bottom-center",
-    "sharedScale": 0.421801
+    "sharedScale": 0.421801,
+    "animations": {
+      "walk": {
+        "columns": 8,
+        "rows": 8,
+        "frameCount": 64
+      },
+      "jump": {
+        "columns": 6,
+        "rows": 4,
+        "frameCount": 24
+      },
+      "victory": {
+        "columns": 8,
+        "rows": 8,
+        "frameCount": 64
+      }
+    }
   }
 }

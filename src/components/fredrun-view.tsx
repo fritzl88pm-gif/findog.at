@@ -24,25 +24,23 @@ import {
 } from "@/lib/fredrun";
 
 const SPRITE_CELL_SIZE = 192;
-const SPRITE_COLUMNS = 8;
-const SPRITE_FRAME_COUNT = 64;
 const SPRITE_DRAW_SIZE = 166;
 const JUMP_ANIMATION_DURATION = 0.82;
 const FIXED_STEP = 1 / 120;
 
-type SpriteKey = "walk" | "jump" | "victory";
+const spriteLayouts = {
+  walk: { source: "/fredrun/walk.png", columns: 8, frameCount: 64 },
+  jump: { source: "/fredrun/jump.png", columns: 6, frameCount: 24 },
+  victory: { source: "/fredrun/victory.png", columns: 8, frameCount: 64 },
+} as const;
+
+type SpriteKey = keyof typeof spriteLayouts;
 type SpriteImages = Record<SpriteKey, HTMLImageElement>;
 
 type FredRunSnapshot = {
   phase: FredRunPhase;
   score: number;
   level: number;
-};
-
-const spriteSources: Record<SpriteKey, string> = {
-  walk: "/fredrun/walk.png",
-  jump: "/fredrun/jump.png",
-  victory: "/fredrun/victory.png",
 };
 
 function snapshotFrom(state: FredRunState): FredRunSnapshot {
@@ -184,14 +182,26 @@ function activeSprite(state: FredRunState): { key: SpriteKey; frame: number } {
   const effectivePhase = state.phase === "paused" ? state.pausedFrom : state.phase;
   if (effectivePhase === "milestone") {
     const progress = 1 - state.milestoneRemaining / FREDRUN_MILESTONE_DURATION;
-    return { key: "victory", frame: Math.min(63, Math.max(0, Math.floor(progress * SPRITE_FRAME_COUNT))) };
+    return {
+      key: "victory",
+      frame: Math.min(
+        spriteLayouts.victory.frameCount - 1,
+        Math.max(0, Math.floor(progress * spriteLayouts.victory.frameCount)),
+      ),
+    };
   }
   if (!state.grounded) {
     const progress = state.jumpElapsed / JUMP_ANIMATION_DURATION;
-    return { key: "jump", frame: Math.min(63, Math.max(0, Math.floor(progress * SPRITE_FRAME_COUNT))) };
+    return {
+      key: "jump",
+      frame: Math.min(
+        spriteLayouts.jump.frameCount - 1,
+        Math.max(0, Math.floor(progress * spriteLayouts.jump.frameCount)),
+      ),
+    };
   }
   if (effectivePhase === "running") {
-    return { key: "walk", frame: Math.floor(state.elapsed * 18) % SPRITE_FRAME_COUNT };
+    return { key: "walk", frame: Math.floor(state.elapsed * 18) % spriteLayouts.walk.frameCount };
   }
   return { key: "walk", frame: 0 };
 }
@@ -213,8 +223,9 @@ function renderFredRun(
 
   if (sprites) {
     const sprite = activeSprite(state);
-    const sourceX = (sprite.frame % SPRITE_COLUMNS) * SPRITE_CELL_SIZE;
-    const sourceY = Math.floor(sprite.frame / SPRITE_COLUMNS) * SPRITE_CELL_SIZE;
+    const layout = spriteLayouts[sprite.key];
+    const sourceX = (sprite.frame % layout.columns) * SPRITE_CELL_SIZE;
+    const sourceY = Math.floor(sprite.frame / layout.columns) * SPRITE_CELL_SIZE;
     const footY = FREDRUN_GROUND_Y - state.playerHeight + 4;
     context.drawImage(
       sprites[sprite.key],
@@ -311,7 +322,9 @@ export default function FredRunView() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all((Object.keys(spriteSources) as SpriteKey[]).map(async (key) => [key, await loadSprite(spriteSources[key])] as const))
+    Promise.all((Object.keys(spriteLayouts) as SpriteKey[]).map(async (key) => (
+      [key, await loadSprite(spriteLayouts[key].source)] as const
+    )))
       .then((entries) => {
         if (cancelled) return;
         spritesRef.current = Object.fromEntries(entries) as SpriteImages;

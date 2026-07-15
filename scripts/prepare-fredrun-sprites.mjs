@@ -5,39 +5,55 @@ import path from "node:path";
 import PizZip from "pizzip";
 import sharp from "sharp";
 
-const SOURCE_PATH = process.argv[2] ?? "C:/Users/conta/Downloads/Fred-spritesheet.zip";
-const EXPECTED_SOURCE_HASH = "DCD8D61B48B88FE525DA2D151544B8B8C859C9E3E222DEE18732E160E1A9F735";
+const SOURCE_ZIP_PATH = process.argv[2] ?? "C:/Users/conta/Downloads/Fred-spritesheet.zip";
+const JUMP_SHEET_PATH = process.argv[3] ?? "C:/Users/conta/Downloads/Fred-jump.png";
+const EXPECTED_ZIP_HASH = "DCD8D61B48B88FE525DA2D151544B8B8C859C9E3E222DEE18732E160E1A9F735";
+const EXPECTED_JUMP_HASH = "F16512E534978A7F3E0081A455DC1EE57064383AC2D4C8C994050EB087670789";
 const OUTPUT_DIRECTORY = path.resolve("public/fredrun");
-const SOURCE_CELL_SIZE = 512;
 const CELL_SIZE = 192;
-const COLUMNS = 8;
-const FRAME_COUNT = 64;
 const ALPHA_THRESHOLD = 8;
 const HORIZONTAL_PADDING = 8;
 const TOP_PADDING = 6;
 const BOTTOM_PADDING = 8;
+const JUMP_SOURCE_COLUMNS = 7;
+const JUMP_SOURCE_FRAME_COUNT = 49;
+const JUMP_OUTPUT_FRAME_COUNT = 24;
 
-const animations = [
-  { key: "walk", sourceDirectory: "walk_right" },
-  { key: "jump", sourceDirectory: "jump_right" },
-  { key: "victory", sourceDirectory: "Victory" },
+const archiveAnimations = [
+  { key: "walk", sourceDirectory: "walk_right", sourceColumns: 8, sourceRows: 8, outputColumns: 8 },
+  { key: "victory", sourceDirectory: "Victory", sourceColumns: 8, sourceRows: 8, outputColumns: 8 },
 ];
 
-function findAlphaBounds(data, channels, frameX, frameY) {
-  let left = SOURCE_CELL_SIZE;
-  let top = SOURCE_CELL_SIZE;
+const jumpFrameIndices = Array.from({ length: JUMP_OUTPUT_FRAME_COUNT }, (_, index) => (
+  Math.round(index * (JUMP_SOURCE_FRAME_COUNT - 1) / (JUMP_OUTPUT_FRAME_COUNT - 1))
+));
+
+function sha256(buffer) {
+  return createHash("sha256").update(buffer).digest("hex").toUpperCase();
+}
+
+function frameRectangle(index, columns, rows, imageWidth, imageHeight) {
+  const column = index % columns;
+  const row = Math.floor(index / columns);
+  const left = Math.round(column * imageWidth / columns);
+  const top = Math.round(row * imageHeight / rows);
+  const right = Math.round((column + 1) * imageWidth / columns);
+  const bottom = Math.round((row + 1) * imageHeight / rows);
+  return { left, top, width: right - left, height: bottom - top };
+}
+
+function findAlphaBounds(data, channels, imageWidth, rectangle) {
+  let left = rectangle.width;
+  let top = rectangle.height;
   let right = -1;
   let bottom = -1;
-  const atlasWidth = SOURCE_CELL_SIZE * COLUMNS;
 
-  for (let y = 0; y < SOURCE_CELL_SIZE; y += 1) {
-    const sourceY = frameY + y;
-    for (let x = 0; x < SOURCE_CELL_SIZE; x += 1) {
-      const sourceX = frameX + x;
-      const alpha = data[(sourceY * atlasWidth + sourceX) * channels + 3];
-      if (alpha <= ALPHA_THRESHOLD) {
-        continue;
-      }
+  for (let y = 0; y < rectangle.height; y += 1) {
+    const sourceY = rectangle.top + y;
+    for (let x = 0; x < rectangle.width; x += 1) {
+      const sourceX = rectangle.left + x;
+      const alpha = data[(sourceY * imageWidth + sourceX) * channels + 3];
+      if (alpha <= ALPHA_THRESHOLD) continue;
       left = Math.min(left, x);
       top = Math.min(top, y);
       right = Math.max(right, x);
@@ -46,51 +62,88 @@ function findAlphaBounds(data, channels, frameX, frameY) {
   }
 
   if (right < left || bottom < top) {
-    throw new Error(`Leerer Sprite-Frame bei ${frameX},${frameY}.`);
+    throw new Error(`Leerer Sprite-Frame bei ${rectangle.left},${rectangle.top}.`);
   }
 
-  return {
-    left,
-    top,
-    width: right - left + 1,
-    height: bottom - top + 1,
-  };
+  return { left, top, width: right - left + 1, height: bottom - top + 1 };
+}
+
+async function removeUniformBackground(buffer) {
+  const { data, info } = await sharp(buffer).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const background = [data[0], data[1], data[2]];
+  const output = Buffer.alloc(info.width * info.height * 4);
+
+  for (let pixel = 0; pixel < info.width * info.height; pixel += 1) {
+    const sourceOffset = pixel * info.channels;
+    const outputOffset = pixel * 4;
+    const red = data[sourceOffset];
+    const green = data[sourceOffset + 1];
+    const blue = data[sourceOffset + 2];
+    const distance = Math.hypot(red - background[0], green - background[1], blue - background[2]);
+    const alpha = Math.round(Math.max(0, Math.min(1, (distance - 7) / 24)) * 255);
+    output[outputOffset] = red;
+    output[outputOffset + 1] = green;
+    output[outputOffset + 2] = blue;
+    output[outputOffset + 3] = alpha;
+  }
+
+  return sharp(output, { raw: { width: info.width, height: info.height, channels: 4 } })
+    .png()
+    .toBuffer();
+}
+
+async function decodeAnimation(config) {
+  const { data, info } = await sharp(config.buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const frameIndices = config.frameIndices ?? Array.from(
+    { length: config.sourceColumns * config.sourceRows },
+    (_, index) => index,
+  );
+  const frames = frameIndices.map((sourceIndex, outputIndex) => {
+    const rectangle = frameRectangle(
+      sourceIndex,
+      config.sourceColumns,
+      config.sourceRows,
+      info.width,
+      info.height,
+    );
+    return {
+      sourceIndex,
+      outputIndex,
+      rectangle,
+      bounds: findAlphaBounds(data, info.channels, info.width, rectangle),
+    };
+  });
+  return { ...config, frames };
 }
 
 async function main() {
-  const source = await readFile(SOURCE_PATH);
-  const sourceHash = createHash("sha256").update(source).digest("hex").toUpperCase();
-  if (sourceHash !== EXPECTED_SOURCE_HASH) {
-    throw new Error(`Unerwartetes Spritepaket: ${sourceHash}`);
-  }
+  const [zipSource, jumpSource] = await Promise.all([
+    readFile(SOURCE_ZIP_PATH),
+    readFile(JUMP_SHEET_PATH),
+  ]);
+  if (sha256(zipSource) !== EXPECTED_ZIP_HASH) throw new Error("Unerwartetes Fred-Spritepaket.");
+  if (sha256(jumpSource) !== EXPECTED_JUMP_HASH) throw new Error("Unerwartetes Fred-Sprungsheet.");
 
-  const zip = new PizZip(source);
+  const zip = new PizZip(zipSource);
   const decoded = [];
-  const allBounds = [];
-
-  for (const animation of animations) {
+  for (const animation of archiveAnimations) {
     const entryName = `${animation.sourceDirectory}/spritesheet.png`;
     const entry = zip.file(entryName);
-    if (!entry) {
-      throw new Error(`Fehlender ZIP-Eintrag: ${entryName}`);
-    }
-
-    const buffer = entry.asNodeBuffer();
-    const { data, info } = await sharp(buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-    if (info.width !== SOURCE_CELL_SIZE * COLUMNS || info.height !== SOURCE_CELL_SIZE * COLUMNS || info.channels !== 4) {
-      throw new Error(`Unerwartetes Atlasformat für ${entryName}.`);
-    }
-
-    const frames = Array.from({ length: FRAME_COUNT }, (_, index) => {
-      const frameX = (index % COLUMNS) * SOURCE_CELL_SIZE;
-      const frameY = Math.floor(index / COLUMNS) * SOURCE_CELL_SIZE;
-      const bounds = findAlphaBounds(data, info.channels, frameX, frameY);
-      allBounds.push(bounds);
-      return { index, frameX, frameY, bounds };
-    });
-    decoded.push({ ...animation, buffer, frames });
+    if (!entry) throw new Error(`Fehlender ZIP-Eintrag: ${entryName}`);
+    decoded.push(await decodeAnimation({ ...animation, buffer: entry.asNodeBuffer() }));
   }
 
+  const transparentJump = await removeUniformBackground(jumpSource);
+  decoded.splice(1, 0, await decodeAnimation({
+    key: "jump",
+    buffer: transparentJump,
+    sourceColumns: JUMP_SOURCE_COLUMNS,
+    sourceRows: JUMP_SOURCE_COLUMNS,
+    outputColumns: 6,
+    frameIndices: jumpFrameIndices,
+  }));
+
+  const allBounds = decoded.flatMap((animation) => animation.frames.map((frame) => frame.bounds));
   const maxWidth = Math.max(...allBounds.map((bounds) => bounds.width));
   const maxHeight = Math.max(...allBounds.map((bounds) => bounds.height));
   const scale = Math.min(
@@ -99,24 +152,25 @@ async function main() {
   );
 
   await mkdir(OUTPUT_DIRECTORY, { recursive: true });
-
+  const animationManifest = {};
   for (const animation of decoded) {
+    const rows = Math.ceil(animation.frames.length / animation.outputColumns);
     const composites = [];
     for (const frame of animation.frames) {
       const width = Math.max(1, Math.round(frame.bounds.width * scale));
       const height = Math.max(1, Math.round(frame.bounds.height * scale));
       const input = await sharp(animation.buffer)
         .extract({
-          left: frame.frameX + frame.bounds.left,
-          top: frame.frameY + frame.bounds.top,
+          left: frame.rectangle.left + frame.bounds.left,
+          top: frame.rectangle.top + frame.bounds.top,
           width: frame.bounds.width,
           height: frame.bounds.height,
         })
         .resize(width, height, { fit: "fill", kernel: sharp.kernel.lanczos3 })
         .png()
         .toBuffer();
-      const column = frame.index % COLUMNS;
-      const row = Math.floor(frame.index / COLUMNS);
+      const column = frame.outputIndex % animation.outputColumns;
+      const row = Math.floor(frame.outputIndex / animation.outputColumns);
       composites.push({
         input,
         left: column * CELL_SIZE + Math.round((CELL_SIZE - width) / 2),
@@ -126,8 +180,8 @@ async function main() {
 
     await sharp({
       create: {
-        width: CELL_SIZE * COLUMNS,
-        height: CELL_SIZE * COLUMNS,
+        width: CELL_SIZE * animation.outputColumns,
+        height: CELL_SIZE * rows,
         channels: 4,
         background: { r: 0, g: 0, b: 0, alpha: 0 },
       },
@@ -135,21 +189,34 @@ async function main() {
       .composite(composites)
       .png({ compressionLevel: 9, effort: 10 })
       .toFile(path.join(OUTPUT_DIRECTORY, `${animation.key}.png`));
+
+    animationManifest[animation.key] = {
+      columns: animation.outputColumns,
+      rows,
+      frameCount: animation.frames.length,
+    };
   }
 
   const manifest = {
     source: {
-      file: path.basename(SOURCE_PATH),
-      sha256: EXPECTED_SOURCE_HASH,
-      includedAnimations: animations.map((animation) => animation.sourceDirectory),
+      archive: {
+        file: path.basename(SOURCE_ZIP_PATH),
+        sha256: EXPECTED_ZIP_HASH,
+        includedAnimations: archiveAnimations.map((animation) => animation.sourceDirectory),
+      },
+      jumpSheet: {
+        file: path.basename(JUMP_SHEET_PATH),
+        sha256: EXPECTED_JUMP_HASH,
+        sourceGrid: "7x7",
+        sourceFrameCount: JUMP_SOURCE_FRAME_COUNT,
+        selectedFrameIndices: jumpFrameIndices,
+      },
     },
     atlas: {
       cellSize: CELL_SIZE,
-      columns: COLUMNS,
-      rows: COLUMNS,
-      frameCount: FRAME_COUNT,
       anchor: "bottom-center",
       sharedScale: Number(scale.toFixed(6)),
+      animations: animationManifest,
     },
   };
   await writeFile(path.join(OUTPUT_DIRECTORY, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
