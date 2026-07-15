@@ -102,6 +102,7 @@ function completionPayload(
 
   if (isLaoZhang) {
     payload.temperature = 0.2;
+    payload.max_tokens = 16000;
   } else {
     payload.thinking = { type: usesThinking ? "enabled" : "disabled" };
 

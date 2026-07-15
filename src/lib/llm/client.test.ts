@@ -214,6 +214,7 @@ describe("provider-neutral chatCompletion", () => {
       temperature: 0.2,
       tool_choice: "auto",
     });
+    expect(requestBody(fetchMock)).not.toHaveProperty("max_tokens");
     expect(JSON.stringify(requestBody(fetchMock))).not.toContain("deepseek-secret");
   });
 
@@ -370,7 +371,7 @@ describe("LaoZhang chat completion", () => {
     expect(body).not.toHaveProperty("reasoning_effort");
   });
 
-  it("keeps standard OpenAI-compatible fields (model, messages, stream, temperature)", async () => {
+  it("keeps standard OpenAI-compatible fields with max_tokens=16000 (model, messages, stream, temperature, max_tokens)", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
 
@@ -385,6 +386,7 @@ describe("LaoZhang chat completion", () => {
       messages: [{ role: "user", content: "Frage" }],
       stream: false,
       temperature: 0.2,
+      max_tokens: 16000,
     });
   });
 
