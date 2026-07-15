@@ -2938,3 +2938,111 @@ textarea:focus {
     content: "..." !important;
   }
 }
+
+
+/* Feedback controls */
+.feedback-controls {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.feedback-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  font-size: 1rem;
+  line-height: 1;
+  transition: var(--transition);
+  cursor: pointer;
+  padding: 0;
+}
+
+.feedback-button:hover {
+  background: var(--bg-app);
+}
+
+.feedback-positive {
+  background: #2e7d32;
+  color: #ffffff;
+  border-color: #2e7d32;
+}
+
+.feedback-positive:hover {
+  background: #1b5e20;
+  border-color: #1b5e20;
+}
+
+.feedback-positive:focus-visible {
+  outline: 3px solid rgba(46, 125, 50, 0.35);
+  outline-offset: 1px;
+}
+
+.feedback-negative {
+  background: #c62828;
+  color: #ffffff;
+  border-color: #c62828;
+}
+
+.feedback-negative:hover {
+  background: #b71c1c;
+  border-color: #b71c1c;
+}
+
+.feedback-negative:focus-visible {
+  outline: 3px solid rgba(198, 40, 40, 0.35);
+  outline-offset: 1px;
+}
+
+/* Feedback dialogs */
+.feedback-dialog {
+  width: min(400px, 100%);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+
+.feedback-positive-dialog {
+  text-align: center;
+  border-top: 4px solid #2e7d32;
+}
+
+.feedback-negative-dialog {
+  border-top: 4px solid var(--danger);
+}
+
+.feedback-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.feedback-dialog-header h2 {
+  margin: 0;
+  color: var(--bmf-blue-deep);
+  font-size: 1.15rem;
+}
+
+.feedback-thanks-message {
+  margin: 0;
+  color: #2e7d32;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.feedback-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}

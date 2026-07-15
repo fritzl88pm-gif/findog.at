@@ -42,6 +42,7 @@ import { CHAT_STREAM_CONTENT_TYPE, parseChatStreamLine } from "@/lib/chat-stream
 import { parsePasswordChangeBody } from "@/lib/auth/password";
 import { getWelcomeGreeting } from "@/lib/chat/welcome";
 import { shouldOfferChatPdfDownload } from "@/lib/chat/pdf-request";
+import { findNearestPrecedingUserMessage } from "@/lib/agent-feedback";
 import {
   FORM_IMAGE_MIME_TYPES,
   isFormImageMimeType,
@@ -1580,6 +1581,11 @@ export default function Home() {
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
   const [error, setError] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [feedbackTargetIndex, setFeedbackTargetIndex] = useState<number | null>(null);
+  const [feedbackDialogType, setFeedbackDialogType] = useState<"positive" | "negative">("positive");
+  const [feedbackText, setFeedbackText] = useState("");
+  const [isFeedbackSaving, setIsFeedbackSaving] = useState(false);
+  const [feedbackError, setFeedbackError] = useState("");
   const [openComposerMenu, setOpenComposerMenu] = useState<ComposerMenu>(null);
   const [pendingStepText, setPendingStepText] = useState(INITIAL_PENDING_TEXT);
   const [pendingSteps, setPendingSteps] = useState<AgentStep[]>([]);
@@ -1652,6 +1658,10 @@ export default function Home() {
   const settingsDialogRef = useRef<HTMLElement>(null);
   const settingsDialogCloseRef = useRef<HTMLButtonElement>(null);
   const authenticatedUserIdRef = useRef<string | null>(null);
+  const feedbackCloseRef = useRef<HTMLButtonElement>(null);
+  const feedbackTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const feedbackTriggerRef = useRef<HTMLButtonElement>(null);
+  const feedbackDialogRef = useRef<HTMLElement>(null);
   const user = session?.user ?? null;
   const signedInEmail = user?.email ?? "";
   const [welcomeGreeting] = useState(() => getWelcomeGreeting());
@@ -1659,6 +1669,14 @@ export default function Home() {
     setIsSettingsDialogOpen(false);
     requestAnimationFrame(() => settingsTriggerRef.current?.focus());
   }, []);
+  const closeFeedbackDialog = useCallback(() => {
+    if (isFeedbackSaving) {
+      return;
+    }
+    setFeedbackTargetIndex(null);
+    setFeedbackError("");
+    requestAnimationFrame(() => feedbackTriggerRef.current?.focus());
+  }, [isFeedbackSaving]);
   const clearAttachments = useCallback(() => {
     setSelectedPdfs([]);
     setSelectedImages([]);
@@ -1921,6 +1939,58 @@ export default function Home() {
     settingsDialogCloseRef.current?.focus();
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [closeSettingsDialog, isSettingsDialogOpen]);
+
+  useEffect(() => {
+    if (feedbackTargetIndex === null) {
+      return;
+    }
+
+    if (feedbackDialogType === "positive") {
+      feedbackCloseRef.current?.focus();
+    } else {
+      feedbackTextareaRef.current?.focus();
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isFeedbackSaving) {
+        event.preventDefault();
+        closeFeedbackDialog();
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const dialog = feedbackDialogRef.current;
+      if (!dialog) {
+        return;
+      }
+      const focusableElements = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      const firstFocusable = focusableElements[0];
+      const lastFocusable = focusableElements[focusableElements.length - 1];
+
+      if (!firstFocusable || !lastFocusable) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const activeElement = document.activeElement;
+      if (event.shiftKey && (activeElement === firstFocusable || !dialog.contains(activeElement))) {
+        event.preventDefault();
+        lastFocusable.focus();
+      } else if (!event.shiftKey && (activeElement === lastFocusable || !dialog.contains(activeElement))) {
+        event.preventDefault();
+        firstFocusable.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [closeFeedbackDialog, feedbackDialogType, feedbackTargetIndex, isFeedbackSaving]);
 
   useEffect(() => {
     if (!openComposerMenu) {
@@ -3080,6 +3150,67 @@ export default function Home() {
     input?.click();
   }
 
+  async function submitFeedback(messageIndex: number) {
+    if (isFeedbackSaving) return;
+    setFeedbackError("");
+    setIsFeedbackSaving(true);
+
+    const message = messages[messageIndex];
+    if (!message || message.role !== "assistant") {
+      setIsFeedbackSaving(false);
+      return;
+    }
+
+    const userRequest = findNearestPrecedingUserMessage(messages, messageIndex);
+    if (!userRequest) {
+      setIsFeedbackSaving(false);
+      return;
+    }
+
+    try {
+      const currentSession = await getSupabaseBrowserClient()?.auth.getSession();
+      const accessToken = currentSession?.data?.session?.access_token;
+      if (!accessToken) {
+        setFeedbackError("Sitzung abgelaufen. Bitte lade die Seite neu.");
+        setIsFeedbackSaving(false);
+        return;
+      }
+
+      const response = await fetch("/api/feedback", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          conversationId: conversationId,
+          userRequest,
+          assistantResponse: message.content,
+          feedback: feedbackText.trim(),
+        }),
+      });
+
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+
+      if (!response.ok) {
+        setFeedbackError(
+          typeof payload.error === "string" ? payload.error : "Feedback konnte nicht gespeichert werden.",
+        );
+        setIsFeedbackSaving(false);
+        return;
+      }
+
+      setFeedbackDialogType("positive");
+      setFeedbackText("");
+      setFeedbackError("");
+    } catch (err) {
+      setFeedbackError(
+        err instanceof Error ? err.message : "Feedback konnte nicht gespeichert werden.",
+      );
+    } finally {
+      setIsFeedbackSaving(false);
+    }
+  }
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -4670,6 +4801,37 @@ export default function Home() {
                         </button>
                       </div>
                     ) : null}
+                  {message.role === "assistant" && findNearestPrecedingUserMessage(messages, index) ? (
+                    <div className="feedback-controls">
+                      <button
+                        type="button"
+                        className="feedback-button feedback-positive"
+                        onClick={(event) => {
+                          feedbackTriggerRef.current = event.currentTarget;
+                          setFeedbackTargetIndex(index);
+                          setFeedbackDialogType("positive");
+                          setFeedbackError("");
+                        }}
+                        aria-label="Positive Rückmeldung zu dieser Antwort"
+                      >
+                        👍
+                      </button>
+                      <button
+                        type="button"
+                        className="feedback-button feedback-negative"
+                        onClick={(event) => {
+                          feedbackTriggerRef.current = event.currentTarget;
+                          setFeedbackTargetIndex(index);
+                          setFeedbackDialogType("negative");
+                          setFeedbackText("");
+                          setFeedbackError("");
+                        }}
+                        aria-label="Negative Rückmeldung zu dieser Antwort"
+                      >
+                        👎
+                      </button>
+                    </div>
+                  ) : null}
                   {message.role === "assistant" && (message.steps?.length || message.agentRun) ? (
                     <AgentStepsPanel steps={message.steps ?? []} />
                   ) : null}
@@ -4692,6 +4854,103 @@ export default function Home() {
             ) : null}
           </div>
         </div>
+
+          {feedbackTargetIndex !== null ? (
+            <div
+              className="dialog-backdrop"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) {
+                  closeFeedbackDialog();
+                }
+              }}
+            >
+              {feedbackDialogType === "positive" ? (
+                <section
+                  className="feedback-dialog feedback-positive-dialog"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Positive Rückmeldung"
+                  ref={feedbackDialogRef}
+                  tabIndex={-1}
+                >
+                  <p className="feedback-thanks-message">Danke für dein Feedback</p>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    onClick={closeFeedbackDialog}
+                    ref={feedbackCloseRef}
+                    aria-label="Schließen"
+                    disabled={isFeedbackSaving}
+                  >
+                    <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19"></line><line x1="19" y1="5" x2="5" y2="19"></line></svg>
+                  </button>
+                </section>
+              ) : (
+                <section
+                  className="feedback-dialog feedback-negative-dialog"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="feedback-negative-title"
+                  ref={feedbackDialogRef}
+                  tabIndex={-1}
+                >
+                  <div className="feedback-dialog-header">
+                    <h2 id="feedback-negative-title">Feedback</h2>
+                    <button
+                      className="icon-button"
+                      type="button"
+                      onClick={closeFeedbackDialog}
+                      aria-label="Schließen"
+                      disabled={isFeedbackSaving}
+                    >
+                      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="5" y1="5" x2="19" y2="19"></line><line x1="19" y1="5" x2="5" y2="19"></line></svg>
+                    </button>
+                  </div>
+                  <form
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void submitFeedback(feedbackTargetIndex);
+                    }}
+                  >
+                    <div className="field-group">
+                      <label htmlFor="feedback-textarea">Deine Rückmeldung</label>
+                      <textarea
+                        id="feedback-textarea"
+                        ref={feedbackTextareaRef}
+                        value={feedbackText}
+                        onChange={(e) => setFeedbackText(e.target.value)}
+                        placeholder="Was können wir verbessern?"
+                        required
+                        disabled={isFeedbackSaving}
+                      />
+                    </div>
+                    {feedbackError ? (
+                      <div className="error-box" role="alert" aria-live="polite">
+                        {feedbackError}
+                      </div>
+                    ) : null}
+                    <div className="feedback-dialog-actions">
+                      <button
+                        type="button"
+                        className="secondary-button compact-button"
+                        onClick={closeFeedbackDialog}
+                        disabled={isFeedbackSaving}
+                      >
+                        Abbrechen
+                      </button>
+                      <button
+                        type="submit"
+                        className="primary-button compact-button"
+                        disabled={isFeedbackSaving || !feedbackText.trim()}
+                      >
+                        {isFeedbackSaving ? "Wird gespeichert…" : "Absenden"}
+                      </button>
+                    </div>
+                  </form>
+                </section>
+              )}
+            </div>
+          ) : null}
 
         <div className="composer-container">
           {error ? (
