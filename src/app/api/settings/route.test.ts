@@ -60,5 +60,14 @@ describe("GET /api/settings", () => {
     });
     expect(isAdminUser).toHaveBeenCalledWith(expect.anything(), "user-1");
     expect(readEffectiveModelSettings).toHaveBeenCalledWith(expect.anything());
+    expect(publicEnabledModelDtos).toHaveBeenCalledWith(expect.anything(), true);
   });
+  it("passes normal-user status to model filtering", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "user-1" });
+    vi.mocked(isAdminUser).mockResolvedValue(false);
+    const response = await GET(new Request("http://localhost/api/settings"));
+    expect(response.status).toBe(200);
+    expect(publicEnabledModelDtos).toHaveBeenCalledWith(expect.anything(), false);
+  });
+
 });

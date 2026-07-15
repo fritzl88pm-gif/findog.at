@@ -5,7 +5,6 @@ import {
   type ModelProvider,
 } from "../config";
 import { resolveDeepSeekApiKey } from "../deepseek-key";
-import { resolveLaoZhangApiKey } from "../laozhang-key";
 import { UserVisibleError } from "../errors";
 
 function normalizedKey(value: string | undefined): string | undefined {
@@ -31,18 +30,16 @@ function resolveZaiApiKey(): string {
   return validateKey(key, "Z.AI");
 }
 
-export function resolveProviderApiKey(provider: ModelProvider): string {
+export function resolveProviderApiKey(provider: Exclude<ModelProvider, "openai_compatible">): string {
   switch (provider) {
     case "deepseek":
       return resolveDeepSeekApiKey();
     case "zai":
       return resolveZaiApiKey();
-    case "laozhang":
-      return resolveLaoZhangApiKey();
   }
 }
 
-export function isProviderConfigured(provider: ModelProvider): boolean {
+export function isProviderConfigured(provider: Exclude<ModelProvider, "openai_compatible">): boolean {
   try {
     resolveProviderApiKey(provider);
     return true;

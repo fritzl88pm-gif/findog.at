@@ -297,13 +297,13 @@ describe("provider-neutral chatCompletion", () => {
   });
 });
 
-describe("LaoZhang chat completion", () => {
-  const LAOZHANG_RUNTIME = {
-    model: "laozhang:00000000-0000-4000-8000-000000000001",
-    provider: "laozhang",
+describe("OpenAI-compatible chat completion", () => {
+  const OPENAI_COMPATIBLE_RUNTIME = {
+    model: "openai:00000000-0000-4000-8000-000000000001",
+    provider: "openai_compatible",
     upstreamModel: "glm-5.2",
-    baseUrl: "https://api.laozhang.ai/v1",
-    apiKey: "lz-secret-key",
+    baseUrl: "https://gateway.example.com/v1",
+    apiKey: "provider-secret-key",
     reasoning: "disabled",
   } satisfies LlmRuntime;
 
@@ -315,17 +315,17 @@ describe("LaoZhang chat completion", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses the correct LaoZhang API endpoint URL", async () => {
+  it("uses the correct OpenAI-compatible API endpoint URL", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
 
     await chatCompletion({
-      runtime: LAOZHANG_RUNTIME,
+      runtime: OPENAI_COMPATIBLE_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
     });
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "https://api.laozhang.ai/v1/chat/completions",
+      "https://gateway.example.com/v1/chat/completions",
     );
   });
 
@@ -334,7 +334,7 @@ describe("LaoZhang chat completion", () => {
     fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
 
     await chatCompletion({
-      runtime: LAOZHANG_RUNTIME,
+      runtime: OPENAI_COMPATIBLE_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
     });
 
@@ -347,13 +347,13 @@ describe("LaoZhang chat completion", () => {
     fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
 
     await chatCompletion({
-      runtime: LAOZHANG_RUNTIME,
+      runtime: OPENAI_COMPATIBLE_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
     });
 
     const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
     expect(headers).toMatchObject({
-      Authorization: "Bearer lz-secret-key",
+      Authorization: "Bearer provider-secret-key",
     });
   });
 
@@ -362,7 +362,7 @@ describe("LaoZhang chat completion", () => {
     fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
 
     await chatCompletion({
-      runtime: LAOZHANG_RUNTIME,
+      runtime: OPENAI_COMPATIBLE_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
     });
 
@@ -376,7 +376,7 @@ describe("LaoZhang chat completion", () => {
     fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
 
     await chatCompletion({
-      runtime: LAOZHANG_RUNTIME,
+      runtime: OPENAI_COMPATIBLE_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
     });
 
@@ -390,7 +390,7 @@ describe("LaoZhang chat completion", () => {
     });
   });
 
-  it("supports tool calling for laozhang", async () => {
+  it("supports tool calling for OpenAI-compatible provider", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(
       responseMessage(
@@ -407,7 +407,7 @@ describe("LaoZhang chat completion", () => {
     );
 
     const result = await chatCompletion({
-      runtime: LAOZHANG_RUNTIME,
+      runtime: OPENAI_COMPATIBLE_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
       tools: [TOOL],
     });
@@ -417,24 +417,24 @@ describe("LaoZhang chat completion", () => {
     expect(result.toolCalls[0].name).toBe("search_laws");
   });
 
-  it("uses LaoZhang-specific error text for auth failures", async () => {
+  it("uses OpenAI-compatible-specific error text for auth failures", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(new Response("Unauthorized", { status: 401 }));
 
     await expect(chatCompletion({
-      runtime: LAOZHANG_RUNTIME,
+      runtime: OPENAI_COMPATIBLE_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
-    })).rejects.toThrow("LaoZhang API-Zugang wurde abgelehnt");
+    })).rejects.toThrow("OpenAI-kompatibler Provider API-Zugang wurde abgelehnt");
   });
 
-  it("uses LaoZhang-specific error text for forbidden failures", async () => {
+  it("uses OpenAI-compatible-specific error text for forbidden failures", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(new Response("Forbidden", { status: 403 }));
 
     await expect(chatCompletion({
-      runtime: LAOZHANG_RUNTIME,
+      runtime: OPENAI_COMPATIBLE_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
-    })).rejects.toThrow("LaoZhang API-Zugang wurde abgelehnt");
+    })).rejects.toThrow("OpenAI-kompatibler Provider API-Zugang wurde abgelehnt");
   });
 
   it("includes tools in the payload when provided", async () => {
@@ -442,7 +442,7 @@ describe("LaoZhang chat completion", () => {
     fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
 
     await chatCompletion({
-      runtime: LAOZHANG_RUNTIME,
+      runtime: OPENAI_COMPATIBLE_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
       tools: [TOOL],
     });
@@ -453,12 +453,12 @@ describe("LaoZhang chat completion", () => {
     expect(body.tools).toHaveLength(1);
   });
 
-  it("does not set a tool_choice for laozhang", async () => {
+  it("does not set a tool_choice for OpenAI-compatible provider", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
 
     await chatCompletion({
-      runtime: LAOZHANG_RUNTIME,
+      runtime: OPENAI_COMPATIBLE_RUNTIME,
       messages: [{ role: "user", content: "Frage" }],
       tools: [TOOL],
     });

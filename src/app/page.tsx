@@ -142,10 +142,11 @@ type AdminModelSetting = {
   providerConfigured: boolean;
   revision: number;
   updatedAt: string | null;
-  /** Present for dynamic models */
   provider?: string;
-  /** Present for dynamic models */
   upstreamModel?: string;
+  displayName?: string | null;
+  baseUrl?: string;
+  accessScope?: "disabled" | "admins" | "all";
 };
 
 type AdminUserSummary = {
@@ -645,6 +646,9 @@ function normalizeAdminModels(value: unknown): AdminModelSetting[] | null {
       updatedAt: item.updatedAt,
       ...(typeof item.provider === "string" ? { provider: item.provider } : {}),
       ...(typeof item.upstreamModel === "string" ? { upstreamModel: item.upstreamModel } : {}),
+      ...((typeof item.displayName === "string" || item.displayName === null) ? { displayName: item.displayName } : {}),
+      ...(typeof item.baseUrl === "string" ? { baseUrl: item.baseUrl } : {}),
+      ...((item.accessScope === "disabled" || item.accessScope === "admins" || item.accessScope === "all") ? { accessScope: item.accessScope } : {}),
     }];
   });
 
@@ -1607,8 +1611,9 @@ export default function Home() {
   const [adminModels, setAdminModels] = useState<AdminModelSetting[]>([]);
   const [isAdminModelsLoading, setIsAdminModelsLoading] = useState(false);
   const [isAdminModelsSaving, setIsAdminModelsSaving] = useState(false);
-  const [adminCreateModelDisplayName, setAdminCreateModelDisplayName] = useState("");
-  const [adminCreateModelUpstreamId, setAdminCreateModelUpstreamId] = useState("");
+  const [adminCreateModel, setAdminCreateModel] = useState({ upstreamModel: "", displayName: "", baseUrl: "", apiKey: "", accessScope: "disabled" as "disabled" | "admins" | "all" });
+  const [adminEditingModelId, setAdminEditingModelId] = useState<string | null>(null);
+  const [adminEditModel, setAdminEditModel] = useState({ upstreamModel: "", displayName: "", baseUrl: "", apiKey: "", accessScope: "disabled" as "disabled" | "admins" | "all" });
   const [isAdminCreatingModel, setIsAdminCreatingModel] = useState(false);
   const [adminUsers, setAdminUsers] = useState<AdminUserSummary[]>([]);
   const [adminUserProfile, setAdminUserProfile] = useState<AdminUserProfile | null>(null);
@@ -2669,84 +2674,90 @@ export default function Home() {
     }
   }
 
-  async function createLaoZhangModel() {
+  async function refreshModelSettings(accessToken: string) {
+    await loadAdminModels(accessToken);
+    const publicSettings = await fetchAuthenticatedSettings(accessToken);
+    setIsAdmin(publicSettings.isAdmin);
+    applyEnabledModels(publicSettings.enabledModels);
+  }
+
+  async function createOpenAICompatibleModel() {
     const accessToken = session?.access_token;
-    if (!accessToken || !isAdmin || isAdminCreatingModel || !adminCreateModelDisplayName.trim() || !adminCreateModelUpstreamId.trim()) {
-      return;
-    }
-    setAdminError("");
-    setAdminNotice("");
-    setIsAdminCreatingModel(true);
+    if (!accessToken || !isAdmin || isAdminCreatingModel || !adminCreateModel.upstreamModel.trim() || !adminCreateModel.baseUrl.trim() || !adminCreateModel.apiKey.trim()) return;
+    setAdminError(""); setAdminNotice(""); setIsAdminCreatingModel(true);
     try {
       const response = await fetch("/api/admin/models", {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          displayName: adminCreateModelDisplayName.trim(),
-          upstreamModel: adminCreateModelUpstreamId.trim(),
-        }),
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ ...adminCreateModel, upstreamModel: adminCreateModel.upstreamModel.trim(), displayName: adminCreateModel.displayName.trim() || null, baseUrl: adminCreateModel.baseUrl.trim() }),
       });
       const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!response.ok) {
-        throw new Error(
-          typeof payload.error === "string"
-            ? payload.error
-            : "Das Modell konnte nicht angelegt werden.",
-        );
-      }
-      setAdminCreateModelDisplayName("");
-      setAdminCreateModelUpstreamId("");
-      await loadAdminModels(accessToken);
-      setAdminNotice("LaoZhang-Modell wurde angelegt.");
+      if (!response.ok) throw new Error(typeof payload.error === "string" ? payload.error : "Das Modell konnte nicht angelegt werden.");
+      setAdminCreateModel({ upstreamModel: "", displayName: "", baseUrl: "", apiKey: "", accessScope: "disabled" });
+      await refreshModelSettings(accessToken);
+      setAdminNotice("Das OpenAI-kompatible Modell wurde angelegt.");
     } catch (createError) {
-      setAdminError(createError instanceof Error
-        ? createError.message
-        : "Das Modell konnte nicht angelegt werden.");
-    } finally {
-      setIsAdminCreatingModel(false);
-    }
+      setAdminError(createError instanceof Error ? createError.message : "Das Modell konnte nicht angelegt werden.");
+    } finally { setIsAdminCreatingModel(false); }
   }
 
-  async function toggleDynamicModelEnabled(modelId: string, enabled: boolean) {
+  function startEditingOpenAICompatibleModel(model: AdminModelSetting) {
+    setAdminEditingModelId(model.id);
+    setAdminEditModel({ upstreamModel: model.upstreamModel ?? "", displayName: model.displayName ?? "", baseUrl: model.baseUrl ?? "", apiKey: "", accessScope: model.accessScope ?? "disabled" });
+  }
+
+  function cancelEditingOpenAICompatibleModel() {
+    setAdminEditingModelId(null);
+    setAdminEditModel({ upstreamModel: "", displayName: "", baseUrl: "", apiKey: "", accessScope: "disabled" });
+  }
+
+  async function saveOpenAICompatibleModel(model: AdminModelSetting) {
     const accessToken = session?.access_token;
-    if (!accessToken || !isAdmin || isAdminModelsSaving) {
-      return;
-    }
-    setAdminError("");
-    setAdminNotice("");
-    setIsAdminModelsSaving(true);
+    if (
+      !accessToken
+      || !isAdmin
+      || isAdminModelsSaving
+      || adminEditingModelId !== model.id
+      || !adminEditModel.upstreamModel.trim()
+      || !adminEditModel.baseUrl.trim()
+    ) return;
+    setAdminError(""); setAdminNotice(""); setIsAdminModelsSaving(true);
     try {
-      const response = await fetch(`/api/admin/models/${encodeURIComponent(modelId)}`, {
+      const response = await fetch(`/api/admin/models/${encodeURIComponent(model.id)}`, {
         method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ enabled }),
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ ...adminEditModel, upstreamModel: adminEditModel.upstreamModel.trim(), displayName: adminEditModel.displayName.trim() || null, baseUrl: adminEditModel.baseUrl.trim(), revision: model.revision }),
       });
       const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) throw new Error(typeof payload.error === "string" ? payload.error : "Das Modell konnte nicht gespeichert werden.");
+      cancelEditingOpenAICompatibleModel();
+      await refreshModelSettings(accessToken);
+      setAdminNotice("Das OpenAI-kompatible Modell wurde gespeichert.");
+    } catch (saveError) {
+      setAdminError(saveError instanceof Error ? saveError.message : "Das Modell konnte nicht gespeichert werden.");
+    } finally { setIsAdminModelsSaving(false); }
+  }
+
+  async function deleteOpenAICompatibleModel(model: AdminModelSetting) {
+    const accessToken = session?.access_token;
+    if (!accessToken || !isAdmin || isAdminModelsSaving || !window.confirm(`Modell „${model.label}“ wirklich löschen?`)) return;
+    setAdminError(""); setAdminNotice(""); setIsAdminModelsSaving(true);
+    try {
+      const response = await fetch(`/api/admin/models/${encodeURIComponent(model.id)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ revision: model.revision }),
+      });
       if (!response.ok) {
-        throw new Error(
-          typeof payload.error === "string"
-            ? payload.error
-            : "Die Modellkonfiguration konnte nicht gespeichert werden.",
-        );
+        const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+        throw new Error(typeof payload.error === "string" ? payload.error : "Das Modell konnte nicht gelöscht werden.");
       }
-      await loadAdminModels(accessToken);
-      const publicSettings = await fetchAuthenticatedSettings(accessToken);
-      setIsAdmin(publicSettings.isAdmin);
-      applyEnabledModels(publicSettings.enabledModels);
-      setAdminNotice("Die Modellkonfiguration wurde gespeichert.");
-    } catch (toggleError) {
-      setAdminError(toggleError instanceof Error
-        ? toggleError.message
-        : "Die Modellkonfiguration konnte nicht gespeichert werden.");
-    } finally {
-      setIsAdminModelsSaving(false);
-    }
+      if (adminEditingModelId === model.id) cancelEditingOpenAICompatibleModel();
+      await refreshModelSettings(accessToken);
+      setAdminNotice("Das OpenAI-kompatible Modell wurde gelöscht.");
+    } catch (deleteError) {
+      setAdminError(deleteError instanceof Error ? deleteError.message : "Das Modell konnte nicht gelöscht werden.");
+    } finally { setIsAdminModelsSaving(false); }
   }
 
   async function openAdministrationView() {
@@ -4703,66 +4714,101 @@ export default function Home() {
                   {isAdminModelsSaving ? "Wird gespeichert…" : "Modelleinstellungen speichern"}
                 </button>
               </div>
-              <details className="admin-laozhang-section">
-                <summary className="admin-laozhang-summary">LaoZhang-Modelle verwalten</summary>
-                <div className="admin-laozhang-create-form">
-                  <div className="field-group">
-                    <label htmlFor="laozhang-display-name">Name</label>
-                    <input
-                      id="laozhang-display-name"
-                      type="text"
-                      value={adminCreateModelDisplayName}
-                      onChange={(e) => setAdminCreateModelDisplayName(e.target.value)}
-                      placeholder="z.B. GLM-5.2 (LaoZhang)"
-                      disabled={isAdminCreatingModel}
-                      maxLength={120}
-                    />
-                  </div>
-                  <div className="field-group">
-                    <label htmlFor="laozhang-upstream-id">Modell-ID</label>
-                    <input
-                      id="laozhang-upstream-id"
-                      type="text"
-                      value={adminCreateModelUpstreamId}
-                      onChange={(e) => setAdminCreateModelUpstreamId(e.target.value)}
-                      placeholder="z.B. glm-5.2"
-                      disabled={isAdminCreatingModel}
-                      maxLength={120}
-                    />
-                  </div>
-                  <button
-                    className="primary-button compact-button"
-                    type="button"
-                    onClick={() => void createLaoZhangModel()}
-                    disabled={isAdminCreatingModel || !adminCreateModelDisplayName.trim() || !adminCreateModelUpstreamId.trim()}
-                  >
-                    {isAdminCreatingModel ? "Wird angelegt…" : "Modell hinzufügen"}
-                  </button>
+              <details className="admin-openai-compatible-section">
+                <summary className="admin-openai-compatible-summary">OpenAI-kompatible Modelle verwalten</summary>
+                <div className="admin-openai-compatible-create-form">
+                  <div className="field-group"><label htmlFor="openai-compatible-upstream-id">Upstream-Modell-ID</label><input id="openai-compatible-upstream-id" type="text" maxLength={120} value={adminCreateModel.upstreamModel} onChange={(event) => setAdminCreateModel((current) => ({ ...current, upstreamModel: event.target.value }))} disabled={isAdminCreatingModel} /></div>
+                  <div className="field-group"><label htmlFor="openai-compatible-display-name">Anzeigename (optional)</label><input id="openai-compatible-display-name" type="text" maxLength={120} value={adminCreateModel.displayName} onChange={(event) => setAdminCreateModel((current) => ({ ...current, displayName: event.target.value }))} disabled={isAdminCreatingModel} /></div>
+                  <div className="field-group"><label htmlFor="openai-compatible-base-url">Basis-URL</label><input id="openai-compatible-base-url" type="url" maxLength={2048} placeholder="https://gateway.example.com/v1" value={adminCreateModel.baseUrl} onChange={(event) => setAdminCreateModel((current) => ({ ...current, baseUrl: event.target.value }))} disabled={isAdminCreatingModel} /></div>
+                  <div className="field-group"><label htmlFor="openai-compatible-api-key">API-Key</label><input id="openai-compatible-api-key" type="password" maxLength={512} autoComplete="new-password" value={adminCreateModel.apiKey} onChange={(event) => setAdminCreateModel((current) => ({ ...current, apiKey: event.target.value }))} disabled={isAdminCreatingModel} /></div>
+                  <div className="field-group"><label htmlFor="openai-compatible-access">Verfügbarkeit</label><select id="openai-compatible-access" value={adminCreateModel.accessScope} onChange={(event) => setAdminCreateModel((current) => ({ ...current, accessScope: event.target.value as "disabled" | "admins" | "all" }))} disabled={isAdminCreatingModel}><option value="disabled">Deaktiviert</option><option value="admins">Nur Administratoren</option><option value="all">Alle Benutzer</option></select></div>
+                  <button className="primary-button compact-button" type="button" onClick={() => void createOpenAICompatibleModel()} disabled={isAdminCreatingModel || !adminCreateModel.upstreamModel.trim() || !adminCreateModel.baseUrl.trim() || !adminCreateModel.apiKey.trim()}>{isAdminCreatingModel ? "Wird angelegt…" : "Modell hinzufügen"}</button>
                 </div>
-                {adminModels.filter((m) => isDynamicModelId(m.id)).length > 0 ? (
-                  <div className="admin-laozhang-model-list">
-                    {adminModels.filter((m) => isDynamicModelId(m.id)).map((model) => (
-                      <div className="admin-model-setting" key={model.id}>
-                        <label className="admin-model-toggle">
-                          <input
-                            type="checkbox"
-                            checked={model.enabled}
-                            onChange={(event) => void toggleDynamicModelEnabled(model.id, event.target.checked)}
-                            disabled={(!model.providerConfigured && !model.enabled) || isAdminModelsSaving}
-                          />
-                          <span>
-                            <strong>{model.label}</strong>
-                            <small>LaoZhang · {model.upstreamModel ?? "–"}</small>
-                          </span>
-                        </label>
-                        <div className="field-group admin-model-reasoning">
-                          <span className="admin-model-no-reasoning">Reasoning deaktiviert</span>
+                <div className="admin-openai-compatible-model-list">
+                  {adminModels.filter((model) => isDynamicModelId(model.id)).map((model) => (
+                    <div className="admin-openai-compatible-model" key={model.id}>
+                      {adminEditingModelId === model.id ? (
+                        <div className="admin-openai-compatible-create-form">
+                          <div className="field-group">
+                            <label htmlFor={`openai-compatible-edit-upstream-${model.id}`}>Upstream-Modell-ID</label>
+                            <input
+                              id={`openai-compatible-edit-upstream-${model.id}`}
+                              type="text"
+                              maxLength={120}
+                              value={adminEditModel.upstreamModel}
+                              onChange={(event) => setAdminEditModel((current) => ({ ...current, upstreamModel: event.target.value }))}
+                              disabled={isAdminModelsSaving}
+                              required
+                            />
+                          </div>
+                          <div className="field-group">
+                            <label htmlFor={`openai-compatible-edit-display-${model.id}`}>Anzeigename (optional)</label>
+                            <input
+                              id={`openai-compatible-edit-display-${model.id}`}
+                              type="text"
+                              maxLength={120}
+                              value={adminEditModel.displayName}
+                              onChange={(event) => setAdminEditModel((current) => ({ ...current, displayName: event.target.value }))}
+                              disabled={isAdminModelsSaving}
+                            />
+                          </div>
+                          <div className="field-group">
+                            <label htmlFor={`openai-compatible-edit-base-url-${model.id}`}>Basis-URL</label>
+                            <input
+                              id={`openai-compatible-edit-base-url-${model.id}`}
+                              type="url"
+                              maxLength={2048}
+                              value={adminEditModel.baseUrl}
+                              onChange={(event) => setAdminEditModel((current) => ({ ...current, baseUrl: event.target.value }))}
+                              disabled={isAdminModelsSaving}
+                              required
+                            />
+                          </div>
+                          <div className="field-group">
+                            <label htmlFor={`openai-compatible-edit-api-key-${model.id}`}>Neuer API-Key (optional)</label>
+                            <input
+                              id={`openai-compatible-edit-api-key-${model.id}`}
+                              type="password"
+                              maxLength={512}
+                              autoComplete="new-password"
+                              value={adminEditModel.apiKey}
+                              onChange={(event) => setAdminEditModel((current) => ({ ...current, apiKey: event.target.value }))}
+                              disabled={isAdminModelsSaving}
+                            />
+                          </div>
+                          <div className="field-group">
+                            <label htmlFor={`openai-compatible-edit-access-${model.id}`}>Verfügbarkeit</label>
+                            <select
+                              id={`openai-compatible-edit-access-${model.id}`}
+                              value={adminEditModel.accessScope}
+                              onChange={(event) => setAdminEditModel((current) => ({ ...current, accessScope: event.target.value as "disabled" | "admins" | "all" }))}
+                              disabled={isAdminModelsSaving}
+                            >
+                              <option value="disabled">Deaktiviert</option>
+                              <option value="admins">Nur Administratoren</option>
+                              <option value="all">Alle Benutzer</option>
+                            </select>
+                          </div>
+                          <div className="admin-openai-compatible-actions">
+                            <button
+                              className="primary-button compact-button"
+                              type="button"
+                              onClick={() => void saveOpenAICompatibleModel(model)}
+                              disabled={isAdminModelsSaving || !adminEditModel.upstreamModel.trim() || !adminEditModel.baseUrl.trim()}
+                            >
+                              Speichern
+                            </button>
+                            <button className="secondary-button compact-button" type="button" onClick={cancelEditingOpenAICompatibleModel} disabled={isAdminModelsSaving}>Abbrechen</button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
+                      ) : (
+                        <><div><strong>{model.label}</strong><small>{model.upstreamModel} · {model.baseUrl} · {model.accessScope === "all" ? "Alle Benutzer" : model.accessScope === "admins" ? "Nur Administratoren" : "Deaktiviert"}</small></div><div className="admin-openai-compatible-actions"><button className="secondary-button compact-button" type="button" onClick={() => startEditingOpenAICompatibleModel(model)} disabled={isAdminModelsSaving}>Bearbeiten</button><button className="danger-button compact-button" type="button" onClick={() => void deleteOpenAICompatibleModel(model)} disabled={isAdminModelsSaving}>Löschen</button></div></>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </details>
+
             </section>
             <div className="admin-user-management">
               <div className="form-generator-card admin-create-user-card">

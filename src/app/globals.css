@@ -1564,14 +1564,14 @@ textarea:focus {
   justify-content: flex-end;
 }
 
-.admin-laozhang-section {
+.admin-openai-compatible-section {
   margin-top: 1.5rem;
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   padding: 0.75rem;
 }
 
-.admin-laozhang-summary {
+.admin-openai-compatible-summary {
   cursor: pointer;
   font-weight: 600;
   font-size: 0.9rem;
@@ -1580,30 +1580,31 @@ textarea:focus {
   user-select: none;
 }
 
-.admin-laozhang-summary:hover {
+.admin-openai-compatible-summary:hover {
   color: var(--text);
 }
 
-.admin-laozhang-create-form {
+.admin-openai-compatible-create-form {
   margin-top: 0.75rem;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
 
-.admin-laozhang-create-form .field-group {
+.admin-openai-compatible-create-form .field-group {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
 }
 
-.admin-laozhang-create-form .field-group label {
+.admin-openai-compatible-create-form .field-group label {
   font-size: 0.8rem;
   font-weight: 500;
   color: var(--text-muted);
 }
 
-.admin-laozhang-create-form input {
+.admin-openai-compatible-create-form input,
+.admin-openai-compatible-create-form select {
   padding: 0.4rem 0.6rem;
   border: 1px solid var(--border);
   border-radius: 0.375rem;
@@ -1612,16 +1613,40 @@ textarea:focus {
   color: var(--text);
 }
 
-.admin-laozhang-create-form input:focus {
+.admin-openai-compatible-create-form input:focus,
+.admin-openai-compatible-create-form select:focus {
   outline: none;
   border-color: var(--primary);
   box-shadow: 0 0 0 2px var(--primary-alpha);
 }
 
-.admin-laozhang-model-list {
+.admin-openai-compatible-model-list {
   margin-top: 0.75rem;
   display: flex;
   flex-direction: column;
+  gap: 0.5rem;
+}
+
+.admin-openai-compatible-model {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+
+.admin-openai-compatible-model small {
+  display: block;
+  color: var(--text-muted);
+  margin-top: 0.2rem;
+  overflow-wrap: anywhere;
+}
+
+.admin-openai-compatible-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 0.5rem;
 }
 

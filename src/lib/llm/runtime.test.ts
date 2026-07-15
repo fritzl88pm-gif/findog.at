@@ -1,8 +1,12 @@
+import { randomBytes } from "node:crypto";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { UserVisibleError } from "../errors";
+import { encryptOpenAICompatibleApiKey } from "../openai-compatible-credentials";
 import {
   isModelProviderConfigured,
+  resolveDynamicLlmRuntime,
   resolveLlmRuntime,
   withRuntimeReasoning,
 } from "./runtime";
@@ -10,6 +14,7 @@ import {
 const originalDeepSeekKey = process.env.DEEPSEEK_API_KEY;
 const originalGlobalDeepSeekKey = process.env.GLOBAL_DEEPSEEK_API_KEY;
 const originalZaiKey = process.env.ZAI_API_KEY;
+const originalCompatibleKey = process.env.OPENAI_COMPATIBLE_CREDENTIALS_KEY;
 
 function restore(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -23,6 +28,7 @@ afterEach(() => {
   restore("DEEPSEEK_API_KEY", originalDeepSeekKey);
   restore("GLOBAL_DEEPSEEK_API_KEY", originalGlobalDeepSeekKey);
   restore("ZAI_API_KEY", originalZaiKey);
+  restore("OPENAI_COMPATIBLE_CREDENTIALS_KEY", originalCompatibleKey);
 });
 
 describe("resolveLlmRuntime", () => {
@@ -50,6 +56,35 @@ describe("resolveLlmRuntime", () => {
       baseUrl: "https://api.z.ai/api/coding/paas/v4",
       apiKey: "zai-secret",
       reasoning: "max",
+    });
+  });
+
+  it("resolves a custom runtime from its own base URL and encrypted key", () => {
+    process.env.OPENAI_COMPATIBLE_CREDENTIALS_KEY = randomBytes(32).toString("base64");
+    const runtime = resolveDynamicLlmRuntime({
+      id: "openai:00000000-0000-4000-8000-000000000001",
+      displayName: null,
+      provider: "openai_compatible",
+      upstreamModel: "vendor-model",
+      baseUrl: "https://gateway.example.com/v1",
+      accessScope: "all",
+      apiKeyCiphertext: encryptOpenAICompatibleApiKey("provider-secret"),
+      isDynamic: true,
+      alwaysEnabled: false,
+      enabled: true,
+      reasoning: "disabled",
+      revision: 5,
+      updatedAt: null,
+      updatedBy: null,
+    });
+
+    expect(runtime).toEqual({
+      model: "openai:00000000-0000-4000-8000-000000000001",
+      provider: "openai_compatible",
+      upstreamModel: "vendor-model",
+      baseUrl: "https://gateway.example.com/v1",
+      apiKey: "provider-secret",
+      reasoning: "disabled",
     });
   });
 

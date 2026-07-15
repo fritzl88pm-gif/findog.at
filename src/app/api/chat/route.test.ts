@@ -12,6 +12,7 @@ vi.mock("next/server", async () => {
 });
 
 import { MAX_IMAGE_UPLOAD_BYTES } from "@/lib/config";
+import { isAdminUser } from "@/lib/admin-auth";
 import { runAgent } from "@/lib/agent";
 import { resolveLlmRuntime } from "@/lib/llm/runtime";
 import {
@@ -28,6 +29,16 @@ import { UserVisibleError } from "@/lib/errors";
 import * as chatRoute from "./route";
 
 const { POST } = chatRoute;
+
+
+vi.mock("@/lib/admin-auth", () => ({
+  isAdminUser: vi.fn().mockResolvedValue(false),
+}));
+
+vi.mock("@/lib/openai-compatible-credentials", () => ({
+  decryptOpenAICompatibleApiKey: vi.fn().mockReturnValue("provider-secret"),
+  encryptOpenAICompatibleApiKey: vi.fn().mockReturnValue("v1.test"),
+}));
 
 vi.mock("@/lib/auth/server", () => ({
   authenticateSupabaseRequest: vi.fn().mockResolvedValue({ id: "user-1" }),
@@ -757,11 +768,11 @@ describe("POST /api/chat dynamic models", () => {
   it("resolves an enabled dynamic database setting through resolveDynamicLlmRuntime using server-side metadata", async () => {
     const { resolveDynamicLlmRuntime } = await import("@/lib/llm/runtime");
     vi.mocked(resolveDynamicLlmRuntime).mockReturnValue({
-      model: "laozhang:00000000-0000-4000-8000-000000000002",
-      provider: "laozhang",
+      model: "openai:00000000-0000-4000-8000-000000000002",
+      provider: "openai_compatible",
       upstreamModel: "qwen3-72b",
-      baseUrl: "https://api.laozhang.ai/v1",
-      apiKey: "lz-server-key",
+      baseUrl: "https://gateway.example.com/v1",
+      apiKey: "provider-server-key",
       reasoning: "disabled",
     });
 
@@ -821,10 +832,13 @@ describe("POST /api/chat dynamic models", () => {
           updatedBy: null,
         },
         {
-          id: "laozhang:00000000-0000-4000-8000-000000000002",
-          displayName: "Qwen3 (LaoZhang)",
-          provider: "laozhang",
+          id: "openai:00000000-0000-4000-8000-000000000002",
+          displayName: "Qwen3 Gateway",
+          provider: "openai_compatible",
           upstreamModel: "qwen3-72b",
+          baseUrl: "https://gateway.example.com/v1",
+          accessScope: "all",
+          apiKeyCiphertext: "v1.test",
           isDynamic: true,
           alwaysEnabled: false,
           enabled: true,
@@ -839,15 +853,15 @@ describe("POST /api/chat dynamic models", () => {
 
     const response = await POST(jsonRequest({
       ...chatPayload(),
-      model: "laozhang:00000000-0000-4000-8000-000000000002",
+      model: "openai:00000000-0000-4000-8000-000000000002",
     }));
 
     expect(response.status).toBe(200);
     expect(resolveDynamicLlmRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "laozhang:00000000-0000-4000-8000-000000000002",
-        displayName: "Qwen3 (LaoZhang)",
-        provider: "laozhang",
+        id: "openai:00000000-0000-4000-8000-000000000002",
+        displayName: "Qwen3 Gateway",
+        provider: "openai_compatible",
         upstreamModel: "qwen3-72b",
         enabled: true,
       }),
@@ -855,8 +869,8 @@ describe("POST /api/chat dynamic models", () => {
     expect(runAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         runtime: expect.objectContaining({
-          model: "laozhang:00000000-0000-4000-8000-000000000002",
-          provider: "laozhang",
+          model: "openai:00000000-0000-4000-8000-000000000002",
+          provider: "openai_compatible",
           upstreamModel: "qwen3-72b",
           reasoning: "disabled",
         }),
@@ -865,8 +879,8 @@ describe("POST /api/chat dynamic models", () => {
     expect(persistConversationTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         modelProvenance: {
-          model: "laozhang:00000000-0000-4000-8000-000000000002",
-          provider: "laozhang",
+          model: "openai:00000000-0000-4000-8000-000000000002",
+          provider: "openai_compatible",
           upstreamModel: "qwen3-72b",
           reasoning: "disabled",
           settingsRevision: 6,
@@ -876,12 +890,42 @@ describe("POST /api/chat dynamic models", () => {
     );
   });
 
+  it("rejects direct access to an admins-only model for a normal user", async () => {
+    vi.mocked(isAdminUser).mockResolvedValue(false);
+    const snapshot = databaseModelSettings();
+    snapshot.models.push({
+      id: "openai:00000000-0000-4000-8000-000000000003",
+      displayName: "Admin Gateway",
+      provider: "openai_compatible",
+      upstreamModel: "admin-model",
+      baseUrl: "https://gateway.example.com/v1",
+      accessScope: "admins",
+      apiKeyCiphertext: "v1.test",
+      isDynamic: true,
+      alwaysEnabled: false,
+      enabled: true,
+      reasoning: "disabled",
+      revision: 7,
+      updatedAt: "2026-07-15T12:00:02Z",
+      updatedBy: null,
+    });
+    vi.mocked(readEffectiveModelSettings).mockResolvedValue(snapshot);
+
+    const response = await POST(jsonRequest({
+      ...chatPayload(),
+      model: "openai:00000000-0000-4000-8000-000000000003",
+    }));
+
+    expect(response.status).toBe(403);
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
   it("rejects an unknown dynamic model ID", async () => {
     vi.mocked(readEffectiveModelSettings).mockResolvedValue(databaseModelSettings());
 
     const response = await POST(jsonRequest({
       ...chatPayload(),
-      model: "laozhang:ffffffff-ffff-4fff-bfff-ffffffffffff",
+      model: "openai:ffffffff-ffff-4fff-bfff-ffffffffffff",
     }));
 
     expect(response.status).toBe(400);
@@ -949,10 +993,13 @@ describe("POST /api/chat dynamic models", () => {
           updatedBy: null,
         },
         {
-          id: "laozhang:00000000-0000-4000-8000-000000000001",
-          displayName: "GLM-5.2 (LaoZhang)",
-          provider: "laozhang",
+          id: "openai:00000000-0000-4000-8000-000000000001",
+          displayName: "GLM-5.2 Gateway",
+          provider: "openai_compatible",
           upstreamModel: "glm-5.2",
+          baseUrl: "https://gateway.example.com/v1",
+          accessScope: "all",
+          apiKeyCiphertext: "v1.test",
           isDynamic: true,
           alwaysEnabled: false,
           enabled: false,
@@ -967,7 +1014,7 @@ describe("POST /api/chat dynamic models", () => {
 
     const response = await POST(jsonRequest({
       ...chatPayload(),
-      model: "laozhang:00000000-0000-4000-8000-000000000001",
+      model: "openai:00000000-0000-4000-8000-000000000001",
     }));
 
     expect(response.status).toBe(400);
@@ -981,11 +1028,11 @@ describe("POST /api/chat dynamic models", () => {
   it("ignores client-supplied provider/upstream fields and uses server-side metadata", async () => {
     const { resolveDynamicLlmRuntime } = await import("@/lib/llm/runtime");
     vi.mocked(resolveDynamicLlmRuntime).mockReturnValue({
-      model: "laozhang:00000000-0000-4000-8000-000000000002",
-      provider: "laozhang",
+      model: "openai:00000000-0000-4000-8000-000000000002",
+      provider: "openai_compatible",
       upstreamModel: "qwen3-72b",
-      baseUrl: "https://api.laozhang.ai/v1",
-      apiKey: "lz-server-key",
+      baseUrl: "https://gateway.example.com/v1",
+      apiKey: "provider-server-key",
       reasoning: "disabled",
     });
 
@@ -1045,10 +1092,13 @@ describe("POST /api/chat dynamic models", () => {
           updatedBy: null,
         },
         {
-          id: "laozhang:00000000-0000-4000-8000-000000000002",
-          displayName: "Qwen3 (LaoZhang)",
-          provider: "laozhang",
+          id: "openai:00000000-0000-4000-8000-000000000002",
+          displayName: "Qwen3 Gateway",
+          provider: "openai_compatible",
           upstreamModel: "qwen3-72b",
+          baseUrl: "https://gateway.example.com/v1",
+          accessScope: "all",
+          apiKeyCiphertext: "v1.test",
           isDynamic: true,
           alwaysEnabled: false,
           enabled: true,
@@ -1063,7 +1113,7 @@ describe("POST /api/chat dynamic models", () => {
 
     const response = await POST(jsonRequest({
       ...chatPayload(),
-      model: "laozhang:00000000-0000-4000-8000-000000000002",
+      model: "openai:00000000-0000-4000-8000-000000000002",
       // Client-supplied fields that should be ignored
       provider: "deepseek",
       upstreamModel: "fake-model",

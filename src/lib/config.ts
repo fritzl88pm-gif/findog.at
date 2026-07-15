@@ -1,6 +1,5 @@
 export const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 export const ZAI_CODING_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
-export const LAOZHANG_BASE_URL = "https://api.laozhang.ai/v1";
 
 export const MODEL_IDS = [
   "deepseek-v4-flash",
@@ -10,14 +9,15 @@ export const MODEL_IDS = [
 ] as const;
 
 export type ChatModel = (typeof MODEL_IDS)[number];
-export type ModelProvider = "deepseek" | "zai" | "laozhang";
+export type BuiltinModelProvider = "deepseek" | "zai";
+export type ModelProvider = BuiltinModelProvider | "openai_compatible";
 export type ReasoningSetting = "disabled" | "enabled" | "high" | "max";
 
 export type ModelDefinition = {
   id: ChatModel;
   label: string;
   description: string;
-  provider: ModelProvider;
+  provider: BuiltinModelProvider;
   upstreamModel: string;
   alwaysEnabled: boolean;
   reasoningOptions: readonly ReasoningSetting[];
@@ -82,8 +82,8 @@ export const MAX_DEEPSEEK_KEY_CHARS = MAX_PROVIDER_KEY_CHARS;
 export const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 export const RATE_LIMIT_MAX_REQUESTS = 20;
 
-/** Pattern for a dynamic LaoZhang model ID */
-const DYNAMIC_MODEL_PREFIX = "laozhang:";
+/** Pattern for an opaque OpenAI-compatible model ID. */
+const DYNAMIC_MODEL_PREFIX = "openai:";
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function isDynamicModelId(model: string): boolean {

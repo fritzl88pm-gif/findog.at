@@ -23,7 +23,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       isAdmin,
-      enabledModels: publicEnabledModelDtos(modelSettings),
+      enabledModels: publicEnabledModelDtos(modelSettings, isAdmin),
     });
   } catch (error) {
     if (error instanceof UserVisibleError) {

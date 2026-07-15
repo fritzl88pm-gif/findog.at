@@ -1,4 +1,8 @@
+import { randomBytes } from "node:crypto";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { encryptOpenAICompatibleApiKey } from "./openai-compatible-credentials";
 
 import {
   adminModelDtos,
@@ -17,6 +21,12 @@ import {
 const originalDeepSeekKey = process.env.DEEPSEEK_API_KEY;
 const originalGlobalDeepSeekKey = process.env.GLOBAL_DEEPSEEK_API_KEY;
 const originalZaiKey = process.env.ZAI_API_KEY;
+const originalOpenAICompatibleCredentialsKey = process.env.OPENAI_COMPATIBLE_CREDENTIALS_KEY;
+
+function testCiphertext(): string {
+  process.env.OPENAI_COMPATIBLE_CREDENTIALS_KEY = randomBytes(32).toString("base64");
+  return encryptOpenAICompatibleApiKey("provider-secret");
+}
 
 function restore(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -30,6 +40,7 @@ afterEach(() => {
   restore("DEEPSEEK_API_KEY", originalDeepSeekKey);
   restore("GLOBAL_DEEPSEEK_API_KEY", originalGlobalDeepSeekKey);
   restore("ZAI_API_KEY", originalZaiKey);
+  restore("OPENAI_COMPATIBLE_CREDENTIALS_KEY", originalOpenAICompatibleCredentialsKey);
 });
 
 function storedRows() {
@@ -323,10 +334,13 @@ describe("admin model DTO separation", () => {
           updatedBy: null,
         },
         {
-          id: "laozhang:00000000-0000-4000-8000-000000000002",
-          displayName: "Qwen3 (LaoZhang)",
-          provider: "laozhang",
+          id: "openai:00000000-0000-4000-8000-000000000002",
+          displayName: "Qwen3 Gateway",
+          provider: "openai_compatible",
           upstreamModel: "qwen3-72b",
+          baseUrl: "https://gateway.example.com/v1",
+          accessScope: "all",
+          apiKeyCiphertext: testCiphertext(),
           isDynamic: true,
           alwaysEnabled: false,
           enabled: true,
@@ -340,14 +354,13 @@ describe("admin model DTO separation", () => {
 
     process.env.DEEPSEEK_API_KEY = "ds-secret";
     process.env.ZAI_API_KEY = "zai-secret";
-    process.env.LAOZHANG_API_KEY = "lz-secret";
 
     const dtos = publicEnabledModelDtos(snapshot);
-    const dynamicDtos = dtos.filter((d) => d.id.startsWith("laozhang:"));
+    const dynamicDtos = dtos.filter((d) => d.id.startsWith("openai:"));
     expect(dynamicDtos).toHaveLength(1);
     expect(dynamicDtos[0]).toEqual({
-      id: "laozhang:00000000-0000-4000-8000-000000000002",
-      label: "Qwen3 (LaoZhang)",
+      id: "openai:00000000-0000-4000-8000-000000000002",
+      label: "Qwen3 Gateway",
     });
     // The normal user menu renders only model.label - no extra fields
     expect(Object.keys(dynamicDtos[0])).toEqual(["id", "label"]);
@@ -410,10 +423,13 @@ describe("admin model DTO separation", () => {
           updatedBy: null,
         },
         {
-          id: "laozhang:00000000-0000-4000-8000-000000000002",
-          displayName: "Qwen3 (LaoZhang)",
-          provider: "laozhang",
+          id: "openai:00000000-0000-4000-8000-000000000002",
+          displayName: "Qwen3 Gateway",
+          provider: "openai_compatible",
           upstreamModel: "qwen3-72b",
+          baseUrl: "https://gateway.example.com/v1",
+          accessScope: "all",
+          apiKeyCiphertext: testCiphertext(),
           isDynamic: true,
           alwaysEnabled: false,
           enabled: true,
@@ -427,19 +443,18 @@ describe("admin model DTO separation", () => {
 
     process.env.DEEPSEEK_API_KEY = "ds-secret";
     process.env.ZAI_API_KEY = "zai-secret";
-    process.env.LAOZHANG_API_KEY = "lz-secret";
 
     const dtos = adminModelDtos(snapshot);
-    const builtinDtos = dtos.filter((d) => !d.provider || d.provider !== "laozhang");
-    const dynamicDtos = dtos.filter((d) => d.provider === "laozhang");
+    const builtinDtos = dtos.filter((d) => !d.provider || d.provider !== "openai_compatible");
+    const dynamicDtos = dtos.filter((d) => d.provider === "openai_compatible");
 
     expect(builtinDtos).toHaveLength(4);
     expect(dynamicDtos).toHaveLength(1);
     expect(dynamicDtos[0]).toMatchObject({
-      id: "laozhang:00000000-0000-4000-8000-000000000002",
-      label: "Qwen3 (LaoZhang)",
+      id: "openai:00000000-0000-4000-8000-000000000002",
+      label: "Qwen3 Gateway",
       alwaysEnabled: false,
-      provider: "laozhang",
+      provider: "openai_compatible",
     });
   });
 });

@@ -1,6 +1,5 @@
 import {
   DEEPSEEK_BASE_URL,
-  LAOZHANG_BASE_URL,
   ZAI_CODING_BASE_URL,
   getModelDefinition,
   isReasoningSettingForModel,
@@ -9,12 +8,13 @@ import {
   type ReasoningSetting,
 } from "../config";
 import { UserVisibleError } from "../errors";
+import { decryptOpenAICompatibleApiKey } from "../openai-compatible-credentials";
+import type { DynamicModelSetting } from "../model-settings";
 import {
   isModelProviderConfigured,
   isProviderConfigured,
   resolveProviderApiKey,
 } from "./credentials";
-import type { DynamicModelSetting } from "../model-settings";
 
 export type LlmRuntime = {
   model: string;
@@ -25,21 +25,11 @@ export type LlmRuntime = {
   reasoning: ReasoningSetting;
 };
 
-function providerBaseUrl(provider: ModelProvider): string {
-  switch (provider) {
-    case "deepseek":
-      return DEEPSEEK_BASE_URL;
-    case "zai":
-      return ZAI_CODING_BASE_URL;
-    case "laozhang":
-      return LAOZHANG_BASE_URL;
-  }
+function providerBaseUrl(provider: "deepseek" | "zai"): string {
+  return provider === "deepseek" ? DEEPSEEK_BASE_URL : ZAI_CODING_BASE_URL;
 }
 
-function validatedReasoning(
-  model: ChatModel,
-  value: ReasoningSetting | undefined,
-): ReasoningSetting {
+function validatedReasoning(model: ChatModel, value: ReasoningSetting | undefined): ReasoningSetting {
   const definition = getModelDefinition(model);
   const reasoning = value ?? definition.defaultReasoning;
   if (!isReasoningSettingForModel(model, reasoning)) {
@@ -51,43 +41,31 @@ function validatedReasoning(
   return reasoning;
 }
 
-export function resolveLlmRuntime(options: {
-  model: ChatModel;
-  reasoning?: ReasoningSetting;
-}): LlmRuntime {
+export function resolveLlmRuntime(options: { model: ChatModel; reasoning?: ReasoningSetting }): LlmRuntime {
   const definition = getModelDefinition(options.model);
-  const reasoning = validatedReasoning(definition.id, options.reasoning);
-  const apiKey = resolveProviderApiKey(definition.provider);
   return {
     model: definition.id,
     provider: definition.provider,
     upstreamModel: definition.upstreamModel,
     baseUrl: providerBaseUrl(definition.provider),
-    apiKey,
-    reasoning,
+    apiKey: resolveProviderApiKey(definition.provider),
+    reasoning: validatedReasoning(definition.id, options.reasoning),
   };
 }
 
 export function resolveDynamicLlmRuntime(setting: DynamicModelSetting): LlmRuntime {
-  const apiKey = resolveProviderApiKey(setting.provider);
   return {
     model: setting.id,
-    provider: setting.provider,
+    provider: "openai_compatible",
     upstreamModel: setting.upstreamModel,
-    baseUrl: providerBaseUrl(setting.provider),
-    apiKey,
+    baseUrl: setting.baseUrl,
+    apiKey: decryptOpenAICompatibleApiKey(setting.apiKeyCiphertext),
     reasoning: "disabled",
   };
 }
 
-export function withRuntimeReasoning(
-  runtime: LlmRuntime,
-  reasoning: ReasoningSetting,
-): LlmRuntime {
-  return {
-    ...runtime,
-    reasoning: validatedReasoning(runtime.model as ChatModel, reasoning),
-  };
+export function withRuntimeReasoning(runtime: LlmRuntime, reasoning: ReasoningSetting): LlmRuntime {
+  return { ...runtime, reasoning: validatedReasoning(runtime.model as ChatModel, reasoning) };
 }
 
 export { isModelProviderConfigured, isProviderConfigured };

@@ -15,6 +15,7 @@ import {
   isSupportedModel,
   type ChatModel,
 } from "@/lib/config";
+import { isAdminUser } from "@/lib/admin-auth";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { type AppChatMessage } from "@/lib/deepseek";
 import { UserVisibleError } from "@/lib/errors";
@@ -396,11 +397,13 @@ export async function POST(request: Request) {
     }
     const authenticatedUser = await authenticateSupabaseRequest(request, supabase);
 
+    const isAdmin = await isAdminUser(supabase, authenticatedUser.id);
+
     const { body, attachmentUploads } = await parseChatRequest(request);
     const model = parseModel(body.model);
     const messages = parseMessages(body.messages);
     const modelSettings = await readEffectiveModelSettings(supabase);
-    const selectedSetting = enabledModelSetting(modelSettings, model);
+    const selectedSetting = enabledModelSetting(modelSettings, model, isAdmin);
     const selectedRuntime = selectedSetting.isDynamic
       ? resolveDynamicLlmRuntime(selectedSetting as DynamicModelSetting)
       : resolveLlmRuntime({
@@ -415,7 +418,7 @@ export async function POST(request: Request) {
       settingsRevision: selectedSetting.revision,
       settingsSource: modelSettings.source,
     };
-    const availableModels = publicEnabledModelDtos(modelSettings).map((entry) => entry.id);
+    const availableModels = publicEnabledModelDtos(modelSettings, isAdmin).map((entry) => entry.id);
     const mcpBearerToken = getServerMcpBearerToken();
     const requestedConversationId = asOptionalString(body.conversationId, 80, "Conversation ID");
     const conversationContext = await resolveConversationContextForClient({

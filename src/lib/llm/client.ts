@@ -48,16 +48,13 @@ export type LlmResult = {
 
 function providerLabel(runtime: LlmRuntime): string {
   if (runtime.provider === "deepseek") return "DeepSeek";
-  if (runtime.provider === "laozhang") return "LaoZhang";
+  if (runtime.provider === "openai_compatible") return "OpenAI-kompatibler Provider";
   return "Z.AI";
 }
 
 function providerError(runtime: LlmRuntime, status: number): string {
   const label = providerLabel(runtime);
   if (status === 401 || status === 403) {
-    if (runtime.provider === "laozhang") {
-      return "LaoZhang API-Zugang wurde abgelehnt. Bitte Administrator kontaktieren.";
-    }
     return `${label} API-Zugang wurde abgelehnt. Bitte Administrator kontaktieren.`;
   }
   if (status === 429) {
@@ -93,14 +90,14 @@ function completionPayload(
   tools: DeepSeekTool[],
 ): JsonObject {
   const usesThinking = thinkingEnabled(runtime);
-  const isLaoZhang = runtime.provider === "laozhang";
+  const isOpenAICompatible = runtime.provider === "openai_compatible";
   const payload: JsonObject = {
     model: runtime.upstreamModel,
     messages,
     stream: false,
   };
 
-  if (isLaoZhang) {
+  if (isOpenAICompatible) {
     payload.temperature = 0.2;
     payload.max_tokens = 16000;
   } else {
@@ -117,7 +114,7 @@ function completionPayload(
 
   if (tools.length > 0) {
     payload.tools = tools;
-    if (!usesThinking && !isLaoZhang) {
+    if (!usesThinking && !isOpenAICompatible) {
       payload.tool_choice = "auto";
     }
   }
