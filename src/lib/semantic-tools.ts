@@ -34,6 +34,7 @@ const KB_NAME_ALIASES = [
   "knowledgeBaseName",
 ] as const;
 const ALL_KB_ALIASES = [...KB_ID_ALIASES, ...KB_NAME_ALIASES] as const;
+const QUERY_ALIASES = ["query", "question", "search_query"] as const;
 
 const DEFAULT_RESULT_LIMIT = 5;
 
@@ -96,7 +97,7 @@ function buildSchemaAwareArgs(
   }
 
   // Map query (document search, FAQ search, wiki search)
-  const queryParam = findParamAlias(props, "query");
+  const queryParam = findParamAlias(props, ...QUERY_ALIASES);
   if (queryParam && semanticArgs.query !== undefined) {
     rawArgs[queryParam] = String(semanticArgs.query);
   }

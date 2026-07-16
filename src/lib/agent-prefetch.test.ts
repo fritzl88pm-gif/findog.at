@@ -42,7 +42,7 @@ function rawSearchTool(name: "faq_search" | "hybrid_search") {
 
 function mockSession(
   callTool = vi.fn().mockImplementation(async (request: { arguments: Record<string, unknown> }) =>
-    `Amtlicher Betragswert für ${String(request.arguments.query)} mit nachvollziehbarer Quelle.`,
+    `Amtlicher Betragswert für ${String(request.arguments.query)}: 35 EUR mit nachvollziehbarer Quelle.`,
   ),
 ) {
   MockedMcpClient.mockImplementation(function MockMcpClient() {
@@ -83,7 +83,7 @@ describe("runAgent retrieval policy", () => {
     vi.stubGlobal("fetch", fetchMock);
     mockedChatCompletion.mockResolvedValueOnce({
       finishReason: "stop",
-      content: "Der Betrag gilt im Veranlagungsjahr 2024.",
+      content: "Der Betrag gilt im Veranlagungsjahr 2024. [Q1]",
       toolCalls: [],
     });
 
@@ -105,7 +105,7 @@ describe("runAgent retrieval policy", () => {
     expect(callTool.mock.calls[0]?.[0].arguments).not.toHaveProperty("as_of");
     expect(JSON.stringify(callTool.mock.calls)).not.toContain(RESEARCH_SOURCES.BFG.kbId);
     expect(result.tools).toEqual(["search_amount_table"]);
-    expect(result.answer).toBe(withOverview("Der Betrag gilt im Veranlagungsjahr 2024."));
+    expect(result.answer).toBe(withOverview("Der Betrag gilt im Veranlagungsjahr 2024. [Q1]"));
     expect(result.answer).not.toMatch(/\bBFG\b|RV\/\d+/u);
     expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -122,7 +122,7 @@ describe("runAgent retrieval policy", () => {
     const callTool = mockSession();
     mockedChatCompletion.mockResolvedValueOnce({
       finishReason: "stop",
-      content: "Der Betrag gilt im Veranlagungsjahr 2024.",
+      content: "Der Betrag gilt im Veranlagungsjahr 2024. [Q1]",
       toolCalls: [],
     });
 
@@ -144,8 +144,37 @@ describe("runAgent retrieval policy", () => {
     expect(result.tools).toEqual(["search_amount_table"]);
   });
 
+  it("resolves a year-only amount follow-up before choosing the shortcut", async () => {
+    const callTool = mockSession();
+    mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "stop",
+      content: "Der Unterhaltsabsetzbetrag gilt im Veranlagungsjahr 2024. [Q1]",
+      toolCalls: [],
+    });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [
+        { role: "user", content: "Wie hoch ist der UAB?" },
+        { role: "assistant", content: "Bisherige Antwort." },
+        { role: "user", content: "Und für 2024?" },
+      ],
+    });
+
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+      name: "faq_search",
+      arguments: expect.objectContaining({
+        kb_id: RESEARCH_SOURCES.BETRAGSTABELLE.kbId,
+        query: expect.stringMatching(/Unterhaltsabsetzbetrag[\s\S]*2024/u),
+      }),
+    }));
+    expect(JSON.stringify(callTool.mock.calls)).not.toContain(RESEARCH_SOURCES.GESETZE.kbId);
+    expect(result.tools).toEqual(["search_amount_table"]);
+  });
+
   it("uses the year-segmented amount KB when the MCP exposes no separate year field", async () => {
-    const callTool = vi.fn().mockResolvedValue("Unterhaltsabsetzbetrag 2024: belegter Jahreswert.");
+    const callTool = vi.fn().mockResolvedValue("Unterhaltsabsetzbetrag 2024: belegter Jahreswert 35 EUR.");
     MockedMcpClient.mockImplementation(function MockMcpClient() {
       return {
         openToolSession: vi.fn().mockResolvedValue({
@@ -163,7 +192,7 @@ describe("runAgent retrieval policy", () => {
     });
     mockedChatCompletion.mockResolvedValueOnce({
       finishReason: "stop",
-      content: "Der Betrag gilt im Veranlagungsjahr 2024.",
+      content: "Der Betrag gilt im Veranlagungsjahr 2024. [Q1]",
       toolCalls: [],
     });
 
@@ -189,7 +218,7 @@ describe("runAgent retrieval policy", () => {
       const callTool = mockSession();
       mockedChatCompletion.mockResolvedValueOnce({
         finishReason: "stop",
-        content: "Kurzantwort für das Jahr 2026.",
+        content: "Kurzantwort für das Jahr 2026. [Q1]",
         toolCalls: [],
       });
 
@@ -220,7 +249,7 @@ describe("runAgent retrieval policy", () => {
     const callTool = mockSession();
     mockedChatCompletion.mockResolvedValueOnce({
       finishReason: "stop",
-      content: "Der Unterhaltsabsetzbetrag gilt am Stichtag 2024-07-01.",
+      content: "Der Unterhaltsabsetzbetrag gilt am Stichtag 2024-07-01. [Q1]",
       toolCalls: [],
     });
 
@@ -244,7 +273,7 @@ describe("runAgent retrieval policy", () => {
     const callTool = mockSession();
     mockedChatCompletion.mockResolvedValueOnce({
       finishReason: "stop",
-      content: "Unterhaltsabsetzbetrag: Veranlagungsjahr 2023 und Veranlagungsjahr 2024.",
+      content: "Unterhaltsabsetzbetrag: Veranlagungsjahr 2023 und Veranlagungsjahr 2024. [Q1] [Q2]",
       toolCalls: [],
     });
 
@@ -347,17 +376,8 @@ describe("runAgent retrieval policy", () => {
     const callTool = mockSession();
     const question = "Wie hoch ist die Familienbeihilfe 2024 für ein am 1.7.2010 geborenes Kind?";
     mockedChatCompletion
-      .mockResolvedValueOnce({
-        finishReason: "tool_calls",
-        content: "Recherchiere Rechtsgrundlagen.",
-        toolCalls: [{
-          id: "laws-1",
-          name: "search_laws",
-          arguments: JSON.stringify({ query: "Familienbeihilfe Kind" }),
-        }],
-      })
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Familienbeihilfe im Jahr 2024.", toolCalls: [] });
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Familienbeihilfe im Jahr 2024. [Q1]", toolCalls: [] });
 
     await runAgent({
       runtime: TEST_RUNTIME,
@@ -381,7 +401,7 @@ describe("runAgent retrieval policy", () => {
     mockSession();
     mockedChatCompletion.mockResolvedValueOnce({
       finishReason: "stop",
-      content: "Im angefragten Rechtsstand beträgt der Wert EUR 1.",
+      content: "Im angefragten Rechtsstand beträgt der Wert EUR 35. [Q1]",
       toolCalls: [],
     });
 
@@ -390,63 +410,58 @@ describe("runAgent retrieval policy", () => {
       messages: [{ role: "user", content: "Wie hoch ist der Unterhaltsabsetzbetrag 2024?" }],
     });
 
-    expect(result.answer).toBe(withOverview("Im angefragten Rechtsstand beträgt der Wert EUR 1."));
+    expect(result.answer).toBe(withOverview("Im angefragten Rechtsstand beträgt der Wert EUR 35. [Q1]"));
     expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
   });
 
-  it("performs no hidden BFG prefetch for a general question", async () => {
+  it("performs the mandatory law search without a hidden BFG prefetch", async () => {
     const callTool = mockSession();
     mockedChatCompletion
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort. [Q1]", toolCalls: [] });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "Welche Voraussetzungen gelten für Werbungskosten?" }],
     });
 
-    expect(callTool).not.toHaveBeenCalled();
-    expect(result.answer).toBe(withOverview("Finale Antwort."));
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+      name: "hybrid_search",
+      arguments: expect.objectContaining({ kb_id: RESEARCH_SOURCES.GESETZE.kbId }),
+    }));
+    expect(result.answer).toBe(withOverview("Finale Antwort. [Q1]"));
     expect(result.steps.some((step) => "toolName" in step && step.toolName === "bfg_prefetch")).toBe(false);
     expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
   });
 
-  it("queries BFG when selected without a post-retrieval Findok verification", async () => {
+  it("queries explicitly requested BFG evidence without post-retrieval Findok verification", async () => {
     const gz = "RV/2100543/2025";
     const callTool = mockSession(vi.fn().mockResolvedValue(`Treffer: ${gz}`));
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     mockedChatCompletion
-      .mockResolvedValueOnce({
-        finishReason: "tool_calls",
-        content: "BFG-Recherche.",
-        toolCalls: [{
-          id: "bfg-1",
-          name: "search_bfg",
-          arguments: JSON.stringify({ query: "Unterhaltsabsetzbetrag Drittstaat" }),
-        }],
-      })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort ohne Geschäftszahl.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort ohne BFG-Zitat.", toolCalls: [] });
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort.", toolCalls: [] })
+      .mockResolvedValueOnce({ finishReason: "stop", content: `BFG ${gz} [Q1] [Q2].`, toolCalls: [] });
 
+    const question = "Welche BFG-Rechtsprechung gilt für den Unterhaltsabsetzbetrag bei Kindern in Drittstaaten?";
     const result = await runAgent({
       runtime: TEST_RUNTIME,
       messages: [{
         role: "user",
-        content: "Welche BFG-Rechtsprechung gilt für den Unterhaltsabsetzbetrag bei Kindern in Drittstaaten?",
+        content: question,
       }],
     });
 
-    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledTimes(2);
     expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
       name: "hybrid_search",
       arguments: expect.objectContaining({
-        query: "Unterhaltsabsetzbetrag Drittstaat",
+        query: question,
         kb_id: RESEARCH_SOURCES.BFG.kbId,
       }),
     }));
-    expect(result.answer).toBe(withOverview("Finale Antwort ohne BFG-Zitat."));
-    expect(result.answer).not.toContain(gz);
+    expect(result.answer).toBe(withOverview(`BFG ${gz} [Q1] [Q2].`));
     expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.steps.some((step) => "toolName" in step && step.toolName === "bfg_prefetch")).toBe(false);

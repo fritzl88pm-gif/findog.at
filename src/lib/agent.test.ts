@@ -104,7 +104,7 @@ describe("runAgent", () => {
         ],
       })
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "# 📘 Antwort\n\nFinale Antwort.", toolCalls: [] });
+      .mockResolvedValueOnce({ finishReason: "stop", content: "# 📘 Antwort\n\nFinale Antwort. [Q1]", toolCalls: [] });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
@@ -112,7 +112,7 @@ describe("runAgent", () => {
       mcpBearerToken: "mcp-token",
     });
 
-    expect(result.answer).toBe(withOverview("Finale Antwort."));
+    expect(result.answer).toBe(withOverview("Finale Antwort. [Q1]"));
     expect(result.steps.map((step) => step.type)).toEqual([
       "tools",
       "tool_call",
@@ -158,13 +158,15 @@ describe("runAgent", () => {
   it("notifies callers for every visible deterministic step", async () => {
     const { callTool } = mockMcpSession();
     const onStep = vi.fn();
-    mockedChatCompletion
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
+    mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "stop",
+      content: "Finale Antwort.",
+      toolCalls: [],
+    });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Frage" }],
+      messages: [{ role: "user", content: "Wie funktioniert der Chat?" }],
       onStep,
     });
 
@@ -196,11 +198,14 @@ describe("runAgent", () => {
   });
 
   it("removes a standalone guideline-nature lesson from an ordinary specialist answer", async () => {
-    mockMcpSession();
+    mockMcpSession(
+      "Ja, die Aufwendungen können dem Grunde nach Werbungskosten sein. "
+      + "Die gefundene Fachinformation ist bei der Prüfung zu berücksichtigen.",
+    );
     const finalAnswer = [
       "# 📘 Überblick",
       "",
-      "Ja, die Aufwendungen können dem Grunde nach Werbungskosten sein.",
+      "Ja, die Aufwendungen können dem Grunde nach Werbungskosten sein. [Q1]",
       "",
       "📒 **Hinweis zur Rechtsnatur der LStR:**",
       "",
@@ -208,7 +213,7 @@ describe("runAgent", () => {
       "",
       "# ⚖️ Gesetzliche Grundlagen",
       "",
-      "Die Voraussetzungen sind anhand des EStG zu prüfen.",
+      "Die gefundene Fachinformation ist bei der Prüfung zu berücksichtigen. [Q1]",
     ].join("\n");
     mockedChatCompletion
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
@@ -226,7 +231,7 @@ describe("runAgent", () => {
 
   it("keeps guideline-nature information when the user explicitly asks for it", async () => {
     mockMcpSession();
-    const finalAnswer = "# 📘 Überblick\n\nHinweis zur Rechtsnatur: Die LStR sind ein Auslegungsbehelf.";
+    const finalAnswer = "# 📘 Überblick\n\nHinweis zur Rechtsnatur: Die LStR sind ein Auslegungsbehelf. [Q1]";
     mockedChatCompletion
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
       .mockResolvedValueOnce({ finishReason: "stop", content: finalAnswer, toolCalls: [] });
@@ -253,11 +258,11 @@ describe("runAgent", () => {
         }],
       })
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort. [Q1]", toolCalls: [] });
 
     await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Frage" }],
+      messages: [{ role: "user", content: "Welche Werbungskosten gelten?" }],
       mcpBearerToken: "mcp-token",
       deadline,
     });
@@ -273,14 +278,14 @@ describe("runAgent", () => {
     mockedChatCompletion
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
       .mockResolvedValueOnce({ finishReason: "length", content: "Unvollständiger Entwurf", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vollständige Antwort.", toolCalls: [] });
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Vollständige Antwort. [Q1]", toolCalls: [] });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Frage" }],
+      messages: [{ role: "user", content: "Welche Werbungskosten gelten?" }],
     });
 
-    expect(result.answer).toBe(withOverview("Vollständige Antwort."));
+    expect(result.answer).toBe(withOverview("Vollständige Antwort. [Q1]"));
     expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
     const firstFinalMessages = mockedChatCompletion.mock.calls[1]?.[0].messages;
     const retryMessages = mockedChatCompletion.mock.calls[2]?.[0].messages;
@@ -305,13 +310,13 @@ describe("runAgent", () => {
 
     await expect(runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Frage" }],
+      messages: [{ role: "user", content: "Welche Werbungskosten gelten?" }],
     })).rejects.toThrow("finale Antwort nicht vollständig abschließen");
 
     expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
   });
 
-  it("errors without executing tools when research planning ends with length", async () => {
+  it("stops after the mandatory law search when later research planning ends with length", async () => {
     const { callTool } = mockMcpSession();
     mockedChatCompletion.mockResolvedValueOnce({
       finishReason: "length",
@@ -325,10 +330,10 @@ describe("runAgent", () => {
 
     await expect(runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Frage" }],
+      messages: [{ role: "user", content: "Welche Werbungskosten gelten?" }],
     })).rejects.toThrow("Rechercheschritt nicht vollständig abschließen");
 
-    expect(callTool).not.toHaveBeenCalled();
+    expect(callTool).toHaveBeenCalledTimes(1);
     expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
   });
 
@@ -342,15 +347,15 @@ describe("runAgent", () => {
       throwIfExpired: vi.fn(),
       dispose: vi.fn(),
     };
-    mockedChatCompletion.mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
+    mockedChatCompletion.mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort. [Q1]", toolCalls: [] });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Frage" }],
+      messages: [{ role: "user", content: "Welche Werbungskosten gelten?" }],
       deadline,
     });
 
-    expect(result.answer).toBe(withOverview("Finale Antwort."));
+    expect(result.answer).toBe(withOverview("Finale Antwort. [Q1]"));
     expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
     expect(result.steps).toEqual(
       expect.arrayContaining([
@@ -363,7 +368,7 @@ describe("runAgent", () => {
     mockMcpSession();
     mockedChatCompletion
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort mit PDF-Kontext.", toolCalls: [] });
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort mit PDF-Kontext. [Q1] [Q2]", toolCalls: [] });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
@@ -372,7 +377,7 @@ describe("runAgent", () => {
       initialSteps: [{ type: "pdf_context", title: "PDF gelesen", content: "Bescheid.pdf" }],
     });
 
-    expect(result.answer).toBe(withOverview("Finale Antwort mit PDF-Kontext."));
+    expect(result.answer).toBe(withOverview("Finale Antwort mit PDF-Kontext. [Q1] [Q2]"));
     expect(result.steps[0]).toMatchObject({ type: "pdf_context" });
     expect(result.steps[1]).toMatchObject({ type: "tools", title: "Datenbank bereit" });
 
@@ -413,7 +418,7 @@ describe("runAgent", () => {
     mockMcpSession();
     mockedChatCompletion
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort mit Anhängen.", toolCalls: [] });
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort mit Anhängen. [Q1] [Q2]", toolCalls: [] });
 
     await runAgent({
       runtime: TEST_RUNTIME,
@@ -454,16 +459,16 @@ describe("runAgent", () => {
         })),
       })
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort nach sieben Aufrufen.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort nach sieben Aufrufen.", toolCalls: [] });
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort nach sieben Aufrufen. [Q1]", toolCalls: [] });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Frage" }],
+      messages: [{ role: "user", content: "Welche Werbungskosten gelten?" }],
     });
 
-    expect(result.answer).toBe(withOverview("Finale Antwort nach sieben Aufrufen."));
-    expect(callTool).toHaveBeenCalledTimes(7);
-    expect(result.steps.filter((step) => step.type === "tool_call")).toHaveLength(7);
+    expect(result.answer).toBe(withOverview("Finale Antwort nach sieben Aufrufen. [Q1]"));
+    expect(callTool).toHaveBeenCalledTimes(8);
+    expect(result.steps.filter((step) => step.type === "tool_call")).toHaveLength(8);
     expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
     expect(result.steps).toEqual(
       expect.arrayContaining([
@@ -490,20 +495,20 @@ describe("runAgent", () => {
         }],
       })
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort ohne Fundstelle.", toolCalls: [] });
+      .mockResolvedValueOnce({ finishReason: "stop", content: `BFG ${gzs[0]} [Q1] [Q2].`, toolCalls: [] });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "Welche BFG-Rechtsprechung ist einschlägig?" }],
     });
 
-    expect(result.answer).toBe(withOverview("Finale Antwort ohne Fundstelle."));
+    expect(result.answer).toBe(withOverview(`BFG ${gzs[0]} [Q1] [Q2].`));
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
     expectProtocolSafeMessages();
   });
 
-  it("returns BFG references unchanged without post-verification", async () => {
+  it("corrects an invented BFG reference without external post-verification", async () => {
     mockMcpSession("Treffer: RV/7103053/2014");
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -518,16 +523,21 @@ describe("runAgent", () => {
       })
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
       .mockResolvedValueOnce({ finishReason: "stop",
-        content: "Siehe RV/7103053/2014 und RV/7103080/2015.",
+        content: "Siehe RV/7103053/2014 [Q2] und RV/7103080/2015 [Q2].",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({ finishReason: "stop",
+        content: "Siehe RV/7103053/2014 [Q1] [Q2].",
         toolCalls: [],
       });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Frage" }],
+      messages: [{ role: "user", content: "Welche BFG-Rechtsprechung gilt zur Quellensteuer?" }],
     });
 
-    expect(result.answer).toBe(withOverview("Siehe RV/7103053/2014 und RV/7103080/2015."));
+    expect(result.answer).toBe(withOverview("Siehe RV/7103053/2014 [Q1] [Q2]."));
+    expect(result.answer).not.toContain("RV/7103080/2015");
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
   });
