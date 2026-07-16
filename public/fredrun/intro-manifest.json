@@ -1,0 +1,15 @@
+{
+  "source": {
+    "file": "intro.png",
+    "sha256": "29F68BDD254CA3DFC3E6F8D1350DFCFFA55ED24DF3D569742AF725F86ECCA8A8",
+    "width": 1672,
+    "height": 941
+  },
+  "output": {
+    "file": "intro.webp",
+    "format": "webp",
+    "width": 1600,
+    "height": 900,
+    "bytes": 383610
+  }
+}

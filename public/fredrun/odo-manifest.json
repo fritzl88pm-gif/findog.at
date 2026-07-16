@@ -1,0 +1,21 @@
+{
+  "source": {
+    "file": "Odo-run.png",
+    "sha256": "22124B4BFE05E32D551B9A4877EC33DEFD08BF2C8AA1F41CFDC04DD364A552B8",
+    "grid": "8x8",
+    "frameCount": 64
+  },
+  "atlas": {
+    "file": "odo-run.webp",
+    "format": "webp",
+    "sha256": "869F7A2B428C405B5F4725A8DF53F68F0AC95CC05B54A3233BEBB46BEB317D68",
+    "columns": 8,
+    "rows": 8,
+    "cellSize": 192,
+    "frameCount": 64,
+    "anchor": "bottom-center",
+    "sharedScale": 0.46114,
+    "flippedHorizontally": true,
+    "bytes": 559078
+  }
+}

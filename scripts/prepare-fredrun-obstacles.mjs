@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import sharp from "sharp";
@@ -10,23 +10,18 @@ const ALPHA_THRESHOLD = 8;
 
 const sourceAssets = [
   {
-    key: "beschluss",
-    input: process.argv[2] ?? "C:/Users/conta/Downloads/LccQeoyP6DNV9vkNYTnni_LFMlXEEY.png",
-    sha256: "333AF269567DDDF3DAC89C12467DA42B7B2214508E1E0376B37D0C7156DD09FB",
-  },
-  {
     key: "reihe100",
-    input: process.argv[3] ?? "C:/Users/conta/Downloads/k7IBqIrZBUlwAfKgjcUOl_t88N4Iv9.png",
+    input: process.argv[2] ?? "C:/Users/conta/Downloads/k7IBqIrZBUlwAfKgjcUOl_t88N4Iv9.png",
     sha256: "9B668A34398940FCBE7B376944ECF7C6BA9FB38FBD9867C9CACAE5FCFC3F4F3D",
   },
   {
     key: "steuerkodex",
-    input: process.argv[4] ?? "C:/Users/conta/Downloads/mM79uPXO3whBsRILJcOt7_ohuZGsKF.png",
+    input: process.argv[3] ?? "C:/Users/conta/Downloads/mM79uPXO3whBsRILJcOt7_ohuZGsKF.png",
     sha256: "2F19937098D2E3D68C518E72864F40DD3DFCCC80C32688B4D4368DFF8C6A6B59",
   },
   {
     key: "paragraph",
-    input: process.argv[5] ?? "C:/Users/conta/Downloads/t63Z-G-kR6wiyjHJAAKTa_EacK2To4.png",
+    input: process.argv[4] ?? "C:/Users/conta/Downloads/t63Z-G-kR6wiyjHJAAKTa_EacK2To4.png",
     sha256: "F5460B622F0D7FBF94232FFCCB4AEC6D281BFE0C31D2E48E5DD260BB378B3316",
   },
 ];
@@ -62,6 +57,12 @@ async function alphaBounds(buffer) {
 
 async function main() {
   await mkdir(OUTPUT_DIRECTORY, { recursive: true });
+  const expectedOutputFiles = new Set(sourceAssets.map((asset) => `${asset.key}.webp`));
+  for (const existingFile of await readdir(OUTPUT_DIRECTORY)) {
+    if (existingFile.endsWith(".webp") && !expectedOutputFiles.has(existingFile)) {
+      await rm(path.join(OUTPUT_DIRECTORY, existingFile));
+    }
+  }
   const manifestAssets = {};
 
   for (const asset of sourceAssets) {

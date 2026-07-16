@@ -30,6 +30,31 @@ const obstacleManifest = JSON.parse(readFileSync(
     outputBytes: number;
   }>;
 };
+const introManifest = JSON.parse(readFileSync(
+  fileURLToPath(new URL("../../public/fredrun/intro-manifest.json", import.meta.url)),
+  "utf8",
+)) as {
+  source: { file: string; sha256: string; width: number; height: number };
+  output: { file: string; format: string; width: number; height: number; bytes: number };
+};
+const odoManifest = JSON.parse(readFileSync(
+  fileURLToPath(new URL("../../public/fredrun/odo-manifest.json", import.meta.url)),
+  "utf8",
+)) as {
+  source: { file: string; sha256: string; grid: string; frameCount: number };
+  atlas: {
+    file: string;
+    format: string;
+    sha256: string;
+    columns: number;
+    rows: number;
+    cellSize: number;
+    frameCount: number;
+    anchor: string;
+    flippedHorizontally: boolean;
+    bytes: number;
+  };
+};
 
 describe("Fredrun UI surface", () => {
   it("registers Fredrun in both navigation modes and the app view", () => {
@@ -79,13 +104,12 @@ describe("Fredrun UI surface", () => {
     expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
   });
 
-  it("loads all four supplied obstacle assets with recorded provenance and a small payload", () => {
+  it("loads only the three remaining obstacle assets with recorded provenance and a small payload", () => {
     expect(obstacleManifest).toMatchObject({
       format: "webp",
       alpha: true,
       maximumOutputSize: 192,
       assets: {
-        beschluss: { sha256: "333AF269567DDDF3DAC89C12467DA42B7B2214508E1E0376B37D0C7156DD09FB" },
         reihe100: { sha256: "9B668A34398940FCBE7B376944ECF7C6BA9FB38FBD9867C9CACAE5FCFC3F4F3D" },
         steuerkodex: { sha256: "2F19937098D2E3D68C518E72864F40DD3DFCCC80C32688B4D4368DFF8C6A6B59" },
         paragraph: { sha256: "F5460B622F0D7FBF94232FFCCB4AEC6D281BFE0C31D2E48E5DD260BB378B3316" },
@@ -93,7 +117,8 @@ describe("Fredrun UI surface", () => {
     });
 
     const assets = Object.values(obstacleManifest.assets);
-    expect(assets).toHaveLength(4);
+    expect(assets).toHaveLength(3);
+    expect(obstacleManifest.assets).not.toHaveProperty("beschluss");
     expect(assets.every((asset) => asset.outputSize.width <= 192 && asset.outputSize.height <= 192)).toBe(true);
     expect(assets.reduce((total, asset) => total + asset.outputBytes, 0)).toBeLessThanOrEqual(128 * 1024);
     for (const asset of assets) {
@@ -103,5 +128,57 @@ describe("Fredrun UI surface", () => {
       ))).size).toBe(asset.outputBytes);
       expect(viewSource).toContain(`/fredrun/obstacles/${asset.outputFile}`);
     }
+  });
+
+  it("uses the supplied intro artwork as the responsive title screen", () => {
+    expect(introManifest).toEqual({
+      source: {
+        file: "intro.png",
+        sha256: "29F68BDD254CA3DFC3E6F8D1350DFCFFA55ED24DF3D569742AF725F86ECCA8A8",
+        width: 1672,
+        height: 941,
+      },
+      output: {
+        file: "intro.webp",
+        format: "webp",
+        width: 1600,
+        height: 900,
+        bytes: 383610,
+      },
+    });
+    expect(statSync(fileURLToPath(new URL("../../public/fredrun/intro.webp", import.meta.url))).size)
+      .toBe(introManifest.output.bytes);
+    expect(introManifest.output.bytes).toBeLessThanOrEqual(400 * 1024);
+    expect(viewSource).toContain('const INTRO_SOURCE = "/fredrun/intro.webp"');
+    expect(viewSource).toContain('className="fredrun-intro"');
+    expect(viewSource).toContain("Fred Runner: Fred läuft");
+  });
+
+  it("ships Odo as a normalized left-facing animated obstacle", () => {
+    expect(odoManifest).toMatchObject({
+      source: {
+        file: "Odo-run.png",
+        sha256: "22124B4BFE05E32D551B9A4877EC33DEFD08BF2C8AA1F41CFDC04DD364A552B8",
+        grid: "8x8",
+        frameCount: 64,
+      },
+      atlas: {
+        file: "odo-run.webp",
+        format: "webp",
+        sha256: "869F7A2B428C405B5F4725A8DF53F68F0AC95CC05B54A3233BEBB46BEB317D68",
+        columns: 8,
+        rows: 8,
+        cellSize: 192,
+        frameCount: 64,
+        anchor: "bottom-center",
+        flippedHorizontally: true,
+        bytes: 559078,
+      },
+    });
+    expect(statSync(fileURLToPath(new URL("../../public/fredrun/odo-run.webp", import.meta.url))).size)
+      .toBe(odoManifest.atlas.bytes);
+    expect(odoManifest.atlas.bytes).toBeLessThanOrEqual(600 * 1024);
+    expect(viewSource).toContain('source: "/fredrun/odo-run.webp"');
+    expect(viewSource).toContain('context.fillText("Beschluss?"');
   });
 });

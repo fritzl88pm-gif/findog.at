@@ -7,12 +7,12 @@ import type { LlmRuntime } from "./runtime";
 import { LLM_CHAT_TIMEOUT_MS, LLM_THINKING_TIMEOUT_MS } from "./client";
 
 describe("LLM timeout constants", () => {
-  it("LLM_CHAT_TIMEOUT_MS is 100_000", () => {
-    expect(LLM_CHAT_TIMEOUT_MS).toBe(100_000);
+  it("LLM_CHAT_TIMEOUT_MS is 120_000", () => {
+    expect(LLM_CHAT_TIMEOUT_MS).toBe(120_000);
   });
 
-  it("LLM_THINKING_TIMEOUT_MS is 190_000", () => {
-    expect(LLM_THINKING_TIMEOUT_MS).toBe(190_000);
+  it("LLM_THINKING_TIMEOUT_MS is 220_000", () => {
+    expect(LLM_THINKING_TIMEOUT_MS).toBe(220_000);
   });
 });
 

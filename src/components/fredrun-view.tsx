@@ -1,5 +1,6 @@
 "use client";
 
+import NextImage from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -28,6 +29,7 @@ const SPRITE_CELL_SIZE = 192;
 const SPRITE_DRAW_SIZE = 166;
 const JUMP_ANIMATION_DURATION = 0.82;
 const FIXED_STEP = 1 / 120;
+const INTRO_SOURCE = "/fredrun/intro.webp";
 
 const spriteLayouts = {
   walk: { source: "/fredrun/walk.png", columns: 8, frameCount: 64 },
@@ -37,13 +39,20 @@ const spriteLayouts = {
 
 const obstacleLayouts: Record<
   FredRunObstacleKind,
-  { source: string; drawWidth: number; drawHeight: number; offsetX: number }
+  {
+    source: string;
+    drawWidth: number;
+    drawHeight: number;
+    offsetX: number;
+    animation?: { columns: number; cellSize: number; frameCount: number; fps: number };
+  }
 > = {
-  beschluss: {
-    source: "/fredrun/obstacles/beschluss.webp",
-    drawWidth: 64,
-    drawHeight: 96,
-    offsetX: -9,
+  odo: {
+    source: "/fredrun/odo-run.webp",
+    drawWidth: 118,
+    drawHeight: 118,
+    offsetX: -40,
+    animation: { columns: 8, cellSize: 192, frameCount: 64, fps: 22 },
   },
   reihe100: {
     source: "/fredrun/obstacles/reihe100.webp",
@@ -141,19 +150,63 @@ function drawObstacle(
   context: CanvasRenderingContext2D,
   obstacle: FredRunObstacle,
   image: HTMLImageElement,
+  elapsed: number,
+  reducedMotion: boolean,
 ) {
   const layout = obstacleLayouts[obstacle.kind];
+  const drawX = obstacle.x + layout.offsetX;
+  const drawY = FREDRUN_GROUND_Y - layout.drawHeight;
   context.save();
+  if (obstacle.kind === "odo") {
+    const bubbleX = obstacle.x + 28;
+    const bubbleY = drawY - 29;
+    const bubbleWidth = 92;
+    const bubbleHeight = 42;
+    context.shadowColor = "rgba(19, 53, 75, 0.18)";
+    context.shadowBlur = 6;
+    context.shadowOffsetY = 3;
+    context.fillStyle = "rgba(255, 255, 255, 0.97)";
+    context.strokeStyle = "#17242d";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.roundRect(bubbleX, bubbleY, bubbleWidth, bubbleHeight, 14);
+    context.moveTo(bubbleX + 15, bubbleY + bubbleHeight - 2);
+    context.lineTo(bubbleX + 2, bubbleY + bubbleHeight + 11);
+    context.lineTo(bubbleX + 27, bubbleY + bubbleHeight - 1);
+    context.closePath();
+    context.fill();
+    context.stroke();
+    context.shadowColor = "transparent";
+    context.fillStyle = "#101820";
+    context.font = "900 12px system-ui";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText("Wo", bubbleX + bubbleWidth / 2, bubbleY + 13);
+    context.fillText("Beschluss?", bubbleX + bubbleWidth / 2, bubbleY + 28);
+  }
   context.shadowColor = "rgba(19, 53, 75, 0.2)";
   context.shadowBlur = 7;
   context.shadowOffsetY = 4;
-  context.drawImage(
-    image,
-    obstacle.x + layout.offsetX,
-    FREDRUN_GROUND_Y - layout.drawHeight,
-    layout.drawWidth,
-    layout.drawHeight,
-  );
+  if (layout.animation) {
+    const frame = reducedMotion
+      ? 0
+      : (Math.floor(elapsed * layout.animation.fps) + obstacle.id * 7) % layout.animation.frameCount;
+    const sourceX = (frame % layout.animation.columns) * layout.animation.cellSize;
+    const sourceY = Math.floor(frame / layout.animation.columns) * layout.animation.cellSize;
+    context.drawImage(
+      image,
+      sourceX,
+      sourceY,
+      layout.animation.cellSize,
+      layout.animation.cellSize,
+      drawX,
+      drawY,
+      layout.drawWidth,
+      layout.drawHeight,
+    );
+  } else {
+    context.drawImage(image, drawX, drawY, layout.drawWidth, layout.drawHeight);
+  }
   context.restore();
 }
 
@@ -199,7 +252,13 @@ function renderFredRun(
   context.imageSmoothingEnabled = true;
   drawBackground(context, state, reducedMotion);
   if (images) {
-    state.obstacles.forEach((obstacle) => drawObstacle(context, obstacle, images.obstacles[obstacle.kind]));
+    state.obstacles.forEach((obstacle) => drawObstacle(
+      context,
+      obstacle,
+      images.obstacles[obstacle.kind],
+      state.elapsed,
+      reducedMotion,
+    ));
   }
 
   if (images) {
@@ -310,6 +369,7 @@ export default function FredRunView() {
       Promise.all((Object.keys(obstacleLayouts) as FredRunObstacleKind[]).map(async (key) => (
         [key, await loadImage(obstacleLayouts[key].source)] as const
       ))),
+      loadImage(INTRO_SOURCE),
     ])
       .then(([spriteEntries, obstacleEntries]) => {
         if (cancelled) return;
@@ -413,6 +473,7 @@ export default function FredRunView() {
 
   const isPaused = snapshot.phase === "paused";
   const showPauseButton = snapshot.phase === "running" || snapshot.phase === "milestone" || isPaused;
+  const showIntro = assetState === "ready" && snapshot.phase === "ready";
 
   return (
     <section className="forms-panel fredrun-panel" aria-labelledby="fredrun-view-title">
@@ -421,7 +482,7 @@ export default function FredRunView() {
           <div>
             <p className="eyebrow">Findog Spielpause</p>
             <h1 id="fredrun-view-title">Fredrun</h1>
-            <p>Spring mit Fred über REIH 100, Steuerkodex, Paragraphen und fehlende Beschlüsse.</p>
+            <p>Spring mit Fred über Odo, REIH 100, Steuerkodex und Paragraphen.</p>
           </div>
           <div className="fredrun-controls-copy" aria-label="Steuerung">
             <span><kbd>Leertaste</kbd> oder <kbd>↑</kbd></span>
@@ -429,17 +490,19 @@ export default function FredRunView() {
           </div>
         </header>
 
-        <div className="fredrun-game-shell">
-          <div className="fredrun-hud" aria-label="Spielstand">
-            <div><span>Punkte</span><strong>{snapshot.score}</strong></div>
-            <div><span>Stufe</span><strong>{snapshot.level}</strong></div>
-            <div><span>Bestwert</span><strong>{bestScore}</strong></div>
-            {showPauseButton ? (
-              <button type="button" onClick={togglePause}>{isPaused ? "Weiter" : "Pause"}</button>
-            ) : null}
-          </div>
+        <div className={`fredrun-game-shell${showIntro ? " fredrun-game-shell--intro" : ""}`}>
+          {!showIntro ? (
+            <div className="fredrun-hud" aria-label="Spielstand">
+              <div><span>Punkte</span><strong>{snapshot.score}</strong></div>
+              <div><span>Stufe</span><strong>{snapshot.level}</strong></div>
+              <div><span>Bestwert</span><strong>{bestScore}</strong></div>
+              {showPauseButton ? (
+                <button type="button" onClick={togglePause}>{isPaused ? "Weiter" : "Pause"}</button>
+              ) : null}
+            </div>
+          ) : null}
 
-          <div className="fredrun-stage">
+          <div className={`fredrun-stage${showIntro ? " fredrun-stage--intro" : ""}`}>
             <canvas
               ref={canvasRef}
               className="fredrun-canvas"
@@ -448,7 +511,8 @@ export default function FredRunView() {
                 startOrJump();
               }}
               aria-label="Fredrun-Spielfeld. Leertaste, Pfeil nach oben oder Antippen zum Springen."
-              tabIndex={0}
+              aria-hidden={showIntro || undefined}
+              tabIndex={showIntro ? -1 : 0}
             />
 
             {assetState === "loading" ? (
@@ -469,11 +533,20 @@ export default function FredRunView() {
                 </button>
               </div>
             ) : null}
-            {assetState === "ready" && snapshot.phase === "ready" ? (
-              <div className="fredrun-overlay">
-                <p className="fredrun-overlay-kicker">Ein Sprung. Volle Konzentration.</p>
-                <h2>Bereit?</h2>
-                <button className="primary-button" type="button" onClick={startRound}>Loslaufen</button>
+            {showIntro ? (
+              <div className="fredrun-intro" aria-label="Fredrun-Titelscreen">
+                <NextImage
+                  className="fredrun-intro-image"
+                  src={INTRO_SOURCE}
+                  alt="Fred Runner: Fred läuft vor Akten, Gesetzbüchern und dem Ruf nach einem Beschluss davon."
+                  fill
+                  loading="eager"
+                  sizes="(max-width: 760px) 100vw, 1040px"
+                  unoptimized
+                />
+                <div className="fredrun-intro-action">
+                  <button className="primary-button" type="button" onClick={startRound}>Loslaufen</button>
+                </div>
               </div>
             ) : null}
             {snapshot.phase === "milestone" ? (
@@ -499,13 +572,17 @@ export default function FredRunView() {
             ) : null}
           </div>
 
-          {snapshot.phase === "running" ? (
-            <div className="fredrun-mobile-action">
-              <button className="primary-button" type="button" onClick={startOrJump}>Springen</button>
-            </div>
+          {!showIntro ? (
+            <>
+              {snapshot.phase === "running" ? (
+                <div className="fredrun-mobile-action">
+                  <button className="primary-button" type="button" onClick={startOrJump}>Springen</button>
+                </div>
+              ) : null}
+              <p className="fredrun-status" role="status" aria-live="polite">{phaseStatus(snapshot)}</p>
+              <p className="fredrun-milestone-note">Alle {FREDRUN_MILESTONE_POINTS} Punkte feiert Fred – danach wird es schneller.</p>
+            </>
           ) : null}
-          <p className="fredrun-status" role="status" aria-live="polite">{phaseStatus(snapshot)}</p>
-          <p className="fredrun-milestone-note">Alle {FREDRUN_MILESTONE_POINTS} Punkte feiert Fred – danach wird es schneller.</p>
         </div>
       </div>
     </section>

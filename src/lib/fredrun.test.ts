@@ -64,12 +64,12 @@ describe("Fredrun simulation", () => {
     expect(state.spawnDistance).toBeLessThanOrEqual(470);
   });
 
-  it("spawns all four supplied obstacle motifs with fair collision boxes", () => {
+  it("spawns Odo occasionally and keeps all collision boxes jumpable", () => {
     const cases = [
-      { roll: 0, kind: "beschluss", width: 36, height: 66 },
-      { roll: 0.25, kind: "reihe100", width: 56, height: 60 },
-      { roll: 0.5, kind: "steuerkodex", width: 45, height: 70 },
-      { roll: 0.75, kind: "paragraph", width: 42, height: 68 },
+      { roll: 0, kind: "odo", width: 38, height: 78 },
+      { roll: 0.125, kind: "reihe100", width: 56, height: 60 },
+      { roll: 0.42, kind: "steuerkodex", width: 45, height: 70 },
+      { roll: 0.71, kind: "paragraph", width: 42, height: 68 },
     ] as const;
 
     for (const expected of cases) {
@@ -88,9 +88,22 @@ describe("Fredrun simulation", () => {
     const state = startFredRun({
       ...createFredRunState(),
       spawnDistance: 10_000,
-      obstacles: [{ id: 1, kind: "paragraph", x: 112, width: 42, height: 68 }],
+      obstacles: [{ id: 1, kind: "odo", x: 112, width: 38, height: 78 }],
     });
     expect(advanceFredRun(state, 0.01, () => 0.5).phase).toBe("game-over");
+  });
+
+  it("moves the running Odo faster than static obstacles", () => {
+    const state = startFredRun({
+      ...createFredRunState(),
+      spawnDistance: 10_000,
+      obstacles: [
+        { id: 1, kind: "odo", x: 800, width: 38, height: 78 },
+        { id: 2, kind: "paragraph", x: 800, width: 42, height: 68 },
+      ],
+    });
+    const advanced = advanceFredRun(state, 0.1, () => 0.5);
+    expect(advanced.obstacles[0].x).toBeLessThan(advanced.obstacles[1].x);
   });
 
   it("celebrates every 250 points, clears danger, and resumes one level faster", () => {

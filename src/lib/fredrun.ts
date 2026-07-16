@@ -14,9 +14,11 @@ const JUMP_VELOCITY = 660;
 const SCORE_DISTANCE = 34;
 const INITIAL_SPAWN_DISTANCE = 650;
 const RESUME_SPAWN_DISTANCE = 520;
+const ODO_SPAWN_RATE = 0.125;
+const ODO_SPEED_MULTIPLIER = 1.18;
 
 export type FredRunPhase = "ready" | "running" | "milestone" | "paused" | "game-over";
-export type FredRunObstacleKind = "beschluss" | "reihe100" | "steuerkodex" | "paragraph";
+export type FredRunObstacleKind = "odo" | "reihe100" | "steuerkodex" | "paragraph";
 
 export type FredRunObstacle = {
   id: number;
@@ -26,8 +28,8 @@ export type FredRunObstacle = {
   height: number;
 };
 
-const FREDRUN_OBSTACLE_SPECS = [
-  { kind: "beschluss", width: 36, height: 66 },
+const FREDRUN_ODO_SPEC = { kind: "odo", width: 38, height: 78 } as const;
+const FREDRUN_STATIC_OBSTACLE_SPECS = [
   { kind: "reihe100", width: 56, height: 60 },
   { kind: "steuerkodex", width: 45, height: 70 },
   { kind: "paragraph", width: 42, height: 68 },
@@ -118,7 +120,15 @@ function speedForLevel(level: number): number {
 
 function obstacleFor(random: () => number, id: number): FredRunObstacle {
   const roll = Math.min(0.999999, Math.max(0, random()));
-  const spec = FREDRUN_OBSTACLE_SPECS[Math.floor(roll * FREDRUN_OBSTACLE_SPECS.length)];
+  if (roll < ODO_SPAWN_RATE) {
+    return { id, ...FREDRUN_ODO_SPEC, x: FREDRUN_WORLD_WIDTH + 40 };
+  }
+  const regularRoll = (roll - ODO_SPAWN_RATE) / (1 - ODO_SPAWN_RATE);
+  const regularIndex = Math.min(
+    FREDRUN_STATIC_OBSTACLE_SPECS.length - 1,
+    Math.floor(regularRoll * FREDRUN_STATIC_OBSTACLE_SPECS.length),
+  );
+  const spec = FREDRUN_STATIC_OBSTACLE_SPECS[regularIndex];
   return { id, ...spec, x: FREDRUN_WORLD_WIDTH + 40 };
 }
 
@@ -199,7 +209,10 @@ export function advanceFredRun(
   let spawnDistance = state.spawnDistance - state.speed * delta;
   let nextObstacleId = state.nextObstacleId;
   const obstacles = state.obstacles
-    .map((obstacle) => ({ ...obstacle, x: obstacle.x - state.speed * delta }))
+    .map((obstacle) => ({
+      ...obstacle,
+      x: obstacle.x - state.speed * (obstacle.kind === "odo" ? ODO_SPEED_MULTIPLIER : 1) * delta,
+    }))
     .filter((obstacle) => obstacle.x + obstacle.width > -20);
 
   if (spawnDistance <= 0) {

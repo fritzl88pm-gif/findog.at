@@ -3,26 +3,6 @@
   "alpha": true,
   "maximumOutputSize": 192,
   "assets": {
-    "beschluss": {
-      "sourceFile": "LccQeoyP6DNV9vkNYTnni_LFMlXEEY.png",
-      "sha256": "333AF269567DDDF3DAC89C12467DA42B7B2214508E1E0376B37D0C7156DD09FB",
-      "sourceSize": {
-        "width": 376,
-        "height": 376
-      },
-      "sourceBounds": {
-        "left": 73,
-        "top": 2,
-        "width": 248,
-        "height": 370
-      },
-      "outputFile": "beschluss.webp",
-      "outputSize": {
-        "width": 129,
-        "height": 192
-      },
-      "outputBytes": 13366
-    },
     "reihe100": {
       "sourceFile": "k7IBqIrZBUlwAfKgjcUOl_t88N4Iv9.png",
       "sha256": "9B668A34398940FCBE7B376944ECF7C6BA9FB38FBD9867C9CACAE5FCFC3F4F3D",

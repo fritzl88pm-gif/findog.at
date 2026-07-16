@@ -3,8 +3,8 @@ import { UserVisibleError } from "../errors";
 import type { DeepSeekTool, JsonObject } from "../mcp/tools";
 import type { LlmRuntime } from "./runtime";
 
-export const LLM_CHAT_TIMEOUT_MS = 100_000;
-export const LLM_THINKING_TIMEOUT_MS = 190_000;
+export const LLM_CHAT_TIMEOUT_MS = 120_000;
+export const LLM_THINKING_TIMEOUT_MS = 220_000;
 
 export type AppChatMessage = {
   role: "user" | "assistant";
