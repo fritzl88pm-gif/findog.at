@@ -130,6 +130,13 @@ describe("Fredrun UI surface", () => {
     }
   });
 
+  it("keeps the runner character name out of the visible game-page copy", () => {
+    expect(viewSource).toContain(
+      "Spring mit Fred über REIH 100, Steuerkodex, Paragraphen und unerwartete Hindernisse.",
+    );
+    expect(viewSource).not.toContain("Spring mit Fred über Odo");
+  });
+
   it("uses the supplied intro artwork as the responsive title screen", () => {
     expect(introManifest).toEqual({
       source: {

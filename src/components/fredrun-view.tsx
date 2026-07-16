@@ -482,7 +482,7 @@ export default function FredRunView() {
           <div>
             <p className="eyebrow">Findog Spielpause</p>
             <h1 id="fredrun-view-title">Fredrun</h1>
-            <p>Spring mit Fred über Odo, REIH 100, Steuerkodex und Paragraphen.</p>
+            <p>Spring mit Fred über REIH 100, Steuerkodex, Paragraphen und unerwartete Hindernisse.</p>
           </div>
           <div className="fredrun-controls-copy" aria-label="Steuerung">
             <span><kbd>Leertaste</kbd> oder <kbd>↑</kbd></span>
