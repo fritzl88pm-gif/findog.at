@@ -1,0 +1,87 @@
+{
+  "format": "webp",
+  "alpha": true,
+  "maximumOutputSize": 192,
+  "assets": {
+    "beschluss": {
+      "sourceFile": "LccQeoyP6DNV9vkNYTnni_LFMlXEEY.png",
+      "sha256": "333AF269567DDDF3DAC89C12467DA42B7B2214508E1E0376B37D0C7156DD09FB",
+      "sourceSize": {
+        "width": 376,
+        "height": 376
+      },
+      "sourceBounds": {
+        "left": 73,
+        "top": 2,
+        "width": 248,
+        "height": 370
+      },
+      "outputFile": "beschluss.webp",
+      "outputSize": {
+        "width": 129,
+        "height": 192
+      },
+      "outputBytes": 13366
+    },
+    "reihe100": {
+      "sourceFile": "k7IBqIrZBUlwAfKgjcUOl_t88N4Iv9.png",
+      "sha256": "9B668A34398940FCBE7B376944ECF7C6BA9FB38FBD9867C9CACAE5FCFC3F4F3D",
+      "sourceSize": {
+        "width": 376,
+        "height": 376
+      },
+      "sourceBounds": {
+        "left": 0,
+        "top": 6,
+        "width": 370,
+        "height": 368
+      },
+      "outputFile": "reihe100.webp",
+      "outputSize": {
+        "width": 192,
+        "height": 191
+      },
+      "outputBytes": 22684
+    },
+    "steuerkodex": {
+      "sourceFile": "mM79uPXO3whBsRILJcOt7_ohuZGsKF.png",
+      "sha256": "2F19937098D2E3D68C518E72864F40DD3DFCCC80C32688B4D4368DFF8C6A6B59",
+      "sourceSize": {
+        "width": 376,
+        "height": 376
+      },
+      "sourceBounds": {
+        "left": 51,
+        "top": 2,
+        "width": 275,
+        "height": 372
+      },
+      "outputFile": "steuerkodex.webp",
+      "outputSize": {
+        "width": 142,
+        "height": 192
+      },
+      "outputBytes": 23292
+    },
+    "paragraph": {
+      "sourceFile": "t63Z-G-kR6wiyjHJAAKTa_EacK2To4.png",
+      "sha256": "F5460B622F0D7FBF94232FFCCB4AEC6D281BFE0C31D2E48E5DD260BB378B3316",
+      "sourceSize": {
+        "width": 376,
+        "height": 376
+      },
+      "sourceBounds": {
+        "left": 63,
+        "top": 9,
+        "width": 257,
+        "height": 357
+      },
+      "outputFile": "paragraph.webp",
+      "outputSize": {
+        "width": 138,
+        "height": 192
+      },
+      "outputBytes": 19716
+    }
+  }
+}

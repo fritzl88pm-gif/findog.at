@@ -16,6 +16,20 @@ const manifest = JSON.parse(readFileSync(fileURLToPath(new URL("../../public/fre
     animations: Record<"walk" | "jump" | "victory", { columns: number; rows: number; frameCount: number }>;
   };
 };
+const obstacleManifest = JSON.parse(readFileSync(
+  fileURLToPath(new URL("../../public/fredrun/obstacles/manifest.json", import.meta.url)),
+  "utf8",
+)) as {
+  format: string;
+  alpha: boolean;
+  maximumOutputSize: number;
+  assets: Record<string, {
+    sha256: string;
+    outputFile: string;
+    outputSize: { width: number; height: number };
+    outputBytes: number;
+  }>;
+};
 
 describe("Fredrun UI surface", () => {
   it("registers Fredrun in both navigation modes and the app view", () => {
@@ -63,5 +77,31 @@ describe("Fredrun UI surface", () => {
       total + statSync(fileURLToPath(new URL(`../../public/fredrun/${name}`, import.meta.url))).size
     ), 0);
     expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
+  });
+
+  it("loads all four supplied obstacle assets with recorded provenance and a small payload", () => {
+    expect(obstacleManifest).toMatchObject({
+      format: "webp",
+      alpha: true,
+      maximumOutputSize: 192,
+      assets: {
+        beschluss: { sha256: "333AF269567DDDF3DAC89C12467DA42B7B2214508E1E0376B37D0C7156DD09FB" },
+        reihe100: { sha256: "9B668A34398940FCBE7B376944ECF7C6BA9FB38FBD9867C9CACAE5FCFC3F4F3D" },
+        steuerkodex: { sha256: "2F19937098D2E3D68C518E72864F40DD3DFCCC80C32688B4D4368DFF8C6A6B59" },
+        paragraph: { sha256: "F5460B622F0D7FBF94232FFCCB4AEC6D281BFE0C31D2E48E5DD260BB378B3316" },
+      },
+    });
+
+    const assets = Object.values(obstacleManifest.assets);
+    expect(assets).toHaveLength(4);
+    expect(assets.every((asset) => asset.outputSize.width <= 192 && asset.outputSize.height <= 192)).toBe(true);
+    expect(assets.reduce((total, asset) => total + asset.outputBytes, 0)).toBeLessThanOrEqual(128 * 1024);
+    for (const asset of assets) {
+      expect(statSync(fileURLToPath(new URL(
+        `../../public/fredrun/obstacles/${asset.outputFile}`,
+        import.meta.url,
+      ))).size).toBe(asset.outputBytes);
+      expect(viewSource).toContain(`/fredrun/obstacles/${asset.outputFile}`);
+    }
   });
 });

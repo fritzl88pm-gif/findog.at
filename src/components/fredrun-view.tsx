@@ -19,6 +19,7 @@ import {
   startFredRun,
   writeFredRunHighScore,
   type FredRunObstacle,
+  type FredRunObstacleKind,
   type FredRunPhase,
   type FredRunState,
 } from "@/lib/fredrun";
@@ -34,8 +35,40 @@ const spriteLayouts = {
   victory: { source: "/fredrun/victory.png", columns: 8, frameCount: 64 },
 } as const;
 
+const obstacleLayouts: Record<
+  FredRunObstacleKind,
+  { source: string; drawWidth: number; drawHeight: number; offsetX: number }
+> = {
+  beschluss: {
+    source: "/fredrun/obstacles/beschluss.webp",
+    drawWidth: 64,
+    drawHeight: 96,
+    offsetX: -9,
+  },
+  reihe100: {
+    source: "/fredrun/obstacles/reihe100.webp",
+    drawWidth: 72,
+    drawHeight: 72,
+    offsetX: -8,
+  },
+  steuerkodex: {
+    source: "/fredrun/obstacles/steuerkodex.webp",
+    drawWidth: 61,
+    drawHeight: 82,
+    offsetX: -8,
+  },
+  paragraph: {
+    source: "/fredrun/obstacles/paragraph.webp",
+    drawWidth: 56,
+    drawHeight: 78,
+    offsetX: -7,
+  },
+};
+
 type SpriteKey = keyof typeof spriteLayouts;
 type SpriteImages = Record<SpriteKey, HTMLImageElement>;
+type ObstacleImages = Record<FredRunObstacleKind, HTMLImageElement>;
+type FredRunImages = { sprites: SpriteImages; obstacles: ObstacleImages };
 
 type FredRunSnapshot = {
   phase: FredRunPhase;
@@ -47,7 +80,7 @@ function snapshotFrom(state: FredRunState): FredRunSnapshot {
   return { phase: state.phase, score: state.score, level: state.level };
 }
 
-function loadSprite(source: string): Promise<HTMLImageElement> {
+function loadImage(source: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.decoding = "async";
@@ -55,24 +88,6 @@ function loadSprite(source: string): Promise<HTMLImageElement> {
     image.onerror = () => reject(new Error(`Sprite konnte nicht geladen werden: ${source}`));
     image.src = source;
   });
-}
-
-function drawRoundedRectangle(
-  context: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  radius: number,
-) {
-  const safeRadius = Math.min(radius, width / 2, height / 2);
-  context.beginPath();
-  context.moveTo(x + safeRadius, y);
-  context.arcTo(x + width, y, x + width, y + height, safeRadius);
-  context.arcTo(x + width, y + height, x, y + height, safeRadius);
-  context.arcTo(x, y + height, x, y, safeRadius);
-  context.arcTo(x, y, x + width, y, safeRadius);
-  context.closePath();
 }
 
 function drawBackground(context: CanvasRenderingContext2D, state: FredRunState, reducedMotion: boolean) {
@@ -122,59 +137,23 @@ function drawBackground(context: CanvasRenderingContext2D, state: FredRunState, 
   }
 }
 
-function drawObstacle(context: CanvasRenderingContext2D, obstacle: FredRunObstacle) {
-  const top = FREDRUN_GROUND_Y - obstacle.height;
+function drawObstacle(
+  context: CanvasRenderingContext2D,
+  obstacle: FredRunObstacle,
+  image: HTMLImageElement,
+) {
+  const layout = obstacleLayouts[obstacle.kind];
   context.save();
-  context.shadowColor = "rgba(19, 53, 75, 0.18)";
-  context.shadowBlur = 8;
+  context.shadowColor = "rgba(19, 53, 75, 0.2)";
+  context.shadowBlur = 7;
   context.shadowOffsetY = 4;
-
-  if (obstacle.kind === "akten") {
-    context.fillStyle = "#1f668d";
-    drawRoundedRectangle(context, obstacle.x, top + 9, obstacle.width, obstacle.height - 9, 5);
-    context.fill();
-    context.fillStyle = "#f4b942";
-    drawRoundedRectangle(context, obstacle.x + 5, top, 26, 15, 4);
-    context.fill();
-    context.fillStyle = "#ffffff";
-    context.fillRect(obstacle.x + 8, top + 25, obstacle.width - 16, 15);
-    context.fillStyle = "#1e5274";
-    context.font = "700 10px system-ui";
-    context.textAlign = "center";
-    context.fillText("AKT", obstacle.x + obstacle.width / 2, top + 36);
-  } else if (obstacle.kind === "bescheid") {
-    context.fillStyle = "#fffdf7";
-    drawRoundedRectangle(context, obstacle.x, top, obstacle.width, obstacle.height, 4);
-    context.fill();
-    context.strokeStyle = "#87a2b2";
-    context.lineWidth = 2;
-    context.stroke();
-    context.fillStyle = "#d64545";
-    context.beginPath();
-    context.arc(obstacle.x + obstacle.width / 2, top + 40, 12, 0, Math.PI * 2);
-    context.fill();
-    context.fillStyle = "#ffffff";
-    context.font = "800 9px system-ui";
-    context.textAlign = "center";
-    context.fillText("FAÖ", obstacle.x + obstacle.width / 2, top + 43);
-    context.fillStyle = "#5e7785";
-    context.fillRect(obstacle.x + 8, top + 12, obstacle.width - 16, 3);
-    context.fillRect(obstacle.x + 8, top + 20, obstacle.width - 20, 3);
-  } else {
-    const colors = ["#245e83", "#b33a3a", "#2f7a6b"];
-    for (let index = 0; index < 3; index += 1) {
-      const bookY = top + index * 16;
-      context.fillStyle = colors[index];
-      drawRoundedRectangle(context, obstacle.x + (index % 2) * 4, bookY, obstacle.width - 4, 15, 3);
-      context.fill();
-      context.fillStyle = "rgba(255,255,255,0.88)";
-      context.fillRect(obstacle.x + 10, bookY + 4, obstacle.width - 22, 2);
-    }
-    context.fillStyle = "#ffffff";
-    context.font = "800 17px Georgia";
-    context.textAlign = "center";
-    context.fillText("§", obstacle.x + obstacle.width / 2, top + 46);
-  }
+  context.drawImage(
+    image,
+    obstacle.x + layout.offsetX,
+    FREDRUN_GROUND_Y - layout.drawHeight,
+    layout.drawWidth,
+    layout.drawHeight,
+  );
   context.restore();
 }
 
@@ -209,7 +188,7 @@ function activeSprite(state: FredRunState): { key: SpriteKey; frame: number } {
 function renderFredRun(
   canvas: HTMLCanvasElement,
   state: FredRunState,
-  sprites: SpriteImages | null,
+  images: FredRunImages | null,
   reducedMotion: boolean,
 ) {
   const context = canvas.getContext("2d");
@@ -219,16 +198,18 @@ function renderFredRun(
   context.setTransform(canvas.width / FREDRUN_WORLD_WIDTH, 0, 0, canvas.height / FREDRUN_WORLD_HEIGHT, 0, 0);
   context.imageSmoothingEnabled = true;
   drawBackground(context, state, reducedMotion);
-  state.obstacles.forEach((obstacle) => drawObstacle(context, obstacle));
+  if (images) {
+    state.obstacles.forEach((obstacle) => drawObstacle(context, obstacle, images.obstacles[obstacle.kind]));
+  }
 
-  if (sprites) {
+  if (images) {
     const sprite = activeSprite(state);
     const layout = spriteLayouts[sprite.key];
     const sourceX = (sprite.frame % layout.columns) * SPRITE_CELL_SIZE;
     const sourceY = Math.floor(sprite.frame / layout.columns) * SPRITE_CELL_SIZE;
     const footY = FREDRUN_GROUND_Y - state.playerHeight + 4;
     context.drawImage(
-      sprites[sprite.key],
+      images.sprites[sprite.key],
       sourceX,
       sourceY,
       SPRITE_CELL_SIZE,
@@ -261,7 +242,7 @@ export default function FredRunView() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<number | null>(null);
   const gameRef = useRef<FredRunState>(createFredRunState());
-  const spritesRef = useRef<SpriteImages | null>(null);
+  const imagesRef = useRef<FredRunImages | null>(null);
   const bestScoreRef = useRef(0);
   const reducedMotionRef = useRef(false);
   const [snapshot, setSnapshot] = useState<FredRunSnapshot>(() => snapshotFrom(createFredRunState()));
@@ -282,7 +263,7 @@ export default function FredRunView() {
     gameRef.current = state;
     publish(state);
     if (canvasRef.current) {
-      renderFredRun(canvasRef.current, state, spritesRef.current, reducedMotionRef.current);
+      renderFredRun(canvasRef.current, state, imagesRef.current, reducedMotionRef.current);
     }
   }, [publish]);
 
@@ -322,17 +303,25 @@ export default function FredRunView() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all((Object.keys(spriteLayouts) as SpriteKey[]).map(async (key) => (
-      [key, await loadSprite(spriteLayouts[key].source)] as const
-    )))
-      .then((entries) => {
+    Promise.all([
+      Promise.all((Object.keys(spriteLayouts) as SpriteKey[]).map(async (key) => (
+        [key, await loadImage(spriteLayouts[key].source)] as const
+      ))),
+      Promise.all((Object.keys(obstacleLayouts) as FredRunObstacleKind[]).map(async (key) => (
+        [key, await loadImage(obstacleLayouts[key].source)] as const
+      ))),
+    ])
+      .then(([spriteEntries, obstacleEntries]) => {
         if (cancelled) return;
-        spritesRef.current = Object.fromEntries(entries) as SpriteImages;
+        imagesRef.current = {
+          sprites: Object.fromEntries(spriteEntries) as SpriteImages,
+          obstacles: Object.fromEntries(obstacleEntries) as ObstacleImages,
+        };
         setAssetState("ready");
       })
       .catch(() => {
         if (cancelled) return;
-        spritesRef.current = null;
+        imagesRef.current = null;
         setAssetState("error");
       });
     return () => { cancelled = true; };
@@ -358,7 +347,7 @@ export default function FredRunView() {
         canvas.width = width;
         canvas.height = height;
       }
-      renderFredRun(canvas, gameRef.current, spritesRef.current, reducedMotionRef.current);
+      renderFredRun(canvas, gameRef.current, imagesRef.current, reducedMotionRef.current);
     };
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
@@ -391,7 +380,7 @@ export default function FredRunView() {
         }
       }
       if (canvasRef.current) {
-        renderFredRun(canvasRef.current, state, spritesRef.current, reducedMotionRef.current);
+        renderFredRun(canvasRef.current, state, imagesRef.current, reducedMotionRef.current);
       }
       frameRef.current = requestAnimationFrame(tick);
     };
@@ -432,7 +421,7 @@ export default function FredRunView() {
           <div>
             <p className="eyebrow">Findog Spielpause</p>
             <h1 id="fredrun-view-title">Fredrun</h1>
-            <p>Spring mit Fred über Akten, Bescheide und Gesetzesstapel.</p>
+            <p>Spring mit Fred über REIH 100, Steuerkodex, Paragraphen und fehlende Beschlüsse.</p>
           </div>
           <div className="fredrun-controls-copy" aria-label="Steuerung">
             <span><kbd>Leertaste</kbd> oder <kbd>↑</kbd></span>
@@ -467,7 +456,7 @@ export default function FredRunView() {
             ) : null}
             {assetState === "error" ? (
               <div className="fredrun-overlay" role="alert">
-                <h2>Fred konnte nicht geladen werden</h2>
+                <h2>Die Spielgrafiken konnten nicht geladen werden</h2>
                 <button
                   className="primary-button"
                   type="button"

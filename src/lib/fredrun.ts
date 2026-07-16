@@ -16,7 +16,7 @@ const INITIAL_SPAWN_DISTANCE = 650;
 const RESUME_SPAWN_DISTANCE = 520;
 
 export type FredRunPhase = "ready" | "running" | "milestone" | "paused" | "game-over";
-export type FredRunObstacleKind = "akten" | "bescheid" | "gesetze";
+export type FredRunObstacleKind = "beschluss" | "reihe100" | "steuerkodex" | "paragraph";
 
 export type FredRunObstacle = {
   id: number;
@@ -25,6 +25,13 @@ export type FredRunObstacle = {
   width: number;
   height: number;
 };
+
+const FREDRUN_OBSTACLE_SPECS = [
+  { kind: "beschluss", width: 36, height: 66 },
+  { kind: "reihe100", width: 56, height: 60 },
+  { kind: "steuerkodex", width: 45, height: 70 },
+  { kind: "paragraph", width: 42, height: 68 },
+] as const satisfies readonly Omit<FredRunObstacle, "id" | "x">[];
 
 export type FredRunState = {
   phase: FredRunPhase;
@@ -111,13 +118,8 @@ function speedForLevel(level: number): number {
 
 function obstacleFor(random: () => number, id: number): FredRunObstacle {
   const roll = Math.min(0.999999, Math.max(0, random()));
-  if (roll < 1 / 3) {
-    return { id, kind: "akten", x: FREDRUN_WORLD_WIDTH + 40, width: 48, height: 58 };
-  }
-  if (roll < 2 / 3) {
-    return { id, kind: "bescheid", x: FREDRUN_WORLD_WIDTH + 40, width: 42, height: 68 };
-  }
-  return { id, kind: "gesetze", x: FREDRUN_WORLD_WIDTH + 40, width: 58, height: 52 };
+  const spec = FREDRUN_OBSTACLE_SPECS[Math.floor(roll * FREDRUN_OBSTACLE_SPECS.length)];
+  return { id, ...spec, x: FREDRUN_WORLD_WIDTH + 40 };
 }
 
 function nextGap(speed: number, random: () => number): number {

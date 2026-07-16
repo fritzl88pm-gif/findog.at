@@ -64,11 +64,31 @@ describe("Fredrun simulation", () => {
     expect(state.spawnDistance).toBeLessThanOrEqual(470);
   });
 
+  it("spawns all four supplied obstacle motifs with fair collision boxes", () => {
+    const cases = [
+      { roll: 0, kind: "beschluss", width: 36, height: 66 },
+      { roll: 0.25, kind: "reihe100", width: 56, height: 60 },
+      { roll: 0.5, kind: "steuerkodex", width: 45, height: 70 },
+      { roll: 0.75, kind: "paragraph", width: 42, height: 68 },
+    ] as const;
+
+    for (const expected of cases) {
+      const state = startFredRun({ ...createFredRunState(), spawnDistance: 0 });
+      const advanced = advanceFredRun(state, 1 / 120, () => expected.roll);
+      expect(advanced.obstacles).toHaveLength(1);
+      expect(advanced.obstacles[0]).toMatchObject({
+        kind: expected.kind,
+        width: expected.width,
+        height: expected.height,
+      });
+    }
+  });
+
   it("detects a collision with Fred's reduced hitbox", () => {
     const state = startFredRun({
       ...createFredRunState(),
       spawnDistance: 10_000,
-      obstacles: [{ id: 1, kind: "akten", x: 112, width: 48, height: 58 }],
+      obstacles: [{ id: 1, kind: "paragraph", x: 112, width: 42, height: 68 }],
     });
     expect(advanceFredRun(state, 0.01, () => 0.5).phase).toBe("game-over");
   });
@@ -79,7 +99,7 @@ describe("Fredrun simulation", () => {
       distance: 249 * 34 + 33,
       score: 249,
       spawnDistance: 10_000,
-      obstacles: [{ id: 1, kind: "gesetze", x: 800, width: 58, height: 52 }],
+      obstacles: [{ id: 1, kind: "steuerkodex", x: 800, width: 45, height: 70 }],
     });
     const milestone = advanceFredRun(nearMilestone, 0.01, () => 0.5);
     expect(milestone.phase).toBe("milestone");
