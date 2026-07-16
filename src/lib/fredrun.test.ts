@@ -123,7 +123,7 @@ describe("Fredrun simulation", () => {
     const resumed = advanceFor(FREDRUN_MILESTONE_DURATION + 0.1, milestone);
     expect(resumed.phase).toBe("running");
     expect(resumed.level).toBe(2);
-    expect(resumed.speed).toBeGreaterThan(milestone.speed);
+    expect(resumed.speed).toBe(336);
     expect(resumed.spawnDistance).toBeGreaterThan(450);
   });
 

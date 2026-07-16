@@ -137,6 +137,12 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).not.toContain("Spring mit Fred über Odo");
   });
 
+  it("shows the milestone message without the former tinted overlay", () => {
+    expect(viewSource).toContain('className="fredrun-milestone-message"');
+    expect(viewSource).not.toContain("fredrun-milestone-overlay");
+    expect(viewSource).toContain("Nächste Stufe");
+  });
+
   it("uses the supplied intro artwork as the responsive title screen", () => {
     expect(introManifest).toEqual({
       source: {

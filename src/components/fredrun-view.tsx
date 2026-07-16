@@ -553,7 +553,7 @@ export default function FredRunView() {
               </div>
             ) : null}
             {snapshot.phase === "milestone" ? (
-              <div className="fredrun-overlay fredrun-milestone-overlay">
+              <div className="fredrun-milestone-message">
                 <p className="fredrun-overlay-kicker">Nächste Stufe</p>
                 <h2>{snapshot.score} Punkte!</h2>
               </div>

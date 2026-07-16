@@ -8,7 +8,7 @@ export const FREDRUN_HIGH_SCORE_KEY = "findog.fredrun.highscore.v1";
 
 const BASE_SPEED = 300;
 const MAX_SPEED = 516;
-const SPEED_PER_LEVEL = 24;
+const SPEED_PER_LEVEL = 36;
 const GRAVITY = 1600;
 const JUMP_VELOCITY = 660;
 const SCORE_DISTANCE = 34;
