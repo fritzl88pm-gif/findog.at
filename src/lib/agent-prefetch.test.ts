@@ -193,7 +193,7 @@ describe("runAgent retrieval policy", () => {
         toolCalls: [],
       });
 
-      await runAgent({
+      const result = await runAgent({
       runtime: TEST_RUNTIME,
         messages: [{ role: "user", content: "Wie hoch ist der Unterhaltsabsetzbetrag?" }],
       });
@@ -209,6 +209,17 @@ describe("runAgent retrieval policy", () => {
       expect(callTool.mock.calls[0]?.[0].arguments).not.toHaveProperty("year");
       expect(callTool.mock.calls[0]?.[0].arguments).not.toHaveProperty("as_of");
       expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
+      expect(result.steps).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          title: "Suche in „Betragstabelle FAQ“",
+        }),
+        expect.objectContaining({
+          type: "tool_result",
+          title: "Treffer aus „Betragstabelle FAQ“ werden ausgewertet",
+        }),
+      ]));
+      expect(JSON.stringify(result.steps)).not.toContain(RESEARCH_SOURCES.BETRAGSTABELLE.kbId);
       expect(finalPrompt()).toContain("Veranlagungsjahr 2026");
       expect(finalPrompt()).not.toContain("Stichtag 2026-07-14");
     } finally {

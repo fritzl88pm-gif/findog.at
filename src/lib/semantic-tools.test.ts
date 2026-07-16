@@ -154,6 +154,28 @@ describe("SemanticToolRegistry", () => {
   });
 
   describe("(b) semantic tool call routing", () => {
+    it("resolves only the human-readable source name for fixed and source-key calls", () => {
+      const registry = new SemanticToolRegistry(allProductionRawTools());
+
+      expect(registry.getResearchSourceName("search_laws", { query: "EStG" }))
+        .toBe(RESEARCH_SOURCES.GESETZE.name);
+      expect(registry.getResearchSourceName("inspect_research_document", {
+        source_key: "BFG",
+        knowledge_id: "doc-123",
+      })).toBe(RESEARCH_SOURCES.BFG.name);
+      expect(registry.getResearchSourceName("inspect_research_source", {
+        source_key: RESEARCH_SOURCES.WIKI.kbId,
+      })).toBe(RESEARCH_SOURCES.WIKI.name);
+      expect(registry.getResearchSourceName("list_research_sources", {})).toBeUndefined();
+      expect(registry.getResearchSourceName("unknown_tool", {})).toBeUndefined();
+      expect(registry.getResearchSourceName("inspect_research_source", {
+        source_key: "UNKNOWN",
+      })).toBeUndefined();
+
+      expect(registry.getResearchSourceName("search_laws", { query: "EStG" }))
+        .not.toContain(RESEARCH_SOURCES.GESETZE.kbId);
+    });
+
     it("routes search_laws to hybrid_search with correct Gesetze kb_id", () => {
       const registry = new SemanticToolRegistry(allProductionRawTools());
       const routed = registry.routeToolCall("search_laws", { query: "EStG § 33" });

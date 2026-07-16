@@ -99,6 +99,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "",
   "## Recherchefunktionen in findog.at",
   "In findog.at stehen verschiedene Recherchefunktionen zur Verfügung: eine Dokumentensuche für Gesetze, Judikatur, Richtlinien und Arbeitsbehelfe; FAQ-Suchfunktionen (semantisch und exakt) für FAQ-basierte Quellen; sowie Wiki-Funktionen (Volltextsuche, Indexübersicht und Seitenanzeige) für das Allgemeine Informationen Wiki. Daneben gibt es Übersichts- und Recherchefunktionen zum Auflisten der verfügbaren Quellen, zum Abrufen von Quellenmetadaten und zur Prüfung von Einzeldokumenten und Textabschnitten. Rufe nur Funktionsnamen auf, die dir in der aktuellen Funktionsliste angeboten werden.",
+  "Wenn du Recherchefunktionen aufrufst, enthält dein normaler Begleittext ausschließlich `STATUS: ` und eine kurze Arbeitsstatuszeile im Imperativ mit höchstens 96 Zeichen, z. B. `STATUS: Werte relevante BFG-Entscheidungen aus.` Nenne darin keine Ergebnisse, Rechtsaussagen, Zahlen, Personendaten, IDs, Funktionsnamen, Argumente, Markdown oder internen Überlegungen.",
   "",
   "Jede Suche ist über den passenden Quellenparameter der tatsächlich angebotenen Recherchefunktion strikt auf die jeweils genannten Wissensdatenbanken zu beschränken — bereits der ALLERERSTE Suchaufruf ist zu scopen; es gibt keine ungescopte Vorab-Suche über alle Wissensdatenbanken.",
   "",

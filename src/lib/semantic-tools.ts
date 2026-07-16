@@ -18,6 +18,7 @@ import {
   getSourceByKbId,
   getSourceByKey,
 } from "./research-sources";
+import type { ResearchSourceName } from "./research-source-display";
 
 /* ------------------------------------------------------------------ */
 /*  Schema-aware argument helpers                                     */
@@ -561,6 +562,29 @@ export class SemanticToolRegistry {
         parameters: def.publicParameters,
       },
     }));
+  }
+
+  /** Resolves the safe, human-readable source name for a semantic call. */
+  getResearchSourceName(
+    publicName: string,
+    semanticArgs: JsonObject,
+  ): ResearchSourceName | undefined {
+    const def = this.byPublicName.get(publicName);
+    if (!def) return undefined;
+
+    if (def.resolveSource) {
+      return def.resolveSource(semanticArgs).name;
+    }
+
+    const sourceKey = semanticArgs.source_key;
+    if (typeof sourceKey !== "string" || !sourceKey.trim()) {
+      return undefined;
+    }
+
+    return (
+      getSourceByKey(sourceKey.trim().toUpperCase())
+      ?? getSourceByKbId(sourceKey.trim())
+    )?.name;
   }
 
   /**

@@ -93,7 +93,7 @@ describe("runAgent", () => {
     const { callTool } = mockMcpSession();
     mockedChatCompletion
       .mockResolvedValueOnce({ finishReason: "tool_calls",
-        content: "Recherche",
+        content: "STATUS: Werte relevante Rechtsgrundlagen aus.",
         reasoningContent: "Unveränderte interne Werkzeugbegründung",
         toolCalls: [
           {
@@ -126,6 +126,21 @@ describe("runAgent", () => {
     expect(result.tools).toContain("search_bfg");
     expect(result.tools).not.toContain("findok_verify_bfg_cases");
     expect(result.tools).not.toContain("hybrid_search");
+    expect(result.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "tool_call",
+        title: "Suche in „Gesetze und Verordnungen“",
+      }),
+      expect.objectContaining({
+        type: "tool_result",
+        title: "Treffer aus „Gesetze und Verordnungen“ werden ausgewertet",
+      }),
+      expect.objectContaining({
+        type: "progress",
+        title: "LLM-Arbeitsstatus: Werte relevante Rechtsgrundlagen aus.",
+      }),
+    ]));
+    expect(JSON.stringify(result.steps)).not.toContain("Unveränderte interne Werkzeugbegründung");
     expect(mockedChatCompletion.mock.calls[0]?.[0].tools?.map((tool) => tool.function.name))
       .toContain("search_laws");
     expect(mockedChatCompletion.mock.calls[0]?.[0].tools?.map((tool) => tool.function.name))
@@ -446,7 +461,7 @@ describe("runAgent", () => {
     const { callTool } = mockMcpSession();
     mockedChatCompletion
       .mockResolvedValueOnce({ finishReason: "tool_calls",
-        content: "Weitere Recherche",
+        content: "STATUS: Werte alle angeforderten Rechtsquellen aus.",
         toolCalls: Array.from({ length: 7 }, (_value, index) => ({
           id: `call-${index + 1}`,
           name: "search_laws",
@@ -464,6 +479,11 @@ describe("runAgent", () => {
     expect(result.answer).toBe(withOverview("Finale Antwort nach sieben Aufrufen."));
     expect(callTool).toHaveBeenCalledTimes(7);
     expect(result.steps.filter((step) => step.type === "tool_call")).toHaveLength(7);
+    expect(result.steps.filter((step) => step.type === "progress")).toEqual([
+      expect.objectContaining({
+        title: "LLM-Arbeitsstatus: Werte alle angeforderten Rechtsquellen aus.",
+      }),
+    ]);
     expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
     expect(result.steps).toEqual(
       expect.arrayContaining([

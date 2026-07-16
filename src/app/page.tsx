@@ -239,7 +239,7 @@ type BfgProResult = {
 };
 
 const SETTINGS_STORAGE_KEY = "findog.settings.v1";
-const INITIAL_PENDING_TEXT = "Recherche wird vorbereitet";
+const INITIAL_PENDING_TEXT = "Anfrage wird vorbereitet";
 const BFG_SORT_OPTIONS: ReadonlyArray<{ value: BfgSort; label: string }> = [
   { value: "1", label: "Relevanz" },
   { value: "2", label: "Genehmigungsdatum absteigend" },

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { AgentStep } from "./agent-steps";
+import { createLlmProgressStepTitle } from "./agent-progress-status";
 import { agentStepDisplayLabel } from "./agent-step-display";
+import {
+  RESEARCH_SOURCE_NAMES,
+  researchSourceCallTitle,
+  researchSourceResultTitle,
+} from "./research-source-display";
 
 describe("agentStepDisplayLabel", () => {
   it("maps database searches to simple German wording", () => {
@@ -13,7 +19,39 @@ describe("agentStepDisplayLabel", () => {
       arguments: { query: "Pendlerpauschale", kb_id: "fred" },
     };
 
-    expect(agentStepDisplayLabel(step)).toBe("Datenbank wird durchsucht");
+    expect(agentStepDisplayLabel(step)).toBe("Rechtsquelle wird durchsucht");
+  });
+
+  it("shows the concrete source name for calls, results, and failures", () => {
+    const sourceName = RESEARCH_SOURCE_NAMES.GESETZE;
+    const callStep: AgentStep = {
+      type: "tool_call",
+      title: researchSourceCallTitle(sourceName),
+      content: "interne Argumente",
+      toolName: "search_laws",
+    };
+    const resultStep: AgentStep = {
+      type: "tool_result",
+      title: researchSourceResultTitle(sourceName, true),
+      content: "interne Treffer",
+      toolName: "search_laws",
+      success: true,
+    };
+    const failedStep: AgentStep = {
+      type: "tool_result",
+      title: researchSourceResultTitle(sourceName, false),
+      content: "interner Fehler",
+      toolName: "search_laws",
+      success: false,
+    };
+
+    expect(agentStepDisplayLabel(callStep)).toBe("Suche in „Gesetze und Verordnungen“");
+    expect(agentStepDisplayLabel(resultStep)).toBe(
+      "Treffer aus „Gesetze und Verordnungen“ werden ausgewertet",
+    );
+    expect(agentStepDisplayLabel(failedStep)).toBe(
+      "Abfrage von „Gesetze und Verordnungen“ fehlgeschlagen",
+    );
   });
 
   it("maps policy and citation verification to user-facing wording", () => {
@@ -39,6 +77,7 @@ describe("agentStepDisplayLabel", () => {
     [{ type: "answer", title: "raw", content: "raw" }, "Antwort wird erstellt"],
     [{ type: "pdf_context", title: "raw", content: "raw" }, "PDF wird gelesen"],
     [{ type: "attachment_context", title: "Bild-Kontext", content: "raw" }, "Anhang wird gelesen"],
+    [{ type: "progress", title: "raw", content: "raw" }, "Rechercheergebnisse werden ausgewertet"],
   ] as const)("maps %s to %s", (step, expected) => {
     expect(agentStepDisplayLabel(step as AgentStep)).toBe(expected);
   });
@@ -74,7 +113,31 @@ describe("agentStepDisplayLabel", () => {
 
     const label = agentStepDisplayLabel(unknownStep);
 
-    expect(label).toBe("Recherche läuft");
+    expect(label).toBe("Anfrage wird verarbeitet");
     expect(label.length).toBeLessThanOrEqual(30);
+  });
+
+  it("shows a validated model-generated activity for progress steps", () => {
+    const title = createLlmProgressStepTitle("STATUS: Werte BFG-Urteile aus.");
+    expect(title).toBeDefined();
+
+    const step: AgentStep = {
+      type: "progress",
+      title: title!,
+      content: "interner Fortschritt",
+    };
+
+    expect(agentStepDisplayLabel(step)).toBe("Werte BFG-Urteile aus.");
+  });
+
+  it("does not trust a source name embedded in an arbitrary title", () => {
+    const step: AgentStep = {
+      type: "tool_call",
+      title: "Gesetze und Verordnungen: secret-id-42",
+      content: "raw",
+      toolName: "unknown_tool",
+    };
+
+    expect(agentStepDisplayLabel(step)).toBe("Recherchequelle wird abgefragt");
   });
 });

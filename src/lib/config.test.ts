@@ -70,6 +70,16 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
     expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/externe Recherche angek(?:ü|\u00fc)ndigt/i);
   });
 
+  it("requests a bounded activity status only alongside research calls", () => {
+    expect(DEFAULT_SYSTEM_PROMPT).toContain(
+      "STATUS: Werte relevante BFG-Entscheidungen aus.",
+    );
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("mit höchstens 96 Zeichen");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain(
+      "keine Ergebnisse, Rechtsaussagen, Zahlen, Personendaten, IDs, Funktionsnamen, Argumente, Markdown oder internen Überlegungen",
+    );
+  });
+
   it("contains the confirmed tax abbreviations without triggering extra research", () => {
     for (const [abbreviation, expansion] of [
       ["AVAB", "Alleinverdienerabsetzbetrag"],

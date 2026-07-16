@@ -8,6 +8,11 @@ import type { LlmRuntime } from "./llm/runtime";
 import { SemanticToolRegistry } from "./semantic-tools";
 import { RESEARCH_SOURCES } from "./research-sources";
 import {
+  researchSourceCallTitle,
+  researchSourceResultTitle,
+} from "./research-source-display";
+import { createLlmProgressStepTitle } from "./agent-progress-status";
+import {
   summarizeStepText,
   summarizeToolArguments,
   type AgentRunResult,
@@ -667,11 +672,14 @@ export async function runAgent(options: {
         secureRouteFound = true;
         executedToolCallCount += 1;
         const argumentSummary = summarizeToolArguments(simpleAmountLogArguments(query, target));
+        const sourceName = registry.getResearchSourceName(target.semanticToolName, { query });
         await appendAgentStep(
           steps,
           {
             type: "tool_call",
-            title: "Betragsquelle wird gezielt abgefragt",
+            title: sourceName
+              ? researchSourceCallTitle(sourceName)
+              : "Betragsquelle wird gezielt abgefragt",
             content: `Argumente:\n${argumentSummary}`,
             toolName: target.semanticToolName,
             arguments: argumentSummary,
@@ -703,7 +711,11 @@ export async function runAgent(options: {
           steps,
           {
             type: "tool_result",
-            title: success ? "Betragsquelle ausgewertet" : "Betragsquelle fehlgeschlagen",
+            title: sourceName
+              ? researchSourceResultTitle(sourceName, success)
+              : success
+                ? "Betragsquelle ausgewertet"
+                : "Betragsquelle fehlgeschlagen",
             content: summarizeStepText(toolResult),
             toolName: target.semanticToolName,
             success,
@@ -828,6 +840,7 @@ export async function runAgent(options: {
       }
       return { ...call, parsedArguments };
     });
+    const llmProgressStepTitle = createLlmProgressStepTitle(result.content);
 
     messages.push({
       role: "assistant",
@@ -861,11 +874,14 @@ export async function runAgent(options: {
 
       const parsedArguments = call.parsedArguments;
       const argumentSummary = summarizeToolArguments(parsedArguments);
+      const sourceName = registry.getResearchSourceName(call.name, parsedArguments);
       await appendAgentStep(
         steps,
         {
           type: "tool_call",
-          title: "Datenbank wird abgefragt",
+          title: sourceName
+            ? researchSourceCallTitle(sourceName)
+            : "Recherchequelle wird abgefragt",
           content: `Argumente:\n${argumentSummary}`,
           toolName: call.name,
           arguments: argumentSummary,
@@ -891,7 +907,9 @@ export async function runAgent(options: {
           steps,
           {
             type: "tool_result",
-            title: "Datenbankfehler",
+            title: sourceName
+              ? researchSourceResultTitle(sourceName, false)
+              : "Recherchequelle nicht erreichbar",
             content: error instanceof Error
               ? summarizeStepText(error.message)
               : "Die Datenbankabfrage konnte nicht erfolgreich ausgeführt werden.",
@@ -909,7 +927,11 @@ export async function runAgent(options: {
         steps,
         {
           type: "tool_result",
-          title: success ? "Datenbankergebnis" : "Datenbankfehler",
+          title: sourceName
+            ? researchSourceResultTitle(sourceName, success)
+            : success
+              ? "Rechercheergebnis wird ausgewertet"
+              : "Recherchequelle nicht erreichbar",
           content: summarizeStepText(toolResult),
           toolName: call.name,
           success,
@@ -923,7 +945,7 @@ export async function runAgent(options: {
       steps,
       {
         type: "progress",
-        title: "Recherche fortgesetzt",
+        title: llmProgressStepTitle ?? "Rechercheergebnisse werden ausgewertet",
         content: `${toolLog.length} Werkzeugergebnis${toolLog.length === 1 ? "" : "se"} berücksichtigt.`,
       },
       options.onStep,
