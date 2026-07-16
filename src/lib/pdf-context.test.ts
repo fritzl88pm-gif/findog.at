@@ -1,11 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createDeadline } from "./deadline";
-import { MAX_PDF_CONTEXT_CHARS, extractImageContext, extractPdfContext } from "./pdf-context";
+import {
+  MAX_PDF_CONTEXT_CHARS,
+  OPENROUTER_CONTEXT_TIMEOUT_MS,
+  extractImageContext,
+  extractPdfContext,
+} from "./pdf-context";
 import { UserVisibleError } from "./errors";
 
 describe("extractPdfContext", () => {
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+
+  it("allows Gemini document and image extraction up to 270 seconds", () => {
+    expect(OPENROUTER_CONTEXT_TIMEOUT_MS).toBe(270_000);
+  });
 
   beforeEach(() => {
     process.env.OPENROUTER_API_KEY = "openrouter-test-key";

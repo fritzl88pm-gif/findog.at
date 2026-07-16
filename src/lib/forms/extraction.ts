@@ -4,7 +4,7 @@ import { type FormImageMimeType } from "./config";
 
 export const OPENROUTER_FORM_EXTRACTION_URL = "https://openrouter.ai/api/v1/chat/completions";
 export const OPENROUTER_FORM_EXTRACTION_MODEL = "google/gemini-3.5-flash";
-const FORM_EXTRACTION_TIMEOUT_MS = 90_000;
+export const FORM_EXTRACTION_TIMEOUT_MS = 270_000;
 
 const EXTRACTED_FIELD_NAMES = [
   "steuernummer",

@@ -5,7 +5,7 @@ export const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/cha
 export const OPENROUTER_GEMINI_CONTEXT_MODEL = "google/gemini-3.5-flash";
 export const OPENROUTER_GEMINI_PDF_MODEL = OPENROUTER_GEMINI_CONTEXT_MODEL;
 export const MAX_PDF_CONTEXT_CHARS = 120_000;
-export const OPENROUTER_CONTEXT_TIMEOUT_MS = 90_000;
+export const OPENROUTER_CONTEXT_TIMEOUT_MS = 270_000;
 
 type ExtractPdfContextOptions = {
   filename: string;

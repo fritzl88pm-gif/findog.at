@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { parseStructuredFormFields } from "./extraction";
+import { FORM_EXTRACTION_TIMEOUT_MS, parseStructuredFormFields } from "./extraction";
 
 describe("structured Verf 5 extraction", () => {
+  it("allows Gemini form extraction up to 270 seconds", () => {
+    expect(FORM_EXTRACTION_TIMEOUT_MS).toBe(270_000);
+  });
+
   it("retains only the expected string fields and excludes server/manual fields", () => {
     const result = parseStructuredFormFields(`\n\`\`\`json\n{
       "steuernummer": "12 345/6789",
