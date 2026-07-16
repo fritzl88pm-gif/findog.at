@@ -473,7 +473,7 @@ export default function FredRunView() {
 
   const isPaused = snapshot.phase === "paused";
   const showPauseButton = snapshot.phase === "running" || snapshot.phase === "milestone" || isPaused;
-  const showIntro = assetState === "ready" && snapshot.phase === "ready";
+  const showIntro = assetState !== "error" && snapshot.phase === "ready";
 
   return (
     <section className="forms-panel fredrun-panel" aria-labelledby="fredrun-view-title">
@@ -515,9 +515,6 @@ export default function FredRunView() {
               tabIndex={showIntro ? -1 : 0}
             />
 
-            {assetState === "loading" ? (
-              <div className="fredrun-overlay"><p>Fred macht sich bereit…</p></div>
-            ) : null}
             {assetState === "error" ? (
               <div className="fredrun-overlay" role="alert">
                 <h2>Die Spielgrafiken konnten nicht geladen werden</h2>
@@ -534,7 +531,11 @@ export default function FredRunView() {
               </div>
             ) : null}
             {showIntro ? (
-              <div className="fredrun-intro" aria-label="Fredrun-Titelscreen">
+              <div
+                className="fredrun-intro"
+                aria-label={assetState === "loading" ? "Fredrun wird geladen" : "Fredrun-Titelscreen"}
+                aria-busy={assetState === "loading"}
+              >
                 <NextImage
                   className="fredrun-intro-image"
                   src={INTRO_SOURCE}
@@ -544,9 +545,11 @@ export default function FredRunView() {
                   sizes="(max-width: 760px) 100vw, 1040px"
                   unoptimized
                 />
-                <div className="fredrun-intro-action">
-                  <button className="primary-button" type="button" onClick={startRound}>Loslaufen</button>
-                </div>
+                {assetState === "ready" ? (
+                  <div className="fredrun-intro-action">
+                    <button className="primary-button" type="button" onClick={startRound}>Loslaufen</button>
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {snapshot.phase === "milestone" ? (

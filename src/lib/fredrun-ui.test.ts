@@ -152,6 +152,9 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain('const INTRO_SOURCE = "/fredrun/intro.webp"');
     expect(viewSource).toContain('className="fredrun-intro"');
     expect(viewSource).toContain("Fred Runner: Fred läuft");
+    expect(viewSource).toContain('const showIntro = assetState !== "error" && snapshot.phase === "ready"');
+    expect(viewSource).toContain('aria-busy={assetState === "loading"}');
+    expect(viewSource).not.toContain("Fred macht sich bereit");
   });
 
   it("ships Odo as a normalized left-facing animated obstacle", () => {
