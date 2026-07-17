@@ -123,3 +123,36 @@ describe("composer submit-reset path", () => {
     expect(resetWindow).toContain("resetComposerHeight(composerRef.current)");
   });
 });
+
+describe("composer retry button", () => {
+  it("shows a retry button labeled 'Erneut versuchen' only when lastFailedRequest is set and not sending/deleting", () => {
+    const containerStart = pageSource.indexOf('<div className="composer-container">');
+    const containerEnd = pageSource.indexOf('<form className="composer"', containerStart);
+    const containerContent = pageSource.slice(containerStart, containerEnd);
+
+    expect(containerContent).toContain('Erneut versuchen');
+    expect(containerContent).toContain('lastFailedRequest && error === lastFailedRequest.errorMessage');
+    expect(containerContent).toContain('!isSending && !isDeleting');
+    expect(containerContent).toContain('className="retry-button"');
+    expect(containerContent).toContain('onClick={handleRetry}');
+  });
+
+  it("stores the prepared request on failure in sendPreparedChatRequest catch", () => {
+    const sendBlock = pageSource.slice(
+      pageSource.indexOf("async function sendPreparedChatRequest("),
+      pageSource.indexOf("async function handleSubmit("),
+    );
+
+    expect(sendBlock).toContain("setLastFailedRequest({ request, errorMessage })");
+  });
+
+  it("handleRetry calls sendPreparedChatRequest without constructing a user message", () => {
+    const retryBlock = pageSource.slice(
+      pageSource.indexOf("async function handleRetry("),
+      pageSource.indexOf("async function downloadAssistantPdf("),
+    );
+
+    expect(retryBlock).toContain("sendPreparedChatRequest(lastFailedRequest.request, accessToken)");
+    expect(retryBlock).not.toContain("userMessage");
+  });
+});

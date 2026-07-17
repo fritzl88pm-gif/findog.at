@@ -42,6 +42,7 @@ describe("resolveLlmRuntime", () => {
       baseUrl: "https://api.deepseek.com",
       apiKey: "deepseek-secret",
       reasoning: "disabled",
+      label: "DeepSeek v4 Flash",
     });
   });
 
@@ -56,6 +57,7 @@ describe("resolveLlmRuntime", () => {
       baseUrl: "https://api.z.ai/api/coding/paas/v4",
       apiKey: "zai-secret",
       reasoning: "max",
+      label: "GLM-5.2",
     });
   });
 
@@ -85,8 +87,10 @@ describe("resolveLlmRuntime", () => {
       baseUrl: "https://gateway.example.com/v1",
       apiKey: "provider-secret",
       reasoning: "disabled",
+      label: "OpenAI-kompatibles Modell",
     });
   });
+
 
   it("rejects unsupported per-model reasoning instead of silently remapping it", () => {
     process.env.ZAI_API_KEY = "zai-secret";

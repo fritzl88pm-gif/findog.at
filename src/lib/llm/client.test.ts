@@ -4,7 +4,12 @@ import type { DeepSeekTool } from "../mcp/tools";
 import { chatCompletion } from "./client";
 import type { LlmRuntime } from "./runtime";
 
-import { LLM_CHAT_TIMEOUT_MS, LLM_THINKING_TIMEOUT_MS } from "./client";
+import {
+  LLM_CHAT_TIMEOUT_MS,
+  LLM_OPENAI_COMPATIBLE_TIMEOUT_MS,
+  LLM_THINKING_TIMEOUT_MS,
+  effectiveTimeoutMs,
+} from "./client";
 
 describe("LLM timeout constants", () => {
   it("LLM_CHAT_TIMEOUT_MS is 120_000", () => {
@@ -465,5 +470,204 @@ describe("OpenAI-compatible chat completion", () => {
 
     const body = requestBody(fetchMock);
     expect(body).not.toHaveProperty("tool_choice");
+  });
+});
+
+describe("LLM_OPENAI_COMPATIBLE_TIMEOUT_MS constant", () => {
+  it("LLM_OPENAI_COMPATIBLE_TIMEOUT_MS is 300_000", () => {
+    expect(LLM_OPENAI_COMPATIBLE_TIMEOUT_MS).toBe(300_000);
+  });
+});
+
+describe("effectiveTimeoutMs pure timeout selector", () => {
+  it("returns 300_000 for openai_compatible provider", () => {
+    const runtime = {
+      model: "openai:xxx",
+      provider: "openai_compatible" as const,
+      upstreamModel: "m",
+      baseUrl: "https://example.com",
+      apiKey: "k",
+      reasoning: "disabled" as const,
+    } satisfies LlmRuntime;
+
+    expect(effectiveTimeoutMs(runtime)).toBe(300_000);
+  });
+
+  it("returns 300_000 for openai_compatible even with reasoning enabled", () => {
+    const runtime = {
+      model: "openai:xxx",
+      provider: "openai_compatible" as const,
+      upstreamModel: "m",
+      baseUrl: "https://example.com",
+      apiKey: "k",
+      reasoning: "high" as const,
+    } satisfies LlmRuntime;
+
+    expect(effectiveTimeoutMs(runtime)).toBe(300_000);
+  });
+
+  it("returns 120_000 for built-in non-thinking provider", () => {
+    const runtime = {
+      model: "deepseek-v4-flash",
+      provider: "deepseek" as const,
+      upstreamModel: "deepseek-v4-flash",
+      baseUrl: "https://api.deepseek.com",
+      apiKey: "k",
+      reasoning: "disabled" as const,
+    } satisfies LlmRuntime;
+
+    expect(effectiveTimeoutMs(runtime)).toBe(120_000);
+  });
+
+  it("returns 220_000 for built-in thinking provider", () => {
+    const runtime = {
+      model: "deepseek-v4-flash",
+      provider: "deepseek" as const,
+      upstreamModel: "deepseek-v4-flash",
+      baseUrl: "https://api.deepseek.com",
+      apiKey: "k",
+      reasoning: "high" as const,
+    } satisfies LlmRuntime;
+
+    expect(effectiveTimeoutMs(runtime)).toBe(220_000);
+  });
+});
+
+describe("transport retry on fetch failure", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("retries once after initial TypeError and succeeds on second attempt", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const successResponse = responseMessage({ content: "Gerettet" }, "stop");
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(successResponse);
+
+    const result = await chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.content).toBe("Gerettet");
+  });
+
+  it("does not retry runWithTimeout timeout (UserVisibleError)", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const abortError = new Error("The operation was aborted");
+    abortError.name = "AbortError";
+    fetchMock.mockRejectedValueOnce(abortError);
+
+    await expect(chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow("DeepSeek hat nicht rechtzeitig geantwortet");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a transport TypeError after the shared signal aborts", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(responseMessage({ content: "Zu spät" }, "stop"));
+    const controller = new AbortController();
+    controller.abort(new TypeError("fetch failed"));
+
+    await expect(chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+      signal: controller.signal,
+    })).rejects.toThrow("DeepSeek hat nicht rechtzeitig geantwortet");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry on non-connection error (Error, not TypeError)", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockRejectedValueOnce(new Error("Some non-connection error"));
+
+    await expect(chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow("Some non-connection error");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws UserVisibleError with provider/model name after two transport failures", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"));
+
+    await expect(chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow(
+      "DeepSeek ist nach einem Verbindungsfehler nicht erreichbar. Bitte später erneut versuchen.",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws UserVisibleError with dynamic model label after two transport failures", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"));
+
+    const dynamicRuntime = {
+      model: "openai:00000000-0000-4000-8000-000000000001",
+      provider: "openai_compatible" as const,
+      upstreamModel: "gpt-5.6-terra-high",
+      baseUrl: "https://gateway.example.com/v1",
+      apiKey: "secret",
+      reasoning: "disabled" as const,
+      label: "GPT 5.6 Terra High",
+    } satisfies LlmRuntime;
+
+    await expect(chatCompletion({
+      runtime: dynamicRuntime,
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow(
+      "GPT 5.6 Terra High ist nach einem Verbindungsfehler nicht erreichbar. Bitte später erneut versuchen.",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry HTTP 5xx - those are not TypeError transport failures", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(new Response("Upstream error", { status: 502 }));
+
+    await expect(chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow("DeepSeek ist derzeit nicht erreichbar");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses public label for openai_compatible HTTP 502 error (dynamic model)", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(new Response("Gateway error", { status: 502 }));
+
+    const dynamicRuntime = {
+      model: "openai:00000000-0000-4000-8000-000000000001",
+      provider: "openai_compatible" as const,
+      upstreamModel: "gpt-5.6-terra-high",
+      baseUrl: "https://gateway.example.com/v1",
+      apiKey: "secret",
+      reasoning: "disabled" as const,
+      label: "GPT 5.6 Terra High",
+    } satisfies LlmRuntime;
+
+    await expect(chatCompletion({
+      runtime: dynamicRuntime,
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow(
+      "GPT 5.6 Terra High ist derzeit nicht erreichbar",
+    );
   });
 });

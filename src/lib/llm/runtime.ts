@@ -23,6 +23,8 @@ export type LlmRuntime = {
   baseUrl: string;
   apiKey: string;
   reasoning: ReasoningSetting;
+  /** Public label for user-facing error messages (e.g. "GPT 5.6 Terra High", "DeepSeek v4 Flash"). */
+  label?: string;
 };
 
 function providerBaseUrl(provider: "deepseek" | "zai"): string {
@@ -50,6 +52,7 @@ export function resolveLlmRuntime(options: { model: ChatModel; reasoning?: Reaso
     baseUrl: providerBaseUrl(definition.provider),
     apiKey: resolveProviderApiKey(definition.provider),
     reasoning: validatedReasoning(definition.id, options.reasoning),
+    label: definition.label,
   };
 }
 
@@ -61,6 +64,7 @@ export function resolveDynamicLlmRuntime(setting: DynamicModelSetting): LlmRunti
     baseUrl: setting.baseUrl,
     apiKey: decryptOpenAICompatibleApiKey(setting.apiKeyCiphertext),
     reasoning: "disabled",
+    label: setting.displayName ?? "OpenAI-kompatibles Modell",
   };
 }
 

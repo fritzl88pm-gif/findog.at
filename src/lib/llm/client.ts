@@ -5,6 +5,7 @@ import type { LlmRuntime } from "./runtime";
 
 export const LLM_CHAT_TIMEOUT_MS = 120_000;
 export const LLM_THINKING_TIMEOUT_MS = 220_000;
+export const LLM_OPENAI_COMPATIBLE_TIMEOUT_MS = 300_000;
 
 export type AppChatMessage = {
   role: "user" | "assistant";
@@ -46,6 +47,10 @@ export type LlmResult = {
   finishReason: FinishReason;
 };
 
+function publicLabel(runtime: LlmRuntime): string {
+  return runtime.label ?? providerLabel(runtime);
+}
+
 function providerLabel(runtime: LlmRuntime): string {
   if (runtime.provider === "deepseek") return "DeepSeek";
   if (runtime.provider === "openai_compatible") return "OpenAI-kompatibler Provider";
@@ -53,7 +58,7 @@ function providerLabel(runtime: LlmRuntime): string {
 }
 
 function providerError(runtime: LlmRuntime, status: number): string {
-  const label = providerLabel(runtime);
+  const label = publicLabel(runtime);
   if (status === 401 || status === 403) {
     return `${label} API-Zugang wurde abgelehnt. Bitte Administrator kontaktieren.`;
   }
@@ -122,6 +127,36 @@ function completionPayload(
   return payload;
 }
 
+export function effectiveTimeoutMs(runtime: LlmRuntime): number {
+  if (runtime.provider === "openai_compatible") {
+    return LLM_OPENAI_COMPATIBLE_TIMEOUT_MS;
+  }
+  return thinkingEnabled(runtime) ? LLM_THINKING_TIMEOUT_MS : LLM_CHAT_TIMEOUT_MS;
+}
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  deadline: { signal?: AbortSignal; deadline?: Deadline; timeoutMs: number; timeoutMessage: string; reserveMs?: number },
+): Promise<{ response: Response; body: string }> {
+  return runWithTimeout(async (signal) => {
+    const maxAttempts = 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const response = await fetch(url, { ...init, signal });
+        return { response, body: await response.text() };
+      } catch (error) {
+        const isLastAttempt = attempt === maxAttempts;
+        const isTransportFailure = error instanceof TypeError;
+        if (signal.aborted || !isTransportFailure || isLastAttempt) {
+          throw error;
+        }
+      }
+    }
+    throw new Error("unreachable");
+  }, deadline);
+}
+
 export async function chatCompletion(options: {
   runtime: LlmRuntime;
   messages: LlmMessage[];
@@ -132,7 +167,6 @@ export async function chatCompletion(options: {
   reserveMs?: number;
 }): Promise<LlmResult> {
   const tools = options.tools ?? [];
-  const usesThinking = thinkingEnabled(options.runtime);
   const payload = completionPayload(options.runtime, options.messages, tools);
   const headers: Record<string, string> = {
     Accept: "application/json",
@@ -143,27 +177,38 @@ export async function chatCompletion(options: {
     headers["Accept-Language"] = "en-US,en";
   }
 
-  const { response, body } = await runWithTimeout(
-    (signal) =>
-      fetch(`${options.runtime.baseUrl}/chat/completions`, {
+  const timeoutMs = options.timeoutMs ?? effectiveTimeoutMs(options.runtime);
+
+  let response: Response;
+  let body: string;
+  try {
+    const result = await fetchWithRetry(
+      `${options.runtime.baseUrl}/chat/completions`,
+      {
         method: "POST",
         headers,
         body: JSON.stringify(payload),
         cache: "no-store",
-        signal,
-      }).then(async (response) => ({
-        response,
-        body: await response.text(),
-      })),
-    {
-      deadline: options.deadline,
-      signal: options.signal,
-      timeoutMs: options.timeoutMs
-        ?? (usesThinking ? LLM_THINKING_TIMEOUT_MS : LLM_CHAT_TIMEOUT_MS),
-      timeoutMessage: `${providerLabel(options.runtime)} hat nicht rechtzeitig geantwortet. Bitte erneut versuchen.`,
-      reserveMs: options.reserveMs,
-    },
-  );
+      },
+      {
+        deadline: options.deadline,
+        signal: options.signal,
+        timeoutMs,
+        timeoutMessage: `${publicLabel(options.runtime)} hat nicht rechtzeitig geantwortet. Bitte erneut versuchen.`,
+        reserveMs: options.reserveMs,
+      },
+    );
+    response = result.response;
+    body = result.body;
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new UserVisibleError(
+        `${publicLabel(options.runtime)} ist nach einem Verbindungsfehler nicht erreichbar. Bitte später erneut versuchen.`,
+        502,
+      );
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     throw new UserVisibleError(
@@ -177,7 +222,7 @@ export async function chatCompletion(options: {
     parsed = JSON.parse(body) as JsonObject;
   } catch {
     throw new UserVisibleError(
-      `${providerLabel(options.runtime)} lieferte keine gültige JSON-Antwort.`,
+      `${publicLabel(options.runtime)} lieferte keine gültige JSON-Antwort.`,
       502,
     );
   }
@@ -188,7 +233,7 @@ export async function chatCompletion(options: {
   const message = firstChoice?.message as JsonObject | undefined;
   if (!message) {
     throw new UserVisibleError(
-      `${providerLabel(options.runtime)} Antwort enthält keine Auswahl.`,
+      `${publicLabel(options.runtime)} Antwort enthält keine Auswahl.`,
       502,
     );
   }
@@ -225,19 +270,19 @@ export async function chatCompletion(options: {
 
   if (finishReason === "tool_calls" && toolCalls.length === 0) {
     throw new UserVisibleError(
-      `${providerLabel(options.runtime)} hat eine unvollständige Werkzeugauswahl geliefert.`,
+      `${publicLabel(options.runtime)} hat eine unvollständige Werkzeugauswahl geliefert.`,
       502,
     );
   }
   if (finishReason === "content_filter") {
     throw new UserVisibleError(
-      `${providerLabel(options.runtime)} hat die Antwort aufgrund eines Sicherheitsfilters abgelehnt.`,
+      `${publicLabel(options.runtime)} hat die Antwort aufgrund eines Sicherheitsfilters abgelehnt.`,
       502,
     );
   }
   if (!["stop", "length", "tool_calls"].includes(finishReason)) {
     throw new UserVisibleError(
-      `${providerLabel(options.runtime)} hat die Antwort mit einem unbekannten Status beendet.`,
+      `${publicLabel(options.runtime)} hat die Antwort mit einem unbekannten Status beendet.`,
       502,
     );
   }

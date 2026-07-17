@@ -88,6 +88,19 @@ type ChatMessage = {
   agentRun?: AgentRunMetadata;
 };
 
+type PreparedChatRequest = {
+  model: string;
+  messages: ChatMessage[];
+  attachedPdfs: File[];
+  attachedImages: File[];
+  conversationId?: string;
+};
+
+type FailedChatRequest = {
+  request: PreparedChatRequest;
+  errorMessage: string;
+};
+
 type ConversationSummary = {
   id: string;
   title: string;
@@ -1636,6 +1649,7 @@ export default function Home() {
   const [selectedPdfs, setSelectedPdfs] = useState<File[]>([]);
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
   const [error, setError] = useState("");
+  const [lastFailedRequest, setLastFailedRequest] = useState<FailedChatRequest | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [feedbackTargetIndex, setFeedbackTargetIndex] = useState<number | null>(null);
   const [feedbackDialogType, setFeedbackDialogType] = useState<"positive" | "negative">("positive");
@@ -3470,6 +3484,155 @@ export default function Home() {
       setIsFeedbackSaving(false);
     }
   }
+  async function executeChatRequest(params: {
+    model: string;
+    messages: Array<Pick<ChatMessage, "role" | "content">>;
+    conversationId?: string;
+    attachedPdfs: File[];
+    attachedImages: File[];
+    accessToken: string;
+    onStep: (step: AgentStep) => void;
+  }): Promise<ChatResponsePayload> {
+    const { model, messages, conversationId, attachedPdfs, attachedImages, accessToken, onStep } = params;
+    const hasAttachments = attachedPdfs.length > 0 || attachedImages.length > 0;
+
+    const requestBody: {
+      model: string;
+      messages: Array<Pick<ChatMessage, "role" | "content">>;
+      conversationId?: string;
+    } = { model, messages };
+    if (conversationId) {
+      requestBody.conversationId = conversationId;
+    }
+
+    const requestHeaders: Record<string, string> = {
+      Accept: CHAT_STREAM_CONTENT_TYPE,
+      Authorization: `Bearer ${accessToken}`,
+    };
+    const requestInit: RequestInit = {
+      method: "POST",
+      headers: requestHeaders,
+    };
+
+    if (hasAttachments) {
+      const formData = new FormData();
+      formData.append("payload", JSON.stringify(requestBody));
+      for (const file of attachedPdfs) {
+        formData.append("pdf", file, file.name);
+      }
+      for (const file of attachedImages) {
+        formData.append("image", file, file.name);
+      }
+      requestInit.body = formData;
+    } else {
+      requestHeaders["Content-Type"] = "application/json";
+      requestInit.body = JSON.stringify(requestBody);
+    }
+
+    const response = await fetch("/api/chat", requestInit);
+
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    const payload = contentType.includes(CHAT_STREAM_CONTENT_TYPE)
+      ? await readChatStream(response, onStep)
+      : ((await response.json().catch(() => ({}))) as ChatResponsePayload);
+
+    if (!response.ok) {
+      throw new Error(
+        typeof payload.error === "string"
+          ? payload.error
+          : `Die Anfrage ist mit HTTP ${response.status} fehlgeschlagen.`,
+      );
+    }
+
+    if (typeof payload.answer !== "string" || !payload.answer.trim()) {
+      throw new Error("Die Antwort war leer.");
+    }
+
+    return payload;
+  }
+
+  async function sendPreparedChatRequest(
+    request: PreparedChatRequest,
+    accessToken: string,
+  ): Promise<void> {
+    const hasAttachments = request.attachedPdfs.length > 0 || request.attachedImages.length > 0;
+
+    setLastFailedRequest(null);
+    setError("");
+    setOpenComposerMenu(null);
+    setIsSending(true);
+    setPendingStepText(INITIAL_PENDING_TEXT);
+    setPendingSteps([]);
+
+    try {
+      const payload = await executeChatRequest({
+        model: request.model,
+        messages: request.messages.map((m) => ({ role: m.role, content: m.content })),
+        ...(request.conversationId ? { conversationId: request.conversationId } : {}),
+        attachedPdfs: request.attachedPdfs,
+        attachedImages: request.attachedImages,
+        accessToken,
+        onStep: (step) => {
+          setPendingSteps((current) => [...current, step]);
+          setPendingStepText(agentStepDisplayLabel(step));
+        },
+      });
+
+      if (typeof payload.conversationId === "string" && payload.conversationId.trim()) {
+        setConversationId(payload.conversationId.trim());
+      }
+      const responseConversationId = typeof payload.conversationId === "string"
+        ? payload.conversationId.trim()
+        : request.conversationId;
+      const responseTitle = typeof payload.title === "string" && payload.title.trim()
+        ? payload.title.trim()
+        : conversationTitle;
+      if (responseTitle) {
+        setConversationTitle(responseTitle);
+      }
+      if (responseConversationId) {
+        const now = new Date().toISOString();
+        setConversations((current) => {
+          const existing = current.find((item) => item.id === responseConversationId);
+          const title = responseTitle || existing?.title || "Neue Unterhaltung";
+          return [
+            {
+              id: responseConversationId,
+              title,
+              createdAt: existing?.createdAt ?? now,
+              updatedAt: now,
+            },
+            ...current.filter((item) => item.id !== responseConversationId),
+          ];
+        });
+      }
+      if (hasAttachments) {
+        clearAttachments();
+      }
+
+      const steps = normalizeAgentSteps(payload.steps);
+      setMessages([
+        ...request.messages,
+        {
+          role: "assistant",
+          content: (payload.answer as string).trim(),
+          createdAt: new Date().toISOString(),
+          ...(steps.length > 0 ? { steps } : {}),
+        },
+      ]);
+    } catch (caughtError) {
+      const errorMessage = caughtError instanceof Error
+        ? caughtError.message
+        : "Die Anfrage konnte nicht verarbeitet werden.";
+      setError(errorMessage);
+      setLastFailedRequest({ request, errorMessage });
+    } finally {
+      setIsSending(false);
+      setPendingStepText(INITIAL_PENDING_TEXT);
+      setPendingSteps([]);
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -3515,132 +3678,40 @@ export default function Home() {
 
     setComposer("");
     resetComposerHeight(composerRef.current);
-    setError("");
-    setOpenComposerMenu(null);
-    setIsSending(true);
-    setPendingStepText(INITIAL_PENDING_TEXT);
-    setPendingSteps([]);
     setMessages(nextMessages);
 
-    try {
-      const requestBody: {
-        model: string;
-        messages: Array<Pick<ChatMessage, "role" | "content">>;
-        conversationId?: string;
-      } = {
+    await sendPreparedChatRequest(
+      {
         model: settings.model!,
-        messages: nextMessages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-      };
-
-      if (conversationId) {
-        requestBody.conversationId = conversationId;
-      }
-
-      const requestHeaders: Record<string, string> = {
-        Accept: CHAT_STREAM_CONTENT_TYPE,
-        Authorization: `Bearer ${accessToken}`,
-      };
-      const requestInit: RequestInit = {
-        method: "POST",
-        headers: requestHeaders,
-      };
-
-      if (hasAttachments) {
-        const formData = new FormData();
-        formData.append("payload", JSON.stringify(requestBody));
-        for (const file of attachedPdfs) {
-          formData.append("pdf", file, file.name);
-        }
-        for (const file of attachedImages) {
-          formData.append("image", file, file.name);
-        }
-        requestInit.body = formData;
-      } else {
-        requestHeaders["Content-Type"] = "application/json";
-        requestInit.body = JSON.stringify(requestBody);
-      }
-
-      const response = await fetch("/api/chat", requestInit);
-
-      const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-      const payload = contentType.includes(CHAT_STREAM_CONTENT_TYPE)
-        ? await readChatStream(response, (step) => {
-            setPendingSteps((current) => [...current, step]);
-            setPendingStepText(agentStepDisplayLabel(step));
-          })
-        : ((await response.json().catch(() => ({}))) as ChatResponsePayload);
-
-      if (!response.ok) {
-        throw new Error(
-          typeof payload.error === "string"
-            ? payload.error
-            : `Die Anfrage ist mit HTTP ${response.status} fehlgeschlagen.`,
-        );
-      }
-
-      if (typeof payload.answer !== "string" || !payload.answer.trim()) {
-        throw new Error("Die Antwort war leer.");
-      }
-
-      if (typeof payload.conversationId === "string" && payload.conversationId.trim()) {
-        setConversationId(payload.conversationId.trim());
-      }
-      const responseConversationId = typeof payload.conversationId === "string"
-        ? payload.conversationId.trim()
-        : conversationId;
-      const responseTitle = typeof payload.title === "string" && payload.title.trim()
-        ? payload.title.trim()
-        : conversationTitle;
-      if (responseTitle) {
-        setConversationTitle(responseTitle);
-      }
-      if (responseConversationId) {
-        const now = new Date().toISOString();
-        setConversations((current) => {
-          const existing = current.find((item) => item.id === responseConversationId);
-          const title = responseTitle || existing?.title || "Neue Unterhaltung";
-          return [
-            {
-              id: responseConversationId,
-              title,
-              createdAt: existing?.createdAt ?? now,
-              updatedAt: now,
-            },
-            ...current.filter((item) => item.id !== responseConversationId),
-          ];
-        });
-      }
-      if (hasAttachments) {
-        clearAttachments();
-      }
-
-      const steps = normalizeAgentSteps(payload.steps);
-      setMessages([
-        ...nextMessages,
-        {
-          role: "assistant",
-          content: payload.answer.trim(),
-          createdAt: new Date().toISOString(),
-          ...(steps.length > 0 ? { steps } : {}),
-        },
-      ]);
-    } catch (caughtError) {
-      setError(
-        caughtError instanceof Error
-          ? caughtError.message
-          : "Die Anfrage konnte nicht verarbeitet werden.",
-      );
-      setMessages(nextMessages);
-    } finally {
-      setIsSending(false);
-      setPendingStepText(INITIAL_PENDING_TEXT);
-      setPendingSteps([]);
-    }
+        messages: nextMessages,
+        attachedPdfs,
+        attachedImages,
+        ...(conversationId ? { conversationId } : {}),
+      },
+      accessToken,
+    );
   }
 
+  async function handleRetry() {
+    if (isSending || isDeleting || !lastFailedRequest) {
+      return;
+    }
+
+    if (!supabase || !user) {
+      setError("Bitte zuerst anmelden.");
+      return;
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+    if (!accessToken) {
+      setError("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+      return;
+    }
+    setSession(sessionData.session);
+
+    await sendPreparedChatRequest(lastFailedRequest.request, accessToken);
+  }
   async function downloadAssistantPdf(message: ChatMessage, messageIndex: number) {
     if (downloadingPdfMessageIndex !== null) {
       return;
@@ -5382,6 +5453,16 @@ export default function Home() {
           {error ? (
             <div className="error-box composer-error" role="alert" aria-live="polite">
               {error}
+              {lastFailedRequest && error === lastFailedRequest.errorMessage
+                && !isSending && !isDeleting ? (
+                <button
+                  type="button"
+                  className="retry-button"
+                  onClick={handleRetry}
+                >
+                  Erneut versuchen
+                </button>
+              ) : null}
             </div>
           ) : null}
           <form className="composer" onSubmit={handleSubmit}>
