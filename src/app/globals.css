@@ -2790,7 +2790,7 @@ textarea:focus {
 .composer textarea {
   box-sizing: border-box;
   min-height: 48px;
-  max-height: 240px;
+  max-height: 120px;
   overflow-y: auto;
   resize: none;
   font-size: 0.95rem;
@@ -2821,9 +2821,11 @@ textarea:focus {
 
 .attachment-chips {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 10px;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .composer-menu-control {
@@ -2951,6 +2953,7 @@ textarea:focus {
 
 .attachment-chip {
   display: inline-flex;
+  flex: 0 0 auto;
   min-width: 0;
   max-width: min(100%, 360px);
   align-items: center;

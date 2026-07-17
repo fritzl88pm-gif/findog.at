@@ -8,8 +8,8 @@ import Link from "next/link";
 import { chatHistoryStorageKey } from "@/lib/chat/storage";
 import { applyConversationDeletion } from "@/lib/chat/deletion";
 import {
-  clampComposerHeight,
-  COMPOSER_MIN_HEIGHT,
+  autosizeComposer,
+  resetComposerHeight,
 } from "@/lib/chat/composer-height";
 import {
   normalizeAgentRun,
@@ -2112,8 +2112,7 @@ export default function Home() {
       return;
     }
 
-    textarea.style.height = `${COMPOSER_MIN_HEIGHT}px`;
-    textarea.style.height = `${clampComposerHeight(textarea.scrollHeight)}px`;
+    autosizeComposer(textarea);
   }, [composer]);
 
   useEffect(() => {
@@ -3515,6 +3514,7 @@ export default function Home() {
     const nextMessages = [...messages, userMessage];
 
     setComposer("");
+    resetComposerHeight(composerRef.current);
     setError("");
     setOpenComposerMenu(null);
     setIsSending(true);

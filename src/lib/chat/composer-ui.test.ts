@@ -8,6 +8,21 @@ const pageSource = readFileSync(
   "utf8",
 );
 
+const cssSource = readFileSync(
+  fileURLToPath(new URL("../../app/globals.css", import.meta.url)),
+  "utf8",
+);
+
+function cssRule(selector: string): string {
+  const start = cssSource.indexOf(`${selector} {`);
+  const end = cssSource.indexOf("\n}", start);
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return cssSource.slice(start, end);
+}
+
 function composerSource(): string {
   const start = pageSource.indexOf('<form className="composer"');
   const end = pageSource.indexOf("\n          </form>", start);
@@ -79,5 +94,32 @@ describe("composer public UI", () => {
     expect(composer).not.toContain('id="composer-model"');
     expect(composer).not.toMatch(/<select\b/);
     expect(composer).not.toMatch(/>Modell</);
+  });
+});
+
+describe("composer attachment chips CSS", () => {
+  it("renders attachment chips in a single horizontal row without wrapping", () => {
+    const chips = cssRule(".attachment-chips");
+    expect(chips).toContain("flex-wrap: nowrap");
+    expect(chips).toContain("overflow-x: auto");
+  });
+
+  it("prevents individual chips from shrinking below their content", () => {
+    expect(cssRule(".attachment-chip")).toContain("flex: 0 0 auto");
+  });
+});
+
+describe("composer submit-reset path", () => {
+  it("resets textarea height immediately in handleSubmit after setComposer", () => {
+    const handleSubmitBlock = pageSource.slice(
+      pageSource.indexOf("async function handleSubmit("),
+      pageSource.indexOf("async function handleComposerPaste("),
+    );
+
+    const setComposerLine = handleSubmitBlock.indexOf('setComposer("")');
+    expect(setComposerLine).toBeGreaterThanOrEqual(0);
+
+    const resetWindow = handleSubmitBlock.slice(setComposerLine, setComposerLine + 120);
+    expect(resetWindow).toContain("resetComposerHeight(composerRef.current)");
   });
 });
