@@ -9,6 +9,7 @@ it("uses a neutral PDF palette", async () => {
 
   expect(source).not.toMatch(/#174f74|#286f9c/i);
 });
+
 it("parses a Markdown pipe table as a table block", () => {
   expect(
     parsePdfContentBlocks([

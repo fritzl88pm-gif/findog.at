@@ -48,6 +48,13 @@ type AgentStepRow = {
   tools?: unknown;
 };
 
+type DocumentArtifactRow = {
+  id: string;
+  assistant_message_id: number;
+  title: string;
+  filename: string;
+};
+
 function isMissingAgentTraceRelation(error: unknown): boolean {
   if (!error || typeof error !== "object") {
     return false;
@@ -59,6 +66,17 @@ function isMissingAgentTraceRelation(error: unknown): boolean {
     return false;
   }
   return code === "42P01" || code === "PGRST205";
+}
+
+function isMissingDocumentArtifactRelation(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const databaseError = error as DatabaseError;
+  const code = typeof databaseError.code === "string" ? databaseError.code : "";
+  const message = typeof databaseError.message === "string" ? databaseError.message : "";
+  return (code === "42P01" || code === "PGRST205")
+    && /document_artifacts/iu.test(message);
 }
 
 function stepFromRow(row: AgentStepRow) {
@@ -111,6 +129,23 @@ export async function GET(
       .order("id", { ascending: true });
     if (messagesError) {
       throw new UserVisibleError("Nachrichten konnten nicht geladen werden.", 503);
+    }
+
+    const { data: storedArtifacts, error: artifactsError } = await supabase
+      .from("document_artifacts")
+      .select("id,assistant_message_id,title,filename")
+      .eq("conversation_id", conversationId)
+      .eq("client_id", user.id)
+      .eq("kind", "pdf")
+      .order("created_at", { ascending: true });
+    if (artifactsError && !isMissingDocumentArtifactRelation(artifactsError)) {
+      throw new UserVisibleError("Dokumente konnten nicht geladen werden.", 503);
+    }
+    const artifactsByMessage = new Map<number, Array<{ id: string; title: string; filename: string }>>();
+    for (const artifact of (artifactsError ? [] : (storedArtifacts ?? [])) as DocumentArtifactRow[]) {
+      const current = artifactsByMessage.get(artifact.assistant_message_id) ?? [];
+      current.push({ id: artifact.id, title: artifact.title, filename: artifact.filename });
+      artifactsByMessage.set(artifact.assistant_message_id, current);
     }
 
     const { data: runs, error: runsError } = await supabase
@@ -175,6 +210,7 @@ export async function GET(
         const storedSteps = stepsByMessage.get(message.id);
         const pdfOfferStep = storedSteps?.find((step) => step.type === "pdf_offer");
         const steps = storedSteps?.filter((step) => step.type !== "pdf_offer");
+        const pdfArtifacts = artifactsByMessage.get(message.id);
         const agentRun = message.role === "assistant" ? runByMessage.get(message.id) : undefined;
         return {
           id: message.id,
@@ -190,6 +226,7 @@ export async function GET(
             },
           } : {}),
           ...(pdfOfferStep ? { pdfOffer: { title: pdfOfferStep.content } } : {}),
+          ...(pdfArtifacts?.length ? { pdfArtifacts } : {}),
           ...(steps?.length ? { steps } : {}),
         };
       }),

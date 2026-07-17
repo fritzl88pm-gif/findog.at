@@ -29,6 +29,7 @@ import { UserVisibleError } from "@/lib/errors";
 import * as chatRoute from "./route";
 
 const { POST } = chatRoute;
+const CHAT_REQUEST_TIMEOUT_MS = 600_000;
 
 
 vi.mock("@/lib/admin-auth", () => ({
@@ -256,6 +257,7 @@ describe("POST /api/chat uploads", () => {
       answer: "# Aufstellung\n\nVollständiger Dokumentinhalt.",
       steps: [],
       tools: [],
+      status: "completed",
       pdfOffer: { title: "Aufstellung mit Begründungen" },
     });
 
@@ -272,6 +274,43 @@ describe("POST /api/chat uploads", () => {
           content: "Aufstellung mit Begründungen",
         },
       ],
+    }));
+  });
+
+  it("persists generated PDF content before exposing durable download artifacts", async () => {
+    const draft = {
+      id: "55555555-5555-4555-8555-555555555555",
+      title: "Eigenständige Aufstellung",
+      filename: "Eigenstaendige_Aufstellung.pdf",
+      contentMarkdown: "# Eigenständige Aufstellung\n\nAusführlicher Dokumentinhalt.",
+      contentSha256: "a".repeat(64),
+      stichtag: "2024-12-31",
+      provenance: { version: 1, basis: "conversation" },
+    };
+    vi.mocked(runAgent).mockResolvedValueOnce({
+      answer: "Das angeforderte Dokument wurde erstellt.",
+      steps: [],
+      tools: ["create_pdf_document"],
+      status: "completed",
+      pdfArtifacts: [draft],
+    });
+    vi.mocked(persistConversationTurn).mockResolvedValueOnce({
+      assistantMessageId: 11,
+      agentRunId: "44444444-4444-4444-8444-444444444444",
+      pdfArtifacts: [{ id: draft.id, title: draft.title, filename: draft.filename }],
+      artifactsPersisted: true,
+    });
+
+    const response = await POST(jsonRequest(chatPayload()));
+
+    await expect(response.json()).resolves.toMatchObject({
+      answer: "Das angeforderte Dokument wurde erstellt.",
+      status: "completed",
+      pdfArtifacts: [{ id: draft.id, title: draft.title, filename: draft.filename }],
+    });
+    expect(persistConversationTurn).toHaveBeenCalledWith(expect.objectContaining({
+      assistantMessage: "Das angeforderte Dokument wurde erstellt.",
+      pdfArtifacts: [draft],
     }));
   });
 
@@ -430,7 +469,7 @@ describe("POST /api/chat uploads", () => {
     });
     vi.mocked(runAgent).mockImplementationOnce(async () => {
       executionOrder.push("agent");
-      return { answer: "Antwort", steps: [], tools: [] };
+      return { answer: "Antwort", steps: [], tools: [], status: "completed" };
     });
 
     const request = jsonRequest(chatPayload());
@@ -485,7 +524,7 @@ describe("POST /api/chat uploads", () => {
     expect(chatRoute).not.toHaveProperty("maxDuration");
   });
 
-  it("passes unbounded request cancellation to attachment extraction and the agent", async () => {
+  it("passes one finite request deadline to attachment extraction and the agent", async () => {
     const formData = new FormData();
     formData.append("payload", JSON.stringify(chatPayload()));
     formData.append(
@@ -500,13 +539,15 @@ describe("POST /api/chat uploads", () => {
       deadline?: { signal?: AbortSignal; remainingMs?: () => number };
     };
     expect(pdfOptions.deadline?.signal).toBeInstanceOf(AbortSignal);
-    expect(pdfOptions.deadline?.remainingMs?.()).toBe(Number.POSITIVE_INFINITY);
+    expect(pdfOptions.deadline?.remainingMs?.()).toBeGreaterThan(0);
+    expect(pdfOptions.deadline?.remainingMs?.()).toBeLessThanOrEqual(CHAT_REQUEST_TIMEOUT_MS);
 
     const agentOptions = vi.mocked(runAgent).mock.calls[0]?.[0] as {
       deadline?: { signal?: AbortSignal; remainingMs?: () => number };
     };
     expect(agentOptions.deadline?.signal).toBeInstanceOf(AbortSignal);
-    expect(agentOptions.deadline?.remainingMs?.()).toBe(Number.POSITIVE_INFINITY);
+    expect(agentOptions.deadline?.remainingMs?.()).toBeGreaterThan(0);
+    expect(agentOptions.deadline?.remainingMs?.()).toBeLessThanOrEqual(CHAT_REQUEST_TIMEOUT_MS);
   });
 
   it("propagates request aborts to the agent cancellation signal", async () => {
@@ -517,7 +558,7 @@ describe("POST /api/chat uploads", () => {
       await new Promise<void>((resolve) => {
         agentSignal?.addEventListener("abort", () => resolve(), { once: true });
       });
-      return { answer: "Antwort", steps: [], tools: [] };
+      return { answer: "Antwort", steps: [], tools: [], status: "completed" };
     });
 
     const responsePromise = POST(jsonRequest(chatPayload(), requestController.signal));
@@ -561,6 +602,7 @@ describe("POST /api/chat uploads", () => {
       answer: "# Aufstellung\n\nVollständiger Dokumentinhalt.",
       steps: [],
       tools: [],
+      status: "completed",
       pdfOffer: { title: "Aufstellung mit Begründungen" },
     });
 
@@ -573,6 +615,43 @@ describe("POST /api/chat uploads", () => {
     expect(events.at(-1)).toMatchObject({
       type: "final",
       pdfOffer: { title: "Aufstellung mit Begründungen" },
+    });
+  });
+
+  it("includes only persisted PDF artifacts in the final stream event", async () => {
+    const draft = {
+      id: "55555555-5555-4555-8555-555555555555",
+      title: "Dynamisches Dokument",
+      filename: "Dynamisches_Dokument.pdf",
+      contentMarkdown: "# Dynamisches Dokument\n\nEigenständiger Inhalt.",
+      contentSha256: "b".repeat(64),
+      stichtag: null,
+      provenance: { version: 1, basis: "conversation" },
+    };
+    vi.mocked(runAgent).mockResolvedValueOnce({
+      answer: "Das Dokument wurde erstellt.",
+      steps: [],
+      tools: ["create_pdf_document"],
+      status: "completed",
+      pdfArtifacts: [draft],
+    });
+    vi.mocked(persistConversationTurn).mockResolvedValueOnce({
+      assistantMessageId: 11,
+      agentRunId: "44444444-4444-4444-8444-444444444444",
+      pdfArtifacts: [{ id: draft.id, title: draft.title, filename: draft.filename }],
+      artifactsPersisted: true,
+    });
+
+    const response = await POST(streamingJsonRequest(chatPayload()));
+    const events = (await response.text())
+      .split("\n")
+      .map((line) => parseChatStreamLine(line))
+      .filter((event) => event !== null);
+
+    expect(events.at(-1)).toMatchObject({
+      type: "final",
+      status: "completed",
+      pdfArtifacts: [{ id: draft.id, title: draft.title, filename: draft.filename }],
     });
   });
 

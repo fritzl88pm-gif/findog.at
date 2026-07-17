@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { AgentStep } from "./agent-steps";
+import type { AgentStep, PdfArtifactDraft, PdfArtifactOffer } from "./agent-steps";
 import { summarizeStepText } from "./agent-steps";
 import { UserVisibleError } from "./errors";
 import type { ModelRunProvenance } from "./model-settings";
@@ -138,6 +138,13 @@ function sanitizeSteps(agentRunId: string, steps: AgentStep[]): PersistedStep[] 
   }));
 }
 
+export type PersistedConversationTurn = {
+  assistantMessageId: number;
+  agentRunId: string;
+  pdfArtifacts: PdfArtifactOffer[];
+  artifactsPersisted: boolean;
+};
+
 export async function persistConversationTurn(options: {
   conversationId?: string;
   clientId?: string;
@@ -146,9 +153,10 @@ export async function persistConversationTurn(options: {
   title?: string;
   modelProvenance?: ModelRunProvenance;
   steps?: AgentStep[];
+  pdfArtifacts?: PdfArtifactDraft[];
   startedAt?: string;
   completedAt?: string;
-}): Promise<void> {
+}): Promise<PersistedConversationTurn | null> {
   const supabase = getSupabaseServerClient();
   if (
     !supabase
@@ -157,10 +165,10 @@ export async function persistConversationTurn(options: {
     || !options.userMessage
     || !options.modelProvenance
   ) {
-    return;
+    return null;
   }
   if (!isUuid(options.conversationId) || !isUuid(options.clientId)) {
-    return;
+    return null;
   }
 
   const { data: existingConversation, error: lookupError } = await supabase
@@ -170,11 +178,11 @@ export async function persistConversationTurn(options: {
     .maybeSingle();
   if (lookupError) {
     console.error("Supabase conversation ownership check failed");
-    return;
+    return null;
   }
   if (!isConversationOwnedByClient(existingConversation?.client_id, options.clientId)) {
     console.error("Supabase conversation ownership mismatch");
-    return;
+    return null;
   }
 
   const now = options.completedAt ?? new Date().toISOString();
@@ -193,7 +201,7 @@ export async function persistConversationTurn(options: {
     );
     if (conversationError) {
       console.error("Supabase conversation persistence failed");
-      return;
+      return null;
     }
   } else {
     const { error: conversationError } = await supabase
@@ -203,7 +211,7 @@ export async function persistConversationTurn(options: {
       .eq("client_id", options.clientId);
     if (conversationError) {
       console.error("Supabase conversation persistence failed");
-      return;
+      return null;
     }
   }
 
@@ -233,14 +241,14 @@ export async function persistConversationTurn(options: {
     .select("id,role");
   if (messageError) {
     console.error("Supabase message persistence failed");
-    return;
+    return null;
   }
 
   const assistantMessageId = (insertedMessages ?? []).find(
     (message) => message.role === "assistant",
   )?.id;
   if (!assistantMessageId) {
-    return;
+    return null;
   }
 
   const { data: agentRun, error: runError } = await supabase
@@ -259,15 +267,62 @@ export async function persistConversationTurn(options: {
     if (!isMissingAgentTraceRelation(runError, "agent_runs")) {
       console.error("Supabase agent run persistence failed");
     }
-    return;
+    return null;
   }
 
   const steps = sanitizeSteps(agentRun.id, options.steps ?? []);
-  if (steps.length === 0) {
-    return;
+  if (steps.length > 0) {
+    const { error: stepsError } = await supabase.from("agent_steps").insert(steps);
+    if (stepsError && !isMissingAgentTraceRelation(stepsError, "agent_steps")) {
+      console.error("Supabase agent step persistence failed");
+    }
   }
-  const { error: stepsError } = await supabase.from("agent_steps").insert(steps);
-  if (stepsError && !isMissingAgentTraceRelation(stepsError, "agent_steps")) {
-    console.error("Supabase agent step persistence failed");
+
+  const artifactDrafts = (options.pdfArtifacts ?? []).slice(0, 3);
+  if (artifactDrafts.length === 0) {
+    return {
+      assistantMessageId,
+      agentRunId: agentRun.id,
+      pdfArtifacts: [],
+      artifactsPersisted: true,
+    };
   }
+
+  const { data: insertedArtifacts, error: artifactsError } = await supabase
+    .from("document_artifacts")
+    .insert(artifactDrafts.map((artifact) => ({
+      id: artifact.id,
+      conversation_id: options.conversationId,
+      client_id: options.clientId,
+      assistant_message_id: assistantMessageId,
+      agent_run_id: agentRun.id,
+      kind: "pdf",
+      title: artifact.title,
+      filename: artifact.filename,
+      content_markdown: artifact.contentMarkdown,
+      content_sha256: artifact.contentSha256,
+      stichtag: artifact.stichtag,
+      provenance: artifact.provenance,
+    })))
+    .select("id,title,filename");
+  if (artifactsError) {
+    console.error("Supabase document artifact persistence failed");
+    return {
+      assistantMessageId,
+      agentRunId: agentRun.id,
+      pdfArtifacts: [],
+      artifactsPersisted: false,
+    };
+  }
+
+  return {
+    assistantMessageId,
+    agentRunId: agentRun.id,
+    pdfArtifacts: (insertedArtifacts ?? []).map((artifact) => ({
+      id: artifact.id,
+      title: artifact.title,
+      filename: artifact.filename,
+    })),
+    artifactsPersisted: (insertedArtifacts ?? []).length === artifactDrafts.length,
+  };
 }

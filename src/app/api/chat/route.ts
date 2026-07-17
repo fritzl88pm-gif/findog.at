@@ -30,16 +30,17 @@ import {
 } from "@/lib/model-settings";
 import { persistConversationTurn, resolveConversationContextForClient } from "@/lib/persistence";
 import { runAgent, type AttachmentContext } from "@/lib/agent";
-import type { AgentStep, PdfOffer } from "@/lib/agent-steps";
+import type { AgentStep, PdfArtifactDraft, PdfArtifactOffer, PdfOffer } from "@/lib/agent-steps";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getServerMcpBearerToken } from "@/lib/mcp/server-token";
 import { CHAT_STREAM_CONTENT_TYPE, encodeChatStreamEvent } from "@/lib/chat-stream";
 import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
-import { createUnboundedDeadline, type Deadline } from "@/lib/deadline";
+import { createDeadline, type Deadline } from "@/lib/deadline";
 import { fallbackConversationTitle, generateConversationTitle } from "@/lib/conversation-title";
 import { recordAdminRequest } from "@/lib/admin-request-history";
 
 export const runtime = "nodejs";
+const CHAT_REQUEST_TIMEOUT_MS = 600_000;
 
 type ChatRequestBody = {
   messages?: unknown;
@@ -100,6 +101,31 @@ function scheduleConversationPersistence(options: Parameters<typeof persistConve
       console.error("Chat persistence failed", safeErrorDetails(error));
     });
   });
+}
+
+async function persistPdfArtifacts(options: {
+  persistence: Parameters<typeof persistConversationTurn>[0];
+  drafts: PdfArtifactDraft[];
+}): Promise<{ offers: PdfArtifactOffer[]; persisted: boolean }> {
+  try {
+    const result = await persistConversationTurn({
+      ...options.persistence,
+      pdfArtifacts: options.drafts,
+    });
+    return {
+      offers: result?.artifactsPersisted ? result.pdfArtifacts : [],
+      persisted: Boolean(result?.artifactsPersisted),
+    };
+  } catch (error) {
+    console.error("PDF artifact persistence failed", safeErrorDetails(error));
+    return { offers: [], persisted: false };
+  }
+}
+
+function answerWithPdfPersistenceNotice(answer: string, persisted: boolean): string {
+  return persisted
+    ? answer
+    : `${answer}\n\nDas angeforderte PDF konnte leider nicht dauerhaft gespeichert werden. Bitte versuche es erneut.`;
 }
 
 function stepsWithPersistedPdfOffer(steps: AgentStep[], pdfOffer?: PdfOffer): AgentStep[] {
@@ -399,7 +425,7 @@ async function prepareAttachmentContexts(
 }
 
 export async function POST(request: Request) {
-  const deadline = createUnboundedDeadline({ parentSignal: request.signal });
+  const deadline = createDeadline(CHAT_REQUEST_TIMEOUT_MS, { parentSignal: request.signal });
   let disposeDeadline = true;
 
   try {
@@ -507,20 +533,7 @@ export async function POST(request: Request) {
               titlePromise,
             ]);
             const completedAt = new Date().toISOString();
-
-            send({
-              type: "final",
-              answer: agentResult.answer,
-              ...(title ? { title } : {}),
-              steps: agentResult.steps,
-              tools: agentResult.tools,
-              ...(agentResult.pdfOffer ? { pdfOffer: agentResult.pdfOffer } : {}),
-              conversationId,
-              model,
-              availableModels,
-            });
-
-            scheduleConversationPersistence({
+            const persistence = {
               conversationId,
               clientId: authenticatedUser.id,
               userMessage: latestUserMessage?.content,
@@ -530,7 +543,34 @@ export async function POST(request: Request) {
               steps: stepsWithPersistedPdfOffer(agentResult.steps, agentResult.pdfOffer),
               startedAt,
               completedAt,
+            };
+            const artifactResult = agentResult.pdfArtifacts?.length
+              ? await persistPdfArtifacts({ persistence, drafts: agentResult.pdfArtifacts })
+              : null;
+            const finalAnswer = artifactResult
+              ? answerWithPdfPersistenceNotice(agentResult.answer, artifactResult.persisted)
+              : agentResult.answer;
+            const agentStatus = agentResult.status === "partial" || artifactResult?.persisted === false
+              ? "partial"
+              : "completed";
+
+            send({
+              type: "final",
+              answer: finalAnswer,
+              ...(title ? { title } : {}),
+              steps: agentResult.steps,
+              tools: agentResult.tools,
+              status: agentStatus,
+              ...(agentResult.pdfOffer ? { pdfOffer: agentResult.pdfOffer } : {}),
+              ...(artifactResult?.offers.length ? { pdfArtifacts: artifactResult.offers } : {}),
+              conversationId,
+              model,
+              availableModels,
             });
+
+            if (!artifactResult) {
+              scheduleConversationPersistence(persistence);
+            }
           } catch (streamError) {
             if (!(streamError instanceof UserVisibleError)) {
               console.error("Chat stream failed", safeErrorDetails(streamError));
@@ -572,8 +612,7 @@ export async function POST(request: Request) {
       titlePromise,
     ]);
     const completedAt = new Date().toISOString();
-
-    scheduleConversationPersistence({
+    const persistence = {
       conversationId,
       clientId: authenticatedUser.id,
       userMessage: latestUserMessage?.content,
@@ -583,14 +622,28 @@ export async function POST(request: Request) {
       steps: stepsWithPersistedPdfOffer(agentResult.steps, agentResult.pdfOffer),
       startedAt,
       completedAt,
-    });
+    };
+    const artifactResult = agentResult.pdfArtifacts?.length
+      ? await persistPdfArtifacts({ persistence, drafts: agentResult.pdfArtifacts })
+      : null;
+    if (!artifactResult) {
+      scheduleConversationPersistence(persistence);
+    }
+    const finalAnswer = artifactResult
+      ? answerWithPdfPersistenceNotice(agentResult.answer, artifactResult.persisted)
+      : agentResult.answer;
+    const agentStatus = agentResult.status === "partial" || artifactResult?.persisted === false
+      ? "partial"
+      : "completed";
 
     return NextResponse.json({
-      answer: agentResult.answer,
+      answer: finalAnswer,
       ...(title ? { title } : {}),
       steps: agentResult.steps,
       tools: agentResult.tools,
+      status: agentStatus,
       ...(agentResult.pdfOffer ? { pdfOffer: agentResult.pdfOffer } : {}),
+      ...(artifactResult?.offers.length ? { pdfArtifacts: artifactResult.offers } : {}),
       conversationId,
       model,
       availableModels,

@@ -465,4 +465,12 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "",
   "Fehlt für eine tragende Normaussage eine nachvollziehbare RIS-/EVI-Provenienz oder eine zeitlich passende Fassung, ist sie als nicht ausreichend abgesichert zu kennzeichnen und darf nicht entscheidungstragend verwendet werden. Für Entscheidungen ist stattdessen eine konkrete amtliche BFG-/Findok-Provenienz samt Fundstelle erforderlich. Hochgeladene Dokumente belegen nur ihren dokumentierten Inhalt bzw. Sachverhalt, nicht die Rechtslage.",
   "",
+  "---",
+  "# PDF-DOKUMENTE",
+  "Erstelle ein PDF-Dokument ausschließlich auf ausdrücklichen Wunsch des Nutzers. Eine bloße Erwähnung von PDF, eine Frage zur PDF-Funktion oder eine normale Fachfrage löst keine PDF-Erstellung aus.",
+  "Nutze dafür den von der Anwendung bereitgestellten PDF-Download und erzeuge den vollständigen, druckfertigen Dokumentinhalt als eigenständiges Dokument; antworte nie nur mit einer Zusage oder mit dem bloßen Hinweis, die sichtbare Chatantwort werde als PDF gerendert.",
+  "Eine bereits erstellte Antwort, Aufstellung, Übersicht oder Ausarbeitung darf auf ausdrücklichen Wunsch aus dem Gesprächskontext als PDF-Dokument neu gegliedert und vollständig ausgearbeitet werden, ohne unveränderte Rechtsinhalte erneut zu recherchieren.",
+  "Verlangt der Nutzer neue, ergänzte, aktualisierte oder anderweitig geänderte Rechtsinhalte, ist vor der PDF-Erstellung der normale Rechercheablauf einzuhalten. Stichtag, Normfassung, Quellenart und Provenienz gelten für den Dokumentinhalt uneingeschränkt.",
+  "Erzeuge mehrere PDF-Dokumente nur auf ausdrücklichen Wunsch und höchstens drei pro Antwort. Behaupte einen PDF-Download nur, wenn diese Funktion von der Anwendung tatsächlich bereitgestellt wird.",
+  "",
 ].join("\n");

@@ -1,4 +1,4 @@
-import type { AgentStep, PdfOffer } from "./agent-steps";
+import type { AgentStep, PdfArtifactOffer, PdfOffer } from "./agent-steps";
 
 export const CHAT_STREAM_CONTENT_TYPE = "application/x-ndjson";
 
@@ -10,7 +10,9 @@ export type ChatStreamEvent =
       title?: string;
       steps: AgentStep[];
       tools: string[];
+      status: "completed" | "partial";
       pdfOffer?: PdfOffer;
+      pdfArtifacts?: PdfArtifactOffer[];
       conversationId: string;
       model: string;
       availableModels: readonly string[];
@@ -60,6 +62,23 @@ function isPdfOffer(value: unknown): value is PdfOffer {
     && Object.keys(value).length === 1;
 }
 
+function isPdfArtifactOffer(value: unknown): value is PdfArtifactOffer {
+  return isRecord(value)
+    && typeof value.id === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value.id)
+    && typeof value.title === "string"
+    && value.title.trim().length > 0
+    && value.title.length <= 160
+    && typeof value.filename === "string"
+    && value.filename.trim().length > 0
+    && value.filename.length <= 180
+    && Object.keys(value).every((key) => key === "id" || key === "title" || key === "filename");
+}
+
+function isPdfArtifactOfferArray(value: unknown): value is PdfArtifactOffer[] {
+  return Array.isArray(value) && value.length <= 3 && value.every(isPdfArtifactOffer);
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
@@ -100,7 +119,9 @@ export function parseChatStreamLine(line: string): ChatStreamEvent | null {
       !Array.isArray(parsed.steps) ||
       !parsed.steps.every(isAgentStep) ||
       !isStringArray(parsed.tools) ||
+      (parsed.status !== "completed" && parsed.status !== "partial") ||
       (parsed.pdfOffer !== undefined && !isPdfOffer(parsed.pdfOffer)) ||
+      (parsed.pdfArtifacts !== undefined && !isPdfArtifactOfferArray(parsed.pdfArtifacts)) ||
       typeof parsed.conversationId !== "string" ||
       typeof parsed.model !== "string" ||
       !isStringArray(parsed.availableModels)
@@ -113,7 +134,9 @@ export function parseChatStreamLine(line: string): ChatStreamEvent | null {
       ...(typeof parsed.title === "string" ? { title: parsed.title } : {}),
       steps: parsed.steps,
       tools: parsed.tools,
+      status: parsed.status,
       ...(parsed.pdfOffer ? { pdfOffer: parsed.pdfOffer } : {}),
+      ...(parsed.pdfArtifacts ? { pdfArtifacts: parsed.pdfArtifacts } : {}),
       conversationId: parsed.conversationId,
       model: parsed.model,
       availableModels: parsed.availableModels,

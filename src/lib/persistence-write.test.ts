@@ -36,6 +36,15 @@ function persistenceClient(existingConversation: { client_id: string; title: str
   });
   const runInsert = vi.fn().mockReturnValue({ select: vi.fn().mockReturnValue({ single: runSingle }) });
   const stepsInsert = vi.fn().mockResolvedValue({ error: null });
+  const artifactsSelect = vi.fn().mockResolvedValue({
+    data: [{
+      id: "55555555-5555-4555-8555-555555555555",
+      title: "Aufstellung",
+      filename: "Aufstellung.pdf",
+    }],
+    error: null,
+  });
+  const artifactsInsert = vi.fn().mockReturnValue({ select: artifactsSelect });
 
   const from = vi.fn((table: string) => {
     if (table === "conversations") {
@@ -47,6 +56,9 @@ function persistenceClient(existingConversation: { client_id: string; title: str
     if (table === "agent_runs") {
       return { insert: runInsert };
     }
+    if (table === "document_artifacts") {
+      return { insert: artifactsInsert };
+    }
     return { insert: stepsInsert };
   });
 
@@ -57,6 +69,7 @@ function persistenceClient(existingConversation: { client_id: string; title: str
     messagesInsert,
     runInsert,
     stepsInsert,
+    artifactsInsert,
   };
 }
 
@@ -159,6 +172,54 @@ describe("persistConversationTurn", () => {
 
     expect(fake.upsert).not.toHaveBeenCalled();
     expect(fake.update).toHaveBeenCalledWith({ updated_at: expect.any(String) });
+  });
+
+  it("stores PDF document content with message, run, cutoff, integrity hash, and provenance", async () => {
+    const fake = persistenceClient({ client_id: clientId, title: "Bestehender Titel" });
+    vi.mocked(getSupabaseServerClient).mockReturnValue(fake.client as never);
+    const artifact = {
+      id: "55555555-5555-4555-8555-555555555555",
+      title: "Aufstellung",
+      filename: "Aufstellung.pdf",
+      contentMarkdown: "# Aufstellung\n\nEigenständiger Inhalt.",
+      contentSha256: "a".repeat(64),
+      stichtag: "2024-12-31",
+      provenance: { version: 1, basis: "conversation" },
+    };
+
+    const result = await persistConversationTurn({
+      conversationId,
+      clientId,
+      userMessage: "Als PDF, bitte.",
+      assistantMessage: "Das Dokument wurde erstellt.",
+      modelProvenance: {
+        model: "deepseek-v4-pro",
+        provider: "deepseek",
+        upstreamModel: "deepseek-v4-pro",
+        reasoning: "high",
+        settingsRevision: 12,
+        settingsSource: "database",
+      },
+      pdfArtifacts: [artifact],
+    });
+
+    expect(fake.artifactsInsert).toHaveBeenCalledWith([expect.objectContaining({
+      id: artifact.id,
+      conversation_id: conversationId,
+      client_id: clientId,
+      assistant_message_id: 2,
+      agent_run_id: "33333333-3333-4333-8333-333333333333",
+      content_markdown: artifact.contentMarkdown,
+      content_sha256: artifact.contentSha256,
+      stichtag: "2024-12-31",
+      provenance: artifact.provenance,
+    })]);
+    expect(result).toEqual({
+      assistantMessageId: 2,
+      agentRunId: "33333333-3333-4333-8333-333333333333",
+      pdfArtifacts: [{ id: artifact.id, title: artifact.title, filename: artifact.filename }],
+      artifactsPersisted: true,
+    });
   });
 
   it.each([

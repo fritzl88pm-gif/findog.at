@@ -30,7 +30,7 @@ import {
 } from "@/lib/chat/settings";
 import { ellipsizeFilename } from "@/lib/attachment-names";
 import { clipboardImageFiles } from "@/lib/chat/clipboard-images";
-import type { AgentStep, PdfOffer } from "@/lib/agent-steps";
+import type { AgentStep, PdfArtifactOffer, PdfOffer } from "@/lib/agent-steps";
 import { agentStepDisplayLabel } from "@/lib/agent-step-display";
 import { AGENT_PLAN_ITEMS, completedAgentPlanItemCount } from "@/lib/agent-plan";
 import { parseRichAnswer, type RichBlock, type RichInline } from "@/lib/answer-rendering";
@@ -87,6 +87,7 @@ type ChatMessage = {
   steps?: AgentStep[];
   agentRun?: AgentRunMetadata;
   pdfOffer?: PdfOffer;
+  pdfArtifacts?: PdfArtifactOffer[];
 };
 
 type PreparedChatRequest = {
@@ -127,7 +128,9 @@ type ChatResponsePayload = {
   answer?: unknown;
   error?: unknown;
   steps?: unknown;
+  status?: unknown;
   pdfOffer?: unknown;
+  pdfArtifacts?: unknown;
   conversationId?: unknown;
   title?: unknown;
 };
@@ -323,7 +326,7 @@ function normalizeAgentSteps(value: unknown): AgentStep[] {
       return [];
     }
 
-    if (item.type === "pdf_context" || item.type === "attachment_context") {
+    if (item.type === "pdf_context" || item.type === "attachment_context" || item.type === "pdf_offer") {
       return [{ type: item.type, title: item.title, content: item.content }];
     }
     if (item.type === "plan") {
@@ -397,6 +400,31 @@ function normalizePdfOffer(value: unknown): PdfOffer | undefined {
   return { title: item.title.trim() };
 }
 
+function normalizePdfArtifacts(value: unknown): PdfArtifactOffer[] {
+  if (!Array.isArray(value) || value.length > 3) {
+    return [];
+  }
+  return value.flatMap((candidate): PdfArtifactOffer[] => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      return [];
+    }
+    const item = candidate as Record<string, unknown>;
+    if (
+      typeof item.id !== "string"
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(item.id)
+      || typeof item.title !== "string"
+      || !item.title.trim()
+      || item.title.length > 160
+      || typeof item.filename !== "string"
+      || !/^[A-Za-z0-9_]+\.pdf$/u.test(item.filename)
+      || item.filename.length > 100
+    ) {
+      return [];
+    }
+    return [{ id: item.id, title: item.title.trim(), filename: item.filename }];
+  });
+}
+
 function normalizeMessages(value: unknown): ChatMessage[] {
   if (!Array.isArray(value)) {
     return [];
@@ -414,6 +442,7 @@ function normalizeMessages(value: unknown): ChatMessage[] {
     const steps = item.role === "assistant" ? normalizeAgentSteps(item.steps) : [];
     const agentRun = item.role === "assistant" ? normalizeAgentRun(item.agentRun) : undefined;
     const pdfOffer = item.role === "assistant" ? normalizePdfOffer(item.pdfOffer) : undefined;
+    const pdfArtifacts = item.role === "assistant" ? normalizePdfArtifacts(item.pdfArtifacts) : [];
 
     return [
       {
@@ -422,6 +451,7 @@ function normalizeMessages(value: unknown): ChatMessage[] {
         createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString(),
         ...(agentRun ? { agentRun } : {}),
         ...(pdfOffer ? { pdfOffer } : {}),
+        ...(pdfArtifacts.length ? { pdfArtifacts } : {}),
         ...(steps.length > 0 ? { steps } : {}),
       },
     ];
@@ -918,7 +948,9 @@ async function readChatStream(
     finalPayload = {
       answer: event.answer,
       steps: event.steps,
+      status: event.status,
       ...(event.pdfOffer ? { pdfOffer: event.pdfOffer } : {}),
+      ...(event.pdfArtifacts ? { pdfArtifacts: event.pdfArtifacts } : {}),
       conversationId: event.conversationId,
       ...(event.title ? { title: event.title } : {}),
     };
@@ -3653,6 +3685,7 @@ export default function Home() {
 
       const steps = normalizeAgentSteps(payload.steps);
       const pdfOffer = normalizePdfOffer(payload.pdfOffer);
+      const pdfArtifacts = normalizePdfArtifacts(payload.pdfArtifacts);
       setMessages([
         ...request.messages,
         {
@@ -3661,6 +3694,7 @@ export default function Home() {
           createdAt: new Date().toISOString(),
           ...(steps.length > 0 ? { steps } : {}),
           ...(pdfOffer ? { pdfOffer } : {}),
+          ...(pdfArtifacts.length ? { pdfArtifacts } : {}),
         },
       ]);
     } catch (caughtError) {
@@ -3755,7 +3789,64 @@ export default function Home() {
 
     await sendPreparedChatRequest(lastFailedRequest.request, accessToken);
   }
-  async function downloadAssistantPdf(message: ChatMessage, messageIndex: number) {
+  async function downloadPdfArtifact(artifact: PdfArtifactOffer, messageIndex: number) {
+    if (downloadingPdfMessageIndex !== null) {
+      return;
+    }
+    if (!supabase || !user) {
+      setError("Bitte zuerst anmelden.");
+      return;
+    }
+
+    setError("");
+    setDownloadingPdfMessageIndex(messageIndex);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) {
+        throw new Error("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+      }
+      setSession(sessionData.session);
+
+      const response = await fetch(`/api/documents/pdf/${encodeURIComponent(artifact.id)}`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Das PDF konnte nicht erstellt werden.",
+        );
+      }
+      if (!response.headers.get("content-type")?.toLowerCase().startsWith("application/pdf")) {
+        throw new Error("Die PDF-Antwort war ungültig. Bitte erneut versuchen.");
+      }
+
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const filename = /filename="([A-Za-z0-9_.-]+\.pdf)"/.exec(disposition)?.[1]
+        ?? artifact.filename;
+      const downloadUrl = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = filename;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+    } catch (downloadError) {
+      setError(
+        downloadError instanceof Error
+          ? downloadError.message
+          : "Das PDF konnte nicht erstellt werden.",
+      );
+    } finally {
+      setDownloadingPdfMessageIndex(null);
+    }
+  }
+
+  async function downloadLegacyAssistantPdf(message: ChatMessage, messageIndex: number) {
     if (downloadingPdfMessageIndex !== null) {
       return;
     }
@@ -5349,19 +5440,35 @@ export default function Home() {
                   ) : (
                     renderUserMessageContent(message.content)
                   )}
-                  {message.role === "assistant" && message.pdfOffer ? (
+                  {message.role === "assistant" && message.pdfArtifacts?.length ? (
                     <div className="pdf-download-row">
-                      <button
-                        className="secondary-button compact-button pdf-download-button"
-                        type="button"
-                        onClick={() => void downloadAssistantPdf(message, index)}
-                        disabled={downloadingPdfMessageIndex !== null}
-                        aria-label="Antwort von Fred als PDF herunterladen"
-                      >
-                        PDF herunterladen
-                      </button>
+                      {message.pdfArtifacts.map((artifact) => (
+                        <button
+                          key={artifact.id}
+                          className="secondary-button compact-button pdf-download-button"
+                          type="button"
+                          onClick={() => void downloadPdfArtifact(artifact, index)}
+                          disabled={downloadingPdfMessageIndex !== null}
+                          aria-label={`${artifact.title} als PDF herunterladen`}
+                        >
+                          {artifact.title} herunterladen
+                        </button>
+                      ))}
                     </div>
                   ) : null}
+                  {message.role === "assistant" && message.pdfOffer ? (
+                      <div className="pdf-download-row">
+                        <button
+                          className="secondary-button compact-button pdf-download-button"
+                          type="button"
+                          onClick={() => void downloadLegacyAssistantPdf(message, index)}
+                          disabled={downloadingPdfMessageIndex !== null}
+                          aria-label="Antwort von Fred als PDF herunterladen"
+                        >
+                          PDF herunterladen
+                        </button>
+                      </div>
+                    ) : null}
                   {message.role === "assistant" && findNearestPrecedingUserMessage(messages, index) ? (
                     <div className="feedback-controls">
                       <button

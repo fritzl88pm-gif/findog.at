@@ -94,9 +94,19 @@ describe("GET /api/conversations/:conversationId", () => {
       ],
       error: null,
     });
+    const artifactsQuery = queryResult({
+      data: [{
+        id: "55555555-5555-4555-8555-555555555555",
+        assistant_message_id: 11,
+        title: "Eigenständige Aufstellung",
+        filename: "Eigenstaendige_Aufstellung.pdf",
+      }],
+      error: null,
+    });
     const select = vi.fn((table: string) => {
       if (table === "conversations") return conversationQuery;
       if (table === "messages") return messagesQuery;
+      if (table === "document_artifacts") return artifactsQuery;
       if (table === "agent_runs") return runsQuery;
       return stepsQuery;
     });
@@ -137,6 +147,11 @@ describe("GET /api/conversations/:conversationId", () => {
     expect(payload.messages[1].pdfOffer).toEqual({
       title: "Unterhaltsabsetzbetrag 2024",
     });
+    expect(payload.messages[1].pdfArtifacts).toEqual([{
+      id: "55555555-5555-4555-8555-555555555555",
+      title: "Eigenständige Aufstellung",
+      filename: "Eigenstaendige_Aufstellung.pdf",
+    }]);
     expect(conversationQuery.eq).toHaveBeenCalledWith(
       "client_id",
       "11111111-1111-4111-8111-111111111111",
@@ -181,10 +196,18 @@ describe("GET /api/conversations/:conversationId", () => {
         message: 'relation "public.agent_runs" does not exist',
       },
     });
+    const artifactsQuery = queryResult({
+      data: null,
+      error: {
+        code: "42P01",
+        message: 'relation "public.document_artifacts" does not exist',
+      },
+    });
     const from = vi.fn((table: string) => ({
       select: vi.fn(() => {
         if (table === "conversations") return conversationQuery;
         if (table === "messages") return messagesQuery;
+        if (table === "document_artifacts") return artifactsQuery;
         return runsQuery;
       }),
     }));

@@ -20,7 +20,7 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
 
   it("includes internal organization and business allocation questions in scope", () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain(
-      "Interne Organisations- und Geschäftsverteilungsfragen gehören ebenfalls zu deinem Zuständigkeitsbereich.",
+      "Interne Organisations- und Geschäftsverteilungsfragen sowie einfache unterstützende Arbeitsaufgaben",
     );
     expect(DEFAULT_SYSTEM_PROMPT).toContain(
       "Interne Organisations- und Geschäftsverteilungsfragen sind primär in `Arbeitsbehelfe und interne Dokumente` zu recherchieren.",
@@ -33,35 +33,23 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
   it("tells the assistant to fulfill explicit PDF document requests through the available download", () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain("# PDF-DOKUMENTE");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("PDF-Download");
-    expect(DEFAULT_SYSTEM_PROMPT).toContain("vollständige, druckfertige Dokumentinhalt");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("vollständigen, druckfertigen Dokumentinhalt");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("bereits erstellte Antwort, Aufstellung, Übersicht oder Ausarbeitung");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("antworte nie nur mit einer Zusage");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("Behaupte einen PDF-Download nur, wenn diese Funktion von der Anwendung tatsächlich bereitgestellt wird");
   });
 
-  it("contains no raw MCP tool names, no KB UUIDs, no empty parentheses, and no broken source table", () => {
-    // No raw MCP function names
-    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bhybrid_search\b/);
-    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bfaq_search\b/);
-    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bfaq_entries_search\b/);
-    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bwiki_search\b/);
-    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bwiki_read_page\b/);
-    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bwiki_index_view\b/);
-    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\blist_knowledge_bases\b/);
-    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bget_knowledge_base\b/);
-    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\blist_knowledge\b/);
-    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\blist_chunks\b/);
-    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bget_knowledge\b/);
-    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bonly_recommended\b/);
-    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bfirst_priority_tag_ids\b/);
-    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/\bsecond_priority_tag_ids\b/);
+  it("contains the precise current KB tool inventory and intact source table", () => {
+    expect(DEFAULT_SYSTEM_PROMPT).toMatch(/\bhybrid_search\b/);
+    expect(DEFAULT_SYSTEM_PROMPT).toMatch(/\bfaq_search\b/);
+    expect(DEFAULT_SYSTEM_PROMPT).toMatch(/\bwiki_search\b/);
+    expect(DEFAULT_SYSTEM_PROMPT).toMatch(/\blist_knowledge_bases\b/);
     // No empty parentheses placeholders
     expect(DEFAULT_SYSTEM_PROMPT).not.toContain("()");
     // No broken "der Dokumentsuche" prefix
     expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/^der Dokumentsuche/m);
-    // No static KB UUIDs
-    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("e0282ab8");
-    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("7e203a75");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("e0282ab8-b94f-4553-962e-68705201cf9a");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("7e203a75-9e51-4839-afd4-7d24d2e5b033");
     // No stripped "Hermes Memory" sentence — the Hermes reference must be intact
     expect(DEFAULT_SYSTEM_PROMPT).toContain("Hermes Memory");
     expect(DEFAULT_SYSTEM_PROMPT).toMatch(/nichts mit Steuerrecht zu tun/);

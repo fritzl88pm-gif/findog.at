@@ -141,6 +141,7 @@ function pdfSafeText(value: string): string {
     .replace(/\s+([,.;:!?])/g, "$1")
     .trim();
 }
+
 function plainText(value: string): string {
   return pdfSafeText(value
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
@@ -290,7 +291,11 @@ function ChatPdfDocument({ title, content, date }: ChatPdfPayload) {
           {blocks.map((block, index) => {
             if (block.type === "heading") {
               return (
-                <Text key={index} style={block.level <= 2 ? styles.heading2 : styles.heading3}>
+                <Text
+                  key={index}
+                  style={block.level <= 2 ? styles.heading2 : styles.heading3}
+                  minPresenceAhead={64}
+                >
                   {block.text}
                 </Text>
               );
@@ -326,7 +331,11 @@ function ChatPdfDocument({ title, content, date }: ChatPdfPayload) {
               );
 
               return (
-                <View key={index} style={styles.table}>
+                <View
+                  key={index}
+                  style={styles.table}
+                  minPresenceAhead={100}
+                >
                   <View fixed style={[styles.tableRow, styles.tableHeaderRow]} wrap={false}>
                     {block.headers.map((header, cellIndex) => renderCell(header, cellIndex, true))}
                   </View>
