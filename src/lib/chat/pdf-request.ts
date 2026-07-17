@@ -32,7 +32,6 @@ export function isExplicitPdfCreationRequest(userMessage: string): boolean {
   return CLEAR_PDF_EXECUTION_PATTERN.test(request)
     || (!INFORMATION_QUESTION_PATTERN.test(request) && !EXPLANATION_REQUEST_PATTERN.test(request));
 }
-
 /**
  * Recognizes PDF follow-ups that point back to content already present in the
  * conversation. The caller must additionally verify that a preceding assistant

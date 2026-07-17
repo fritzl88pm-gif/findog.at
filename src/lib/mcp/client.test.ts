@@ -77,23 +77,4 @@ describe("McpClient", () => {
     }
     deadline.dispose();
   });
-
-  it.each([
-    [400, 400],
-    [403, 403],
-    [408, 504],
-    [429, 429],
-    [500, 502],
-    [502, 502],
-    [503, 503],
-    [504, 504],
-  ] as const)("preserves the retry semantics of MCP HTTP %i", async (upstreamStatus, exposedStatus) => {
-    vi.mocked(fetch).mockResolvedValueOnce(new Response("upstream error", { status: upstreamStatus }));
-
-    await expect(new McpClient().callTool({
-      token: "mcp-token",
-      name: "hybrid_search",
-      arguments: { query: "Test" },
-    })).rejects.toMatchObject({ status: exposedStatus });
-  });
 });

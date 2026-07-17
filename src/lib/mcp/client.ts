@@ -233,24 +233,8 @@ export class McpClient {
         401,
       );
     }
-    if (response.status === 403) {
-      throw new UserVisibleError(
-        "Datenbankzugang ist für diese Recherche nicht berechtigt.",
-        403,
-      );
-    }
-    if (response.status === 429) {
-      throw new UserVisibleError("Die Datenbank ist derzeit ausgelastet.", 429);
-    }
     if (!response.ok) {
-      const retryStatus = response.status === 503
-        ? 503
-        : response.status === 504 || response.status === 408
-          ? 504
-          : response.status >= 500
-            ? 502
-            : 400;
-      throw new UserVisibleError(`Datenbankfehler HTTP ${response.status}.`, retryStatus);
+      throw new UserVisibleError(`Datenbankfehler HTTP ${response.status}.`, 502);
     }
 
     const payloads = extractJsonPayloads(body);

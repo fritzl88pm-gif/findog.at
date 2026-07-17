@@ -29,7 +29,6 @@ import { UserVisibleError } from "@/lib/errors";
 import * as chatRoute from "./route";
 
 const { POST } = chatRoute;
-const CHAT_REQUEST_TIMEOUT_MS = 600_000;
 
 
 vi.mock("@/lib/admin-auth", () => ({
@@ -524,7 +523,7 @@ describe("POST /api/chat uploads", () => {
     expect(chatRoute).not.toHaveProperty("maxDuration");
   });
 
-  it("passes one finite request deadline to attachment extraction and the agent", async () => {
+  it("passes unbounded request cancellation to attachment extraction and the agent", async () => {
     const formData = new FormData();
     formData.append("payload", JSON.stringify(chatPayload()));
     formData.append(
@@ -539,15 +538,13 @@ describe("POST /api/chat uploads", () => {
       deadline?: { signal?: AbortSignal; remainingMs?: () => number };
     };
     expect(pdfOptions.deadline?.signal).toBeInstanceOf(AbortSignal);
-    expect(pdfOptions.deadline?.remainingMs?.()).toBeGreaterThan(0);
-    expect(pdfOptions.deadline?.remainingMs?.()).toBeLessThanOrEqual(CHAT_REQUEST_TIMEOUT_MS);
+    expect(pdfOptions.deadline?.remainingMs?.()).toBe(Number.POSITIVE_INFINITY);
 
     const agentOptions = vi.mocked(runAgent).mock.calls[0]?.[0] as {
       deadline?: { signal?: AbortSignal; remainingMs?: () => number };
     };
     expect(agentOptions.deadline?.signal).toBeInstanceOf(AbortSignal);
-    expect(agentOptions.deadline?.remainingMs?.()).toBeGreaterThan(0);
-    expect(agentOptions.deadline?.remainingMs?.()).toBeLessThanOrEqual(CHAT_REQUEST_TIMEOUT_MS);
+    expect(agentOptions.deadline?.remainingMs?.()).toBe(Number.POSITIVE_INFINITY);
   });
 
   it("propagates request aborts to the agent cancellation signal", async () => {

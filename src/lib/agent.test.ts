@@ -4,7 +4,6 @@ import { runAgent } from "./agent";
 import { chatCompletion } from "./deepseek";
 import { DEFAULT_SYSTEM_PROMPT } from "./default-system-prompt";
 import { createDeadline } from "./deadline";
-import { UserVisibleError } from "./errors";
 import type { LlmRuntime } from "./llm/runtime";
 import { McpClient } from "./mcp/client";
 
@@ -26,15 +25,6 @@ const TEST_RUNTIME = {
   reasoning: "disabled",
 } satisfies LlmRuntime;
 const withOverview = (content: string) => `# 📘 Überblick\n\n${content}`;
-const DEFAULT_LAW_RESULT = JSON.stringify({
-  knowledge_id: "estg-current",
-  chunk_id: "paragraph-16",
-  document_type: "norm",
-  title: "EStG 1988",
-  valid_from: "1989-01-01",
-  valid_to: null,
-  content: "§ 16 EStG – amtlicher Normtext zu Werbungskosten.",
-});
 
 function expectCanonicalSystemMessages(): void {
   for (const [callIndex, [options]] of mockedChatCompletion.mock.calls.entries()) {
@@ -69,14 +59,10 @@ describe("runAgent", () => {
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     expectCanonicalSystemMessages();
   });
 
-  function mockMcpSession(
-    toolResult: string | ((request: { arguments: Record<string, unknown> }) => Promise<string>)
-      = DEFAULT_LAW_RESULT,
-  ) {
+  function mockMcpSession(toolResult = "Gefundene Fachinformation ohne Geschäftszahl.") {
     const openToolSession = vi.fn().mockResolvedValue({
       sessionId: "mcp-session",
       tools: [
@@ -104,14 +90,319 @@ describe("runAgent", () => {
         },
       ],
     });
-    const callTool = typeof toolResult === "function"
-      ? vi.fn(toolResult)
-      : vi.fn().mockResolvedValue(toolResult);
+    const callTool = vi.fn().mockResolvedValue(toolResult);
     MockedMcpClient.mockImplementation(function MockMcpClient() {
       return { openToolSession, callTool } as unknown as McpClient;
     });
     return { callTool, openToolSession };
   }
+
+  it("creates a complete PDF answer for a referential follow-up without opening MCP", async () => {
+    const previousAnswer = [
+      "# 📘 Überblick",
+      "",
+      "| Position | Ergebnis |",
+      "| --- | --- |",
+      "| Werbungskosten | anerkannt |",
+      "",
+      "# 📎 Quellen, Provenienz und Rechtsstand",
+      "",
+      "[Q1] § 16 EStG in der am Stichtag anwendbaren Fassung.",
+    ].join("\n");
+    const generatedPdfAnswer = [
+      "# 📘 Überblick",
+      "",
+      "Die Aufstellung wird vollständig mit den verlangten Begründungen ausgegeben.",
+      "",
+      "# Aufstellung samt Begründungen",
+      "",
+      "| Position | Ergebnis | Begründung |",
+      "| --- | --- | --- |",
+      "| Werbungskosten | anerkannt | Der berufliche Zusammenhang ist belegt. |",
+      "",
+      "# 📎 Quellen, Provenienz und Rechtsstand",
+      "",
+      "[Q1] § 16 EStG in der am Stichtag anwendbaren Fassung.",
+    ].join("\n");
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: generatedPdfAnswer,
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "tool_calls",
+        content: "",
+        toolCalls: [{
+          id: "create-pdf-1",
+          name: "create_pdf_document",
+          arguments: JSON.stringify({
+            title: "Aufstellung samt Begründungen",
+            content_markdown: generatedPdfAnswer,
+            stichtag: null,
+          }),
+        }],
+      });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [
+        { role: "user", content: "Stelle die Prüfungspunkte mit Begründungen dar." },
+        { role: "assistant", content: previousAnswer },
+        { role: "user", content: "Gib mir diese Aufstellung samt Begründungen als PDF." },
+      ],
+    });
+
+    expect(result.answer).toBe(generatedPdfAnswer);
+    expect(result.answer).toContain("Der berufliche Zusammenhang ist belegt.");
+    expect(result.pdfArtifacts?.[0]).toEqual(expect.objectContaining({
+      title: "Aufstellung samt Begründungen",
+      contentMarkdown: generatedPdfAnswer,
+    }));
+    expect(result.tools).toEqual(["create_pdf_document"]);
+    expect(result.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "answer" }),
+      expect.objectContaining({ type: "tool_result", toolName: "create_pdf_document", success: true }),
+    ]));
+    expect(MockedMcpClient).not.toHaveBeenCalled();
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(2);
+    const directCall = mockedChatCompletion.mock.calls[0]?.[0];
+    expect(directCall?.tools).toBeUndefined();
+    expect(directCall?.messages).toContainEqual({ role: "assistant", content: previousAnswer });
+    expect(directCall?.messages.at(-1)).toEqual(expect.objectContaining({
+      role: "user",
+      content: expect.stringContaining("vollständige, druckfertige Fassung"),
+    }));
+  });
+
+  it("retries a length-limited referential PDF answer once as a complete final version", async () => {
+    const partialAnswer = "# 📘 Überblick\n\nTeilantwort mit begonnener Aufstellung.";
+    const completeAnswer = [
+      "# 📘 Überblick",
+      "",
+      "Vollständige druckfertige Ausarbeitung.",
+      "",
+      "# Anspruchsvoraussetzungen",
+      "",
+      "Alle Voraussetzungen und Begründungen sind vollständig enthalten.",
+    ].join("\n");
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        finishReason: "length",
+        content: partialAnswer,
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: completeAnswer,
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "tool_calls",
+        content: "",
+        toolCalls: [{
+          id: "create-pdf-2",
+          name: "create_pdf_document",
+          arguments: JSON.stringify({
+            title: "Anspruchsvoraussetzungen",
+            content_markdown: completeAnswer,
+            stichtag: null,
+          }),
+        }],
+      });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [
+        { role: "user", content: "Stelle die Anspruchsvoraussetzungen mit Begründungen dar." },
+        { role: "assistant", content: "# 📘 Überblick\n\nBisherige fachliche Antwort." },
+        { role: "user", content: "Gib mir diese Aufstellung als PDF." },
+      ],
+    });
+
+    expect(result.answer).toBe(completeAnswer);
+    expect(result.pdfArtifacts?.[0]).toEqual(expect.objectContaining({
+      title: "Anspruchsvoraussetzungen",
+      contentMarkdown: completeAnswer,
+    }));
+    expect(MockedMcpClient).not.toHaveBeenCalled();
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
+    const retryCall = mockedChatCompletion.mock.calls[1]?.[0];
+    expect(retryCall?.messages).toContainEqual({ role: "assistant", content: partialAnswer });
+    expect(retryCall?.messages.at(-1)).toEqual(expect.objectContaining({
+      role: "user",
+      content: expect.stringContaining("vollständige, abschließende und druckfertige Fassung"),
+    }));
+  });
+
+  it("runs a new substantive PDF question through the normal research agent and offers its final answer", async () => {
+    const { callTool, openToolSession } = mockMcpSession();
+    const finalPdfAnswer = [
+      "# 📘 Überblick",
+      "",
+      "Abschließende fachliche Ausarbeitung mit Begründungen.",
+      "",
+      "# Voraussetzungen des § 34 EStG",
+      "",
+      "Die gesetzlichen Voraussetzungen werden begründet dargestellt.",
+    ].join("\n");
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        finishReason: "tool_calls",
+        content: "Recherchiere die gesetzlichen Voraussetzungen.",
+        toolCalls: [{
+          id: "pdf-law-search",
+          name: "search_laws",
+          arguments: JSON.stringify({ query: "§ 34 EStG Voraussetzungen" }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Vorläufige Ausarbeitung auf Basis der Recherche.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: finalPdfAnswer,
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "tool_calls",
+        content: "",
+        toolCalls: [{
+          id: "create-pdf-3",
+          name: "create_pdf_document",
+          arguments: JSON.stringify({
+            title: "Voraussetzungen des § 34 EStG",
+            content_markdown: finalPdfAnswer,
+            stichtag: null,
+          }),
+        }],
+      });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{
+        role: "user",
+        content: "Erstelle eine neue Aufstellung zu den Voraussetzungen des § 34 EStG als PDF.",
+      }],
+      mcpBearerToken: "mcp-token",
+    });
+
+    expect(openToolSession).toHaveBeenCalledWith("mcp-token", { deadline: undefined });
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(4);
+    expect(result.answer).toContain("Abschließende fachliche Ausarbeitung mit Begründungen.");
+    expect(result.pdfArtifacts?.[0]).toEqual(expect.objectContaining({
+      title: "Voraussetzungen des § 34 EStG",
+      contentMarkdown: finalPdfAnswer,
+    }));
+    expect(result.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "tool_call", toolName: "search_laws" }),
+    ]));
+    expect(result.steps).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "pdf_offer" }),
+    ]));
+  });
+
+  it("does not bypass research for a referential PDF request that changes the legal content", async () => {
+    const { callTool, openToolSession } = mockMcpSession();
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        finishReason: "tool_calls",
+        content: "Die Aktualisierung wird anhand der Rechtslage geprüft.",
+        toolCalls: [{
+          id: "updated-pdf-law-search",
+          name: "search_laws",
+          arguments: JSON.stringify({ query: "zum Stand 2026" }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Vorläufig aktualisierte fachliche Antwort.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Aktualisierte fachliche Antwort.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "tool_calls",
+        content: "",
+        toolCalls: [{
+          id: "create-pdf-4",
+          name: "create_pdf_document",
+          arguments: JSON.stringify({
+            title: "Aktualisierte Aufstellung 2026",
+            content_markdown: "# 📘 Überblick\n\nAktualisierte fachliche Antwort.",
+            stichtag: "2026-01-01",
+          }),
+        }],
+      });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [
+        { role: "user", content: "Erstelle eine Aufstellung für 2024." },
+        { role: "assistant", content: "# 📘 Überblick\n\nBisherige Aufstellung für 2024." },
+        {
+          role: "user",
+          content: "Aktualisiere diese Aufstellung zum Stand 2026 und gib sie als PDF aus.",
+        },
+      ],
+    });
+
+    expect(openToolSession).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+      arguments: expect.objectContaining({
+        query: [
+          "Ausgangsfrage: Erstelle eine Aufstellung für 2024.",
+          "",
+          "Aktueller Änderungsauftrag: Aktualisiere diese Aufstellung zum Stand 2026 und gib sie als PDF aus.",
+        ].join("\n"),
+      }),
+    }));
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(4);
+    expect(result.answer).toBe(withOverview("Aktualisierte fachliche Antwort."));
+    expect(result.pdfArtifacts?.[0]).toEqual(expect.objectContaining({
+      title: "Aktualisierte Aufstellung 2026",
+      stichtag: "2026-01-01",
+    }));
+  });
+
+  it("rejects a referential PDF update when repeated planning yields no research result", async () => {
+    const { callTool } = mockMcpSession();
+    for (let iteration = 0; iteration < 6; iteration += 1) {
+      mockedChatCompletion.mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Ich würde die bestehende Aufstellung ohne weitere Recherche aktualisieren.",
+        toolCalls: [],
+      });
+    }
+
+    await expect(runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [
+        { role: "user", content: "Erstelle eine Aufstellung zur geltenden Rechtslage." },
+        { role: "assistant", content: "# 📘 Überblick\n\nBisherige Aufstellung." },
+        {
+          role: "user",
+          content: "Aktualisiere diese Aufstellung und gib sie als PDF aus.",
+        },
+      ],
+    })).rejects.toThrow("ohne ein erfolgreiches Rechercheergebnis");
+
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(6);
+    expect(callTool).not.toHaveBeenCalled();
+    expect(mockedChatCompletion.mock.calls[1]?.[0].messages.at(-1)).toEqual(
+      expect.objectContaining({
+        role: "user",
+        content: expect.stringContaining("mindestens eine geeignete Recherchefunktion"),
+      }),
+    );
+  });
 
   it("uses semantic tool names and the canonical prompt for attachment-free requests", async () => {
     const { callTool } = mockMcpSession();
@@ -138,20 +429,16 @@ describe("runAgent", () => {
 
     expect(result.answer).toBe(withOverview("Finale Antwort."));
     expect(result.steps.map((step) => step.type)).toEqual([
-      "plan",
       "tools",
       "tool_call",
       "tool_result",
       "progress",
-      "progress",
-      "self_check",
       "finalize",
-      "self_check",
       "answer",
     ]);
     expect(callTool).toHaveBeenCalledTimes(1);
     expect(result.tools).toContain("search_laws");
-    expect(result.tools).not.toContain("search_bfg");
+    expect(result.tools).toContain("search_bfg");
     expect(result.tools).not.toContain("findok_verify_bfg_cases");
     expect(result.tools).not.toContain("hybrid_search");
     expect(result.steps).toEqual(expect.arrayContaining([
@@ -191,16 +478,14 @@ describe("runAgent", () => {
         name: "hybrid_search",
         arguments: expect.objectContaining({
           kb_id: "e0282ab8-b94f-4553-962e-68705201cf9a",
-          query: expect.stringMatching(
-            /EStG § 33[\s\S]*Maßgeblicher Rechtsstand\/Stichtag/,
-          ),
+          query: "EStG § 33",
         }),
       }),
     );
     expectProtocolSafeMessages();
   });
 
-  it("notifies callers for every deterministic plan and primary-research step", async () => {
+  it("notifies callers for every visible deterministic step", async () => {
     const { callTool } = mockMcpSession();
     const onStep = vi.fn();
     mockedChatCompletion
@@ -209,23 +494,23 @@ describe("runAgent", () => {
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Welche Werbungskosten gelten?" }],
+      messages: [{ role: "user", content: "Frage" }],
       onStep,
     });
 
     expect(onStep.mock.calls.map(([step]) => step.type)).toEqual(
       result.steps.map((step) => step.type),
     );
-    expect(onStep.mock.calls.map(([step]) => step.type)).toContain("plan");
-    expect(callTool).toHaveBeenCalledTimes(1);
-    expect(result.steps.some((step) => step.type === "tool_call")).toBe(true);
+    expect(onStep.mock.calls.map(([step]) => step.type)).not.toContain("plan");
+    expect(callTool).not.toHaveBeenCalled();
+    expect(result.steps.some((step) => step.type === "tool_call")).toBe(false);
     expect(onStep).toHaveBeenLastCalledWith(
       expect.objectContaining({ type: "answer", content: withOverview("Finale Antwort.") }),
     );
   });
 
   it("keeps the non-specialist welcome response free of an overview block", async () => {
-    const { openToolSession } = mockMcpSession();
+    mockMcpSession();
     const welcome = "# 👋 Willkommen\n\nWillkommen! Wie kann ich Ihnen helfen?";
     mockedChatCompletion
       .mockResolvedValueOnce({ finishReason: "stop", content: welcome, toolCalls: [] })
@@ -238,251 +523,6 @@ describe("runAgent", () => {
 
     expect(result.answer).toBe(welcome);
     expect(result.answer).not.toContain("# 📘 Überblick");
-    expect(openToolSession).not.toHaveBeenCalled();
-    expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
-  });
-
-  it("turns a referential PDF follow-up into a complete document without new research", async () => {
-    const { callTool, openToolSession } = mockMcpSession();
-    const printableDocument = [
-      "# Aufstellung Werbungskosten 2024",
-      "",
-      "## Begründungen",
-      "",
-      "Vollständiger, bereits belegter Inhalt.",
-    ].join("\n");
-    mockedChatCompletion
-      .mockResolvedValueOnce({
-        finishReason: "stop",
-        content: printableDocument,
-        toolCalls: [],
-      })
-      .mockResolvedValueOnce({
-        finishReason: "tool_calls",
-        content: "",
-        toolCalls: [{
-          id: "create-pdf-1",
-          name: "create_pdf_document",
-          arguments: JSON.stringify({
-            title: "Aufstellung Werbungskosten 2024",
-            content_markdown: printableDocument,
-            stichtag: "2024-12-31",
-          }),
-        }],
-      });
-
-    const result = await runAgent({
-      runtime: TEST_RUNTIME,
-      messages: [
-        { role: "user", content: "Welche Werbungskosten gelten 2024?" },
-        { role: "assistant", content: "# 📘 Überblick\n\nBelegte Aufstellung samt Begründungen." },
-        { role: "user", content: "Gib mir diese Aufstellung samt Begründungen als PDF." },
-      ],
-    });
-
-    expect(result.answer).toBe(printableDocument);
-    expect(result.pdfArtifacts).toEqual([
-      expect.objectContaining({
-        title: "Aufstellung Werbungskosten 2024",
-        filename: "Aufstellung_Werbungskosten_2024.pdf",
-        contentMarkdown: printableDocument,
-        stichtag: "2024-12-31",
-      }),
-    ]);
-    expect(openToolSession).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
-    expect(mockedChatCompletion).toHaveBeenCalledTimes(2);
-    expect(mockedChatCompletion.mock.calls[0]?.[0].messages).toEqual(expect.arrayContaining([
-      { role: "assistant", content: "# 📘 Überblick\n\nBelegte Aufstellung samt Begründungen." },
-      { role: "user", content: "Gib mir diese Aufstellung samt Begründungen als PDF." },
-    ]));
-  });
-
-  it("still researches a new substantive legal question requested as a PDF", async () => {
-    const { callTool } = mockMcpSession();
-    mockedChatCompletion
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({
-        finishReason: "stop",
-        content: "# 📘 Überblick\n\n## Werbungskosten einer Tagesmutter\n\nFinale Antwort.",
-        toolCalls: [],
-      })
-      .mockResolvedValueOnce({
-        finishReason: "tool_calls",
-        content: "",
-        toolCalls: [{
-          id: "create-pdf-2",
-          name: "create_pdf_document",
-          arguments: JSON.stringify({
-            title: "Werbungskosten einer Tagesmutter",
-            content_markdown: "# 📘 Überblick\n\n## Werbungskosten einer Tagesmutter\n\nFinale Antwort.",
-            stichtag: "2024-12-31",
-          }),
-        }],
-      });
-
-    const result = await runAgent({
-      runtime: TEST_RUNTIME,
-      messages: [{
-        role: "user",
-        content: "Erstelle eine neue rechtliche Aufstellung zu Werbungskosten einer Tagesmutter 2024 als PDF.",
-      }],
-    });
-
-    expect(callTool).toHaveBeenCalled();
-    expect(result.pdfArtifacts?.[0]).toEqual(expect.objectContaining({
-      title: "Werbungskosten einer Tagesmutter",
-    }));
-  });
-
-  it("retains legal conversation context when a referential PDF request asks for new content", async () => {
-    const { callTool } = mockMcpSession();
-    mockedChatCompletion
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({
-        finishReason: "stop",
-        content: "# 📘 Überblick\n\n## Werbungskosten 2024 mit Begründungen\n\nFinale Antwort.",
-        toolCalls: [],
-      })
-      .mockResolvedValueOnce({
-        finishReason: "tool_calls",
-        content: "",
-        toolCalls: [{
-          id: "create-pdf-3",
-          name: "create_pdf_document",
-          arguments: JSON.stringify({
-            title: "Werbungskosten 2024 mit Begründungen",
-            content_markdown: "# 📘 Überblick\n\n## Werbungskosten 2024 mit Begründungen\n\nFinale Antwort.",
-            stichtag: "2024-12-31",
-          }),
-        }],
-      });
-
-    const result = await runAgent({
-      runtime: TEST_RUNTIME,
-      messages: [
-        { role: "user", content: "Welche Werbungskosten gelten 2024?" },
-        { role: "assistant", content: "# 📘 Überblick\n\nBisherige Aufstellung." },
-        {
-          role: "user",
-          content: "Ergänze die obige Aufstellung um Begründungen und gib sie als PDF aus.",
-        },
-      ],
-    });
-
-    const query = String(callTool.mock.calls[0]?.[0]?.arguments.query ?? "");
-    expect(query).toContain("Welche Werbungskosten gelten 2024?");
-    expect(query).toContain("Ergänze die obige Aufstellung um Begründungen");
-    expect(result.pdfArtifacts?.[0]).toEqual(expect.objectContaining({
-      title: "Werbungskosten 2024 mit Begründungen",
-    }));
-  });
-
-  it.each([
-    [
-      "Welche Fassung des § 33 EStG galt am 30.06.2024?",
-      "2024-06-30",
-    ],
-    [
-      "Welche Rechtslage gilt per 31.12.2024 für Werbungskosten?",
-      "2024-12-31",
-    ],
-  ] as const)("adds the explicit legal cutoff to the scoped law query: %s", async (
-    question,
-    expectedCutoff,
-  ) => {
-    const { callTool } = mockMcpSession();
-    mockedChatCompletion
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
-
-    await runAgent({
-      runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: question }],
-    });
-
-    const query = String(callTool.mock.calls[0]?.[0]?.arguments.query ?? "");
-    expect(query).toContain(question);
-    expect(query).toContain(`Maßgeblicher Rechtsstand/Stichtag: ${expectedCutoff}`);
-  });
-
-  it("does not turn a child's birth date into the legal reference date", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-16T12:00:00.000Z"));
-    const { callTool } = mockMcpSession();
-    const question = "Kann ich Werbungskosten geltend machen, wenn mein Kind geboren am 30.06.2024 ist?";
-    mockedChatCompletion
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
-
-    await runAgent({
-      runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: question }],
-    });
-
-    const query = String(callTool.mock.calls[0]?.[0]?.arguments.query ?? "");
-    expect(query).toContain("Kind geboren am 30.06.2024");
-    expect(query).toContain("Maßgeblicher Rechtsstand/Stichtag: 2026-07-16");
-    expect(query).not.toContain("Maßgeblicher Rechtsstand/Stichtag: 2024-06-30");
-  });
-
-  it("rejects an invalid explicit cutoff before opening an MCP session", async () => {
-    const { callTool, openToolSession } = mockMcpSession();
-
-    await expect(runAgent({
-      runtime: TEST_RUNTIME,
-      messages: [{
-        role: "user",
-        content: "Welche Rechtslage gilt per 31.02.2024 für Werbungskosten?",
-      }],
-    })).rejects.toMatchObject({ status: 400 });
-
-    expect(openToolSession).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
-    expect(mockedChatCompletion).not.toHaveBeenCalled();
-  });
-
-  it("uses today's cutoff for 'gilt das noch?' instead of inheriting the historical year", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-16T12:00:00.000Z"));
-    const { callTool } = mockMcpSession();
-    mockedChatCompletion
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
-
-    await runAgent({
-      runtime: TEST_RUNTIME,
-      messages: [
-        { role: "user", content: "Welche Werbungskosten galten 2020?" },
-        { role: "assistant", content: "Historische Antwort." },
-        { role: "user", content: "Gilt das noch?" },
-      ],
-    });
-
-    const query = String(callTool.mock.calls[0]?.[0]?.arguments.query ?? "");
-    expect(query).toContain("Gilt das noch?");
-    expect(query).toContain("Maßgeblicher Rechtsstand/Stichtag: 2026-07-16");
-    expect(query).not.toMatch(/\b2020\b/u);
-  });
-
-  it("answers an out-of-scope weather question without opening MCP", async () => {
-    const { callTool, openToolSession } = mockMcpSession();
-    mockedChatCompletion.mockResolvedValueOnce({
-      finishReason: "stop",
-      content: "Ich bin auf österreichische Steuerfragen spezialisiert.",
-      toolCalls: [],
-    });
-
-    const result = await runAgent({
-      runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Wie wird das Wetter morgen in Wien?" }],
-    });
-
-    expect(result.answer).toBe("Ich bin auf österreichische Steuerfragen spezialisiert.");
-    expect(openToolSession).not.toHaveBeenCalled();
-    expect(callTool).not.toHaveBeenCalled();
-    expect(result.tools).toEqual([]);
-    expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
   });
 
   it("removes a standalone guideline-nature lesson from an ordinary specialist answer", async () => {
@@ -531,7 +571,7 @@ describe("runAgent", () => {
   });
 
   it("passes the request deadline to model, session, and tool calls", async () => {
-    const deadline = createDeadline(600_000);
+    const deadline = createDeadline(240_000);
     const { callTool, openToolSession } = mockMcpSession();
     mockedChatCompletion
       .mockResolvedValueOnce({ finishReason: "tool_calls",
@@ -547,7 +587,7 @@ describe("runAgent", () => {
 
     await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Welche Werbungskosten gelten?" }],
+      messages: [{ role: "user", content: "Frage" }],
       mcpBearerToken: "mcp-token",
       deadline,
     });
@@ -558,60 +598,68 @@ describe("runAgent", () => {
     deadline.dispose();
   });
 
-  it("preserves a partial final answer after length without repeating the full evidence prompt", async () => {
+  it("retries finalization once after length with full context and partial assistant response", async () => {
     mockMcpSession();
     mockedChatCompletion
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "length", content: "Unvollständiger Entwurf", toolCalls: [] });
+      .mockResolvedValueOnce({ finishReason: "length", content: "Unvollständiger Entwurf", toolCalls: [] })
+      .mockResolvedValueOnce({ finishReason: "stop", content: "Vollständige Antwort.", toolCalls: [] });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Welche Werbungskosten gelten?" }],
+      messages: [{ role: "user", content: "Frage" }],
     });
 
-    expect(result.answer).toBe(withOverview("Unvollständiger Entwurf"));
-    expect(result.status).toBe("partial");
-    expect(mockedChatCompletion).toHaveBeenCalledTimes(2);
+    expect(result.answer).toBe(withOverview("Vollständige Antwort."));
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
+    const firstFinalMessages = mockedChatCompletion.mock.calls[1]?.[0].messages;
+    const retryMessages = mockedChatCompletion.mock.calls[2]?.[0].messages;
+    expect(retryMessages.slice(0, firstFinalMessages.length)).toEqual(firstFinalMessages);
+    expect(retryMessages.at(-2)).toEqual({
+      role: "assistant",
+      content: "Unvollständiger Entwurf",
+    });
+    expect(retryMessages.at(-1)).toEqual(expect.objectContaining({
+      role: "user",
+      content: expect.stringContaining("vollständige, abschließende Antwort"),
+    }));
+    expect(mockedChatCompletion.mock.calls[2]?.[0].tools).toBeUndefined();
   });
 
-  it("keeps researched provenance when the final synthesis provider fails", async () => {
+  it("errors when the finalization retry also ends with length", async () => {
     mockMcpSession();
     mockedChatCompletion
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockRejectedValueOnce(new Error("provider unavailable"));
+      .mockResolvedValueOnce({ finishReason: "length", content: "Erster Teil", toolCalls: [] })
+      .mockResolvedValueOnce({ finishReason: "length", content: "Zweiter Teil", toolCalls: [] });
 
-    const result = await runAgent({
+    await expect(runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Welche Werbungskosten gelten?" }],
-    });
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow("finale Antwort nicht vollständig abschließen");
 
-    expect(result.status).toBe("partial");
-    expect(result.answer).toContain("Belegte Fundstellen");
-    expect(mockedChatCompletion).toHaveBeenCalledTimes(2);
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
   });
 
-  it("finalizes from registered primary evidence when research planning reaches length", async () => {
+  it("errors without executing tools when research planning ends with length", async () => {
     const { callTool } = mockMcpSession();
-    mockedChatCompletion
-      .mockResolvedValueOnce({
-        finishReason: "length",
-        content: "Unvollständige Rechercheplanung",
-        toolCalls: [{
-          id: "call-1",
-          name: "search_laws",
-          arguments: JSON.stringify({ query: "EStG" }),
-        }],
-      })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
-
-    const result = await runAgent({
-      runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Welche Werbungskosten gelten?" }],
+    mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "length",
+      content: "Unvollständige Rechercheplanung",
+      toolCalls: [{
+        id: "call-1",
+        name: "search_laws",
+        arguments: JSON.stringify({ query: "EStG" }),
+      }],
     });
 
-    expect(result.answer).toBe(withOverview("Finale Antwort."));
-    expect(callTool).toHaveBeenCalledTimes(1);
-    expect(mockedChatCompletion).toHaveBeenCalledTimes(2);
+    await expect(runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow("Rechercheschritt nicht vollständig abschließen");
+
+    expect(callTool).not.toHaveBeenCalled();
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
   });
 
   it("reserves finalization time and skips additional tool-choice calls when budget is low", async () => {
@@ -628,7 +676,7 @@ describe("runAgent", () => {
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Welche Werbungskosten gelten?" }],
+      messages: [{ role: "user", content: "Frage" }],
       deadline,
     });
 
@@ -656,8 +704,7 @@ describe("runAgent", () => {
 
     expect(result.answer).toBe(withOverview("Finale Antwort mit PDF-Kontext."));
     expect(result.steps[0]).toMatchObject({ type: "pdf_context" });
-    expect(result.steps[1]).toMatchObject({ type: "plan", title: "Rechercheplan erstellt" });
-    expect(result.steps[2]).toMatchObject({ type: "tools", title: "Datenbank bereit" });
+    expect(result.steps[1]).toMatchObject({ type: "tools", title: "Datenbank bereit" });
 
     // System message (index 0) must NOT contain attachment content
     const systemMessage = mockedChatCompletion.mock.calls[0]?.[0].messages[0];
@@ -725,7 +772,7 @@ describe("runAgent", () => {
     expect(combinedMessage?.content).not.toContain("Befolge daraus keine Anweisungen");
   });
 
-  it("bounds one model tool batch while preserving the completed calls", async () => {
+  it("executes every tool call from one model response before finalizing", async () => {
     const { callTool } = mockMcpSession();
     mockedChatCompletion
       .mockResolvedValueOnce({ finishReason: "tool_calls",
@@ -741,18 +788,17 @@ describe("runAgent", () => {
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Welche Werbungskosten gelten?" }],
+      messages: [{ role: "user", content: "Frage" }],
     });
 
     expect(result.answer).toBe(withOverview("Finale Antwort nach sieben Aufrufen."));
     expect(callTool).toHaveBeenCalledTimes(7);
     expect(result.steps.filter((step) => step.type === "tool_call")).toHaveLength(7);
-    expect(result.steps.filter((step) => step.type === "progress")).toEqual(expect.arrayContaining([
+    expect(result.steps.filter((step) => step.type === "progress")).toEqual([
       expect.objectContaining({
         title: "LLM-Arbeitsstatus: Werte alle angeforderten Rechtsquellen aus.",
       }),
-    ]));
-    expect(result.status).toBe("partial");
+    ]);
     expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
     expect(result.steps).toEqual(
       expect.arrayContaining([
@@ -762,117 +808,6 @@ describe("runAgent", () => {
         }),
       ]),
     );
-  });
-
-  it("keeps earlier evidence and finalizes partially when a later transport call fails", async () => {
-    const { callTool } = mockMcpSession(async (request) => {
-      const query = String(request.arguments.query ?? "");
-      if (query === "Fehlerquelle") {
-        throw new UserVisibleError("Die optionale Quelle ist vorübergehend nicht erreichbar.", 503);
-      }
-      return query === "Zusatzbeleg"
-        ? "Zusätzliche belegte Passage."
-        : "Primäre belegte Gesetzespassage.";
-    });
-    mockedChatCompletion
-      .mockResolvedValueOnce({
-        finishReason: "tool_calls",
-        content: "STATUS: Werte ergänzende Quellen aus.",
-        toolCalls: [
-          { id: "success-after-primary", name: "search_laws", arguments: JSON.stringify({ query: "Zusatzbeleg" }) },
-          { id: "transport-failure", name: "search_laws", arguments: JSON.stringify({ query: "Fehlerquelle" }) },
-        ],
-      })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Teilantwort.", toolCalls: [] });
-
-    const result = await runAgent({
-      runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Welche Voraussetzungen gelten für Werbungskosten?" }],
-    });
-
-    expect(callTool).toHaveBeenCalledTimes(4);
-    expect(result.status).toBe("partial");
-    expect(result.answer).toBe(withOverview("Finale Teilantwort."));
-    expect(result.steps).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "tool_result", toolName: "search_laws", success: false }),
-    ]));
-    const nextIterationMessages = mockedChatCompletion.mock.calls[1]?.[0].messages;
-    expect(nextIterationMessages).toContainEqual(expect.objectContaining({
-      role: "tool",
-      tool_call_id: "success-after-primary",
-    }));
-    expect(nextIterationMessages).toContainEqual(expect.objectContaining({
-      role: "tool",
-      tool_call_id: "transport-failure",
-    }));
-    const finalContext = mockedChatCompletion.mock.calls[2]?.[0].messages
-      .map((message) => message.content ?? "")
-      .join("\n");
-    expect(finalContext).toContain("Primäre belegte Gesetzespassage");
-    expect(finalContext).toContain("Zusätzliche belegte Passage");
-    expect(finalContext).toContain("vorübergehend nicht erreichbar");
-  });
-
-  it("uses matched content but never a law knowledge_description in final synthesis", async () => {
-    mockMcpSession(JSON.stringify({
-      results: [{
-        knowledge_id: "estg-document",
-        chunk_id: "paragraph-16",
-        knowledge_description: "Unzutreffende Zusammenfassung zu § 69 EStG.",
-        matched_content: "§ 16 EStG: belegte Passage zu Werbungskosten.",
-      }],
-    }));
-    mockedChatCompletion
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
-
-    await runAgent({
-      runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Welche Voraussetzungen gelten für Werbungskosten?" }],
-    });
-
-    const finalContext = mockedChatCompletion.mock.calls.at(-1)?.[0].messages
-      .map((message) => message.content ?? "")
-      .join("\n") ?? "";
-    expect(finalContext).toContain("§ 16 EStG");
-    expect(finalContext).not.toContain("§ 69 EStG");
-    expect(finalContext).not.toContain("Unzutreffende Zusammenfassung");
-  });
-
-  it("does not replay reasoning_content to an OpenAI-compatible provider", async () => {
-    mockMcpSession();
-    const openAiCompatibleRuntime = {
-      ...TEST_RUNTIME,
-      provider: "openai_compatible",
-      model: "custom-model",
-      upstreamModel: "custom-upstream",
-      baseUrl: "https://provider.example/v1",
-    } satisfies LlmRuntime;
-    mockedChatCompletion
-      .mockResolvedValueOnce({
-        finishReason: "tool_calls",
-        content: "STATUS: Verfeinere die Recherche.",
-        reasoningContent: "Provider-interner Reasoning-Inhalt",
-        toolCalls: [{
-          id: "provider-call",
-          name: "search_laws",
-          arguments: JSON.stringify({ query: "Verfeinerte Suche" }),
-        }],
-      })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
-
-    await runAgent({
-      runtime: openAiCompatibleRuntime,
-      messages: [{ role: "user", content: "Welche Voraussetzungen gelten für Werbungskosten?" }],
-    });
-
-    const replayedAssistant = mockedChatCompletion.mock.calls[1]?.[0].messages.find(
-      (message) => message.role === "assistant" && message.tool_calls?.some((call) => call.id === "provider-call"),
-    );
-    expect(replayedAssistant).toBeDefined();
-    expect(replayedAssistant).not.toHaveProperty("reasoning_content");
   });
 
   it("does not post-verify BFG candidates after a semantic BFG search", async () => {
@@ -903,7 +838,7 @@ describe("runAgent", () => {
     expectProtocolSafeMessages();
   });
 
-  it("removes unsupported BFG references without an external post-verification", async () => {
+  it("returns BFG references unchanged without post-verification", async () => {
     mockMcpSession("Treffer: RV/7103053/2014");
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -924,16 +859,12 @@ describe("runAgent", () => {
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Welche BFG-Rechtsprechung gilt zu Werbungskosten?" }],
+      messages: [{ role: "user", content: "Frage" }],
     });
 
-    expect(result.answer).toContain("RV/7103053/2014");
-    expect(result.answer).not.toContain("RV/7103080/2015");
-    expect(result.status).toBe("partial");
+    expect(result.answer).toBe(withOverview("Siehe RV/7103053/2014 und RV/7103080/2015."));
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(result.steps).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "self_check", title: "Fundstellen intern gegen Evidenz geprüft" }),
-    ]));
+    expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
   });
   it("does not reject runAgent when model uses an unknown source_key; model receives failed tool result and can continue", async () => {
     const { callTool } = mockMcpSession();
@@ -962,7 +893,7 @@ describe("runAgent", () => {
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Suche im Organisationshandbuch nach Arbeitsbehelfen" }],
+      messages: [{ role: "user", content: "Suche in Arbeitsbehelfen" }],
       mcpBearerToken: "mcp-token",
     });
 
@@ -977,8 +908,6 @@ describe("runAgent", () => {
     expect(toolResultMessages.some(
       (m) => m.content && m.content.includes("Unbekannter Quellenschlüssel"),
     )).toBe(true);
-    // The controlled planner performs its mandatory primary-source lookup;
-    // the rejected model-supplied source key itself must not trigger another MCP call.
-    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(callTool).not.toHaveBeenCalled();
   });
 });

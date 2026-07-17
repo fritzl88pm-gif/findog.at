@@ -29,20 +29,13 @@ export type PdfArtifactDraft = PdfArtifactOffer & {
   provenance: Record<string, unknown>;
 };
 
-export type PdfArtifactReferenceEvidence = {
-  evidenceId: string;
-  text: string;
-  citationLabels?: readonly string[];
-};
-
 export type AgentRunResult = {
   answer: string;
   steps: AgentStep[];
   tools: string[];
-  status: "completed" | "partial";
+  status?: "completed" | "partial";
   pdfOffer?: PdfOffer;
   pdfArtifacts?: PdfArtifactDraft[];
-  artifactReferenceEvidence?: PdfArtifactReferenceEvidence[];
 };
 
 const DEFAULT_STEP_TEXT_LIMIT = 1_200;
