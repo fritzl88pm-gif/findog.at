@@ -42,6 +42,7 @@ describe("chat stream events", () => {
       title: "Unterhaltsabsetzbetrag bei Drittstaatenkindern",
       steps: [],
       tools: ["hybrid_search"],
+      pdfOffer: { title: "Unterhaltsabsetzbetrag 2024" },
       conversationId: "11111111-1111-4111-8111-111111111111",
       model: "deepseek-v4-pro",
       availableModels: ["deepseek-v4-pro"],
@@ -55,5 +56,18 @@ describe("chat stream events", () => {
     expect(() => parseChatStreamLine(JSON.stringify({ type: "unknown" }))).toThrow(
       "Unbekanntes Streaming-Ereignis",
     );
+  });
+
+  it("rejects malformed PDF offers", () => {
+    expect(() => parseChatStreamLine(JSON.stringify({
+      type: "final",
+      answer: "Antwort",
+      steps: [],
+      tools: [],
+      pdfOffer: { title: "", unexpected: true },
+      conversationId: "conversation-1",
+      model: "deepseek-v4-pro",
+      availableModels: ["deepseek-v4-pro"],
+    }))).toThrow("Ungültiges Streaming-Ereignis");
   });
 });

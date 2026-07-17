@@ -1,5 +1,6 @@
 export type AgentStep =
   | { type: "pdf_context"; title: string; content: string }
+  | { type: "pdf_offer"; title: string; content: string }
   | { type: "attachment_context"; title: string; content: string }
   | { type: "plan"; title: string; content: string }
   | { type: "tools"; title: string; content: string; tools?: string[] }
@@ -11,10 +12,16 @@ export type AgentStep =
   | { type: "self_check"; title: string; content: string }
   | { type: "answer"; title: string; content: string };
 
+export type PdfOffer = {
+  title: string;
+};
+
 export type AgentRunResult = {
   answer: string;
   steps: AgentStep[];
   tools: string[];
+  status?: "completed" | "partial";
+  pdfOffer?: PdfOffer;
 };
 
 const DEFAULT_STEP_TEXT_LIMIT = 1_200;

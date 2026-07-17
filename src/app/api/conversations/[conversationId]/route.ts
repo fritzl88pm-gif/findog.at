@@ -172,7 +172,9 @@ export async function GET(
         updatedAt: conversationRow.updated_at,
       },
       messages: ((messages ?? []) as MessageRow[]).map((message) => {
-        const steps = stepsByMessage.get(message.id);
+        const storedSteps = stepsByMessage.get(message.id);
+        const pdfOfferStep = storedSteps?.find((step) => step.type === "pdf_offer");
+        const steps = storedSteps?.filter((step) => step.type !== "pdf_offer");
         const agentRun = message.role === "assistant" ? runByMessage.get(message.id) : undefined;
         return {
           id: message.id,
@@ -187,6 +189,7 @@ export async function GET(
               completedAt: agentRun.completed_at,
             },
           } : {}),
+          ...(pdfOfferStep ? { pdfOffer: { title: pdfOfferStep.content } } : {}),
           ...(steps?.length ? { steps } : {}),
         };
       }),

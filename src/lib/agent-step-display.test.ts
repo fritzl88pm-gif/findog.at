@@ -76,6 +76,7 @@ describe("agentStepDisplayLabel", () => {
     [{ type: "finalize", title: "raw", content: "raw" }, "Antwort wird vorbereitet"],
     [{ type: "answer", title: "raw", content: "raw" }, "Antwort wird erstellt"],
     [{ type: "pdf_context", title: "raw", content: "raw" }, "PDF wird gelesen"],
+    [{ type: "pdf_offer", title: "raw", content: "raw" }, "PDF-Download wird vorbereitet"],
     [{ type: "attachment_context", title: "Bild-Kontext", content: "raw" }, "Anhang wird gelesen"],
     [{ type: "progress", title: "raw", content: "raw" }, "Rechercheergebnisse werden ausgewertet"],
   ] as const)("maps %s to %s", (step, expected) => {

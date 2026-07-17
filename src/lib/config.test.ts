@@ -33,6 +33,9 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
   it("tells the assistant to fulfill explicit PDF document requests through the available download", () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain("# PDF-DOKUMENTE");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("PDF-Download");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("vollständige, druckfertige Dokumentinhalt");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("bereits erstellte Antwort, Aufstellung, Übersicht oder Ausarbeitung");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("antworte nie nur mit einer Zusage");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("Behaupte einen PDF-Download nur, wenn diese Funktion von der Anwendung tatsächlich bereitgestellt wird");
   });
 

@@ -13,6 +13,12 @@ import {
 } from "./research-source-display";
 import { createLlmProgressStepTitle } from "./agent-progress-status";
 import {
+  derivePdfOfferTitle,
+  isExistingAnswerPdfRequest,
+  isExplicitPdfCreationRequest,
+  isReferentialPdfRequest,
+} from "./chat/pdf-request";
+import {
   summarizeStepText,
   summarizeToolArguments,
   type AgentRunResult,
@@ -71,6 +77,59 @@ export type AttachmentContext = {
 };
 
 type AgentStepHandler = (step: AgentStep) => void | Promise<void>;
+
+type ExistingAnswerPdfContext = {
+  request: string;
+  sourceQuestion: string;
+};
+
+function findExistingAnswerPdfContext(
+  messages: readonly AppChatMessage[],
+): ExistingAnswerPdfContext | undefined {
+  const latestUserIndex = messages.findLastIndex((message) => message.role === "user");
+  if (latestUserIndex < 0 || latestUserIndex !== messages.length - 1) {
+    return undefined;
+  }
+  const request = messages[latestUserIndex]?.content ?? "";
+  if (!isExistingAnswerPdfRequest(request)) {
+    return undefined;
+  }
+  for (let assistantIndex = latestUserIndex - 1; assistantIndex >= 0; assistantIndex -= 1) {
+    const assistantMessage = messages[assistantIndex];
+    if (assistantMessage?.role !== "assistant" || !assistantMessage.content.trim()) {
+      continue;
+    }
+    const sourceQuestion = messages
+      .slice(0, assistantIndex)
+      .findLast((message) => message.role === "user")?.content ?? request;
+    return { request, sourceQuestion };
+  }
+  return undefined;
+}
+
+function referentialPdfResearchQuery(
+  messages: readonly AppChatMessage[],
+  latestQuestion: string,
+): string {
+  const latestUserIndex = messages.findLastIndex((message) => message.role === "user");
+  const earlierUserMessages = latestUserIndex > 0
+    ? messages.slice(0, latestUserIndex).filter((message) => message.role === "user")
+    : [];
+  const priorSubject = earlierUserMessages.findLast((message) =>
+    message.content.trim() && !isReferentialPdfRequest(message.content)
+  )?.content.trim() ?? earlierUserMessages.at(-1)?.content.trim();
+
+  return priorSubject
+    ? `Ausgangsfrage: ${priorSubject}\n\nAktueller Änderungsauftrag: ${latestQuestion.trim()}`
+    : latestQuestion.trim();
+}
+
+function missingReferentialPdfResearchError(): UserVisibleError {
+  return new UserVisibleError(
+    "Die aktualisierte PDF-Ausarbeitung kann ohne ein erfolgreiches Rechercheergebnis nicht verlässlich erstellt werden. Bitte erneut versuchen.",
+    502,
+  );
+}
 
 function normalizedQuestion(value: string): string {
   return value
@@ -596,13 +655,21 @@ async function finalizeAgentRun(options: {
     answerWithoutUnrequestedNotice,
     !isNonFachResponse(answerWithoutUnrequestedNotice),
   );
+  const pdfOfferTitle = isExplicitPdfCreationRequest(latestQuestion)
+    ? derivePdfOfferTitle(answer, latestQuestion)
+    : undefined;
 
   await appendAgentStep(
     options.steps,
     { type: "answer", title: "Finale Antwort", content: summarizeStepText(answer) },
     options.onStep,
   );
-  return { answer, steps: options.steps, tools: options.tools };
+  return {
+    answer,
+    steps: options.steps,
+    tools: options.tools,
+    ...(pdfOfferTitle ? { pdfOffer: { title: pdfOfferTitle } } : {}),
+  };
 }
 export async function runAgent(options: {
   runtime: LlmRuntime;
@@ -614,6 +681,83 @@ export async function runAgent(options: {
   initialSteps?: AgentStep[];
   deadline?: Deadline;
 }): Promise<AgentRunResult> {
+  const steps: AgentStep[] = [...(options.initialSteps ?? [])];
+  const hasAttachments = Boolean(options.attachmentContexts?.length || options.pdfContext);
+  const existingPdfContext = hasAttachments
+    ? undefined
+    : findExistingAnswerPdfContext(options.messages);
+  if (existingPdfContext) {
+    const directMessages: DeepSeekMessage[] = [
+      { role: "system", content: DEFAULT_SYSTEM_PROMPT },
+      ...options.messages.map((message, index) => ({
+        role: message.role,
+        content: index === options.messages.length - 1
+          ? [
+              message.content,
+              "Erstelle jetzt auf Basis des bisherigen Gesprächs eine vollständige, druckfertige Fassung.",
+              "Übernimm die verlangten Aufstellungen und Begründungen vollständig; antworte nicht nur mit einer Download-Bestätigung.",
+            ].join("\n\n")
+          : message.content,
+      })),
+    ];
+    let directResult = await chatCompletion({
+      runtime: options.runtime,
+      deadline: options.deadline,
+      messages: directMessages,
+    });
+    if (directResult.finishReason === "length") {
+      directResult = await chatCompletion({
+        runtime: options.runtime,
+        deadline: options.deadline,
+        messages: [
+          ...directMessages,
+          { role: "assistant", content: directResult.content },
+          {
+            role: "user",
+            content: [
+              "Erstelle jetzt eine vollständige, abschließende und druckfertige Fassung.",
+              "Übernimm alle relevanten Inhalte, Aufstellungen und Begründungen aus dem gesamten Gespräch und der Teilantwort; gib nicht nur eine Fortsetzung aus.",
+            ].join(" "),
+          },
+        ],
+      });
+    }
+    if (directResult.finishReason !== "stop") {
+      throw new UserVisibleError(
+        "Das Modell konnte die PDF-Ausarbeitung nicht vollständig abschließen. Bitte erneut versuchen.",
+        502,
+      );
+    }
+    const modelAnswer = requireModelContent(
+      directResult.content,
+      "Das Modell konnte keine PDF-Ausarbeitung erstellen.",
+    );
+    const answerWithoutUnrequestedNotice = removeUnrequestedGuidelineNatureNotice(
+      modelAnswer,
+      existingPdfContext.request,
+    );
+    const answer = ensureRequiredOverview(
+      answerWithoutUnrequestedNotice,
+      !isNonFachResponse(answerWithoutUnrequestedNotice),
+    );
+    const pdfOfferTitle = derivePdfOfferTitle(answer, existingPdfContext.sourceQuestion);
+    await appendAgentStep(
+      steps,
+      {
+        type: "answer",
+        title: "Finale Antwort",
+        content: summarizeStepText(answer),
+      },
+      options.onStep,
+    );
+    return {
+      answer,
+      steps,
+      tools: [],
+      pdfOffer: { title: pdfOfferTitle },
+    };
+  }
+
   const mcp = new McpClient();
   // Build a separate user-role message for attachment/PDF context.
   const attachmentUserMessage = formatAttachmentUserMessage({
@@ -625,11 +769,21 @@ export async function runAgent(options: {
     content: message.content,
   }));
   const latestQuestion = options.messages.findLast((message) => message.role === "user")?.content;
+  const requiresSuccessfulReferentialPdfResearch = Boolean(
+    latestQuestion
+    && isExplicitPdfCreationRequest(latestQuestion)
+    && isReferentialPdfRequest(latestQuestion)
+    && !isExistingAnswerPdfRequest(latestQuestion),
+  );
+  const fullLawSearchQuery = latestQuestion?.trim()
+    ? requiresSuccessfulReferentialPdfResearch
+      ? referentialPdfResearchQuery(options.messages, latestQuestion)
+      : latestQuestion.trim()
+    : undefined;
   const policy = retrievalPolicy({
     latestQuestion,
-    hasAttachments: Boolean(options.attachmentContexts?.length || options.pdfContext),
+    hasAttachments,
   });
-  const steps: AgentStep[] = [...(options.initialSteps ?? [])];
   const toolLog: ToolLogEntry[] = [];
   const session = await mcp.openToolSession(options.mcpBearerToken, { deadline: options.deadline });
   const registry = new SemanticToolRegistry(session.tools);
@@ -784,6 +938,9 @@ export async function runAgent(options: {
   let hasRunFullLawSearch = false;
   for (let iteration = 0; iteration < policy.maxToolIterations; iteration += 1) {
     if (!hasDeadlineTime(options.deadline, AGENT_MIN_ITERATION_BUDGET_MS)) {
+      if (requiresSuccessfulReferentialPdfResearch && !toolLog.some((entry) => entry.success)) {
+        throw missingReferentialPdfResearchError();
+      }
       return finalizeAgentRun({
         runtime: options.runtime,
         attachmentUserMessage,
@@ -814,6 +971,17 @@ export async function runAgent(options: {
     }
 
     if (result.finishReason === "stop" || result.toolCalls.length === 0) {
+      if (requiresSuccessfulReferentialPdfResearch && !toolLog.some((entry) => entry.success)) {
+        messages.push({ role: "assistant", content: result.content });
+        messages.push({
+          role: "user",
+          content: [
+            "Für die verlangte aktualisierte PDF-Ausarbeitung fehlt noch ein belegtes Rechercheergebnis.",
+            "Rufe jetzt mindestens eine geeignete Recherchefunktion auf und stütze die Überarbeitung auf deren erfolgreiches Ergebnis.",
+          ].join(" "),
+        });
+        continue;
+      }
       return finalizeAgentRun({
         runtime: options.runtime,
         attachmentUserMessage,
@@ -834,8 +1002,8 @@ export async function runAgent(options: {
         throw new UserVisibleError(`Das Modell wählte eine nicht erlaubte Recherchefunktion: ${call.name}.`, 502);
       }
       const parsedArguments = parseToolArguments(call.name, call.arguments);
-      if (call.name === "search_laws" && !hasRunFullLawSearch && latestQuestion?.trim()) {
-        parsedArguments.query = latestQuestion.trim();
+      if (call.name === "search_laws" && !hasRunFullLawSearch && fullLawSearchQuery) {
+        parsedArguments.query = fullLawSearchQuery;
         hasRunFullLawSearch = true;
       }
       return { ...call, parsedArguments };
@@ -857,6 +1025,9 @@ export async function runAgent(options: {
 
     for (const call of selectedToolCalls) {
       if (!hasDeadlineTime(options.deadline, AGENT_FINALIZATION_RESERVE_MS)) {
+        if (requiresSuccessfulReferentialPdfResearch && !toolLog.some((entry) => entry.success)) {
+          throw missingReferentialPdfResearchError();
+        }
         return finalizeAgentRun({
           runtime: options.runtime,
           attachmentUserMessage,
@@ -962,6 +1133,9 @@ export async function runAgent(options: {
 
   }
 
+  if (requiresSuccessfulReferentialPdfResearch && !toolLog.some((entry) => entry.success)) {
+    throw missingReferentialPdfResearchError();
+  }
   return finalizeAgentRun({
     runtime: options.runtime,
     attachmentUserMessage,

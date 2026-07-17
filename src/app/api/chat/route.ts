@@ -30,7 +30,7 @@ import {
 } from "@/lib/model-settings";
 import { persistConversationTurn, resolveConversationContextForClient } from "@/lib/persistence";
 import { runAgent, type AttachmentContext } from "@/lib/agent";
-import type { AgentStep } from "@/lib/agent-steps";
+import type { AgentStep, PdfOffer } from "@/lib/agent-steps";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getServerMcpBearerToken } from "@/lib/mcp/server-token";
 import { CHAT_STREAM_CONTENT_TYPE, encodeChatStreamEvent } from "@/lib/chat-stream";
@@ -100,6 +100,20 @@ function scheduleConversationPersistence(options: Parameters<typeof persistConve
       console.error("Chat persistence failed", safeErrorDetails(error));
     });
   });
+}
+
+function stepsWithPersistedPdfOffer(steps: AgentStep[], pdfOffer?: PdfOffer): AgentStep[] {
+  if (!pdfOffer) {
+    return steps;
+  }
+  return [
+    ...steps,
+    {
+      type: "pdf_offer",
+      title: "PDF-Download",
+      content: pdfOffer.title,
+    },
+  ];
 }
 
 function pruneExpiredRateLimitEntries(now: number): void {
@@ -500,6 +514,7 @@ export async function POST(request: Request) {
               ...(title ? { title } : {}),
               steps: agentResult.steps,
               tools: agentResult.tools,
+              ...(agentResult.pdfOffer ? { pdfOffer: agentResult.pdfOffer } : {}),
               conversationId,
               model,
               availableModels,
@@ -512,7 +527,7 @@ export async function POST(request: Request) {
               assistantMessage: agentResult.answer,
               title,
               modelProvenance,
-              steps: agentResult.steps,
+              steps: stepsWithPersistedPdfOffer(agentResult.steps, agentResult.pdfOffer),
               startedAt,
               completedAt,
             });
@@ -565,7 +580,7 @@ export async function POST(request: Request) {
       assistantMessage: agentResult.answer,
       title,
       modelProvenance,
-      steps: agentResult.steps,
+      steps: stepsWithPersistedPdfOffer(agentResult.steps, agentResult.pdfOffer),
       startedAt,
       completedAt,
     });
@@ -575,6 +590,7 @@ export async function POST(request: Request) {
       ...(title ? { title } : {}),
       steps: agentResult.steps,
       tools: agentResult.tools,
+      ...(agentResult.pdfOffer ? { pdfOffer: agentResult.pdfOffer } : {}),
       conversationId,
       model,
       availableModels,

@@ -251,6 +251,30 @@ describe("POST /api/chat uploads", () => {
     expect(agentOptions).not.toHaveProperty("systemPrompt");
   });
 
+  it("returns and persists a structured PDF offer from the Findog agent", async () => {
+    vi.mocked(runAgent).mockResolvedValueOnce({
+      answer: "# Aufstellung\n\nVollständiger Dokumentinhalt.",
+      steps: [],
+      tools: [],
+      pdfOffer: { title: "Aufstellung mit Begründungen" },
+    });
+
+    const response = await POST(jsonRequest(chatPayload()));
+
+    await expect(response.json()).resolves.toMatchObject({
+      pdfOffer: { title: "Aufstellung mit Begründungen" },
+    });
+    expect(persistConversationTurn).toHaveBeenCalledWith(expect.objectContaining({
+      steps: [
+        {
+          type: "pdf_offer",
+          title: "PDF-Download",
+          content: "Aufstellung mit Begründungen",
+        },
+      ],
+    }));
+  });
+
   it("accepts DeepSeek v4 Flash and uses it throughout the response lifecycle", async () => {
     const response = await POST(
       jsonRequest({
@@ -530,6 +554,26 @@ describe("POST /api/chat uploads", () => {
     );
 
     errorSpy.mockRestore();
+  });
+
+  it("includes the structured PDF offer in the final stream event", async () => {
+    vi.mocked(runAgent).mockResolvedValueOnce({
+      answer: "# Aufstellung\n\nVollständiger Dokumentinhalt.",
+      steps: [],
+      tools: [],
+      pdfOffer: { title: "Aufstellung mit Begründungen" },
+    });
+
+    const response = await POST(streamingJsonRequest(chatPayload()));
+    const events = (await response.text())
+      .split("\n")
+      .map((line) => parseChatStreamLine(line))
+      .filter((event) => event !== null);
+
+    expect(events.at(-1)).toMatchObject({
+      type: "final",
+      pdfOffer: { title: "Aufstellung mit Begründungen" },
+    });
   });
 
   it("returns non-streaming JSON before best-effort persistence failures", async () => {

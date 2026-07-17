@@ -36,6 +36,8 @@ export function agentStepDisplayLabel(step: AgentStep): string {
   switch (step.type) {
     case "pdf_context":
       return "PDF wird gelesen";
+    case "pdf_offer":
+      return "PDF-Download wird vorbereitet";
     case "attachment_context":
       return /pdf/i.test(step.title) ? "PDF wird gelesen" : "Anhang wird gelesen";
     case "plan":

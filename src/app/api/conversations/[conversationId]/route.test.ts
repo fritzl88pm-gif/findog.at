@@ -81,6 +81,16 @@ describe("GET /api/conversations/:conversationId", () => {
           success: true,
           arguments: null,
         },
+        {
+          agent_run_id: "44444444-4444-4444-8444-444444444444",
+          step_order: 1,
+          step_type: "pdf_offer",
+          title: "PDF-Download",
+          content: "Unterhaltsabsetzbetrag 2024",
+          tool_name: null,
+          success: null,
+          arguments: null,
+        },
       ],
       error: null,
     });
@@ -124,6 +134,9 @@ describe("GET /api/conversations/:conversationId", () => {
         success: true,
       },
     ]);
+    expect(payload.messages[1].pdfOffer).toEqual({
+      title: "Unterhaltsabsetzbetrag 2024",
+    });
     expect(conversationQuery.eq).toHaveBeenCalledWith(
       "client_id",
       "11111111-1111-4111-8111-111111111111",

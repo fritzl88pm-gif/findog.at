@@ -30,7 +30,7 @@ import {
 } from "@/lib/chat/settings";
 import { ellipsizeFilename } from "@/lib/attachment-names";
 import { clipboardImageFiles } from "@/lib/chat/clipboard-images";
-import type { AgentStep } from "@/lib/agent-steps";
+import type { AgentStep, PdfOffer } from "@/lib/agent-steps";
 import { agentStepDisplayLabel } from "@/lib/agent-step-display";
 import { AGENT_PLAN_ITEMS, completedAgentPlanItemCount } from "@/lib/agent-plan";
 import { parseRichAnswer, type RichBlock, type RichInline } from "@/lib/answer-rendering";
@@ -41,7 +41,6 @@ import {
 import { CHAT_STREAM_CONTENT_TYPE, parseChatStreamLine } from "@/lib/chat-stream";
 import { parsePasswordChangeBody } from "@/lib/auth/password";
 import { getWelcomeGreeting } from "@/lib/chat/welcome";
-import { shouldOfferChatPdfDownload } from "@/lib/chat/pdf-request";
 import { findNearestPrecedingUserMessage } from "@/lib/agent-feedback";
 import {
   FORM_IMAGE_MIME_TYPES,
@@ -87,6 +86,7 @@ type ChatMessage = {
   createdAt: string;
   steps?: AgentStep[];
   agentRun?: AgentRunMetadata;
+  pdfOffer?: PdfOffer;
 };
 
 type PreparedChatRequest = {
@@ -127,6 +127,7 @@ type ChatResponsePayload = {
   answer?: unknown;
   error?: unknown;
   steps?: unknown;
+  pdfOffer?: unknown;
   conversationId?: unknown;
   title?: unknown;
 };
@@ -380,6 +381,22 @@ function normalizeAgentSteps(value: unknown): AgentStep[] {
   });
 }
 
+function normalizePdfOffer(value: unknown): PdfOffer | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const item = value as Record<string, unknown>;
+  if (
+    Object.keys(item).length !== 1
+    || typeof item.title !== "string"
+    || !item.title.trim()
+    || item.title.length > 160
+  ) {
+    return undefined;
+  }
+  return { title: item.title.trim() };
+}
+
 function normalizeMessages(value: unknown): ChatMessage[] {
   if (!Array.isArray(value)) {
     return [];
@@ -396,6 +413,7 @@ function normalizeMessages(value: unknown): ChatMessage[] {
     }
     const steps = item.role === "assistant" ? normalizeAgentSteps(item.steps) : [];
     const agentRun = item.role === "assistant" ? normalizeAgentRun(item.agentRun) : undefined;
+    const pdfOffer = item.role === "assistant" ? normalizePdfOffer(item.pdfOffer) : undefined;
 
     return [
       {
@@ -403,6 +421,7 @@ function normalizeMessages(value: unknown): ChatMessage[] {
         content: item.content,
         createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString(),
         ...(agentRun ? { agentRun } : {}),
+        ...(pdfOffer ? { pdfOffer } : {}),
         ...(steps.length > 0 ? { steps } : {}),
       },
     ];
@@ -899,6 +918,7 @@ async function readChatStream(
     finalPayload = {
       answer: event.answer,
       steps: event.steps,
+      ...(event.pdfOffer ? { pdfOffer: event.pdfOffer } : {}),
       conversationId: event.conversationId,
       ...(event.title ? { title: event.title } : {}),
     };
@@ -3632,6 +3652,7 @@ export default function Home() {
       }
 
       const steps = normalizeAgentSteps(payload.steps);
+      const pdfOffer = normalizePdfOffer(payload.pdfOffer);
       setMessages([
         ...request.messages,
         {
@@ -3639,6 +3660,7 @@ export default function Home() {
           content: (payload.answer as string).trim(),
           createdAt: new Date().toISOString(),
           ...(steps.length > 0 ? { steps } : {}),
+          ...(pdfOffer ? { pdfOffer } : {}),
         },
       ]);
     } catch (caughtError) {
@@ -3759,7 +3781,9 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          title: conversationTitle.trim().slice(0, 160) || "Antwort",
+          title: message.pdfOffer?.title.trim().slice(0, 160)
+            || conversationTitle.trim().slice(0, 160)
+            || "Antwort",
           content: message.content,
         }),
       });
@@ -5325,21 +5349,19 @@ export default function Home() {
                   ) : (
                     renderUserMessageContent(message.content)
                   )}
-                  {message.role === "assistant"
-                    && messages[index - 1]?.role === "user"
-                    && shouldOfferChatPdfDownload(messages[index - 1].content, message.content) ? (
-                      <div className="pdf-download-row">
-                        <button
-                          className="secondary-button compact-button pdf-download-button"
-                          type="button"
-                          onClick={() => void downloadAssistantPdf(message, index)}
-                          disabled={downloadingPdfMessageIndex !== null}
-                          aria-label="Antwort von Fred als PDF herunterladen"
-                        >
-                          PDF herunterladen
-                        </button>
-                      </div>
-                    ) : null}
+                  {message.role === "assistant" && message.pdfOffer ? (
+                    <div className="pdf-download-row">
+                      <button
+                        className="secondary-button compact-button pdf-download-button"
+                        type="button"
+                        onClick={() => void downloadAssistantPdf(message, index)}
+                        disabled={downloadingPdfMessageIndex !== null}
+                        aria-label="Antwort von Fred als PDF herunterladen"
+                      >
+                        PDF herunterladen
+                      </button>
+                    </div>
+                  ) : null}
                   {message.role === "assistant" && findNearestPrecedingUserMessage(messages, index) ? (
                     <div className="feedback-controls">
                       <button

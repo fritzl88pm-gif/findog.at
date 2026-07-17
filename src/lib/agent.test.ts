@@ -97,6 +97,246 @@ describe("runAgent", () => {
     return { callTool, openToolSession };
   }
 
+  it("creates a complete PDF answer for a referential follow-up without opening MCP", async () => {
+    const previousAnswer = [
+      "# 📘 Überblick",
+      "",
+      "| Position | Ergebnis |",
+      "| --- | --- |",
+      "| Werbungskosten | anerkannt |",
+      "",
+      "# 📎 Quellen, Provenienz und Rechtsstand",
+      "",
+      "[Q1] § 16 EStG in der am Stichtag anwendbaren Fassung.",
+    ].join("\n");
+    const generatedPdfAnswer = [
+      "# 📘 Überblick",
+      "",
+      "Die Aufstellung wird vollständig mit den verlangten Begründungen ausgegeben.",
+      "",
+      "# Aufstellung samt Begründungen",
+      "",
+      "| Position | Ergebnis | Begründung |",
+      "| --- | --- | --- |",
+      "| Werbungskosten | anerkannt | Der berufliche Zusammenhang ist belegt. |",
+      "",
+      "# 📎 Quellen, Provenienz und Rechtsstand",
+      "",
+      "[Q1] § 16 EStG in der am Stichtag anwendbaren Fassung.",
+    ].join("\n");
+    mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "stop",
+      content: generatedPdfAnswer,
+      toolCalls: [],
+    });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [
+        { role: "user", content: "Stelle die Prüfungspunkte mit Begründungen dar." },
+        { role: "assistant", content: previousAnswer },
+        { role: "user", content: "Gib mir diese Aufstellung samt Begründungen als PDF." },
+      ],
+    });
+
+    expect(result.answer).toBe(generatedPdfAnswer);
+    expect(result.answer).toContain("Der berufliche Zusammenhang ist belegt.");
+    expect(result.pdfOffer).toEqual({ title: "Aufstellung samt Begründungen" });
+    expect(result.tools).toEqual([]);
+    expect(result.steps).toEqual([expect.objectContaining({ type: "answer" })]);
+    expect(MockedMcpClient).not.toHaveBeenCalled();
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
+    const directCall = mockedChatCompletion.mock.calls[0]?.[0];
+    expect(directCall?.tools).toBeUndefined();
+    expect(directCall?.messages).toContainEqual({ role: "assistant", content: previousAnswer });
+    expect(directCall?.messages.at(-1)).toEqual(expect.objectContaining({
+      role: "user",
+      content: expect.stringContaining("vollständige, druckfertige Fassung"),
+    }));
+  });
+
+  it("retries a length-limited referential PDF answer once as a complete final version", async () => {
+    const partialAnswer = "# 📘 Überblick\n\nTeilantwort mit begonnener Aufstellung.";
+    const completeAnswer = [
+      "# 📘 Überblick",
+      "",
+      "Vollständige druckfertige Ausarbeitung.",
+      "",
+      "# Anspruchsvoraussetzungen",
+      "",
+      "Alle Voraussetzungen und Begründungen sind vollständig enthalten.",
+    ].join("\n");
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        finishReason: "length",
+        content: partialAnswer,
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: completeAnswer,
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [
+        { role: "user", content: "Stelle die Anspruchsvoraussetzungen mit Begründungen dar." },
+        { role: "assistant", content: "# 📘 Überblick\n\nBisherige fachliche Antwort." },
+        { role: "user", content: "Gib mir diese Aufstellung als PDF." },
+      ],
+    });
+
+    expect(result.answer).toBe(completeAnswer);
+    expect(result.pdfOffer).toEqual({ title: "Anspruchsvoraussetzungen" });
+    expect(MockedMcpClient).not.toHaveBeenCalled();
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(2);
+    const retryCall = mockedChatCompletion.mock.calls[1]?.[0];
+    expect(retryCall?.messages).toContainEqual({ role: "assistant", content: partialAnswer });
+    expect(retryCall?.messages.at(-1)).toEqual(expect.objectContaining({
+      role: "user",
+      content: expect.stringContaining("vollständige, abschließende und druckfertige Fassung"),
+    }));
+  });
+
+  it("runs a new substantive PDF question through the normal research agent and offers its final answer", async () => {
+    const { callTool, openToolSession } = mockMcpSession();
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        finishReason: "tool_calls",
+        content: "Recherchiere die gesetzlichen Voraussetzungen.",
+        toolCalls: [{
+          id: "pdf-law-search",
+          name: "search_laws",
+          arguments: JSON.stringify({ query: "§ 34 EStG Voraussetzungen" }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Vorläufige Ausarbeitung auf Basis der Recherche.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: [
+          "# 📘 Überblick",
+          "",
+          "Abschließende fachliche Ausarbeitung mit Begründungen.",
+          "",
+          "# Voraussetzungen des § 34 EStG",
+          "",
+          "Die gesetzlichen Voraussetzungen werden begründet dargestellt.",
+        ].join("\n"),
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{
+        role: "user",
+        content: "Erstelle eine neue Aufstellung zu den Voraussetzungen des § 34 EStG als PDF.",
+      }],
+      mcpBearerToken: "mcp-token",
+    });
+
+    expect(openToolSession).toHaveBeenCalledWith("mcp-token", { deadline: undefined });
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
+    expect(result.answer).toContain("Abschließende fachliche Ausarbeitung mit Begründungen.");
+    expect(result.pdfOffer).toEqual({
+      title: "Voraussetzungen des § 34 EStG",
+    });
+    expect(result.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "tool_call", toolName: "search_laws" }),
+    ]));
+    expect(result.steps).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "pdf_offer" }),
+    ]));
+  });
+
+  it("does not bypass research for a referential PDF request that changes the legal content", async () => {
+    const { callTool, openToolSession } = mockMcpSession();
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        finishReason: "tool_calls",
+        content: "Die Aktualisierung wird anhand der Rechtslage geprüft.",
+        toolCalls: [{
+          id: "updated-pdf-law-search",
+          name: "search_laws",
+          arguments: JSON.stringify({ query: "zum Stand 2026" }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Vorläufig aktualisierte fachliche Antwort.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Aktualisierte fachliche Antwort.",
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [
+        { role: "user", content: "Erstelle eine Aufstellung für 2024." },
+        { role: "assistant", content: "# 📘 Überblick\n\nBisherige Aufstellung für 2024." },
+        {
+          role: "user",
+          content: "Aktualisiere diese Aufstellung zum Stand 2026 und gib sie als PDF aus.",
+        },
+      ],
+    });
+
+    expect(openToolSession).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
+      arguments: expect.objectContaining({
+        query: [
+          "Ausgangsfrage: Erstelle eine Aufstellung für 2024.",
+          "",
+          "Aktueller Änderungsauftrag: Aktualisiere diese Aufstellung zum Stand 2026 und gib sie als PDF aus.",
+        ].join("\n"),
+      }),
+    }));
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
+    expect(result.answer).toBe(withOverview("Aktualisierte fachliche Antwort."));
+    expect(result.pdfOffer).toBeDefined();
+  });
+
+  it("rejects a referential PDF update when repeated planning yields no research result", async () => {
+    const { callTool } = mockMcpSession();
+    for (let iteration = 0; iteration < 6; iteration += 1) {
+      mockedChatCompletion.mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Ich würde die bestehende Aufstellung ohne weitere Recherche aktualisieren.",
+        toolCalls: [],
+      });
+    }
+
+    await expect(runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [
+        { role: "user", content: "Erstelle eine Aufstellung zur geltenden Rechtslage." },
+        { role: "assistant", content: "# 📘 Überblick\n\nBisherige Aufstellung." },
+        {
+          role: "user",
+          content: "Aktualisiere diese Aufstellung und gib sie als PDF aus.",
+        },
+      ],
+    })).rejects.toThrow("ohne ein erfolgreiches Rechercheergebnis");
+
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(6);
+    expect(callTool).not.toHaveBeenCalled();
+    expect(mockedChatCompletion.mock.calls[1]?.[0].messages.at(-1)).toEqual(
+      expect.objectContaining({
+        role: "user",
+        content: expect.stringContaining("mindestens eine geeignete Recherchefunktion"),
+      }),
+    );
+  });
+
   it("uses semantic tool names and the canonical prompt for attachment-free requests", async () => {
     const { callTool } = mockMcpSession();
     mockedChatCompletion

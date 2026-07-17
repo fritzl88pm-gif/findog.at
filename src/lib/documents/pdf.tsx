@@ -110,27 +110,45 @@ const styles = StyleSheet.create({
   },
   footer: {
     position: "absolute",
+    // With long wrapping content, react-pdf resolves `bottom` against the
+    // unpaginated flow. This fixed A4 coordinate keeps the footer on-page.
+    top: 800,
     right: 52,
-    bottom: 24,
     left: 52,
     borderTopWidth: 0.5,
     borderTopColor: "#cbd5e1",
     paddingTop: 7,
+  },
+  footerText: {
     color: "#718096",
     fontSize: 8,
     textAlign: "center",
   },
 });
 
-function plainText(value: string): string {
+// The built-in Helvetica font only covers a limited character set. Decorative
+// emoji are therefore removed before layout instead of being rendered as
+// missing-glyph boxes or as broken surrogate characters in the PDF.
+const decorativeEmojiPattern =
+  /(?:\p{Regional_Indicator}{2}|[0-9#*]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:[\uFE0E\uFE0F\u{1F3FB}-\u{1F3FF}])*(?:\u200D\p{Extended_Pictographic}(?:[\uFE0E\uFE0F\u{1F3FB}-\u{1F3FF}])*)*)/gu;
+
+function pdfSafeText(value: string): string {
   return value
+    .normalize("NFC")
+    .replace(decorativeEmojiPattern, "")
+    .replace(/[\u200D\uFE0E\uFE0F\u{1F3FB}-\u{1F3FF}]/gu, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .trim();
+}
+function plainText(value: string): string {
+  return pdfSafeText(value
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 ($2)")
     .replace(/(?:\*\*|__)(.+?)(?:\*\*|__)/g, "$1")
     .replace(/(?:\*|_)(.+?)(?:\*|_)/g, "$1")
     .replace(/`([^`]+)`/g, "$1")
-    .replace(/^>\s?/, "")
-    .trim();
+    .replace(/^>\s?/, ""));
 }
 
 function parseTableRow(line: string): string[] | null {
@@ -260,74 +278,79 @@ function getColumnWeights(headers: string[], rows: string[][]): number[] {
 
 function ChatPdfDocument({ title, content, date }: ChatPdfPayload) {
   const blocks = parsePdfContentBlocks(content);
+  const safeTitle = pdfSafeText(title);
+  const safeDate = pdfSafeText(date);
 
   return (
-    <Document title={title}>
+    <Document title={safeTitle}>
       <Page size="A4" style={styles.page}>
-        <Text style={styles.title}>{title}</Text>
-        <Text style={styles.date}>{date}</Text>
-        {blocks.map((block, index) => {
-          if (block.type === "heading") {
-            return (
-              <Text key={index} style={block.level <= 2 ? styles.heading2 : styles.heading3}>
-                {block.text}
-              </Text>
-            );
-          }
-          if (block.type === "bullet") {
-            return (
-              <View key={index} style={styles.bulletRow} wrap={false}>
-                <Text style={styles.bulletMarker}>{block.ordered ? `${block.marker}.` : "•"}</Text>
-                <Text style={styles.bulletText}>{block.text}</Text>
-              </View>
-            );
-          }
-          if (block.type === "table") {
-            const columnWeights = getColumnWeights(block.headers, block.rows);
-            const renderCell = (text: string, cellIndex: number, header = false) => (
-              <View
-                key={cellIndex}
-                style={[
-                  styles.tableCellContainer,
-                  { flexBasis: 0, flexGrow: columnWeights[cellIndex] ?? 1 },
-                ]}
-              >
-                <Text
+        <Text style={styles.title}>{safeTitle}</Text>
+        <Text style={styles.date}>{safeDate}</Text>
+        <View>
+          {blocks.map((block, index) => {
+            if (block.type === "heading") {
+              return (
+                <Text key={index} style={block.level <= 2 ? styles.heading2 : styles.heading3}>
+                  {block.text}
+                </Text>
+              );
+            }
+            if (block.type === "bullet") {
+              return (
+                <View key={index} style={styles.bulletRow} wrap={false}>
+                  <Text style={styles.bulletMarker}>{block.ordered ? `${block.marker}.` : "-"}</Text>
+                  <Text style={styles.bulletText}>{block.text}</Text>
+                </View>
+              );
+            }
+            if (block.type === "table") {
+              const columnWeights = getColumnWeights(block.headers, block.rows);
+              const renderCell = (text: string, cellIndex: number, header = false) => (
+                <View
+                  key={cellIndex}
                   style={[
-                    styles.tableCell,
-                    { textAlign: block.alignments[cellIndex] ?? "left" },
-                    ...(header ? [styles.tableHeaderCell] : []),
+                    styles.tableCellContainer,
+                    { flexBasis: 0, flexGrow: columnWeights[cellIndex] ?? 1 },
                   ]}
                 >
-                  {text}
-                </Text>
-              </View>
-            );
-
-            return (
-              <View key={index} style={styles.table}>
-                <View style={[styles.tableRow, styles.tableHeaderRow]} wrap={false}>
-                  {block.headers.map((header, cellIndex) => renderCell(header, cellIndex, true))}
-                </View>
-                {block.rows.map((row, rowIndex) => (
-                  <View
-                    key={rowIndex}
-                    style={[styles.tableRow, ...(rowIndex % 2 === 1 ? [styles.tableAlternateRow] : [])]}
-                    wrap={false}
+                  <Text
+                    style={[
+                      styles.tableCell,
+                      { textAlign: block.alignments[cellIndex] ?? "left" },
+                      ...(header ? [styles.tableHeaderCell] : []),
+                    ]}
                   >
-                    {row.map((cell, cellIndex) => renderCell(cell, cellIndex))}
+                    {text}
+                  </Text>
+                </View>
+              );
+
+              return (
+                <View key={index} style={styles.table}>
+                  <View fixed style={[styles.tableRow, styles.tableHeaderRow]} wrap={false}>
+                    {block.headers.map((header, cellIndex) => renderCell(header, cellIndex, true))}
                   </View>
-                ))}
-              </View>
-            );
-          }
-          return <Text key={index} style={styles.paragraph}>{block.text}</Text>;
-        })}
-        <Text
-          fixed
-          style={styles.footer}
-          render={({ pageNumber, totalPages }) => `Seite ${pageNumber} von ${totalPages}`}
-        />
+                  {block.rows.map((row, rowIndex) => (
+                    <View
+                      key={rowIndex}
+                      style={[styles.tableRow, ...(rowIndex % 2 === 1 ? [styles.tableAlternateRow] : [])]}
+                      wrap={false}
+                    >
+                      {row.map((cell, cellIndex) => renderCell(cell, cellIndex))}
+                    </View>
+                  ))}
+                </View>
+              );
+            }
+            return <Text key={index} style={styles.paragraph}>{block.text}</Text>;
+          })}
+        </View>
+        <View fixed style={styles.footer} wrap={false}>
+          <Text
+            style={styles.footerText}
+            render={({ pageNumber, totalPages }) => `Seite ${pageNumber} von ${totalPages}`}
+          />
+        </View>
       </Page>
     </Document>
   );
