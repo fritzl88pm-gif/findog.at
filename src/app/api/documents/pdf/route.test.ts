@@ -4,7 +4,9 @@ import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { renderChatPdf } from "@/lib/documents/pdf";
 import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { MAX_PDF_CONTENT_CHARS, POST } from "./route";
+import { POST } from "./route";
+
+const MAX_PDF_CONTENT_CHARS = 60_000;
 
 vi.mock("@/lib/auth/server", () => ({
   authenticateSupabaseRequest: vi.fn(),

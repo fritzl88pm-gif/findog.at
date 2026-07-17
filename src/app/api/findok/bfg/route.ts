@@ -12,10 +12,10 @@ import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
-export const MAX_FINDOK_QUERY_CHARS = 200;
-export const MAX_FINDOK_PAGE = 1_000;
-export const MAX_FINDOK_PAGE_SIZE = 20;
-export const MAX_FINDOK_FILTER_CHARS = 200;
+const MAX_FINDOK_QUERY_CHARS = 200;
+const MAX_FINDOK_PAGE = 1_000;
+const MAX_FINDOK_PAGE_SIZE = 20;
+const MAX_FINDOK_FILTER_CHARS = 200;
 
 const FINDOK_SORTS = new Set<BfgSort>(["1", "2", "3", "4", "7", "10"]);
 

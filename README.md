@@ -29,9 +29,14 @@ Copy `.env.example` to `.env.local` and configure Supabase Auth before using the
 | `GLOBAL_DEEPSEEK_API_KEY` | Optional | Fallback server-only DeepSeek key if `DEEPSEEK_API_KEY` is unset or blank. |
 | `ZAI_API_KEY` | For enabled GLM models | Server-only GLM Coding Plan key. Store it as a protected Coolify runtime variable; never use a `NEXT_PUBLIC_` prefix. |
 | `BFG_MCP_BEARER_TOKEN` | Yes | Server-only bearer token for the fixed BFG/WeKnora MCP endpoint. Never expose it to the browser. |
+| `WEKNORA_FRED_CHANNEL_ID` | For Fred Web Embed | Public identifier of Fred's enabled WeKnora embed channel. Kept server-side so the browser receives it only with a short-lived session. |
+| `WEKNORA_FRED_PUBLISH_TOKEN` | For Fred Web Embed | Server-only long-lived channel publish token with the `em_` prefix. This is not an account API key (`sk_`) and must never use a `NEXT_PUBLIC_` prefix. |
+| `WEKNORA_FRED_EXCHANGE_ORIGIN` | For Fred Web Embed | Exact Findog origin registered in the channel allowlist; production defaults to `https://findog.at`. |
 | `OPENROUTER_API_KEY` | Yes for PDF/image uploads | Server-only OpenRouter key used only for fixed Gemini 3.5 Flash attachment/OCR context extraction. Never expose it to the browser. |
 
 DeepSeek uses `https://api.deepseek.com`; GLM uses the dedicated Coding Plan endpoint `https://api.z.ai/api/coding/paas/v4`. Both use OpenAI-compatible `POST /chat/completions`. The fixed server catalog contains `deepseek-v4-flash`, `deepseek-v4-pro`, `glm-5.2`, and `glm-5-turbo`. Arbitrary client model IDs, endpoints, and API keys are rejected. Availability and supported reasoning settings are resolved server-side for every run.
+
+Fred's WeKnora page uses Secure Mode: Findog exchanges the long-lived `em_` publish token only on the server and hands the browser a short-lived `ems_` session through a verified `postMessage` channel. The Taxdog iframe runs credentialless so its channel-scoped storage cannot cross Findog accounts; the app reloads the top-level document on sign-out/account changes. This privacy boundary currently requires a Chromium browser. Because credentialless storage is page-lifetime only, a full Findog reload starts a fresh visible Fred conversation, and popup-based OAuth inside the iframe is unavailable.
 
 PDF and image uploads are handled as a separate fixed server-side context layer: the browser sends up to five `application/pdf` attachments and up to five image attachments with the chat payload, the server sends each file to OpenRouter model `google/gemini-3.5-flash` for OCR/document or image extraction, and the extracted Markdown contexts are passed to the selected enabled chat model. The existing 50 MB per-PDF limit still applies; images are capped at 5 MB each. There is no page-count gate before extraction. Gemini does not produce the final chat answer.
 
@@ -65,4 +70,4 @@ npm run build
 
 ## Deployment
 
-Deploy the Next.js application through Coolify. Configure the Supabase variables plus `DEEPSEEK_API_KEY`, `ZAI_API_KEY`, `BFG_MCP_BEARER_TOKEN`, and any attachment-processing key as protected runtime environment variables. Do not expose provider keys as build arguments or `NEXT_PUBLIC_` variables. Restart or redeploy the application after changing a runtime variable. Users never provide provider keys in the authenticated UI.
+Deploy the Next.js application through Coolify. Configure the Supabase variables plus `DEEPSEEK_API_KEY`, `ZAI_API_KEY`, `BFG_MCP_BEARER_TOKEN`, the three `WEKNORA_FRED_*` values, and any attachment-processing key as protected runtime environment variables. The Fred channel allowlist must include `https://taxdog.cloud` and the exact Findog exchange origin (plus the local origin only while testing). Do not expose provider keys as build arguments or `NEXT_PUBLIC_` variables. Restart or redeploy the application after changing a runtime variable. Users never provide provider keys in the authenticated UI.

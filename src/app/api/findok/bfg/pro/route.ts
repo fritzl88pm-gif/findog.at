@@ -7,8 +7,8 @@ import { BfgProModelError, runBfgProSearch } from "@/lib/findok/bfg-pro";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
-export const MAX_BFG_PRO_SCENARIO_CHARS = 2_000;
-export const BFG_PRO_RATE_LIMIT_MAX_REQUESTS = 5;
+const MAX_BFG_PRO_SCENARIO_CHARS = 2_000;
+const BFG_PRO_RATE_LIMIT_MAX_REQUESTS = 5;
 const BFG_PRO_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1_000;
 
 type RateLimitEntry = {

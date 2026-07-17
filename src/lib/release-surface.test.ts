@@ -38,7 +38,7 @@ describe("approved release surface", () => {
   });
 
   it("adds a separate BFG Suche PRO view and controls without replacing the normal search", () => {
-    expect(pageSource).toContain('type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "administration"');
+    expect(pageSource).toContain('type AppView = "chat" | "fred" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "administration"');
     expect(pageSource).toMatch(/className={`sidebar-view-button[\s\S]*?BFG Suche PRO\s*<\/button>/);
     expect(pageSource).toContain('title="BFG Suche PRO"');
     expect(pageSource).toContain('aria-label="BFG Suche PRO"');
@@ -148,7 +148,7 @@ describe("approved release surface", () => {
   it("exposes no mutable system-prompt surface and uses one canonical runtime source", () => {
     const settingsDialog = pageSource.slice(
       pageSource.indexOf('{isSettingsDialogOpen ? ('),
-      pageSource.indexOf('{appView === "bfg-pro" ? ('),
+      pageSource.indexOf('{appView === "fred" ? ('),
     );
     const chatSubmit = pageSource.slice(
       pageSource.indexOf('async function handleSubmit('),
@@ -242,7 +242,7 @@ describe("approved release surface", () => {
 
   it("shows the verified decorative PRO illustration in the responsive BFG header", () => {
     const bfgProHeader = pageSource.slice(
-      pageSource.indexOf('{appView === "bfg-pro" ? ('),
+      pageSource.indexOf(') : appView === "bfg-pro" ? ('),
       pageSource.indexOf(') : appView === "bfg-decisions" ? ('),
     );
 

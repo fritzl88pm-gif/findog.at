@@ -5,7 +5,9 @@ import { UserVisibleError } from "@/lib/errors";
 import { FindokUpstreamError } from "@/lib/findok/bfg-decisions";
 import { BfgProModelError, runBfgProSearch } from "@/lib/findok/bfg-pro";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { MAX_BFG_PRO_SCENARIO_CHARS, POST } from "./route";
+import { POST } from "./route";
+
+const MAX_BFG_PRO_SCENARIO_CHARS = 2_000;
 
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
 vi.mock("@/lib/findok/bfg-pro", () => ({

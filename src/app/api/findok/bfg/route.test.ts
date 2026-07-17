@@ -7,7 +7,10 @@ import {
 } from "@/lib/findok/bfg-decisions";
 import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { GET, MAX_FINDOK_PAGE_SIZE, MAX_FINDOK_QUERY_CHARS } from "./route";
+import { GET } from "./route";
+
+const MAX_FINDOK_QUERY_CHARS = 200;
+const MAX_FINDOK_PAGE_SIZE = 20;
 
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
 vi.mock("@/lib/findok/bfg-decisions", () => ({

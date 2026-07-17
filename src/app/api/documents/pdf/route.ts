@@ -8,8 +8,8 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
-export const MAX_PDF_TITLE_CHARS = 160;
-export const MAX_PDF_CONTENT_CHARS = 60_000;
+const MAX_PDF_TITLE_CHARS = 160;
+const MAX_PDF_CONTENT_CHARS = 60_000;
 const MAX_PDF_JSON_BYTES = 100_000;
 
 type PdfRequestBody = {

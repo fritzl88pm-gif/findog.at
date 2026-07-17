@@ -78,6 +78,7 @@ import {
   getL17bSourceNote,
   parseL17bGermanAmount,
 } from "@/lib/l17b-currency";
+import FredEmbedView from "@/components/fred-embed-view";
 import FredRunView from "@/components/fredrun-view";
 
 type ChatMessage = {
@@ -108,7 +109,7 @@ type ConversationSummary = {
   updatedAt: string;
 };
 
-type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "administration";
+type AppView = "chat" | "fred" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "administration";
 type ComposerMenu = "attachments" | "model" | null;
 
 type AuthForm = {
@@ -1736,6 +1737,7 @@ export default function Home() {
   const settingsDialogRef = useRef<HTMLElement>(null);
   const settingsDialogCloseRef = useRef<HTMLButtonElement>(null);
   const authenticatedUserIdRef = useRef<string | null>(null);
+  const secureEmbedOwnerIdRef = useRef<string | null>(null);
   const feedbackCloseRef = useRef<HTMLButtonElement>(null);
   const feedbackTextareaRef = useRef<HTMLTextAreaElement>(null);
   const feedbackTriggerRef = useRef<HTMLButtonElement>(null);
@@ -1803,6 +1805,17 @@ export default function Home() {
       if (!isActive) {
         return;
       }
+
+      const previousUserId = secureEmbedOwnerIdRef.current;
+      const nextUserId = nextSession?.user.id ?? null;
+      if (previousUserId && previousUserId !== nextUserId) {
+        // Credentialless iframe storage is isolated for the lifetime of the
+        // top-level document. A reload on sign-out/account change guarantees
+        // that another Findog account cannot inherit Fred's ephemeral state.
+        window.location.reload();
+        return;
+      }
+      secureEmbedOwnerIdRef.current = nextUserId;
 
       setSession(nextSession);
       setError("");
@@ -2514,6 +2527,14 @@ export default function Home() {
 
   function openFredRunView() {
     setAppView("fredrun");
+    setError("");
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
+  function openFredView() {
+    setAppView("fred");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
@@ -4061,6 +4082,15 @@ export default function Home() {
             </div>
             <nav className="forms-navigation" aria-label="Anwendungsbereiche">
               <button
+                className={`sidebar-view-button ${appView === "fred" ? "active" : ""}`}
+                type="button"
+                onClick={openFredView}
+                aria-current={appView === "fred" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"></path><path d="M8 9h8M8 13h5"></path></svg>
+                Fred
+              </button>
+              <button
                 className={`sidebar-view-button ${appView === "bfg-decisions" ? "active" : ""}`}
                 type="button"
                 onClick={openBfgDecisionsView}
@@ -4138,6 +4168,16 @@ export default function Home() {
               aria-label="Neue Unterhaltung"
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+            <button
+              className={`icon-button rail-icon-btn ${appView === "fred" ? "active" : ""}`}
+              type="button"
+              onClick={openFredView}
+              title="Fred"
+              aria-label="Fred"
+              aria-current={appView === "fred" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"></path><path d="M8 9h8M8 13h5"></path></svg>
             </button>
             <button
               className={`icon-button rail-icon-btn rail-forms-button ${appView === "forms" ? "active" : ""}`}
@@ -4393,7 +4433,9 @@ export default function Home() {
         </div>
       ) : null}
 
-      {appView === "bfg-pro" ? (
+      {appView === "fred" ? (
+        <FredEmbedView accessToken={session?.access_token ?? ""} />
+      ) : appView === "bfg-pro" ? (
         <section className="forms-panel" aria-labelledby="bfg-pro-view-title">
           <div className="forms-view bfg-decisions-view bfg-pro-view">
             <header className="forms-view-header bfg-view-header">
