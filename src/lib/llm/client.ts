@@ -5,7 +5,7 @@ import type { LlmRuntime } from "./runtime";
 
 export const LLM_CHAT_TIMEOUT_MS = 120_000;
 export const LLM_THINKING_TIMEOUT_MS = 220_000;
-export const LLM_OPENAI_COMPATIBLE_TIMEOUT_MS = 300_000;
+export const LLM_OPENAI_COMPATIBLE_TIMEOUT_MS = 600_000;
 
 export type AppChatMessage = {
   role: "user" | "assistant";

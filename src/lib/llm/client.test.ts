@@ -474,13 +474,13 @@ describe("OpenAI-compatible chat completion", () => {
 });
 
 describe("LLM_OPENAI_COMPATIBLE_TIMEOUT_MS constant", () => {
-  it("LLM_OPENAI_COMPATIBLE_TIMEOUT_MS is 300_000", () => {
-    expect(LLM_OPENAI_COMPATIBLE_TIMEOUT_MS).toBe(300_000);
+  it("LLM_OPENAI_COMPATIBLE_TIMEOUT_MS is 600_000", () => {
+    expect(LLM_OPENAI_COMPATIBLE_TIMEOUT_MS).toBe(600_000);
   });
 });
 
 describe("effectiveTimeoutMs pure timeout selector", () => {
-  it("returns 300_000 for openai_compatible provider", () => {
+  it("returns 600_000 for openai_compatible provider", () => {
     const runtime = {
       model: "openai:xxx",
       provider: "openai_compatible" as const,
@@ -490,10 +490,10 @@ describe("effectiveTimeoutMs pure timeout selector", () => {
       reasoning: "disabled" as const,
     } satisfies LlmRuntime;
 
-    expect(effectiveTimeoutMs(runtime)).toBe(300_000);
+    expect(effectiveTimeoutMs(runtime)).toBe(600_000);
   });
 
-  it("returns 300_000 for openai_compatible even with reasoning enabled", () => {
+  it("returns 600_000 for openai_compatible even with reasoning enabled", () => {
     const runtime = {
       model: "openai:xxx",
       provider: "openai_compatible" as const,
@@ -503,7 +503,7 @@ describe("effectiveTimeoutMs pure timeout selector", () => {
       reasoning: "high" as const,
     } satisfies LlmRuntime;
 
-    expect(effectiveTimeoutMs(runtime)).toBe(300_000);
+    expect(effectiveTimeoutMs(runtime)).toBe(600_000);
   });
 
   it("returns 120_000 for built-in non-thinking provider", () => {
