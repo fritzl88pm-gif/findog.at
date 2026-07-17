@@ -38,6 +38,9 @@ const ALL_KB_ALIASES = [...KB_ID_ALIASES, ...KB_NAME_ALIASES] as const;
 
 const DEFAULT_RESULT_LIMIT = 5;
 
+/** Canonical source keys from RESEARCH_SOURCES used for enum constraints in model-visible schemas. */
+const CANONICAL_SOURCE_KEYS: readonly string[] = Object.keys(RESEARCH_SOURCES);
+
 /** Find which KB-parameter alias the raw schema declares, if any. */
 function findKbParamAlias(
   schemaProps: Record<string, unknown> | undefined,
@@ -62,14 +65,8 @@ function findParamAlias(
 }
 
 /** Resolve a source key or a known KB id to a ResearchSource; throw on unknown. */
-function resolveSourceKey(key: string): ResearchSource {
-  const source = getSourceByKey(key.toUpperCase()) ?? getSourceByKbId(key);
-  if (!source) {
-    throw new Error(
-      `Unbekannter Quellenschlüssel: „${key}“. Verwende list_research_sources, um verfügbare Quellen zu ermitteln.`,
-    );
-  }
-  return source;
+function resolveSourceKey(key: string): ResearchSource | undefined {
+  return getSourceByKey(key.toUpperCase()) ?? getSourceByKbId(key);
 }
 
 /**
@@ -166,12 +163,15 @@ interface SemanticToolDef {
    * Build the raw MCP arguments from the public (semantic) arguments.
    * Receives the raw McpTool object for schema-aware mapping and the
    * resolved ResearchSource for KB-id injection.
+   * Returns undefined when the semantic arguments are invalid (e.g. unknown
+   * source_key); routeToolCall will surface the error as a recoverable
+   * argument error instead of throwing.
    */
   buildRawArgs: (
     semanticArgs: JsonObject,
     rawTool: McpTool,
     source?: ResearchSource,
-  ) => JsonObject;
+  ) => JsonObject | undefined;
   /** Names of required raw MCP tools (must all be present to expose). */
   requiredRawToolNames: readonly string[];
   /** Fixed ResearchSource to inject, or a resolver from semantic args. */
@@ -259,8 +259,9 @@ function sourceDocIdProperties(
     properties: {
       source_key: {
         type: "string",
+        enum: [...CANONICAL_SOURCE_KEYS],
         description:
-          "Quellenschlüssel aus der Liste der verfügbaren Forschungsquellen (z. B. „GESETZE“, „BFG“, „WIKI“).",
+          "Quellenschlüssel aus der Liste der verfügbaren Forschungsquellen.",
       },
       knowledge_id: {
         type: "string",
@@ -325,14 +326,18 @@ function faqExactTool(
   };
 }
 
+function sourceKeyError(key: string): string {
+  return `Unbekannter Quellenschlüssel: „${key}“. Verwende list_research_sources, um verfügbare Quellen zu ermitteln.`;
+}
+
 /** Build raw args for a source-key-based tool (list/inspect/chunks). */
 function sourceKeyToolArgs(
   semanticArgs: JsonObject,
   rawTool: McpTool,
-): JsonObject {
-  const source = resolveSourceKey(
-    String(semanticArgs.source_key ?? ""),
-  );
+): JsonObject | undefined {
+  const key = String(semanticArgs.source_key ?? "");
+  const source = resolveSourceKey(key);
+  if (!source) return undefined;
   return buildSchemaAwareArgs(rawTool, semanticArgs, source);
 }
 
@@ -345,8 +350,9 @@ const LIST_SOURCE_DOCUMENTS_PROPERTIES: JsonObject = {
   properties: {
     source_key: {
       type: "string",
+      enum: [...CANONICAL_SOURCE_KEYS],
       description:
-        "Quellenschlüssel aus der Liste der verfügbaren Forschungsquellen (z. B. „GESETZE“, „BFG“, „WIKI“).",
+        "Quellenschlüssel aus der Liste der verfügbaren Forschungsquellen.",
     },
   },
   required: ["source_key"],
@@ -504,8 +510,9 @@ const ALL_SEMANTIC_DEFS: SemanticToolDef[] = [
       properties: {
         source_key: {
           type: "string",
+          enum: [...CANONICAL_SOURCE_KEYS],
           description:
-            "Quellenschlüssel aus der Liste der verfügbaren Forschungsquellen (z. B. „GESETZE“, „BFG“, „WIKI“).",
+            "Quellenschlüssel aus der Liste der verfügbaren Forschungsquellen.",
         },
       },
       required: ["source_key"],
@@ -513,9 +520,9 @@ const ALL_SEMANTIC_DEFS: SemanticToolDef[] = [
     },
     rawName: "get_knowledge_base",
     buildRawArgs: (semanticArgs, rawTool) => {
-      const source = resolveSourceKey(
-        String(semanticArgs.source_key ?? ""),
-      );
+      const key = String(semanticArgs.source_key ?? "");
+      const source = resolveSourceKey(key);
+      if (!source) return undefined;
       return buildSchemaAwareArgs(rawTool, {}, source);
     },
     requiredRawToolNames: ["get_knowledge_base"] as const,
@@ -592,22 +599,34 @@ export class SemanticToolRegistry {
    * MCP tool name and arguments (with kb_id and defaults injected).
    * Uses schema-aware argument mapping based on the raw tool's schema.
    *
-   * @returns The raw MCP `{ name, arguments }` or `undefined` if the
-   *          public tool name is unknown / unavailable.
+   * @returns `{ name, arguments }` for a valid route,
+   *          `{ name, arguments, error }` for recoverable semantic argument errors
+   *          (e.g. unknown source_key), or `undefined` if the public tool name is
+   *          unknown / unavailable.
    */
   routeToolCall(
     publicName: string,
     semanticArgs: JsonObject,
-  ): { name: string; arguments: JsonObject } | undefined {
+  ): { name: string; arguments: JsonObject; error?: string } | undefined {
     const def = this.byPublicName.get(publicName);
     if (!def) return undefined;
 
     const rawMcpTool = this.rawToolByName.get(def.rawName);
     if (!rawMcpTool) return undefined;
 
+    const builtArgs = def.buildRawArgs(semanticArgs, rawMcpTool);
+    if (builtArgs === undefined) {
+      const key = String(semanticArgs.source_key ?? "");
+      return {
+        name: def.rawName,
+        arguments: {},
+        error: sourceKeyError(key),
+      };
+    }
+
     return {
       name: def.rawName,
-      arguments: def.buildRawArgs(semanticArgs, rawMcpTool),
+      arguments: builtArgs,
     };
   }
 

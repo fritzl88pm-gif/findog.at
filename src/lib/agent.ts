@@ -890,38 +890,47 @@ export async function runAgent(options: {
       );
 
       let toolResult: string;
-      try {
-        const routed = registry.routeToolCall(call.name, parsedArguments);
-        if (!routed) {
-          throw new UserVisibleError(`Unbekannte Recherchefunktion: ${call.name}.`, 502);
+      let semanticArgumentError = false;
+      const routed = registry.routeToolCall(call.name, parsedArguments);
+      if (!routed) {
+        throw new UserVisibleError(`Unbekannte Recherchefunktion: ${call.name}.`, 502);
+      }
+      if ("error" in routed && typeof routed.error === "string") {
+        // Recoverable semantic argument error (e.g. unknown source_key).
+        // Record a failed tool result and let the agent loop continue so the
+        // model can retry or answer. Do NOT swallow MCP/network/auth errors.
+        toolResult = routed.error;
+        semanticArgumentError = true;
+      } else {
+        try {
+          toolResult = await mcp.callTool({
+            token: options.mcpBearerToken,
+            sessionId: session.sessionId,
+            name: routed.name,
+            arguments: routed.arguments,
+            deadline: options.deadline,
+          });
+        } catch (error) {
+          await appendAgentStep(
+            steps,
+            {
+              type: "tool_result",
+              title: sourceName
+                ? researchSourceResultTitle(sourceName, false)
+                : "Recherchequelle nicht erreichbar",
+              content: error instanceof Error
+                ? summarizeStepText(error.message)
+                : "Die Datenbankabfrage konnte nicht erfolgreich ausgeführt werden.",
+              toolName: call.name,
+              success: false,
+            },
+            options.onStep,
+          );
+          throw error;
         }
-        toolResult = await mcp.callTool({
-          token: options.mcpBearerToken,
-          sessionId: session.sessionId,
-          name: routed.name,
-          arguments: routed.arguments,
-          deadline: options.deadline,
-        });
-      } catch (error) {
-        await appendAgentStep(
-          steps,
-          {
-            type: "tool_result",
-            title: sourceName
-              ? researchSourceResultTitle(sourceName, false)
-              : "Recherchequelle nicht erreichbar",
-            content: error instanceof Error
-              ? summarizeStepText(error.message)
-              : "Die Datenbankabfrage konnte nicht erfolgreich ausgeführt werden.",
-            toolName: call.name,
-            success: false,
-          },
-          options.onStep,
-        );
-        throw error;
       }
 
-      const success = !toolResult.startsWith("Datenbankfehler:");
+      const success = semanticArgumentError ? false : !toolResult.startsWith("Datenbankfehler:");
       toolLog.push({ toolName: call.name, arguments: argumentSummary, result: toolResult, success });
       await appendAgentStep(
         steps,

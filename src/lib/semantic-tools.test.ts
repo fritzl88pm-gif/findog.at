@@ -423,33 +423,68 @@ describe("SemanticToolRegistry", () => {
       expect(routed!.arguments.knowledge_id).toBe("wiki-doc-456");
     });
 
-    it("rejects unknown source_key with an error for list_research_documents", () => {
+    it("returns argumentError for unknown source_key in list_research_documents instead of throwing", () => {
       const registry = new SemanticToolRegistry(allProductionRawTools());
-      expect(() =>
-        registry.routeToolCall("list_research_documents", {
-          source_key: "UNKNOWN_SOURCE",
-        }),
-      ).toThrow(/Unbekannter Quellenschlüssel/);
+      const result = registry.routeToolCall("list_research_documents", {
+        source_key: "UNKNOWN_SOURCE",
+      });
+      expect(result).toBeDefined();
+      expect(result).toHaveProperty("error");
+      expect(result!.error).toMatch(/Unbekannter Quellenschlüssel/);
     });
 
-    it("rejects unknown source_key for inspect_research_document", () => {
+    it("returns argumentError for unknown source_key in inspect_research_document instead of throwing", () => {
       const registry = new SemanticToolRegistry(allProductionRawTools());
-      expect(() =>
-        registry.routeToolCall("inspect_research_document", {
-          source_key: "NONEXISTENT",
-          knowledge_id: "x",
-        }),
-      ).toThrow(/Unbekannter Quellenschlüssel/);
+      const result = registry.routeToolCall("inspect_research_document", {
+        source_key: "NONEXISTENT",
+        knowledge_id: "x",
+      });
+      expect(result).toBeDefined();
+      expect(result).toHaveProperty("error");
+      expect(result!.error).toMatch(/Unbekannter Quellenschlüssel/);
     });
 
-    it("rejects unknown source_key for inspect_research_document_chunks", () => {
+    it("returns argumentError for unknown source_key in inspect_research_document_chunks instead of throwing", () => {
       const registry = new SemanticToolRegistry(allProductionRawTools());
-      expect(() =>
-        registry.routeToolCall("inspect_research_document_chunks", {
-          source_key: "INVALID",
-          knowledge_id: "x",
-        }),
-      ).toThrow(/Unbekannter Quellenschlüssel/);
+      const result = registry.routeToolCall("inspect_research_document_chunks", {
+        source_key: "INVALID",
+        knowledge_id: "x",
+      });
+      expect(result).toBeDefined();
+      expect(result).toHaveProperty("error");
+      expect(result!.error).toMatch(/Unbekannter Quellenschlüssel/);
+    });
+
+    it("returns argumentError for unknown source_key in inspect_research_source instead of throwing", () => {
+      const registry = new SemanticToolRegistry(allProductionRawTools());
+      const result = registry.routeToolCall("inspect_research_source", {
+        source_key: "NONEXISTENT",
+      });
+      expect(result).toBeDefined();
+      expect(result).toHaveProperty("error");
+      expect(result!.error).toMatch(/Unbekannter Quellenschlüssel/);
+    });
+
+    it("adds an enum constraint with exactly the canonical keys to all four source_key schemas", () => {
+      const registry = new SemanticToolRegistry(allProductionRawTools());
+      const modelTools = registry.getModelTools();
+      const sourceKeyTools = [
+        "list_research_documents",
+        "inspect_research_document",
+        "inspect_research_document_chunks",
+        "inspect_research_source",
+      ];
+      const expectedKeys = Object.keys(RESEARCH_SOURCES);
+      for (const toolName of sourceKeyTools) {
+        const tool = modelTools.find((t) => t.function.name === toolName);
+        expect(tool, `tool ${toolName} not found`).toBeDefined();
+        const props = (tool!.function.parameters as Record<string, unknown>).properties as Record<string, unknown>;
+        const sourceKeySchema = props.source_key as Record<string, unknown>;
+        expect(sourceKeySchema, `source_key schema for ${toolName}`).toBeDefined();
+        expect(sourceKeySchema.enum, `enum for ${toolName}`).toBeDefined();
+        const enumValues = sourceKeySchema.enum as string[];
+        expect([...enumValues].sort()).toEqual([...expectedKeys].sort());
+      }
     });
   });
 

@@ -80,6 +80,14 @@ describe("runAgent", () => {
             },
           },
         },
+        {
+          name: "list_knowledge",
+          description: "List documents in a knowledge base",
+          inputSchema: {
+            type: "object",
+            properties: { kb_id: { type: "string" } },
+          },
+        },
       ],
     });
     const callTool = vi.fn().mockResolvedValue(toolResult);
@@ -550,5 +558,49 @@ describe("runAgent", () => {
     expect(result.answer).toBe(withOverview("Siehe RV/7103053/2014 und RV/7103080/2015."));
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
+  });
+  it("does not reject runAgent when model uses an unknown source_key; model receives failed tool result and can continue", async () => {
+    const { callTool } = mockMcpSession();
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        finishReason: "tool_calls",
+        content: "Ich suche nach Arbeitsbehelfen.",
+        toolCalls: [
+          {
+            id: "call-invalid-key",
+            name: "list_research_documents",
+            arguments: JSON.stringify({ source_key: "WORK_AIDS" }),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Vorläufige Antwort trotz ungültigem Quellenschlüssel.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "# 📘 Antwort\n\nErfolgreich recherchiert.",
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "Suche in Arbeitsbehelfen" }],
+      mcpBearerToken: "mcp-token",
+    });
+
+    expect(result.answer).toContain("Erfolgreich recherchiert.");
+    const failedSteps = result.steps.filter(
+      (step) => step.type === "tool_result" && step.success === false,
+    );
+    expect(failedSteps.length).toBeGreaterThanOrEqual(1);
+    const toolResultMessages = mockedChatCompletion.mock.calls
+      .flatMap(([options]) => options.messages)
+      .filter((m) => m.role === "tool");
+    expect(toolResultMessages.some(
+      (m) => m.content && m.content.includes("Unbekannter Quellenschlüssel"),
+    )).toBe(true);
+    expect(callTool).not.toHaveBeenCalled();
   });
 });
