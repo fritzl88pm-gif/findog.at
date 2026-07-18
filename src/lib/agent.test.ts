@@ -521,17 +521,8 @@ describe("runAgent", () => {
     const { callTool } = mockMcpSession("§ 16 EStG in der am Stichtag geltenden Fassung.");
     mockedChatCompletion
       .mockResolvedValueOnce({
-        finishReason: "tool_calls",
-        content: "Die Rechtsgrundlage wird nun geprüft.",
-        toolCalls: [{
-          id: "initial-law-search",
-          name: "search_laws",
-          arguments: JSON.stringify({ query: "Werbungskosten § 16 EStG" }),
-        }],
-      })
-      .mockResolvedValueOnce({
         finishReason: "stop",
-        content: "Entwurf auf Basis der recherchierten Rechtsgrundlage.",
+        content: "Unbelegter Entwurf aus Modellwissen.",
         toolCalls: [],
       })
       .mockResolvedValueOnce({
@@ -555,12 +546,42 @@ describe("runAgent", () => {
       "answer",
     ]);
     expect(mockedChatCompletion.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ toolChoice: "required" }),
+      expect.not.objectContaining({ toolChoice: expect.anything() }),
+    );
+    expect(mockedChatCompletion.mock.calls[1]?.[0].tools).toBeUndefined();
+  });
+
+  it("falls back to a direct BFG search when an initial case-law answer contains no tool call", async () => {
+    const { callTool } = mockMcpSession("Verifizierter BFG-Rechtssatz zur Fortbildung.");
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Unbelegte Judikaturauskunft.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Geprüfte BFG-Auskunft.",
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "Welche BFG-Rechtsprechung gibt es zu Fortbildungskosten?" }],
+    });
+
+    expect(callTool).toHaveBeenCalledOnce();
+    expect(result.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "tool_call", toolName: "search_bfg" }),
+      expect.objectContaining({ type: "tool_result", toolName: "search_bfg", success: true }),
+    ]));
+    expect(mockedChatCompletion.mock.calls[0]?.[0]).toEqual(
+      expect.not.objectContaining({ toolChoice: expect.anything() }),
     );
   });
 
   it("does not return a first specialist answer when no usable research result can be obtained", async () => {
-    const { callTool } = mockMcpSession();
+    const { callTool } = mockMcpSession("Keine Treffer gefunden.");
     mockedChatCompletion.mockResolvedValueOnce({
       finishReason: "stop",
       content: "Unbelegte fachliche Antwort aus Modellwissen.",
@@ -574,9 +595,9 @@ describe("runAgent", () => {
 
     expect(mockedChatCompletion).toHaveBeenCalledOnce();
     expect(mockedChatCompletion.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ toolChoice: "required" }),
+      expect.not.objectContaining({ toolChoice: expect.anything() }),
     );
-    expect(callTool).not.toHaveBeenCalled();
+    expect(callTool).toHaveBeenCalledOnce();
   });
 
   it("does not accept repeated empty direct searches as first-turn research evidence", async () => {
@@ -966,7 +987,7 @@ describe("runAgent", () => {
       expect.objectContaining({ type: "tool_result", toolName: "search_laws", success: true }),
     ]));
     expect(mockedChatCompletion.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ toolChoice: "required" }),
+      expect.not.objectContaining({ toolChoice: expect.anything() }),
     );
   });
 

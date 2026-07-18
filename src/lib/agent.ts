@@ -1245,6 +1245,121 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
   }
   let hasRunFullLawSearch = false;
   let initialResearchRequired = false;
+
+  const executeResearchToolCall = async (call: {
+    id: string;
+    name: string;
+    parsedArguments: JsonObject;
+  }, appendToolMessage = true): Promise<void> => {
+    const parsedArguments = call.parsedArguments;
+    const argumentSummary = summarizeToolArguments(parsedArguments);
+    const sourceDescriptor = registry.getResearchSourceDescriptor(call.name, parsedArguments);
+    const sourceName = registry.getResearchSourceName(call.name, parsedArguments);
+    await appendAgentStep(
+      steps,
+      {
+        type: "tool_call",
+        title: sourceName
+          ? researchSourceCallTitle(sourceName)
+          : "Recherchequelle wird abgefragt",
+        content: `Argumente:\n${argumentSummary}`,
+        toolName: call.name,
+        arguments: argumentSummary,
+      },
+      options.onStep,
+    );
+
+    let toolResult: string;
+    let detailedResult: McpToolResult | undefined;
+    let semanticArgumentError = false;
+    const routed = registry.routeToolCall(call.name, parsedArguments);
+    if (!routed) {
+      throw new UserVisibleError(`Unbekannte Recherchefunktion: ${call.name}.`, 502);
+    }
+    const effectiveArguments = withEffectiveResearchStichtag(
+      routed.arguments,
+      researchStichtag,
+    );
+    if ("error" in routed && typeof routed.error === "string") {
+      toolResult = routed.error;
+      semanticArgumentError = true;
+    } else {
+      try {
+        detailedResult = await callMcpToolDetailed(mcp, {
+          token: options.mcpBearerToken,
+          sessionId: session.sessionId,
+          name: routed.name,
+          arguments: effectiveArguments,
+          deadline: options.deadline,
+        });
+        toolResult = detailedResult.text;
+      } catch (error) {
+        await appendAgentStep(
+          steps,
+          {
+            type: "tool_result",
+            title: sourceName
+              ? researchSourceResultTitle(sourceName, false)
+              : "Recherchequelle nicht erreichbar",
+            content: error instanceof Error
+              ? summarizeStepText(error.message)
+              : "Die Datenbankabfrage konnte nicht erfolgreich ausgeführt werden.",
+            toolName: call.name,
+            success: false,
+          },
+          options.onStep,
+        );
+        throw error;
+      }
+    }
+
+    const success = semanticArgumentError
+      ? false
+      : detailedResult
+        ? !detailedResult.isError
+        : !toolResult.startsWith("Datenbankfehler:");
+    toolLog.push({ toolName: call.name, arguments: argumentSummary, result: toolResult, success });
+    const resultStepOrder = steps.length;
+    if (success && isUsableGeneralResearchResult(toolResult)) {
+      appendResearchEvidence(researchEvidence, {
+        resultStepOrder,
+        evidenceOrder: researchEvidence.length,
+        semanticToolName: call.name,
+        semanticArguments: parsedArguments,
+        rawToolName: routed.name,
+        effectiveArguments,
+        source: {
+          key: sourceDescriptor?.key ?? null,
+          name: sourceDescriptor?.name ?? null,
+          kbId: sourceDescriptor?.kbId ?? null,
+          system: null,
+        },
+        stichtag: researchStichtag,
+        resultText: toolResult,
+        structuredContent: detailedResult?.structuredContent,
+        resultLimit: effectiveResultLimit(effectiveArguments),
+      });
+    }
+    await appendAgentStep(
+      steps,
+      {
+        type: "tool_result",
+        title: sourceName
+          ? researchSourceResultTitle(sourceName, success)
+          : success
+            ? "Rechercheergebnis wird ausgewertet"
+            : "Recherchequelle nicht erreichbar",
+        content: summarizeStepText(toolResult),
+        toolName: call.name,
+        success,
+      },
+      options.onStep,
+    );
+    if (appendToolMessage) {
+      messages.push({ role: "tool", tool_call_id: call.id, content: toolResult });
+    }
+  };
+
   for (let iteration = 0; iteration < policy.maxToolIterations; iteration += 1) {
     if (!hasDeadlineTime(options.deadline, AGENT_MIN_ITERATION_BUDGET_MS)) {
       if (requiresSuccessfulReferentialPdfResearch && !toolLog.some((entry) => entry.success)) {
@@ -1279,11 +1394,6 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
       reserveMs: AGENT_FINALIZATION_RESERVE_MS,
       messages: [...messages],
       tools: allModelTools,
-      ...(options.runtime.provider === "deepseek"
-        && shouldVerifyInitialSpecialistAnswer
-        && !hasUsableInitialResearchEvidence(researchEvidence)
-        ? { toolChoice: "required" as const }
-        : {}),
     });
 
     if (result.finishReason === "length") {
@@ -1294,6 +1404,60 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
     }
 
     if (result.finishReason === "stop" || result.toolCalls.length === 0) {
+      if (
+        shouldVerifyInitialSpecialistAnswer
+        && !hasUsableInitialResearchEvidence(researchEvidence)
+        && (initialResearchRequired || !isNonFachResponse(result.content ?? ""))
+      ) {
+        initialResearchRequired = true;
+        const prefersCaseLaw = /\b(?:bfg|bundesfinanzgericht|judikatur|rechtsprechung|entscheidungen?|urteile?)\b/iu
+          .test(latestQuestion ?? "");
+        const preferredToolName = prefersCaseLaw ? "search_bfg" : "search_laws";
+        const fallbackToolName = preferredToolName === "search_laws" ? "search_bfg" : "search_laws";
+        const initialToolName = allowedToolNames.has(preferredToolName)
+          ? preferredToolName
+          : allowedToolNames.has(fallbackToolName)
+            ? fallbackToolName
+            : undefined;
+        if (!initialToolName || !fullLawSearchQuery) {
+          throw missingInitialResearchError();
+        }
+        await executeResearchToolCall({
+          id: "initial-research",
+          name: initialToolName,
+          parsedArguments: { query: fullLawSearchQuery },
+        }, false);
+        if (!hasUsableInitialResearchEvidence(researchEvidence)) {
+          throw missingInitialResearchError();
+        }
+        await appendAgentStep(
+          steps,
+          {
+            type: "progress",
+            title: "Erste Quellenprüfung abgeschlossen",
+            content: `${toolLog.length} Werkzeugergebnis${toolLog.length === 1 ? "" : "se"} berücksichtigt.`,
+          },
+          options.onStep,
+        );
+        return finalizeAgentRun({
+          runtime: options.runtime,
+          systemPrompt: options.systemPrompt,
+          attachmentUserMessage,
+          conversation: options.messages,
+          toolLog,
+          researchEvidence,
+          generateResearchMemoryCards: options.generateResearchMemoryCards,
+          researchStichtag,
+          researchMemoryRequeryRequirements: options.researchMemoryRequeryRequirements,
+          steps,
+          tools: allToolNames,
+          onStep: options.onStep,
+          deadline: options.deadline,
+          policy,
+          researchMemory: finalResearchMemory,
+          reason: "Die erste fachliche Anfrage wurde vor der Antwort direkt in der maßgeblichen Quelle geprüft.",
+        });
+      }
       if (requiresSuccessfulReferentialPdfResearch && !toolLog.some((entry) => entry.success)) {
         messages.push({ role: "assistant", content: result.content });
         messages.push({
@@ -1301,26 +1465,6 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
           content: [
             "Für die verlangte aktualisierte PDF-Ausarbeitung fehlt noch ein belegtes Rechercheergebnis.",
             "Rufe jetzt mindestens eine geeignete Recherchefunktion auf und stütze die Überarbeitung auf deren erfolgreiches Ergebnis.",
-          ].join(" "),
-        });
-        continue;
-      }
-      if (
-        shouldVerifyInitialSpecialistAnswer
-        && !hasUsableInitialResearchEvidence(researchEvidence)
-        && (initialResearchRequired || !isNonFachResponse(result.content ?? ""))
-      ) {
-        initialResearchRequired = true;
-        if (options.runtime.provider === "deepseek") {
-          throw missingInitialResearchError();
-        }
-        messages.push({ role: "assistant", content: result.content });
-        messages.push({
-          role: "user",
-          content: [
-            "Dies ist die erste fachliche Rechtsauskunft in diesem Gespräch und sie darf nicht allein aus Modellwissen erstellt werden.",
-            "Rufe jetzt mindestens eine geeignete Recherchefunktion auf und prüfe die Rechtslage zum verbindlichen Stichtag in der fachlich maßgeblichen Quelle.",
-            "Bevorzuge für Normen und Judikatur RIS/EVI und antworte noch nicht abschließend.",
           ].join(" "),
         });
         continue;
@@ -1422,114 +1566,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         });
       }
 
-      const parsedArguments = call.parsedArguments;
-      const argumentSummary = summarizeToolArguments(parsedArguments);
-      const sourceDescriptor = registry.getResearchSourceDescriptor(call.name, parsedArguments);
-      const sourceName = registry.getResearchSourceName(call.name, parsedArguments);
-      await appendAgentStep(
-        steps,
-        {
-          type: "tool_call",
-          title: sourceName
-            ? researchSourceCallTitle(sourceName)
-            : "Recherchequelle wird abgefragt",
-          content: `Argumente:\n${argumentSummary}`,
-          toolName: call.name,
-          arguments: argumentSummary,
-        },
-        options.onStep,
-      );
-
-      let toolResult: string;
-      let detailedResult: McpToolResult | undefined;
-      let semanticArgumentError = false;
-      const routed = registry.routeToolCall(call.name, parsedArguments);
-      if (!routed) {
-        throw new UserVisibleError(`Unbekannte Recherchefunktion: ${call.name}.`, 502);
-      }
-      const effectiveArguments = withEffectiveResearchStichtag(
-        routed.arguments,
-        researchStichtag,
-      );
-      if ("error" in routed && typeof routed.error === "string") {
-        // Recoverable semantic argument error (e.g. unknown source_key).
-        // Record a failed tool result and let the agent loop continue so the
-        // model can retry or answer. Do NOT swallow MCP/network/auth errors.
-        toolResult = routed.error;
-        semanticArgumentError = true;
-      } else {
-        try {
-          detailedResult = await callMcpToolDetailed(mcp, {
-            token: options.mcpBearerToken,
-            sessionId: session.sessionId,
-            name: routed.name,
-            arguments: effectiveArguments,
-            deadline: options.deadline,
-          });
-          toolResult = detailedResult.text;
-        } catch (error) {
-          await appendAgentStep(
-            steps,
-            {
-              type: "tool_result",
-              title: sourceName
-                ? researchSourceResultTitle(sourceName, false)
-                : "Recherchequelle nicht erreichbar",
-              content: error instanceof Error
-                ? summarizeStepText(error.message)
-                : "Die Datenbankabfrage konnte nicht erfolgreich ausgeführt werden.",
-              toolName: call.name,
-              success: false,
-            },
-            options.onStep,
-          );
-          throw error;
-        }
-      }
-
-      const success = semanticArgumentError
-        ? false
-        : detailedResult
-          ? !detailedResult.isError
-          : !toolResult.startsWith("Datenbankfehler:");
-      toolLog.push({ toolName: call.name, arguments: argumentSummary, result: toolResult, success });
-      const resultStepOrder = steps.length;
-      if (success && isUsableGeneralResearchResult(toolResult)) {
-        appendResearchEvidence(researchEvidence, {
-          resultStepOrder,
-          evidenceOrder: researchEvidence.length,
-          semanticToolName: call.name,
-          semanticArguments: parsedArguments,
-          rawToolName: routed.name,
-          effectiveArguments,
-          source: {
-            key: sourceDescriptor?.key ?? null,
-            name: sourceDescriptor?.name ?? null,
-            kbId: sourceDescriptor?.kbId ?? null,
-            system: null,
-          },
-          stichtag: researchStichtag,
-          resultText: toolResult,
-          structuredContent: detailedResult?.structuredContent,
-          resultLimit: effectiveResultLimit(effectiveArguments),
-        });
-      }
-      await appendAgentStep(
-        steps,
-        {
-          type: "tool_result",
-          title: sourceName
-            ? researchSourceResultTitle(sourceName, success)
-            : success
-              ? "Rechercheergebnis wird ausgewertet"
-              : "Recherchequelle nicht erreichbar",
-          content: summarizeStepText(toolResult),
-          toolName: call.name,
-          success,
-        },
-        options.onStep,
-      );
-      messages.push({ role: "tool", tool_call_id: call.id, content: toolResult });
+      await executeResearchToolCall(call);
     }
 
     await appendAgentStep(
