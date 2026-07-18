@@ -1,16 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("next/server", async () => {
-  const actual = await vi.importActual<typeof import("next/server")>("next/server");
-
-  return {
-    ...actual,
-    after: vi.fn((callback: () => void | Promise<void>) => {
-      void callback();
-    }),
-  };
-});
-
 import { MAX_IMAGE_UPLOAD_BYTES } from "@/lib/config";
 import { isAdminUser } from "@/lib/admin-auth";
 import { runAgent } from "@/lib/agent";
@@ -26,6 +15,9 @@ import { persistConversationTurn } from "@/lib/persistence";
 import { generateConversationTitle } from "@/lib/conversation-title";
 import { getGlobalSystemPrompt } from "@/lib/global-system-prompt";
 import { recordAdminRequest } from "@/lib/admin-request-history";
+import { loadConversationResearchMemory } from "@/lib/conversation-memory";
+import { createResearchEvidenceDraft } from "@/lib/research-evidence";
+import { generateResearchMemoryCards } from "@/lib/research-memory-cards";
 import { UserVisibleError } from "@/lib/errors";
 import * as chatRoute from "./route";
 
@@ -79,8 +71,30 @@ vi.mock("@/lib/global-system-prompt", () => ({
   getGlobalSystemPrompt: vi.fn().mockResolvedValue("Globaler Systemprompt aus der Datenbank"),
 }));
 
+vi.mock("@/lib/conversation-memory", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/conversation-memory")>(
+    "@/lib/conversation-memory",
+  );
+  return {
+    ...actual,
+    loadConversationResearchMemory: vi.fn().mockResolvedValue([]),
+  };
+});
+
+vi.mock("@/lib/research-memory-cards", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/research-memory-cards")>(
+    "@/lib/research-memory-cards",
+  );
+  return { ...actual, generateResearchMemoryCards: vi.fn() };
+});
+
 vi.mock("@/lib/persistence", () => ({
-  persistConversationTurn: vi.fn().mockResolvedValue(undefined),
+  persistConversationTurn: vi.fn().mockResolvedValue({
+    assistantMessageId: 11,
+    agentRunId: "44444444-4444-4444-8444-444444444444",
+    pdfArtifacts: [],
+    artifactsPersisted: true,
+  }),
   resolveConversationIdForClient: vi.fn().mockResolvedValue("conversation-1"),
   resolveConversationContextForClient: vi.fn(({ conversationId }: { conversationId?: string }) =>
     Promise.resolve(
@@ -611,8 +625,10 @@ describe("POST /api/chat uploads", () => {
     expect(agentSignal?.reason).toBe(requestController.signal.reason);
   });
 
-  it("streams the final event before best-effort persistence failures", async () => {
-    vi.mocked(persistConversationTurn).mockRejectedValueOnce(new Error("database unavailable"));
+  it("still streams the final event after a best-effort persistence failure", async () => {
+    vi.mocked(persistConversationTurn)
+      .mockRejectedValueOnce(new Error("database unavailable"))
+      .mockRejectedValueOnce(new Error("database unavailable"));
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     const response = await POST(streamingJsonRequest(chatPayload()));
@@ -623,9 +639,10 @@ describe("POST /api/chat uploads", () => {
 
     expect(events[0]).toMatchObject({
       type: "final",
-      answer: "Antwort",
+      answer: expect.stringContaining("Antwort\n\n**Hinweis:** Diese Antwort konnte nicht dauerhaft gespeichert werden."),
       conversationId: "conversation-1",
       title: "Präziser Gesprächstitle",
+      status: "partial",
     });
     expect(events.some((event) => event.type === "error")).toBe(false);
     expect(errorSpy).toHaveBeenCalledWith(
@@ -634,6 +651,87 @@ describe("POST /api/chat uploads", () => {
     );
 
     errorSpy.mockRestore();
+  });
+
+  it("does not stream the final event until persistence has settled", async () => {
+    let releasePersistence!: () => void;
+    vi.mocked(persistConversationTurn).mockImplementationOnce(() =>
+      new Promise((resolve) => {
+        releasePersistence = () => resolve(null);
+      })
+    );
+
+    const response = await POST(streamingJsonRequest(chatPayload()));
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    let firstReadSettled = false;
+    const firstRead = reader!.read().then((chunk) => {
+      firstReadSettled = true;
+      return chunk;
+    });
+    await vi.waitFor(() => expect(persistConversationTurn).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(firstReadSettled).toBe(false);
+
+    releasePersistence();
+    const chunk = await firstRead;
+    const events = new TextDecoder().decode(chunk.value)
+      .split("\n")
+      .map((line) => parseChatStreamLine(line))
+      .filter((event) => event !== null);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "final",
+      answer: expect.stringContaining("Antwort\n\n**Hinweis:** Diese Antwort konnte nicht dauerhaft gespeichert werden."),
+      status: "partial",
+    }));
+    await reader!.cancel();
+  });
+
+  it("aborts stalled persistence before streaming the final event", async () => {
+    vi.useFakeTimers();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      let persistenceSignal: AbortSignal | undefined;
+      vi.mocked(persistConversationTurn).mockImplementationOnce((options) =>
+        new Promise((_resolve, reject) => {
+          persistenceSignal = options.signal;
+          options.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+        })
+      );
+
+      const response = await POST(streamingJsonRequest(chatPayload()));
+      const reader = response.body?.getReader();
+      expect(reader).toBeDefined();
+      let firstReadSettled = false;
+      const firstRead = reader!.read().then((chunk) => {
+        firstReadSettled = true;
+        return chunk;
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(persistConversationTurn).toHaveBeenCalledTimes(1);
+      expect(firstReadSettled).toBe(false);
+      await vi.advanceTimersByTimeAsync(15_001);
+      expect(persistenceSignal?.aborted).toBe(true);
+      expect(firstReadSettled).toBe(true);
+      expect(persistConversationTurn).toHaveBeenCalledTimes(2);
+      const firstAttempt = vi.mocked(persistConversationTurn).mock.calls[0]?.[0];
+      const reconciliationAttempt = vi.mocked(persistConversationTurn).mock.calls[1]?.[0];
+      expect(firstAttempt?.turnKey).toMatch(/^[0-9a-f-]{36}$/iu);
+      expect(reconciliationAttempt?.turnKey).toBe(firstAttempt?.turnKey);
+      expect(reconciliationAttempt?.completedAt).toBe(firstAttempt?.completedAt);
+
+      const chunk = await firstRead;
+      const events = new TextDecoder().decode(chunk.value)
+        .split("\n")
+        .map((line) => parseChatStreamLine(line))
+        .filter((event) => event !== null);
+      expect(events).toContainEqual(expect.objectContaining({ type: "final", answer: "Antwort" }));
+      await reader!.cancel();
+    } finally {
+      errorSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("includes the structured PDF offer in the final stream event", async () => {
@@ -694,15 +792,78 @@ describe("POST /api/chat uploads", () => {
     });
   });
 
-  it("returns non-streaming JSON before best-effort persistence failures", async () => {
-    vi.mocked(persistConversationTurn).mockRejectedValueOnce(new Error("database unavailable"));
+  it("aborts stalled PDF persistence and reports the bounded failure", async () => {
+    vi.useFakeTimers();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const draft = {
+        id: "55555555-5555-4555-8555-555555555555",
+        title: "Dynamisches Dokument",
+        filename: "Dynamisches_Dokument.pdf",
+        contentMarkdown: "# Dynamisches Dokument\n\nEigenständiger Inhalt.",
+        contentSha256: "b".repeat(64),
+        stichtag: null,
+        provenance: { version: 1, basis: "conversation" },
+      };
+      vi.mocked(runAgent).mockResolvedValueOnce({
+        answer: "Das Dokument wurde erstellt.",
+        steps: [],
+        tools: ["create_pdf_document"],
+        status: "completed",
+        pdfArtifacts: [draft],
+      });
+      const persistenceSignals: AbortSignal[] = [];
+      const stalledAttempt = (options: Parameters<typeof persistConversationTurn>[0]) =>
+        new Promise<never>((_resolve, reject) => {
+          if (options.signal) persistenceSignals.push(options.signal);
+          options.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+        });
+      vi.mocked(persistConversationTurn)
+        .mockImplementationOnce(stalledAttempt)
+        .mockImplementationOnce(stalledAttempt);
+
+      let responseSettled = false;
+      const responsePromise = POST(jsonRequest(chatPayload())).then((response) => {
+        responseSettled = true;
+        return response;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(persistConversationTurn).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(15_001);
+      expect(persistenceSignals[0]?.aborted).toBe(true);
+      expect(persistConversationTurn).toHaveBeenCalledTimes(2);
+      expect(responseSettled).toBe(false);
+      expect(vi.mocked(persistConversationTurn).mock.calls[1]?.[0].turnKey)
+        .toBe(vi.mocked(persistConversationTurn).mock.calls[0]?.[0].turnKey);
+
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(persistenceSignals[1]?.aborted).toBe(true);
+      expect(responseSettled).toBe(true);
+
+      const response = await responsePromise;
+      await expect(response.json()).resolves.toMatchObject({
+        answer: "Das angeforderte PDF konnte leider nicht dauerhaft gespeichert werden. Bitte versuchen Sie es erneut.",
+        status: "partial",
+      });
+    } finally {
+      errorSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("still returns non-streaming JSON after a best-effort persistence failure", async () => {
+    vi.mocked(persistConversationTurn)
+      .mockRejectedValueOnce(new Error("database unavailable"))
+      .mockRejectedValueOnce(new Error("database unavailable"));
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     const response = await POST(jsonRequest(chatPayload()));
     await expect(response.json()).resolves.toMatchObject({
-      answer: "Antwort",
+      answer: expect.stringContaining("Antwort\n\n**Hinweis:** Diese Antwort konnte nicht dauerhaft gespeichert werden."),
       conversationId: "conversation-1",
       title: "Präziser Gesprächstitle",
+      status: "partial",
     });
     await Promise.resolve();
 
@@ -712,6 +873,214 @@ describe("POST /api/chat uploads", () => {
     );
 
     errorSpy.mockRestore();
+  });
+
+  it("does not resolve non-streaming JSON until persistence has settled", async () => {
+    let releasePersistence!: () => void;
+    vi.mocked(persistConversationTurn).mockImplementationOnce(() =>
+      new Promise((resolve) => {
+        releasePersistence = () => resolve(null);
+      })
+    );
+    let responseSettled = false;
+    const responsePromise = POST(jsonRequest(chatPayload())).then((response) => {
+      responseSettled = true;
+      return response;
+    });
+
+    await vi.waitFor(() => expect(persistConversationTurn).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(responseSettled).toBe(false);
+
+    releasePersistence();
+    const response = await responsePromise;
+    await expect(response.json()).resolves.toMatchObject({
+      answer: expect.stringContaining("Antwort\n\n**Hinweis:** Diese Antwort konnte nicht dauerhaft gespeichert werden."),
+      status: "partial",
+    });
+  });
+
+  it("uses one Stichtag object and persists the result-limit provenance", async () => {
+    const response = await POST(jsonRequest({
+      messages: [{ role: "user", content: "Was galt nach der Rechtslage am 31.12.2024?" }],
+    }));
+    expect(response.status).toBe(200);
+
+    const agentOptions = vi.mocked(runAgent).mock.calls[0]?.[0];
+    const persistenceOptions = vi.mocked(persistConversationTurn).mock.calls[0]?.[0];
+    expect(agentOptions?.researchStichtag).toEqual({
+      kind: "explicit",
+      stichtag: "2024-12-31",
+      matchedText: "31.12.2024",
+    });
+    expect(persistenceOptions?.researchStichtag).toBe(agentOptions?.researchStichtag);
+    expect(agentOptions?.researchResultLimit).toBe(8);
+    expect(persistenceOptions).toMatchObject({
+      researchResultLimit: 8,
+      researchResultLimitSource: "fallback",
+    });
+  });
+
+  it("wires the batched card generator into the agent and persists its result", async () => {
+    const card = {
+      id: "55555555-5555-4555-8555-555555555555",
+      summary: "Kurze Memory Card.",
+      topics: ["EStG"],
+      evidenceIds: ["44444444-4444-4444-8444-444444444444"],
+      generatedBy: "llm" as const,
+      requeryRequired: true,
+    };
+    vi.mocked(generateResearchMemoryCards).mockResolvedValueOnce([card]);
+    vi.mocked(runAgent).mockImplementationOnce(async (options) => {
+      const evidence = createResearchEvidenceDraft({
+        id: card.evidenceIds[0],
+        resultStepOrder: 0,
+        evidenceOrder: 0,
+        semanticToolName: "search_laws",
+        semanticArguments: { query: "EStG" },
+        rawToolName: "hybrid_search",
+        effectiveArguments: { query: "EStG", kb_id: "laws" },
+        source: { key: "GESETZE", name: "Gesetze", kbId: "laws", system: null },
+        stichtag: options.researchStichtag!,
+        resultText: "Vollständiger Treffer",
+      });
+      const cards = await options.generateResearchMemoryCards!([evidence]);
+      return {
+        answer: "Antwort",
+        steps: [{
+          type: "tool_result" as const,
+          title: "Treffer",
+          content: "Vorschau",
+          toolName: "search_laws",
+          success: true,
+        }],
+        tools: ["search_laws"],
+        researchEvidence: [evidence],
+        researchMemoryCards: cards,
+      };
+    });
+
+    const response = await POST(jsonRequest(chatPayload()));
+    expect(response.status).toBe(200);
+    expect(generateResearchMemoryCards).toHaveBeenCalledOnce();
+    expect(generateResearchMemoryCards).toHaveBeenCalledWith(expect.objectContaining({
+      runtime: expect.objectContaining({ reasoning: "disabled" }),
+      systemPrompt: "Globaler Systemprompt aus der Datenbank",
+      evidence: [expect.objectContaining({ id: card.evidenceIds[0] })],
+    }));
+    expect(persistConversationTurn).toHaveBeenCalledWith(expect.objectContaining({
+      researchEvidence: [expect.objectContaining({ id: card.evidenceIds[0] })],
+      researchMemoryCards: [card],
+    }));
+  });
+
+  it("shares the exact Stichtag object with loader, agent and persistence", async () => {
+    vi.mocked(loadConversationResearchMemory).mockResolvedValueOnce([
+      {
+        evidenceId: "evidence-hint",
+        sourceKey: "GESETZE",
+        sourceName: "Gesetze",
+        kind: "discovery",
+        summary: "Erneut zu prüfender Hinweis zu § 33 EStG.",
+        topics: ["EStG"],
+        requeryRequired: true,
+        canonicalId: null,
+        versionId: null,
+        officialUri: null,
+        validFrom: null,
+        validTo: null,
+        rechtssatzId: null,
+        decisionId: null,
+        chunkId: null,
+        decisionDate: null,
+      },
+      {
+        evidenceId: "evidence-verified",
+        sourceKey: "GESETZE",
+        sourceName: "Gesetze",
+        kind: "norm",
+        summary: "Verifizierte Fassung von § 33 EStG.",
+        topics: ["EStG"],
+        requeryRequired: false,
+        canonicalId: "EStG-33",
+        versionId: "EStG-33-v2024",
+        officialUri: "https://www.ris.bka.gv.at/example",
+        validFrom: "2024-01-01",
+        validTo: "2025-01-01",
+        rechtssatzId: null,
+        decisionId: null,
+        chunkId: null,
+        decisionDate: null,
+      },
+    ]);
+    const response = await POST(jsonRequest({
+      conversationId: "33333333-3333-4333-8333-333333333333",
+      messages: [{ role: "user", content: "Was galt nach § 33 EStG am 31.12.2024?" }],
+    }));
+    expect(response.status).toBe(200);
+
+    const loaderStichtag = vi.mocked(loadConversationResearchMemory).mock.calls[0]?.[0].stichtag;
+    const agentStichtag = vi.mocked(runAgent).mock.calls[0]?.[0].researchStichtag;
+    const persistenceStichtag = vi.mocked(persistConversationTurn).mock.calls[0]?.[0]
+      .researchStichtag;
+    expect(loaderStichtag).toBe(agentStichtag);
+    expect(persistenceStichtag).toBe(agentStichtag);
+    const options = vi.mocked(runAgent).mock.calls[0]?.[0];
+    expect(options).toMatchObject({
+      researchMemoryRequeryRequirements: [{
+        evidenceId: "evidence-hint",
+        sourceKey: "GESETZE",
+        matchTerms: expect.arrayContaining(["estg"]),
+      }],
+    });
+    expect(options?.researchMemory).toContain("evidence-hint");
+    expect(options?.researchMemory).toContain("evidence-verified");
+    expect(options?.finalResearchMemory).not.toContain("evidence-hint");
+    expect(options?.finalResearchMemory).toContain("evidence-verified");
+  });
+
+  it("does not carry unrelated same-date discovery memory into small-talk follow-ups", async () => {
+    vi.mocked(loadConversationResearchMemory).mockResolvedValueOnce([{
+      evidenceId: "unrelated-discovery",
+      sourceKey: "BFG",
+      sourceName: "BFG Entscheidungen",
+      kind: "discovery",
+      summary: "Ein Treffer behandelt Werbungskosten für ein Arbeitszimmer.",
+      topics: ["Werbungskosten", "Arbeitszimmer"],
+      requeryRequired: true,
+      canonicalId: null,
+      versionId: null,
+      officialUri: null,
+      validFrom: null,
+      validTo: null,
+      rechtssatzId: null,
+      decisionId: null,
+      chunkId: null,
+      decisionDate: null,
+    }]);
+
+    const response = await POST(jsonRequest({
+      conversationId: "33333333-3333-4333-8333-333333333333",
+      messages: [{ role: "user", content: "Danke, bitte formuliere das nur kürzer." }],
+    }));
+
+    expect(response.status).toBe(200);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[0]).toMatchObject({
+      researchMemory: undefined,
+      finalResearchMemory: undefined,
+      researchMemoryRequeryRequirements: [],
+    });
+  });
+
+  it("rejects an invalid marked Stichtag before agent execution or persistence", async () => {
+    const response = await POST(jsonRequest({
+      messages: [{ role: "user", content: "Was galt am Stichtag 31.2.2024?" }],
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Der angegebene Stichtag ist ungültig." });
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(persistConversationTurn).not.toHaveBeenCalled();
   });
 
   it("generates and persists a title only when starting a new conversation", async () => {

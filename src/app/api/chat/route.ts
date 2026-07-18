@@ -1,4 +1,6 @@
-import { after, NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
+
+import { NextResponse } from "next/server";
 
 import {
   MAX_IMAGE_UPLOAD_BYTES,
@@ -39,8 +41,14 @@ import { createUnboundedDeadline, type Deadline } from "@/lib/deadline";
 import { fallbackConversationTitle, generateConversationTitle } from "@/lib/conversation-title";
 import { recordAdminRequest } from "@/lib/admin-request-history";
 import { getGlobalSystemPrompt } from "@/lib/global-system-prompt";
-import { getResearchResultLimit } from "@/lib/research-settings";
-import { formatResearchMemory, loadConversationResearchMemory } from "@/lib/conversation-memory";
+import { getResearchResultLimitSnapshot } from "@/lib/research-settings";
+import {
+  formatResearchMemory,
+  loadConversationResearchMemory,
+  scopeResearchMemoryForQuestion,
+} from "@/lib/conversation-memory";
+import { resolveLegalStichtag } from "@/lib/legal-stichtag";
+import { generateResearchMemoryCards } from "@/lib/research-memory-cards";
 
 export const runtime = "nodejs";
 
@@ -78,6 +86,8 @@ type ParsedChatRequest = {
 
 const rateLimit = new Map<string, RateLimitEntry>();
 const MAX_ATTACHMENT_EXTRACTION_CONCURRENCY = 3;
+const CHAT_PERSISTENCE_TIMEOUT_MS = 15_000;
+const CHAT_PERSISTENCE_RECONCILIATION_TIMEOUT_MS = 5_000;
 
 function sanitizeLogText(value: string): string {
   return value
@@ -97,12 +107,62 @@ function safeErrorDetails(error: unknown): Record<string, string> {
   return { message: sanitizeLogText(String(error)) };
 }
 
-function scheduleConversationPersistence(options: Parameters<typeof persistConversationTurn>[0]): void {
-  after(() => {
-    void persistConversationTurn(options).catch((error) => {
-      console.error("Chat persistence failed", safeErrorDetails(error));
-    });
-  });
+async function persistConversationAttempt(
+  options: Parameters<typeof persistConversationTurn>[0],
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<Awaited<ReturnType<typeof persistConversationTurn>>> {
+  const controller = new AbortController();
+  const timeoutError = new Error(timeoutMessage);
+  const timeoutId = setTimeout(
+    () => controller.abort(timeoutError),
+    timeoutMs,
+  );
+  try {
+    return await persistConversationTurn({ ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function persistConversationWithTimeout(
+  options: Parameters<typeof persistConversationTurn>[0],
+): Promise<Awaited<ReturnType<typeof persistConversationTurn>>> {
+  // Freeze every hash-relevant default before the first request. If its
+  // transport outcome is unclear, the short second call can safely return the
+  // existing transaction result or perform the rolled-back write exactly once.
+  const stableOptions = {
+    ...options,
+    turnKey: options.turnKey ?? randomUUID(),
+    completedAt: options.completedAt ?? new Date().toISOString(),
+  };
+  try {
+    return await persistConversationAttempt(
+      stableOptions,
+      CHAT_PERSISTENCE_TIMEOUT_MS,
+      "Chat persistence timed out",
+    );
+  } catch {
+    return persistConversationAttempt(
+      stableOptions,
+      CHAT_PERSISTENCE_RECONCILIATION_TIMEOUT_MS,
+      "Chat persistence reconciliation timed out",
+    );
+  }
+}
+
+async function persistConversationBestEffort(
+  options: Parameters<typeof persistConversationTurn>[0],
+): Promise<boolean> {
+  try {
+    // Each bounded attempt propagates its abort signal. The atomic RPC and
+    // stable-key reconciliation prevent partial or duplicate turns even when
+    // the first transport outcome is unknown.
+    return Boolean(await persistConversationWithTimeout(options));
+  } catch (error) {
+    console.error("Chat persistence failed", safeErrorDetails(error));
+    return false;
+  }
 }
 
 async function persistPdfArtifacts(options: {
@@ -110,7 +170,7 @@ async function persistPdfArtifacts(options: {
   drafts: PdfArtifactDraft[];
 }): Promise<{ offers: PdfArtifactOffer[]; persisted: boolean }> {
   try {
-    const result = await persistConversationTurn({
+    const result = await persistConversationWithTimeout({
       ...options.persistence,
       pdfArtifacts: options.drafts,
     });
@@ -128,6 +188,15 @@ function answerWithPdfPersistenceNotice(answer: string, persisted: boolean): str
   return persisted
     ? answer
     : "Das angeforderte PDF konnte leider nicht dauerhaft gespeichert werden. Bitte versuchen Sie es erneut.";
+}
+
+function answerWithConversationPersistenceNotice(answer: string, persisted: boolean): string {
+  return persisted
+    ? answer
+    : [
+        answer,
+        "**Hinweis:** Diese Antwort konnte nicht dauerhaft gespeichert werden. Die Recherche-Memory steht für eine Folgerunde möglicherweise nicht zur Verfügung; bitte versuchen Sie die Anfrage bei Bedarf erneut.",
+      ].join("\n\n");
 }
 
 function stepsWithPersistedPdfOffer(steps: AgentStep[], pdfOffer?: PdfOffer): AgentStep[] {
@@ -445,11 +514,11 @@ export async function POST(request: Request) {
     const { body, attachmentUploads } = await parseChatRequest(request);
     const requestedModel = parseModel(body.model);
     const messages = parseMessages(body.messages);
-    const [modelSettings, defaultPolicy, systemPrompt, researchResultLimit] = await Promise.all([
+    const [modelSettings, defaultPolicy, systemPrompt, researchResultLimitSnapshot] = await Promise.all([
       readEffectiveModelSettings(supabase),
       readModelDefaultPolicy(supabase),
       getGlobalSystemPrompt(supabase),
-      getResearchResultLimit(supabase),
+      getResearchResultLimitSnapshot(supabase),
     ]);
     const defaultSetting = globalDefaultModelSetting(modelSettings, defaultPolicy);
     const model = requestedModel ?? defaultSetting.id;
@@ -480,24 +549,35 @@ export async function POST(request: Request) {
     });
     const conversationId = conversationContext.id;
 
-    // Carry forward prior research findings for follow-up turns of an existing
-    // conversation. Best-effort: a missing trace yields no memory.
-    const researchMemory = conversationContext.isNew
-      ? undefined
-      : formatResearchMemory(
-          await loadConversationResearchMemory({
-            supabase,
-            conversationId,
-            clientId: authenticatedUser.id,
-          }),
-        );
-
     const latestUserMessage = messages.findLast(
       (message) => message.role === "user" && Boolean(message.content),
     );
     if (!latestUserMessage) {
       throw new UserVisibleError("Bitte zuerst eine Frage eingeben.", 400);
     }
+    const researchStichtag = resolveLegalStichtag(latestUserMessage.content);
+
+    // Carry forward prior research findings for follow-up turns of an existing
+    // conversation. Best-effort: a missing trace yields no memory.
+    const researchMemoryEntries = conversationContext.isNew
+      ? []
+      : await loadConversationResearchMemory({
+            supabase,
+            conversationId,
+            clientId: authenticatedUser.id,
+            stichtag: researchStichtag,
+          });
+    const scopedResearchMemory = scopeResearchMemoryForQuestion(
+      researchMemoryEntries,
+      latestUserMessage.content,
+    );
+    const researchMemory = formatResearchMemory(scopedResearchMemory.entries, researchStichtag);
+    // Discovery hints may guide the tool loop, but they are never included in
+    // final synthesis. Only fully verified, reusable cards cross that boundary.
+    const finalResearchMemory = formatResearchMemory(
+      scopedResearchMemory.entries.filter((entry) => !entry.requeryRequired),
+      researchStichtag,
+    );
     await recordAdminRequest({
       supabase,
       userId: authenticatedUser.id,
@@ -543,8 +623,17 @@ export async function POST(request: Request) {
                 systemPrompt,
                 messages,
                 mcpBearerToken,
-                researchResultLimit,
+                researchResultLimit: researchResultLimitSnapshot.value,
                 researchMemory,
+                finalResearchMemory,
+                researchMemoryRequeryRequirements: scopedResearchMemory.requeryRequirements,
+                researchStichtag,
+                generateResearchMemoryCards: (evidence) => generateResearchMemoryCards({
+                  runtime: { ...selectedRuntime, reasoning: "disabled" },
+                  systemPrompt,
+                  evidence,
+                  deadline,
+                }),
                 attachmentContexts: attachmentAgentContext.attachmentContexts,
                 initialSteps: attachmentAgentContext.initialSteps,
                 deadline,
@@ -561,16 +650,24 @@ export async function POST(request: Request) {
               title,
               modelProvenance,
               steps: stepsWithPersistedPdfOffer(agentResult.steps, agentResult.pdfOffer),
+              researchResultLimit: researchResultLimitSnapshot.value,
+              researchResultLimitSource: researchResultLimitSnapshot.source,
+              researchStichtag,
+              researchEvidence: agentResult.researchEvidence,
+              researchMemoryCards: agentResult.researchMemoryCards,
               startedAt,
               completedAt,
             };
             const artifactResult = agentResult.pdfArtifacts?.length
               ? await persistPdfArtifacts({ persistence, drafts: agentResult.pdfArtifacts })
               : null;
+            const persistenceSucceeded = artifactResult
+              ? artifactResult.persisted
+              : await persistConversationBestEffort(persistence);
             const finalAnswer = artifactResult
               ? answerWithPdfPersistenceNotice(agentResult.answer, artifactResult.persisted)
-              : agentResult.answer;
-            const agentStatus = agentResult.status === "partial" || artifactResult?.persisted === false
+              : answerWithConversationPersistenceNotice(agentResult.answer, persistenceSucceeded);
+            const agentStatus = agentResult.status === "partial" || !persistenceSucceeded
               ? "partial"
               : "completed";
 
@@ -587,10 +684,6 @@ export async function POST(request: Request) {
               model,
               availableModels,
             });
-
-            if (!artifactResult) {
-              scheduleConversationPersistence(persistence);
-            }
           } catch (streamError) {
             if (!(streamError instanceof UserVisibleError)) {
               console.error("Chat stream failed", safeErrorDetails(streamError));
@@ -626,8 +719,17 @@ export async function POST(request: Request) {
         systemPrompt,
         messages,
         mcpBearerToken,
-        researchResultLimit,
+        researchResultLimit: researchResultLimitSnapshot.value,
         researchMemory,
+        finalResearchMemory,
+        researchMemoryRequeryRequirements: scopedResearchMemory.requeryRequirements,
+        researchStichtag,
+        generateResearchMemoryCards: (evidence) => generateResearchMemoryCards({
+          runtime: { ...selectedRuntime, reasoning: "disabled" },
+          systemPrompt,
+          evidence,
+          deadline,
+        }),
         attachmentContexts: attachmentAgentContext.attachmentContexts,
         initialSteps: attachmentAgentContext.initialSteps,
         deadline,
@@ -643,19 +745,24 @@ export async function POST(request: Request) {
       title,
       modelProvenance,
       steps: stepsWithPersistedPdfOffer(agentResult.steps, agentResult.pdfOffer),
+      researchResultLimit: researchResultLimitSnapshot.value,
+      researchResultLimitSource: researchResultLimitSnapshot.source,
+      researchStichtag,
+      researchEvidence: agentResult.researchEvidence,
+      researchMemoryCards: agentResult.researchMemoryCards,
       startedAt,
       completedAt,
     };
     const artifactResult = agentResult.pdfArtifacts?.length
       ? await persistPdfArtifacts({ persistence, drafts: agentResult.pdfArtifacts })
       : null;
-    if (!artifactResult) {
-      scheduleConversationPersistence(persistence);
-    }
+    const persistenceSucceeded = artifactResult
+      ? artifactResult.persisted
+      : await persistConversationBestEffort(persistence);
     const finalAnswer = artifactResult
       ? answerWithPdfPersistenceNotice(agentResult.answer, artifactResult.persisted)
-      : agentResult.answer;
-    const agentStatus = agentResult.status === "partial" || artifactResult?.persisted === false
+      : answerWithConversationPersistenceNotice(agentResult.answer, persistenceSucceeded);
+    const agentStatus = agentResult.status === "partial" || !persistenceSucceeded
       ? "partial"
       : "completed";
 

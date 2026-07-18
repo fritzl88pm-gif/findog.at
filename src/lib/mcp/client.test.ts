@@ -77,4 +77,33 @@ describe("McpClient", () => {
     }
     deadline.dispose();
   });
+
+  it("preserves MCP structuredContent alongside the legacy text result", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(jsonRpcResponse({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        content: [{ type: "text", text: "Lesbarer Treffer" }],
+        structuredContent: {
+          hits: [{ kind: "norm", canonicalId: "ris:norm:123" }],
+        },
+        isError: false,
+      },
+    }));
+
+    const result = await new McpClient().callToolDetailed({
+      token: "mcp-token",
+      name: "hybrid_search",
+      arguments: { query: "§ 33 EStG" },
+    });
+
+    expect(result).toEqual({
+      text: "Lesbarer Treffer",
+      structuredContent: {
+        hits: [{ kind: "norm", canonicalId: "ris:norm:123" }],
+      },
+      isError: false,
+    });
+  });
 });

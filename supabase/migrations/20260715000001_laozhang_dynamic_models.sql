@@ -54,6 +54,13 @@ alter table public.model_settings
 
 -- Enforce uniqueness of (provider, upstream_model) for dynamic models
 -- Backfill upstream_model for built-ins first
+-- These deterministic schema backfills have no administrator actor. The
+-- existing BEFORE trigger rejects actor-less updates and the AFTER trigger
+-- would write history rows before the matching history columns exist. History
+-- itself is backfilled below, so suspend both triggers only for this block.
+alter table public.model_settings disable trigger model_settings_prepare_change;
+alter table public.model_settings disable trigger model_settings_append_history;
+
 update public.model_settings set upstream_model = model_id where upstream_model is null;
 
 alter table public.model_settings
@@ -80,6 +87,9 @@ alter table public.model_settings
 
 -- Backfill always_enabled for built-in models
 update public.model_settings set always_enabled = true where model_id = 'deepseek-v4-flash';
+
+alter table public.model_settings enable trigger model_settings_append_history;
+alter table public.model_settings enable trigger model_settings_prepare_change;
 
 -- Add provider check: built-in must be deepseek/zai, dynamic must be laozhang
 alter table public.model_settings

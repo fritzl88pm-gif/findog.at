@@ -8,6 +8,7 @@
 
 import {
   RESEARCH_SOURCE_NAMES,
+  type ResearchSourceKey,
   type ResearchSourceName,
 } from "./research-source-display";
 
@@ -75,6 +76,11 @@ export const BFG_KB_NAME: string = RESEARCH_SOURCES.BFG.name;
 
 export function getSourceByKbId(kbId: string): ResearchSource | undefined {
   return Object.values(RESEARCH_SOURCES).find((source) => source.kbId === kbId);
+}
+
+export function getSourceKeyByKbId(kbId: string): ResearchSourceKey | undefined {
+  return (Object.entries(RESEARCH_SOURCES) as Array<[ResearchSourceKey, ResearchSource]>)
+    .find(([, source]) => source.kbId === kbId)?.[0];
 }
 
 export function getSourceByKey(key: string): ResearchSource | undefined {

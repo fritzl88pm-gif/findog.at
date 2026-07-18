@@ -17,8 +17,16 @@ import {
   type ResearchSource,
   getSourceByKbId,
   getSourceByKey,
+  getSourceKeyByKbId,
 } from "./research-sources";
-import type { ResearchSourceName } from "./research-source-display";
+import type { ResearchSourceKey, ResearchSourceName } from "./research-source-display";
+
+export type ResearchSourceDescriptor = {
+  key: ResearchSourceKey;
+  name: ResearchSourceName;
+  kbId: string;
+  indexType: ResearchSource["type"];
+};
 
 /* ------------------------------------------------------------------ */
 /*  Schema-aware argument helpers                                     */
@@ -582,22 +590,36 @@ export class SemanticToolRegistry {
     publicName: string,
     semanticArgs: JsonObject,
   ): ResearchSourceName | undefined {
+    return this.getResearchSourceDescriptor(publicName, semanticArgs)?.name;
+  }
+
+  /** Resolves deterministic source metadata without asking the language model. */
+  getResearchSourceDescriptor(
+    publicName: string,
+    semanticArgs: JsonObject,
+  ): ResearchSourceDescriptor | undefined {
     const def = this.byPublicName.get(publicName);
     if (!def) return undefined;
 
-    if (def.resolveSource) {
-      return def.resolveSource(semanticArgs).name;
-    }
-
-    const sourceKey = semanticArgs.source_key;
-    if (typeof sourceKey !== "string" || !sourceKey.trim()) {
-      return undefined;
-    }
-
-    return (
-      getSourceByKey(sourceKey.trim().toUpperCase())
-      ?? getSourceByKbId(sourceKey.trim())
-    )?.name;
+    const source = def.resolveSource
+      ? def.resolveSource(semanticArgs)
+      : (() => {
+          const sourceKey = semanticArgs.source_key;
+          if (typeof sourceKey !== "string" || !sourceKey.trim()) {
+            return undefined;
+          }
+          return getSourceByKey(sourceKey.trim().toUpperCase())
+            ?? getSourceByKbId(sourceKey.trim());
+        })();
+    if (!source) return undefined;
+    const key = getSourceKeyByKbId(source.kbId);
+    if (!key) return undefined;
+    return {
+      key,
+      name: source.name,
+      kbId: source.kbId,
+      indexType: source.type,
+    };
   }
 
   /**

@@ -107,8 +107,17 @@ describe("runAgent retrieval policy", () => {
     }));
     expect(callTool.mock.calls[0]?.[0].arguments).not.toHaveProperty("year");
     expect(callTool.mock.calls[0]?.[0].arguments).not.toHaveProperty("as_of");
+    expect(callTool.mock.calls[0]?.[0].arguments.query).not.toMatch(
+      /\b(?:19|20)\d{2}-\d{2}-\d{2}\b/u,
+    );
     expect(JSON.stringify(callTool.mock.calls)).not.toContain(RESEARCH_SOURCES.BFG.kbId);
     expect(result.tools).toEqual(["search_amount_table"]);
+    expect(result.researchEvidence?.[0]?.stichtag).toEqual({
+      kind: "unknown",
+      stichtag: null,
+      reason: "year_only",
+      referenceYear: 2024,
+    });
     expect(result.answer).toBe(withOverview("Der Betrag gilt im Veranlagungsjahr 2024."));
     expect(result.answer).not.toMatch(/\bBFG\b|RV\/\d+/u);
     expect(result.steps.some((step) => step.type === "citation_verification")).toBe(false);
@@ -116,6 +125,29 @@ describe("runAgent retrieval policy", () => {
     expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
     expect(finalPrompt()).toContain("Veranlagungsjahr 2024");
     expect(finalPrompt()).not.toContain("Findok-Verifikation der BFG-Fundstellen");
+  });
+
+  it("does not add a daily lookup constraint when only a tax year was requested", async () => {
+    const callTool = mockSession();
+    mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "stop",
+      content: "Der Betrag gilt im Veranlagungsjahr 2024.",
+      toolCalls: [],
+    });
+
+    await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "Wie hoch ist der Unterhaltsabsetzbetrag 2024?" }],
+      researchStichtag: {
+        kind: "implicit",
+        stichtag: "2024-07-18",
+        reason: "default_current",
+      },
+    });
+
+    const query = callTool.mock.calls[0]?.[0].arguments.query;
+    expect(query).toContain("Veranlagungsjahr 2024");
+    expect(query).not.toContain("Stichtag 2024-07-18");
   });
 
   it.each([
@@ -225,7 +257,7 @@ describe("runAgent retrieval policy", () => {
       ]));
       expect(JSON.stringify(result.steps)).not.toContain(RESEARCH_SOURCES.BETRAGSTABELLE.kbId);
       expect(finalPrompt()).toContain("Veranlagungsjahr 2026");
-      expect(finalPrompt()).not.toContain("Stichtag 2026-07-14");
+      expect(finalPrompt()).toContain("Stichtag 2026-07-14");
     } finally {
       vi.useRealTimers();
     }
@@ -456,7 +488,7 @@ describe("runAgent retrieval policy", () => {
     expect(callTool).toHaveBeenCalledWith(expect.objectContaining({
       name: "hybrid_search",
       arguments: expect.objectContaining({
-        query: "Unterhaltsabsetzbetrag Drittstaat",
+        query: expect.stringMatching(/^Unterhaltsabsetzbetrag Drittstaat\nVerbindlicher Rechtsstand\/Stichtag: \d{4}-\d{2}-\d{2}$/u),
         kb_id: RESEARCH_SOURCES.BFG.kbId,
       }),
     }));

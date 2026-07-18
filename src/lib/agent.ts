@@ -1,7 +1,7 @@
 import { chatCompletion, type AppChatMessage, type DeepSeekMessage } from "./deepseek";
 import { type Deadline, hasDeadlineTime } from "./deadline";
 import { UserVisibleError } from "./errors";
-import { McpClient } from "./mcp/client";
+import { McpClient, type McpToolResult } from "./mcp/client";
 import type { JsonObject } from "./mcp/tools";
 import type { LlmRuntime } from "./llm/runtime";
 import { SemanticToolRegistry } from "./semantic-tools";
@@ -29,6 +29,20 @@ import {
   CREATE_PDF_DOCUMENT_TOOL_NAME,
   createPdfArtifactDrafts,
 } from "./documents/pdf-artifacts";
+import { resolveLegalStichtag, type StichtagResolution } from "./legal-stichtag";
+import {
+  createResearchEvidenceDraft,
+  type CreateResearchEvidenceDraftOptions,
+  type ResearchEvidenceDraft,
+} from "./research-evidence";
+import {
+  fallbackResearchMemoryCards,
+  type ResearchMemoryCard,
+} from "./research-memory-cards";
+import {
+  matchesResearchMemoryTerms,
+  type ResearchMemoryRequeryRequirement,
+} from "./conversation-memory";
 
 const MAX_TOOL_ITERATIONS = 6;
 const SIMPLE_AMOUNT_MAX_TOOL_ITERATIONS = 2;
@@ -36,6 +50,14 @@ const SIMPLE_AMOUNT_MAX_TOOL_CALLS = 2;
 const AGENT_FINALIZATION_RESERVE_MS = 100_000;
 const AGENT_MIN_ITERATION_BUDGET_MS = AGENT_FINALIZATION_RESERVE_MS + 30_000;
 const QUERY_ARGUMENT_NAMES = ["query", "question", "search_query"] as const;
+const REQUERY_ARGUMENT_NAMES = [
+  ...QUERY_ARGUMENT_NAMES,
+  "keyword",
+  "exact_keyword",
+  "slug",
+  "document_id",
+  "knowledge_id",
+] as const;
 const KB_ID_ARGUMENT_NAMES = ["kb_id", "knowledge_base_id", "knowledgeBaseId"] as const;
 const KB_NAME_ARGUMENT_NAMES = ["kb_name", "knowledge_base_name", "knowledgeBaseName"] as const;
 const REFERENCE_DATE_MARKER_PATTERN = "(?:zum\\s+stichtag|stichtag(?:\\s+(?:am|zum))?|rechtsstand(?:\\s+(?:am|zum))?|gultig\\s+am|zum)";
@@ -82,6 +104,81 @@ export type AttachmentContext = {
 };
 
 type AgentStepHandler = (step: AgentStep) => void | Promise<void>;
+
+type ResearchMemoryBatchGenerator = (
+  evidence: ResearchEvidenceDraft[],
+) => Promise<ResearchMemoryCard[]>;
+
+const RESULT_LIMIT_ARGUMENT_NAMES = ["limit", "count", "max_results", "maxResults"] as const;
+
+function effectiveResultLimit(argumentsValue: JsonObject): number | null {
+  for (const key of RESULT_LIMIT_ARGUMENT_NAMES) {
+    const value = argumentsValue[key];
+    if (typeof value === "number" && Number.isSafeInteger(value) && value >= 1) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function researchStichtagInstruction(stichtag: StichtagResolution): string {
+  if (stichtag.kind === "unknown") {
+    return [
+      "Der rechtliche Stichtag dieses Runs ist nicht eindeutig aufgelöst.",
+      "Behaupte keine bestimmte gültige Normfassung; kläre den Stichtag oder recherchiere nur als unverbindlichen Hinweis.",
+    ].join(" ");
+  }
+  return [
+    `Verbindlicher Recherche-Stichtag dieses Runs: ${stichtag.stichtag}.`,
+    "Suche und bewerte Normfassungen sowie Entscheidungen ausschließlich bezogen auf diesen Tag.",
+  ].join(" ");
+}
+
+function withEffectiveResearchStichtag(
+  argumentsValue: JsonObject,
+  stichtag: StichtagResolution,
+): JsonObject {
+  if (stichtag.kind === "unknown") return argumentsValue;
+  const marker = `Verbindlicher Rechtsstand/Stichtag: ${stichtag.stichtag}`;
+  for (const key of QUERY_ARGUMENT_NAMES) {
+    const value = argumentsValue[key];
+    if (typeof value !== "string" || !value.trim() || value.includes(marker)) continue;
+    return {
+      ...argumentsValue,
+      [key]: `${value.trim()}\n${marker}`,
+    };
+  }
+  return argumentsValue;
+}
+
+function appendResearchEvidence(
+  target: ResearchEvidenceDraft[],
+  options: CreateResearchEvidenceDraftOptions,
+): void {
+  try {
+    target.push(createResearchEvidenceDraft(options));
+  } catch {
+    // The answer must remain available when an upstream payload exceeds the
+    // audited JSON bounds. Other valid evidence rows in this run are retained.
+    console.error("Research evidence capture skipped because its audit payload exceeded bounds");
+  }
+}
+
+async function callMcpToolDetailed(
+  mcp: McpClient,
+  options: Parameters<McpClient["callTool"]>[0],
+): Promise<McpToolResult> {
+  // Older focused test doubles only implement callTool(). Keep those tests and
+  // staged deployments compatible while production retains structuredContent.
+  const detailed = (mcp as McpClient & {
+    callToolDetailed?: (callOptions: Parameters<McpClient["callTool"]>[0]) => Promise<McpToolResult>;
+  }).callToolDetailed;
+  if (typeof detailed === "function") {
+    return detailed.call(mcp, options);
+  }
+  const text = await mcp.callTool(options);
+  return { text, isError: text.startsWith("Datenbankfehler:") };
+}
 
 type ExistingAnswerPdfContext = {
   request: string;
@@ -225,17 +322,6 @@ function hasExplicitReferenceDateText(question: string): boolean {
   ).test(question) || Boolean(naturalAmountReferenceDateMatch(question));
 }
 
-function currentViennaDate(): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/Vienna",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
 function isPureAmountQuestion(question: string): boolean {
   const withoutDatesAndYears = question
     .replace(/\b(?:19|20)\d{2}-\d{2}-\d{2}\b/g, " ")
@@ -255,6 +341,7 @@ function isPureAmountQuestion(question: string): boolean {
 function retrievalPolicy(options: {
   latestQuestion?: string;
   hasAttachments: boolean;
+  stichtag: StichtagResolution;
 }): AgentRetrievalPolicy {
   const expandedSourceQuestion = expandAmountAbbreviations(options.latestQuestion ?? "");
   const question = normalizedQuestion(expandedSourceQuestion);
@@ -274,14 +361,20 @@ function retrievalPolicy(options: {
     && namesAmountConcept
     && isPureAmountQuestion(question)
     && referenceYears.length <= SIMPLE_AMOUNT_MAX_TOOL_CALLS
+    && !(options.stichtag.kind === "unknown" && referenceYears.length === 0)
     && !options.hasAttachments
   );
 
   if (isSimpleAmount) {
-    const effectiveReferenceDate = referenceDate;
+    const effectiveReferenceDate = referenceDate
+      ?? (referenceYears.length === 0 && options.stichtag.kind !== "unknown"
+        ? options.stichtag.stichtag
+        : undefined);
     const effectiveReferenceYears = referenceYears.length > 0
       ? referenceYears
-      : [currentViennaDate().slice(0, 4)];
+      : options.stichtag.kind === "unknown"
+        ? []
+        : [options.stichtag.stichtag.slice(0, 4)];
     const effectiveReferenceYear = effectiveReferenceYears.length === 1
       ? effectiveReferenceYears[0]
       : undefined;
@@ -485,11 +578,14 @@ function supportMessages(options: {
   systemPrompt: string;
   attachmentUserMessage?: string;
   researchMemory?: string;
+  researchStichtag: StichtagResolution;
   conversation: AppChatMessage[];
   toolLog: ToolLogEntry[];
   draftAnswer?: string;
 }): DeepSeekMessage[] {
   const context = [
+    researchStichtagInstruction(options.researchStichtag),
+    "",
     ...(options.researchMemory ? [options.researchMemory, ""] : []),
     "Chatverlauf:",
     formatConversation(options.conversation),
@@ -590,6 +686,22 @@ function isUsableSimpleAmountResult(
     && !/"(?:count|total)"\s*:\s*0\b/iu.test(result);
 }
 
+function isUsableGeneralResearchResult(result: string): boolean {
+  const normalized = normalizedQuestion(result);
+  if (!normalized || normalized.startsWith("datenbankfehler:")) return false;
+  if (/^(?:null|undefined|\[\s*\]|\{\s*\})$/u.test(normalized)) return false;
+  if (/^(?:keine|kein|0)\b.{0,60}\b(?:treffer|ergebnisse?|fundstellen?|dokumente?|chunks?)\b/u.test(normalized)) {
+    return false;
+  }
+  if (/^no\b.{0,60}\b(?:results?|matches|hits?|documents?|chunks?)\b/u.test(normalized)) {
+    return false;
+  }
+  if (/"(?:results|matches|hits|documents|chunks)"\s*:\s*\[\s*\]/iu.test(result)) {
+    return false;
+  }
+  return !/"(?:count|total)"\s*:\s*0\b/iu.test(result);
+}
+
 function simpleAmountRetrievalTargets(policy: AgentRetrievalPolicy): SimpleAmountRetrievalTarget[] {
   return policy.referenceYears.slice(0, SIMPLE_AMOUNT_MAX_TOOL_CALLS).map((referenceYear) => ({
     semanticToolName: "search_amount_table",
@@ -613,8 +725,26 @@ async function finalizeAgentRun(options: {
   onStep?: AgentStepHandler;
   deadline?: Deadline;
   policy: AgentRetrievalPolicy;
+  researchEvidence: ResearchEvidenceDraft[];
+  generateResearchMemoryCards?: ResearchMemoryBatchGenerator;
+  researchStichtag: StichtagResolution;
+  researchMemoryRequeryRequirements?: readonly ResearchMemoryRequeryRequirement[];
 }): Promise<AgentRunResult> {
   options.deadline?.throwIfExpired();
+  const requeryRequirements = options.researchMemoryRequeryRequirements ?? [];
+  const hasFreshResearch = hasMatchingFreshResearch(
+    options.researchEvidence,
+    requeryRequirements,
+  );
+  if (
+    requeryRequirements.length > 0
+    && !hasFreshResearch
+  ) {
+    throw new UserVisibleError(
+      "Die frühere Fundstelle muss vor einer neuen Rechtsauskunft erneut geprüft werden. Bitte erneut versuchen.",
+      502,
+    );
+  }
   await appendAgentStep(
     options.steps,
     { type: "finalize", title: "Antwort wird finalisiert", content: options.reason },
@@ -625,10 +755,21 @@ async function finalizeAgentRun(options: {
     systemPrompt: options.systemPrompt,
     attachmentUserMessage: options.attachmentUserMessage,
     researchMemory: options.researchMemory,
+    researchStichtag: options.researchStichtag,
     conversation: options.conversation,
     toolLog: options.toolLog,
-    draftAnswer: options.draftAnswer,
+    // A draft produced while discovery hints were visible can contain claims
+    // copied from those unverified cards. Rebuild solely from verified memory
+    // and current-run tool results once any re-query requirement was involved.
+    draftAnswer: requeryRequirements.length > 0 ? undefined : options.draftAnswer,
   });
+  const memoryCardsPromise = options.researchEvidence.length === 0
+    ? Promise.resolve<ResearchMemoryCard[]>([])
+    : options.generateResearchMemoryCards
+      ? options.generateResearchMemoryCards(options.researchEvidence).catch(() =>
+          fallbackResearchMemoryCards(options.researchEvidence)
+        )
+      : Promise.resolve(fallbackResearchMemoryCards(options.researchEvidence));
   let finalResult = await chatCompletion({
     runtime: options.runtime,
     deadline: options.deadline,
@@ -676,10 +817,17 @@ async function finalizeAgentRun(options: {
     { type: "answer", title: "Finale Antwort", content: summarizeStepText(answer) },
     options.onStep,
   );
+  const researchMemoryCards = await memoryCardsPromise;
   return {
     answer,
     steps: options.steps,
     tools: options.tools,
+    ...(options.researchEvidence.length > 0
+      ? {
+          researchEvidence: options.researchEvidence,
+          researchMemoryCards,
+        }
+      : {}),
     ...(pdfOfferTitle ? { pdfOffer: { title: pdfOfferTitle } } : {}),
   };
 }
@@ -697,7 +845,46 @@ export type RunAgentOptions = {
   researchResultLimit?: number;
   /** Pre-formatted research findings carried forward from earlier turns. */
   researchMemory?: string;
+  /** Source/query scopes that a usable current-run result must satisfy. */
+  researchMemoryRequeryRequirements?: readonly ResearchMemoryRequeryRequirement[];
+  /** Verified-only memory for final synthesis; discovery hints are excluded. */
+  finalResearchMemory?: string;
+  /** One stable cutoff resolution shared by retrieval, memory loading and persistence. */
+  researchStichtag?: StichtagResolution;
+  /** Optional route-owned batched LLM generator. Omitted in focused agent tests. */
+  generateResearchMemoryCards?: ResearchMemoryBatchGenerator;
 };
+
+function requeryArgumentText(argumentsValue: JsonObject): string {
+  return REQUERY_ARGUMENT_NAMES
+    .map((key) => argumentsValue[key])
+    .filter((value): value is string | number =>
+      typeof value === "string" || typeof value === "number"
+    )
+    .join(" ");
+}
+
+function evidenceMatchesRequeryRequirement(
+  evidence: ResearchEvidenceDraft,
+  requirement: ResearchMemoryRequeryRequirement,
+): boolean {
+  const requiredSource = requirement.sourceKey?.trim().toLocaleUpperCase("de-AT");
+  const evidenceSource = evidence.source.key?.trim().toLocaleUpperCase("de-AT");
+  if (requiredSource && requiredSource !== evidenceSource) return false;
+  return matchesResearchMemoryTerms(
+    requeryArgumentText(evidence.semanticArguments),
+    requirement.matchTerms,
+  );
+}
+
+function hasMatchingFreshResearch(
+  evidence: ResearchEvidenceDraft[],
+  requirements: readonly ResearchMemoryRequeryRequirement[],
+): boolean {
+  return requirements.every((requirement) =>
+    evidence.some((entry) => evidenceMatchesRequeryRequirement(entry, requirement))
+  );
+}
 
 async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunResult> {
   const steps: AgentStep[] = [...(options.initialSteps ?? [])];
@@ -788,6 +975,8 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
     content: message.content,
   }));
   const latestQuestion = options.messages.findLast((message) => message.role === "user")?.content;
+  const researchStichtag = options.researchStichtag
+    ?? resolveLegalStichtag(latestQuestion ?? "");
   const requiresSuccessfulReferentialPdfResearch = Boolean(
     latestQuestion
     && isExplicitPdfCreationRequest(latestQuestion)
@@ -802,8 +991,10 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
   const policy = retrievalPolicy({
     latestQuestion,
     hasAttachments,
+    stichtag: researchStichtag,
   });
   const toolLog: ToolLogEntry[] = [];
+  const researchEvidence: ResearchEvidenceDraft[] = [];
   const session = await mcp.openToolSession(options.mcpBearerToken, { deadline: options.deadline });
   const registry = new SemanticToolRegistry(session.tools, {
     resultLimit: options.researchResultLimit,
@@ -846,7 +1037,12 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         }
         secureRouteFound = true;
         executedToolCallCount += 1;
-        const argumentSummary = summarizeToolArguments(simpleAmountLogArguments(query, target));
+        const semanticArguments = simpleAmountLogArguments(query, target);
+        const argumentSummary = summarizeToolArguments(semanticArguments);
+        const sourceDescriptor = registry.getResearchSourceDescriptor(
+          target.semanticToolName,
+          { query },
+        );
         const sourceName = registry.getResearchSourceName(target.semanticToolName, { query });
         await appendAgentStep(
           steps,
@@ -863,16 +1059,18 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         );
 
         let toolResult: string;
+        let detailedResult: McpToolResult | undefined;
         let success = false;
         try {
-          toolResult = await mcp.callTool({
+          detailedResult = await callMcpToolDetailed(mcp, {
             token: options.mcpBearerToken,
             sessionId: session.sessionId,
             name: routed.name,
             arguments: routed.arguments,
             deadline: options.deadline,
           });
-          success = isUsableSimpleAmountResult(toolResult, target);
+          toolResult = detailedResult.text;
+          success = !detailedResult.isError && isUsableSimpleAmountResult(toolResult, target);
         } catch (error) {
           toolResult = error instanceof Error ? error.message : "Die Betragsquelle konnte nicht abgefragt werden.";
         }
@@ -882,6 +1080,27 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
           result: toolResult,
           success,
         });
+        const resultStepOrder = steps.length;
+        if (success && toolResult.trim()) {
+          appendResearchEvidence(researchEvidence, {
+            resultStepOrder,
+            evidenceOrder: researchEvidence.length,
+            semanticToolName: target.semanticToolName,
+            semanticArguments,
+            rawToolName: routed.name,
+            effectiveArguments: routed.arguments,
+            source: {
+              key: sourceDescriptor?.key ?? null,
+              name: sourceDescriptor?.name ?? null,
+              kbId: sourceDescriptor?.kbId ?? null,
+              system: null,
+            },
+            stichtag: researchStichtag,
+            resultText: toolResult,
+            structuredContent: detailedResult?.structuredContent,
+            resultLimit: effectiveResultLimit(routed.arguments),
+          });
+        }
         await appendAgentStep(
           steps,
           {
@@ -930,6 +1149,9 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
       attachmentUserMessage,
       conversation: options.messages,
       toolLog,
+      researchEvidence,
+      generateResearchMemoryCards: options.generateResearchMemoryCards,
+      researchStichtag,
       steps,
       tools: Array.from(new Set(toolLog.map((entry) => entry.toolName))),
       onStep: options.onStep,
@@ -939,10 +1161,18 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
     });
   }
 
+  // Research-loop memory can contain discovery hints. Final synthesis accepts
+  // only the separately supplied, verified-only block.
+  const finalResearchMemory = options.finalResearchMemory;
+
   // Build the message sequence: system → one user message.
   // Prior-turn research memory and attachment context are merged into a single
   // leading user message to avoid consecutive same-role messages.
-  const generalUserContext = [attachmentUserMessage, options.researchMemory?.trim() || undefined]
+  const generalUserContext = [
+    researchStichtagInstruction(researchStichtag),
+    attachmentUserMessage,
+    options.researchMemory?.trim() || undefined,
+  ]
     .filter((part): part is string => Boolean(part))
     .join("\n\n") || undefined;
   const messages: DeepSeekMessage[] = [
@@ -983,12 +1213,16 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         attachmentUserMessage,
         conversation: options.messages,
         toolLog,
+        researchEvidence,
+        generateResearchMemoryCards: options.generateResearchMemoryCards,
+        researchStichtag,
+        researchMemoryRequeryRequirements: options.researchMemoryRequeryRequirements,
         steps,
         tools: allToolNames,
         onStep: options.onStep,
         deadline: options.deadline,
         policy,
-        researchMemory: options.researchMemory,
+        researchMemory: finalResearchMemory,
         reason: "Das Zeitbudget ist fast ausgeschöpft; die bisherigen Ergebnisse werden verwendet.",
       });
     }
@@ -1020,19 +1254,40 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         });
         continue;
       }
+      if (
+        (options.researchMemoryRequeryRequirements?.length ?? 0) > 0
+        && !hasMatchingFreshResearch(
+          researchEvidence,
+          options.researchMemoryRequeryRequirements ?? [],
+        )
+      ) {
+        messages.push({ role: "assistant", content: result.content });
+        messages.push({
+          role: "user",
+          content: [
+            "Die frühere Memory Card ist nur ein RECHERCHEHINWEIS und kein Rechtsbeleg.",
+            "Rufe jetzt die zum Hinweis gehörende Quelle mit zur aktuellen Frage passenden Suchbegriffen auf und prüfe die Fundstelle für den verbindlichen Stichtag erneut, bevor du eine Rechtsaussage machst.",
+          ].join(" "),
+        });
+        continue;
+      }
       return finalizeAgentRun({
         runtime: options.runtime,
         systemPrompt: options.systemPrompt,
         attachmentUserMessage,
         conversation: options.messages,
         toolLog,
+        researchEvidence,
+        generateResearchMemoryCards: options.generateResearchMemoryCards,
+        researchStichtag,
+        researchMemoryRequeryRequirements: options.researchMemoryRequeryRequirements,
         draftAnswer: result.content?.trim(),
         steps,
         tools: allToolNames,
         onStep: options.onStep,
         deadline: options.deadline,
         policy,
-        researchMemory: options.researchMemory,
+        researchMemory: finalResearchMemory,
         reason: "Die erforderliche Recherche ist abgeschlossen; die Antwort wird aus den vorliegenden Quellen erstellt.",
       });
     }
@@ -1074,19 +1329,24 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
           attachmentUserMessage,
           conversation: options.messages,
           toolLog,
+          researchEvidence,
+          generateResearchMemoryCards: options.generateResearchMemoryCards,
+          researchStichtag,
+          researchMemoryRequeryRequirements: options.researchMemoryRequeryRequirements,
           draftAnswer: result.content?.trim(),
           steps,
           tools: allToolNames,
           onStep: options.onStep,
           deadline: options.deadline,
           policy,
-          researchMemory: options.researchMemory,
+          researchMemory: finalResearchMemory,
           reason: "Das Zeitbudget ist fast ausgeschöpft; es werden keine weiteren Werkzeuge aufgerufen.",
         });
       }
 
       const parsedArguments = call.parsedArguments;
       const argumentSummary = summarizeToolArguments(parsedArguments);
+      const sourceDescriptor = registry.getResearchSourceDescriptor(call.name, parsedArguments);
       const sourceName = registry.getResearchSourceName(call.name, parsedArguments);
       await appendAgentStep(
         steps,
@@ -1103,11 +1363,16 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
       );
 
       let toolResult: string;
+      let detailedResult: McpToolResult | undefined;
       let semanticArgumentError = false;
       const routed = registry.routeToolCall(call.name, parsedArguments);
       if (!routed) {
         throw new UserVisibleError(`Unbekannte Recherchefunktion: ${call.name}.`, 502);
       }
+      const effectiveArguments = withEffectiveResearchStichtag(
+        routed.arguments,
+        researchStichtag,
+      );
       if ("error" in routed && typeof routed.error === "string") {
         // Recoverable semantic argument error (e.g. unknown source_key).
         // Record a failed tool result and let the agent loop continue so the
@@ -1116,13 +1381,14 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         semanticArgumentError = true;
       } else {
         try {
-          toolResult = await mcp.callTool({
+          detailedResult = await callMcpToolDetailed(mcp, {
             token: options.mcpBearerToken,
             sessionId: session.sessionId,
             name: routed.name,
-            arguments: routed.arguments,
+            arguments: effectiveArguments,
             deadline: options.deadline,
           });
+          toolResult = detailedResult.text;
         } catch (error) {
           await appendAgentStep(
             steps,
@@ -1143,8 +1409,33 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         }
       }
 
-      const success = semanticArgumentError ? false : !toolResult.startsWith("Datenbankfehler:");
+      const success = semanticArgumentError
+        ? false
+        : detailedResult
+          ? !detailedResult.isError
+          : !toolResult.startsWith("Datenbankfehler:");
       toolLog.push({ toolName: call.name, arguments: argumentSummary, result: toolResult, success });
+      const resultStepOrder = steps.length;
+      if (success && isUsableGeneralResearchResult(toolResult)) {
+        appendResearchEvidence(researchEvidence, {
+          resultStepOrder,
+          evidenceOrder: researchEvidence.length,
+          semanticToolName: call.name,
+          semanticArguments: parsedArguments,
+          rawToolName: routed.name,
+          effectiveArguments,
+          source: {
+            key: sourceDescriptor?.key ?? null,
+            name: sourceDescriptor?.name ?? null,
+            kbId: sourceDescriptor?.kbId ?? null,
+            system: null,
+          },
+          stichtag: researchStichtag,
+          resultText: toolResult,
+          structuredContent: detailedResult?.structuredContent,
+          resultLimit: effectiveResultLimit(effectiveArguments),
+        });
+      }
       await appendAgentStep(
         steps,
         {
@@ -1184,12 +1475,16 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
     attachmentUserMessage,
     conversation: options.messages,
     toolLog,
+    researchEvidence,
+    generateResearchMemoryCards: options.generateResearchMemoryCards,
+    researchStichtag,
+    researchMemoryRequeryRequirements: options.researchMemoryRequeryRequirements,
     steps,
     tools: allToolNames,
     onStep: options.onStep,
     deadline: options.deadline,
     policy,
-    researchMemory: options.researchMemory,
+    researchMemory: finalResearchMemory,
     reason: "Die maximale Zahl an Recherche-Runden ist erreicht; die bisherigen Ergebnisse werden verwendet.",
   });
 }

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_RESEARCH_RESULT_LIMIT,
   getResearchResultLimit,
+  getResearchResultLimitSnapshot,
   parseResearchResultLimit,
   updateResearchResultLimit,
 } from "./research-settings";
@@ -60,6 +61,25 @@ describe("getResearchResultLimit", () => {
     await expect(getResearchResultLimit(client)).resolves.toBe(
       DEFAULT_RESEARCH_RESULT_LIMIT,
     );
+  });
+
+  it("marks stored values as database provenance", async () => {
+    const { client } = readClient({
+      data: { research_result_limit: 12 },
+      error: null,
+    });
+    await expect(getResearchResultLimitSnapshot(client)).resolves.toEqual({
+      value: 12,
+      source: "database",
+    });
+  });
+
+  it("marks missing settings as fallback provenance", async () => {
+    const { client } = readClient({ data: null, error: { code: "PGRST205" } });
+    await expect(getResearchResultLimitSnapshot(client)).resolves.toEqual({
+      value: DEFAULT_RESEARCH_RESULT_LIMIT,
+      source: "fallback",
+    });
   });
 });
 

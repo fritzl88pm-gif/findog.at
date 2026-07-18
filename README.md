@@ -63,8 +63,11 @@ Apply all migrations in order through the Supabase SQL editor or your migration 
 13. `supabase/migrations/20260715172808_index_model_default_policy_fk.sql`
 14. `supabase/migrations/20260718000000_document_artifacts.sql`
 15. `supabase/migrations/20260718100000_research_result_limit.sql`
+16. `supabase/migrations/20260718133121_research_evidence_memory_cards.sql`
 
 Supabase Auth must be enabled for email/password login. Authorized accounts are manually provisioned; the app does not expose self-service registration. Server persistence stores the authenticated Supabase `user.id` as `conversations.client_id`, `messages.client_id`, and `agent_runs.client_id`. Deleting an owned conversation cascades to its messages, agent runs, and agent steps. The admin request audit records only submitted user prompts and is deliberately independent of conversation deletion; deleting the audit history does not remove a user's conversations.
+
+Successful research results are stored separately from the 1,200-character agent-step preview. One additional batched, non-reasoning LLM call can create up to ten compact Memory Cards per run. Opaque MCP text remains a non-authoritative discovery hint and is requeried before legal use; only deterministically typed RIS/EVI evidence with the exact matching Stichtag can become reusable legal memory.
 
 ## Verification
 

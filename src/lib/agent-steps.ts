@@ -1,3 +1,6 @@
+import type { ResearchEvidenceDraft } from "./research-evidence";
+import type { ResearchMemoryCard } from "./research-memory-cards";
+
 export type AgentStep =
   | { type: "pdf_context"; title: string; content: string }
   | { type: "pdf_offer"; title: string; content: string }
@@ -36,6 +39,10 @@ export type AgentRunResult = {
   status?: "completed" | "partial";
   pdfOffer?: PdfOffer;
   pdfArtifacts?: PdfArtifactDraft[];
+  /** Server-internal full research payloads; never exposed in the chat response. */
+  researchEvidence?: ResearchEvidenceDraft[];
+  /** Server-internal, claim-bounded cards generated from researchEvidence. */
+  researchMemoryCards?: ResearchMemoryCard[];
 };
 
 const DEFAULT_STEP_TEXT_LIMIT = 1_200;

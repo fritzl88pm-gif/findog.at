@@ -482,7 +482,7 @@ describe("runAgent", () => {
         name: "hybrid_search",
         arguments: expect.objectContaining({
           kb_id: "e0282ab8-b94f-4553-962e-68705201cf9a",
-          query: "EStG § 33",
+          query: expect.stringMatching(/^EStG § 33\nVerbindlicher Rechtsstand\/Stichtag: \d{4}-\d{2}-\d{2}$/u),
         }),
       }),
     );

@@ -16,6 +16,12 @@ type McpSession = {
   tools: McpTool[];
 };
 
+export type McpToolResult = {
+  text: string;
+  structuredContent?: JsonObject;
+  isError: boolean;
+};
+
 type JsonRpcError = {
   code?: number;
   message?: string;
@@ -70,7 +76,7 @@ function parseTools(payloads: JsonObject[]): McpTool[] {
   });
 }
 
-function stringifyToolContent(payloads: JsonObject[]): string {
+function parseToolContent(payloads: JsonObject[]): McpToolResult {
   const result = resultObject(payloads, "Datenbankantwort ist unvollständig.");
   const parts: string[] = [];
 
@@ -89,7 +95,17 @@ function stringifyToolContent(payloads: JsonObject[]): string {
   }
 
   const text = parts.filter(Boolean).join("\n\n") || JSON.stringify(result);
-  return result.isError === true ? `Datenbankfehler: ${text}` : text;
+  const isError = result.isError === true;
+  const structuredContent = result.structuredContent
+    && typeof result.structuredContent === "object"
+    && !Array.isArray(result.structuredContent)
+    ? result.structuredContent as JsonObject
+    : undefined;
+  return {
+    text: isError ? `Datenbankfehler: ${text}` : text,
+    ...(structuredContent ? { structuredContent } : {}),
+    isError,
+  };
 }
 
 export class McpClient {
@@ -163,6 +179,17 @@ export class McpClient {
     deadline?: Deadline;
     signal?: AbortSignal;
   }): Promise<string> {
+    return (await this.callToolDetailed(options)).text;
+  }
+
+  async callToolDetailed(options: {
+    token?: string;
+    sessionId?: string;
+    name: string;
+    arguments: JsonObject;
+    deadline?: Deadline;
+    signal?: AbortSignal;
+  }): Promise<McpToolResult> {
     const result = await this.postJson({
       payload: {
         jsonrpc: "2.0",
@@ -180,7 +207,7 @@ export class McpClient {
       allowEmptyResponse: false,
     });
 
-    return stringifyToolContent(result.payloads);
+    return parseToolContent(result.payloads);
   }
 
   private async postJson(options: {

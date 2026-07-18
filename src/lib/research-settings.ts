@@ -9,6 +9,11 @@ export const DEFAULT_RESEARCH_RESULT_LIMIT = 8;
 export const MIN_RESEARCH_RESULT_LIMIT = 1;
 export const MAX_RESEARCH_RESULT_LIMIT = 50;
 
+export type ResearchResultLimitSnapshot = {
+  value: number;
+  source: "database" | "fallback";
+};
+
 /** Coerce and range-check a candidate limit; returns null when invalid. */
 export function parseResearchResultLimit(value: unknown): number | null {
   const numeric =
@@ -35,6 +40,12 @@ export function parseResearchResultLimit(value: unknown): number | null {
 export async function getResearchResultLimit(
   supabase: ServerSupabaseClient,
 ): Promise<number> {
+  return (await getResearchResultLimitSnapshot(supabase)).value;
+}
+
+export async function getResearchResultLimitSnapshot(
+  supabase: ServerSupabaseClient,
+): Promise<ResearchResultLimitSnapshot> {
   try {
     const { data, error } = await supabase
       .from("global_settings")
@@ -42,14 +53,16 @@ export async function getResearchResultLimit(
       .eq("id", true)
       .maybeSingle();
     if (error || !data) {
-      return DEFAULT_RESEARCH_RESULT_LIMIT;
+      return { value: DEFAULT_RESEARCH_RESULT_LIMIT, source: "fallback" };
     }
     const parsed = parseResearchResultLimit(
       (data as Record<string, unknown>).research_result_limit,
     );
-    return parsed ?? DEFAULT_RESEARCH_RESULT_LIMIT;
+    return parsed === null
+      ? { value: DEFAULT_RESEARCH_RESULT_LIMIT, source: "fallback" }
+      : { value: parsed, source: "database" };
   } catch {
-    return DEFAULT_RESEARCH_RESULT_LIMIT;
+    return { value: DEFAULT_RESEARCH_RESULT_LIMIT, source: "fallback" };
   }
 }
 
