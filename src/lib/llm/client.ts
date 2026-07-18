@@ -21,8 +21,6 @@ export type LlmToolCall = {
 export type LlmMessage = {
   role: "system" | "user" | "assistant" | "tool";
   content?: string | null;
-  reasoning_content?: string;
-  tool_call_id?: string;
   tool_calls?: Array<{
     id: string;
     type: "function";
@@ -96,9 +94,16 @@ function completionPayload(
 ): JsonObject {
   const usesThinking = thinkingEnabled(runtime);
   const isOpenAICompatible = runtime.provider === "openai_compatible";
+  const sanitizedMessages = messages.map((message) => {
+    if (message && typeof message === "object" && "reasoning_content" in message) {
+      const { reasoning_content: _ignore, ...rest } = message as Record<string, unknown>;
+      return rest as LlmMessage;
+    }
+    return message;
+  });
   const payload: JsonObject = {
     model: runtime.upstreamModel,
-    messages,
+    messages: sanitizedMessages,
     stream: false,
   };
 

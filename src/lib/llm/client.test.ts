@@ -670,4 +670,42 @@ describe("transport retry on fetch failure", () => {
       "GPT 5.6 Terra High ist derzeit nicht erreichbar",
     );
   });
+
+describe("reasoning_content sanitization in payload", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("strips reasoning_content from messages in the JSON payload", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
+
+    // Cast to bypass type safety - simulate a runtime message with reasoning_content
+    const messagesWithReasoning = [
+      { role: "user" as const, content: "Frage" },
+    ];
+    const reasoningMsg = {
+      role: "assistant" as const,
+      content: "Überlegung",
+      reasoning_content: "Interne Überlegung",
+    };
+    messagesWithReasoning.push(reasoningMsg as unknown as { role: "assistant"; content: string });
+
+    await chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: messagesWithReasoning,
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string) as Record<string, unknown>;
+    const sentMessages = body.messages as Array<Record<string, unknown>>;
+    const assistantMsg = sentMessages.find((m) => m.role === "assistant");
+    expect(assistantMsg?.reasoning_content).toBeUndefined();
+    expect(assistantMsg?.content).toBe("Überlegung");
+  });
+});
+
 });

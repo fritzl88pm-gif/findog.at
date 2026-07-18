@@ -1619,9 +1619,6 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
     messages.push({
       role: "assistant",
       content: result.content,
-      ...(result.reasoningContent !== null && result.reasoningContent !== undefined
-        ? { reasoning_content: result.reasoningContent }
-        : {}),
       tool_calls: selectedToolCalls.map((call) => ({
         id: call.id,
         type: "function",

@@ -462,12 +462,11 @@ describe("runAgent", () => {
       .toContain("search_laws");
     expect(mockedChatCompletion.mock.calls[0]?.[0].tools?.map((tool) => tool.function.name))
       .not.toContain("findok_verify_bfg_cases");
-    expect(mockedChatCompletion.mock.calls[1]?.[0].messages).toContainEqual(
-      expect.objectContaining({
-        role: "assistant",
-        reasoning_content: "Unveränderte interne Werkzeugbegründung",
-      }),
-    );
+    expect(
+      mockedChatCompletion.mock.calls[1]?.[0].messages.find(
+        (m: Record<string, unknown>) => m.role === "assistant" && "reasoning_content" in m,
+      ),
+    ).toBeUndefined();
 
     // The runtime uses the canonical prompt byte-for-byte; attachment content stays outside it.
     expect(mockedChatCompletion.mock.calls[0][0].messages[0]).toEqual({
