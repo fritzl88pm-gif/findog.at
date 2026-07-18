@@ -21,6 +21,7 @@ export type LlmToolCall = {
 export type LlmMessage = {
   role: "system" | "user" | "assistant" | "tool";
   content?: string | null;
+  tool_call_id?: string;
   tool_calls?: Array<{
     id: string;
     type: "function";
@@ -96,7 +97,8 @@ function completionPayload(
   const isOpenAICompatible = runtime.provider === "openai_compatible";
   const sanitizedMessages = messages.map((message) => {
     if (message && typeof message === "object" && "reasoning_content" in message) {
-      const { reasoning_content: _ignore, ...rest } = message as Record<string, unknown>;
+      const rest = { ...(message as Record<string, unknown>) };
+      delete rest.reasoning_content;
       return rest as LlmMessage;
     }
     return message;

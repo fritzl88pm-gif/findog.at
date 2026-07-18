@@ -1,5 +1,6 @@
 import { chatCompletion, type AppChatMessage, type DeepSeekMessage } from "./deepseek";
 import { type Deadline, hasDeadlineTime } from "./deadline";
+import { applyToolLogBudget, applyToolLoopContextBudget, truncateToolResultForContext } from "./agent-context-budget";
 import { MissingMcpBearerTokenError, UserVisibleError } from "./errors";
 import { McpClient, type McpToolResult } from "./mcp/client";
 import type { JsonObject } from "./mcp/tools";
@@ -596,7 +597,8 @@ function formatToolLog(toolLog: ToolLogEntry[]): string {
     return "Noch keine Werkzeugergebnisse.";
   }
 
-  return toolLog
+  const budgeted = applyToolLogBudget(toolLog);
+  return budgeted
     .map((entry, index) =>
       [
         `${index + 1}. ${entry.success ? "Erfolg" : "Fehler"}: ${entry.toolName}`,
@@ -1167,10 +1169,11 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         } catch (error) {
           toolResult = error instanceof Error ? error.message : "Die Betragsquelle konnte nicht abgefragt werden.";
         }
+        const contextResult = truncateToolResultForContext(toolResult);
         toolLog.push({
           toolName: target.semanticToolName,
           arguments: argumentSummary,
-          result: toolResult,
+          result: contextResult,
           success,
         });
         const resultStepOrder = steps.length;
@@ -1268,7 +1271,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
   ]
     .filter((part): part is string => Boolean(part))
     .join("\n\n") || undefined;
-  const messages: DeepSeekMessage[] = [
+  let messages: DeepSeekMessage[] = [
     { role: "system", content: options.systemPrompt },
   ];
   if (generalUserContext && conversationMessages.length > 0 && conversationMessages[0].role === "user") {
@@ -1304,6 +1307,8 @@ function isFatalResearchToolError(error: unknown, deadline: Deadline | undefined
   if (deadline?.signal.aborted) return true;
   return false;
 }
+
+  const toolMessageSuccessByCallId = new Map<string, boolean>();
 
   const executeResearchToolCall = async (call: {
     id: string;
@@ -1385,7 +1390,8 @@ function isFatalResearchToolError(error: unknown, deadline: Deadline | undefined
         : detailedResult
           ? !detailedResult.isError
           : !toolResult.startsWith("Datenbankfehler:");
-    toolLog.push({ toolName: call.name, arguments: argumentSummary, result: toolResult, success });
+    const contextResult = truncateToolResultForContext(toolResult);
+    toolLog.push({ toolName: call.name, arguments: argumentSummary, result: contextResult, success });
     const resultStepOrder = steps.length;
     if (success && isUsableGeneralResearchResult(toolResult)) {
       appendResearchEvidence(researchEvidence, {
@@ -1423,7 +1429,8 @@ function isFatalResearchToolError(error: unknown, deadline: Deadline | undefined
       options.onStep,
     );
     if (appendToolMessage) {
-      messages.push({ role: "tool", tool_call_id: call.id, content: toolResult });
+      messages.push({ role: "tool", tool_call_id: call.id, content: contextResult });
+      toolMessageSuccessByCallId.set(call.id, success);
     }
   };
 
@@ -1455,6 +1462,7 @@ function isFatalResearchToolError(error: unknown, deadline: Deadline | undefined
       });
     }
 
+    messages = applyToolLoopContextBudget(messages, toolMessageSuccessByCallId);
     let result = await chatCompletion({
       runtime: options.runtime,
       deadline: options.deadline,

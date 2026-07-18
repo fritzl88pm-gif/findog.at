@@ -291,7 +291,7 @@ export class McpClient {
         lastError = error;
         const isLastAttempt = attempt === maxAttempts;
         const isTransportFailure = error instanceof TypeError;
-        const signalAborted = options.signal?.aborted ?? options.deadline?.signal.aborted ?? false;
+        const signalAborted = (options.signal?.aborted ?? false) || (options.deadline?.signal.aborted ?? false);
         if (isLastAttempt || !isTransportFailure || signalAborted) {
           throw error;
         }

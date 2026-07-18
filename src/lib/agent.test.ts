@@ -1189,7 +1189,7 @@ describe("runAgent", () => {
     const lawResultSteps = result.steps.filter(
       (step) => step.type === "tool_result" && step.toolName === "search_laws",
     );
-    expect(lawResultSteps.some((step) => step.success === false)).toBe(true);
+    expect(lawResultSteps.some((step) => (step as { type: "tool_result"; success: boolean }).success === false)).toBe(true);
   });
 
   it("throws on fatal MissingMcpBearerTokenError from MCP transport", async () => {

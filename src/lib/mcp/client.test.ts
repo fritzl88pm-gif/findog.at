@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createDeadline } from "../deadline";
+import { createDeadline, type Deadline } from "../deadline";
 import { MCP_HTTP_TIMEOUT_MS } from "./client";
 import { McpClient } from "./client";
 
@@ -159,6 +159,42 @@ describe("McpClient transport retry", () => {
     })).rejects.toThrow();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     deadline.dispose();
+  });
+
+  it("does not retry when the deadline aborts but the explicit signal remains active", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const explicitController = new AbortController();
+    const abortedDeadlineController = new AbortController();
+    abortedDeadlineController.abort();
+    let signalReads = 0;
+    const deadline: Deadline = {
+      get signal() {
+        signalReads += 1;
+        return signalReads <= 3
+          ? explicitController.signal
+          : abortedDeadlineController.signal;
+      },
+      expiresAt: Date.now() + 60_000,
+      remainingMs: () => 60_000,
+      throwIfExpired: () => undefined,
+      dispose: () => undefined,
+    };
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(jsonRpcResponse({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { content: [{ type: "text", text: "Zu spät" }] },
+      }));
+
+    await expect(new McpClient().callToolDetailed({
+      name: "hybrid_search",
+      arguments: { query: "test" },
+      signal: explicitController.signal,
+      deadline,
+    })).rejects.toThrow("fetch failed");
+    expect(explicitController.signal.aborted).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry for HTTP 5xx errors (not TypeError)", async () => {

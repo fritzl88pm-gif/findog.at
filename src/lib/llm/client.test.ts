@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DeepSeekTool } from "../mcp/tools";
-import { chatCompletion } from "./client";
+import { chatCompletion, type LlmMessage } from "./client";
 import type { LlmRuntime } from "./runtime";
 
 import {
@@ -684,16 +684,16 @@ describe("reasoning_content sanitization in payload", () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
 
-    // Cast to bypass type safety - simulate a runtime message with reasoning_content
-    const messagesWithReasoning = [
-      { role: "user" as const, content: "Frage" },
-    ];
-    const reasoningMsg = {
+    // Simulate a runtime message with reasoning_content using a raw object
+    const rawMsg = {
       role: "assistant" as const,
       content: "Überlegung",
       reasoning_content: "Interne Überlegung",
     };
-    messagesWithReasoning.push(reasoningMsg as unknown as { role: "assistant"; content: string });
+    const messagesWithReasoning: LlmMessage[] = [
+      { role: "user", content: "Frage" },
+      rawMsg,
+    ];
 
     await chatCompletion({
       runtime: FLASH_RUNTIME,
