@@ -47,6 +47,8 @@ export type LlmResult = {
   finishReason: FinishReason;
 };
 
+export type LlmToolChoice = "auto" | "required";
+
 function publicLabel(runtime: LlmRuntime): string {
   return runtime.label ?? providerLabel(runtime);
 }
@@ -93,6 +95,7 @@ function completionPayload(
   runtime: LlmRuntime,
   messages: LlmMessage[],
   tools: DeepSeekTool[],
+  toolChoice?: LlmToolChoice,
 ): JsonObject {
   const usesThinking = thinkingEnabled(runtime);
   const isOpenAICompatible = runtime.provider === "openai_compatible";
@@ -119,7 +122,9 @@ function completionPayload(
 
   if (tools.length > 0) {
     payload.tools = tools;
-    if (!usesThinking && !isOpenAICompatible) {
+    if (toolChoice) {
+      payload.tool_choice = toolChoice;
+    } else if (!usesThinking && !isOpenAICompatible) {
       payload.tool_choice = "auto";
     }
   }
@@ -165,9 +170,15 @@ export async function chatCompletion(options: {
   signal?: AbortSignal;
   timeoutMs?: number;
   reserveMs?: number;
+  toolChoice?: LlmToolChoice;
 }): Promise<LlmResult> {
   const tools = options.tools ?? [];
-  const payload = completionPayload(options.runtime, options.messages, tools);
+  const payload = completionPayload(
+    options.runtime,
+    options.messages,
+    tools,
+    options.toolChoice,
+  );
   const headers: Record<string, string> = {
     Accept: "application/json",
     Authorization: `Bearer ${options.runtime.apiKey}`,

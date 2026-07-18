@@ -1279,6 +1279,11 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
       reserveMs: AGENT_FINALIZATION_RESERVE_MS,
       messages: [...messages],
       tools: allModelTools,
+      ...(options.runtime.provider === "deepseek"
+        && shouldVerifyInitialSpecialistAnswer
+        && !hasUsableInitialResearchEvidence(researchEvidence)
+        ? { toolChoice: "required" as const }
+        : {}),
     });
 
     if (result.finishReason === "length") {
@@ -1306,6 +1311,9 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         && (initialResearchRequired || !isNonFachResponse(result.content ?? ""))
       ) {
         initialResearchRequired = true;
+        if (options.runtime.provider === "deepseek") {
+          throw missingInitialResearchError();
+        }
         messages.push({ role: "assistant", content: result.content });
         messages.push({
           role: "user",

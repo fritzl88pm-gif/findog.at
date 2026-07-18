@@ -223,6 +223,29 @@ describe("provider-neutral chatCompletion", () => {
     expect(JSON.stringify(requestBody(fetchMock))).not.toContain("deepseek-secret");
   });
 
+  it("can require a DeepSeek tool call explicitly", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(responseMessage({
+      content: null,
+      tool_calls: [{
+        id: "call-1",
+        type: "function",
+        function: { name: "search_laws", arguments: { query: "EStG" } },
+      }],
+    }, "tool_calls"));
+
+    await chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+      tools: [TOOL],
+      toolChoice: "required",
+    });
+
+    expect(requestBody(fetchMock)).toMatchObject({
+      tool_choice: "required",
+    });
+  });
+
   it("omits temperature and tool_choice in thinking mode and preserves reasoning plus object arguments", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(responseMessage({

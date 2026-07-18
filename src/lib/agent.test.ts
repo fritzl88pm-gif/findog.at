@@ -521,11 +521,6 @@ describe("runAgent", () => {
     const { callTool } = mockMcpSession("§ 16 EStG in der am Stichtag geltenden Fassung.");
     mockedChatCompletion
       .mockResolvedValueOnce({
-        finishReason: "stop",
-        content: "Werbungskosten sind unter bestimmten Voraussetzungen abzugsfähig.",
-        toolCalls: [],
-      })
-      .mockResolvedValueOnce({
         finishReason: "tool_calls",
         content: "Die Rechtsgrundlage wird nun geprüft.",
         toolCalls: [{
@@ -559,30 +554,28 @@ describe("runAgent", () => {
       "finalize",
       "answer",
     ]);
-    expect(mockedChatCompletion.mock.calls[1]?.[0].messages.at(-1)).toEqual(
-      expect.objectContaining({
-        role: "user",
-        content: expect.stringContaining("darf nicht allein aus Modellwissen"),
-      }),
+    expect(mockedChatCompletion.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ toolChoice: "required" }),
     );
   });
 
   it("does not return a first specialist answer when no usable research result can be obtained", async () => {
     const { callTool } = mockMcpSession();
-    for (let iteration = 0; iteration < 6; iteration += 1) {
-      mockedChatCompletion.mockResolvedValueOnce({
-        finishReason: "stop",
-        content: "Unbelegte fachliche Antwort aus Modellwissen.",
-        toolCalls: [],
-      });
-    }
+    mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "stop",
+      content: "Unbelegte fachliche Antwort aus Modellwissen.",
+      toolCalls: [],
+    });
 
     await expect(runAgent({
       runtime: TEST_RUNTIME,
       messages: [{ role: "user", content: "Welche Voraussetzungen gelten nach § 16 EStG?" }],
     })).rejects.toThrow("kein verwertbares Rechercheergebnis");
 
-    expect(mockedChatCompletion).toHaveBeenCalledTimes(6);
+    expect(mockedChatCompletion).toHaveBeenCalledOnce();
+    expect(mockedChatCompletion.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ toolChoice: "required" }),
+    );
     expect(callTool).not.toHaveBeenCalled();
   });
 
@@ -942,11 +935,6 @@ describe("runAgent", () => {
     const { callTool } = mockMcpSession("§ 198 BAO in der am Stichtag geltenden Fassung.");
     mockedChatCompletion
       .mockResolvedValueOnce({
-        finishReason: "stop",
-        content: "Der Bescheid scheint rechtmäßig.",
-        toolCalls: [],
-      })
-      .mockResolvedValueOnce({
         finishReason: "tool_calls",
         content: "Die gesetzliche Grundlage wird geprüft.",
         toolCalls: [{
@@ -977,6 +965,9 @@ describe("runAgent", () => {
       expect.objectContaining({ type: "tool_call", toolName: "search_laws" }),
       expect.objectContaining({ type: "tool_result", toolName: "search_laws", success: true }),
     ]));
+    expect(mockedChatCompletion.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ toolChoice: "required" }),
+    );
   });
 
   it("executes every tool call from one model response before finalizing", async () => {
