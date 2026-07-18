@@ -231,57 +231,72 @@ export class McpClient {
       headers["Mcp-Session-Id"] = options.sessionId;
     }
 
-    const { response, body } = await runWithTimeout(
-      (signal) =>
-        fetch(BFG_MCP_ENDPOINT, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(options.payload),
-          cache: "no-store",
-          signal,
-        }).then(async (response) => ({
-          response,
-          body: await response.text(),
-        })),
-      {
-        deadline: options.deadline,
-        signal: options.signal,
-        timeoutMs: MCP_HTTP_TIMEOUT_MS,
-        timeoutMessage: "Die Datenbank hat nicht rechtzeitig geantwortet. Bitte erneut versuchen.",
-      },
-    );
+    const maxAttempts = 2;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const { response, body } = await runWithTimeout(
+          (signal) =>
+            fetch(BFG_MCP_ENDPOINT, {
+              method: "POST",
+              headers,
+              body: JSON.stringify(options.payload),
+              cache: "no-store",
+              signal,
+            }).then(async (response) => ({
+              response,
+              body: await response.text(),
+            })),
+          {
+            deadline: options.deadline,
+            signal: options.signal,
+            timeoutMs: MCP_HTTP_TIMEOUT_MS,
+            timeoutMessage: "Die Datenbank hat nicht rechtzeitig geantwortet. Bitte erneut versuchen.",
+          },
+        );
 
-    if (response.status === 401 && !options.token) {
-      throw new MissingMcpBearerTokenError();
-    }
-    if (response.status === 401) {
-      throw new UserVisibleError(
-        "Datenbankzugang wurde abgelehnt. Bitte serverseitige Datenbank-Konfiguration prüfen.",
-        401,
-      );
-    }
-    if (!response.ok) {
-      throw new UserVisibleError(`Datenbankfehler HTTP ${response.status}.`, 502);
-    }
+        if (response.status === 401 && !options.token) {
+          throw new MissingMcpBearerTokenError();
+        }
+        if (response.status === 401) {
+          throw new UserVisibleError(
+            "Datenbankzugang wurde abgelehnt. Bitte serverseitige Datenbank-Konfiguration prüfen.",
+            401,
+          );
+        }
+        if (!response.ok) {
+          throw new UserVisibleError(`Datenbankfehler HTTP ${response.status}.`, 502);
+        }
 
-    const payloads = extractJsonPayloads(body);
-    if (payloads.length === 0 && !options.allowEmptyResponse) {
-      throw new UserVisibleError("Datenbankantwort ist leer.", 502);
-    }
+        const payloads = extractJsonPayloads(body);
+        if (payloads.length === 0 && !options.allowEmptyResponse) {
+          throw new UserVisibleError("Datenbankantwort ist leer.", 502);
+        }
 
-    const jsonRpcError = getJsonRpcError(payloads);
-    if (jsonRpcError) {
-      throw new UserVisibleError(
-        `Datenbankfehler${jsonRpcError.code ? ` ${jsonRpcError.code}` : ""}: ${
-          jsonRpcError.message ?? "Unbekannter JSON-RPC Fehler."
-        }`,
-        502,
-      );
-    }
+        const jsonRpcError = getJsonRpcError(payloads);
+        if (jsonRpcError) {
+          throw new UserVisibleError(
+            `Datenbankfehler${jsonRpcError.code ? ` ${jsonRpcError.code}` : ""}: ${
+              jsonRpcError.message ?? "Unbekannter JSON-RPC Fehler."
+            }`,
+            502,
+          );
+        }
 
-    return {
-      payloads,
-      sessionId: response.headers.get("Mcp-Session-Id") ?? response.headers.get("MCP-Session-Id") ?? undefined,
-    };
+        return {
+          payloads,
+          sessionId: response.headers.get("Mcp-Session-Id") ?? response.headers.get("MCP-Session-Id") ?? undefined,
+        };
+      } catch (error) {
+        lastError = error;
+        const isLastAttempt = attempt === maxAttempts;
+        const isTransportFailure = error instanceof TypeError;
+        const signalAborted = options.signal?.aborted ?? options.deadline?.signal.aborted ?? false;
+        if (isLastAttempt || !isTransportFailure || signalAborted) {
+          throw error;
+        }
+      }
+    }
+    throw lastError;
   }
 }

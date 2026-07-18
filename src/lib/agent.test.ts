@@ -1138,4 +1138,147 @@ describe("runAgent", () => {
     )).toBe(true);
     expect(callTool).not.toHaveBeenCalled();
   });
+
+
+  it("recovers from a generic MCP transport failure on one tool call when a second source succeeds", async () => {
+    const openToolSession = vi.fn().mockResolvedValue({
+      sessionId: "mcp-session",
+      tools: [
+        { name: "hybrid_search", description: "Search", inputSchema: { type: "object", properties: { query: { type: "string" }, kb_id: { type: "string" } } } },
+      ],
+    });
+    const callTool = vi.fn()
+      .mockRejectedValueOnce(new Error("fetch failed"))
+      .mockResolvedValueOnce("§ 33 EStG in der geltenden Fassung.");
+    MockedMcpClient.mockImplementation(function MockMcpClient() {
+      return { openToolSession, callTool } as unknown as McpClient;
+    });
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        finishReason: "tool_calls",
+        content: "Ich suche in zwei Quellen.",
+        toolCalls: [
+          { id: "call-fail", name: "search_laws", arguments: JSON.stringify({ query: "fehlgeschlagen" }) },
+          { id: "call-ok", name: "search_bfg", arguments: JSON.stringify({ query: "erfolgreich" }) },
+        ],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "# 📘 Antwort\n\nFinale Antwort nach teilweisem Fehler.",
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "Testfrage" }],
+      mcpBearerToken: "mcp-token",
+    });
+
+    expect(result.answer).toBe(withOverview("Finale Antwort nach teilweisem Fehler."));
+    expect(callTool).toHaveBeenCalledTimes(2);
+    const failedSteps = result.steps.filter(
+      (step) => step.type === "tool_result" && step.success === false,
+    );
+    expect(failedSteps).toHaveLength(1);
+    const toolMessages = mockedChatCompletion.mock.calls
+      .flatMap(([options]) => options.messages)
+      .filter((m) => m.role === "tool");
+    const failedToolMsg = toolMessages.find((m) => m.tool_call_id === "call-fail");
+    expect(failedToolMsg).toBeDefined();
+    expect(failedToolMsg?.content).toContain("nicht erreichbar");
+    const lawResultSteps = result.steps.filter(
+      (step) => step.type === "tool_result" && step.toolName === "search_laws",
+    );
+    expect(lawResultSteps.some((step) => step.success === false)).toBe(true);
+  });
+
+  it("throws on fatal MissingMcpBearerTokenError from MCP transport", async () => {
+    const { MissingMcpBearerTokenError } = await import("./errors");
+    mockMcpSession();
+    const errorMcp = new MissingMcpBearerTokenError();
+    MockedMcpClient.mockImplementation(function MockMcpClient() {
+      return {
+        openToolSession: vi.fn().mockRejectedValue(errorMcp),
+        callTool: vi.fn(),
+      } as unknown as McpClient;
+    });
+
+    await expect(runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+    })).rejects.toThrow("Datenbankzugang ist serverseitig nicht konfiguriert");
+  });
+
+  it("throws on fatal UserVisibleError with status 401", async () => {
+    const { UserVisibleError } = await import("./errors");
+    mockMcpSession();
+    const errorMcp = new UserVisibleError("Unauthorized", 401);
+    MockedMcpClient.mockImplementation(function MockMcpClient() {
+      return {
+        openToolSession: vi.fn().mockResolvedValue({
+          sessionId: "mcp-session",
+          tools: [{ name: "hybrid_search", description: "Search", inputSchema: { type: "object", properties: { query: { type: "string" } } } }],
+        }),
+        callTool: vi.fn().mockRejectedValue(errorMcp),
+      } as unknown as McpClient;
+    });
+    mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "tool_calls",
+      content: "Recherche.",
+      toolCalls: [{ id: "fatal-401", name: "search_laws", arguments: JSON.stringify({ query: "test" }) }],
+    });
+
+    await expect(runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+      mcpBearerToken: "mcp-token",
+    })).rejects.toThrow("Unauthorized");
+  });
+
+  it("throws on fatal UserVisibleError with status 403", async () => {
+    const { UserVisibleError } = await import("./errors");
+    mockMcpSession();
+    const errorMcp = new UserVisibleError("Forbidden", 403);
+    MockedMcpClient.mockImplementation(function MockMcpClient() {
+      return {
+        openToolSession: vi.fn().mockResolvedValue({
+          sessionId: "mcp-session",
+          tools: [{ name: "hybrid_search", description: "Search", inputSchema: { type: "object", properties: { query: { type: "string" } } } }],
+        }),
+        callTool: vi.fn().mockRejectedValue(errorMcp),
+      } as unknown as McpClient;
+    });
+    mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "tool_calls",
+      content: "Recherche.",
+      toolCalls: [{ id: "fatal-403", name: "search_laws", arguments: JSON.stringify({ query: "test" }) }],
+    });
+
+    await expect(runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+      mcpBearerToken: "mcp-token",
+    })).rejects.toThrow("Forbidden");
+  });
+
+  it("throws on aborted overall deadline during MCP tool call", async () => {
+    const deadline = createDeadline(1);
+    // Wait for deadline to expire
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    mockMcpSession();
+    mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "tool_calls",
+      content: "Recherche.",
+      toolCalls: [{ id: "deadline-tool", name: "search_laws", arguments: JSON.stringify({ query: "test" }) }],
+    });
+
+    await expect(runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+      mcpBearerToken: "mcp-token",
+      deadline,
+    })).rejects.toThrow();
+    deadline.dispose();
+  });
+
 });

@@ -106,4 +106,71 @@ describe("McpClient", () => {
       isError: false,
     });
   });
+
+describe("McpClient transport retry", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("retries once after TypeError from fetch and succeeds on second attempt", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(jsonRpcResponse({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          content: [{ type: "text", text: "Gerettet" }],
+        },
+      }));
+
+    const result = await new McpClient().callToolDetailed({
+      name: "hybrid_search",
+      arguments: { query: "test" },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.text).toBe("Gerettet");
+  });
+
+  it("does not retry when the signal is already aborted", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const controller = new AbortController();
+    controller.abort();
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(jsonRpcResponse({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { content: [{ type: "text", text: "Zu spät" }] },
+      }));
+
+    const deadline = createDeadline(60_000);
+    // Abort the deadline signal
+    // We need a deadline that is aborted, so use a custom signal
+    await expect(new McpClient().callToolDetailed({
+      name: "hybrid_search",
+      arguments: { query: "test" },
+      signal: controller.signal,
+    })).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    deadline.dispose();
+  });
+
+  it("does not retry for HTTP 5xx errors (not TypeError)", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(new Response("Server Error", { status: 502 }));
+
+    await expect(new McpClient().callToolDetailed({
+      name: "hybrid_search",
+      arguments: { query: "test" },
+    })).rejects.toThrow("Datenbankfehler HTTP 502");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 });

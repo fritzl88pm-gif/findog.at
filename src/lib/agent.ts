@@ -1,6 +1,6 @@
 import { chatCompletion, type AppChatMessage, type DeepSeekMessage } from "./deepseek";
 import { type Deadline, hasDeadlineTime } from "./deadline";
-import { UserVisibleError } from "./errors";
+import { MissingMcpBearerTokenError, UserVisibleError } from "./errors";
 import { McpClient, type McpToolResult } from "./mcp/client";
 import type { JsonObject } from "./mcp/tools";
 import type { LlmRuntime } from "./llm/runtime";
@@ -1297,6 +1297,14 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
   let hasRunFullLawSearch = false;
   let initialResearchRequired = false;
 
+
+function isFatalResearchToolError(error: unknown, deadline: Deadline | undefined): boolean {
+  if (error instanceof MissingMcpBearerTokenError) return true;
+  if (error instanceof UserVisibleError && (error.status === 401 || error.status === 403)) return true;
+  if (deadline?.signal.aborted) return true;
+  return false;
+}
+
   const executeResearchToolCall = async (call: {
     id: string;
     name: string;
@@ -1323,6 +1331,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
     let toolResult: string;
     let detailedResult: McpToolResult | undefined;
     let semanticArgumentError = false;
+    let recoverableTransportFailure = false;
     const routed = registry.routeToolCall(call.name, parsedArguments);
     if (!routed) {
       throw new UserVisibleError(`Unbekannte Recherchefunktion: ${call.name}.`, 502);
@@ -1345,30 +1354,37 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         });
         toolResult = detailedResult.text;
       } catch (error) {
-        await appendAgentStep(
-          steps,
-          {
-            type: "tool_result",
-            title: sourceName
-              ? researchSourceResultTitle(sourceName, false)
-              : "Recherchequelle nicht erreichbar",
-            content: error instanceof Error
-              ? summarizeStepText(error.message)
-              : "Die Datenbankabfrage konnte nicht erfolgreich ausgeführt werden.",
-            toolName: call.name,
-            success: false,
-          },
-          options.onStep,
-        );
-        throw error;
+        if (isFatalResearchToolError(error, options.deadline)) {
+          await appendAgentStep(
+            steps,
+            {
+              type: "tool_result",
+              title: sourceName
+                ? researchSourceResultTitle(sourceName, false)
+                : "Recherchequelle nicht erreichbar",
+              content: error instanceof Error
+                ? summarizeStepText(error.message)
+                : "Die Datenbankabfrage konnte nicht erfolgreich ausgeführt werden.",
+              toolName: call.name,
+              success: false,
+            },
+            options.onStep,
+          );
+          throw error;
+        }
+        // Recoverable transport failure: produce a safe failure result
+        recoverableTransportFailure = true;
+        toolResult = "Diese Recherchequelle ist derzeit nicht erreichbar. Nutze eine andere verfügbare Recherchefunktion.";
       }
     }
 
-    const success = semanticArgumentError
+    const success = recoverableTransportFailure
       ? false
-      : detailedResult
-        ? !detailedResult.isError
-        : !toolResult.startsWith("Datenbankfehler:");
+      : semanticArgumentError
+        ? false
+        : detailedResult
+          ? !detailedResult.isError
+          : !toolResult.startsWith("Datenbankfehler:");
     toolLog.push({ toolName: call.name, arguments: argumentSummary, result: toolResult, success });
     const resultStepOrder = steps.length;
     if (success && isUsableGeneralResearchResult(toolResult)) {
