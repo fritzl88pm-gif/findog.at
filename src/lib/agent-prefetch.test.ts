@@ -403,7 +403,6 @@ describe("runAgent retrieval policy", () => {
           arguments: JSON.stringify({ query: "Familienbeihilfe Kind" }),
         }],
       })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort.", toolCalls: [] })
       .mockResolvedValueOnce({ finishReason: "stop", content: "Familienbeihilfe im Jahr 2024.", toolCalls: [] });
 
     await runAgent({
@@ -443,9 +442,7 @@ describe("runAgent retrieval policy", () => {
 
   it("performs no hidden BFG prefetch for a general question", async () => {
     const callTool = mockSession();
-    mockedChatCompletion
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
+    mockedChatCompletion.mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
@@ -477,7 +474,6 @@ describe("runAgent retrieval policy", () => {
           arguments: JSON.stringify({ query: "Unterhaltsabsetzbetrag Drittstaat" }),
         }],
       })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort ohne Geschäftszahl.", toolCalls: [] })
       .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort ohne BFG-Zitat.", toolCalls: [] });
 
     const result = await runAgent({

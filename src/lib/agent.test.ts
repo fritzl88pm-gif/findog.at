@@ -422,7 +422,6 @@ describe("runAgent", () => {
           },
         ],
       })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort.", toolCalls: [] })
       .mockResolvedValueOnce({ finishReason: "stop", content: "# 📘 Antwort\n\nFinale Antwort.", toolCalls: [] });
 
     const result = await runAgent({
@@ -437,7 +436,6 @@ describe("runAgent", () => {
       "tool_call",
       "tool_result",
       "progress",
-      "finalize",
       "answer",
     ]);
     expect(callTool).toHaveBeenCalledTimes(1);
@@ -492,9 +490,7 @@ describe("runAgent", () => {
   it("notifies callers for every visible deterministic step", async () => {
     const { callTool } = mockMcpSession();
     const onStep = vi.fn();
-    mockedChatCompletion
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
+    mockedChatCompletion.mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
@@ -512,6 +508,8 @@ describe("runAgent", () => {
     expect(onStep.mock.calls.map(([step]) => step.type)).not.toContain("plan");
     expect(callTool).not.toHaveBeenCalled();
     expect(result.steps.some((step) => step.type === "tool_call")).toBe(false);
+    expect(result.steps.some((step) => step.type === "finalize")).toBe(false);
+    expect(mockedChatCompletion).toHaveBeenCalledOnce();
     expect(onStep).toHaveBeenLastCalledWith(
       expect.objectContaining({ type: "answer", content: withOverview("Finale Antwort.") }),
     );
@@ -704,9 +702,7 @@ describe("runAgent", () => {
       "",
       "Die Voraussetzungen sind anhand des EStG zu prüfen.",
     ].join("\n");
-    mockedChatCompletion
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: finalAnswer, toolCalls: [] });
+    mockedChatCompletion.mockResolvedValueOnce({ finishReason: "stop", content: finalAnswer, toolCalls: [] });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
@@ -725,9 +721,7 @@ describe("runAgent", () => {
   it("keeps guideline-nature information when the user explicitly asks for it", async () => {
     mockMcpSession();
     const finalAnswer = "# 📘 Überblick\n\nHinweis zur Rechtsnatur: Die LStR sind ein Auslegungsbehelf.";
-    mockedChatCompletion
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: finalAnswer, toolCalls: [] });
+    mockedChatCompletion.mockResolvedValueOnce({ finishReason: "stop", content: finalAnswer, toolCalls: [] });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
@@ -754,7 +748,6 @@ describe("runAgent", () => {
           arguments: JSON.stringify({ query: "Frage" }),
         }],
       })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
       .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort.", toolCalls: [] });
 
     await runAgent({
@@ -770,10 +763,9 @@ describe("runAgent", () => {
     deadline.dispose();
   });
 
-  it("retries finalization once after length with full context and partial assistant response", async () => {
+  it("retries a truncated terminal answer once with full context and the partial response", async () => {
     mockMcpSession();
     mockedChatCompletion
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
       .mockResolvedValueOnce({ finishReason: "length", content: "Unvollständiger Entwurf", toolCalls: [] })
       .mockResolvedValueOnce({ finishReason: "stop", content: "Vollständige Antwort.", toolCalls: [] });
 
@@ -787,9 +779,9 @@ describe("runAgent", () => {
     });
 
     expect(result.answer).toBe(withOverview("Vollständige Antwort."));
-    expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
-    const firstFinalMessages = mockedChatCompletion.mock.calls[1]?.[0].messages;
-    const retryMessages = mockedChatCompletion.mock.calls[2]?.[0].messages;
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(2);
+    const firstFinalMessages = mockedChatCompletion.mock.calls[0]?.[0].messages;
+    const retryMessages = mockedChatCompletion.mock.calls[1]?.[0].messages;
     expect(retryMessages.slice(0, firstFinalMessages.length)).toEqual(firstFinalMessages);
     expect(retryMessages.at(-2)).toEqual({
       role: "assistant",
@@ -799,13 +791,15 @@ describe("runAgent", () => {
       role: "user",
       content: expect.stringContaining("vollständige, abschließende Antwort"),
     }));
-    expect(mockedChatCompletion.mock.calls[2]?.[0].tools).toBeUndefined();
+    expect(mockedChatCompletion.mock.calls[1]?.[0].tools).toBeUndefined();
+    expect(result.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "finalize", title: "Antwort wird vervollständigt" }),
+    ]));
   });
 
-  it("errors when the finalization retry also ends with length", async () => {
+  it("errors when the truncated-answer retry also ends with length", async () => {
     mockMcpSession();
     mockedChatCompletion
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
       .mockResolvedValueOnce({ finishReason: "length", content: "Erster Teil", toolCalls: [] })
       .mockResolvedValueOnce({ finishReason: "length", content: "Zweiter Teil", toolCalls: [] });
 
@@ -818,7 +812,7 @@ describe("runAgent", () => {
       ],
     })).rejects.toThrow("finale Antwort nicht vollständig abschließen");
 
-    expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(2);
   });
 
   it("errors without executing tools when research planning ends with length", async () => {
@@ -862,6 +856,9 @@ describe("runAgent", () => {
 
     expect(result.answer).toBe(withOverview("Finale Antwort."));
     expect(mockedChatCompletion).toHaveBeenCalledTimes(1);
+    expect(mockedChatCompletion.mock.calls[0]?.[0].messages.at(-1)?.content).toContain(
+      "keinen Prüfbericht",
+    );
     expect(result.steps).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: "finalize", content: expect.stringContaining("Zeitbudget") }),
@@ -871,9 +868,11 @@ describe("runAgent", () => {
 
   it("inserts attachment context as a user-role message, not appended to system prompt", async () => {
     mockMcpSession();
-    mockedChatCompletion
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort mit PDF-Kontext.", toolCalls: [] });
+    mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "stop",
+      content: "Finale Antwort mit PDF-Kontext.",
+      toolCalls: [],
+    });
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
@@ -903,7 +902,7 @@ describe("runAgent", () => {
     expect(combinedMessage?.content).toContain("untrusted user-provided context");
     expect(combinedMessage?.content).toContain("Fasse dieses PDF zusammen.");
 
-    // Final synthesis also receives attachment context (combined with synthesis context)
+    // Every model call keeps attachment context outside the canonical system prompt.
     for (const [options] of mockedChatCompletion.mock.calls) {
       const messages = options.messages;
       const systemMsg = messages[0];
@@ -911,7 +910,7 @@ describe("runAgent", () => {
         role: "system",
         content: TEST_SYSTEM_PROMPT,
       });
-      // Attachment context is in the same user message as synthesis context
+      // Attachment context is in the same user message as the conversation context.
       if (options.messages.length > 1) {
         const userMsg = options.messages[1];
         expect(userMsg?.role).toBe("user");
@@ -991,7 +990,7 @@ describe("runAgent", () => {
     );
   });
 
-  it("executes every tool call from one model response before finalizing", async () => {
+  it("executes every tool call from one model response before returning the terminal answer", async () => {
     const { callTool } = mockMcpSession();
     mockedChatCompletion
       .mockResolvedValueOnce({ finishReason: "tool_calls",
@@ -1002,7 +1001,6 @@ describe("runAgent", () => {
           arguments: JSON.stringify({ query: `Suche ${index + 1}` }),
         })),
       })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort nach sieben Aufrufen.", toolCalls: [] })
       .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort nach sieben Aufrufen.", toolCalls: [] });
 
     const result = await runAgent({
@@ -1018,15 +1016,8 @@ describe("runAgent", () => {
         title: "LLM-Arbeitsstatus: Werte alle angeforderten Rechtsquellen aus.",
       }),
     ]);
-    expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
-    expect(result.steps).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "finalize",
-          content: expect.stringContaining("erforderliche Recherche ist abgeschlossen"),
-        }),
-      ]),
-    );
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(2);
+    expect(result.steps.some((step) => step.type === "finalize")).toBe(false);
   });
 
   it("does not post-verify BFG candidates after a semantic BFG search", async () => {
@@ -1043,7 +1034,6 @@ describe("runAgent", () => {
           arguments: JSON.stringify({ query: "Rechtsprechung" }),
         }],
       })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufige Antwort.", toolCalls: [] })
       .mockResolvedValueOnce({ finishReason: "stop", content: "Finale Antwort ohne Fundstelle.", toolCalls: [] });
 
     const result = await runAgent({
@@ -1070,7 +1060,6 @@ describe("runAgent", () => {
           arguments: JSON.stringify({ query: "Quellensteuer" }),
         }],
       })
-      .mockResolvedValueOnce({ finishReason: "stop", content: "Vorläufig.", toolCalls: [] })
       .mockResolvedValueOnce({ finishReason: "stop",
         content: "Siehe RV/7103053/2014 und RV/7103080/2015.",
         toolCalls: [],
@@ -1098,11 +1087,6 @@ describe("runAgent", () => {
             arguments: JSON.stringify({ source_key: "WORK_AIDS" }),
           },
         ],
-      })
-      .mockResolvedValueOnce({
-        finishReason: "stop",
-        content: "Vorläufige Antwort trotz ungültigem Quellenschlüssel.",
-        toolCalls: [],
       })
       .mockResolvedValueOnce({
         finishReason: "stop",

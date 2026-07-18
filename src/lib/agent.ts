@@ -621,6 +621,12 @@ function supportMessages(options: {
   if (options.draftAnswer) {
     context.push("", "Vorläufige Antwort des Agenten:", options.draftAnswer);
   }
+  context.push(
+    "",
+    "Ausgabeauftrag:",
+    "Formulieren Sie jetzt ausschließlich die vollständige Antwort an den Nutzer auf Basis des verifizierten Kontexts.",
+    "Geben Sie keinen Prüfbericht, keine Bewertung des Entwurfs und keine Meta-Kommentare zur Antworterstellung aus.",
+  );
   const result: DeepSeekMessage[] = [
     { role: "system", content: options.systemPrompt },
   ];
@@ -736,6 +742,70 @@ function simpleAmountRetrievalTargets(policy: AgentRetrievalPolicy): SimpleAmoun
   }));
 }
 
+function researchMemoryCardsForRun(
+  researchEvidence: ResearchEvidenceDraft[],
+  generateResearchMemoryCards?: ResearchMemoryBatchGenerator,
+): Promise<ResearchMemoryCard[]> {
+  if (researchEvidence.length === 0) {
+    return Promise.resolve([]);
+  }
+  if (!generateResearchMemoryCards) {
+    return Promise.resolve(fallbackResearchMemoryCards(researchEvidence));
+  }
+  return generateResearchMemoryCards(researchEvidence).catch(() =>
+    fallbackResearchMemoryCards(researchEvidence)
+  );
+}
+
+async function completeAgentRun(options: {
+  rawAnswer: string | null;
+  emptyAnswerMessage: string;
+  conversation: AppChatMessage[];
+  steps: AgentStep[];
+  tools: string[];
+  onStep?: AgentStepHandler;
+  researchEvidence: ResearchEvidenceDraft[];
+  generateResearchMemoryCards?: ResearchMemoryBatchGenerator;
+  researchMemoryCardsPromise?: Promise<ResearchMemoryCard[]>;
+}): Promise<AgentRunResult> {
+  const modelAnswer = requireModelContent(options.rawAnswer, options.emptyAnswerMessage);
+  const latestQuestion = options.conversation.findLast((message) => message.role === "user")?.content ?? "";
+  const answerWithoutUnrequestedNotice = removeUnrequestedGuidelineNatureNotice(
+    modelAnswer,
+    latestQuestion,
+  );
+  const answer = ensureRequiredOverview(
+    answerWithoutUnrequestedNotice,
+    !isNonFachResponse(answerWithoutUnrequestedNotice)
+      && !isClearlyConversationalQuestion(latestQuestion),
+  );
+  const pdfOfferTitle = isExplicitPdfCreationRequest(latestQuestion)
+    ? derivePdfOfferTitle(answer, latestQuestion)
+    : undefined;
+
+  await appendAgentStep(
+    options.steps,
+    { type: "answer", title: "Finale Antwort", content: summarizeStepText(answer) },
+    options.onStep,
+  );
+  const researchMemoryCards = await (
+    options.researchMemoryCardsPromise
+    ?? researchMemoryCardsForRun(options.researchEvidence, options.generateResearchMemoryCards)
+  );
+  return {
+    answer,
+    steps: options.steps,
+    tools: options.tools,
+    ...(options.researchEvidence.length > 0
+      ? {
+          researchEvidence: options.researchEvidence,
+          researchMemoryCards,
+        }
+      : {}),
+    ...(pdfOfferTitle ? { pdfOffer: { title: pdfOfferTitle } } : {}),
+  };
+}
+
 async function finalizeAgentRun(options: {
   runtime: LlmRuntime;
   systemPrompt: string;
@@ -788,13 +858,10 @@ async function finalizeAgentRun(options: {
     // and current-run tool results once any re-query requirement was involved.
     draftAnswer: requeryRequirements.length > 0 ? undefined : options.draftAnswer,
   });
-  const memoryCardsPromise = options.researchEvidence.length === 0
-    ? Promise.resolve<ResearchMemoryCard[]>([])
-    : options.generateResearchMemoryCards
-      ? options.generateResearchMemoryCards(options.researchEvidence).catch(() =>
-          fallbackResearchMemoryCards(options.researchEvidence)
-        )
-      : Promise.resolve(fallbackResearchMemoryCards(options.researchEvidence));
+  const memoryCardsPromise = researchMemoryCardsForRun(
+    options.researchEvidence,
+    options.generateResearchMemoryCards,
+  );
   let finalResult = await chatCompletion({
     runtime: options.runtime,
     deadline: options.deadline,
@@ -820,42 +887,17 @@ async function finalizeAgentRun(options: {
       502,
     );
   }
-  const modelAnswer = requireModelContent(
-    finalResult.content,
-    "Das Modell konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
-  );
-  const latestQuestion = options.conversation.findLast((message) => message.role === "user")?.content ?? "";
-  const answerWithoutUnrequestedNotice = removeUnrequestedGuidelineNatureNotice(
-    modelAnswer,
-    latestQuestion,
-  );
-  const answer = ensureRequiredOverview(
-    answerWithoutUnrequestedNotice,
-    !isNonFachResponse(answerWithoutUnrequestedNotice)
-      && !isClearlyConversationalQuestion(latestQuestion),
-  );
-  const pdfOfferTitle = isExplicitPdfCreationRequest(latestQuestion)
-    ? derivePdfOfferTitle(answer, latestQuestion)
-    : undefined;
-
-  await appendAgentStep(
-    options.steps,
-    { type: "answer", title: "Finale Antwort", content: summarizeStepText(answer) },
-    options.onStep,
-  );
-  const researchMemoryCards = await memoryCardsPromise;
-  return {
-    answer,
+  return completeAgentRun({
+    rawAnswer: finalResult.content,
+    emptyAnswerMessage: "Das Modell konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
+    conversation: options.conversation,
     steps: options.steps,
     tools: options.tools,
-    ...(options.researchEvidence.length > 0
-      ? {
-          researchEvidence: options.researchEvidence,
-          researchMemoryCards,
-        }
-      : {}),
-    ...(pdfOfferTitle ? { pdfOffer: { title: pdfOfferTitle } } : {}),
-  };
+    onStep: options.onStep,
+    researchEvidence: options.researchEvidence,
+    generateResearchMemoryCards: options.generateResearchMemoryCards,
+    researchMemoryCardsPromise: memoryCardsPromise,
+  });
 }
 export type RunAgentOptions = {
   runtime: LlmRuntime;
@@ -1388,7 +1430,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
       });
     }
 
-    const result = await chatCompletion({
+    let result = await chatCompletion({
       runtime: options.runtime,
       deadline: options.deadline,
       reserveMs: AGENT_FINALIZATION_RESERVE_MS,
@@ -1397,10 +1439,39 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
     });
 
     if (result.finishReason === "length") {
-      throw new UserVisibleError(
-        "Das Modell konnte den Rechercheschritt nicht vollständig abschließen. Bitte erneut versuchen.",
-        502,
+      if (result.toolCalls.length > 0) {
+        throw new UserVisibleError(
+          "Das Modell konnte den Rechercheschritt nicht vollständig abschließen. Bitte erneut versuchen.",
+          502,
+        );
+      }
+      await appendAgentStep(
+        steps,
+        {
+          type: "finalize",
+          title: "Antwort wird vervollständigt",
+          content: "Die Antwort wurde wegen des Ausgabelimits abgeschnitten und wird vollständig neu erstellt.",
+        },
+        options.onStep,
       );
+      result = await chatCompletion({
+        runtime: options.runtime,
+        deadline: options.deadline,
+        messages: [
+          ...messages,
+          { role: "assistant", content: result.content },
+          {
+            role: "user",
+            content: "Erstellen Sie jetzt eine vollständige, abschließende Antwort auf Basis des gesamten bisherigen Kontexts. Geben Sie die vollständige Antwort aus, nicht nur die Fortsetzung.",
+          },
+        ],
+      });
+      if (result.finishReason !== "stop") {
+        throw new UserVisibleError(
+          "Das Modell konnte die finale Antwort nicht vollständig abschließen. Bitte erneut versuchen.",
+          502,
+        );
+      }
     }
 
     if (result.finishReason === "stop" || result.toolCalls.length === 0) {
@@ -1486,24 +1557,36 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         });
         continue;
       }
-      return finalizeAgentRun({
-        runtime: options.runtime,
-        systemPrompt: options.systemPrompt,
-        attachmentUserMessage,
+      const requeryRequirements = options.researchMemoryRequeryRequirements ?? [];
+      if (requeryRequirements.length > 0) {
+        return finalizeAgentRun({
+          runtime: options.runtime,
+          systemPrompt: options.systemPrompt,
+          attachmentUserMessage,
+          conversation: options.messages,
+          toolLog,
+          researchEvidence,
+          generateResearchMemoryCards: options.generateResearchMemoryCards,
+          researchStichtag,
+          researchMemoryRequeryRequirements: requeryRequirements,
+          steps,
+          tools: allToolNames,
+          onStep: options.onStep,
+          deadline: options.deadline,
+          policy,
+          researchMemory: finalResearchMemory,
+          reason: "Verifizierungsbedürftige frühere Fundstellen werden ausschließlich aus der aktuellen Recherche neu synthetisiert.",
+        });
+      }
+      return completeAgentRun({
+        rawAnswer: result.content,
+        emptyAnswerMessage: "Das Modell konnte aus den bisherigen Werkzeugergebnissen keine finale Antwort erstellen.",
         conversation: options.messages,
-        toolLog,
-        researchEvidence,
-        generateResearchMemoryCards: options.generateResearchMemoryCards,
-        researchStichtag,
-        researchMemoryRequeryRequirements: options.researchMemoryRequeryRequirements,
-        draftAnswer: result.content?.trim(),
         steps,
         tools: allToolNames,
         onStep: options.onStep,
-        deadline: options.deadline,
-        policy,
-        researchMemory: finalResearchMemory,
-        reason: "Die erforderliche Recherche ist abgeschlossen; die Antwort wird aus den vorliegenden Quellen erstellt.",
+        researchEvidence,
+        generateResearchMemoryCards: options.generateResearchMemoryCards,
       });
     }
 
