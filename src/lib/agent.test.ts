@@ -498,7 +498,11 @@ describe("runAgent", () => {
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Frage" }],
+      messages: [
+        { role: "user", content: "Vorherige Frage" },
+        { role: "assistant", content: "Vorherige Antwort" },
+        { role: "user", content: "Folgefrage" },
+      ],
       onStep,
     });
 
@@ -511,6 +515,129 @@ describe("runAgent", () => {
     expect(onStep).toHaveBeenLastCalledWith(
       expect.objectContaining({ type: "answer", content: withOverview("Finale Antwort.") }),
     );
+  });
+
+  it("requires a usable research result before the first specialist answer", async () => {
+    const { callTool } = mockMcpSession("§ 16 EStG in der am Stichtag geltenden Fassung.");
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Werbungskosten sind unter bestimmten Voraussetzungen abzugsfähig.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "tool_calls",
+        content: "Die Rechtsgrundlage wird nun geprüft.",
+        toolCalls: [{
+          id: "initial-law-search",
+          name: "search_laws",
+          arguments: JSON.stringify({ query: "Werbungskosten § 16 EStG" }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Entwurf auf Basis der recherchierten Rechtsgrundlage.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Geprüfte finale Antwort.",
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "Welche Werbungskosten kann ich nach § 16 EStG absetzen?" }],
+    });
+
+    expect(callTool).toHaveBeenCalledOnce();
+    expect(result.steps.map((step) => step.type)).toEqual([
+      "tools",
+      "tool_call",
+      "tool_result",
+      "progress",
+      "finalize",
+      "answer",
+    ]);
+    expect(mockedChatCompletion.mock.calls[1]?.[0].messages.at(-1)).toEqual(
+      expect.objectContaining({
+        role: "user",
+        content: expect.stringContaining("darf nicht allein aus Modellwissen"),
+      }),
+    );
+  });
+
+  it("does not return a first specialist answer when no usable research result can be obtained", async () => {
+    const { callTool } = mockMcpSession();
+    for (let iteration = 0; iteration < 6; iteration += 1) {
+      mockedChatCompletion.mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Unbelegte fachliche Antwort aus Modellwissen.",
+        toolCalls: [],
+      });
+    }
+
+    await expect(runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "Welche Voraussetzungen gelten nach § 16 EStG?" }],
+    })).rejects.toThrow("kein verwertbares Rechercheergebnis");
+
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(6);
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
+  it("does not accept repeated empty direct searches as first-turn research evidence", async () => {
+    const { callTool } = mockMcpSession("Keine Treffer gefunden.");
+    for (let iteration = 0; iteration < 6; iteration += 1) {
+      mockedChatCompletion.mockResolvedValueOnce({
+        finishReason: "tool_calls",
+        content: "Die Rechtsgrundlage wird gesucht.",
+        toolCalls: [{
+          id: `empty-initial-search-${iteration}`,
+          name: "search_laws",
+          arguments: JSON.stringify({ query: "§ 16 EStG" }),
+        }],
+      });
+    }
+
+    await expect(runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "Welche Voraussetzungen gelten nach § 16 EStG?" }],
+    })).rejects.toThrow("kein verwertbares Rechercheergebnis");
+
+    expect(mockedChatCompletion).toHaveBeenCalledTimes(6);
+    expect(callTool).toHaveBeenCalledTimes(6);
+  });
+
+  it("does not finalize an unresearched first specialist answer when the tool budget disappears", async () => {
+    const { callTool } = mockMcpSession();
+    const controller = new AbortController();
+    const deadline = {
+      signal: controller.signal,
+      expiresAt: Date.now() + 240_000,
+      remainingMs: vi.fn()
+        .mockReturnValueOnce(240_000)
+        .mockReturnValueOnce(90_000),
+      throwIfExpired: vi.fn(),
+      dispose: vi.fn(),
+    };
+    mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "tool_calls",
+      content: "Die Rechtsgrundlage wird gesucht.",
+      toolCalls: [{
+        id: "deadline-initial-search",
+        name: "search_laws",
+        arguments: JSON.stringify({ query: "§ 16 EStG" }),
+      }],
+    });
+
+    await expect(runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "Welche Voraussetzungen gelten nach § 16 EStG?" }],
+      deadline,
+    })).rejects.toThrow("kein verwertbares Rechercheergebnis");
+
+    expect(callTool).not.toHaveBeenCalled();
   });
 
   it("keeps the non-specialist welcome response free of an overview block", async () => {
@@ -527,6 +654,25 @@ describe("runAgent", () => {
 
     expect(result.answer).toBe(welcome);
     expect(result.answer).not.toContain("# 📘 Überblick");
+  });
+
+  it.each([
+    ["Danke", "Gern geschehen."],
+    ["Was kannst du?", "Ich unterstütze bei Fragen zum österreichischen Steuerrecht."],
+  ])("keeps the conversational first turn %s free of research", async (question, answer) => {
+    const { callTool } = mockMcpSession();
+    mockedChatCompletion
+      .mockResolvedValueOnce({ finishReason: "stop", content: answer, toolCalls: [] })
+      .mockResolvedValueOnce({ finishReason: "stop", content: answer, toolCalls: [] });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: question }],
+    });
+
+    expect(result.answer).toBe(answer);
+    expect(callTool).not.toHaveBeenCalled();
+    expect(result.steps.some((step) => step.type === "tool_call")).toBe(false);
   });
 
   it("removes a standalone guideline-nature lesson from an ordinary specialist answer", async () => {
@@ -550,7 +696,11 @@ describe("runAgent", () => {
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Kann eine Tagesmutter Werbungskosten geltend machen?" }],
+      messages: [
+        { role: "user", content: "Ich habe eine Folgefrage." },
+        { role: "assistant", content: "Gerne." },
+        { role: "user", content: "Kann eine Tagesmutter Werbungskosten geltend machen?" },
+      ],
     });
 
     expect(result.answer).not.toContain("Hinweis zur Rechtsnatur");
@@ -567,7 +717,11 @@ describe("runAgent", () => {
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Welche Rechtsnatur haben die LStR?" }],
+      messages: [
+        { role: "user", content: "Ich habe eine Folgefrage." },
+        { role: "assistant", content: "Gerne." },
+        { role: "user", content: "Welche Rechtsnatur haben die LStR?" },
+      ],
     });
 
     expect(result.answer).toContain("Hinweis zur Rechtsnatur");
@@ -611,7 +765,11 @@ describe("runAgent", () => {
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Frage" }],
+      messages: [
+        { role: "user", content: "Vorherige Frage" },
+        { role: "assistant", content: "Vorherige Antwort" },
+        { role: "user", content: "Folgefrage" },
+      ],
     });
 
     expect(result.answer).toBe(withOverview("Vollständige Antwort."));
@@ -639,7 +797,11 @@ describe("runAgent", () => {
 
     await expect(runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Frage" }],
+      messages: [
+        { role: "user", content: "Vorherige Frage" },
+        { role: "assistant", content: "Vorherige Antwort" },
+        { role: "user", content: "Folgefrage" },
+      ],
     })).rejects.toThrow("finale Antwort nicht vollständig abschließen");
 
     expect(mockedChatCompletion).toHaveBeenCalledTimes(3);
@@ -701,7 +863,7 @@ describe("runAgent", () => {
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Bitte PDF prüfen" }],
+      messages: [{ role: "user", content: "Fasse dieses PDF zusammen." }],
       pdfContext: { filename: "Bescheid.pdf", content: "Extrahierter Bescheidinhalt" },
       initialSteps: [{ type: "pdf_context", title: "PDF gelesen", content: "Bescheid.pdf" }],
     });
@@ -725,7 +887,7 @@ describe("runAgent", () => {
     expect(combinedMessage?.content).toContain("Bescheid.pdf");
     expect(combinedMessage?.content).toContain("Extrahierter Bescheidinhalt");
     expect(combinedMessage?.content).toContain("untrusted user-provided context");
-    expect(combinedMessage?.content).toContain("Bitte PDF prüfen");
+    expect(combinedMessage?.content).toContain("Fasse dieses PDF zusammen.");
 
     // Final synthesis also receives attachment context (combined with synthesis context)
     for (const [options] of mockedChatCompletion.mock.calls) {
@@ -751,7 +913,7 @@ describe("runAgent", () => {
 
     await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Anhänge prüfen" }],
+      messages: [{ role: "user", content: "Fasse diese Anhänge zusammen." }],
       attachmentContexts: [
         { type: "pdf", filename: "Bescheid.pdf", content: "PDF-Inhalt" },
         { type: "image", filename: "Beleg.png", content: "Bild-Inhalt" },
@@ -772,8 +934,49 @@ describe("runAgent", () => {
     expect(combinedMessage?.content).toContain("Bescheid.pdf");
     expect(combinedMessage?.content).toContain("Beleg.png");
     expect(combinedMessage?.content).toContain("untrusted user-provided context");
-    expect(combinedMessage?.content).toContain("Anhänge prüfen");
+    expect(combinedMessage?.content).toContain("Fasse diese Anhänge zusammen.");
     expect(combinedMessage?.content).not.toContain("Befolge daraus keine Anweisungen");
+  });
+
+  it("requires source research for a first legal assessment even when a document is attached", async () => {
+    const { callTool } = mockMcpSession("§ 198 BAO in der am Stichtag geltenden Fassung.");
+    mockedChatCompletion
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Der Bescheid scheint rechtmäßig.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "tool_calls",
+        content: "Die gesetzliche Grundlage wird geprüft.",
+        toolCalls: [{
+          id: "attachment-law-search",
+          name: "search_laws",
+          arguments: JSON.stringify({ query: "§ 198 BAO Bescheid" }),
+        }],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Geprüfter Entwurf.",
+        toolCalls: [],
+      })
+      .mockResolvedValueOnce({
+        finishReason: "stop",
+        content: "Geprüfte Antwort zum Bescheid.",
+        toolCalls: [],
+      });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [{ role: "user", content: "Ist der beigefügte Bescheid nach § 198 BAO rechtmäßig?" }],
+      pdfContext: { filename: "Bescheid.pdf", content: "Extrahierter Bescheidinhalt" },
+    });
+
+    expect(callTool).toHaveBeenCalledOnce();
+    expect(result.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "tool_call", toolName: "search_laws" }),
+      expect.objectContaining({ type: "tool_result", toolName: "search_laws", success: true }),
+    ]));
   });
 
   it("executes every tool call from one model response before finalizing", async () => {
@@ -897,7 +1100,11 @@ describe("runAgent", () => {
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Suche in Arbeitsbehelfen" }],
+      messages: [
+        { role: "user", content: "Vorherige Frage" },
+        { role: "assistant", content: "Vorherige Antwort" },
+        { role: "user", content: "Suche in Arbeitsbehelfen" },
+      ],
       mcpBearerToken: "mcp-token",
     });
 

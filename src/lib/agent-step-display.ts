@@ -2,6 +2,45 @@ import type { AgentStep } from "./agent-steps";
 import { readLlmProgressStepTitle } from "./agent-progress-status";
 import { safeResearchSourceStepTitle } from "./research-source-display";
 
+export type AgentStepIconKind =
+  | "database-ready"
+  | "database-search"
+  | "document-search"
+  | "download"
+  | "plan"
+  | "warning"
+  | "verification"
+  | "compose"
+  | "bulb";
+
+export function agentStepIconKind(step: AgentStep): AgentStepIconKind {
+  switch (step.type) {
+    case "pdf_context":
+    case "attachment_context":
+      return "document-search";
+    case "pdf_offer":
+      return "download";
+    case "plan":
+      return "plan";
+    case "tools":
+      return "database-ready";
+    case "tool_call":
+    case "progress":
+      return "database-search";
+    case "tool_result":
+      return step.success ? "database-search" : "warning";
+    case "citation_verification":
+    case "self_check":
+      return "verification";
+    case "finalize":
+      return "compose";
+    case "answer":
+      return "bulb";
+    default:
+      return "compose";
+  }
+}
+
 function toolStepDisplayLabel(step: Extract<AgentStep, { type: "tool_call" | "tool_result" }>): string {
   const sourceStepTitle = safeResearchSourceStepTitle(step.title);
   if (sourceStepTitle) {

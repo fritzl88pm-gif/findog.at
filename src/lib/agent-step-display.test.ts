@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type { AgentStep } from "./agent-steps";
 import { createLlmProgressStepTitle } from "./agent-progress-status";
-import { agentStepDisplayLabel } from "./agent-step-display";
+import {
+  agentStepDisplayLabel,
+  agentStepIconKind,
+  type AgentStepIconKind,
+} from "./agent-step-display";
 import {
   RESEARCH_SOURCE_NAMES,
   researchSourceCallTitle,
@@ -140,5 +144,26 @@ describe("agentStepDisplayLabel", () => {
     };
 
     expect(agentStepDisplayLabel(step)).toBe("Recherchequelle wird abgefragt");
+  });
+});
+
+describe("agentStepIconKind", () => {
+  it.each([
+    [{ type: "pdf_context", title: "PDF", content: "raw" }, "document-search"],
+    [{ type: "attachment_context", title: "Anhang", content: "raw" }, "document-search"],
+    [{ type: "pdf_offer", title: "PDF", content: "raw" }, "download"],
+    [{ type: "plan", title: "Plan", content: "raw" }, "plan"],
+    [{ type: "tools", title: "Tools", content: "raw" }, "database-ready"],
+    [{ type: "tool_call", title: "Suche", content: "raw", toolName: "search_laws" }, "database-search"],
+    [{ type: "tool_result", title: "Treffer", content: "raw", toolName: "search_laws", success: true }, "database-search"],
+    [{ type: "tool_result", title: "Fehler", content: "raw", toolName: "search_laws", success: false }, "warning"],
+    [{ type: "progress", title: "Auswertung", content: "raw" }, "database-search"],
+    [{ type: "citation_verification", title: "Fundstellen", content: "raw" }, "verification"],
+    [{ type: "self_check", title: "Prüfung", content: "raw" }, "verification"],
+    [{ type: "finalize", title: "Finalisierung", content: "raw" }, "compose"],
+    [{ type: "answer", title: "Antwort", content: "raw" }, "bulb"],
+  ] as Array<[AgentStep, AgentStepIconKind]>)
+  ("maps $type to $expected", (step, expected) => {
+    expect(agentStepIconKind(step)).toBe(expected);
   });
 });

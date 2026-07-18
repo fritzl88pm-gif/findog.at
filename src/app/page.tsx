@@ -79,6 +79,7 @@ import {
 } from "@/lib/l17b-currency";
 import FredEmbedView from "@/components/fred-embed-view";
 import FredRunView from "@/components/fredrun-view";
+import AgentStepTimeline from "@/components/agent-step-timeline";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -1145,11 +1146,7 @@ function AgentStepsPanel({ steps }: { steps: AgentStep[] }) {
         </ol>
       ) : null}
       {progressSteps.length > 0 ? (
-        <ol className="agent-progress-list">
-          {progressSteps.map((step, index) => (
-            <li key={`${step.type}-${index}`}>{agentStepDisplayLabel(step)}</li>
-          ))}
-        </ol>
+        <AgentStepTimeline steps={progressSteps} />
       ) : null}
     </details>
   );

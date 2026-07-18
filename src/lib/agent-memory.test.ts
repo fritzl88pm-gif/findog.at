@@ -114,7 +114,11 @@ describe("runAgent cross-turn memory", () => {
 
     const result = await runAgent({
       runtime: TEST_RUNTIME,
-      messages: [{ role: "user", content: "Welche Voraussetzungen gelten für Werbungskosten?" }],
+      messages: [
+        { role: "user", content: "Vorherige Frage" },
+        { role: "assistant", content: "Vorherige Antwort" },
+        { role: "user", content: "Welche Voraussetzungen gelten für Werbungskosten?" },
+      ],
     });
 
     expect(promptAt(0)).not.toContain(MEMORY_MARKER);

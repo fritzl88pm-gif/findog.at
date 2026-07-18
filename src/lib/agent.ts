@@ -233,6 +233,13 @@ function missingReferentialPdfResearchError(): UserVisibleError {
   );
 }
 
+function missingInitialResearchError(): UserVisibleError {
+  return new UserVisibleError(
+    "Für die erste fachliche Rechtsauskunft konnte kein verwertbares Rechercheergebnis ermittelt werden. Bitte erneut versuchen.",
+    502,
+  );
+}
+
 function normalizedQuestion(value: string): string {
   return value
     .normalize("NFKD")
@@ -240,6 +247,24 @@ function normalizedQuestion(value: string): string {
     .toLocaleLowerCase("de-AT")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function isClearlyConversationalQuestion(value: string): boolean {
+  const question = normalizedQuestion(value)
+    .replace(/[!?.,;:]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return /^(?:hallo|hi|hey|servus|gruss gott|guten morgen|guten tag|guten abend)(?: wie geht es dir)?$/u.test(question)
+    || /^(?:danke|vielen dank|besten dank|danke dir|danke ihnen|super|perfekt|alles klar|ok|okay)$/u.test(question)
+    || /^(?:wer bist du|was kannst du|wobei kannst du(?: mir)? helfen|wie funktioniert (?:findog|dieser assistent))$/u.test(question);
+}
+
+function isPureAttachmentOperation(value: string): boolean {
+  const question = normalizedQuestion(value);
+  const referencesAttachment = /\b(?:anhang|anhange|pdf|bild|bilder|dokument|datei|dateien)\b/u.test(question);
+  const requestsTransformation = /\b(?:fass(?:e)?|zusammenfass|ubersetz|extrahier|transkribier|lies|lese)\w*\b/u.test(question);
+  const requestsLegalAssessment = /(?:§|\b(?:rechtlich|rechtslage|gesetz|verordnung|judikatur|rechtsprechung|urteil|entscheidung|steuer|abgabe|anspruch|frist|haftung|straf|bescheid|bewert|beurteil|pruf|estg|ustg|kstg|bao|asvg|abgb)\w*\b)/u.test(question);
+  return referencesAttachment && requestsTransformation && !requestsLegalAssessment;
 }
 
 function expandAmountAbbreviations(value: string): string {
@@ -806,7 +831,8 @@ async function finalizeAgentRun(options: {
   );
   const answer = ensureRequiredOverview(
     answerWithoutUnrequestedNotice,
-    !isNonFachResponse(answerWithoutUnrequestedNotice),
+    !isNonFachResponse(answerWithoutUnrequestedNotice)
+      && !isClearlyConversationalQuestion(latestQuestion),
   );
   const pdfOfferTitle = isExplicitPdfCreationRequest(latestQuestion)
     ? derivePdfOfferTitle(answer, latestQuestion)
@@ -883,6 +909,17 @@ function hasMatchingFreshResearch(
 ): boolean {
   return requirements.every((requirement) =>
     evidence.some((entry) => evidenceMatchesRequeryRequirement(entry, requirement))
+  );
+}
+
+function hasUsableInitialResearchEvidence(evidence: ResearchEvidenceDraft[]): boolean {
+  return evidence.some((entry) =>
+    (
+      entry.semanticToolName.startsWith("search_")
+      && !entry.semanticToolName.endsWith("_documents")
+    )
+    || entry.semanticToolName === "inspect_research_document"
+    || entry.semanticToolName === "inspect_research_document_chunks"
   );
 }
 
@@ -983,6 +1020,11 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
     && isReferentialPdfRequest(latestQuestion)
     && !isExistingAnswerPdfRequest(latestQuestion),
   );
+  const isInitialQuestion = options.messages.filter((message) => message.role === "user").length === 1;
+  const shouldVerifyInitialSpecialistAnswer = isInitialQuestion
+    && !options.researchMemory
+    && !isClearlyConversationalQuestion(latestQuestion ?? "")
+    && !(hasAttachments && isPureAttachmentOperation(latestQuestion ?? ""));
   const fullLawSearchQuery = latestQuestion?.trim()
     ? requiresSuccessfulReferentialPdfResearch
       ? referentialPdfResearchQuery(options.messages, latestQuestion)
@@ -1202,10 +1244,14 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
     );
   }
   let hasRunFullLawSearch = false;
+  let initialResearchRequired = false;
   for (let iteration = 0; iteration < policy.maxToolIterations; iteration += 1) {
     if (!hasDeadlineTime(options.deadline, AGENT_MIN_ITERATION_BUDGET_MS)) {
       if (requiresSuccessfulReferentialPdfResearch && !toolLog.some((entry) => entry.success)) {
         throw missingReferentialPdfResearchError();
+      }
+      if (initialResearchRequired && !hasUsableInitialResearchEvidence(researchEvidence)) {
+        throw missingInitialResearchError();
       }
       return finalizeAgentRun({
         runtime: options.runtime,
@@ -1255,6 +1301,23 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         continue;
       }
       if (
+        shouldVerifyInitialSpecialistAnswer
+        && !hasUsableInitialResearchEvidence(researchEvidence)
+        && (initialResearchRequired || !isNonFachResponse(result.content ?? ""))
+      ) {
+        initialResearchRequired = true;
+        messages.push({ role: "assistant", content: result.content });
+        messages.push({
+          role: "user",
+          content: [
+            "Dies ist die erste fachliche Rechtsauskunft in diesem Gespräch und sie darf nicht allein aus Modellwissen erstellt werden.",
+            "Rufe jetzt mindestens eine geeignete Recherchefunktion auf und prüfe die Rechtslage zum verbindlichen Stichtag in der fachlich maßgeblichen Quelle.",
+            "Bevorzuge für Normen und Judikatur RIS/EVI und antworte noch nicht abschließend.",
+          ].join(" "),
+        });
+        continue;
+      }
+      if (
         (options.researchMemoryRequeryRequirements?.length ?? 0) > 0
         && !hasMatchingFreshResearch(
           researchEvidence,
@@ -1292,6 +1355,10 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
       });
     }
 
+    if (shouldVerifyInitialSpecialistAnswer) {
+      initialResearchRequired = true;
+    }
+
     const selectedToolCalls = result.toolCalls.map((call) => {
       if (!allowedToolNames.has(call.name)) {
         throw new UserVisibleError(`Das Modell wählte eine nicht erlaubte Recherchefunktion: ${call.name}.`, 502);
@@ -1322,6 +1389,9 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
       if (!hasDeadlineTime(options.deadline, AGENT_FINALIZATION_RESERVE_MS)) {
         if (requiresSuccessfulReferentialPdfResearch && !toolLog.some((entry) => entry.success)) {
           throw missingReferentialPdfResearchError();
+        }
+        if (initialResearchRequired && !hasUsableInitialResearchEvidence(researchEvidence)) {
+          throw missingInitialResearchError();
         }
         return finalizeAgentRun({
           runtime: options.runtime,
@@ -1468,6 +1538,9 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
 
   if (requiresSuccessfulReferentialPdfResearch && !toolLog.some((entry) => entry.success)) {
     throw missingReferentialPdfResearchError();
+  }
+  if (initialResearchRequired && !hasUsableInitialResearchEvidence(researchEvidence)) {
+    throw missingInitialResearchError();
   }
   return finalizeAgentRun({
     runtime: options.runtime,
