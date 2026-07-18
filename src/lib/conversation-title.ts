@@ -36,6 +36,7 @@ function normalizeGeneratedTitle(value: string | null, fallback: string): string
 
 export async function generateConversationTitle(options: {
   runtime: LlmRuntime;
+  systemPrompt: string;
   userRequest: string;
   deadline?: Deadline;
 }): Promise<string> {
@@ -48,14 +49,20 @@ export async function generateConversationTitle(options: {
       messages: [
         {
           role: "system",
+          content: options.systemPrompt,
+        },
+        {
+          role: "user",
           content: [
             "Erzeuge einen kurzen, präzisen deutschen Titel für eine Chat-Unterhaltung.",
             "Leite ihn ausschließlich aus der folgenden neuesten Nutzeranfrage ab.",
             "Gib nur den Titel aus, ohne Anführungszeichen, Antwort, Erklärung oder Satzzeichen am Ende.",
             `Maximal ${MAX_CONVERSATION_TITLE_CHARS} Zeichen.`,
+            "",
+            "Neueste Nutzeranfrage:",
+            options.userRequest,
           ].join("\n"),
         },
-        { role: "user", content: options.userRequest },
       ],
     });
 

@@ -38,6 +38,7 @@ import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 import { createUnboundedDeadline, type Deadline } from "@/lib/deadline";
 import { fallbackConversationTitle, generateConversationTitle } from "@/lib/conversation-title";
 import { recordAdminRequest } from "@/lib/admin-request-history";
+import { getGlobalSystemPrompt } from "@/lib/global-system-prompt";
 
 export const runtime = "nodejs";
 
@@ -442,9 +443,10 @@ export async function POST(request: Request) {
     const { body, attachmentUploads } = await parseChatRequest(request);
     const requestedModel = parseModel(body.model);
     const messages = parseMessages(body.messages);
-    const [modelSettings, defaultPolicy] = await Promise.all([
+    const [modelSettings, defaultPolicy, systemPrompt] = await Promise.all([
       readEffectiveModelSettings(supabase),
       readModelDefaultPolicy(supabase),
+      getGlobalSystemPrompt(supabase),
     ]);
     const defaultSetting = globalDefaultModelSetting(modelSettings, defaultPolicy);
     const model = requestedModel ?? defaultSetting.id;
@@ -494,6 +496,7 @@ export async function POST(request: Request) {
           try {
             return await generateConversationTitle({
               runtime: { ...selectedRuntime, reasoning: "disabled" },
+              systemPrompt,
               userRequest: latestUserMessage.content,
               deadline,
             });
@@ -522,6 +525,7 @@ export async function POST(request: Request) {
             const [agentResult, title] = await Promise.all([
               runAgent({
                 runtime: selectedRuntime,
+                systemPrompt,
                 messages,
                 mcpBearerToken,
                 attachmentContexts: attachmentAgentContext.attachmentContexts,
@@ -602,6 +606,7 @@ export async function POST(request: Request) {
     const [agentResult, title] = await Promise.all([
       runAgent({
         runtime: selectedRuntime,
+        systemPrompt,
         messages,
         mcpBearerToken,
         attachmentContexts: attachmentAgentContext.attachmentContexts,

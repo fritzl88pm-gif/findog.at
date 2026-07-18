@@ -24,6 +24,7 @@ import { extractImageContext, extractPdfContext } from "@/lib/pdf-context";
 import { parseChatStreamLine } from "@/lib/chat-stream";
 import { persistConversationTurn } from "@/lib/persistence";
 import { generateConversationTitle } from "@/lib/conversation-title";
+import { getGlobalSystemPrompt } from "@/lib/global-system-prompt";
 import { recordAdminRequest } from "@/lib/admin-request-history";
 import { UserVisibleError } from "@/lib/errors";
 import * as chatRoute from "./route";
@@ -72,6 +73,10 @@ vi.mock("@/lib/admin-request-history", () => ({
 
 vi.mock("@/lib/conversation-title", () => ({
   generateConversationTitle: vi.fn().mockResolvedValue("Präziser Gesprächstitle"),
+}));
+
+vi.mock("@/lib/global-system-prompt", () => ({
+  getGlobalSystemPrompt: vi.fn().mockResolvedValue("Globaler Systemprompt aus der Datenbank"),
 }));
 
 vi.mock("@/lib/persistence", () => ({
@@ -224,7 +229,7 @@ describe("POST /api/chat uploads", () => {
     });
   });
 
-  it("ignores stale client prompt fields and never forwards them to the agent", async () => {
+  it("ignores stale client prompt fields and forwards only the database prompt to the agent", async () => {
     const request = jsonRequest({
       ...chatPayload(),
       systemPrompt: "Staler persönlicher Prompt",
@@ -235,20 +240,22 @@ describe("POST /api/chat uploads", () => {
 
     expect(response.status).toBe(200);
     const agentOptions = vi.mocked(runAgent).mock.calls[0]?.[0];
-    expect(agentOptions).not.toHaveProperty("systemPrompt");
+    expect(agentOptions).toHaveProperty("systemPrompt", "Globaler Systemprompt aus der Datenbank");
+    expect(getGlobalSystemPrompt).toHaveBeenCalledTimes(1);
     const payload = await response.json();
     expect(payload).not.toHaveProperty("systemPrompt");
     expect(JSON.stringify(payload)).not.toContain("Staler persönlicher Prompt");
   });
 
-  it("does not load or forward an external prompt when the request has none", async () => {
+  it("loads and forwards the global database prompt when the request has none", async () => {
     const request = jsonRequest(chatPayload());
     request.headers.set("x-forwarded-for", "test-global-prompt");
     const response = await POST(request);
 
     expect(response.status).toBe(200);
     const agentOptions = vi.mocked(runAgent).mock.calls[0]?.[0];
-    expect(agentOptions).not.toHaveProperty("systemPrompt");
+    expect(agentOptions).toHaveProperty("systemPrompt", "Globaler Systemprompt aus der Datenbank");
+    expect(getGlobalSystemPrompt).toHaveBeenCalledTimes(1);
   });
 
   it("returns and persists a structured PDF offer from the Findog agent", async () => {

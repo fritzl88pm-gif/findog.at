@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runAgent } from "./agent";
+import { runAgent as runAgentWithSystemPrompt, type RunAgentOptions } from "./agent";
 import { chatCompletion } from "./deepseek";
-import { DEFAULT_SYSTEM_PROMPT } from "./default-system-prompt";
 import { createDeadline } from "./deadline";
 import type { LlmRuntime } from "./llm/runtime";
 import { McpClient } from "./mcp/client";
@@ -16,6 +15,7 @@ vi.mock("./mcp/client", () => ({ McpClient: vi.fn() }));
 
 const mockedChatCompletion = vi.mocked(chatCompletion);
 const MockedMcpClient = vi.mocked(McpClient);
+const TEST_SYSTEM_PROMPT = "Globaler Systemprompt aus der Datenbank";
 const TEST_RUNTIME = {
   model: "deepseek-v4-pro",
   provider: "deepseek",
@@ -26,11 +26,15 @@ const TEST_RUNTIME = {
 } satisfies LlmRuntime;
 const withOverview = (content: string) => `# 📘 Überblick\n\n${content}`;
 
+function runAgent(options: Omit<RunAgentOptions, "systemPrompt">) {
+  return runAgentWithSystemPrompt({ ...options, systemPrompt: TEST_SYSTEM_PROMPT });
+}
+
 function expectCanonicalSystemMessages(): void {
   for (const [callIndex, [options]] of mockedChatCompletion.mock.calls.entries()) {
     const systemMessages = options.messages.filter((message) => message.role === "system");
     expect(systemMessages, `chatCompletion call ${callIndex} must have exactly one system message`)
-      .toEqual([{ role: "system", content: DEFAULT_SYSTEM_PROMPT }]);
+      .toEqual([{ role: "system", content: TEST_SYSTEM_PROMPT }]);
   }
 }
 
@@ -470,7 +474,7 @@ describe("runAgent", () => {
     // The runtime uses the canonical prompt byte-for-byte; attachment content stays outside it.
     expect(mockedChatCompletion.mock.calls[0][0].messages[0]).toEqual({
       role: "system",
-      content: DEFAULT_SYSTEM_PROMPT,
+      content: TEST_SYSTEM_PROMPT,
     });
 
     expect(callTool).toHaveBeenCalledWith(
@@ -710,7 +714,7 @@ describe("runAgent", () => {
     const systemMessage = mockedChatCompletion.mock.calls[0]?.[0].messages[0];
     expect(systemMessage).toEqual({
       role: "system",
-      content: DEFAULT_SYSTEM_PROMPT,
+      content: TEST_SYSTEM_PROMPT,
     });
     expect(systemMessage?.content).not.toContain("Bescheid.pdf");
     expect(systemMessage?.content).not.toContain("Extrahierter Bescheidinhalt");
@@ -729,7 +733,7 @@ describe("runAgent", () => {
       const systemMsg = messages[0];
       expect(systemMsg).toEqual({
         role: "system",
-        content: DEFAULT_SYSTEM_PROMPT,
+        content: TEST_SYSTEM_PROMPT,
       });
       // Attachment context is in the same user message as synthesis context
       if (options.messages.length > 1) {
@@ -757,7 +761,7 @@ describe("runAgent", () => {
     const systemMessage = mockedChatCompletion.mock.calls[0]?.[0].messages[0];
     expect(systemMessage).toEqual({
       role: "system",
-      content: DEFAULT_SYSTEM_PROMPT,
+      content: TEST_SYSTEM_PROMPT,
     });
     expect(systemMessage?.content).not.toContain("Bescheid.pdf");
     expect(systemMessage?.content).not.toContain("Beleg.png");

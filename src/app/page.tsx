@@ -1720,6 +1720,10 @@ export default function Home() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminError, setAdminError] = useState("");
   const [adminNotice, setAdminNotice] = useState("");
+  const [adminSystemPrompt, setAdminSystemPrompt] = useState("");
+  const [adminSystemPromptUpdatedAt, setAdminSystemPromptUpdatedAt] = useState<string | null>(null);
+  const [isAdminSystemPromptLoading, setIsAdminSystemPromptLoading] = useState(false);
+  const [isAdminSystemPromptSaving, setIsAdminSystemPromptSaving] = useState(false);
   const [adminModels, setAdminModels] = useState<AdminModelSetting[]>([]);
   const [adminDefaultModelId, setAdminDefaultModelId] = useState("");
   const [adminDefaultRevision, setAdminDefaultRevision] = useState(0);
@@ -1922,6 +1926,8 @@ export default function Home() {
         setEnabledModels([]);
         setIsModelPolicyLoaded(false);
         setAdminModels([]);
+        setAdminSystemPrompt("");
+        setAdminSystemPromptUpdatedAt(null);
         setAdminDefaultModelId("");
         setAdminDefaultRevision(0);
         setAdminModelImages([]);
@@ -2411,6 +2417,8 @@ export default function Home() {
       setMessages([]);
       setComposer("");
       setAdminModels([]);
+      setAdminSystemPrompt("");
+      setAdminSystemPromptUpdatedAt(null);
       setIsAdmin(false);
       setAppView("chat");
       clearAttachments();
@@ -2732,6 +2740,83 @@ export default function Home() {
     }
   }
 
+  async function loadAdminSystemPrompt(accessToken: string) {
+    setIsAdminSystemPromptLoading(true);
+    try {
+      const response = await fetch("/api/admin/settings", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (
+        !response.ok
+        || typeof payload.systemPrompt !== "string"
+        || !payload.systemPrompt.trim()
+        || typeof payload.updatedAt !== "string"
+      ) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Der globale Systemprompt konnte nicht geladen werden.",
+        );
+      }
+      setAdminSystemPrompt(payload.systemPrompt);
+      setAdminSystemPromptUpdatedAt(payload.updatedAt);
+    } catch (promptError) {
+      setAdminError(promptError instanceof Error
+        ? promptError.message
+        : "Der globale Systemprompt konnte nicht geladen werden.");
+    } finally {
+      setIsAdminSystemPromptLoading(false);
+    }
+  }
+
+  async function saveAdminSystemPrompt() {
+    const accessToken = session?.access_token;
+    if (
+      !accessToken
+      || !isAdmin
+      || isAdminSystemPromptSaving
+      || !adminSystemPrompt.trim()
+    ) {
+      return;
+    }
+    setAdminError("");
+    setAdminNotice("");
+    setIsAdminSystemPromptSaving(true);
+    try {
+      const response = await fetch("/api/admin/settings", {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ systemPrompt: adminSystemPrompt }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (
+        !response.ok
+        || typeof payload.systemPrompt !== "string"
+        || !payload.systemPrompt.trim()
+        || typeof payload.updatedAt !== "string"
+      ) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Der globale Systemprompt konnte nicht gespeichert werden.",
+        );
+      }
+      setAdminSystemPrompt(payload.systemPrompt);
+      setAdminSystemPromptUpdatedAt(payload.updatedAt);
+      setAdminNotice("Der globale Systemprompt wurde gespeichert und gilt für alle Benutzer.");
+    } catch (promptError) {
+      setAdminError(promptError instanceof Error
+        ? promptError.message
+        : "Der globale Systemprompt konnte nicht gespeichert werden.");
+    } finally {
+      setIsAdminSystemPromptSaving(false);
+    }
+  }
+
   async function loadAdminModels(accessToken: string) {
     setIsAdminModelsLoading(true);
     try {
@@ -3013,6 +3098,7 @@ export default function Home() {
     setAdminNotice("");
     setIsAdminUsersLoading(true);
     setAdminUserProfile(null);
+    void loadAdminSystemPrompt(accessToken);
     void loadAdminModels(accessToken);
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
@@ -5037,7 +5123,7 @@ export default function Home() {
         <section className="forms-panel" aria-labelledby="administration-view-title">
           <div className="forms-view">
             <header className="forms-view-header">
-              <p className="eyebrow">Benutzerverwaltung</p>
+              <p className="eyebrow">Systemkonfiguration</p>
               <h1 id="administration-view-title">Administration</h1>
             </header>
             {adminError ? (
@@ -5050,6 +5136,46 @@ export default function Home() {
                 {adminNotice}
               </div>
             ) : null}
+            <section className="form-generator-card admin-system-prompt-card" aria-labelledby="admin-system-prompt-title">
+              <div className="form-generator-heading">
+                <h2 id="admin-system-prompt-title">Globaler Systemprompt</h2>
+                <p>Dieser gespeicherte Prompt ist die einzige Systemprompt-Quelle und gilt auf der gesamten Seite für alle Benutzer.</p>
+              </div>
+              <div className="field-group">
+                <label htmlFor="admin-system-prompt">Systemprompt</label>
+                <textarea
+                  id="admin-system-prompt"
+                  className="admin-system-prompt-textarea"
+                  value={adminSystemPrompt}
+                  onChange={(event) => {
+                    setAdminSystemPrompt(event.target.value);
+                    setAdminError("");
+                    setAdminNotice("");
+                  }}
+                  rows={24}
+                  spellCheck={false}
+                  disabled={isAdminSystemPromptLoading || isAdminSystemPromptSaving}
+                />
+                <small>
+                  Keine Zeichenbegrenzung · {adminSystemPrompt.length.toLocaleString("de-AT")} Zeichen
+                  {adminSystemPromptUpdatedAt ? ` · zuletzt gespeichert ${formatAdminDate(adminSystemPromptUpdatedAt)}` : ""}
+                </small>
+              </div>
+              <div className="admin-model-actions">
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => void saveAdminSystemPrompt()}
+                  disabled={
+                    isAdminSystemPromptLoading
+                    || isAdminSystemPromptSaving
+                    || !adminSystemPrompt.trim()
+                  }
+                >
+                  {isAdminSystemPromptSaving ? "Wird gespeichert…" : "Systemprompt speichern"}
+                </button>
+              </div>
+            </section>
             <section className="form-generator-card admin-model-settings-card" aria-labelledby="admin-model-settings-title">
               <div className="form-generator-heading">
                 <h2 id="admin-model-settings-title">Modelle</h2>

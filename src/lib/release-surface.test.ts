@@ -145,7 +145,7 @@ describe("approved release surface", () => {
     );
   });
 
-  it("exposes no mutable system-prompt surface and uses one canonical runtime source", () => {
+  it("exposes one admin-managed global system prompt and uses it as the sole runtime source", () => {
     const settingsDialog = pageSource.slice(
       pageSource.indexOf('{isSettingsDialogOpen ? ('),
       pageSource.indexOf('{appView === "fred" ? ('),
@@ -171,18 +171,26 @@ describe("approved release surface", () => {
     expect(chatSubmit).not.toContain('usesGlobalDefault');
     expect(chatSubmit).not.toContain('requestBody.systemPrompt');
     expect(publicSettingsSource).not.toContain('globalSystemPrompt');
-    expect(pageSource).not.toContain('adminSystemPrompt');
-    expect(pageSource).not.toContain('saveAdminSystemPrompt');
-    expect(pageSource).not.toContain('/api/admin/settings');
-    expect(pageSource).not.toContain('Globaler System Prompt');
-    expect(pageSource).not.toContain('admin-system-prompt');
+    expect(pageSource).toContain('adminSystemPrompt');
+    expect(pageSource).toContain('saveAdminSystemPrompt');
+    expect(pageSource).toContain('/api/admin/settings');
+    expect(pageSource).toContain('Globaler Systemprompt');
+    expect(pageSource).toContain('id="admin-system-prompt"');
+    expect(pageSource).toContain('Keine Zeichenbegrenzung');
+    const promptTextarea = pageSource.slice(
+      pageSource.indexOf('id="admin-system-prompt"'),
+      pageSource.indexOf('/>', pageSource.indexOf('id="admin-system-prompt"')),
+    );
+    expect(promptTextarea).not.toContain('maxLength');
     expect(pageSource).not.toContain('DEFAULT_SYSTEM_PROMPT');
-    expect(pageSource).toContain('<p className="eyebrow">Benutzerverwaltung</p>');
+    expect(pageSource).toContain('<p className="eyebrow">Systemkonfiguration</p>');
     expect(pageSource).toContain('fetch("/api/admin/users"');
-    expect(existsSync(adminSettingsPath)).toBe(false);
-    expect(chatRouteSource).not.toContain('getGlobalSystemPrompt');
-    expect(chatRouteSource).not.toContain('systemPrompt');
-    expect(agentSource).toContain('import { DEFAULT_SYSTEM_PROMPT } from "./default-system-prompt"');
+    expect(existsSync(adminSettingsPath)).toBe(true);
+    expect(chatRouteSource).toContain('getGlobalSystemPrompt');
+    expect(chatRouteSource).toContain('systemPrompt');
+    expect(chatRouteSource).not.toContain('body.systemPrompt');
+    expect(agentSource).not.toContain('DEFAULT_SYSTEM_PROMPT');
+    expect(agentSource).toContain('options.systemPrompt');
     expect(agentSource).not.toContain('RESEARCH_POLICY_PROMPT');
     expect(agentSource).not.toContain('ABBREVIATION_POLICY_PROMPT');
     expect(agentSource).not.toContain('OUTPUT_FORMAT_POLICY_PROMPT');

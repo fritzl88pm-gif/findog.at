@@ -1,6 +1,5 @@
 import { chatCompletion, type AppChatMessage, type DeepSeekMessage } from "./deepseek";
 import { type Deadline, hasDeadlineTime } from "./deadline";
-import { DEFAULT_SYSTEM_PROMPT } from "./default-system-prompt";
 import { UserVisibleError } from "./errors";
 import { McpClient } from "./mcp/client";
 import type { JsonObject } from "./mcp/tools";
@@ -483,6 +482,7 @@ function formatToolLog(toolLog: ToolLogEntry[]): string {
 }
 
 function supportMessages(options: {
+  systemPrompt: string;
   attachmentUserMessage?: string;
   conversation: AppChatMessage[];
   toolLog: ToolLogEntry[];
@@ -499,7 +499,7 @@ function supportMessages(options: {
     context.push("", "Vorläufige Antwort des Agenten:", options.draftAnswer);
   }
   const result: DeepSeekMessage[] = [
-    { role: "system", content: DEFAULT_SYSTEM_PROMPT },
+    { role: "system", content: options.systemPrompt },
   ];
   // For final synthesis, combine attachment context and generated context into one user message
   // to avoid consecutive same-role messages (system → one user message)
@@ -599,6 +599,7 @@ function simpleAmountRetrievalTargets(policy: AgentRetrievalPolicy): SimpleAmoun
 
 async function finalizeAgentRun(options: {
   runtime: LlmRuntime;
+  systemPrompt: string;
   attachmentUserMessage?: string;
   conversation: AppChatMessage[];
   toolLog: ToolLogEntry[];
@@ -618,6 +619,7 @@ async function finalizeAgentRun(options: {
   );
 
   const finalMessages = supportMessages({
+    systemPrompt: options.systemPrompt,
     attachmentUserMessage: options.attachmentUserMessage,
     conversation: options.conversation,
     toolLog: options.toolLog,
@@ -679,6 +681,7 @@ async function finalizeAgentRun(options: {
 }
 export type RunAgentOptions = {
   runtime: LlmRuntime;
+  systemPrompt: string;
   messages: AppChatMessage[];
   mcpBearerToken?: string;
   onStep?: AgentStepHandler;
@@ -696,7 +699,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
     : findExistingAnswerPdfContext(options.messages);
   if (existingPdfContext) {
     const directMessages: DeepSeekMessage[] = [
-      { role: "system", content: DEFAULT_SYSTEM_PROMPT },
+      { role: "system", content: options.systemPrompt },
       ...options.messages.map((message, index) => ({
         role: message.role,
         content: index === options.messages.length - 1
@@ -913,6 +916,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
 
     return finalizeAgentRun({
       runtime: options.runtime,
+      systemPrompt: options.systemPrompt,
       attachmentUserMessage,
       conversation: options.messages,
       toolLog,
@@ -929,7 +933,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
   // If attachment context exists and the first conversation message is a user message,
   // combine them to avoid consecutive same-role messages.
   const messages: DeepSeekMessage[] = [
-    { role: "system", content: DEFAULT_SYSTEM_PROMPT },
+    { role: "system", content: options.systemPrompt },
   ];
   if (attachmentUserMessage && conversationMessages.length > 0 && conversationMessages[0].role === "user") {
     messages.push({
@@ -951,6 +955,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
       }
       return finalizeAgentRun({
         runtime: options.runtime,
+        systemPrompt: options.systemPrompt,
         attachmentUserMessage,
         conversation: options.messages,
         toolLog,
@@ -992,6 +997,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
       }
       return finalizeAgentRun({
         runtime: options.runtime,
+        systemPrompt: options.systemPrompt,
         attachmentUserMessage,
         conversation: options.messages,
         toolLog,
@@ -1038,6 +1044,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         }
         return finalizeAgentRun({
           runtime: options.runtime,
+          systemPrompt: options.systemPrompt,
           attachmentUserMessage,
           conversation: options.messages,
           toolLog,
@@ -1146,6 +1153,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
   }
   return finalizeAgentRun({
     runtime: options.runtime,
+    systemPrompt: options.systemPrompt,
     attachmentUserMessage,
     conversation: options.messages,
     toolLog,
@@ -1171,6 +1179,9 @@ function pdfDownloadAnswer(documentCount: number): string {
 }
 
 export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult> {
+  if (!options.systemPrompt.trim()) {
+    throw new UserVisibleError("Der globale Systemprompt ist derzeit nicht verfügbar.", 503);
+  }
   const result = await runControlledAgent(options);
   const latestQuestion = options.messages.findLast((message) => message.role === "user")?.content ?? "";
   if (!isExplicitPdfCreationRequest(latestQuestion) || !result.answer.trim()) {
@@ -1178,7 +1189,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
   }
 
   const creationMessages = (repairReasons: readonly string[] = []): DeepSeekMessage[] => [
-    { role: "system", content: DEFAULT_SYSTEM_PROMPT },
+    { role: "system", content: options.systemPrompt },
     {
       role: "user",
       content: [

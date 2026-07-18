@@ -13,6 +13,7 @@ vi.mock("./deepseek", async (importOriginal) => {
 });
 
 const mockedChatCompletion = vi.mocked(chatCompletion);
+const TEST_SYSTEM_PROMPT = "Globaler Systemprompt aus der Datenbank";
 const TEST_RUNTIME = {
   model: "deepseek-v4-pro",
   provider: "deepseek",
@@ -37,19 +38,17 @@ describe("generateConversationTitle", () => {
     await expect(
       generateConversationTitle({
         runtime: TEST_RUNTIME,
+        systemPrompt: TEST_SYSTEM_PROMPT,
         userRequest: "Unterhaltsabsetzbetrag für Kinder in Drittstaaten",
       }),
     ).resolves.toBe("Unterhaltsabsetzbetrag bei Drittstaatenkindern");
 
     const prompt = mockedChatCompletion.mock.calls[0]?.[0].messages;
-    expect(prompt).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "user",
-          content: "Unterhaltsabsetzbetrag für Kinder in Drittstaaten",
-        }),
-      ]),
-    );
+    expect(prompt?.[0]).toEqual({ role: "system", content: TEST_SYSTEM_PROMPT });
+    expect(prompt?.[1]).toEqual(expect.objectContaining({
+      role: "user",
+      content: expect.stringContaining("Unterhaltsabsetzbetrag für Kinder in Drittstaaten"),
+    }));
     expect(prompt?.map((message) => message.content).join("\n")).not.toContain("Antworttext");
     expect(mockedChatCompletion.mock.calls[0]?.[0].runtime.reasoning).toBe("disabled");
   });
@@ -61,6 +60,7 @@ describe("generateConversationTitle", () => {
 
     const title = await generateConversationTitle({
       runtime: TEST_RUNTIME,
+      systemPrompt: TEST_SYSTEM_PROMPT,
       userRequest: request,
     });
 

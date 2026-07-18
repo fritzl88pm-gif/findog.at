@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runAgent } from "./agent";
+import { runAgent as runAgentWithSystemPrompt, type RunAgentOptions } from "./agent";
 import { chatCompletion } from "./deepseek";
-import { DEFAULT_SYSTEM_PROMPT } from "./default-system-prompt";
 import type { LlmRuntime } from "./llm/runtime";
 import { McpClient } from "./mcp/client";
 import { RESEARCH_SOURCES } from "./research-sources";
@@ -16,6 +15,7 @@ vi.mock("./mcp/client", () => ({ McpClient: vi.fn() }));
 
 const mockedChatCompletion = vi.mocked(chatCompletion);
 const MockedMcpClient = vi.mocked(McpClient);
+const TEST_SYSTEM_PROMPT = "Globaler Systemprompt aus der Datenbank";
 const TEST_RUNTIME = {
   model: "deepseek-v4-pro",
   provider: "deepseek",
@@ -25,6 +25,10 @@ const TEST_RUNTIME = {
   reasoning: "disabled",
 } satisfies LlmRuntime;
 const withOverview = (content: string) => `# 📘 Überblick\n\n${content}`;
+
+function runAgent(options: Omit<RunAgentOptions, "systemPrompt">) {
+  return runAgentWithSystemPrompt({ ...options, systemPrompt: TEST_SYSTEM_PROMPT });
+}
 
 function rawSearchTool(name: "faq_search" | "hybrid_search") {
   return {
@@ -73,7 +77,7 @@ describe("runAgent retrieval policy", () => {
     for (const [callIndex, [options]] of mockedChatCompletion.mock.calls.entries()) {
       const systemMessages = options.messages.filter((message) => message.role === "system");
       expect(systemMessages, `chatCompletion call ${callIndex} must have exactly one system message`)
-        .toEqual([{ role: "system", content: DEFAULT_SYSTEM_PROMPT }]);
+        .toEqual([{ role: "system", content: TEST_SYSTEM_PROMPT }]);
     }
   });
 

@@ -4,6 +4,7 @@ import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { FindokUpstreamError } from "@/lib/findok/bfg-decisions";
 import { BfgProModelError, runBfgProSearch } from "@/lib/findok/bfg-pro";
+import { getGlobalSystemPrompt } from "@/lib/global-system-prompt";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { POST } from "./route";
 
@@ -14,7 +15,10 @@ vi.mock("@/lib/findok/bfg-pro", () => ({
   BfgProModelError: class BfgProModelError extends Error {},
   runBfgProSearch: vi.fn(),
 }));
+vi.mock("@/lib/global-system-prompt", () => ({ getGlobalSystemPrompt: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
+
+const TEST_SYSTEM_PROMPT = "Globaler Systemprompt aus der Datenbank";
 
 function request(body: BodyInit = JSON.stringify({ scenario: "Beruflich genutztes Arbeitszimmer" }), ip = "192.0.2.1") {
   return new Request("http://localhost/api/findok/bfg/pro", {
@@ -33,6 +37,7 @@ describe("POST /api/findok/bfg/pro", () => {
     vi.resetAllMocks();
     vi.mocked(getSupabaseServerClient).mockReturnValue({ auth: {} } as never);
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "user-1" });
+    vi.mocked(getGlobalSystemPrompt).mockResolvedValue(TEST_SYSTEM_PROMPT);
     vi.mocked(runBfgProSearch).mockResolvedValue({ results: [] });
   });
 
@@ -95,7 +100,10 @@ describe("POST /api/findok/bfg/pro", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(runBfgProSearch).toHaveBeenCalledWith("Beruflich genutztes Arbeitszimmer");
+    expect(runBfgProSearch).toHaveBeenCalledWith({
+      scenario: "Beruflich genutztes Arbeitszimmer",
+      systemPrompt: TEST_SYSTEM_PROMPT,
+    });
     await expect(response.json()).resolves.toEqual(payload);
   });
 

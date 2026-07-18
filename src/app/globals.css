@@ -1901,9 +1901,18 @@ textarea:focus {
   align-items: start;
 }
 
+.admin-system-prompt-card,
 .admin-model-settings-card {
   margin-bottom: 20px;
   padding: 22px;
+}
+
+.admin-system-prompt-textarea {
+  min-height: 520px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  tab-size: 2;
 }
 
 .admin-model-settings-list {
