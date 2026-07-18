@@ -1164,6 +1164,12 @@ function withoutLegacyPdfOffer(result: AgentRunResult): AgentRunResult {
   return publicResult;
 }
 
+function pdfDownloadAnswer(documentCount: number): string {
+  return documentCount === 1
+    ? "Hier ist Ihre PDF:"
+    : "Hier sind Ihre PDFs:";
+}
+
 export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult> {
   const result = await runControlledAgent(options);
   const latestQuestion = options.messages.findLast((message) => message.role === "user")?.content ?? "";
@@ -1231,7 +1237,12 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       },
       options.onStep,
     );
-    return { ...withoutLegacyPdfOffer(result), tools, status: "partial" };
+    return {
+      ...withoutLegacyPdfOffer(result),
+      answer: "Das angeforderte PDF konnte nicht erstellt werden. Bitte versuchen Sie es erneut.",
+      tools,
+      status: "partial",
+    };
   }
 
   await appendAgentStep(
@@ -1247,6 +1258,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
   );
   return {
     ...withoutLegacyPdfOffer(result),
+    answer: pdfDownloadAnswer(drafts.length),
     tools,
     status: result.status ?? "completed",
     pdfArtifacts: drafts,

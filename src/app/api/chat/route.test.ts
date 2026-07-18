@@ -287,7 +287,7 @@ describe("POST /api/chat uploads", () => {
       provenance: { version: 1, basis: "conversation" },
     };
     vi.mocked(runAgent).mockResolvedValueOnce({
-      answer: "Das angeforderte Dokument wurde erstellt.",
+      answer: "Hier ist Ihre PDF:",
       steps: [],
       tools: ["create_pdf_document"],
       status: "completed",
@@ -303,14 +303,49 @@ describe("POST /api/chat uploads", () => {
     const response = await POST(jsonRequest(chatPayload()));
 
     await expect(response.json()).resolves.toMatchObject({
-      answer: "Das angeforderte Dokument wurde erstellt.",
+      answer: "Hier ist Ihre PDF:",
       status: "completed",
       pdfArtifacts: [{ id: draft.id, title: draft.title, filename: draft.filename }],
     });
     expect(persistConversationTurn).toHaveBeenCalledWith(expect.objectContaining({
-      assistantMessage: "Das angeforderte Dokument wurde erstellt.",
+      assistantMessage: "Hier ist Ihre PDF:",
       pdfArtifacts: [draft],
     }));
+  });
+
+  it("does not repeat the generated answer when PDF persistence fails", async () => {
+    const draft = {
+      id: "55555555-5555-4555-8555-555555555555",
+      title: "Eigenständige Aufstellung",
+      filename: "Eigenstaendige_Aufstellung.pdf",
+      contentMarkdown: "# Eigenständige Aufstellung\n\nAusführlicher Dokumentinhalt.",
+      contentSha256: "a".repeat(64),
+      stichtag: null,
+      provenance: { version: 1, basis: "conversation" },
+    };
+    vi.mocked(runAgent).mockResolvedValueOnce({
+      answer: "Hier ist Ihre PDF:",
+      steps: [],
+      tools: ["create_pdf_document"],
+      status: "completed",
+      pdfArtifacts: [draft],
+    });
+    vi.mocked(persistConversationTurn).mockResolvedValueOnce({
+      assistantMessageId: 11,
+      agentRunId: "44444444-4444-4444-8444-444444444444",
+      pdfArtifacts: [],
+      artifactsPersisted: false,
+    });
+
+    const response = await POST(jsonRequest(chatPayload()));
+    const payload = await response.json();
+
+    expect(payload).toMatchObject({
+      answer: "Das angeforderte PDF konnte leider nicht dauerhaft gespeichert werden. Bitte versuchen Sie es erneut.",
+      status: "partial",
+    });
+    expect(payload).not.toHaveProperty("pdfArtifacts");
+    expect(payload.answer).not.toContain("Hier ist Ihre PDF:");
   });
 
   it("accepts DeepSeek v4 Flash and uses it throughout the response lifecycle", async () => {

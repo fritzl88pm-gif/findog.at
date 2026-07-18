@@ -124,7 +124,7 @@ async function persistPdfArtifacts(options: {
 function answerWithPdfPersistenceNotice(answer: string, persisted: boolean): string {
   return persisted
     ? answer
-    : `${answer}\n\nDas angeforderte PDF konnte leider nicht dauerhaft gespeichert werden. Bitte versuche es erneut.`;
+    : "Das angeforderte PDF konnte leider nicht dauerhaft gespeichert werden. Bitte versuchen Sie es erneut.";
 }
 
 function stepsWithPersistedPdfOffer(steps: AgentStep[], pdfOffer?: PdfOffer): AgentStep[] {

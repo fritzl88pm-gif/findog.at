@@ -153,8 +153,8 @@ describe("runAgent", () => {
       ],
     });
 
-    expect(result.answer).toBe(generatedPdfAnswer);
-    expect(result.answer).toContain("Der berufliche Zusammenhang ist belegt.");
+    expect(result.answer).toBe("Hier ist Ihre PDF:");
+    expect(result.answer).not.toContain("Der berufliche Zusammenhang ist belegt.");
     expect(result.pdfArtifacts?.[0]).toEqual(expect.objectContaining({
       title: "Aufstellung samt Begründungen",
       contentMarkdown: generatedPdfAnswer,
@@ -220,7 +220,7 @@ describe("runAgent", () => {
       ],
     });
 
-    expect(result.answer).toBe(completeAnswer);
+    expect(result.answer).toBe("Hier ist Ihre PDF:");
     expect(result.pdfArtifacts?.[0]).toEqual(expect.objectContaining({
       title: "Anspruchsvoraussetzungen",
       contentMarkdown: completeAnswer,
@@ -292,7 +292,7 @@ describe("runAgent", () => {
     expect(openToolSession).toHaveBeenCalledWith("mcp-token", { deadline: undefined });
     expect(callTool).toHaveBeenCalledTimes(1);
     expect(mockedChatCompletion).toHaveBeenCalledTimes(4);
-    expect(result.answer).toContain("Abschließende fachliche Ausarbeitung mit Begründungen.");
+    expect(result.answer).toBe("Hier ist Ihre PDF:");
     expect(result.pdfArtifacts?.[0]).toEqual(expect.objectContaining({
       title: "Voraussetzungen des § 34 EStG",
       contentMarkdown: finalPdfAnswer,
@@ -365,7 +365,7 @@ describe("runAgent", () => {
       }),
     }));
     expect(mockedChatCompletion).toHaveBeenCalledTimes(4);
-    expect(result.answer).toBe(withOverview("Aktualisierte fachliche Antwort."));
+    expect(result.answer).toBe("Hier ist Ihre PDF:");
     expect(result.pdfArtifacts?.[0]).toEqual(expect.objectContaining({
       title: "Aktualisierte Aufstellung 2026",
       stichtag: "2026-01-01",
