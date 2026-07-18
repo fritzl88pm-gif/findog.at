@@ -3,6 +3,7 @@ const PDF_ACTION_PATTERN = /\b(?:erstelle|erstellen|erzeuge|erzeugen|generiere|g
 const PDF_FORMAT_REQUEST_PATTERN = /\bals\s+(?:eine?\s+)?pdf(?:-datei(?:en)?|-dokument(?:e)?)?\b/i;
 const PDF_ONLY_REQUEST_PATTERN = /^(?:bitte\s+)?pdf(?:-datei|-dokument|-export)?(?:\s+bitte)?[.!?]*$/i;
 const REFERENTIAL_PDF_TARGET_PATTERN = /\b(?:diese[rsn]?|jene[rsn]?|obige[rsn]?|vorige[rsn]?|vorherige[rsn]?|vorstehende[rsn]?|bisherige[rsn]?|soeben\s+erstellte[rsn]?|zuletzt\s+erstellte[rsn]?)\s+(?:antwort|aufstellung|übersicht|zusammenfassung|entwurf|ausarbeitung|begründung(?:en)?|ergebnis|tabelle|liste|text|inhalt)\b|\b(?:davon|daraus|hieraus)\s+(?:bitte\s+)?(?:eine?\s+)?pdf\b/i;
+const PRIOR_RESULT_PDF_TARGET_PATTERN = /\b(?:von\s+dir\s+)?(?:bereits\s+|zuvor\s+|vorher\s+|soeben\s+)?(?:gefunden|genannt|angeführt|aufgeführt|ermittelt|dargestellt|zusammengefasst)\w*\s+(?:urteile?|entscheidungen?|rechtssätze?|fundstellen?|quellen?|dokumente?|fälle?)\b/i;
 const BARE_PDF_FOLLOW_UP_PATTERN = /^(?:bitte\s+)?(?:(?:das|dies)\s+)?(?:noch\s+)?(?:einmal\s+)?als\s+(?:eine?\s+)?pdf(?:-datei|-dokument)?(?:\s+(?:ausgeben|exportieren|bereitstellen))?(?:\s+bitte)?[.!?]*$|^(?:bitte\s+)?pdf(?:-datei|-dokument|-export)?(?:\s+bitte)?[.!?]*$/i;
 const SUBSTANTIVE_PDF_CHANGE_PATTERN = /\b(?:ergänze|ergänzen|aktualisiere|aktualisieren|überarbeite|überarbeiten|erweitere|erweitern|prüfe|prüfen|beurteile|beurteilen|recherchiere|recherchieren|füge\b.{0,40}\bhinzu|mit\s+stand\s+(?:19|20)\d{2}|zum\s+stand\s+(?:19|20)\d{2})\b/i;
 const CLEAR_PDF_EXECUTION_PATTERN = /\b(?:diese[rsn]?|vorige[rsn]?|vorherige[rsn]?|obige[rsn]?)\s+(?:antwort|aufstellung|übersicht|zusammenfassung|ausarbeitung)\b.{0,100}\bpdf\b.{0,40}\bherunterladen\b|^(?:wie\s+(?:besprochen|vereinbart)),\s*(?:gib|erstelle|erzeuge|exportiere)\b|[?.!]\s*(?:erstelle|erzeuge|generiere|exportiere)\b.{0,120}\bpdf\b/i;
@@ -49,6 +50,7 @@ export function isReferentialPdfRequest(userMessage: string): boolean {
     && PDF_TERM_PATTERN.test(request)
     && (
       REFERENTIAL_PDF_TARGET_PATTERN.test(request)
+      || PRIOR_RESULT_PDF_TARGET_PATTERN.test(request)
       || BARE_PDF_FOLLOW_UP_PATTERN.test(request)
       || CONTEXTUAL_PDF_INTRO_PATTERN.test(request)
     ),

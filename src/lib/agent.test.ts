@@ -687,6 +687,28 @@ describe("runAgent", () => {
     expect(result.steps.some((step) => step.type === "tool_call")).toBe(false);
   });
 
+  it("keeps an explicitly requested standalone justification free of an overview block", async () => {
+    mockMcpSession();
+    const justification = "Die Pflichtveranlagung war durchzuführen, weil die maßgebliche Einkommensgrenze im Zusammenhang mit dem Klimabonus überschritten wurde.";
+    mockedChatCompletion.mockResolvedValueOnce({
+      finishReason: "stop",
+      content: justification,
+      toolCalls: [],
+    });
+
+    const result = await runAgent({
+      runtime: TEST_RUNTIME,
+      messages: [
+        { role: "user", content: "Wir prüfen eine Pflichtveranlagung." },
+        { role: "assistant", content: "Welchen Text benötigen Sie?" },
+        { role: "user", content: "Ich brauche eine einfache Begründung wegen der Pflichtveranlagung bei Einkommensüberschreitung beim Klimabonus." },
+      ],
+    });
+
+    expect(result.answer).toBe(justification);
+    expect(result.answer).not.toContain("# 📘 Überblick");
+  });
+
   it("removes a standalone guideline-nature lesson from an ordinary specialist answer", async () => {
     mockMcpSession();
     const finalAnswer = [

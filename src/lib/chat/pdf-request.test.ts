@@ -19,6 +19,7 @@ describe("PDF request intent", () => {
     "PDF-Export bitte.",
     "Die Liste der Medikamente als PDF",
     "Gib mir diese Aufstellung samt Begründungen als PDF.",
+    "Gib mir die drei von dir gefundenen Urteile als PDF.",
     "Kann ich diese Aufstellung als PDF herunterladen?",
     "Wie besprochen, gib mir die Aufstellung als PDF aus.",
     "Was steht in diesem PDF? Erstelle danach eine Zusammenfassung als PDF.",
@@ -41,6 +42,7 @@ describe("PDF request intent", () => {
 
   it.each([
     "Gib mir diese Aufstellung samt Begründungen als PDF.",
+    "Gib mir die drei von dir gefundenen Urteile als PDF.",
     "Bitte die vorherige Antwort als PDF exportieren.",
     "Davon bitte ein PDF.",
     "Mach daraus ein PDF.",

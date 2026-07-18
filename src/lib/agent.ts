@@ -259,6 +259,14 @@ function isClearlyConversationalQuestion(value: string): boolean {
     || /^(?:wer bist du|was kannst du|wobei kannst du(?: mir)? helfen|wie funktioniert (?:findog|dieser assistent))$/u.test(question);
 }
 
+function isStandaloneDraftRequest(value: string): boolean {
+  const question = normalizedQuestion(value);
+  const requestsDraft = /\b(?:ich\s+(?:brauche|benotige)|formuliere|formulieren|verfasse|verfassen|schreibe|schreiben|erstelle|erstellen|gib\s+mir|bitte\s+um)\b.{0,140}\b(?:begrundung(?:stext)?|bescheidbegrundung|vorhalt(?:sentwurf)?|stellungnahme|textbaustein)\b/u.test(question)
+    || /^(?:kurze|knappe|einfache|formelle|amtliche)?\s*(?:begrundung(?:stext)?|bescheidbegrundung|vorhalt(?:sentwurf)?|stellungnahme|textbaustein)\b/u.test(question);
+  const requestsAnalysis = /\b(?:analysiere|analyse|beurteile|beurteilung|prufe|prufung|erklare|erklarung|welche\s+rechtslage|welche\s+grundlagen)\b/u.test(question);
+  return requestsDraft && !requestsAnalysis;
+}
+
 function isPureAttachmentOperation(value: string): boolean {
   const question = normalizedQuestion(value);
   const referencesAttachment = /\b(?:anhang|anhange|pdf|bild|bilder|dokument|datei|dateien)\b/u.test(question);
@@ -777,7 +785,8 @@ async function completeAgentRun(options: {
   const answer = ensureRequiredOverview(
     answerWithoutUnrequestedNotice,
     !isNonFachResponse(answerWithoutUnrequestedNotice)
-      && !isClearlyConversationalQuestion(latestQuestion),
+      && !isClearlyConversationalQuestion(latestQuestion)
+      && !isStandaloneDraftRequest(latestQuestion),
   );
   const pdfOfferTitle = isExplicitPdfCreationRequest(latestQuestion)
     ? derivePdfOfferTitle(answer, latestQuestion)
