@@ -332,6 +332,36 @@ function sourceKeyError(key: string): string {
   return `Unbekannter Quellenschlüssel: „${key}“. Verwende list_research_sources, um verfügbare Quellen zu ermitteln.`;
 }
 
+function missingRequiredArgError(key: string): string {
+  return `Die Pflichtangabe „${key}“ fehlt oder ist leer. Ergänze einen konkreten Wert und rufe die Funktion erneut auf.`;
+}
+
+/**
+ * Returns the first required public parameter that is missing or blank so an
+ * empty/parameterless MCP search is never issued.  Required parameters are the
+ * string inputs declared in each tool's public schema (query, keyword, slug,
+ * source_key, knowledge_id).
+ */
+function firstMissingRequiredArg(
+  publicParameters: JsonObject,
+  semanticArgs: JsonObject,
+): string | undefined {
+  const required = (publicParameters as { required?: unknown }).required;
+  if (!Array.isArray(required)) {
+    return undefined;
+  }
+  for (const key of required) {
+    if (typeof key !== "string") {
+      continue;
+    }
+    const value = semanticArgs[key];
+    if (typeof value !== "string" || value.trim() === "") {
+      return key;
+    }
+  }
+  return undefined;
+}
+
 /** Build raw args for a source-key-based tool (list/inspect/chunks). */
 function sourceKeyToolArgs(
   semanticArgs: JsonObject,
@@ -619,6 +649,15 @@ export class SemanticToolRegistry {
 
     const rawMcpTool = this.rawToolByName.get(def.rawName);
     if (!rawMcpTool) return undefined;
+
+    const missingArg = firstMissingRequiredArg(def.publicParameters, semanticArgs);
+    if (missingArg) {
+      return {
+        name: def.rawName,
+        arguments: {},
+        error: missingRequiredArgError(missingArg),
+      };
+    }
 
     const builtArgs = def.buildRawArgs(semanticArgs, rawMcpTool, this.resultLimit);
     if (builtArgs === undefined) {

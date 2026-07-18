@@ -77,4 +77,51 @@ describe("McpClient", () => {
     }
     deadline.dispose();
   });
+
+  function toolCallSuccess(): Response {
+    return jsonRpcResponse({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { content: [{ type: "text", text: "Treffer" }] },
+    });
+  }
+
+  it("retries a transient 503 and then succeeds", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(new Response("busy", { status: 503 }))
+      .mockResolvedValueOnce(toolCallSuccess());
+    const result = await new McpClient().callTool({ token: "t", name: "hybrid_search", arguments: {} });
+    expect(result).toBe("Treffer");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a network error and then succeeds", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(toolCallSuccess());
+    const result = await new McpClient().callTool({ token: "t", name: "hybrid_search", arguments: {} });
+    expect(result).toBe("Treffer");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry an authentication failure", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue(new Response("no", { status: 401 }));
+    await expect(
+      new McpClient().callTool({ token: "t", name: "hybrid_search", arguments: {} }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up after the maximum number of attempts on persistent 5xx", async () => {
+    const fetchMock = vi.mocked(fetch);
+    // A fresh Response per call: a body can only be read once.
+    fetchMock.mockImplementation(() => Promise.resolve(new Response("down", { status: 502 })));
+    await expect(
+      new McpClient().callTool({ token: "t", name: "hybrid_search", arguments: {} }),
+    ).rejects.toMatchObject({ status: 502 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  }, 10_000);
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { SemanticToolRegistry } from "./semantic-tools";
-import type { McpTool } from "./mcp/tools";
+import type { JsonObject, McpTool } from "./mcp/tools";
 import { RESEARCH_SOURCES } from "./research-sources";
 
 /* ------------------------------------------------------------------ */
@@ -673,6 +673,35 @@ describe("SemanticToolRegistry", () => {
       const registry = new SemanticToolRegistry(hybridWithLimit(), { resultLimit: 25 });
       const routed = registry.routeToolCall("search_laws", { query: "EStG" });
       expect(routed!.arguments).not.toHaveProperty("limit");
+    });
+  });
+
+  describe("(h) required-argument guard", () => {
+    it.each([
+      ["missing query", {}],
+      ["blank query", { query: "   " }],
+      ["empty query", { query: "" }],
+      ["non-string query", { query: 42 }],
+    ])("returns a recoverable error for %s instead of an empty search", (_label, args) => {
+      const registry = new SemanticToolRegistry(allProductionRawTools());
+      const result = registry.routeToolCall("search_bfg", args as JsonObject);
+      expect(result).toBeDefined();
+      expect(result).toHaveProperty("error");
+      expect(result!.error).toMatch(/Pflichtangabe/);
+      expect(result!.arguments).not.toHaveProperty("query");
+    });
+
+    it("flags a missing knowledge_id for document inspection", () => {
+      const registry = new SemanticToolRegistry(allProductionRawTools());
+      const result = registry.routeToolCall("inspect_research_document", { source_key: "BFG" });
+      expect(result?.error).toMatch(/Pflichtangabe/);
+    });
+
+    it("routes normally when the required query is present", () => {
+      const registry = new SemanticToolRegistry(allProductionRawTools());
+      const routed = registry.routeToolCall("search_bfg", { query: "Pendlerpauschale" });
+      expect(routed?.error).toBeUndefined();
+      expect(routed!.name).toBe("hybrid_search");
     });
   });
 });
