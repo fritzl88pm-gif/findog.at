@@ -484,11 +484,13 @@ function formatToolLog(toolLog: ToolLogEntry[]): string {
 function supportMessages(options: {
   systemPrompt: string;
   attachmentUserMessage?: string;
+  researchMemory?: string;
   conversation: AppChatMessage[];
   toolLog: ToolLogEntry[];
   draftAnswer?: string;
 }): DeepSeekMessage[] {
   const context = [
+    ...(options.researchMemory ? [options.researchMemory, ""] : []),
     "Chatverlauf:",
     formatConversation(options.conversation),
     "",
@@ -601,6 +603,7 @@ async function finalizeAgentRun(options: {
   runtime: LlmRuntime;
   systemPrompt: string;
   attachmentUserMessage?: string;
+  researchMemory?: string;
   conversation: AppChatMessage[];
   toolLog: ToolLogEntry[];
   draftAnswer?: string;
@@ -621,6 +624,7 @@ async function finalizeAgentRun(options: {
   const finalMessages = supportMessages({
     systemPrompt: options.systemPrompt,
     attachmentUserMessage: options.attachmentUserMessage,
+    researchMemory: options.researchMemory,
     conversation: options.conversation,
     toolLog: options.toolLog,
     draftAnswer: options.draftAnswer,
@@ -689,6 +693,10 @@ export type RunAgentOptions = {
   attachmentContexts?: AttachmentContext[];
   initialSteps?: AgentStep[];
   deadline?: Deadline;
+  /** Centrally configured number of results per non-law research source. */
+  researchResultLimit?: number;
+  /** Pre-formatted research findings carried forward from earlier turns. */
+  researchMemory?: string;
 };
 
 async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunResult> {
@@ -797,7 +805,9 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
   });
   const toolLog: ToolLogEntry[] = [];
   const session = await mcp.openToolSession(options.mcpBearerToken, { deadline: options.deadline });
-  const registry = new SemanticToolRegistry(session.tools);
+  const registry = new SemanticToolRegistry(session.tools, {
+    resultLimit: options.researchResultLimit,
+  });
   const semanticTools = registry.getModelTools();
   const publicToolNames = registry.getPublicToolNames();
   const allModelTools = semanticTools;
@@ -929,23 +939,37 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
     });
   }
 
-  // Build the message sequence: system → one user message
-  // If attachment context exists and the first conversation message is a user message,
-  // combine them to avoid consecutive same-role messages.
+  // Build the message sequence: system → one user message.
+  // Prior-turn research memory and attachment context are merged into a single
+  // leading user message to avoid consecutive same-role messages.
+  const generalUserContext = [attachmentUserMessage, options.researchMemory?.trim() || undefined]
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n") || undefined;
   const messages: DeepSeekMessage[] = [
     { role: "system", content: options.systemPrompt },
   ];
-  if (attachmentUserMessage && conversationMessages.length > 0 && conversationMessages[0].role === "user") {
+  if (generalUserContext && conversationMessages.length > 0 && conversationMessages[0].role === "user") {
     messages.push({
       role: "user",
-      content: attachmentUserMessage + "\n\n" + conversationMessages[0].content,
+      content: generalUserContext + "\n\n" + conversationMessages[0].content,
     });
     messages.push(...conversationMessages.slice(1));
-  } else if (attachmentUserMessage) {
-    messages.push({ role: "user", content: attachmentUserMessage });
+  } else if (generalUserContext) {
+    messages.push({ role: "user", content: generalUserContext });
     messages.push(...conversationMessages);
   } else {
     messages.push(...conversationMessages);
+  }
+  if (options.researchMemory) {
+    await appendAgentStep(
+      steps,
+      {
+        type: "progress",
+        title: "Frühere Fundstellen berücksichtigt",
+        content: "Ergebnisse aus vorherigen Runden dieses Gesprächs wurden in die Recherche einbezogen.",
+      },
+      options.onStep,
+    );
   }
   let hasRunFullLawSearch = false;
   for (let iteration = 0; iteration < policy.maxToolIterations; iteration += 1) {
@@ -964,6 +988,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         onStep: options.onStep,
         deadline: options.deadline,
         policy,
+        researchMemory: options.researchMemory,
         reason: "Das Zeitbudget ist fast ausgeschöpft; die bisherigen Ergebnisse werden verwendet.",
       });
     }
@@ -1007,6 +1032,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
         onStep: options.onStep,
         deadline: options.deadline,
         policy,
+        researchMemory: options.researchMemory,
         reason: "Die erforderliche Recherche ist abgeschlossen; die Antwort wird aus den vorliegenden Quellen erstellt.",
       });
     }
@@ -1054,6 +1080,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
           onStep: options.onStep,
           deadline: options.deadline,
           policy,
+          researchMemory: options.researchMemory,
           reason: "Das Zeitbudget ist fast ausgeschöpft; es werden keine weiteren Werkzeuge aufgerufen.",
         });
       }
@@ -1162,6 +1189,7 @@ async function runControlledAgent(options: RunAgentOptions): Promise<AgentRunRes
     onStep: options.onStep,
     deadline: options.deadline,
     policy,
+    researchMemory: options.researchMemory,
     reason: "Die maximale Zahl an Recherche-Runden ist erreicht; die bisherigen Ergebnisse werden verwendet.",
   });
 }

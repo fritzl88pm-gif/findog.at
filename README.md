@@ -56,6 +56,13 @@ Apply all migrations in order through the Supabase SQL editor or your migration 
 6. `supabase/migrations/20260714195644_central_model_settings.sql`
 7. `supabase/migrations/20260714205842_lock_down_chat_tables.sql`
 8. `supabase/migrations/20260714205944_index_model_provenance_fks.sql`
+9. `supabase/migrations/20260715000000_agent_feedback.sql`
+10. `supabase/migrations/20260715000001_laozhang_dynamic_models.sql`
+11. `supabase/migrations/20260715093000_openai_compatible_providers.sql`
+12. `supabase/migrations/20260715171030_global_default_and_model_icons.sql`
+13. `supabase/migrations/20260715172808_index_model_default_policy_fk.sql`
+14. `supabase/migrations/20260718000000_document_artifacts.sql`
+15. `supabase/migrations/20260718100000_research_result_limit.sql`
 
 Supabase Auth must be enabled for email/password login. Authorized accounts are manually provisioned; the app does not expose self-service registration. Server persistence stores the authenticated Supabase `user.id` as `conversations.client_id`, `messages.client_id`, and `agent_runs.client_id`. Deleting an owned conversation cascades to its messages, agent runs, and agent steps. The admin request audit records only submitted user prompts and is deliberately independent of conversation deletion; deleting the audit history does not remove a user's conversations.
 

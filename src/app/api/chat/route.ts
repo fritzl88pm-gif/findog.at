@@ -39,6 +39,8 @@ import { createUnboundedDeadline, type Deadline } from "@/lib/deadline";
 import { fallbackConversationTitle, generateConversationTitle } from "@/lib/conversation-title";
 import { recordAdminRequest } from "@/lib/admin-request-history";
 import { getGlobalSystemPrompt } from "@/lib/global-system-prompt";
+import { getResearchResultLimit } from "@/lib/research-settings";
+import { formatResearchMemory, loadConversationResearchMemory } from "@/lib/conversation-memory";
 
 export const runtime = "nodejs";
 
@@ -443,10 +445,11 @@ export async function POST(request: Request) {
     const { body, attachmentUploads } = await parseChatRequest(request);
     const requestedModel = parseModel(body.model);
     const messages = parseMessages(body.messages);
-    const [modelSettings, defaultPolicy, systemPrompt] = await Promise.all([
+    const [modelSettings, defaultPolicy, systemPrompt, researchResultLimit] = await Promise.all([
       readEffectiveModelSettings(supabase),
       readModelDefaultPolicy(supabase),
       getGlobalSystemPrompt(supabase),
+      getResearchResultLimit(supabase),
     ]);
     const defaultSetting = globalDefaultModelSetting(modelSettings, defaultPolicy);
     const model = requestedModel ?? defaultSetting.id;
@@ -476,6 +479,18 @@ export async function POST(request: Request) {
       supabase,
     });
     const conversationId = conversationContext.id;
+
+    // Carry forward prior research findings for follow-up turns of an existing
+    // conversation. Best-effort: a missing trace yields no memory.
+    const researchMemory = conversationContext.isNew
+      ? undefined
+      : formatResearchMemory(
+          await loadConversationResearchMemory({
+            supabase,
+            conversationId,
+            clientId: authenticatedUser.id,
+          }),
+        );
 
     const latestUserMessage = messages.findLast(
       (message) => message.role === "user" && Boolean(message.content),
@@ -528,6 +543,8 @@ export async function POST(request: Request) {
                 systemPrompt,
                 messages,
                 mcpBearerToken,
+                researchResultLimit,
+                researchMemory,
                 attachmentContexts: attachmentAgentContext.attachmentContexts,
                 initialSteps: attachmentAgentContext.initialSteps,
                 deadline,
@@ -609,6 +626,8 @@ export async function POST(request: Request) {
         systemPrompt,
         messages,
         mcpBearerToken,
+        researchResultLimit,
+        researchMemory,
         attachmentContexts: attachmentAgentContext.attachmentContexts,
         initialSteps: attachmentAgentContext.initialSteps,
         deadline,

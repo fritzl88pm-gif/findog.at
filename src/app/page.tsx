@@ -1724,6 +1724,8 @@ export default function Home() {
   const [adminSystemPromptUpdatedAt, setAdminSystemPromptUpdatedAt] = useState<string | null>(null);
   const [isAdminSystemPromptLoading, setIsAdminSystemPromptLoading] = useState(false);
   const [isAdminSystemPromptSaving, setIsAdminSystemPromptSaving] = useState(false);
+  const [adminResultLimit, setAdminResultLimit] = useState("");
+  const [isAdminResultLimitSaving, setIsAdminResultLimitSaving] = useState(false);
   const [adminModels, setAdminModels] = useState<AdminModelSetting[]>([]);
   const [adminDefaultModelId, setAdminDefaultModelId] = useState("");
   const [adminDefaultRevision, setAdminDefaultRevision] = useState(0);
@@ -1928,6 +1930,7 @@ export default function Home() {
         setAdminModels([]);
         setAdminSystemPrompt("");
         setAdminSystemPromptUpdatedAt(null);
+        setAdminResultLimit("");
         setAdminDefaultModelId("");
         setAdminDefaultRevision(0);
         setAdminModelImages([]);
@@ -2419,6 +2422,7 @@ export default function Home() {
       setAdminModels([]);
       setAdminSystemPrompt("");
       setAdminSystemPromptUpdatedAt(null);
+      setAdminResultLimit("");
       setIsAdmin(false);
       setAppView("chat");
       clearAttachments();
@@ -2761,12 +2765,59 @@ export default function Home() {
       }
       setAdminSystemPrompt(payload.systemPrompt);
       setAdminSystemPromptUpdatedAt(payload.updatedAt);
+      if (typeof payload.researchResultLimit === "number") {
+        setAdminResultLimit(String(payload.researchResultLimit));
+      }
     } catch (promptError) {
       setAdminError(promptError instanceof Error
         ? promptError.message
         : "Der globale Systemprompt konnte nicht geladen werden.");
     } finally {
       setIsAdminSystemPromptLoading(false);
+    }
+  }
+
+  async function saveAdminResultLimit() {
+    const accessToken = session?.access_token;
+    const limitValue = Number(adminResultLimit);
+    if (
+      !accessToken
+      || !isAdmin
+      || isAdminResultLimitSaving
+      || !Number.isInteger(limitValue)
+      || limitValue < 1
+      || limitValue > 50
+    ) {
+      return;
+    }
+    setAdminError("");
+    setAdminNotice("");
+    setIsAdminResultLimitSaving(true);
+    try {
+      const response = await fetch("/api/admin/settings", {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ researchResultLimit: limitValue }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok || typeof payload.researchResultLimit !== "number") {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Das Rechercheergebnis-Limit konnte nicht gespeichert werden.",
+        );
+      }
+      setAdminResultLimit(String(payload.researchResultLimit));
+      setAdminNotice("Das Rechercheergebnis-Limit wurde gespeichert und gilt für alle Benutzer.");
+    } catch (limitError) {
+      setAdminError(limitError instanceof Error
+        ? limitError.message
+        : "Das Rechercheergebnis-Limit konnte nicht gespeichert werden.");
+    } finally {
+      setIsAdminResultLimitSaving(false);
     }
   }
 
@@ -5173,6 +5224,46 @@ export default function Home() {
                   }
                 >
                   {isAdminSystemPromptSaving ? "Wird gespeichert…" : "Systemprompt speichern"}
+                </button>
+              </div>
+            </section>
+            <section className="form-generator-card admin-result-limit-card" aria-labelledby="admin-result-limit-title">
+              <div className="form-generator-heading">
+                <h2 id="admin-result-limit-title">Rechercheergebnisse pro Quelle</h2>
+                <p>Legt zentral fest, wie viele Treffer der Agent je Nicht-Gesetz-Quelle abruft (1–50). Gesetze bleiben unbegrenzt.</p>
+              </div>
+              <div className="field-group">
+                <label htmlFor="admin-result-limit">Anzahl Treffer</label>
+                <input
+                  id="admin-result-limit"
+                  type="number"
+                  min={1}
+                  max={50}
+                  step={1}
+                  value={adminResultLimit}
+                  onChange={(event) => {
+                    setAdminResultLimit(event.target.value);
+                    setAdminError("");
+                    setAdminNotice("");
+                  }}
+                  disabled={isAdminSystemPromptLoading || isAdminResultLimitSaving}
+                />
+                <small>Wert zwischen 1 und 50 · gilt für alle Benutzer</small>
+              </div>
+              <div className="admin-model-actions">
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => void saveAdminResultLimit()}
+                  disabled={
+                    isAdminSystemPromptLoading
+                    || isAdminResultLimitSaving
+                    || !Number.isInteger(Number(adminResultLimit))
+                    || Number(adminResultLimit) < 1
+                    || Number(adminResultLimit) > 50
+                  }
+                >
+                  {isAdminResultLimitSaving ? "Wird gespeichert…" : "Limit speichern"}
                 </button>
               </div>
             </section>

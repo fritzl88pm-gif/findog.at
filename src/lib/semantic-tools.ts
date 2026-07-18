@@ -80,6 +80,7 @@ function buildSchemaAwareArgs(
   rawTool: McpTool,
   semanticArgs: JsonObject,
   source: ResearchSource,
+  resultLimit: number = DEFAULT_RESULT_LIMIT,
 ): JsonObject {
   const schema = rawTool.inputSchema as Record<string, unknown> | undefined;
   const props =
@@ -139,7 +140,7 @@ function buildSchemaAwareArgs(
   if (limitParam
     && source.kbId !== RESEARCH_SOURCES.GESETZE.kbId
     && !(limitParam in semanticArgs)) {
-    rawArgs[limitParam] = DEFAULT_RESULT_LIMIT;
+    rawArgs[limitParam] = resultLimit;
   }
 
   return rawArgs;
@@ -162,7 +163,8 @@ interface SemanticToolDef {
   /**
    * Build the raw MCP arguments from the public (semantic) arguments.
    * Receives the raw McpTool object for schema-aware mapping and the
-   * resolved ResearchSource for KB-id injection.
+   * centrally configured result limit to inject where the raw schema
+   * supports it.
    * Returns undefined when the semantic arguments are invalid (e.g. unknown
    * source_key); routeToolCall will surface the error as a recoverable
    * argument error instead of throwing.
@@ -170,7 +172,7 @@ interface SemanticToolDef {
   buildRawArgs: (
     semanticArgs: JsonObject,
     rawTool: McpTool,
-    source?: ResearchSource,
+    resultLimit?: number,
   ) => JsonObject | undefined;
   /** Names of required raw MCP tools (must all be present to expose). */
   requiredRawToolNames: readonly string[];
@@ -285,8 +287,8 @@ function documentSearchTool(
     publicDescription: description,
     publicParameters: DOCUMENT_SEARCH_PROPERTIES,
     rawName: "hybrid_search",
-    buildRawArgs: (args, rawTool) =>
-      buildSchemaAwareArgs(rawTool, args, source),
+    buildRawArgs: (args, rawTool, resultLimit) =>
+      buildSchemaAwareArgs(rawTool, args, source, resultLimit),
     requiredRawToolNames: source.requiresRawTools,
     resolveSource: () => source,
   };
@@ -302,8 +304,8 @@ function faqSemanticTool(
     publicDescription: description,
     publicParameters: FAQ_SEARCH_PROPERTIES,
     rawName: "faq_search",
-    buildRawArgs: (args, rawTool) =>
-      buildSchemaAwareArgs(rawTool, args, source),
+    buildRawArgs: (args, rawTool, resultLimit) =>
+      buildSchemaAwareArgs(rawTool, args, source, resultLimit),
     requiredRawToolNames: ["faq_search"] as const,
     resolveSource: () => source,
   };
@@ -319,8 +321,8 @@ function faqExactTool(
     publicDescription: description,
     publicParameters: FAQ_EXACT_PROPERTIES,
     rawName: "faq_entries_search",
-    buildRawArgs: (args, rawTool) =>
-      buildSchemaAwareArgs(rawTool, args, source),
+    buildRawArgs: (args, rawTool, resultLimit) =>
+      buildSchemaAwareArgs(rawTool, args, source, resultLimit),
     requiredRawToolNames: ["faq_entries_search"] as const,
     resolveSource: () => source,
   };
@@ -334,11 +336,12 @@ function sourceKeyError(key: string): string {
 function sourceKeyToolArgs(
   semanticArgs: JsonObject,
   rawTool: McpTool,
+  resultLimit?: number,
 ): JsonObject | undefined {
   const key = String(semanticArgs.source_key ?? "");
   const source = resolveSourceKey(key);
   if (!source) return undefined;
-  return buildSchemaAwareArgs(rawTool, semanticArgs, source);
+  return buildSchemaAwareArgs(rawTool, semanticArgs, source, resultLimit);
 }
 
 /* ------------------------------------------------------------------ */
@@ -398,8 +401,8 @@ const ALL_SEMANTIC_DEFS: SemanticToolDef[] = [
       "Durchsucht das Allgemeine Informationen Wiki (ABC der Werbungskosten, Familienbeihilfe, DBA-Grundlagen u. a.) nach Begriffen.",
     publicParameters: WIKI_SEARCH_PROPERTIES,
     rawName: "wiki_search",
-    buildRawArgs: (args, rawTool) =>
-      buildSchemaAwareArgs(rawTool, args, RESEARCH_SOURCES.WIKI),
+    buildRawArgs: (args, rawTool, resultLimit) =>
+      buildSchemaAwareArgs(rawTool, args, RESEARCH_SOURCES.WIKI, resultLimit),
     requiredRawToolNames: ["wiki_search"] as const,
     resolveSource: () => RESEARCH_SOURCES.WIKI,
   },
@@ -409,8 +412,8 @@ const ALL_SEMANTIC_DEFS: SemanticToolDef[] = [
       "Ruft eine vollständige Wiki-Seite anhand ihres Slugs ab (z. B. „summary/Familienbonus Plus - alle Informationen - Summary“).",
     publicParameters: WIKI_READ_PROPERTIES,
     rawName: "wiki_read_page",
-    buildRawArgs: (args, rawTool) =>
-      buildSchemaAwareArgs(rawTool, args, RESEARCH_SOURCES.WIKI),
+    buildRawArgs: (args, rawTool, resultLimit) =>
+      buildSchemaAwareArgs(rawTool, args, RESEARCH_SOURCES.WIKI, resultLimit),
     requiredRawToolNames: ["wiki_read_page"] as const,
     resolveSource: () => RESEARCH_SOURCES.WIKI,
   },
@@ -420,8 +423,8 @@ const ALL_SEMANTIC_DEFS: SemanticToolDef[] = [
       "Zeigt den strukturierten Index des Allgemeine Informationen Wiki an, gruppiert nach summary/entity/concept.",
     publicParameters: WIKI_INDEX_PROPERTIES,
     rawName: "wiki_index_view",
-    buildRawArgs: (_args, rawTool) =>
-      buildSchemaAwareArgs(rawTool, {}, RESEARCH_SOURCES.WIKI),
+    buildRawArgs: (_args, rawTool, resultLimit) =>
+      buildSchemaAwareArgs(rawTool, {}, RESEARCH_SOURCES.WIKI, resultLimit),
     requiredRawToolNames: ["wiki_index_view"] as const,
     resolveSource: () => RESEARCH_SOURCES.WIKI,
   },
@@ -454,8 +457,8 @@ const ALL_SEMANTIC_DEFS: SemanticToolDef[] = [
       "Durchsucht Dokumente im Allgemeine Informationen Wiki (volltext Dokumentensuche, z. B. BMF-Broschüren, AK-Leitfäden, Kanzleiartikel).",
     publicParameters: DOCUMENT_SEARCH_PROPERTIES,
     rawName: "hybrid_search",
-    buildRawArgs: (args, rawTool) =>
-      buildSchemaAwareArgs(rawTool, args, RESEARCH_SOURCES.WIKI),
+    buildRawArgs: (args, rawTool, resultLimit) =>
+      buildSchemaAwareArgs(rawTool, args, RESEARCH_SOURCES.WIKI, resultLimit),
     requiredRawToolNames: ["hybrid_search"] as const,
     resolveSource: () => RESEARCH_SOURCES.WIKI,
   },
@@ -519,11 +522,11 @@ const ALL_SEMANTIC_DEFS: SemanticToolDef[] = [
       additionalProperties: false,
     },
     rawName: "get_knowledge_base",
-    buildRawArgs: (semanticArgs, rawTool) => {
+    buildRawArgs: (semanticArgs, rawTool, resultLimit) => {
       const key = String(semanticArgs.source_key ?? "");
       const source = resolveSourceKey(key);
       if (!source) return undefined;
-      return buildSchemaAwareArgs(rawTool, {}, source);
+      return buildSchemaAwareArgs(rawTool, {}, source, resultLimit);
     },
     requiredRawToolNames: ["get_knowledge_base"] as const,
   },
@@ -540,8 +543,11 @@ export class SemanticToolRegistry {
   private readonly byPublicName = new Map<string, SemanticToolDef>();
   /** Map: raw MCP tool name → McpTool object (for schema-aware routing). */
   private readonly rawToolByName = new Map<string, McpTool>();
+  /** Centrally configured result limit injected into schema-aware args. */
+  private readonly resultLimit?: number;
 
-  constructor(rawTools: McpTool[]) {
+  constructor(rawTools: McpTool[], options?: { resultLimit?: number }) {
+    this.resultLimit = options?.resultLimit;
     // Index raw tools by name for schema lookups
     for (const tool of rawTools) {
       this.rawToolByName.set(tool.name, tool);
@@ -614,7 +620,7 @@ export class SemanticToolRegistry {
     const rawMcpTool = this.rawToolByName.get(def.rawName);
     if (!rawMcpTool) return undefined;
 
-    const builtArgs = def.buildRawArgs(semanticArgs, rawMcpTool);
+    const builtArgs = def.buildRawArgs(semanticArgs, rawMcpTool, this.resultLimit);
     if (builtArgs === undefined) {
       const key = String(semanticArgs.source_key ?? "");
       return {

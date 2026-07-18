@@ -645,4 +645,34 @@ describe("SemanticToolRegistry", () => {
       expect(routed!.arguments.knowledge_id).toBe("custom-id");
     });
   });
+
+  describe("(g) centrally configurable result limit", () => {
+    function hybridWithLimit(): McpTool[] {
+      return [
+        rawTool("hybrid_search", {
+          kb_id: { type: "string" },
+          query: { type: "string" },
+          limit: { type: "number" },
+        }),
+      ];
+    }
+
+    it("injects the configured limit for capped sources", () => {
+      const registry = new SemanticToolRegistry(hybridWithLimit(), { resultLimit: 12 });
+      const routed = registry.routeToolCall("search_bfg", { query: "Pendlerpauschale" });
+      expect(routed!.arguments.limit).toBe(12);
+    });
+
+    it("falls back to the default limit when none is configured", () => {
+      const registry = new SemanticToolRegistry(hybridWithLimit());
+      const routed = registry.routeToolCall("search_bfg", { query: "Pendlerpauschale" });
+      expect(routed!.arguments.limit).toBe(5);
+    });
+
+    it("never caps search_laws regardless of the configured limit", () => {
+      const registry = new SemanticToolRegistry(hybridWithLimit(), { resultLimit: 25 });
+      const routed = registry.routeToolCall("search_laws", { query: "EStG" });
+      expect(routed!.arguments).not.toHaveProperty("limit");
+    });
+  });
 });
