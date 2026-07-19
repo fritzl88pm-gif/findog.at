@@ -7,7 +7,7 @@ import Link from "next/link";
 
 import { applyConversationDeletion } from "@/lib/chat/deletion";
 import { ellipsizeFilename } from "@/lib/attachment-names";
-import { parseRichAnswer, type RichBlock, type RichInline } from "@/lib/answer-rendering";
+import RichAnswer from "@/components/rich-answer";
 import {
   getSupabaseBrowserClient,
   isSupabaseBrowserConfigured,
@@ -53,6 +53,7 @@ import FredNativeChatView, {
   type FredNativeMessage,
 } from "@/components/fred-native-chat-view";
 import FredRunView from "@/components/fredrun-view";
+import ScanningView from "@/components/scanning-view";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -69,7 +70,7 @@ type ConversationSummary = {
   updatedAt: string;
 };
 
-type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "administration";
+type AppView = "chat" | "scanning" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "administration";
 
 type AuthForm = {
   email: string;
@@ -559,114 +560,6 @@ function renderUserMessageContent(content: string): ReactNode {
       })}
     </p>
   );
-}
-
-function renderRichInline(nodes: RichInline[], keyPrefix: string): ReactNode[] {
-  return nodes.map((node, index) => {
-    const key = `${keyPrefix}-${index}`;
-
-    if (node.type === "text") {
-      return <span key={key}>{node.text}</span>;
-    }
-    if (node.type === "strong") {
-      return <strong key={key}>{renderRichInline(node.children, key)}</strong>;
-    }
-    if (node.type === "code") {
-      return <code key={key}>{node.text}</code>;
-    }
-    if (node.type === "highlight") {
-      return <mark key={key}>{renderRichInline(node.children, key)}</mark>;
-    }
-    return (
-      <a key={key} href={node.href} target="_blank" rel="noreferrer noopener">
-        {renderRichInline(node.children, key)}
-      </a>
-    );
-  });
-}
-
-function renderRichBlock(block: RichBlock, index: number): ReactNode {
-  if (block.type === "heading") {
-    const HeadingTag = `h${block.level}` as "h2" | "h3" | "h4";
-    return (
-      <HeadingTag key={`heading-${index}`}>
-        {renderRichInline(block.children, `heading-${index}`)}
-      </HeadingTag>
-    );
-  }
-
-  if (block.type === "paragraph") {
-    return <p key={`paragraph-${index}`}>{renderRichInline(block.children, `paragraph-${index}`)}</p>;
-  }
-
-  if (block.type === "unordered-list") {
-    return (
-      <ul key={`unordered-list-${index}`}>
-        {block.items.map((item, itemIndex) => (
-          <li key={`unordered-list-${index}-${itemIndex}`}>
-            {renderRichInline(item, `unordered-list-${index}-${itemIndex}`)}
-          </li>
-        ))}
-      </ul>
-    );
-  }
-
-  if (block.type === "ordered-list") {
-    return (
-      <ol key={`ordered-list-${index}`}>
-        {block.items.map((item, itemIndex) => (
-          <li key={`ordered-list-${index}-${itemIndex}`}>
-            {renderRichInline(item, `ordered-list-${index}-${itemIndex}`)}
-          </li>
-        ))}
-      </ol>
-    );
-  }
-
-  if (block.type === "table") {
-    return (
-      <div className="answer-table-scroll" key={`table-${index}`}>
-        <table>
-          <thead>
-            <tr>
-              {block.headers.map((cell, cellIndex) => (
-                <th key={`table-${index}-head-${cellIndex}`} scope="col">
-                  {renderRichInline(cell, `table-${index}-head-${cellIndex}`)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {block.rows.map((row, rowIndex) => (
-              <tr key={`table-${index}-row-${rowIndex}`}>
-                {row.map((cell, cellIndex) => (
-                  <td key={`table-${index}-row-${rowIndex}-${cellIndex}`}>
-                    {renderRichInline(cell, `table-${index}-row-${rowIndex}-${cellIndex}`)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-
-  return (
-    <blockquote className="answer-callout" key={`blockquote-${index}`}>
-      {renderRichInline(block.children, `blockquote-${index}`)}
-    </blockquote>
-  );
-}
-
-function RichAnswer({ content }: { content: string }) {
-  const blocks = parseRichAnswer(content);
-
-  if (blocks.length === 0) {
-    return <p className="message-body"></p>;
-  }
-
-  return <div className="answer-content">{blocks.map(renderRichBlock)}</div>;
 }
 
 function L17bCurrencyView() {
@@ -2295,6 +2188,14 @@ export default function Home() {
     openFredView();
   }
 
+  function openScanningView() {
+    setAppView("scanning");
+    setError("");
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
   async function selectFredConversation(conversation: ConversationSummary) {
     if (isHistoryLoading || isDeleting || !session?.access_token) {
       return;
@@ -2626,7 +2527,7 @@ export default function Home() {
               disabled={historyControlsDisabled}
             >
               <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-              Aktueller Fred-Chat
+              Neue Unterhaltung
             </button>
             <div className="conversation-history" aria-label="Gespeicherte Unterhaltungen">
               <div className="conversation-history-heading">
@@ -2688,15 +2589,6 @@ export default function Home() {
             </div>
             <nav className="forms-navigation" aria-label="Anwendungsbereiche">
               <button
-                className={`sidebar-view-button ${appView === "chat" ? "active" : ""}`}
-                type="button"
-                onClick={openFredView}
-                aria-current={appView === "chat" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"></path><path d="M8 9h8M8 13h5"></path></svg>
-                Fred
-              </button>
-              <button
                 className={`sidebar-view-button ${appView === "bfg-decisions" ? "active" : ""}`}
                 type="button"
                 onClick={openBfgDecisionsView}
@@ -2742,6 +2634,15 @@ export default function Home() {
                 Fredrun
               </button>
               <button
+                className={`sidebar-view-button ${appView === "scanning" ? "active" : ""}`}
+                type="button"
+                onClick={openScanningView}
+                aria-current={appView === "scanning" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8h10M7 12h10M7 16h6" /></svg>
+                Scanning
+              </button>
+              <button
                 className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
                 type="button"
                 onClick={openFormsView}
@@ -2770,20 +2671,10 @@ export default function Home() {
               type="button"
               onClick={startNewManagedConversation}
               disabled={historyControlsDisabled}
-              title="Aktueller Fred-Chat"
-              aria-label="Aktueller Fred-Chat"
+              title="Neue Unterhaltung"
+              aria-label="Neue Unterhaltung"
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "chat" ? "active" : ""}`}
-              type="button"
-              onClick={openFredView}
-              title="Fred"
-              aria-label="Fred"
-              aria-current={appView === "chat" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"></path><path d="M8 9h8M8 13h5"></path></svg>
             </button>
             <button
               className={`icon-button rail-icon-btn rail-forms-button ${appView === "forms" ? "active" : ""}`}
@@ -2844,6 +2735,16 @@ export default function Home() {
               aria-current={appView === "fredrun" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17h3l2-4 3 2 2-5 2 4h4"></path><path d="M5 7h.01M9 5h.01M13 7h.01"></path></svg>
+            </button>
+            <button
+              className={`icon-button rail-icon-btn ${appView === "scanning" ? "active" : ""}`}
+              type="button"
+              onClick={openScanningView}
+              title="Scanning"
+              aria-label="Scanning"
+              aria-current={appView === "scanning" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8h10M7 12h10M7 16h6" /></svg>
             </button>
             {isAdmin ? (
               <button
@@ -3413,6 +3314,8 @@ export default function Home() {
         <L17bCurrencyView />
       ) : appView === "fredrun" ? (
         <FredRunView />
+      ) : appView === "scanning" ? (
+        <ScanningView accessToken={session?.access_token ?? ""} />
       ) : appView === "german-sv-pension" ? (
         <GermanSvPensionView
           downloadError={error}

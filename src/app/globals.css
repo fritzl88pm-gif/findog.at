@@ -3355,6 +3355,144 @@ textarea:focus {
   font-weight: 700;
 }
 
+/* Scanning */
+.scanning-empty-state {
+  align-items: center;
+}
+
+.scanning-empty-state > div:last-child {
+  display: grid;
+  gap: 8px;
+}
+
+.scanning-empty-state p {
+  max-width: 560px;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.scanning-empty-icon {
+  display: grid;
+  flex: 0 0 84px;
+  width: 84px;
+  height: 84px;
+  place-items: center;
+  border: 1px solid rgba(40, 111, 156, 0.18);
+  border-radius: 24px;
+  background: linear-gradient(145deg, #ffffff, rgba(40, 111, 156, 0.08));
+  color: var(--bmf-blue);
+  box-shadow: var(--shadow-sm);
+}
+
+.scanning-composer {
+  gap: 14px;
+}
+
+.scanning-dropzone {
+  display: grid;
+  min-height: 118px;
+  place-items: center;
+  align-content: center;
+  gap: 4px;
+  border: 2px dashed rgba(40, 111, 156, 0.28);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  color: var(--bmf-blue-deep);
+  background: rgba(40, 111, 156, 0.025);
+  text-align: center;
+  transition: var(--transition);
+}
+
+.scanning-dropzone.is-dragging {
+  border-color: var(--bmf-blue);
+  background: rgba(40, 111, 156, 0.1);
+  transform: translateY(-1px);
+}
+
+.scanning-dropzone span,
+.scanning-dropzone small {
+  color: var(--muted);
+}
+
+.scanning-selection-count {
+  font-weight: 700;
+}
+
+.scanning-toolbar,
+.scanning-file-buttons,
+.scanning-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.scanning-result-actions {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(40, 111, 156, 0.12);
+}
+
+.scanning-avatar {
+  width: 32px;
+  height: 32px;
+  background: var(--accent-yellow);
+  color: var(--bmf-blue-deep);
+}
+
+.scanning-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.scanning-status-summary {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.scanning-panel .message.assistant {
+  max-width: min(96%, 940px);
+}
+
+.scanning-panel .transcript-content,
+.scanning-panel .composer,
+.scanning-panel .composer-error {
+  max-width: 940px;
+}
+
+@media (max-width: 720px) {
+  .scanning-empty-state {
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .scanning-empty-icon {
+    flex-basis: 68px;
+    width: 68px;
+    height: 68px;
+  }
+
+  .scanning-toolbar,
+  .scanning-result-actions {
+    align-items: stretch;
+  }
+
+  .scanning-file-buttons,
+  .scanning-file-buttons button,
+  .scanning-result-actions button {
+    width: 100%;
+  }
+
+  .scanning-toolbar .composer-actions {
+    width: 100%;
+  }
+}
+
 .composer-actions {
   display: flex;
   align-items: center;

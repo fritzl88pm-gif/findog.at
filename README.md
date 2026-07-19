@@ -1,6 +1,6 @@
 # findog.at
 
-Next.js application for Findog/Fred, a German-language tax-law assistant using WeKnora for Fred, DeepSeek for BFG Suche PRO, and Supabase for authentication and durable history.
+Next.js application for Findog/Fred, a German-language tax-law assistant using WeKnora for Fred, Gemini via OpenRouter for Scanning, DeepSeek for BFG Suche PRO, and Supabase for authentication and durable chat history.
 
 ## Local Setup
 
@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000` and sign in with a manually provisioned Supabase email/password account. The first authenticated view is the native Fred chat. Fred's messages, files and optional web-search flag are sent to WeKnora through authenticated server routes; WeKnora credentials and session bindings remain server-side. BFG Suche PRO and the form tools remain separate application features.
+Open `http://localhost:3000` and sign in with a manually provisioned Supabase email/password account. The first authenticated view is the native Fred chat. Fred's messages, files and optional web-search flag are sent to WeKnora through authenticated server routes; WeKnora credentials and session bindings remain server-side. Scanning, BFG Suche PRO and the form tools remain separate application features.
 
 ## Environment
 
@@ -27,11 +27,13 @@ Copy `.env.example` to `.env.local` and configure Supabase Auth before using the
 | `WEKNORA_FRED_PUBLISH_TOKEN` | For native Fred chat | Server-only long-lived channel publish token with the `em_` prefix. This is not an account API key (`sk_`) and must never use a `NEXT_PUBLIC_` prefix. |
 | `WEKNORA_FRED_EXCHANGE_ORIGIN` | For native Fred chat | Exact Findog origin registered in the channel allowlist; production defaults to `https://findog.at`. |
 | `WEKNORA_FRED_WEBHOOK_SECRET` | For durable Fred history | Server-only HMAC secret shared with Fred's WeKnora webhook. Use at least 32 random characters. |
-| `OPENROUTER_API_KEY` | For image-assisted forms | Server-only OpenRouter key used by the form image extraction flow. Never expose it to the browser. |
+| `OPENROUTER_API_KEY` | For Scanning and image-assisted forms | Server-only OpenRouter key used by Gemini 3.5 Flash for Scanning and by the form image extraction flow. Never expose it to the browser. |
 
 Fred uses Findog's native chat surface. The authenticated `/api/fred/chat` proxy exchanges the long-lived `em_` publish token server-side, creates or resumes the user-owned WeKnora session, streams Fred's answer and structured research events as NDJSON, and persists both sides of the turn. Findog renders deterministic German research summaries instead of exposing raw model reasoning or tool arguments. Complete BFG business numbers are verified against the official Findok API while the answer streams; verified citations become official Findok full-text links, while unresolved citations remain unchanged and unlinked. WeKnora's internal `<kb ... />` and `<web ... />` citation tags are removed from the visible answer while their source metadata and the unchanged provider answer remain stored for provenance. Neither the short-lived `ems_` token nor the signed WeKnora session handle reaches the browser. There is no Taxdog iframe or cross-origin browser storage.
 
 Fred history is stored separately from the internal agent history, with explicit WeKnora channel/session provenance. Configure the WeKnora channel to POST `message_sent` and `message_received` events to `https://findog.at/api/webhooks/weknora` and use the same `WEKNORA_FRED_WEBHOOK_SECRET` for its `X-WeKnora-Signature` HMAC. The authenticated server proxy binds every WeKnora session to exactly one Findog user before sending the question. Signed webhook deliveries remain an independent audit and reconciliation path. The sidebar supports opening, continuing, selecting, and deleting Fred histories in the same native UI.
+
+Scanning is a one-shot batch evaluation and does not create a chat history. An authenticated user can submit up to five JPEG, PNG, WebP or GIF images (5 MiB each) and five PDFs (10 MiB each). The server validates counts, MIME types, file signatures and request size, detects byte-identical duplicates by SHA-256, and sends the unique files directly as Base64 data to `google/gemini-3.5-flash` through OpenRouter. It does not use OpenRouter's persistent file upload. Each document is extracted separately with a strict JSON schema; foreign-language document types, descriptions, categories and warnings are translated into German while names, identifiers and financial values remain unchanged. A second text-only request harmonizes German categories and the German summary. Findog sorts and sums recognized amounts deterministically by category and currency, without currency conversion. Files and reports remain in the current browser workflow only and are never written to Supabase. The resulting report can be exported through the existing authenticated PDF tool.
 
 ## Authentication
 
@@ -77,6 +79,6 @@ npm run build
 
 ## Deployment
 
-Deploy the Next.js application through Coolify. Configure the Supabase variables, `DEEPSEEK_API_KEY` for BFG Suche PRO, `OPENROUTER_API_KEY` for image-assisted forms, and all four `WEKNORA_FRED_*` values as protected runtime environment variables. The Fred channel allowlist must include the exact Findog exchange origin (plus the local origin only while testing). Do not expose provider keys as build arguments or `NEXT_PUBLIC_` variables. Restart or redeploy the application after changing a runtime variable.
+Deploy the Next.js application through Coolify. Configure the Supabase variables, `DEEPSEEK_API_KEY` for BFG Suche PRO, `OPENROUTER_API_KEY` for Scanning and image-assisted forms, and all four `WEKNORA_FRED_*` values as protected runtime environment variables. The Fred channel allowlist must include the exact Findog exchange origin (plus the local origin only while testing). Do not expose provider keys as build arguments or `NEXT_PUBLIC_` variables. Restart or redeploy the application after changing a runtime variable. The Coolify reverse proxy must accept request bodies of at least 100 MiB so that a valid maximum Scanning batch, including multipart overhead, reaches the application.
 
 The native Fred chat mirrors the WeKnora embed capabilities configured for its channel and agent. When enabled upstream, users can request web search and attach up to five images (JPEG, PNG, GIF, or WebP; 10 MB each) plus five documents (`pdf`, `doc`, `docx`, `txt`, `md`, `csv`, `xlsx`, `xls`, `ppt`, or `pptx`; 20 MB each). Files are forwarded to WeKnora for the current request only. Findog stores auditable attachment metadata (name, MIME type, size, SHA-256) and the web-search flag with the user message, but not the binary file or data URI.

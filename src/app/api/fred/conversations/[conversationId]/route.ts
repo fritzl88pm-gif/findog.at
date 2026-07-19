@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
+import {
+  extractBfgGzCandidates,
+  linkVerifiedBfgCitations,
+  verifyBfgCitations,
+  type VerifiedBfgCitation,
+} from "@/lib/findok/bfg-citations";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import {
   mergeFredSources,
@@ -13,6 +19,7 @@ import {
 export const runtime = "nodejs";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const MAX_LEGACY_BFG_CITATIONS_PER_CONVERSATION = 40;
 
 type FredConversationRow = {
   id: string;
@@ -33,6 +40,20 @@ type FredMessageRow = {
   attachments: unknown;
   web_search_enabled: boolean;
 };
+
+type PreparedFredMessage = FredMessageRow & {
+  rawTransformation: ReturnType<typeof transformWeKnoraAnswer>;
+  displayTransformation: ReturnType<typeof transformWeKnoraAnswer>;
+  legacyBfgCandidates: string[];
+};
+
+function verifiedCitationSources(citations: VerifiedBfgCitation[]) {
+  return citations.map((citation) => ({
+    kind: "web" as const,
+    url: citation.fullTextUrl,
+    title: `BFG ${citation.gz}: ${citation.title}`.slice(0, 512),
+  }));
+}
 
 function attachmentMetadata(value: unknown) {
   if (!Array.isArray(value)) return [];
@@ -104,6 +125,28 @@ export async function GET(
     if (messagesError) {
       throw new UserVisibleError("Fred-Nachrichten konnten nicht geladen werden.", 503);
     }
+    const preparedMessages = ((messages ?? []) as FredMessageRow[]).map((message): PreparedFredMessage => {
+      const rawTransformation = message.role === "assistant"
+        ? transformWeKnoraAnswer(message.content)
+        : { text: message.content, sources: [] };
+      const displayTransformation = message.role === "assistant" && message.display_content
+        ? transformWeKnoraAnswer(message.display_content)
+        : rawTransformation;
+      return {
+        ...message,
+        rawTransformation,
+        displayTransformation,
+        legacyBfgCandidates: message.role === "assistant" && !message.display_content
+          ? extractBfgGzCandidates(displayTransformation.text)
+          : [],
+      };
+    });
+    const legacyCandidates = [...new Set(
+      preparedMessages.flatMap((message) => message.legacyBfgCandidates),
+    )].slice(0, MAX_LEGACY_BFG_CITATIONS_PER_CONVERSATION);
+    const verifiedLegacyCitations = legacyCandidates.length > 0
+      ? (await verifyBfgCitations(legacyCandidates)).verified
+      : [];
     const row = conversation as FredConversationRow;
     return json({
       conversation: {
@@ -112,25 +155,29 @@ export async function GET(
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       },
-      messages: ((messages ?? []) as FredMessageRow[]).map((message) => {
-        const rawTransformation = message.role === "assistant"
-          ? transformWeKnoraAnswer(message.content)
-          : { text: message.content, sources: [] };
-        const displayTransformation = message.role === "assistant" && message.display_content
-          ? transformWeKnoraAnswer(message.display_content)
-          : rawTransformation;
+      messages: preparedMessages.map((message) => {
+        const candidateSet = new Set(message.legacyBfgCandidates);
+        const messageCitations = verifiedLegacyCitations.filter((citation) => candidateSet.has(citation.gz));
+        const displayContent = messageCitations.length > 0
+          ? linkVerifiedBfgCitations(
+              message.displayTransformation.text,
+              messageCitations,
+              { target: "fullText" },
+            )
+          : message.displayTransformation.text;
         return {
           id: message.id,
           role: message.role,
-          content: displayTransformation.text.trim(),
+          content: displayContent.trim(),
           createdAt: message.provider_created_at ?? message.created_at,
           attachments: attachmentMetadata(message.attachments),
           webSearchEnabled: message.web_search_enabled,
           researchTrace: parseStoredFredResearchTrace(message.research_trace),
           sourceReferences: mergeFredSources(
             parseStoredFredSources(message.source_references),
-            rawTransformation.sources,
-            displayTransformation.sources,
+            message.rawTransformation.sources,
+            message.displayTransformation.sources,
+            verifiedCitationSources(messageCitations),
           ),
         };
       }),

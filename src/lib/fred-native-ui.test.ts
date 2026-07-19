@@ -16,10 +16,13 @@ const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", impor
 const nextConfigSource = readFileSync(fileURLToPath(new URL("../../next.config.ts", import.meta.url)), "utf8");
 
 describe("Fred native Findog UI", () => {
-  it("keeps Fred in authenticated navigation and renders the native chat", () => {
-    expect(pageSource).toContain('type AppView = "chat" | "forms"');
+  it("uses the new-conversation action as the only Fred navigation and renders the native chat", () => {
+    expect(pageSource).toContain('type AppView = "chat" | "scanning" | "forms"');
     expect(pageSource).not.toContain('type AppView = "chat" | "fred"');
-    expect(pageSource.match(/onClick=\{openFredView\}/gu)).toHaveLength(2);
+    expect(pageSource).not.toContain("onClick={openFredView}");
+    expect(pageSource.match(/onClick=\{startNewManagedConversation\}/gu)).toHaveLength(2);
+    expect(pageSource).toContain("Neue Unterhaltung");
+    expect(pageSource).not.toContain("Aktueller Fred-Chat");
     expect(pageSource).toContain("<FredNativeChatView");
     expect(pageSource).toContain("initialMessages={fredMessages}");
     expect(pageSource).toContain("renderAssistantContent={(content) => <RichAnswer content={content} />}");
