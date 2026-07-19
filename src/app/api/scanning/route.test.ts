@@ -51,7 +51,7 @@ describe("POST /api/scanning", () => {
       id: request.headers.get("authorization")?.replace("Bearer ", "") || "user",
     }));
     vi.mocked(analyzeScanningBatch).mockResolvedValue(
-      "| Pos. | Beschreibung | Menge | Einzelpreis | Betrag |\n|---:|---|---:|---:|---:|\n| 1 | Ware | 1 | 12,00 EUR | 12,00 EUR |\n| | Gesamtsumme | | | 12,00 EUR |",
+      "| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.10.2024 | Betreuung Oktober | 2.680,00 EUR |\n| 2 | 01.11.2024 | Betreuung November | 2.060,00 EUR |\n| | | Gesamtsumme | 4.740,00 EUR |",
     );
   });
 
@@ -82,15 +82,15 @@ describe("POST /api/scanning", () => {
     expect(getSupabaseServerClient).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards the complete line-item table without adding metadata blocks", async () => {
+  it("forwards one grouped row per invoice plus the shared total", async () => {
     vi.mocked(analyzeScanningBatch).mockResolvedValueOnce(
-      "| Pos. | Beschreibung | Menge | Einzelpreis | Betrag |\n|---:|---|---:|---:|---:|\n| 1 | Leistung A | 1 | 40,00 EUR | 40,00 EUR |\n| 2 | Leistung B | 1 | 47,40 EUR | 47,40 EUR |\n| | Zahlbetrag | | | 87,40 EUR |",
+      "| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.10.2024 | Betreuung Oktober | 2.680,00 EUR |\n| 2 | 01.11.2024 | Betreuung November | 2.060,00 EUR |\n| | | Gesamtsumme | 4.740,00 EUR |",
     );
     const response = await POST(multipart([{ field: "pdf", file: pdf("gedreht.pdf") }], "rotated-user"));
     const final = (await events(response)).find((event) => event?.type === "final");
     expect(final).toMatchObject({
       type: "final",
-      report: expect.stringContaining("| | Zahlbetrag | | | 87,40 EUR |"),
+      report: expect.stringContaining("| | | Gesamtsumme | 4.740,00 EUR |"),
     });
   });
 

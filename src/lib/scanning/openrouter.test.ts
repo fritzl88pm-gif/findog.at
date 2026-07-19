@@ -41,7 +41,7 @@ describe("OpenRouter scanning adapter", () => {
   });
 
   it("sends the complete mixed batch in one direct Gemini request and returns its Markdown", async () => {
-    const report = "| Pos. | Beschreibung | Menge | Einzelpreis | Betrag |\n|---:|---|---:|---:|---:|\n| 1 | Ware | 1 | 12,00 EUR | 12,00 EUR |\n| | Gesamtsumme | | | 12,00 EUR |";
+    const report = "| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.10.2024 | Betreuung Oktober | 2.680,00 EUR |\n| 2 | 01.11.2024 | Betreuung November | 2.060,00 EUR |\n| | | Gesamtsumme | 4.740,00 EUR |";
     vi.mocked(fetch).mockResolvedValue(providerResponse(report));
 
     await expect(analyzeScanningBatch([upload("pdf", "sammel"), upload("image", "foto")]))
@@ -58,13 +58,23 @@ describe("OpenRouter scanning adapter", () => {
     expect(body.plugins).toBeUndefined();
     expect(serialized).toContain("jede Seite");
     expect(serialized).toContain("gedrehte, seitlich liegende oder auf dem Kopf stehende Seiten");
-    expect(serialized).toContain("jede einzelne Position aller Seiten");
-    expect(serialized).toContain("20 Positionen umfasst, muss die Tabelle 20 Positionszeilen enthalten");
-    expect(serialized).toContain("Pos., Beschreibung, Menge, Einzelpreis und Betrag");
-    expect(serialized).toContain("Summenzeilen derselben Tabelle");
-    expect(serialized).toContain("Zeige keine separaten Blöcke oder Zusammenfassungen zu Aussteller");
+    expect(serialized).toContain("als genau einen Beleg");
+    expect(serialized).toContain("eindeutig zusammengehören, in einer gemeinsamen Tabelle");
+    expect(serialized).toContain("Pos., Datum, Beschreibung und Summe");
+    expect(serialized).toContain("steht für eine vollständige Rechnung oder einen vollständigen Beleg");
+    expect(serialized).toContain("Liste die Einzelpositionen einer Rechnung nicht separat auf");
+    expect(serialized).toContain("Füge am Tabellenende genau eine Zeile Gesamtsumme hinzu");
+    expect(serialized).toContain("Zeige keine separaten Rechnungsüberschriften");
     expect(serialized).toContain("darf im Ergebnis nicht erwähnt werden");
     expect(serialized).toContain("deutschem Markdown");
+  });
+
+  it("removes HTML line-break fragments from Gemini table cells", async () => {
+    vi.mocked(fetch).mockResolvedValue(providerResponse(
+      "| 1 | 01.11.2024 | Betreuung<br>November<br />Wien | 2.060,00 EUR |",
+    ));
+    await expect(analyzeScanningBatch([upload("pdf", "belege")]))
+      .resolves.toBe("| 1 | 01.11.2024 | Betreuung November Wien | 2.060,00 EUR |");
   });
 
   it("accepts assistant text returned in content parts", async () => {
