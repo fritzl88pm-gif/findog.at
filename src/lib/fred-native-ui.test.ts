@@ -46,8 +46,14 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).toContain("renderAssistantContent(message.content)");
     expect(viewSource).toContain('className="composer"');
     expect(viewSource).toContain('className="composer-icon-button"');
+    expect(viewSource).toContain("autosizeComposer(textarea)");
+    expect(viewSource).toContain("resetComposerHeight(composerRef.current)");
+    expect(viewSource).toContain("ref={composerRef}");
     expect(viewSource).toContain("Bild anhängen");
     expect(viewSource).toContain("Datei anhängen");
+    expect(viewSource).toContain("max. {MAX_IMAGE_UPLOADS} · je 10 MB");
+    expect(viewSource).toContain("max. {MAX_FILE_UPLOADS} · je 20 MB");
+    expect(viewSource).toContain('className="fred-web-search-icon"');
     expect(viewSource).toContain('fetch("/api/fred/chat"');
     expect(viewSource).toContain("parseFredNativeStreamLine");
     expect(viewSource).toContain("Stoppen");

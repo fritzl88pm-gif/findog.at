@@ -3258,6 +3258,17 @@ textarea:focus {
   color: #ffffff;
 }
 
+.fred-web-search-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .composer-icon-button:disabled,
 .composer-model-trigger:disabled {
   cursor: not-allowed;
@@ -3281,7 +3292,7 @@ textarea:focus {
 
 .attachment-menu {
   left: 0;
-  width: min(170px, calc(100vw - 24px));
+  width: min(270px, calc(100vw - 24px));
 }
 
 .model-menu {
@@ -3308,6 +3319,18 @@ textarea:focus {
 .composer-popover button:focus-visible,
 .composer-popover button.is-active {
   background: rgba(40, 111, 156, 0.08);
+}
+
+.attachment-menu button {
+  justify-content: space-between;
+}
+
+.attachment-menu-limit {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .model-menu-check {

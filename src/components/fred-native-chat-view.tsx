@@ -13,6 +13,10 @@ import {
   parseFredNativeStreamLine,
   type FredNativeConversation,
 } from "@/lib/fred-native-stream";
+import {
+  autosizeComposer,
+  resetComposerHeight,
+} from "@/lib/chat/composer-height";
 import { getWelcomeGreeting } from "@/lib/chat/welcome";
 import {
   mergeFredResearchStep,
@@ -166,6 +170,7 @@ export default function FredNativeChatView({
   const activeConversationIdRef = useRef(conversationId);
   const abortControllerRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentMenuRef = useRef<HTMLDivElement>(null);
@@ -225,6 +230,12 @@ export default function FredNativeChatView({
   useEffect(() => () => abortControllerRef.current?.abort(), []);
 
   useEffect(() => {
+    const textarea = composerRef.current;
+    if (!textarea) return;
+    autosizeComposer(textarea);
+  }, [composer]);
+
+  useEffect(() => {
     const transcript = transcriptRef.current;
     if (!transcript) return;
     transcript.scrollTop = transcript.scrollHeight;
@@ -267,6 +278,7 @@ export default function FredNativeChatView({
     const baseMessages = [...messages, userMessage];
     setMessages([...baseMessages, assistantMessage]);
     setComposer("");
+    resetComposerHeight(composerRef.current);
     setSelectedImages([]);
     setSelectedFiles([]);
     setError("");
@@ -552,6 +564,7 @@ export default function FredNativeChatView({
               tabIndex={-1}
             />
             <textarea
+              ref={composerRef}
               value={composer}
               onChange={(event) => setComposer(event.target.value)}
               onKeyDown={handleComposerKeyDown}
@@ -584,10 +597,12 @@ export default function FredNativeChatView({
                       aria-label="Anhang auswählen"
                     >
                       <button type="button" role="menuitem" onClick={() => imageInputRef.current?.click()}>
-                        Bild anhängen
+                        <span>Bild anhängen</span>
+                        <small className="attachment-menu-limit">max. {MAX_IMAGE_UPLOADS} · je 10 MB</small>
                       </button>
                       <button type="button" role="menuitem" onClick={() => fileInputRef.current?.click()}>
-                        Datei anhängen
+                        <span>Datei anhängen</span>
+                        <small className="attachment-menu-limit">max. {MAX_FILE_UPLOADS} · je 20 MB</small>
                       </button>
                     </div>
                   ) : null}
@@ -602,6 +617,10 @@ export default function FredNativeChatView({
                     onClick={() => setWebSearchEnabled((current) => !current)}
                     disabled={isSending}
                   >
+                    <svg className="fred-web-search-icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <circle cx="12" cy="12" r="9" />
+                      <path d="M3 12h18M12 3c2.3 2.45 3.5 5.45 3.5 9s-1.2 6.55-3.5 9M12 3c-2.3 2.45-3.5 5.45-3.5 9s1.2 6.55 3.5 9" />
+                    </svg>
                     <span>{webSearchEnabled ? "Websuche aktiv" : "Websuche"}</span>
                   </button>
                 ) : null}
