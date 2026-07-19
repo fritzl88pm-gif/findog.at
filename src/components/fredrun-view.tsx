@@ -36,6 +36,9 @@ const SPRITE_DRAW_SIZE = 166;
 const JUMP_ANIMATION_DURATION = 0.82;
 const FIXED_STEP = 1 / 120;
 const INTRO_SOURCE = "/fredrun/intro.webp";
+const BACKGROUND_SOURCE = "/fredrun/vienna-panorama.webp";
+const BACKGROUND_DRAW_HEIGHT = 450;
+const BACKGROUND_SCROLL_FACTOR = 0.12;
 
 const spriteLayouts = {
   walk: { source: "/fredrun/walk.png", columns: 8, frameCount: 64 },
@@ -83,7 +86,7 @@ const obstacleLayouts: Record<
 type SpriteKey = keyof typeof spriteLayouts;
 type SpriteImages = Record<SpriteKey, HTMLImageElement>;
 type ObstacleImages = Record<FredRunObstacleKind, HTMLImageElement>;
-type FredRunImages = { sprites: SpriteImages; obstacles: ObstacleImages };
+type FredRunImages = { sprites: SpriteImages; obstacles: ObstacleImages; background: HTMLImageElement };
 
 type FredRunSnapshot = {
   phase: FredRunPhase;
@@ -105,7 +108,11 @@ function loadImage(source: string): Promise<HTMLImageElement> {
   });
 }
 
-function drawBackground(context: CanvasRenderingContext2D, state: FredRunState, reducedMotion: boolean) {
+function drawFallbackBackground(
+  context: CanvasRenderingContext2D,
+  state: FredRunState,
+  reducedMotion: boolean,
+) {
   const sky = context.createLinearGradient(0, 0, 0, FREDRUN_GROUND_Y);
   sky.addColorStop(0, "#dff5ff");
   sky.addColorStop(0.64, "#f7fcff");
@@ -135,6 +142,47 @@ function drawBackground(context: CanvasRenderingContext2D, state: FredRunState, 
     context.fillRect(x, FREDRUN_GROUND_Y - height, 82, height);
     context.fillRect(x + 20, FREDRUN_GROUND_Y - height - 12, 42, 12);
     context.fillRect(x + 37, FREDRUN_GROUND_Y - height - 26, 7, 14);
+  }
+}
+
+function drawViennaBackground(
+  context: CanvasRenderingContext2D,
+  state: FredRunState,
+  image: HTMLImageElement,
+  reducedMotion: boolean,
+) {
+  const tileWidth = BACKGROUND_DRAW_HEIGHT * image.naturalWidth / image.naturalHeight;
+  const period = tileWidth * 2;
+  const scroll = reducedMotion ? 0 : (state.distance * BACKGROUND_SCROLL_FACTOR) % period;
+  let tileIndex = Math.floor(scroll / tileWidth);
+  let drawX = -(scroll % tileWidth);
+  const drawY = FREDRUN_GROUND_Y - BACKGROUND_DRAW_HEIGHT;
+
+  while (drawX < FREDRUN_WORLD_WIDTH) {
+    context.save();
+    if (tileIndex % 2 === 1) {
+      context.translate(drawX + tileWidth, 0);
+      context.scale(-1, 1);
+      context.drawImage(image, 0, drawY, tileWidth, BACKGROUND_DRAW_HEIGHT);
+    } else {
+      context.drawImage(image, drawX, drawY, tileWidth, BACKGROUND_DRAW_HEIGHT);
+    }
+    context.restore();
+    drawX += tileWidth;
+    tileIndex += 1;
+  }
+}
+
+function drawBackground(
+  context: CanvasRenderingContext2D,
+  state: FredRunState,
+  background: HTMLImageElement | null,
+  reducedMotion: boolean,
+) {
+  if (background) {
+    drawViennaBackground(context, state, background, reducedMotion);
+  } else {
+    drawFallbackBackground(context, state, reducedMotion);
   }
 
   context.fillStyle = "#d8e7dc";
@@ -256,7 +304,7 @@ function renderFredRun(
   }
   context.setTransform(canvas.width / FREDRUN_WORLD_WIDTH, 0, 0, canvas.height / FREDRUN_WORLD_HEIGHT, 0, 0);
   context.imageSmoothingEnabled = true;
-  drawBackground(context, state, reducedMotion);
+  drawBackground(context, state, images?.background ?? null, reducedMotion);
   if (images) {
     state.obstacles.forEach((obstacle) => drawObstacle(
       context,
@@ -444,12 +492,14 @@ export default function FredRunView({ accessToken }: { accessToken: string }) {
         [key, await loadImage(obstacleLayouts[key].source)] as const
       ))),
       loadImage(INTRO_SOURCE),
+      loadImage(BACKGROUND_SOURCE),
     ])
-      .then(([spriteEntries, obstacleEntries]) => {
+      .then(([spriteEntries, obstacleEntries, , background]) => {
         if (cancelled) return;
         imagesRef.current = {
           sprites: Object.fromEntries(spriteEntries) as SpriteImages,
           obstacles: Object.fromEntries(obstacleEntries) as ObstacleImages,
+          background,
         };
         setAssetState("ready");
       })

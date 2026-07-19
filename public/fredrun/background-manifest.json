@@ -1,0 +1,30 @@
+{
+  "description": "Helles, comicartiges Wien-Panorama mit Stephansdom, Rathaus, Prater-Riesenrad, Donau und Donauturm",
+  "generation": {
+    "mode": "built-in image generation",
+    "useCase": "stylized-concept",
+    "sourceFile": "exec-660ee4d9-279f-490d-9d52-6183e3463870.png",
+    "sha256": "D0C9D9A4D9C95D3C43063AB8CBDE016B29BC51B5023D9A36F78270478CBA3132",
+    "size": {
+      "width": 2172,
+      "height": 724
+    }
+  },
+  "output": {
+    "file": "vienna-panorama.webp",
+    "format": "webp",
+    "sha256": "58C947B1B7000E0F019B445357A745444D77EF2B0949AB4B75859AAA0B21080A",
+    "crop": {
+      "left": 0,
+      "top": 0,
+      "width": 2172,
+      "height": 665
+    },
+    "bytes": 140444
+  },
+  "runtime": {
+    "drawHeight": 450,
+    "scrollFactor": 0.12,
+    "loop": "alternating mirrored tiles"
+  }
+}

@@ -55,6 +55,14 @@ const odoManifest = JSON.parse(readFileSync(
     bytes: number;
   };
 };
+const backgroundManifest = JSON.parse(readFileSync(
+  fileURLToPath(new URL("../../public/fredrun/background-manifest.json", import.meta.url)),
+  "utf8",
+)) as {
+  generation: { mode: string; sha256: string; size: { width: number; height: number } };
+  output: { file: string; format: string; sha256: string; crop: { width: number; height: number }; bytes: number };
+  runtime: { drawHeight: number; scrollFactor: number; loop: string };
+};
 
 describe("Fredrun UI surface", () => {
   it("registers Fredrun in both navigation modes and the app view", () => {
@@ -208,5 +216,32 @@ describe("Fredrun UI surface", () => {
     expect(odoManifest.atlas.bytes).toBeLessThanOrEqual(600 * 1024);
     expect(viewSource).toContain('source: "/fredrun/odo-run.webp"');
     expect(viewSource).toContain('context.fillText("Beschluss?"');
+  });
+
+  it("uses the bright Vienna panorama as a long seamless mirrored loop", () => {
+    expect(backgroundManifest).toMatchObject({
+      generation: {
+        mode: "built-in image generation",
+        sha256: "D0C9D9A4D9C95D3C43063AB8CBDE016B29BC51B5023D9A36F78270478CBA3132",
+        size: { width: 2172, height: 724 },
+      },
+      output: {
+        file: "vienna-panorama.webp",
+        format: "webp",
+        sha256: "58C947B1B7000E0F019B445357A745444D77EF2B0949AB4B75859AAA0B21080A",
+        crop: { width: 2172, height: 665 },
+        bytes: 140444,
+      },
+      runtime: {
+        drawHeight: 450,
+        scrollFactor: 0.12,
+        loop: "alternating mirrored tiles",
+      },
+    });
+    expect(statSync(fileURLToPath(new URL("../../public/fredrun/vienna-panorama.webp", import.meta.url))).size)
+      .toBe(backgroundManifest.output.bytes);
+    expect(viewSource).toContain('const BACKGROUND_SOURCE = "/fredrun/vienna-panorama.webp"');
+    expect(viewSource).toContain("drawViennaBackground");
+    expect(viewSource).toContain("context.scale(-1, 1)");
   });
 });
