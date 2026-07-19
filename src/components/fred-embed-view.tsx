@@ -20,6 +20,12 @@ const CREDENTIALLESS_IFRAME_ATTRIBUTE = { credentialless: "" } as const;
 
 type FredEmbedViewProps = {
   accessToken: string;
+  onConversationUpdated?: (conversation: {
+    id: string;
+    title: string;
+    createdAt: string;
+    updatedAt: string;
+  }) => void;
 };
 
 type EmbedConfig = {
@@ -86,6 +92,7 @@ function FredEmbedUnavailable({ message }: { message: string }) {
 
 function FredEmbedSession({
   accessToken,
+  onConversationUpdated,
   onRetry,
 }: FredEmbedViewProps & { onRetry: () => void }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -114,6 +121,67 @@ function FredEmbedSession({
       currentConfig.embedOrigin,
     );
   }, []);
+
+  const persistEmbedEvent = useCallback(async (data: Record<string, unknown>) => {
+    const type = data.type;
+    const sessionId = typeof data.session_id === "string" ? data.session_id.trim() : "";
+    const content = type === "message_sent"
+      ? (typeof data.query === "string" ? data.query.trim() : "")
+      : (typeof data.content === "string" ? data.content.trim() : "");
+    const channelId = configRef.current?.channelId ?? "";
+    if (
+      (type !== "message_sent" && type !== "message_received")
+      || !sessionId
+      || !content
+      || !channelId
+    ) {
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/fred/events", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          eventId: crypto.randomUUID(),
+          type,
+          channelId,
+          sessionId,
+          content,
+        }),
+      });
+      const payload = await response.json().catch(() => null) as unknown;
+      if (
+        !response.ok
+        || !isRecord(payload)
+        || !isRecord(payload.conversation)
+      ) {
+        return;
+      }
+      const conversation = payload.conversation;
+      if (
+        typeof conversation.id === "string"
+        && typeof conversation.title === "string"
+        && typeof conversation.createdAt === "string"
+        && typeof conversation.updatedAt === "string"
+      ) {
+        onConversationUpdated?.({
+          id: conversation.id,
+          title: conversation.title,
+          createdAt: conversation.createdAt,
+          updatedAt: conversation.updatedAt,
+        });
+      }
+    } catch {
+      // The signed WeKnora webhook is the independent persistence fallback.
+    }
+  }, [accessToken, onConversationUpdated]);
 
   useEffect(() => {
     let cancelled = false;
@@ -275,12 +343,17 @@ function FredEmbedSession({
       } else if (event.data.type === "ready") {
         setPhase("ready");
         setErrorMessage("");
+      } else if (
+        event.data.type === "message_sent"
+        || event.data.type === "message_received"
+      ) {
+        void persistEmbedEvent(event.data);
       }
     }
 
     window.addEventListener("message", receiveEmbedMessage);
     return () => window.removeEventListener("message", receiveEmbedMessage);
-  }, [config, provideToken]);
+  }, [config, persistEmbedEvent, provideToken]);
 
   useEffect(() => {
     if (!config || phase !== "loading") return;
@@ -352,7 +425,7 @@ function FredEmbedSession({
   );
 }
 
-export default function FredEmbedView({ accessToken }: FredEmbedViewProps) {
+export default function FredEmbedView({ accessToken, onConversationUpdated }: FredEmbedViewProps) {
   const [loadGeneration, setLoadGeneration] = useState(0);
 
   if (!accessToken) {
@@ -372,6 +445,7 @@ export default function FredEmbedView({ accessToken }: FredEmbedViewProps) {
     <FredEmbedSession
       key={loadGeneration}
       accessToken={accessToken}
+      onConversationUpdated={onConversationUpdated}
       onRetry={() => setLoadGeneration((current) => current + 1)}
     />
   );

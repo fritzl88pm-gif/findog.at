@@ -507,6 +507,29 @@ async function fetchConversationHistory(accessToken: string, id: string): Promis
   return { title, messages: normalizeMessages(payload.messages) };
 }
 
+async function fetchFredConversationHistory(accessToken: string, id: string): Promise<{
+  title: string;
+  messages: ChatMessage[];
+}> {
+  const response = await fetch(`/api/fred/conversations/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    throw new Error(
+      typeof payload.error === "string"
+        ? payload.error
+        : "Fred-Unterhaltung konnte nicht geladen werden.",
+    );
+  }
+  const conversation = payload.conversation;
+  const title = conversation && typeof conversation === "object" && !Array.isArray(conversation)
+    && typeof (conversation as Record<string, unknown>).title === "string"
+    ? ((conversation as Record<string, unknown>).title as string)
+    : "Fred-Unterhaltung";
+  return { title, messages: normalizeMessages(payload.messages) };
+}
+
 function normalizeEnabledModelDescriptors(value: unknown): EnabledModelDescriptor[] {
   if (!Array.isArray(value)) {
     return [];
@@ -1685,6 +1708,60 @@ function GermanPensionOptionView() {
 }
 
 
+function FredHistoryTranscript({
+  title,
+  messages,
+  error,
+  onOpenLiveChat,
+}: {
+  title: string;
+  messages: ChatMessage[];
+  error: string;
+  onOpenLiveChat: () => void;
+}) {
+  return (
+    <section className="chat-panel fred-history-panel" aria-labelledby="fred-history-title">
+      <header className="fred-history-header">
+        <div>
+          <p className="eyebrow">Fred · Web Embed</p>
+          <h1 id="fred-history-title">{title || "Fred-Unterhaltung"}</h1>
+          <p>Gespeicherter, schreibgeschützter Verlauf dieser WeKnora-Sitzung.</p>
+        </div>
+        <button className="primary-button" type="button" onClick={onOpenLiveChat}>
+          Zum aktuellen Fred-Chat
+        </button>
+      </header>
+      {error ? <div className="error-box fred-history-error" role="alert">{error}</div> : null}
+      <div className="transcript">
+        <div className="transcript-content">
+          {messages.length === 0 ? (
+            <p className="conversation-empty">Für diese Unterhaltung wurden noch keine Nachrichten gespeichert.</p>
+          ) : messages.map((message, index) => (
+            <article className={`message ${message.role}`} key={`${message.createdAt}-${index}`}>
+              <div className="message-header">
+                {message.role === "user" ? (
+                  <div className="message-avatar">DU</div>
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img className="message-avatar fred-avatar" src="/fred-avatar.png" alt="" />
+                )}
+                <div className="message-meta">
+                  <span className="sender-name">{message.role === "user" ? "Du" : "Fred"}</span>
+                  <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
+                </div>
+              </div>
+              {message.role === "assistant"
+                ? <RichAnswer content={message.content} />
+                : renderUserMessageContent(message.content)}
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+
 export default function Home() {
   const supabase = getSupabaseBrowserClient();
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_CHAT_SETTINGS);
@@ -1693,6 +1770,11 @@ export default function Home() {
   const [conversationTitle, setConversationTitle] = useState("");
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [selectedConversationIds, setSelectedConversationIds] = useState<string[]>([]);
+  const [fredConversationId, setFredConversationId] = useState("");
+  const [fredConversationTitle, setFredConversationTitle] = useState("");
+  const [fredMessages, setFredMessages] = useState<ChatMessage[]>([]);
+  const [fredConversations, setFredConversations] = useState<ConversationSummary[]>([]);
+  const [selectedFredConversationIds, setSelectedFredConversationIds] = useState<string[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [composer, setComposer] = useState("");
@@ -1903,6 +1985,11 @@ export default function Home() {
         setConversationTitle("");
         setConversations([]);
         setSelectedConversationIds([]);
+        setFredConversationId("");
+        setFredConversationTitle("");
+        setFredMessages([]);
+        setFredConversations([]);
+        setSelectedFredConversationIds([]);
         setMessages([]);
         setComposer("");
         setOpenComposerMenu(null);
@@ -1944,6 +2031,9 @@ export default function Home() {
         setConversationId("");
         setConversationTitle("");
         setMessages([]);
+        setFredConversationId("");
+        setFredConversationTitle("");
+        setFredMessages([]);
         setComposer("");
         setOpenComposerMenu(null);
         setError("");
@@ -1961,22 +2051,39 @@ export default function Home() {
       setIsHistoryLoading(true);
       void (async () => {
         try {
-          const response = await fetch("/api/conversations", {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          });
-          const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-          if (!response.ok) {
-            throw new Error(
-              typeof payload.error === "string"
-                ? payload.error
-                : "Gesprächsverlauf konnte nicht geladen werden.",
-            );
-          }
+          const [internalResponse, fredResponse] = await Promise.all([
+            fetch("/api/conversations", {
+              headers: { Authorization: `Bearer ${accessToken}` },
+            }),
+            fetch("/api/fred/conversations", {
+              headers: { Authorization: `Bearer ${accessToken}` },
+            }),
+          ]);
+          const [internalPayload, fredPayload] = await Promise.all([
+            internalResponse.json().catch(() => ({})) as Promise<Record<string, unknown>>,
+            fredResponse.json().catch(() => ({})) as Promise<Record<string, unknown>>,
+          ]);
           if (!isActive) {
             return;
           }
-          const summaries = normalizeConversationSummaries(payload.conversations);
-          setConversations(summaries);
+          const historyErrors: string[] = [];
+          if (internalResponse.ok) {
+            setConversations(normalizeConversationSummaries(internalPayload.conversations));
+          } else {
+            historyErrors.push(typeof internalPayload.error === "string"
+              ? internalPayload.error
+              : "Gesprächsverlauf konnte nicht geladen werden.");
+          }
+          if (fredResponse.ok) {
+            setFredConversations(normalizeConversationSummaries(fredPayload.conversations));
+          } else {
+            historyErrors.push(typeof fredPayload.error === "string"
+              ? fredPayload.error
+              : "Fred-Verlauf konnte nicht geladen werden.");
+          }
+          if (historyErrors.length > 0) {
+            throw new Error(historyErrors.join(" "));
+          }
         } catch (historyError) {
           if (isActive) {
             setError(historyError instanceof Error
@@ -2414,6 +2521,11 @@ export default function Home() {
       setConversationTitle("");
       setConversations([]);
       setSelectedConversationIds([]);
+      setFredConversationId("");
+      setFredConversationTitle("");
+      setFredMessages([]);
+      setFredConversations([]);
+      setSelectedFredConversationIds([]);
       setMessages([]);
       setComposer("");
       setAdminModels([]);
@@ -2455,6 +2567,11 @@ export default function Home() {
       setConversationTitle("");
       setConversations([]);
       setSelectedConversationIds([]);
+      setFredConversationId("");
+      setFredConversationTitle("");
+      setFredMessages([]);
+      setFredConversations([]);
+      setSelectedFredConversationIds([]);
       setMessages([]);
       setComposer("");
       clearAttachments();
@@ -2596,6 +2713,9 @@ export default function Home() {
 
   function openFredView() {
     setAppView("fred");
+    setFredConversationId("");
+    setFredConversationTitle("");
+    setFredMessages([]);
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
@@ -3480,6 +3600,14 @@ export default function Home() {
     }
   }
 
+  function startNewManagedConversation() {
+    if (appView === "fred") {
+      openFredView();
+      return;
+    }
+    startNewConversation();
+  }
+
   async function selectConversation(conversation: ConversationSummary) {
     if (isSending || isHistoryLoading || isDeleting || !session?.access_token) {
       return;
@@ -3508,10 +3636,47 @@ export default function Home() {
     }
   }
 
+  async function selectFredConversation(conversation: ConversationSummary) {
+    if (isSending || isHistoryLoading || isDeleting || !session?.access_token) {
+      return;
+    }
+    setError("");
+    setIsHistoryLoading(true);
+    try {
+      const history = await fetchFredConversationHistory(session.access_token, conversation.id);
+      setAppView("fred");
+      setFredConversationId(conversation.id);
+      setFredConversationTitle(history.title);
+      setFredMessages(history.messages);
+      if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+        setSettingsOpen(false);
+      }
+    } catch (historyError) {
+      setError(historyError instanceof Error
+        ? historyError.message
+        : "Fred-Unterhaltung konnte nicht geladen werden.");
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  }
+
   function toggleConversationSelection(id: string) {
     setSelectedConversationIds((current) =>
       current.includes(id) ? current.filter((selectedId) => selectedId !== id) : [...current, id],
     );
+  }
+
+  function toggleFredConversationSelection(id: string) {
+    setSelectedFredConversationIds((current) =>
+      current.includes(id) ? current.filter((selectedId) => selectedId !== id) : [...current, id],
+    );
+  }
+
+  function handleFredConversationUpdated(conversation: ConversationSummary) {
+    setFredConversations((current) => [
+      conversation,
+      ...current.filter((entry) => entry.id !== conversation.id),
+    ]);
   }
 
   async function deleteConversations(ids: string[], useBulkEndpoint = false) {
@@ -3589,6 +3754,76 @@ export default function Home() {
         deleteError instanceof Error
           ? deleteError.message
           : "Unterhaltung konnte nicht gelöscht werden.",
+      );
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
+  async function deleteFredConversations(ids: string[], useBulkEndpoint = false) {
+    if (
+      ids.length === 0
+      || isSending
+      || isHistoryLoading
+      || isDeleting
+      || !session?.access_token
+    ) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      ids.length === 1
+        ? "Diese Fred-Unterhaltung wirklich löschen? Alle gespeicherten Nachrichten werden entfernt."
+        : `${ids.length} Fred-Unterhaltungen wirklich löschen? Alle gespeicherten Nachrichten werden entfernt.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setError("");
+    setIsDeleting(true);
+    try {
+      const response = await fetch(
+        useBulkEndpoint
+          ? "/api/fred/conversations"
+          : `/api/fred/conversations/${encodeURIComponent(ids[0])}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            ...(useBulkEndpoint ? { "Content-Type": "application/json" } : {}),
+          },
+          ...(useBulkEndpoint ? { body: JSON.stringify({ ids }) } : {}),
+        },
+      );
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Fred-Unterhaltung konnte nicht gelöscht werden.",
+        );
+      }
+
+      const deletedIds = Array.isArray(payload.deletedIds)
+        ? payload.deletedIds.filter((id): id is string => typeof id === "string")
+        : [];
+      const result = applyConversationDeletion({
+        conversations: fredConversations,
+        selectedIds: selectedFredConversationIds,
+        activeConversationId: fredConversationId,
+        deletedIds,
+      });
+      setFredConversations(result.conversations);
+      setSelectedFredConversationIds(result.selectedIds);
+      if (result.activeConversationDeleted) {
+        openFredView();
+      }
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "Fred-Unterhaltung konnte nicht gelöscht werden.",
       );
     } finally {
       setIsDeleting(false);
@@ -4123,6 +4358,12 @@ export default function Home() {
     && !isSending
     && !isDeleting;
   const historyControlsDisabled = isSending || isHistoryLoading || isDeleting;
+  const isFredHistoryContext = appView === "fred";
+  const visibleConversations = isFredHistoryContext ? fredConversations : conversations;
+  const visibleSelectedConversationIds = isFredHistoryContext
+    ? selectedFredConversationIds
+    : selectedConversationIds;
+  const visibleActiveConversationId = isFredHistoryContext ? fredConversationId : conversationId;
   const currentModel = enabledModels.find((model) => model.id === settings.model);
   const currentModelName = currentModel?.label ?? "Modell wird geladen…";
 
@@ -4265,11 +4506,11 @@ export default function Home() {
             <button
               className="primary-button new-conversation-button"
               type="button"
-              onClick={startNewConversation}
+              onClick={startNewManagedConversation}
               disabled={historyControlsDisabled}
             >
               <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-              Neue Unterhaltung
+              {isFredHistoryContext ? "Aktueller Fred-Chat" : "Neue Unterhaltung"}
             </button>
             <div className="conversation-history" aria-label="Gespeicherte Unterhaltungen">
               <div className="conversation-history-heading">
@@ -4279,39 +4520,45 @@ export default function Home() {
                 ) : null}
               </div>
               <div className="conversation-bulk-actions">
-                <span>{selectedConversationIds.length} ausgewählt</span>
+                <span>{visibleSelectedConversationIds.length} ausgewählt</span>
                 <button
                   className="bulk-delete-button"
                   type="button"
-                  onClick={() => void deleteConversations(selectedConversationIds, true)}
-                  disabled={historyControlsDisabled || selectedConversationIds.length === 0}
+                  onClick={() => void (isFredHistoryContext
+                    ? deleteFredConversations(visibleSelectedConversationIds, true)
+                    : deleteConversations(visibleSelectedConversationIds, true))}
+                  disabled={historyControlsDisabled || visibleSelectedConversationIds.length === 0}
                 >
                   Auswahl löschen
                 </button>
               </div>
               <div className="conversation-list">
-                {!isHistoryLoading && conversations.length === 0 ? (
+                {!isHistoryLoading && visibleConversations.length === 0 ? (
                   <p className="conversation-empty">Noch keine gespeicherten Unterhaltungen.</p>
                 ) : null}
-                {conversations.map((conversation) => (
+                {visibleConversations.map((conversation) => (
                   <div
-                    className={`conversation-row ${appView === "chat" && conversation.id === conversationId ? "active" : ""}`}
+                    className={`conversation-row ${conversation.id === visibleActiveConversationId ? "active" : ""}`}
                     key={conversation.id}
                   >
                     <input
                       className="conversation-checkbox"
                       type="checkbox"
-                      checked={selectedConversationIds.includes(conversation.id)}
-                      onChange={() => toggleConversationSelection(conversation.id)}
+                      checked={visibleSelectedConversationIds.includes(conversation.id)}
+                      onChange={() => (isFredHistoryContext
+                        ? toggleFredConversationSelection(conversation.id)
+                        : toggleConversationSelection(conversation.id))}
                       disabled={historyControlsDisabled}
                       aria-label={`Unterhaltung „${conversation.title}“ auswählen`}
                     />
                     <button
                       className="conversation-open"
                       type="button"
-                      onClick={() => void selectConversation(conversation)}
+                      onClick={() => void (isFredHistoryContext
+                        ? selectFredConversation(conversation)
+                        : selectConversation(conversation))}
                       disabled={historyControlsDisabled}
-                      aria-current={appView === "chat" && conversation.id === conversationId ? "page" : undefined}
+                      aria-current={conversation.id === visibleActiveConversationId ? "page" : undefined}
                     >
                       <span title={conversation.title}>{conversation.title}</span>
                       <time dateTime={conversation.updatedAt}>{formatHistoryDate(conversation.updatedAt)}</time>
@@ -4319,7 +4566,9 @@ export default function Home() {
                     <button
                       className="conversation-delete"
                       type="button"
-                      onClick={() => void deleteConversations([conversation.id])}
+                      onClick={() => void (isFredHistoryContext
+                        ? deleteFredConversations([conversation.id])
+                        : deleteConversations([conversation.id]))}
                       disabled={historyControlsDisabled}
                       aria-label={`Unterhaltung „${conversation.title}“ löschen`}
                     >
@@ -4411,10 +4660,10 @@ export default function Home() {
             <button
               className="icon-button rail-icon-btn"
               type="button"
-              onClick={startNewConversation}
+              onClick={startNewManagedConversation}
               disabled={historyControlsDisabled}
-              title="Neue Unterhaltung"
-              aria-label="Neue Unterhaltung"
+              title={isFredHistoryContext ? "Aktueller Fred-Chat" : "Neue Unterhaltung"}
+              aria-label={isFredHistoryContext ? "Aktueller Fred-Chat" : "Neue Unterhaltung"}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             </button>
@@ -4683,7 +4932,19 @@ export default function Home() {
       ) : null}
 
       {appView === "fred" ? (
-        <FredEmbedView accessToken={session?.access_token ?? ""} />
+        fredConversationId ? (
+          <FredHistoryTranscript
+            title={fredConversationTitle}
+            messages={fredMessages}
+            error={error}
+            onOpenLiveChat={openFredView}
+          />
+        ) : (
+          <FredEmbedView
+            accessToken={session?.access_token ?? ""}
+            onConversationUpdated={handleFredConversationUpdated}
+          />
+        )
       ) : appView === "bfg-pro" ? (
         <section className="forms-panel" aria-labelledby="bfg-pro-view-title">
           <div className="forms-view bfg-decisions-view bfg-pro-view">

@@ -18,7 +18,8 @@ describe("Fred secure embed UI", () => {
     expect(pageSource).toContain('className={`sidebar-view-button ${appView === "fred" ? "active" : ""}`}');
     expect(pageSource).toContain('title="Fred"');
     expect(pageSource).toContain('aria-label="Fred"');
-    expect(pageSource).toContain('<FredEmbedView accessToken={session?.access_token ?? ""} />');
+    expect(pageSource).toContain("<FredEmbedView");
+    expect(pageSource).toContain('accessToken={session?.access_token ?? ""}');
   });
 
   it("fetches only a short-lived session token through the authenticated Findog route", () => {
@@ -105,6 +106,18 @@ describe("Fred secure embed UI", () => {
     expect(viewSource).not.toContain("Frag Fred");
     expect(cssSource).toMatch(/\.fred-embed-hero \{[\s\S]*?align-items: center;/u);
     expect(cssSource).toMatch(/\.fred-embed-hero-image \{[\s\S]*?object-fit: contain;/u);
+  });
+
+  it("persists trusted message events and exposes Fred history management separately", () => {
+    expect(viewSource).toContain('event.data.type === "message_sent"');
+    expect(viewSource).toContain('event.data.type === "message_received"');
+    expect(viewSource).toContain('fetch("/api/fred/events"');
+    expect(viewSource).toContain("onConversationUpdated?.({");
+    expect(pageSource).toContain('fetch("/api/fred/conversations"');
+    expect(pageSource).toContain("selectFredConversation(conversation)");
+    expect(pageSource).toContain("deleteFredConversations(visibleSelectedConversationIds, true)");
+    expect(pageSource).toContain("<FredHistoryTranscript");
+    expect(pageSource).toContain("Gespeicherter, schreibgeschützter Verlauf dieser WeKnora-Sitzung.");
   });
 
   it("allows only the taxdog iframe while preserving Findog anti-framing headers", () => {
