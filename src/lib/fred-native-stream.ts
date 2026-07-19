@@ -1,3 +1,10 @@
+import {
+  parseStoredFredResearchTrace,
+  parseStoredFredSources,
+  type FredResearchStep,
+  type FredSourceReference,
+} from "./weknora/fred-research";
+
 export const FRED_NATIVE_STREAM_CONTENT_TYPE = "application/x-ndjson";
 
 export type FredNativeConversation = {
@@ -10,7 +17,15 @@ export type FredNativeConversation = {
 export type FredNativeStreamEvent =
   | { type: "conversation"; conversation: FredNativeConversation }
   | { type: "delta"; content: string }
-  | { type: "final"; answer: string; conversation: FredNativeConversation }
+  | { type: "replace"; answer: string }
+  | { type: "research"; step: FredResearchStep }
+  | {
+    type: "final";
+    answer: string;
+    conversation: FredNativeConversation;
+    researchTrace?: FredResearchStep[];
+    sourceReferences?: FredSourceReference[];
+  }
   | { type: "error"; error: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -64,12 +79,29 @@ export function parseFredNativeStreamLine(line: string): FredNativeStreamEvent |
     }
     return { type: "delta", content: value.content };
   }
+  if (value.type === "replace") {
+    if (typeof value.answer !== "string") {
+      throw new Error("Ungültiges Fred-Streaming-Ereignis.");
+    }
+    return { type: "replace", answer: value.answer };
+  }
+  if (value.type === "research") {
+    const step = parseStoredFredResearchTrace([value.step])[0];
+    if (!step) throw new Error("Ungültiges Fred-Streaming-Ereignis.");
+    return { type: "research", step };
+  }
   if (value.type === "final") {
     const conversation = parseConversation(value.conversation);
     if (typeof value.answer !== "string" || !conversation) {
       throw new Error("Ungültiges Fred-Streaming-Ereignis.");
     }
-    return { type: "final", answer: value.answer, conversation };
+    return {
+      type: "final",
+      answer: value.answer,
+      conversation,
+      researchTrace: parseStoredFredResearchTrace(value.researchTrace),
+      sourceReferences: parseStoredFredSources(value.sourceReferences),
+    };
   }
   if (value.type === "error") {
     if (typeof value.error !== "string") {

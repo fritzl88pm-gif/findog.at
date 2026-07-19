@@ -5,6 +5,13 @@ import { NextResponse } from "next/server";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import {
+  extractStreamStableBfgGzCandidates,
+  linkVerifiedBfgCitations,
+  resolveBfgCitation,
+  type BfgCitationResolution,
+  type VerifiedBfgCitation,
+} from "@/lib/findok/bfg-citations";
+import {
   FRED_NATIVE_STREAM_CONTENT_TYPE,
   encodeFredNativeStreamEvent,
 } from "@/lib/fred-native-stream";
@@ -27,6 +34,15 @@ import {
   type FredUpstreamAttachment,
   type FredUpstreamSession,
 } from "@/lib/weknora/fred-native";
+import {
+  FRED_CONTENT_TRANSFORMATION,
+  mergeFredResearchStep,
+  mergeFredSources,
+  parseWeKnoraResearchEvent,
+  transformWeKnoraAnswer,
+  type FredResearchStep,
+  type FredSourceReference,
+} from "@/lib/weknora/fred-research";
 
 export const runtime = "nodejs";
 
@@ -44,6 +60,8 @@ const MAX_MULTIPART_REQUEST_BYTES = MAX_REQUEST_BYTES
 const MAX_REQUESTS_PER_WINDOW = 30;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1_000;
 const STREAM_TIMEOUT_MS = 5 * 60 * 1_000;
+const MAX_LIVE_BFG_CITATIONS = 20;
+const MAX_CONCURRENT_LIVE_BFG_VERIFICATIONS = 4;
 
 type RateLimitEntry = { count: number; resetAt: number };
 type ParsedFredChatRequest = {
@@ -305,6 +323,9 @@ async function recordEvent(options: {
   occurredAt: string;
   attachments?: FredUpstreamAttachment[];
   webSearchEnabled?: boolean;
+  displayContent?: string;
+  researchTrace?: FredResearchStep[];
+  sourceReferences?: FredSourceReference[];
 }) {
   const payload = {
     client_id: options.userId,
@@ -322,6 +343,12 @@ async function recordEvent(options: {
       sha256: attachment.sha256,
     })),
     web_search_enabled: options.webSearchEnabled ?? false,
+    ...(options.displayContent !== undefined ? {
+      display_content: options.displayContent,
+      research_trace: options.researchTrace ?? [],
+      source_references: options.sourceReferences ?? [],
+      content_transformation: FRED_CONTENT_TRANSFORMATION,
+    } : {}),
   };
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const { data, error } = await options.supabase.rpc("record_fred_native_event", { payload });
@@ -373,14 +400,10 @@ async function resolveUpstreamSession(options: {
   };
 }
 
-function upstreamDelta(value: unknown): { content?: string; error?: boolean; unsupported?: boolean } {
+function upstreamDelta(value: unknown): { content?: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const event = value as Record<string, unknown>;
   const responseType = typeof event.response_type === "string" ? event.response_type : "";
-  if (responseType === "error") return { error: true };
-  if (responseType === "tool_approval_required" || responseType === "mcp_oauth_required") {
-    return { unsupported: true };
-  }
   if (responseType === "answer" || event.type === "answer") {
     return { content: typeof event.content === "string" ? event.content : undefined };
   }
@@ -495,11 +518,74 @@ export async function POST(request: Request) {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         let buffer = "";
-        let answer = "";
+        let rawAnswer = "";
+        let visibleAnswer = "";
+        let researchTrace: FredResearchStep[] = [];
+        let sourceReferences: FredSourceReference[] = [];
         let failed = false;
+        let acceptingCitationUpdates = true;
+        let activeCitationVerifications = 0;
+        const citationTasks = new Map<string, Promise<void>>();
+        const verifiedCitations = new Map<string, VerifiedBfgCitation>();
+        const citationQueue: Array<{
+          gz: string;
+          resolve: (result: BfgCitationResolution) => void;
+        }> = [];
         const send = (event: Parameters<typeof encodeFredNativeStreamEvent>[0]) => {
           if (!activeLifetime.signal.aborted) {
             controller.enqueue(encoder.encode(encodeFredNativeStreamEvent(event)));
+          }
+        };
+        const pumpCitationQueue = () => {
+          while (
+            activeCitationVerifications < MAX_CONCURRENT_LIVE_BFG_VERIFICATIONS
+            && citationQueue.length > 0
+          ) {
+            const queued = citationQueue.shift();
+            if (!queued) break;
+            activeCitationVerifications += 1;
+            void resolveBfgCitation(queued.gz, fetch, { signal: activeLifetime.signal })
+              .then(queued.resolve)
+              .finally(() => {
+                activeCitationVerifications -= 1;
+                pumpCitationQueue();
+              });
+          }
+        };
+        const queuedCitationResolution = (gz: string) => new Promise<BfgCitationResolution>((resolve) => {
+          citationQueue.push({ gz, resolve });
+          pumpCitationQueue();
+        });
+        const beginCitationVerification = (text: string, streamComplete = false) => {
+          for (const gz of extractStreamStableBfgGzCandidates(text, streamComplete)) {
+            if (
+              citationTasks.has(gz)
+              || citationTasks.size >= MAX_LIVE_BFG_CITATIONS
+            ) continue;
+            const task = queuedCitationResolution(gz).then((resolution) => {
+              if (!acceptingCitationUpdates || resolution.status !== "verified") return;
+              verifiedCitations.set(gz, resolution);
+              sourceReferences = mergeFredSources(sourceReferences, [{
+                kind: "web",
+                url: resolution.fullTextUrl,
+                title: `BFG ${resolution.gz}: ${resolution.title}`.slice(0, 512),
+              }]);
+              const verificationStep: FredResearchStep = {
+                id: `findok:${resolution.gz}`,
+                kind: "sources",
+                status: "completed",
+                label: `BFG-Fundstelle ${resolution.gz} verifiziert`,
+              };
+              researchTrace = mergeFredResearchStep(researchTrace, verificationStep);
+              send({ type: "research", step: verificationStep });
+              const linkedAnswer = linkVerifiedBfgCitations(
+                visibleAnswer,
+                [...verifiedCitations.values()],
+                { target: "fullText" },
+              );
+              if (linkedAnswer !== visibleAnswer) send({ type: "replace", answer: linkedAnswer });
+            });
+            citationTasks.set(gz, task);
           }
         };
         const processFrame = (frame: string) => {
@@ -520,14 +606,29 @@ export async function POST(request: Request) {
               assistantMessageId = upstreamEvent.assistant_message_id;
             }
           }
-          const event = upstreamDelta(parsed);
-          if (event.error) throw new UserVisibleError("Fred konnte die Anfrage nicht abschließen.", 502);
-          if (event.unsupported) {
+          const research = parseWeKnoraResearchEvent(parsed);
+          if (research.fatalError) {
+            throw new UserVisibleError("Fred konnte die Anfrage nicht abschließen.", 502);
+          }
+          if (research.unsupported) {
             throw new UserVisibleError("Diese Fred-Aktion benötigt eine zusätzliche Bestätigung, die hier noch nicht unterstützt wird.", 409);
           }
+          sourceReferences = mergeFredSources(sourceReferences, research.sources);
+          if (research.step) {
+            researchTrace = mergeFredResearchStep(researchTrace, research.step);
+            send({ type: "research", step: research.step });
+          }
+          const event = upstreamDelta(parsed);
           if (event.content) {
-            answer += event.content;
-            send({ type: "delta", content: event.content });
+            rawAnswer += event.content;
+            const transformed = transformWeKnoraAnswer(rawAnswer, { streaming: true });
+            sourceReferences = mergeFredSources(sourceReferences, transformed.sources);
+            if (transformed.text.startsWith(visibleAnswer)) {
+              const delta = transformed.text.slice(visibleAnswer.length);
+              visibleAnswer = transformed.text;
+              if (delta) send({ type: "delta", content: delta });
+            }
+            beginCitationVerification(transformed.text);
           }
         };
 
@@ -543,9 +644,19 @@ export async function POST(request: Request) {
           }
           buffer += decoder.decode();
           if (buffer.trim()) processFrame(buffer);
-          if (!answer.trim()) {
+          const finalTransformation = transformWeKnoraAnswer(rawAnswer);
+          const plainFinalAnswer = finalTransformation.text.trim();
+          sourceReferences = mergeFredSources(sourceReferences, finalTransformation.sources);
+          if (!plainFinalAnswer) {
             throw new UserVisibleError("Fred hat keine Antwort geliefert.", 502);
           }
+          beginCitationVerification(plainFinalAnswer, true);
+          await Promise.all(citationTasks.values());
+          const finalAnswer = linkVerifiedBfgCitations(
+            plainFinalAnswer,
+            [...verifiedCitations.values()],
+            { target: "fullText" },
+          );
           const finalConversation = await recordEvent({
             supabase,
             userId: user.id,
@@ -553,20 +664,30 @@ export async function POST(request: Request) {
             sessionId: upstreamSession.id,
             eventId: randomUUID(),
             eventType: "message_received",
-            content: answer,
+            content: rawAnswer,
             occurredAt: new Date().toISOString(),
+            displayContent: finalAnswer,
+            researchTrace,
+            sourceReferences,
           });
           void relayFredWebhookEvent({
             session: embedSession,
             config,
             upstreamSession,
             type: "message_received",
-            content: answer,
+            content: rawAnswer,
             signal: activeLifetime.signal,
           });
-          send({ type: "final", answer, conversation: finalConversation });
+          send({
+            type: "final",
+            answer: finalAnswer,
+            conversation: finalConversation,
+            researchTrace,
+            sourceReferences,
+          });
         } catch (error) {
           failed = true;
+          acceptingCitationUpdates = false;
           if (!activeLifetime.signal.aborted) {
             send({
               type: "error",
@@ -576,6 +697,7 @@ export async function POST(request: Request) {
             });
           }
         } finally {
+          acceptingCitationUpdates = false;
           if (activeLifetime.signal.aborted) void requestUpstreamStop();
           clearTimeout(activeTimeout);
           request.signal.removeEventListener("abort", activeAbortListener);

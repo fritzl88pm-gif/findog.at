@@ -42,6 +42,25 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
           sha256: "0".repeat(64),
         }],
         web_search_enabled: true,
+        display_content: null,
+        research_trace: [],
+        source_references: [],
+      }, {
+        id: 2,
+        role: "assistant",
+        content: 'Ergebnis <kb doc="EStG.md" chunk_id="chunk-1" kb_id="kb-1" />',
+        display_content: null,
+        research_trace: [{
+          id: "call-1",
+          kind: "knowledge",
+          status: "completed",
+          label: "Wissensbasis durchsucht",
+        }],
+        source_references: [],
+        provider_created_at: "2026-07-19T07:00:02.000Z",
+        created_at: "2026-07-19T07:00:02.000Z",
+        attachments: [],
+        web_search_enabled: false,
       }],
       error: null,
     };
@@ -76,5 +95,21 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
       }],
       webSearchEnabled: true,
     });
+    expect(payload.messages[1]).toMatchObject({
+      content: "Ergebnis",
+      researchTrace: [{
+        id: "call-1",
+        kind: "knowledge",
+        status: "completed",
+        label: "Wissensbasis durchsucht",
+      }],
+      sourceReferences: [{
+        kind: "knowledge",
+        doc: "EStG.md",
+        chunkId: "chunk-1",
+        knowledgeBaseId: "kb-1",
+      }],
+    });
+    expect(payload.messages[1].content).not.toContain("<kb");
   });
 });

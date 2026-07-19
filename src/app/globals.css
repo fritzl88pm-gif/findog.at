@@ -799,6 +799,146 @@ textarea:focus {
   font-weight: 700;
 }
 
+.fred-research-trace {
+  margin: 2px 0 14px;
+  border: 1px solid rgba(40, 111, 156, 0.16);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(40, 111, 156, 0.045), rgba(255, 212, 0, 0.055));
+  color: var(--bmf-blue-deep);
+  overflow: hidden;
+}
+
+.fred-research-trace summary {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 750;
+  list-style: none;
+}
+
+.fred-research-trace summary::-webkit-details-marker {
+  display: none;
+}
+
+.fred-research-trace summary::after {
+  margin-left: auto;
+  content: "›";
+  color: var(--muted);
+  font-size: 1.1rem;
+  transform: rotate(90deg);
+  transition: transform 0.2s ease;
+}
+
+.fred-research-trace[open] summary::after {
+  transform: rotate(-90deg);
+}
+
+.fred-research-pulse,
+.fred-research-check {
+  display: inline-block;
+  flex: 0 0 9px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--bmf-blue);
+}
+
+.fred-research-pulse {
+  animation: fredResearchPulse 1.2s ease-in-out infinite;
+}
+
+.fred-research-check {
+  background: #25834a;
+}
+
+@keyframes fredResearchPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(40, 111, 156, 0.28); }
+  50% { box-shadow: 0 0 0 5px rgba(40, 111, 156, 0); }
+}
+
+.fred-research-steps {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 2px 12px 12px 30px;
+  list-style: none;
+}
+
+.fred-research-steps li {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--ink);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.fred-research-status {
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border: 2px solid rgba(40, 111, 156, 0.4);
+  border-radius: 50%;
+}
+
+.fred-research-steps li.is-completed .fred-research-status {
+  border-color: #25834a;
+  background: #25834a;
+}
+
+.fred-research-steps li.is-failed .fred-research-status {
+  border-color: #b33a3a;
+  background: #b33a3a;
+}
+
+.fred-research-steps small {
+  margin-left: 7px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.fred-research-sources {
+  padding: 10px 12px 12px;
+  border-top: 1px solid rgba(40, 111, 156, 0.12);
+  font-size: 0.76rem;
+}
+
+.fred-research-sources strong {
+  display: block;
+  margin-bottom: 7px;
+}
+
+.fred-research-sources > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fred-research-sources a,
+.fred-research-sources span {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(40, 111, 156, 0.17);
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: #fff;
+  color: var(--bmf-blue-deep);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fred-research-sources a:hover {
+  border-color: var(--bmf-blue);
+  text-decoration: underline;
+}
+
 .fred-native-tool-button {
   cursor: pointer;
   transition: var(--transition);

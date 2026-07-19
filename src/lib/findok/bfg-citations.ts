@@ -84,8 +84,11 @@ function officialPdfUrl(value: string): string | null {
   }
 }
 
-function markdownLinkForCitation(citation: VerifiedBfgCitation): string {
-  return `[${citation.gz}](${citation.pdfUrl})`;
+function markdownLinkForCitation(
+  citation: VerifiedBfgCitation,
+  target: "pdf" | "fullText",
+): string {
+  return `[${citation.gz}](${target === "fullText" ? citation.fullTextUrl : citation.pdfUrl})`;
 }
 
 function verifiedCitationMap(verified: VerifiedBfgCitation[]): Map<string, VerifiedBfgCitation> {
@@ -126,6 +129,28 @@ export function extractBfgGzCandidates(text: string): string[] {
     if (!gz || seen.has(gz)) {
       continue;
     }
+    seen.add(gz);
+    candidates.push(gz);
+  }
+
+  return candidates;
+}
+
+export function extractStreamStableBfgGzCandidates(
+  text: string,
+  streamComplete = false,
+): string[] {
+  const pattern = createGzPattern();
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    const prefixLength = (match[1] ?? "").length;
+    const candidateEnd = match.index + prefixLength + (match[2] ?? "").length;
+    if (!streamComplete && candidateEnd === text.length) continue;
+    const gz = normalizeBfgGz(match[2] ?? "");
+    if (!gz || seen.has(gz)) continue;
     seen.add(gz);
     candidates.push(gz);
   }
@@ -258,8 +283,13 @@ export async function verifyBfgCitations(
   };
 }
 
-export function linkVerifiedBfgCitations(answer: string, verified: VerifiedBfgCitation[]): string {
+export function linkVerifiedBfgCitations(
+  answer: string,
+  verified: VerifiedBfgCitation[],
+  options: { target?: "pdf" | "fullText" } = {},
+): string {
   const byGz = verifiedCitationMap(verified);
+  const target = options.target ?? "pdf";
   if (byGz.size === 0) {
     return answer;
   }
@@ -268,14 +298,14 @@ export function linkVerifiedBfgCitations(answer: string, verified: VerifiedBfgCi
     const normalizedLabel = normalizeBfgGz(label);
     const citation = byGz.get(normalizedLabel);
     return citation && normalizedLabel === label.trim().toUpperCase()
-      ? markdownLinkForCitation(citation)
+      ? markdownLinkForCitation(citation, target)
       : full;
   });
 
   return replaceOutsideMarkdownLinks(relinked, (chunk) =>
     chunk.replace(createGzPattern(), (full, prefix: string, gz: string) => {
       const citation = byGz.get(normalizeBfgGz(gz));
-      return citation ? `${prefix}${markdownLinkForCitation(citation)}` : full;
+      return citation ? `${prefix}${markdownLinkForCitation(citation, target)}` : full;
     }),
   );
 }

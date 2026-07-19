@@ -13,7 +13,7 @@ const conversation = {
 };
 
 describe("Fred native stream", () => {
-  it("round-trips conversation, delta and final events", () => {
+  it("round-trips conversation, delta, research and final events", () => {
     expect(parseFredNativeStreamLine(encodeFredNativeStreamEvent({
       type: "conversation",
       conversation,
@@ -23,10 +23,40 @@ describe("Fred native stream", () => {
       content: "Hallo",
     }))).toEqual({ type: "delta", content: "Hallo" });
     expect(parseFredNativeStreamLine(encodeFredNativeStreamEvent({
+      type: "replace",
+      answer: "[RV/1100290/2023](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F1100290%2F2023)",
+    }))).toEqual({
+      type: "replace",
+      answer: "[RV/1100290/2023](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F1100290%2F2023)",
+    });
+    expect(parseFredNativeStreamLine(encodeFredNativeStreamEvent({
+      type: "research",
+      step: {
+        id: "tool-1",
+        kind: "knowledge",
+        status: "running",
+        label: "Wissensbasis wird durchsucht",
+      },
+    }))).toEqual({
+      type: "research",
+      step: {
+        id: "tool-1",
+        kind: "knowledge",
+        status: "running",
+        label: "Wissensbasis wird durchsucht",
+      },
+    });
+    expect(parseFredNativeStreamLine(encodeFredNativeStreamEvent({
       type: "final",
       answer: "Hallo!",
       conversation,
-    }))).toEqual({ type: "final", answer: "Hallo!", conversation });
+    }))).toEqual({
+      type: "final",
+      answer: "Hallo!",
+      conversation,
+      researchTrace: [],
+      sourceReferences: [],
+    });
   });
 
   it("rejects malformed events", () => {

@@ -15,10 +15,15 @@ import {
 } from "@/lib/weknora/fred-native";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { parseFredNativeStreamLine } from "@/lib/fred-native-stream";
+import { resolveBfgCitation } from "@/lib/findok/bfg-citations";
 import { POST } from "./route";
 
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
+vi.mock("@/lib/findok/bfg-citations", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/lib/findok/bfg-citations")>();
+  return { ...original, resolveBfgCitation: vi.fn() };
+});
 vi.mock("@/lib/weknora/fred-embed", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/weknora/fred-embed")>();
   return {
@@ -159,6 +164,8 @@ describe("POST /api/fred/chat", () => {
         type: "final",
         answer: "Hallo Welt",
         conversation: expect.objectContaining({ id: conversationId }),
+        researchTrace: [],
+        sourceReferences: [],
       },
     ]);
     expect(rpc).toHaveBeenNthCalledWith(1, "record_fred_native_event", {
@@ -181,6 +188,128 @@ describe("POST /api/fred/chat", () => {
     });
     expect(relayFredWebhookEvent).toHaveBeenCalledTimes(2);
     expect(stopFredUpstreamSession).not.toHaveBeenCalled();
+  });
+
+  it("streams German research steps, strips split KB tags and persists raw provenance", async () => {
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+      'data: {"response_type":"thinking","data":{"event_id":"think-1","done":false},"content":"hidden reasoning"}\n\n',
+      'data: {"response_type":"tool_call","data":{"tool_call_id":"call-1","tool_name":"knowledge_search","arguments":{"query":"hidden"}}}\n\n',
+      'data: {"response_type":"tool_result","data":{"tool_call_id":"call-1","tool_name":"knowledge_search","success":true,"duration_ms":120}}\n\n',
+      'data: {"response_type":"answer","content":"Nachweis <k","done":false}\n\n',
+      'data: {"response_type":"answer","content":"b doc=\\"EStG.md\\" chunk_id=\\"chunk-1\\" kb_id=\\"kb-1\\" /> erbracht.","done":true}\n\n',
+      'data: {"response_type":"complete","data":{}}\n\n',
+    ].join(""), { headers: { "Content-Type": "text/event-stream" } }));
+
+    const response = await POST(request({ query: "Bitte recherchieren" }));
+    const events = (await response.text())
+      .split("\n")
+      .map(parseFredNativeStreamLine)
+      .filter(Boolean);
+
+    expect(events).toContainEqual({
+      type: "research",
+      step: {
+        id: "call-1",
+        kind: "knowledge",
+        status: "completed",
+        label: "Wissensbasis durchsucht",
+        durationMs: 120,
+      },
+    });
+    expect(events.filter((event) => event?.type === "delta")).toEqual([
+      { type: "delta", content: "Nachweis " },
+      { type: "delta", content: " erbracht." },
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "final",
+      answer: "Nachweis  erbracht.",
+      sourceReferences: [{
+        kind: "knowledge",
+        doc: "EStG.md",
+        chunkId: "chunk-1",
+        knowledgeBaseId: "kb-1",
+      }],
+    });
+    expect(JSON.stringify(events)).not.toContain("hidden reasoning");
+    expect(JSON.stringify(events)).not.toContain("hidden\"");
+    expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
+      payload: expect.objectContaining({
+        content: 'Nachweis <kb doc="EStG.md" chunk_id="chunk-1" kb_id="kb-1" /> erbracht.',
+        display_content: "Nachweis  erbracht.",
+        content_transformation: "weknora-research-de-v1",
+        research_trace: expect.arrayContaining([
+          expect.objectContaining({ id: "call-1", label: "Wissensbasis durchsucht" }),
+        ]),
+        source_references: [{
+          kind: "knowledge",
+          doc: "EStG.md",
+          chunkId: "chunk-1",
+          knowledgeBaseId: "kb-1",
+        }],
+      }),
+    });
+  });
+
+  it("verifies BFG citations live, links only verified cases and leaves others unchanged", async () => {
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    vi.mocked(resolveBfgCitation).mockImplementation(async (gz) => gz === "RV/1100290/2023"
+      ? {
+          status: "verified",
+          gz,
+          title: "Kosten eines Fußballtrainers",
+          documentTitle: `BFG 03.10.2024, ${gz}`,
+          dokumentId: "doc-1",
+          segmentId: "segment-1",
+          indexName: "findok-bfg",
+          fullTextUrl: "https://findok.bmf.gv.at/findok/volltext?gz=RV%2F1100290%2F2023",
+          pdfUrl: "https://findok.bmf.gv.at/findok/resources/pdf/segment/entscheidung.pdf",
+        }
+      : { status: "not_found", gz, reason: "Nicht gefunden." });
+    vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+      'data: {"response_type":"answer","content":"Siehe RV/1100290/2023 und ","done":false}\n\n',
+      'data: {"response_type":"answer","content":"RV/9999999/2023.","done":true}\n\n',
+      'data: {"response_type":"complete","data":{}}\n\n',
+    ].join(""), { headers: { "Content-Type": "text/event-stream" } }));
+
+    const response = await POST(request({ query: "Welche Entscheidungen gibt es?" }));
+    const events = (await response.text())
+      .split("\n")
+      .map(parseFredNativeStreamLine)
+      .filter(Boolean);
+
+    expect(events).toContainEqual({
+      type: "replace",
+      answer: "Siehe [RV/1100290/2023](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F1100290%2F2023) und RV/9999999/2023.",
+    });
+    expect(events).toContainEqual({
+      type: "research",
+      step: {
+        id: "findok:RV/1100290/2023",
+        kind: "sources",
+        status: "completed",
+        label: "BFG-Fundstelle RV/1100290/2023 verifiziert",
+      },
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: "final",
+      answer: "Siehe [RV/1100290/2023](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F1100290%2F2023) und RV/9999999/2023.",
+    });
+    expect(JSON.stringify(events)).toContain("RV/9999999/2023");
+    expect(JSON.stringify(events)).not.toContain("[RV/9999999/2023]");
+    expect(resolveBfgCitation).toHaveBeenCalledTimes(2);
+    expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
+      payload: expect.objectContaining({
+        content: "Siehe RV/1100290/2023 und RV/9999999/2023.",
+        display_content: "Siehe [RV/1100290/2023](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F1100290%2F2023) und RV/9999999/2023.",
+        source_references: [expect.objectContaining({
+          kind: "web",
+          url: "https://findok.bmf.gv.at/findok/volltext?gz=RV%2F1100290%2F2023",
+        })],
+      }),
+    });
   });
 
   it("continues only an owned stored WeKnora session", async () => {

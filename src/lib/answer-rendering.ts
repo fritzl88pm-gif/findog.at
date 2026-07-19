@@ -40,11 +40,24 @@ type InlineToken =
 function isSafeFindokHref(value: string): boolean {
   try {
     const url = new URL(value);
+    if (
+      url.protocol !== "https:"
+      || url.hostname !== "findok.bmf.gv.at"
+      || url.username
+      || url.password
+      || url.hash
+    ) return false;
+    if (
+      url.pathname.startsWith("/findok/resources/pdf/")
+      && url.pathname.toLowerCase().endsWith(".pdf")
+    ) return true;
+    const parameters = [...url.searchParams.keys()];
+    const gz = url.searchParams.get("gz") ?? "";
     return (
-      url.protocol === "https:" &&
-      url.hostname === "findok.bmf.gv.at" &&
-      url.pathname.startsWith("/findok/resources/pdf/") &&
-      url.pathname.toLowerCase().endsWith(".pdf")
+      url.pathname === "/findok/volltext"
+      && parameters.length === 1
+      && parameters[0] === "gz"
+      && /^(?:RV|RS|RM|AW|VH)\/[A-Z0-9ÄÖÜ-]+\/\d{2,4}$/iu.test(gz)
     );
   } catch {
     return false;

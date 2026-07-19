@@ -3,6 +3,12 @@ import { NextResponse } from "next/server";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import {
+  mergeFredSources,
+  parseStoredFredResearchTrace,
+  parseStoredFredSources,
+  transformWeKnoraAnswer,
+} from "@/lib/weknora/fred-research";
 
 export const runtime = "nodejs";
 
@@ -19,6 +25,9 @@ type FredMessageRow = {
   id: number;
   role: "user" | "assistant";
   content: string;
+  display_content: string | null;
+  research_trace: unknown;
+  source_references: unknown;
   provider_created_at: string | null;
   created_at: string;
   attachments: unknown;
@@ -87,7 +96,7 @@ export async function GET(
     }
     const { data: messages, error: messagesError } = await supabase
       .from("fred_messages")
-      .select("id,role,content,provider_created_at,created_at,attachments,web_search_enabled")
+      .select("id,role,content,display_content,research_trace,source_references,provider_created_at,created_at,attachments,web_search_enabled")
       .eq("conversation_id", conversationId)
       .eq("client_id", user.id)
       .order("provider_created_at", { ascending: true, nullsFirst: false })
@@ -103,14 +112,28 @@ export async function GET(
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       },
-      messages: ((messages ?? []) as FredMessageRow[]).map((message) => ({
-        id: message.id,
-        role: message.role,
-        content: message.content,
-        createdAt: message.provider_created_at ?? message.created_at,
-        attachments: attachmentMetadata(message.attachments),
-        webSearchEnabled: message.web_search_enabled,
-      })),
+      messages: ((messages ?? []) as FredMessageRow[]).map((message) => {
+        const rawTransformation = message.role === "assistant"
+          ? transformWeKnoraAnswer(message.content)
+          : { text: message.content, sources: [] };
+        const displayTransformation = message.role === "assistant" && message.display_content
+          ? transformWeKnoraAnswer(message.display_content)
+          : rawTransformation;
+        return {
+          id: message.id,
+          role: message.role,
+          content: displayTransformation.text.trim(),
+          createdAt: message.provider_created_at ?? message.created_at,
+          attachments: attachmentMetadata(message.attachments),
+          webSearchEnabled: message.web_search_enabled,
+          researchTrace: parseStoredFredResearchTrace(message.research_trace),
+          sourceReferences: mergeFredSources(
+            parseStoredFredSources(message.source_references),
+            rawTransformation.sources,
+            displayTransformation.sources,
+          ),
+        };
+      }),
     });
   } catch (error) {
     if (error instanceof UserVisibleError) return json({ error: error.message }, error.status);

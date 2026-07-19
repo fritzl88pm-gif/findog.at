@@ -14,6 +14,11 @@ import {
   type FredNativeConversation,
 } from "@/lib/fred-native-stream";
 import { getWelcomeGreeting } from "@/lib/chat/welcome";
+import {
+  mergeFredResearchStep,
+  type FredResearchStep,
+  type FredSourceReference,
+} from "@/lib/weknora/fred-research";
 
 export type FredNativeMessage = {
   role: "user" | "assistant";
@@ -21,6 +26,8 @@ export type FredNativeMessage = {
   createdAt: string;
   attachments?: FredNativeAttachment[];
   webSearchEnabled?: boolean;
+  researchTrace?: FredResearchStep[];
+  sourceReferences?: FredSourceReference[];
 };
 
 export type FredNativeAttachment = {
@@ -79,6 +86,59 @@ function displayFileSize(bytes: number): string {
 
 function fileExtension(name: string): string {
   return /\.[^.]+$/u.exec(name.toLowerCase())?.[0] ?? "";
+}
+
+function ResearchTrace({
+  steps,
+  sources,
+  active,
+}: {
+  steps: FredResearchStep[];
+  sources: FredSourceReference[];
+  active: boolean;
+}) {
+  if (steps.length === 0 && sources.length === 0) return null;
+  const completed = steps.filter((step) => step.status === "completed").length;
+  const summary = active
+    ? "Fred recherchiert …"
+    : `Rechercheverlauf${completed > 0 ? ` · ${completed} Schritte` : ""}`;
+  return (
+    <details className="fred-research-trace" open={active}>
+      <summary>
+        <span className={active ? "fred-research-pulse" : "fred-research-check"} aria-hidden="true" />
+        {summary}
+      </summary>
+      <ol className="fred-research-steps">
+        {steps.map((step) => (
+          <li className={`is-${step.status}`} key={step.id}>
+            <span className="fred-research-status" aria-hidden="true" />
+            <span>
+              {step.label}
+              {step.durationMs !== undefined ? (
+                <small>{(step.durationMs / 1_000).toLocaleString("de-AT", { maximumFractionDigits: 1 })} s</small>
+              ) : null}
+            </span>
+          </li>
+        ))}
+      </ol>
+      {sources.length > 0 ? (
+        <div className="fred-research-sources">
+          <strong>Gefundene Quellen</strong>
+          <div>
+            {sources.map((source, index) => source.kind === "web" ? (
+              <a href={source.url} target="_blank" rel="noreferrer" key={`web-${source.url}`}>
+                {source.title || new URL(source.url).hostname}
+              </a>
+            ) : (
+              <span title={source.chunkId ? `Chunk: ${source.chunkId}` : undefined} key={`kb-${source.knowledgeBaseId ?? ""}-${source.chunkId ?? ""}-${index}`}>
+                {source.doc}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </details>
+  );
 }
 
 export default function FredNativeChatView({
@@ -213,6 +273,8 @@ export default function FredNativeChatView({
     setIsSending(true);
 
     let answer = "";
+    let researchTrace: FredResearchStep[] = [];
+    let sourceReferences: FredSourceReference[] = [];
     let receivedFinal = false;
     try {
       const requestPayload = {
@@ -259,16 +321,50 @@ export default function FredNativeChatView({
         }
         if (streamEvent.type === "delta") {
           answer += streamEvent.content;
-          const updatedAssistant = { ...assistantMessage, content: answer };
+          const updatedAssistant = {
+            ...assistantMessage,
+            content: answer,
+            researchTrace,
+            sourceReferences,
+          };
+          setMessages([...baseMessages, updatedAssistant]);
+          return;
+        }
+        if (streamEvent.type === "replace") {
+          answer = streamEvent.answer;
+          const updatedAssistant = {
+            ...assistantMessage,
+            content: answer,
+            researchTrace,
+            sourceReferences,
+          };
+          setMessages([...baseMessages, updatedAssistant]);
+          return;
+        }
+        if (streamEvent.type === "research") {
+          researchTrace = mergeFredResearchStep(researchTrace, streamEvent.step);
+          const updatedAssistant = {
+            ...assistantMessage,
+            content: answer,
+            researchTrace,
+            sourceReferences,
+          };
           setMessages([...baseMessages, updatedAssistant]);
           return;
         }
         answer = streamEvent.answer;
+        researchTrace = streamEvent.researchTrace ?? researchTrace;
+        sourceReferences = streamEvent.sourceReferences ?? sourceReferences;
         receivedFinal = true;
         activeConversationIdRef.current = streamEvent.conversation.id;
         const completedMessages = [
           ...baseMessages,
-          { ...assistantMessage, content: streamEvent.answer },
+          {
+            ...assistantMessage,
+            content: streamEvent.answer,
+            researchTrace,
+            sourceReferences,
+          },
         ];
         setMessages(completedMessages);
         onConversationUpdated(streamEvent.conversation, completedMessages);
@@ -399,6 +495,13 @@ export default function FredNativeChatView({
                     <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
                   </div>
                 </div>
+                {message.role === "assistant" ? (
+                  <ResearchTrace
+                    steps={message.researchTrace ?? []}
+                    sources={message.sourceReferences ?? []}
+                    active={isSending && index === messages.length - 1}
+                  />
+                ) : null}
                 {message.role === "assistant"
                   ? (message.content
                     ? renderAssistantContent(message.content)

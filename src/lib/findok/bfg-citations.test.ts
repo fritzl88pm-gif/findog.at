@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   extractBfgGzCandidates,
+  extractStreamStableBfgGzCandidates,
   findUnverifiedBfgCitations,
   linkVerifiedBfgCitations,
   resolveBfgCitation,
@@ -37,6 +38,19 @@ describe("Findok BFG citation verification", () => {
       "RS/7100001/2020",
       "AW/7100130/2019",
       "VH/7100002/2022",
+    ]);
+  });
+
+  it("waits for a stream boundary before treating a trailing GZ as complete", () => {
+    expect(extractStreamStableBfgGzCandidates("Siehe RV/1100290/2023")).toEqual([]);
+    expect(extractStreamStableBfgGzCandidates("Siehe RV/1100290/2023 ")).toEqual([
+      "RV/1100290/2023",
+    ]);
+    expect(extractStreamStableBfgGzCandidates("**RV/1100290/2023**")).toEqual([
+      "RV/1100290/2023",
+    ]);
+    expect(extractStreamStableBfgGzCandidates("Siehe RV/1100290/2023", true)).toEqual([
+      "RV/1100290/2023",
     ]);
   });
 
@@ -107,6 +121,20 @@ describe("Findok BFG citation verification", () => {
       ),
     ).toBe(
       "Siehe [RV/7103053/2014](https://findok.bmf.gv.at/findok/resources/pdf/segment/121623.pdf) und [RV/7103053/2014](https://findok.bmf.gv.at/findok/resources/pdf/segment/121623.pdf).",
+    );
+    expect(linkVerifiedBfgCitations(
+      "Siehe RV/7103053/2014.",
+      [verified],
+      { target: "fullText" },
+    )).toBe(
+      "Siehe [RV/7103053/2014](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F7103053%2F2014).",
+    );
+    expect(linkVerifiedBfgCitations(
+      "Siehe **RV/7103053/2014**.",
+      [verified],
+      { target: "fullText" },
+    )).toBe(
+      "Siehe **[RV/7103053/2014](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F7103053%2F2014)**.",
     );
 
     expect(
