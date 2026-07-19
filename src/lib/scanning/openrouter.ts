@@ -69,20 +69,74 @@ function responseContent(payload: unknown): string {
     return JSON.stringify(content);
   }
   if (!Array.isArray(content)) return "";
-  return content.flatMap((part) => {
+  const textParts = content.flatMap((part) => {
+    if (typeof part === "string") return [part];
     const item = recordOf(part);
-    return typeof item?.text === "string" ? [item.text] : [];
-  }).join("\n").trim();
+    if (typeof item?.text === "string") return [item.text];
+    const nestedText = recordOf(item?.text);
+    if (typeof nestedText?.value === "string") return [nestedText.value];
+    return typeof item?.content === "string" ? [item.content] : [];
+  });
+  return textParts.length > 0 ? textParts.join("\n").trim() : JSON.stringify(content);
+}
+
+function parseJsonText(value: string): unknown {
+  const parsed = JSON.parse(value) as unknown;
+  if (typeof parsed !== "string") return parsed;
+  const nested = parsed.trim();
+  return nested.startsWith("{") || nested.startsWith("[") ? JSON.parse(nested) as unknown : parsed;
+}
+
+function balancedJsonCandidates(value: string): string[] {
+  const candidates: string[] = [];
+  for (let start = 0; start < value.length; start += 1) {
+    if (value[start] !== "{" && value[start] !== "[") continue;
+    const stack: string[] = [];
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < value.length; index += 1) {
+      const character = value[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') {
+        inString = true;
+        continue;
+      }
+      if (character === "{" || character === "[") stack.push(character);
+      else if (character === "}" || character === "]") {
+        const expected = character === "}" ? "{" : "[";
+        if (stack.pop() !== expected) break;
+        if (stack.length === 0) {
+          candidates.push(value.slice(start, index + 1));
+          start = index;
+          break;
+        }
+      }
+    }
+  }
+  return candidates;
 }
 
 function parseJsonContent(payload: unknown, label: string): unknown {
   const content = responseContent(payload);
-  const unfenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(content)?.[1] ?? content;
-  try {
-    return JSON.parse(unfenced) as unknown;
-  } catch {
-    throw new ScanningProviderError(`${label} lieferte keine gültigen strukturierten Daten.`, 502);
+  const candidates = [content];
+  for (const match of content.matchAll(/```(?:json)?\s*([\s\S]*?)```/giu)) {
+    if (match[1]) candidates.push(match[1].trim());
   }
+  candidates.push(...balancedJsonCandidates(content));
+  for (const candidate of candidates) {
+    if (!candidate.trim()) continue;
+    try {
+      return parseJsonText(candidate.trim());
+    } catch {
+      // Try the next bounded representation without exposing provider content.
+    }
+  }
+  throw new ScanningProviderError(`${label} lieferte keine gültigen strukturierten Daten.`, 502);
 }
 
 function apiKey(): string {
@@ -327,6 +381,7 @@ export async function extractScanningDocuments(
     messages,
     temperature: 0,
     max_tokens: 12_000,
+    reasoning: { effort: "minimal", exclude: true },
   };
   try {
     const payload = await openRouterRequest({

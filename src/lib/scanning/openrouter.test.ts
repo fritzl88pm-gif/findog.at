@@ -89,6 +89,7 @@ describe("OpenRouter scanning adapter", () => {
     expect(JSON.stringify(body)).not.toContain('"file-parser"');
     expect(JSON.stringify(body)).toContain("Untersuche bei PDFs ausnahmslos alle Seiten");
     expect(JSON.stringify(body)).toContain("jeden eigenständigen Beleg genau einen Eintrag");
+    expect(body.reasoning).toEqual({ effort: "minimal", exclude: true });
     expect(JSON.stringify(body)).toContain("fremdsprachige Sachtexte sinngemäß und sachlich ins Deutsche");
     expect(JSON.stringify(body)).toContain("Belegnummern, Aktenzeichen, Artikelnummern, Beträge");
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
@@ -159,6 +160,47 @@ describe("OpenRouter scanning adapter", () => {
 
     await expect(extractScanningDocuments(upload)).resolves.toMatchObject([
       { documentId: "parsed-file:1", documentNumber: "R-7" },
+    ]);
+  });
+
+  it("extracts JSON from explanatory text and fenced provider content", async () => {
+    const embedded = `Die Auswertung ist abgeschlossen.\n\n\`\`\`json\n${JSON.stringify({ documents: [rawDocument()] })}\n\`\`\``;
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: embedded } }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const upload: ScanningUpload = {
+      id: "fenced-file",
+      name: "Fenced.pdf",
+      kind: "pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 5,
+      sha256: "hash",
+      bytes: new TextEncoder().encode("%PDF-"),
+    };
+
+    await expect(extractScanningDocuments(upload)).resolves.toMatchObject([
+      { documentId: "fenced-file:1", documentNumber: "R-7" },
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts structured documents returned directly as content parts", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: [rawDocument(), { ...rawDocument(), documentNumber: "R-8" }] } }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const upload: ScanningUpload = {
+      id: "parts-file",
+      name: "Parts.pdf",
+      kind: "pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 5,
+      sha256: "hash",
+      bytes: new TextEncoder().encode("%PDF-"),
+    };
+
+    await expect(extractScanningDocuments(upload)).resolves.toMatchObject([
+      { documentId: "parts-file:1", documentNumber: "R-7" },
+      { documentId: "parts-file:2", documentNumber: "R-8" },
     ]);
   });
 
