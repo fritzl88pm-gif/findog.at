@@ -59,8 +59,15 @@ function responseContent(payload: unknown): string {
   const body = recordOf(payload);
   const choices = Array.isArray(body?.choices) ? body.choices : [];
   const message = recordOf(recordOf(choices[0])?.message);
+  const parsed = message?.parsed;
+  if (parsed && (Array.isArray(parsed) || typeof parsed === "object")) {
+    return JSON.stringify(parsed);
+  }
   const content = message?.content;
   if (typeof content === "string") return content.trim();
+  if (content && typeof content === "object" && !Array.isArray(content)) {
+    return JSON.stringify(content);
+  }
   if (!Array.isArray(content)) return "";
   return content.flatMap((part) => {
     const item = recordOf(part);
@@ -259,7 +266,18 @@ export function parseScanningDocuments(
   upload: Pick<ScanningUpload, "id" | "name">,
 ): ScanningDocument[] {
   const item = recordOf(value);
-  const documents = item && Array.isArray(item.documents) ? item.documents : [];
+  const knownArray = item
+    ? ["documents", "invoices", "receipts", "items", "belege"]
+      .map((key) => item[key])
+      .find(Array.isArray)
+    : undefined;
+  const looksLikeSingleDocument = item && [
+    "documentType", "date", "issuer", "documentNumber", "description", "category",
+    "currency", "net", "tax", "gross", "vatBreakdown", "warnings", "confidence",
+  ].some((key) => key in item);
+  const documents = Array.isArray(value)
+    ? value
+    : knownArray ?? (looksLikeSingleDocument ? [value] : []);
   if (documents.length === 0 || documents.length > 100) {
     throw new ScanningProviderError("Die Datei lieferte keine verwertbaren Belege.", 502);
   }
@@ -281,6 +299,15 @@ function extractionPrompt(filename: string): string {
     "Nutze ISO-Datumsformat YYYY-MM-DD und ISO-Währungscodes. Bei Gutschriften dürfen eindeutig ausgewiesene Beträge negativ sein.",
     "Erfinde, schätze oder berechne keine fehlenden Werte. Verwende null und ergänze eine Warnung, wenn etwas unlesbar, abgeschnitten, widersprüchlich oder nicht eindeutig ist.",
     "Ziehe keine rechtlichen oder steuerlichen Schlüsse. Gib ausschließlich das angeforderte JSON zurück.",
+  ].join("\n");
+}
+
+function fallbackExtractionPrompt(filename: string): string {
+  return [
+    extractionPrompt(filename),
+    "Ein vorheriger strukturierter Versuch hat keine verwendbare Belegliste geliefert.",
+    "Führe deshalb eine neue seitenweise Prüfung der gesamten Datei durch und übersehe keine Folgeseite.",
+    "Antworte ausschließlich mit einem JSON-Objekt der Form {\"documents\":[...]} und liefere mindestens einen Eintrag, sobald auf irgendeiner Seite ein Beleg erkennbar ist.",
   ].join("\n");
 }
 
@@ -321,8 +348,10 @@ export async function extractScanningDocuments(
     }
     const fallbackPayload = await openRouterRequest({
       ...requestBase,
-      response_format: { type: "json_object" },
-      plugins: [{ id: "response-healing" }],
+      messages: [{
+        role: "user",
+        content: [{ type: "text", text: fallbackExtractionPrompt(upload.name) }, attachment],
+      }],
     }, signal);
     return parseScanningDocuments(parseJsonContent(fallbackPayload, "Die Dokumentauswertung"), upload);
   }

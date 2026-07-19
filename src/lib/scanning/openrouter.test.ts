@@ -113,8 +113,9 @@ describe("OpenRouter scanning adapter", () => {
     ]);
     expect(fetch).toHaveBeenCalledTimes(2);
     const fallbackBody = JSON.parse(String(vi.mocked(fetch).mock.calls[1]?.[1]?.body)) as Record<string, unknown>;
-    expect(fallbackBody.response_format).toEqual({ type: "json_object" });
-    expect(fallbackBody.plugins).toEqual([{ id: "response-healing" }]);
+    expect(fallbackBody.response_format).toBeUndefined();
+    expect(fallbackBody.plugins).toBeUndefined();
+    expect(JSON.stringify(fallbackBody)).toContain("neue seitenweise Prüfung der gesamten Datei");
   });
 
   it("also retries when the strict response contains unusable structured data", async () => {
@@ -133,6 +134,32 @@ describe("OpenRouter scanning adapter", () => {
 
     await expect(extractScanningDocuments(upload)).resolves.toHaveLength(1);
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts Gemini document arrays, aliases and single legacy objects", () => {
+    const upload = { id: "shape-file", name: "Formen.pdf" };
+    expect(parseScanningDocuments([rawDocument(), rawDocument()], upload)).toHaveLength(2);
+    expect(parseScanningDocuments({ invoices: [rawDocument(), rawDocument()] }, upload)).toHaveLength(2);
+    expect(parseScanningDocuments(rawDocument(), upload)).toHaveLength(1);
+  });
+
+  it("reads already parsed structured output returned by the provider", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { parsed: { documents: [rawDocument()] }, content: null } }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const upload: ScanningUpload = {
+      id: "parsed-file",
+      name: "Parsed.pdf",
+      kind: "pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 5,
+      sha256: "hash",
+      bytes: new TextEncoder().encode("%PDF-"),
+    };
+
+    await expect(extractScanningDocuments(upload)).resolves.toMatchObject([
+      { documentId: "parsed-file:1", documentNumber: "R-7" },
+    ]);
   });
 
   it("uses only known document ids when harmonizing categories", async () => {
