@@ -6,7 +6,6 @@ import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import {
   matchesScanningFileSignature,
-  MAX_SCANNING_CONCURRENCY,
   MAX_SCANNING_IMAGE_BYTES,
   MAX_SCANNING_IMAGES,
   MAX_SCANNING_MULTIPART_BYTES,
@@ -18,14 +17,9 @@ import {
   SCANNING_RATE_LIMIT_REQUESTS,
   SCANNING_RATE_LIMIT_WINDOW_MS,
 } from "@/lib/scanning/config";
-import {
-  extractScanningDocuments,
-  organizeScanningDocuments,
-  ScanningProviderError,
-} from "@/lib/scanning/openrouter";
-import { buildScanningReport } from "@/lib/scanning/report";
+import { analyzeScanningBatch, ScanningProviderError } from "@/lib/scanning/openrouter";
 import { encodeScanningStreamEvent, SCANNING_STREAM_CONTENT_TYPE } from "@/lib/scanning/stream";
-import type { ScanningDocument, ScanningFileStatus, ScanningUpload } from "@/lib/scanning/types";
+import type { ScanningFileStatus, ScanningUpload } from "@/lib/scanning/types";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -188,7 +182,7 @@ async function parseUploads(request: Request, contentType: string): Promise<{
 function fileError(error: unknown): string {
   if (error instanceof ScanningProviderError) return error.message;
   if (error instanceof UserVisibleError) return error.message;
-  return "Die Datei konnte nicht ausgewertet werden.";
+  return "Die Dokumentauswertung konnte nicht abgeschlossen werden.";
 }
 
 export async function POST(request: Request) {
@@ -214,100 +208,40 @@ export async function POST(request: Request) {
         const send = (event: Parameters<typeof encodeScanningStreamEvent>[0]) => {
           if (!lifetime.signal.aborted) controller.enqueue(encoder.encode(encodeScanningStreamEvent(event)));
         };
-        const statusById = new Map(parsed.statuses.map((status) => [status.id, status]));
-        const documentsByUpload: ScanningDocument[][] = [];
-        let cursor = 0;
-        let completed = 0;
-        let fatalError: ScanningProviderError | null = null;
         send({ type: "progress", stage: "validating", completed: 0, total: parsed.uploads.length });
 
-        const worker = async () => {
-          while (cursor < parsed.uploads.length && !fatalError && !lifetime.signal.aborted) {
-            const index = cursor;
-            cursor += 1;
-            const upload = parsed.uploads[index];
-            if (!upload) continue;
-            send({
-              type: "progress",
-              stage: "extracting",
-              completed,
-              total: parsed.uploads.length,
-              fileName: upload.name,
-            });
-            try {
-              const extractedDocuments = await extractScanningDocuments(upload, lifetime.signal);
-              documentsByUpload[index] = extractedDocuments;
-              statusById.set(upload.id, {
-                id: upload.id,
-                name: upload.name,
-                kind: upload.kind,
-                status: "completed",
-              });
-            } catch (error) {
-              if (error instanceof ScanningProviderError && error.fatal) {
-                fatalError = error;
-                lifetime.abort(error);
-              }
-              statusById.set(upload.id, {
-                id: upload.id,
-                name: upload.name,
-                kind: upload.kind,
-                status: "failed",
-                detail: fileError(error),
-              });
-            } finally {
-              completed += 1;
-              send({ type: "progress", stage: "extracting", completed, total: parsed.uploads.length });
-            }
-          }
-        };
-
         try {
-          await Promise.all(Array.from(
-            { length: Math.min(MAX_SCANNING_CONCURRENCY, parsed.uploads.length) },
-            () => worker(),
+          send({
+            type: "progress",
+            stage: "extracting",
+            completed: 0,
+            total: parsed.uploads.length,
+            fileName: parsed.uploads.length === 1 ? parsed.uploads[0]?.name : `${parsed.uploads.length} Dateien`,
+          });
+          const report = await analyzeScanningBatch(parsed.uploads, lifetime.signal);
+          const completedIds = new Set(parsed.uploads.map((upload) => upload.id));
+          const statuses = parsed.statuses.map((status): ScanningFileStatus => (
+            completedIds.has(status.id)
+              ? { id: status.id, name: status.name, kind: status.kind, status: "completed" }
+              : status
           ));
-          if (fatalError) {
-            controller.enqueue(encoder.encode(encodeScanningStreamEvent({ type: "error", error: fileError(fatalError) })));
-            controller.close();
-            return;
-          }
-          const successfulDocuments = documentsByUpload.flat();
-          if (successfulDocuments.length === 0) {
-            const statuses = parsed.statuses.map((status) => statusById.get(status.id) ?? status);
-            const firstFailure = statuses.find((status) => status.status === "failed" && status.detail)?.detail;
-            send({
-              type: "error",
-              error: firstFailure || "Keine Datei konnte ausgewertet werden.",
-            });
-            controller.close();
-            return;
-          }
-
+          send({
+            type: "progress",
+            stage: "extracting",
+            completed: parsed.uploads.length,
+            total: parsed.uploads.length,
+          });
           send({
             type: "progress",
             stage: "organizing",
-            completed: successfulDocuments.length,
-            total: successfulDocuments.length,
+            completed: parsed.uploads.length,
+            total: parsed.uploads.length,
           });
-          let summary = "";
-          try {
-            const organization = await organizeScanningDocuments(successfulDocuments, lifetime.signal);
-            summary = organization.summary;
-            const categories = new Map(organization.categories.map((entry) => [entry.documentId, entry.category]));
-            for (const document of successfulDocuments) {
-              document.category = categories.get(document.documentId) ?? document.category;
-            }
-          } catch {
-            // A deterministic report remains available when optional consolidation fails.
-          }
-          const statuses = parsed.statuses.map((status) => statusById.get(status.id) ?? status);
-          const report = buildScanningReport({ documents: successfulDocuments, files: statuses, summary });
           send({ type: "final", report, files: statuses, model: SCANNING_MODEL });
           controller.close();
-        } catch {
+        } catch (error) {
           if (!lifetime.signal.aborted) {
-            send({ type: "error", error: "Die Scanning-Auswertung konnte nicht abgeschlossen werden." });
+            send({ type: "error", error: fileError(error) });
           }
           try { controller.close(); } catch { /* Client already disconnected. */ }
         } finally {

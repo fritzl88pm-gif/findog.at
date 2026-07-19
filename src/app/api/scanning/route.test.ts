@@ -1,13 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
-import {
-  extractScanningDocuments,
-  organizeScanningDocuments,
-  ScanningProviderError,
-} from "@/lib/scanning/openrouter";
+import { analyzeScanningBatch, ScanningProviderError } from "@/lib/scanning/openrouter";
 import { parseScanningStreamLine } from "@/lib/scanning/stream";
-import type { ScanningDocument, ScanningUpload } from "@/lib/scanning/types";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { POST } from "./route";
 
@@ -15,11 +10,7 @@ vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
 vi.mock("@/lib/scanning/openrouter", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/scanning/openrouter")>();
-  return {
-    ...original,
-    extractScanningDocuments: vi.fn(),
-    organizeScanningDocuments: vi.fn(),
-  };
+  return { ...original, analyzeScanningBatch: vi.fn() };
 });
 
 function pngBytes(marker = 0): Uint8Array<ArrayBuffer> {
@@ -48,27 +39,6 @@ function pdf(name: string, marker = 0): File {
   return new File([pdfBytes(marker)], name, { type: "application/pdf" });
 }
 
-function extracted(upload: ScanningUpload): ScanningDocument {
-  return {
-    documentId: `${upload.id}:1`,
-    fileId: upload.id,
-    fileName: upload.name,
-    documentType: "Rechnung",
-    date: "2026-07-19",
-    issuer: "Muster GmbH",
-    documentNumber: `R-${upload.name}`,
-    description: "Leistung",
-    category: "Büro",
-    currency: "EUR",
-    net: "10.00",
-    tax: "2.00",
-    gross: "12.00",
-    vatBreakdown: [],
-    warnings: [],
-    confidence: "high",
-  };
-}
-
 async function events(response: Response) {
   return (await response.text()).split("\n").map(parseScanningStreamLine).filter(Boolean);
 }
@@ -80,14 +50,12 @@ describe("POST /api/scanning", () => {
     vi.mocked(authenticateSupabaseRequest).mockImplementation(async (request) => ({
       id: request.headers.get("authorization")?.replace("Bearer ", "") || "user",
     }));
-    vi.mocked(extractScanningDocuments).mockImplementation(async (upload) => [extracted(upload)]);
-    vi.mocked(organizeScanningDocuments).mockImplementation(async (documents) => ({
-      summary: `${documents.length} Dokumente ausgewertet.`,
-      categories: documents.map((document) => ({ documentId: document.documentId, category: document.category })),
-    }));
+    vi.mocked(analyzeScanningBatch).mockResolvedValue(
+      "# Auswertung\n\n| Beleg | Ausgewiesener Betrag |\n|---|---:|\n| R-1 | 12,00 EUR |",
+    );
   });
 
-  it("streams a report for five images and five PDFs without a persistence client call", async () => {
+  it("sends five images and five PDFs together and streams the direct report", async () => {
     const files = [
       ...Array.from({ length: 5 }, (_, index) => ({ field: "image", file: image(`bild-${index}.png`, index) })),
       ...Array.from({ length: 5 }, (_, index) => ({ field: "pdf", file: pdf(`beleg-${index}.pdf`, index) })),
@@ -99,53 +67,41 @@ describe("POST /api/scanning", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("application/x-ndjson");
     expect(response.headers.get("cache-control")).toContain("no-store");
-    expect(extractScanningDocuments).toHaveBeenCalledTimes(10);
-    expect(final).toMatchObject({ type: "final", model: "google/gemini-3.5-flash" });
-    if (final?.type === "final") expect(final.files).toHaveLength(10);
+    expect(analyzeScanningBatch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(analyzeScanningBatch).mock.calls[0]?.[0]).toHaveLength(10);
+    expect(vi.mocked(analyzeScanningBatch).mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
+    expect(final).toMatchObject({
+      type: "final",
+      model: "google/gemini-3.5-flash",
+      report: expect.stringContaining("Ausgewiesener Betrag"),
+    });
+    if (final?.type === "final") {
+      expect(final.files).toHaveLength(10);
+      expect(final.files.every((file) => file.status === "completed")).toBe(true);
+    }
     expect(getSupabaseServerClient).toHaveBeenCalledTimes(1);
   });
 
-  it("includes every independent invoice found across a multi-page PDF", async () => {
-    vi.mocked(extractScanningDocuments).mockImplementationOnce(async (upload) => [
-      { ...extracted(upload), documentId: `${upload.id}:1`, documentNumber: "RE-100", date: "2026-01-10" },
-      { ...extracted(upload), documentId: `${upload.id}:2`, documentNumber: "RE-200", date: "2026-02-10" },
-      { ...extracted(upload), documentId: `${upload.id}:3`, documentNumber: "RE-300", date: "2026-03-10" },
-    ]);
-    const response = await POST(multipart([{ field: "pdf", file: pdf("Sammelrechnungen.pdf") }], "multipage-user"));
+  it("forwards Gemini Markdown without imposing net, VAT or gross fields", async () => {
+    vi.mocked(analyzeScanningBatch).mockResolvedValueOnce(
+      "## Rechnung\n\nZahlbetrag laut Beleg: **87,40 EUR**. Die zweite Seite wurde gedreht gelesen.",
+    );
+    const response = await POST(multipart([{ field: "pdf", file: pdf("gedreht.pdf") }], "rotated-user"));
     const final = (await events(response)).find((event) => event?.type === "final");
-
     expect(final).toMatchObject({
       type: "final",
-      report: expect.stringContaining("RE-100"),
+      report: expect.stringContaining("Zahlbetrag laut Beleg: **87,40 EUR**"),
     });
-    if (final?.type === "final") {
-      expect(final.report).toContain("RE-200");
-      expect(final.report).toContain("RE-300");
-      expect(final.report).toContain("Netto 30,00, USt 6,00, Brutto 36,00");
-    }
-    expect(organizeScanningDocuments).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        expect.objectContaining({ documentId: expect.stringContaining(":1") }),
-        expect.objectContaining({ documentId: expect.stringContaining(":2") }),
-        expect.objectContaining({ documentId: expect.stringContaining(":3") }),
-      ]),
-      expect.any(AbortSignal),
-    );
   });
 
   it("rejects empty batches, a sixth file and unknown form fields", async () => {
-    const empty = await POST(multipart([], "empty-user"));
-    expect(empty.status).toBe(400);
-
-    const six = await POST(multipart(
+    expect((await POST(multipart([], "empty-user"))).status).toBe(400);
+    expect((await POST(multipart(
       Array.from({ length: 6 }, (_, index) => ({ field: "image", file: image(`bild-${index}.png`, index) })),
       "six-user",
-    ));
-    expect(six.status).toBe(400);
-
-    const unknown = await POST(multipart([{ field: "attachment", file: pdf("beleg.pdf") }], "unknown-user"));
-    expect(unknown.status).toBe(400);
-    expect(extractScanningDocuments).not.toHaveBeenCalled();
+    ))).status).toBe(400);
+    expect((await POST(multipart([{ field: "attachment", file: pdf("beleg.pdf") }], "unknown-user"))).status).toBe(400);
+    expect(analyzeScanningBatch).not.toHaveBeenCalled();
   });
 
   it("accepts files exactly at 5 and 10 MiB and rejects one byte above", async () => {
@@ -162,69 +118,47 @@ describe("POST /api/scanning", () => {
 
     const tooLarge = new Uint8Array(5 * 1_024 * 1_024 + 1);
     tooLarge.set(pngBytes());
-    const rejected = await POST(multipart([
+    expect((await POST(multipart([
       { field: "image", file: new File([tooLarge], "too-large.png", { type: "image/png" }) },
-    ], "large-user"));
-    expect(rejected.status).toBe(413);
+    ], "large-user"))).status).toBe(413);
   });
 
   it("rejects MIME/signature mismatches and cross-site submissions", async () => {
-    const mismatch = await POST(multipart([
+    expect((await POST(multipart([
       { field: "pdf", file: new File([pngBytes()], "fake.pdf", { type: "application/pdf" }) },
-    ], "mismatch-user"));
-    expect(mismatch.status).toBe(400);
+    ], "mismatch-user"))).status).toBe(400);
 
     const crossSite = multipart([{ field: "pdf", file: pdf("beleg.pdf") }], "cross-user");
     const headers = new Headers(crossSite.headers);
     headers.set("Sec-Fetch-Site", "cross-site");
     const authCalls = vi.mocked(authenticateSupabaseRequest).mock.calls.length;
-    const blocked = await POST(new Request(crossSite, { headers }));
-    expect(blocked.status).toBe(403);
+    expect((await POST(new Request(crossSite, { headers }))).status).toBe(403);
     expect(authenticateSupabaseRequest).toHaveBeenCalledTimes(authCalls);
   });
 
-  it("evaluates exact duplicates once and marks the copy", async () => {
+  it("sends exact duplicates once and marks the copy", async () => {
     const response = await POST(multipart([
       { field: "image", file: image("Original.png", 4) },
       { field: "image", file: image("Kopie.png", 4) },
     ], "duplicate-user"));
     const final = (await events(response)).find((event) => event?.type === "final");
-
-    expect(extractScanningDocuments).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(analyzeScanningBatch).mock.calls[0]?.[0]).toHaveLength(1);
     expect(final).toMatchObject({
       type: "final",
       files: expect.arrayContaining([expect.objectContaining({ name: "Kopie.png", status: "duplicate" })]),
     });
   });
 
-  it("keeps a partial result and falls back if category organization fails", async () => {
-    vi.mocked(extractScanningDocuments)
-      .mockImplementationOnce(async (upload) => [extracted(upload)])
-      .mockRejectedValueOnce(new ScanningProviderError("Datei nicht lesbar", 502));
-    vi.mocked(organizeScanningDocuments).mockRejectedValueOnce(new ScanningProviderError("Ausgelastet", 429));
-    const response = await POST(multipart([
-      { field: "pdf", file: pdf("gut.pdf", 1) },
-      { field: "pdf", file: pdf("kaputt.pdf", 2) },
-    ], "partial-user"));
-    const final = (await events(response)).find((event) => event?.type === "final");
+  it("emits the safe provider error instead of inventing an extraction failure", async () => {
+    vi.mocked(analyzeScanningBatch).mockRejectedValueOnce(new ScanningProviderError("OpenRouter ist ausgelastet.", 429));
+    const failure = await POST(multipart([{ field: "pdf", file: pdf("a.pdf") }], "failed-user"));
+    expect(await events(failure)).toContainEqual({ type: "error", error: "OpenRouter ist ausgelastet." });
 
-    expect(final).toMatchObject({
-      type: "final",
-      report: expect.stringContaining("Nicht ausgewertete Dateien"),
-      files: expect.arrayContaining([expect.objectContaining({ name: "kaputt.pdf", status: "failed" })]),
-    });
-  });
-
-  it("emits a friendly error for complete and fatal provider failures", async () => {
-    vi.mocked(extractScanningDocuments).mockRejectedValueOnce(new ScanningProviderError("Nicht lesbar", 502));
-    const completeFailure = await POST(multipart([{ field: "pdf", file: pdf("a.pdf") }], "failed-user"));
-    expect(await events(completeFailure)).toContainEqual({ type: "error", error: "Nicht lesbar" });
-
-    vi.mocked(extractScanningDocuments).mockRejectedValueOnce(
+    vi.mocked(analyzeScanningBatch).mockRejectedValueOnce(
       new ScanningProviderError("Scanning ist serverseitig nicht konfiguriert.", 503, true),
     );
-    const fatalFailure = await POST(multipart([{ field: "pdf", file: pdf("b.pdf") }], "fatal-user"));
-    expect(await events(fatalFailure)).toContainEqual({
+    const fatal = await POST(multipart([{ field: "pdf", file: pdf("b.pdf") }], "fatal-user"));
+    expect(await events(fatal)).toContainEqual({
       type: "error",
       error: "Scanning ist serverseitig nicht konfiguriert.",
     });
@@ -236,7 +170,6 @@ describe("POST /api/scanning", () => {
       expect(response.status).toBe(200);
       await response.text();
     }
-    const blocked = await POST(multipart([{ field: "pdf", file: pdf("sechs.pdf", 9) }], "rate-user"));
-    expect(blocked.status).toBe(429);
+    expect((await POST(multipart([{ field: "pdf", file: pdf("sechs.pdf", 9) }], "rate-user"))).status).toBe(429);
   });
 });
