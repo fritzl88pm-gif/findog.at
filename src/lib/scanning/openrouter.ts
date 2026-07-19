@@ -15,11 +15,13 @@ type JsonRecord = Record<string, unknown>;
 
 export class ScanningProviderError extends UserVisibleError {
   readonly fatal: boolean;
+  readonly upstreamStatus: number | null;
 
-  constructor(message: string, status: number, fatal = false) {
+  constructor(message: string, status: number, fatal = false, upstreamStatus: number | null = null) {
     super(message, status);
     this.name = "ScanningProviderError";
     this.fatal = fatal;
+    this.upstreamStatus = upstreamStatus;
   }
 }
 
@@ -94,15 +96,24 @@ function providerError(status: number): ScanningProviderError {
       "Scanning ist serverseitig nicht verfügbar. Bitte Administrator kontaktieren.",
       503,
       true,
+      status,
     );
   }
   if (status === 429) {
-    return new ScanningProviderError("Die Dokumentauswertung ist derzeit ausgelastet.", 429);
+    return new ScanningProviderError("Die Dokumentauswertung ist derzeit ausgelastet.", 429, false, status);
   }
   if (status === 413) {
-    return new ScanningProviderError("Die Datei ist für die Dokumentauswertung zu groß.", 413);
+    return new ScanningProviderError("Die Datei ist für die Dokumentauswertung zu groß.", 413, false, status);
   }
-  return new ScanningProviderError("Die Dokumentauswertung ist derzeit nicht erreichbar.", 502);
+  if (status === 400 || status === 422) {
+    return new ScanningProviderError(
+      "Die Dokumentauswertung konnte das angeforderte Ausgabeformat nicht verarbeiten.",
+      502,
+      false,
+      status,
+    );
+  }
+  return new ScanningProviderError("Die Dokumentauswertung ist derzeit nicht erreichbar.", 502, false, status);
 }
 
 async function openRouterRequest(body: JsonRecord, signal?: AbortSignal): Promise<unknown> {
@@ -281,19 +292,40 @@ export async function extractScanningDocuments(
   const attachment = upload.kind === "pdf"
     ? { type: "file", file: { filename: upload.name, file_data: dataUrl } }
     : { type: "image_url", image_url: { url: dataUrl } };
-  const payload = await openRouterRequest({
-    messages: [{
-      role: "user",
-      content: [{ type: "text", text: extractionPrompt(upload.name) }, attachment],
-    }],
-    ...(upload.kind === "pdf"
-      ? { plugins: [{ id: "file-parser", pdf: { engine: "native" } }] }
-      : {}),
-    response_format: { type: "json_schema", json_schema: DOCUMENTS_SCHEMA },
+  const messages = [{
+    role: "user",
+    content: [{ type: "text", text: extractionPrompt(upload.name) }, attachment],
+  }];
+  const requestBase = {
+    messages,
     temperature: 0,
     max_tokens: 12_000,
-  }, signal);
-  return parseScanningDocuments(parseJsonContent(payload, "Die Dokumentauswertung"), upload);
+  };
+  try {
+    const payload = await openRouterRequest({
+      ...requestBase,
+      response_format: { type: "json_schema", json_schema: DOCUMENTS_SCHEMA },
+    }, signal);
+    return parseScanningDocuments(parseJsonContent(payload, "Die Dokumentauswertung"), upload);
+  } catch (error) {
+    if (
+      !(error instanceof ScanningProviderError)
+      || error.fatal
+      || (
+        error.upstreamStatus !== null
+        && error.upstreamStatus !== 400
+        && error.upstreamStatus !== 422
+      )
+    ) {
+      throw error;
+    }
+    const fallbackPayload = await openRouterRequest({
+      ...requestBase,
+      response_format: { type: "json_object" },
+      plugins: [{ id: "response-healing" }],
+    }, signal);
+    return parseScanningDocuments(parseJsonContent(fallbackPayload, "Die Dokumentauswertung"), upload);
+  }
 }
 
 const ORGANIZATION_SCHEMA = {

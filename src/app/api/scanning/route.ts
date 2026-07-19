@@ -274,7 +274,12 @@ export async function POST(request: Request) {
           }
           const successfulDocuments = documentsByUpload.flat();
           if (successfulDocuments.length === 0) {
-            send({ type: "error", error: "Keine Datei konnte ausgewertet werden." });
+            const statuses = parsed.statuses.map((status) => statusById.get(status.id) ?? status);
+            const firstFailure = statuses.find((status) => status.status === "failed" && status.detail)?.detail;
+            send({
+              type: "error",
+              error: firstFailure || "Keine Datei konnte ausgewertet werden.",
+            });
             controller.close();
             return;
           }

@@ -218,7 +218,7 @@ describe("POST /api/scanning", () => {
   it("emits a friendly error for complete and fatal provider failures", async () => {
     vi.mocked(extractScanningDocuments).mockRejectedValueOnce(new ScanningProviderError("Nicht lesbar", 502));
     const completeFailure = await POST(multipart([{ field: "pdf", file: pdf("a.pdf") }], "failed-user"));
-    expect(await events(completeFailure)).toContainEqual({ type: "error", error: "Keine Datei konnte ausgewertet werden." });
+    expect(await events(completeFailure)).toContainEqual({ type: "error", error: "Nicht lesbar" });
 
     vi.mocked(extractScanningDocuments).mockRejectedValueOnce(
       new ScanningProviderError("Scanning ist serverseitig nicht konfiguriert.", 503, true),

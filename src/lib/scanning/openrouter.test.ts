@@ -86,12 +86,53 @@ describe("OpenRouter scanning adapter", () => {
     expect(body.model).toBe("google/gemini-3.5-flash");
     expect(JSON.stringify(body)).toContain("data:application/pdf;base64,");
     expect(JSON.stringify(body)).toContain('"strict":true');
-    expect(JSON.stringify(body)).toContain('"engine":"native"');
+    expect(JSON.stringify(body)).not.toContain('"file-parser"');
     expect(JSON.stringify(body)).toContain("Untersuche bei PDFs ausnahmslos alle Seiten");
     expect(JSON.stringify(body)).toContain("jeden eigenständigen Beleg genau einen Eintrag");
     expect(JSON.stringify(body)).toContain("fremdsprachige Sachtexte sinngemäß und sachlich ins Deutsche");
     expect(JSON.stringify(body)).toContain("Belegnummern, Aktenzeichen, Artikelnummern, Beträge");
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+  });
+
+  it("falls back to validated JSON mode when a provider rejects the strict schema", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(new Response("invalid schema", { status: 400 }))
+      .mockResolvedValueOnce(providerResponse({ documents: [rawDocument()] }));
+    const upload: ScanningUpload = {
+      id: "fallback-file",
+      name: "Sammel.pdf",
+      kind: "pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 5,
+      sha256: "hash",
+      bytes: new TextEncoder().encode("%PDF-"),
+    };
+
+    await expect(extractScanningDocuments(upload)).resolves.toMatchObject([
+      { documentId: "fallback-file:1", documentNumber: "R-7" },
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const fallbackBody = JSON.parse(String(vi.mocked(fetch).mock.calls[1]?.[1]?.body)) as Record<string, unknown>;
+    expect(fallbackBody.response_format).toEqual({ type: "json_object" });
+    expect(fallbackBody.plugins).toEqual([{ id: "response-healing" }]);
+  });
+
+  it("also retries when the strict response contains unusable structured data", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(providerResponse({ documents: [] }))
+      .mockResolvedValueOnce(providerResponse({ documents: [rawDocument()] }));
+    const upload: ScanningUpload = {
+      id: "empty-first-result",
+      name: "Sammel.pdf",
+      kind: "pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 5,
+      sha256: "hash",
+      bytes: new TextEncoder().encode("%PDF-"),
+    };
+
+    await expect(extractScanningDocuments(upload)).resolves.toHaveLength(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it("uses only known document ids when harmonizing categories", async () => {
