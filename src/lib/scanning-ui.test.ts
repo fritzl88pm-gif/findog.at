@@ -13,6 +13,8 @@ describe("Scanning UI integration", () => {
   it("adds Scanning to both navigation modes as its own app view", () => {
     expect(pageSource).toContain('type AppView = "chat" | "scanning"');
     expect(pageSource.match(/onClick=\{openScanningView\}/gu)).toHaveLength(2);
+    expect(pageSource).toMatch(/BFG Suche PRO\s*<\/button>\s*<button[\s\S]*?onClick=\{openScanningView\}/u);
+    expect(pageSource).toMatch(/aria-label="BFG Suche PRO"[\s\S]*?<\/button>\s*<button[\s\S]*?onClick=\{openScanningView\}/u);
     expect(pageSource).toContain('appView === "scanning"');
     expect(pageSource).toContain("<ScanningView accessToken={session?.access_token ?? \"\"} />");
   });
@@ -29,6 +31,10 @@ describe("Scanning UI integration", () => {
     expect(viewSource).toContain("nur Apothekenrechnungen, nur Büromaterialien oder nur Amazon-Rechnungen");
     expect(viewSource).toContain('formData.append("instructions", normalizedInstructions)');
     expect(viewSource).toContain("scanning-pdf-button");
+    expect(viewSource).toContain("scanning-pdf-icon");
+    expect(viewSource).toContain('src="/fred_scan.png"');
+    expect(viewSource).toContain("scanning-empty-image");
+    expect(viewSource).not.toContain("scanning-empty-icon");
     expect(viewSource).toContain('fetch("/api/scanning"');
     expect(viewSource).toContain('fetch("/api/tools/pdf"');
     expect(viewSource).toContain("abortRef.current?.abort()");

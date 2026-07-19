@@ -2607,6 +2607,15 @@ export default function Home() {
                 BFG Suche PRO
               </button>
               <button
+                className={`sidebar-view-button ${appView === "scanning" ? "active" : ""}`}
+                type="button"
+                onClick={openScanningView}
+                aria-current={appView === "scanning" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8h10M7 12h10M7 16h6" /></svg>
+                Scanning
+              </button>
+              <button
                 className={`sidebar-view-button ${appView === "german-sv-pension" ? "active" : ""}`}
                 type="button"
                 onClick={openGermanSvPensionView}
@@ -2632,15 +2641,6 @@ export default function Home() {
               >
                 <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17h3l2-4 3 2 2-5 2 4h4"></path><path d="M5 7h.01M9 5h.01M13 7h.01"></path></svg>
                 Fredrun
-              </button>
-              <button
-                className={`sidebar-view-button ${appView === "scanning" ? "active" : ""}`}
-                type="button"
-                onClick={openScanningView}
-                aria-current={appView === "scanning" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8h10M7 12h10M7 16h6" /></svg>
-                Scanning
               </button>
               <button
                 className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
@@ -2707,6 +2707,16 @@ export default function Home() {
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"></path><path d="m19 15 .75 2.25L22 18l-2.25.75L19 21l-.75-2.25L16 18l2.25-.75L19 15Z"></path></svg>
             </button>
             <button
+              className={`icon-button rail-icon-btn ${appView === "scanning" ? "active" : ""}`}
+              type="button"
+              onClick={openScanningView}
+              title="Scanning"
+              aria-label="Scanning"
+              aria-current={appView === "scanning" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8h10M7 12h10M7 16h6" /></svg>
+            </button>
+            <button
               className={`icon-button rail-icon-btn ${appView === "german-sv-pension" ? "active" : ""}`}
               type="button"
               onClick={openGermanSvPensionView}
@@ -2735,16 +2745,6 @@ export default function Home() {
               aria-current={appView === "fredrun" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17h3l2-4 3 2 2-5 2 4h4"></path><path d="M5 7h.01M9 5h.01M13 7h.01"></path></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "scanning" ? "active" : ""}`}
-              type="button"
-              onClick={openScanningView}
-              title="Scanning"
-              aria-label="Scanning"
-              aria-current={appView === "scanning" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8h10M7 12h10M7 16h6" /></svg>
             </button>
             {isAdmin ? (
               <button

@@ -2,6 +2,7 @@
 
 import type { ChangeEvent, DragEvent, FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 
 import RichAnswer from "@/components/rich-answer";
 import {
@@ -248,13 +249,18 @@ export default function ScanningView({ accessToken }: { accessToken: string }) {
           <div className="transcript-content">
             {!hasSubmission ? (
               <div className="empty-state scanning-empty-state">
-                <div className="scanning-empty-icon" aria-hidden="true">
-                  <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8h10M7 12h10M7 16h6" /></svg>
-                </div>
-                <div>
+                <div className="scanning-empty-copy">
                   <h1 className="welcome-greeting">Rechnungen und Belege übersichtlich auswerten</h1>
                   <p>Bis zu fünf Bilder und fünf PDFs werden kategorisiert, chronologisch geordnet und summiert.</p>
                 </div>
+                <Image
+                  className="scanning-empty-image"
+                  src="/fred_scan.png"
+                  alt="Fred scannt Rechnungen und Belege"
+                  width={376}
+                  height={376}
+                  priority
+                />
               </div>
             ) : (
               <>
@@ -300,7 +306,12 @@ export default function ScanningView({ accessToken }: { accessToken: string }) {
                   {report ? (
                     <div className="scanning-result-actions">
                       <button className="secondary-button compact-button scanning-pdf-button" type="button" onClick={() => void downloadPdf()} disabled={isDownloading}>
-                        {isDownloading ? "PDF wird erstellt …" : "Als PDF herunterladen"}
+                        <svg className="scanning-pdf-icon" viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M6.5 2.75h7.75l3.25 3.5v15H6.5z" />
+                          <path d="M14 2.75v3.75h3.5" />
+                          <text x="12" y="16.3">PDF</text>
+                        </svg>
+                        <span>{isDownloading ? "PDF wird erstellt …" : "Als PDF herunterladen"}</span>
                       </button>
                       <button className="primary-button compact-button" type="button" onClick={resetScanning}>Neue Auswertung</button>
                     </div>
