@@ -56,17 +56,17 @@ describe("OpenRouter scanning adapter", () => {
     expect(serialized).toContain("data:image/png;base64,");
     expect(body.response_format).toBeUndefined();
     expect(body.plugins).toBeUndefined();
-    expect(serialized).toContain("jede Seite");
-    expect(serialized).toContain("gedrehte, seitlich liegende oder auf dem Kopf stehende Seiten");
-    expect(serialized).toContain("als genau einen Beleg");
-    expect(serialized).toContain("eindeutig zusammengehören, in einer gemeinsamen Tabelle");
-    expect(serialized).toContain("Pos., Datum, Beschreibung und Summe");
-    expect(serialized).toContain("steht für eine vollständige Rechnung oder einen vollständigen Beleg");
-    expect(serialized).toContain("Liste die Einzelpositionen einer Rechnung nicht separat auf");
-    expect(serialized).toContain("Füge am Tabellenende genau eine Zeile Gesamtsumme hinzu");
-    expect(serialized).toContain("Zeige keine separaten Rechnungsüberschriften");
-    expect(serialized).toContain("darf im Ergebnis nicht erwähnt werden");
-    expect(serialized).toContain("deutschem Markdown");
+    expect(serialized).toContain("bei PDFs jede Seite, Anfang bis Ende");
+    expect(serialized).toContain("Gedrehte oder auf dem Kopf stehende Seiten automatisch korrigieren");
+    expect(serialized).toContain("Bilde selbst sinnvolle inhaltliche Kategorien");
+    expect(serialized).toContain("Amazon-Bestellungen, Reisekosten, Bürobedarf");
+    expect(serialized).toContain("Tabelle „Sonstiges");
+    expect(serialized).toContain("Spalten: Pos., Datum, Beschreibung, Summe");
+    expect(serialized).toContain("Jede Zeile = ein vollständiger Beleg, nicht seine Einzelpositionen");
+    expect(serialized).toContain("Am Ende jeder Tabelle eine Zeile „Gesamtsumme");
+    expect(serialized).toContain("Keine separaten Rechnungsüberschriften");
+    expect(serialized).toContain("Antworte direkt in gut lesbarem deutschem Markdown, kein JSON");
+    expect(serialized).toContain("Dateien: sammel.pdf, foto.png");
   });
 
   it("removes HTML line-break fragments from Gemini table cells", async () => {
