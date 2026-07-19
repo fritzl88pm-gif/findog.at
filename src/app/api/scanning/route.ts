@@ -14,11 +14,11 @@ import {
   MAX_SCANNING_PDFS,
   sanitizeScanningFilename,
   SCANNING_IMAGE_MIME_TYPES,
-  SCANNING_MODEL,
   SCANNING_RATE_LIMIT_REQUESTS,
   SCANNING_RATE_LIMIT_WINDOW_MS,
 } from "@/lib/scanning/config";
 import { analyzeScanningBatch, ScanningProviderError } from "@/lib/scanning/openrouter";
+import { getScanningSettings } from "@/lib/scanning/settings";
 import { encodeScanningStreamEvent, SCANNING_STREAM_CONTENT_TYPE } from "@/lib/scanning/stream";
 import type { ScanningFileStatus, ScanningUpload } from "@/lib/scanning/types";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
@@ -214,6 +214,9 @@ export async function POST(request: Request) {
     enforceRateLimit(user.id);
     const parsed = await parseUploads(request, contentType);
 
+    // Resolve scanning settings server-side, do not trust client-provided model/prompt
+    const settings = await getScanningSettings(supabase);
+
     const encoder = new TextEncoder();
     const lifetime = new AbortController();
     const onRequestAbort = () => lifetime.abort(request.signal.reason);
@@ -235,7 +238,13 @@ export async function POST(request: Request) {
             total: parsed.uploads.length,
             fileName: parsed.uploads.length === 1 ? parsed.uploads[0]?.name : `${parsed.uploads.length} Dateien`,
           });
-          const report = await analyzeScanningBatch(parsed.uploads, lifetime.signal, parsed.instructions);
+          const report = await analyzeScanningBatch(
+            parsed.uploads,
+            lifetime.signal,
+            parsed.instructions,
+            settings.modelId,
+            settings.prompt,
+          );
           const completedIds = new Set(parsed.uploads.map((upload) => upload.id));
           const statuses = parsed.statuses.map((status): ScanningFileStatus => (
             completedIds.has(status.id)
@@ -254,7 +263,7 @@ export async function POST(request: Request) {
             completed: parsed.uploads.length,
             total: parsed.uploads.length,
           });
-          send({ type: "final", report, files: statuses, model: SCANNING_MODEL });
+          send({ type: "final", report, files: statuses, model: settings.modelId });
           controller.close();
         } catch (error) {
           if (!lifetime.signal.aborted) {

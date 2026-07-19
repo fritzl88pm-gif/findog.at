@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { analyzeScanningBatch, ScanningProviderError } from "@/lib/scanning/openrouter";
+import { getScanningSettings } from "@/lib/scanning/settings";
 import { parseScanningStreamLine } from "@/lib/scanning/stream";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { POST } from "./route";
@@ -12,6 +13,9 @@ vi.mock("@/lib/scanning/openrouter", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/scanning/openrouter")>();
   return { ...original, analyzeScanningBatch: vi.fn() };
 });
+vi.mock("@/lib/scanning/settings", () => ({
+  getScanningSettings: vi.fn(),
+}));
 
 function pngBytes(marker = 0): Uint8Array<ArrayBuffer> {
   return Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, marker]);
@@ -58,6 +62,12 @@ describe("POST /api/scanning", () => {
     vi.mocked(analyzeScanningBatch).mockResolvedValue(
       "| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.10.2024 | Betreuung Oktober | 2.680,00 EUR |\n| 2 | 01.11.2024 | Betreuung November | 2.060,00 EUR |\n| | | Gesamtsumme | 4.740,00 EUR |",
     );
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      modelId: "google/gemini-3.5-flash",
+      prompt: "Default scanning prompt",
+      updatedAt: "2026-07-19T08:00:00.000Z",
+      updatedBy: null,
+    });
   });
 
   it("sends five images and five PDFs together and streams the direct report", async () => {
@@ -87,6 +97,32 @@ describe("POST /api/scanning", () => {
     expect(getSupabaseServerClient).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves scanning settings from the server and passes them to the adapter", async () => {
+    vi.mocked(getScanningSettings).mockResolvedValueOnce({
+      modelId: "anthropic/claude-sonnet-4-20250514",
+      prompt: "Custom scanning instructions",
+      updatedAt: "2026-07-19T09:00:00.000Z",
+      updatedBy: "admin-1",
+    });
+
+    const response = await POST(multipart([{ field: "pdf", file: pdf("custom.pdf") }], "custom-user"));
+    const final = (await events(response)).find((event) => event?.type === "final");
+
+    expect(response.status).toBe(200);
+    expect(getScanningSettings).toHaveBeenCalled();
+    expect(analyzeScanningBatch).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(AbortSignal),
+      "",
+      "anthropic/claude-sonnet-4-20250514",
+      "Custom scanning instructions",
+    );
+    expect(final).toMatchObject({
+      type: "final",
+      model: "anthropic/claude-sonnet-4-20250514",
+    });
+  });
+
   it("forwards one grouped row per invoice plus the shared total", async () => {
     vi.mocked(analyzeScanningBatch).mockResolvedValueOnce(
       "| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.10.2024 | Betreuung Oktober | 2.680,00 EUR |\n| 2 | 01.11.2024 | Betreuung November | 2.060,00 EUR |\n| | | Gesamtsumme | 4.740,00 EUR |",
@@ -111,6 +147,8 @@ describe("POST /api/scanning", () => {
       expect.any(Array),
       expect.any(AbortSignal),
       "nur Apothekenrechnungen",
+      expect.any(String),
+      expect.any(String),
     );
   });
 

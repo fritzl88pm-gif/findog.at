@@ -2338,6 +2338,42 @@ textarea:focus {
   padding: 22px;
 }
 
+.admin-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 20px;
+  border-bottom: 2px solid var(--border-color);
+}
+
+.admin-tab-button {
+  flex: 0 0 auto;
+  padding: 10px 20px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.admin-tab-button:hover {
+  color: var(--bmf-blue-dark);
+  border-bottom-color: rgba(40, 111, 156, 0.2);
+}
+
+.admin-tab-button.active {
+  color: var(--bmf-blue);
+  border-bottom-color: var(--bmf-blue);
+}
+
+.admin-tab-button:focus-visible {
+  outline: 2px solid var(--bmf-blue);
+  outline-offset: -2px;
+}
+
 .admin-system-prompt-textarea {
   min-height: 520px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;

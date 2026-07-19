@@ -39,7 +39,7 @@ export function parseScanningStreamLine(line: string): ScanningStreamEvent | nul
     event.type === "final"
     && typeof event.report === "string"
     && Array.isArray(event.files)
-    && event.model === "google/gemini-3.5-flash"
+    && typeof event.model === "string"
   ) {
     return event as ScanningStreamEvent;
   }

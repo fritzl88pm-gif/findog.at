@@ -32,6 +32,6 @@ export type ScanningStreamEvent =
       type: "final";
       report: string;
       files: ScanningFileStatus[];
-      model: "google/gemini-3.5-flash";
+      model: string;
     }
   | { type: "error"; error: string };

@@ -1095,6 +1095,28 @@ function GermanPensionOptionView() {
 }
 
 
+
+const ADMIN_TAB_IDS = ["scanning", "bfg-pro", "benutzer"] as const;
+function handleAdminTabKeyDown(event: React.KeyboardEvent, currentTab: string): void {
+  const currentIndex = ADMIN_TAB_IDS.indexOf(currentTab as typeof ADMIN_TAB_IDS[number]);
+  let nextIndex: number | undefined;
+  if (event.key === "ArrowRight") {
+    nextIndex = (currentIndex + 1) % ADMIN_TAB_IDS.length;
+  } else if (event.key === "ArrowLeft") {
+    nextIndex = (currentIndex - 1 + ADMIN_TAB_IDS.length) % ADMIN_TAB_IDS.length;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = ADMIN_TAB_IDS.length - 1;
+  }
+  if (nextIndex !== undefined) {
+    event.preventDefault();
+    const nextId = ADMIN_TAB_IDS[nextIndex];
+    const button = document.getElementById(`admin-tab-${nextId}`) as HTMLElement | null;
+    button?.click();
+    button?.focus();
+  }
+}
 export default function Home() {
   const supabase = getSupabaseBrowserClient();
   const [fredConversationId, setFredConversationId] = useState("");
@@ -1120,6 +1142,12 @@ export default function Home() {
   const [isAdminUsersLoading, setIsAdminUsersLoading] = useState(false);
   const [isAdminUserCreating, setIsAdminUserCreating] = useState(false);
   const [isAdminUserMutationRunning, setIsAdminUserMutationRunning] = useState(false);
+  const [adminTab, setAdminTab] = useState<"scanning" | "bfg-pro" | "benutzer">("scanning");
+  const [scanningModelId, setScanningModelId] = useState("");
+  const [scanningPrompt, setScanningPrompt] = useState("");
+  const [isScanningSettingsLoading, setIsScanningSettingsLoading] = useState(false);
+  const [isScanningSettingsSaving, setIsScanningSettingsSaving] = useState(false);
+
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthLoaded, setIsAuthLoaded] = useState(false);
   const [authForm, setAuthForm] = useState<AuthForm>({ email: "", password: "" });
@@ -1252,6 +1280,9 @@ export default function Home() {
         setAdminUsers([]);
         setAdminUserProfile(null);
         setAdminUserForm({ email: "", password: "" });
+        setAdminTab("scanning");
+        setScanningModelId("");
+        setScanningPrompt("");
         return;
       }
 
@@ -1858,17 +1889,101 @@ export default function Home() {
     }
   }
 
+  async function loadScanningSettings(accessToken: string) {
+    setIsScanningSettingsLoading(true);
+    try {
+      const response = await fetch("/api/admin/scanning-settings", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (
+        !response.ok
+        || typeof payload.modelId !== "string"
+        || !payload.modelId.trim()
+        || typeof payload.prompt !== "string"
+        || !payload.prompt.trim()
+        || typeof payload.updatedAt !== "string"
+      ) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Die Scanning-Konfiguration konnte nicht geladen werden.",
+        );
+      }
+      setScanningModelId(payload.modelId);
+      setScanningPrompt(payload.prompt);
+    } catch (settingsError) {
+      setAdminError(settingsError instanceof Error
+        ? settingsError.message
+        : "Die Scanning-Konfiguration konnte nicht geladen werden.");
+    } finally {
+      setIsScanningSettingsLoading(false);
+    }
+  }
+
+  async function saveScanningSettings() {
+    const accessToken = session?.access_token;
+    if (
+      !accessToken
+      || !isAdmin
+      || isScanningSettingsSaving
+      || !scanningModelId.trim()
+      || !scanningPrompt.trim()
+    ) {
+      return;
+    }
+    setAdminError("");
+    setAdminNotice("");
+    setIsScanningSettingsSaving(true);
+    try {
+      const response = await fetch("/api/admin/scanning-settings", {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ modelId: scanningModelId.trim(), prompt: scanningPrompt.trim() }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (
+        !response.ok
+        || typeof payload.modelId !== "string"
+        || !payload.modelId.trim()
+        || typeof payload.prompt !== "string"
+        || !payload.prompt.trim()
+        || typeof payload.updatedAt !== "string"
+      ) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : "Die Scanning-Konfiguration konnte nicht gespeichert werden.",
+        );
+      }
+      setScanningModelId(payload.modelId);
+      setScanningPrompt(payload.prompt);
+      setAdminNotice("Die Scanning-Konfiguration wurde gespeichert und gilt für neue Auswertungen.");
+    } catch (settingsError) {
+      setAdminError(settingsError instanceof Error
+        ? settingsError.message
+        : "Die Scanning-Konfiguration konnte nicht gespeichert werden.");
+    } finally {
+      setIsScanningSettingsSaving(false);
+    }
+  }
+
   async function openAdministrationView() {
     const accessToken = session?.access_token;
     if (!isAdmin || !accessToken) {
       return;
     }
     setAppView("administration");
+    setAdminTab("scanning");
     setAdminError("");
     setAdminNotice("");
     setIsAdminUsersLoading(true);
     setAdminUserProfile(null);
     void loadAdminSystemPrompt(accessToken);
+    void loadScanningSettings(accessToken);
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
     }
@@ -3452,178 +3567,271 @@ export default function Home() {
                 {adminNotice}
               </div>
             ) : null}
-            <section className="form-generator-card admin-system-prompt-card" aria-labelledby="admin-system-prompt-title">
-              <div className="form-generator-heading">
-                <h2 id="admin-system-prompt-title">Globaler Systemprompt</h2>
-                <p>Dieser gespeicherte Prompt steuert weiterhin die KI-Reihung der BFG Suche PRO.</p>
-              </div>
-              <div className="field-group">
-                <label htmlFor="admin-system-prompt">Systemprompt</label>
-                <textarea
-                  id="admin-system-prompt"
-                  className="admin-system-prompt-textarea"
-                  value={adminSystemPrompt}
-                  onChange={(event) => {
-                    setAdminSystemPrompt(event.target.value);
-                    setAdminError("");
-                    setAdminNotice("");
-                  }}
-                  rows={24}
-                  spellCheck={false}
-                  disabled={isAdminSystemPromptLoading || isAdminSystemPromptSaving}
-                />
-                <small>
-                  Keine Zeichenbegrenzung · {adminSystemPrompt.length.toLocaleString("de-AT")} Zeichen
-                  {adminSystemPromptUpdatedAt ? ` · zuletzt gespeichert ${formatAdminDate(adminSystemPromptUpdatedAt)}` : ""}
-                </small>
-              </div>
-              <div className="admin-model-actions">
-                <button
-                  className="primary-button"
-                  type="button"
-                  onClick={() => void saveAdminSystemPrompt()}
-                  disabled={
-                    isAdminSystemPromptLoading
-                    || isAdminSystemPromptSaving
-                    || !adminSystemPrompt.trim()
-                  }
-                >
-                  {isAdminSystemPromptSaving ? "Wird gespeichert…" : "Systemprompt speichern"}
-                </button>
-              </div>
-            </section>
-            <div className="admin-user-management">
-              <div className="form-generator-card admin-create-user-card">
+            <div className="admin-tabs" role="tablist" aria-label="Administration">
+              <button
+                id="admin-tab-scanning"
+                className={`admin-tab-button ${adminTab === "scanning" ? "active" : ""}`}
+                role="tab"
+                aria-selected={adminTab === "scanning"}
+                aria-controls="admin-panel-scanning"
+                onClick={() => setAdminTab("scanning")}
+                onKeyDown={(e) => handleAdminTabKeyDown(e, "scanning")}
+              >
+                Scanning
+              </button>
+              <button
+                id="admin-tab-bfg-pro"
+                className={`admin-tab-button ${adminTab === "bfg-pro" ? "active" : ""}`}
+                role="tab"
+                aria-selected={adminTab === "bfg-pro"}
+                aria-controls="admin-panel-bfg-pro"
+                onClick={() => setAdminTab("bfg-pro")}
+                onKeyDown={(e) => handleAdminTabKeyDown(e, "bfg-pro")}
+              >
+                BFG PRO
+              </button>
+              <button
+                id="admin-tab-benutzer"
+                className={`admin-tab-button ${adminTab === "benutzer" ? "active" : ""}`}
+                role="tab"
+                aria-selected={adminTab === "benutzer"}
+                aria-controls="admin-panel-benutzer"
+                onClick={() => setAdminTab("benutzer")}
+                onKeyDown={(e) => handleAdminTabKeyDown(e, "benutzer")}
+              >
+                Benutzer
+              </button>
+            </div>
+            {adminTab === "scanning" ? (
+              <section className="form-generator-card admin-system-prompt-card" role="tabpanel" id="admin-panel-scanning" aria-labelledby="admin-tab-scanning">
                 <div className="form-generator-heading">
-                  <h2>Benutzer anlegen</h2>
-                  <p>Erstellt ein bestätigtes Konto für die Anmeldung mit E-Mail und Passwort.</p>
+                  <h2>Scanning-Einstellungen</h2>
+                  <p>OpenRouter-Modell und vollständiger statischer Prompt für die Belegauswertung.</p>
                 </div>
-                <form className="admin-create-user-form" onSubmit={(event) => void createAdminManagedUser(event)}>
-                  <div className="field-group">
-                    <label htmlFor="admin-user-email">E-Mail</label>
-                    <input
-                      id="admin-user-email"
-                      type="email"
-                      autoComplete="off"
-                      value={adminUserForm.email}
-                      onChange={(event) => setAdminUserForm((current) => ({
-                        ...current,
-                        email: event.target.value,
-                      }))}
-                      required
-                      disabled={isAdminUserCreating}
-                    />
-                  </div>
-                  <div className="field-group">
-                    <label htmlFor="admin-user-password">Passwort</label>
-                    <input
-                      id="admin-user-password"
-                      type="password"
-                      autoComplete="new-password"
-                      minLength={6}
-                      maxLength={72}
-                      value={adminUserForm.password}
-                      onChange={(event) => setAdminUserForm((current) => ({
-                        ...current,
-                        password: event.target.value,
-                      }))}
-                      required
-                      disabled={isAdminUserCreating}
-                    />
-                  </div>
+                <div className="field-group">
+                  <label htmlFor="scanning-model-id">OpenRouter-Modell-ID</label>
+                  <input
+                    id="scanning-model-id"
+                    type="text"
+                    value={scanningModelId}
+                    onChange={(event) => {
+                      setScanningModelId(event.target.value);
+                      setAdminError("");
+                      setAdminNotice("");
+                    }}
+                    spellCheck={false}
+                    disabled={isScanningSettingsLoading || isScanningSettingsSaving}
+                    placeholder="z. B. google/gemini-3.5-flash"
+                  />
+                </div>
+                <div className="field-group">
+                  <label htmlFor="scanning-prompt">Scanning-Prompt</label>
+                  <textarea
+                    id="scanning-prompt"
+                    className="admin-system-prompt-textarea"
+                    value={scanningPrompt}
+                    onChange={(event) => {
+                      setScanningPrompt(event.target.value);
+                      setAdminError("");
+                      setAdminNotice("");
+                    }}
+                    rows={24}
+                    spellCheck={false}
+                    disabled={isScanningSettingsLoading || isScanningSettingsSaving}
+                  />
+
+                </div>
+                <div className="admin-model-actions">
                   <button
                     className="primary-button"
-                    type="submit"
-                    disabled={isAdminUserCreating || !adminUserForm.email.trim() || adminUserForm.password.length < 6}
+                    type="button"
+                    onClick={() => void saveScanningSettings()}
+                    disabled={
+                      isScanningSettingsLoading
+                      || isScanningSettingsSaving
+                      || !scanningModelId.trim()
+                      || !scanningPrompt.trim()
+                    }
                   >
-                    {isAdminUserCreating ? "Wird angelegt…" : "Benutzer anlegen"}
+                    {isScanningSettingsSaving ? "Wird gespeichert…" : "Scanning-Einstellungen speichern"}
                   </button>
-                </form>
-              </div>
-
-              <div className="form-generator-card admin-user-list-card">
-                <div className="form-generator-heading">
-                  <h2>Benutzer</h2>
-                  <p>{adminUsers.length} Konten</p>
                 </div>
-                {isAdminUsersLoading && adminUsers.length === 0 ? (
-                  <p className="admin-empty-state">Benutzer werden geladen…</p>
-                ) : adminUsers.length === 0 ? (
-                  <p className="admin-empty-state">Keine Benutzer gefunden.</p>
-                ) : (
-                  <ul className="admin-user-list">
-                    {adminUsers.map((adminUser) => (
-                      <li key={adminUser.id}>
+              </section>
+            ) : adminTab === "bfg-pro" ? (
+              <section className="form-generator-card admin-system-prompt-card" role="tabpanel" id="admin-panel-bfg-pro" aria-labelledby="admin-tab-bfg-pro">
+                <div className="form-generator-heading">
+                  <h2>Globaler Systemprompt</h2>
+                  <p>Dieser gespeicherte Prompt steuert weiterhin die KI-Reihung der BFG Suche PRO.</p>
+                </div>
+                <div className="field-group">
+                  <label htmlFor="admin-system-prompt">Systemprompt</label>
+                  <textarea
+                    id="admin-system-prompt"
+                    className="admin-system-prompt-textarea"
+                    value={adminSystemPrompt}
+                    onChange={(event) => {
+                      setAdminSystemPrompt(event.target.value);
+                      setAdminError("");
+                      setAdminNotice("");
+                    }}
+                    rows={24}
+                    spellCheck={false}
+                    disabled={isAdminSystemPromptLoading || isAdminSystemPromptSaving}
+                  />
+                  <small>
+                    Keine Zeichenbegrenzung · {adminSystemPrompt.length.toLocaleString("de-AT")} Zeichen
+                    {adminSystemPromptUpdatedAt ? ` · zuletzt gespeichert ${formatAdminDate(adminSystemPromptUpdatedAt)}` : ""}
+                  </small>
+                </div>
+                <div className="admin-model-actions">
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={() => void saveAdminSystemPrompt()}
+                    disabled={
+                      isAdminSystemPromptLoading
+                      || isAdminSystemPromptSaving
+                      || !adminSystemPrompt.trim()
+                    }
+                  >
+                    {isAdminSystemPromptSaving ? "Wird gespeichert…" : "Systemprompt speichern"}
+                  </button>
+                </div>
+              </section>
+            ) : (
+              <section className="admin-user-management" role="tabpanel" id="admin-panel-benutzer" aria-labelledby="admin-tab-benutzer">
+                <div className="form-generator-card admin-create-user-card">
+                  <div className="form-generator-heading">
+                    <h2>Benutzer anlegen</h2>
+                    <p>Erstellt ein bestätigtes Konto für die Anmeldung mit E-Mail und Passwort.</p>
+                  </div>
+                  <form className="admin-create-user-form" onSubmit={(event) => void createAdminManagedUser(event)}>
+                    <div className="field-group">
+                      <label htmlFor="admin-user-email">E-Mail</label>
+                      <input
+                        id="admin-user-email"
+                        type="email"
+                        autoComplete="off"
+                        value={adminUserForm.email}
+                        onChange={(event) => setAdminUserForm((current) => ({
+                          ...current,
+                          email: event.target.value,
+                        }))}
+                        required
+                        disabled={isAdminUserCreating}
+                      />
+                    </div>
+                    <div className="field-group">
+                      <label htmlFor="admin-user-password">Passwort</label>
+                      <input
+                        id="admin-user-password"
+                        type="password"
+                        autoComplete="new-password"
+                        minLength={6}
+                        maxLength={72}
+                        value={adminUserForm.password}
+                        onChange={(event) => setAdminUserForm((current) => ({
+                          ...current,
+                          password: event.target.value,
+                        }))}
+                        required
+                        disabled={isAdminUserCreating}
+                      />
+                    </div>
+                    <button
+                      className="primary-button"
+                      type="submit"
+                      disabled={isAdminUserCreating || !adminUserForm.email.trim() || adminUserForm.password.length < 6}
+                    >
+                      {isAdminUserCreating ? "Wird angelegt…" : "Benutzer anlegen"}
+                    </button>
+                  </form>
+                </div>
+
+                <div className="form-generator-card admin-user-list-card">
+                  <div className="form-generator-heading">
+                    <h2>Benutzer</h2>
+                    <p>{adminUsers.length} Konten</p>
+                  </div>
+                  {isAdminUsersLoading && adminUsers.length === 0 ? (
+                    <p className="admin-empty-state">Benutzer werden geladen…</p>
+                  ) : adminUsers.length === 0 ? (
+                    <p className="admin-empty-state">Keine Benutzer gefunden.</p>
+                  ) : (
+                    <ul className="admin-user-list">
+                      {adminUsers.map((adminUser) => (
+                        <li key={adminUser.id}>
+                          <button
+                            type="button"
+                            className={adminUserProfile?.user.id === adminUser.id ? "active" : undefined}
+                            onClick={() => void loadAdminUserProfile(adminUser.id)}
+                            disabled={isAdminUsersLoading || isAdminUserMutationRunning}
+                          >
+                            <strong>{adminUser.email || "Ohne E-Mail"}</strong>
+                            <small>Erstellt {formatAdminDate(adminUser.createdAt)}</small>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                <div className="form-generator-card admin-user-profile-card">
+                  <div className="form-generator-heading">
+                    <h2>Benutzerprofil</h2>
+                    <p>Der Anfrageverlauf enthält ausschließlich Eingaben des Benutzers.</p>
+                  </div>
+                  {!adminUserProfile ? (
+                    <p className="admin-empty-state">Wähle einen Benutzer aus der Liste.</p>
+                  ) : (
+                    <>
+                      <dl className="admin-profile-metadata">
+                        <div><dt>E-Mail</dt><dd>{adminUserProfile.user.email || "–"}</dd></div>
+                        <div><dt>Erstellt</dt><dd>{formatAdminDate(adminUserProfile.user.createdAt)}</dd></div>
+                        <div><dt>Letzte Anmeldung</dt><dd>{formatAdminDate(adminUserProfile.user.lastSignInAt)}</dd></div>
+                        <div><dt>Anfragen</dt><dd>{adminUserProfile.requestCount}</dd></div>
+                      </dl>
+                      <div className="admin-request-history">
+                        <h3>Anfrageverlauf</h3>
+                        {adminUserProfile.requests.length === 0 ? (
+                          <p className="admin-empty-state">Keine protokollierten Anfragen.</p>
+                        ) : (
+                          <ol>
+                            {adminUserProfile.requests.map((entry) => (
+                              <li key={entry.id}>
+                                <time dateTime={entry.createdAt}>{formatAdminDate(entry.createdAt)}</time>
+                                <p>{entry.content}</p>
+                              </li>
+                            ))}
+                          </ol>
+                        )}
+                      </div>
+                      <div className="admin-profile-actions">
                         <button
+                          className="secondary-button danger-button"
                           type="button"
-                          className={adminUserProfile?.user.id === adminUser.id ? "active" : undefined}
-                          onClick={() => void loadAdminUserProfile(adminUser.id)}
-                          disabled={isAdminUsersLoading || isAdminUserMutationRunning}
+                          onClick={() => void deleteAdminRequestHistory()}
+                          disabled={isAdminUserMutationRunning || adminUserProfile.requestCount === 0}
                         >
-                          <strong>{adminUser.email || "Ohne E-Mail"}</strong>
-                          <small>Erstellt {formatAdminDate(adminUser.createdAt)}</small>
+                          Anfrageverlauf löschen
                         </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
-              <div className="form-generator-card admin-user-profile-card">
-                <div className="form-generator-heading">
-                  <h2>Benutzerprofil</h2>
-                  <p>Der Anfrageverlauf enthält ausschließlich Eingaben des Benutzers.</p>
+                        <button
+                          className="secondary-button danger-button"
+                          type="button"
+                          onClick={() => void deleteAdminManagedUser()}
+                          disabled={isAdminUserMutationRunning || adminUserProfile.user.id === user?.id}
+                          title={adminUserProfile.user.id === user?.id
+                            ? "Das eigene Administratorkonto kann nicht gelöscht werden."
+                            : undefined}
+                        >
+                          Konto löschen
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
-                {!adminUserProfile ? (
-                  <p className="admin-empty-state">Wähle einen Benutzer aus der Liste.</p>
-                ) : (
-                  <>
-                    <dl className="admin-profile-metadata">
-                      <div><dt>E-Mail</dt><dd>{adminUserProfile.user.email || "–"}</dd></div>
-                      <div><dt>Erstellt</dt><dd>{formatAdminDate(adminUserProfile.user.createdAt)}</dd></div>
-                      <div><dt>Letzte Anmeldung</dt><dd>{formatAdminDate(adminUserProfile.user.lastSignInAt)}</dd></div>
-                      <div><dt>Anfragen</dt><dd>{adminUserProfile.requestCount}</dd></div>
-                    </dl>
-                    <div className="admin-request-history">
-                      <h3>Anfrageverlauf</h3>
-                      {adminUserProfile.requests.length === 0 ? (
-                        <p className="admin-empty-state">Keine protokollierten Anfragen.</p>
-                      ) : (
-                        <ol>
-                          {adminUserProfile.requests.map((entry) => (
-                            <li key={entry.id}>
-                              <time dateTime={entry.createdAt}>{formatAdminDate(entry.createdAt)}</time>
-                              <p>{entry.content}</p>
-                            </li>
-                          ))}
-                        </ol>
-                      )}
-                    </div>
-                    <div className="admin-profile-actions">
-                      <button
-                        className="secondary-button danger-button"
-                        type="button"
-                        onClick={() => void deleteAdminRequestHistory()}
-                        disabled={isAdminUserMutationRunning || adminUserProfile.requestCount === 0}
-                      >
-                        Anfrageverlauf löschen
-                      </button>
-                      <button
-                        className="secondary-button danger-button"
-                        type="button"
-                        onClick={() => void deleteAdminManagedUser()}
-                        disabled={isAdminUserMutationRunning || adminUserProfile.user.id === user?.id}
-                        title={adminUserProfile.user.id === user?.id
-                          ? "Das eigene Administratorkonto kann nicht gelöscht werden."
-                          : undefined}
-                      >
-                        Konto löschen
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
+              </section>
+            )}
           </div>
         </section>
       ) : null}
