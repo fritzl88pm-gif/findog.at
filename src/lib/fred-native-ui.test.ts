@@ -17,7 +17,8 @@ const nextConfigSource = readFileSync(fileURLToPath(new URL("../../next.config.t
 
 describe("Fred native Findog UI", () => {
   it("keeps Fred in authenticated navigation and renders the native chat", () => {
-    expect(pageSource).toContain('type AppView = "chat" | "fred"');
+    expect(pageSource).toContain('type AppView = "chat" | "forms"');
+    expect(pageSource).not.toContain('type AppView = "chat" | "fred"');
     expect(pageSource.match(/onClick=\{openFredView\}/gu)).toHaveLength(2);
     expect(pageSource).toContain("<FredNativeChatView");
     expect(pageSource).toContain("initialMessages={fredMessages}");
@@ -26,21 +27,24 @@ describe("Fred native Findog UI", () => {
     expect(pageSource).not.toContain("<FredHistoryTranscript");
   });
 
-  it("renders Fred's image and greeting on the left in the existing Findog colours", () => {
+  it("renders Fred's image and greeting in the existing centered empty state", () => {
     expect(viewSource).toContain('src="/fred.png"');
-    expect(viewSource).toContain('className="fred-embed-hero"');
-    expect(viewSource).toContain('<h1 className="fred-embed-greeting">{welcomeGreeting}</h1>');
+    expect(viewSource).toContain('className="empty-state"');
+    expect(viewSource).toContain('<h1 className="welcome-greeting">{welcomeGreeting}</h1>');
     expect(viewSource.indexOf('src="/fred.png"')).toBeLessThan(
-      viewSource.indexOf('className="fred-embed-greeting"'),
+      viewSource.indexOf('className="welcome-greeting"'),
     );
-    expect(cssSource).toMatch(/\.fred-embed-hero \{[\s\S]*?display: flex;[\s\S]*?align-items: center;/u);
-    expect(cssSource).toMatch(/\.fred-embed-greeting \{[\s\S]*?color: var\(--bmf-blue-deep\);/u);
+    expect(cssSource).toMatch(/\.empty-state \{[\s\S]*?align-items: center;[\s\S]*?text-align: center;/u);
+    expect(cssSource).toMatch(/\.welcome-greeting \{[\s\S]*?color: var\(--bmf-blue-deep\);/u);
   });
 
   it("uses Findog message bubbles, rich answers and the native composer for live responses", () => {
     expect(viewSource).toContain('className={`message ${message.role}');
     expect(viewSource).toContain("renderAssistantContent(message.content)");
     expect(viewSource).toContain('className="composer"');
+    expect(viewSource).toContain('className="composer-icon-button"');
+    expect(viewSource).toContain("Bild anhängen");
+    expect(viewSource).toContain("Datei anhängen");
     expect(viewSource).toContain('fetch("/api/fred/chat"');
     expect(viewSource).toContain("parseFredNativeStreamLine");
     expect(viewSource).toContain("Stoppen");

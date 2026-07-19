@@ -11,7 +11,6 @@ describe("approved release surface", () => {
   const publicSettingsPath = fileURLToPath(new URL("../app/api/settings/route.ts", import.meta.url));
   const adminSettingsPath = fileURLToPath(new URL("../app/api/admin/settings/route.ts", import.meta.url));
   const chatRoutePath = fileURLToPath(new URL("../app/api/chat/route.ts", import.meta.url));
-  const agentPath = fileURLToPath(new URL("./agent.ts", import.meta.url));
   const faviconPath = fileURLToPath(new URL("../../public/favicon.png", import.meta.url));
   const bfgIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-search.png", import.meta.url));
   const bfgProIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-pro-search.png", import.meta.url));
@@ -24,7 +23,6 @@ describe("approved release surface", () => {
   const layoutSource = readFileSync(layoutPath, "utf8");
   const publicSettingsSource = readFileSync(publicSettingsPath, "utf8");
   const chatRouteSource = readFileSync(chatRoutePath, "utf8");
-  const agentSource = readFileSync(agentPath, "utf8");
   const germanSvPensionSource = readFileSync(germanSvPensionPath, "utf8");
   const nextConfigSource = readFileSync(nextConfigPath, "utf8");
 
@@ -38,7 +36,7 @@ describe("approved release surface", () => {
   });
 
   it("adds a separate BFG Suche PRO view and controls without replacing the normal search", () => {
-    expect(pageSource).toContain('type AppView = "chat" | "fred" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "administration"');
+    expect(pageSource).toContain('type AppView = "chat" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "administration"');
     expect(pageSource).toMatch(/className={`sidebar-view-button[\s\S]*?BFG Suche PRO\s*<\/button>/);
     expect(pageSource).toContain('title="BFG Suche PRO"');
     expect(pageSource).toContain('aria-label="BFG Suche PRO"');
@@ -84,7 +82,7 @@ describe("approved release surface", () => {
     expect(germanSvPensionSource).not.toContain("fetch(");
     expect(germanSvPensionSource).not.toContain("localStorage");
     expect(pageSource).toContain('onDownloadPdf={downloadGermanSvPensionPdf}');
-    expect(pageSource).toContain('fetch("/api/documents/pdf"');
+    expect(pageSource).toContain('fetch("/api/tools/pdf"');
   });
 
   it("updates the authoritative Deutsche SV Rente copy and preserves calculator output", () => {
@@ -148,7 +146,7 @@ describe("approved release surface", () => {
   it("exposes one admin-managed global system prompt and uses it as the sole runtime source", () => {
     const settingsDialog = pageSource.slice(
       pageSource.indexOf('{isSettingsDialogOpen ? ('),
-      pageSource.indexOf('{appView === "fred" ? ('),
+      pageSource.indexOf('{appView === "chat" ? ('),
     );
     const chatSubmit = pageSource.slice(
       pageSource.indexOf('async function handleSubmit('),
@@ -186,42 +184,17 @@ describe("approved release surface", () => {
     expect(pageSource).toContain('<p className="eyebrow">Systemkonfiguration</p>');
     expect(pageSource).toContain('fetch("/api/admin/users"');
     expect(existsSync(adminSettingsPath)).toBe(true);
-    expect(chatRouteSource).toContain('getGlobalSystemPrompt');
-    expect(chatRouteSource).toContain('systemPrompt');
-    expect(chatRouteSource).not.toContain('body.systemPrompt');
-    expect(agentSource).not.toContain('DEFAULT_SYSTEM_PROMPT');
-    expect(agentSource).toContain('options.systemPrompt');
-    expect(agentSource).not.toContain('RESEARCH_POLICY_PROMPT');
-    expect(agentSource).not.toContain('ABBREVIATION_POLICY_PROMPT');
-    expect(agentSource).not.toContain('OUTPUT_FORMAT_POLICY_PROMPT');
-    expect(agentSource).not.toContain('effectiveSystemPrompt');
+    expect(chatRouteSource).toContain('retiredApiResponse');
   });
 
-  it("uses safe central model descriptors in the composer and capability-aware admin controls", () => {
-    const composer = pageSource.slice(
-      pageSource.indexOf('<form className="composer"'),
-      pageSource.indexOf("</form>", pageSource.indexOf('<form className="composer"')),
-    );
-    const administration = pageSource.slice(
-      pageSource.indexOf('appView === "administration" && isAdmin'),
-      pageSource.indexOf('<section className={`chat-panel', pageSource.indexOf('appView === "administration" && isAdmin')),
-    );
-
-    expect(composer).toContain("enabledModels.map((model) => (");
-    expect(composer).toContain("{model.label}");
-    expect(composer).not.toContain("AVAILABLE_MODELS");
+  it("uses Fred without model administration and keeps provider images constrained", () => {
     expect(pageSource).toContain('fetch("/api/settings"');
     expect(nextConfigSource).toContain("img-src 'self' data: ${supabaseImageSources.join(\" \")}");
-    expect(administration).toContain('id="admin-model-settings-title"');
-    expect(administration).toContain("model.id === adminDefaultModelId");
-    expect(administration).toContain('id="admin-default-model"');
-    expect(administration).toContain("admin-model-image-assignments");
-    expect(administration).toContain("model.reasoningOptions.map((option) => (");
-    expect(administration).toContain("model.providerConfigured");
-    expect(administration).toContain('aria-label={`Reasoning für ${model.label}`}');
-    expect(pageSource).toContain("revision: model.revision");
-    expect(pageSource).toContain('fetch("/api/admin/models"');
-    expect(pageSource).toContain('method: "PATCH"');
+    expect(pageSource).not.toContain('id="admin-model-settings-title"');
+    expect(pageSource).not.toContain('id="admin-result-limit-title"');
+    expect(pageSource).not.toContain('fetch("/api/admin/models"');
+    expect(publicSettingsSource).toContain("isAdmin");
+    expect(publicSettingsSource).not.toContain("models");
   });
 
   it("registers the supplied favicon and preserves the approved metadata copy", () => {
@@ -299,11 +272,6 @@ describe("approved release surface", () => {
     expect(pageSource).toMatch(
       /<Link className="sidebar-brand" href="\/">[\s\S]*className="austria-flag"[\s\S]*findog\.at[\s\S]*Beta[\s\S]*<\/Link>/,
     );
-  });
-
-  it("keeps the client PDF fallback filename neutral", () => {
-    expect(pageSource).toContain('?? "Antwort.pdf"');
-    expect(pageSource).not.toContain("Findog_Antwort.pdf");
   });
 
   it("shows decorative link and red PDF icons in the BFG result actions", () => {

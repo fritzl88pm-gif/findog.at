@@ -3112,6 +3112,12 @@ textarea:focus {
   background: rgba(40, 111, 156, 0.08);
 }
 
+.fred-web-search-toggle.is-active {
+  border-color: var(--bmf-blue);
+  background: var(--bmf-blue);
+  color: #ffffff;
+}
+
 .composer-icon-button:disabled,
 .composer-model-trigger:disabled {
   cursor: not-allowed;

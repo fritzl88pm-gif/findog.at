@@ -3,10 +3,6 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-const pageSource = readFileSync(
-  fileURLToPath(new URL("../../app/page.tsx", import.meta.url)),
-  "utf8",
-);
 const stylesSource = readFileSync(
   fileURLToPath(new URL("../../app/globals.css", import.meta.url)),
   "utf8",
@@ -22,17 +18,13 @@ function cssRule(selector: string): string {
 }
 
 describe("assistant identity", () => {
-  it("uses Fred's decorative public avatar in live, pending, and stored Fred messages", () => {
+  it("uses Fred's decorative public avatar in native stored and live messages", () => {
     const avatarPattern = /<img className="message-avatar fred-avatar" src="\/fred-avatar\.png" alt="" \/>/g;
-    expect([
-      ...(pageSource.match(avatarPattern) ?? []),
-      ...(fredNativeSource.match(avatarPattern) ?? []),
-    ]).toHaveLength(3);
-    expect(pageSource.match(/<span className="sender-name">Fred<\/span>/g)).toHaveLength(2);
+    expect(fredNativeSource.match(avatarPattern)).toHaveLength(1);
     expect(fredNativeSource).toContain('message.role === "user" ? "Du" : "Fred"');
-    expect(pageSource).not.toContain("Findog/Fred");
-    expect(pageSource).not.toMatch(/>FF</);
-    expect(pageSource).toContain('<div className="message-avatar">DU</div>');
+    expect(fredNativeSource).not.toContain("Findog/Fred");
+    expect(fredNativeSource).not.toMatch(/>FF</);
+    expect(fredNativeSource).toContain('<div className="message-avatar">DU</div>');
   });
 
   it("keeps the user avatar at 24px while making only Fred's avatar larger and cropped", () => {

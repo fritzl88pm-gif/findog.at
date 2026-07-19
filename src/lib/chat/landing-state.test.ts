@@ -7,6 +7,10 @@ const pageSource = readFileSync(
   fileURLToPath(new URL("../../app/page.tsx", import.meta.url)),
   "utf8",
 );
+const fredViewSource = readFileSync(
+  fileURLToPath(new URL("../../components/fred-native-chat-view.tsx", import.meta.url)),
+  "utf8",
+);
 const stylesSource = readFileSync(
   fileURLToPath(new URL("../../app/globals.css", import.meta.url)),
   "utf8",
@@ -18,34 +22,34 @@ function cssRule(selector: string) {
 }
 
 describe("authenticated empty-chat landing", () => {
-  it("starts fresh without restoring or auto-opening locally stored chat history", () => {
-    expect(pageSource).not.toContain("readJson<Partial<StoredHistory>>");
+  it("starts fresh and loads only durable Fred history", () => {
+    expect(pageSource).not.toContain("chatHistoryStorageKey");
     expect(pageSource).toContain("authenticatedUserIdRef");
-    expect(pageSource).toContain("removeStoredValue(chatHistoryStorageKey(user.id))");
-    expect(pageSource).toContain('fetch("/api/conversations"');
-    expect(pageSource).toMatch(/async function selectConversation[\s\S]*?fetchConversationHistory/);
+    expect(pageSource).toContain('fetch("/api/fred/conversations"');
+    expect(pageSource).not.toContain('fetch("/api/conversations"');
+    expect(pageSource).toMatch(/async function selectFredConversation[\s\S]*?fetchFredConversationHistory/);
   });
 
   it("keeps the empty landing reset scoped to a newly authenticated user", () => {
     expect(pageSource).toMatch(
       /const isFreshAuthenticatedLanding\s*=\s*authenticatedUserIdRef\.current\s*!==\s*user\.id/,
     );
-    expect(pageSource).toMatch(/if \(isFreshAuthenticatedLanding\) \{[\s\S]*?setConversationId\(""\)[\s\S]*?setComposer\(""\)[\s\S]*?clearAttachments\(\)/);
+    expect(pageSource).toMatch(/if \(isFreshAuthenticatedLanding\) \{[\s\S]*?setAppView\("chat"\)[\s\S]*?setFredConversationId\(""\)[\s\S]*?setFredMessages\(\[\]\)/);
   });
 
   it("renders Fred, one greeting, and the existing composer as a centered group", () => {
-    const groupStart = pageSource.indexOf('<div className="chat-content-group">');
-    const groupEnd = pageSource.lastIndexOf("</section>");
-    const group = pageSource.slice(groupStart, groupEnd);
+    const groupStart = fredViewSource.indexOf('<div className="chat-content-group">');
+    const groupEnd = fredViewSource.lastIndexOf("</section>");
+    const group = fredViewSource.slice(groupStart, groupEnd);
 
     expect(groupStart).toBeGreaterThanOrEqual(0);
     expect(group).toContain('src="/fred.png"');
     expect(group).toContain('alt="Fred, der Findog-Steuerassistent"');
     expect(group).toContain("welcomeGreeting");
     expect(group).toContain('<form className="composer"');
-    expect(pageSource.match(/<form className="composer"/g)).toHaveLength(1);
-    expect(pageSource).not.toContain("Neue Anfrage");
-    expect(pageSource).not.toContain(
+    expect(fredViewSource.match(/<form className="composer"/g)).toHaveLength(1);
+    expect(fredViewSource).not.toContain("Neue Anfrage");
+    expect(fredViewSource).not.toContain(
       "Stelle eine konkrete steuerrechtliche Frage mit Sachverhalt und Zeitraum.",
     );
     const emptyPanelRule = cssRule(".chat-panel.empty-chat");

@@ -1,7 +1,12 @@
 "use client";
 
-import Image from "next/image";
-import type { ChangeEvent, FormEvent, KeyboardEvent, ReactNode } from "react";
+import type {
+  ChangeEvent,
+  ClipboardEvent,
+  FormEvent,
+  KeyboardEvent,
+  ReactNode,
+} from "react";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -96,22 +101,45 @@ export default function FredNativeChatView({
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [isAttachmentMenuOpen, setIsAttachmentMenuOpen] = useState(false);
   const [welcomeGreeting] = useState(() => getWelcomeGreeting());
   const activeConversationIdRef = useRef(conversationId);
   const abortControllerRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachmentMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (conversationId === activeConversationIdRef.current) return;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
     activeConversationIdRef.current = conversationId;
     setMessages(initialMessages);
     setComposer("");
     setError("");
     setSelectedImages([]);
     setSelectedFiles([]);
+    setIsAttachmentMenuOpen(false);
   }, [conversationId, initialMessages]);
+
+  useEffect(() => {
+    if (!isAttachmentMenuOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!attachmentMenuRef.current?.contains(event.target as Node)) {
+        setIsAttachmentMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setIsAttachmentMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isAttachmentMenuOpen]);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -271,9 +299,8 @@ export default function FredNativeChatView({
     }
   }
 
-  function addImages(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? []);
-    event.target.value = "";
+  function addImageFiles(files: File[]) {
+    if (files.length === 0) return;
     if (selectedImages.length + files.length > MAX_IMAGE_UPLOADS) {
       setError("Bitte maximal fünf Bilder pro Anfrage auswählen.");
       return;
@@ -290,9 +317,17 @@ export default function FredNativeChatView({
     setSelectedImages((current) => [...current, ...files]);
   }
 
+  function addImages(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    setIsAttachmentMenuOpen(false);
+    addImageFiles(files);
+  }
+
   function addFiles(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
+    setIsAttachmentMenuOpen(false);
     if (selectedFiles.length + files.length > MAX_FILE_UPLOADS) {
       setError("Bitte maximal fünf Dateien pro Anfrage auswählen.");
       return;
@@ -309,6 +344,16 @@ export default function FredNativeChatView({
     setSelectedFiles((current) => [...current, ...files]);
   }
 
+  function handleComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (isSending || !capabilities.fileUpload) return;
+    const images = Array.from(event.clipboardData.items).flatMap((item) => {
+      if (item.kind !== "file" || !item.type.startsWith("image/")) return [];
+      const file = item.getAsFile();
+      return file ? [file] : [];
+    });
+    addImageFiles(images);
+  }
+
   function stopAnswer() {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
@@ -323,25 +368,19 @@ export default function FredNativeChatView({
   }
 
   return (
-    <section className="fred-native-panel" aria-label="Fred">
-      <header className="fred-embed-hero">
-        <Image
-          className="fred-embed-hero-image"
-          src="/fred.png"
-          alt="Fred, der Findog-Assistent"
-          width={380}
-          height={380}
-          priority
-        />
-        <h1 className="fred-embed-greeting">{welcomeGreeting}</h1>
-      </header>
-
-      <div className="fred-native-chat-shell">
-        <div className="transcript fred-native-transcript" ref={transcriptRef} aria-live="polite">
+    <section className={`chat-panel ${messages.length === 0 ? "empty-chat" : ""}`} aria-label="Fred">
+      <div className="chat-content-group">
+        <div className="transcript" ref={transcriptRef} aria-live="polite">
           <div className="transcript-content">
             {messages.length === 0 ? (
-              <div className="fred-native-empty">
-                <p>Frag Fred zu österreichischem Steuerrecht und den verfügbaren Rechtsquellen.</p>
+              <div className="empty-state">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  className="fred-welcome-image"
+                  src="/fred.png"
+                  alt="Fred, der Findog-Steuerassistent"
+                />
+                <h1 className="welcome-greeting">{welcomeGreeting}</h1>
               </div>
             ) : messages.map((message, index) => (
               <article
@@ -386,7 +425,7 @@ export default function FredNativeChatView({
           </div>
         </div>
 
-        <div className="composer-container fred-native-composer-container">
+        <div className="composer-container">
           {error || externalError ? (
             <div className="error-box composer-error" role="alert">{error || externalError}</div>
           ) : null}
@@ -409,83 +448,62 @@ export default function FredNativeChatView({
               onChange={addFiles}
               tabIndex={-1}
             />
-            {selectedImages.length > 0 || selectedFiles.length > 0 ? (
-              <div className="attachment-chips">
-                {selectedImages.map((file, index) => (
-                  <span className="attachment-chip" key={`image-${file.name}-${index}`}>
-                    <span title={file.name}>Bild: {file.name}</span>
-                    <small>{displayFileSize(file.size)}</small>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedImages((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                      aria-label={`${file.name} entfernen`}
-                    >
-                      Entfernen
-                    </button>
-                  </span>
-                ))}
-                {selectedFiles.map((file, index) => (
-                  <span className="attachment-chip" key={`file-${file.name}-${index}`}>
-                    <span title={file.name}>Datei: {file.name}</span>
-                    <small>{displayFileSize(file.size)}</small>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                      aria-label={`${file.name} entfernen`}
-                    >
-                      Entfernen
-                    </button>
-                  </span>
-                ))}
-              </div>
-            ) : null}
             <textarea
               value={composer}
               onChange={(event) => setComposer(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder="Frag Fred …"
+              onPaste={handleComposerPaste}
+              placeholder="Frage zu BFG, EStG, UStG oder Verfahrensrecht..."
               aria-label="Nachricht an Fred"
               disabled={isSending || !accessToken}
               rows={2}
             />
             <div className="composer-toolbar">
-              <div className="fred-native-composer-tools">
-                {capabilities.fileUpload ? (
-                  <>
-                    <button
-                      className="fred-native-tool-button"
-                      type="button"
-                      onClick={() => imageInputRef.current?.click()}
-                      disabled={isSending}
+              {capabilities.fileUpload ? (
+                <div className="composer-menu-control" ref={attachmentMenuRef}>
+                  <button
+                    className="composer-icon-button"
+                    type="button"
+                    aria-label="Anhänge hinzufügen"
+                    aria-haspopup="menu"
+                    aria-expanded={isAttachmentMenuOpen}
+                    aria-controls="fred-composer-attachment-menu"
+                    disabled={isSending}
+                    onClick={() => setIsAttachmentMenuOpen((current) => !current)}
+                  >
+                    <span aria-hidden="true">+</span>
+                  </button>
+                  {isAttachmentMenuOpen && !isSending ? (
+                    <div
+                      className="composer-popover attachment-menu"
+                      id="fred-composer-attachment-menu"
+                      role="menu"
+                      aria-label="Anhang auswählen"
                     >
-                      Bild
-                    </button>
-                    <button
-                      className="fred-native-tool-button"
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={isSending}
-                    >
-                      Datei
-                    </button>
-                  </>
-                ) : null}
+                      <button type="button" role="menuitem" onClick={() => imageInputRef.current?.click()}>
+                        Bild anhängen
+                      </button>
+                      <button type="button" role="menuitem" onClick={() => fileInputRef.current?.click()}>
+                        Datei anhängen
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : <span />}
+              <div className="composer-actions">
                 {capabilities.webSearch ? (
                   <button
-                    className={`fred-native-tool-button${webSearchEnabled ? " is-active" : ""}`}
+                    className={`composer-model-trigger fred-web-search-toggle${webSearchEnabled ? " is-active" : ""}`}
                     type="button"
                     aria-pressed={webSearchEnabled}
                     onClick={() => setWebSearchEnabled((current) => !current)}
                     disabled={isSending}
                   >
-                    Websuche
+                    <span>{webSearchEnabled ? "Websuche aktiv" : "Websuche"}</span>
                   </button>
                 ) : null}
-                <span className="fred-native-composer-note">Enter zum Senden · Shift + Enter für neue Zeile</span>
-              </div>
-              <div className="composer-actions">
                 {isSending ? (
-                  <button className="secondary-button" type="button" onClick={stopAnswer}>
+                  <button className="secondary-button compact-button" type="button" onClick={stopAnswer}>
                     Stoppen
                   </button>
                 ) : null}
@@ -494,10 +512,49 @@ export default function FredNativeChatView({
                   type="submit"
                   disabled={!composer.trim() || isSending || !accessToken}
                 >
-                  Senden
+                  {isSending ? (
+                    <><span className="spinner" aria-hidden="true" /> Senden...</>
+                  ) : (
+                    <>
+                      <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
+                      Senden
+                    </>
+                  )}
                 </button>
               </div>
             </div>
+            {selectedImages.length > 0 || selectedFiles.length > 0 ? (
+              <div className="attachment-chips">
+                {selectedImages.map((file, index) => (
+                  <span className="attachment-chip image" key={`image-${file.name}-${index}`}>
+                    <span title={file.name}>{file.name}</span>
+                    <small>{displayFileSize(file.size)}</small>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedImages((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                      aria-label={`Bild ${file.name} entfernen`}
+                      disabled={isSending}
+                    >
+                      Entfernen
+                    </button>
+                  </span>
+                ))}
+                {selectedFiles.map((file, index) => (
+                  <span className="attachment-chip" key={`file-${file.name}-${index}`}>
+                    <span title={file.name}>{file.name}</span>
+                    <small>{displayFileSize(file.size)}</small>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                      aria-label={`Datei ${file.name} entfernen`}
+                      disabled={isSending}
+                    >
+                      Entfernen
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
           </form>
         </div>
       </div>
