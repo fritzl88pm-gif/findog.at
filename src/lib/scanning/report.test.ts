@@ -5,6 +5,7 @@ import type { ScanningDocument, ScanningFileStatus } from "./types";
 
 function document(overrides: Partial<ScanningDocument>): ScanningDocument {
   return {
+    documentId: "file-1:1",
     fileId: "file-1",
     fileName: "Beleg.pdf",
     documentType: "Rechnung",

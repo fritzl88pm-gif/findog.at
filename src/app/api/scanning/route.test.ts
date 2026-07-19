@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import {
-  extractScanningDocument,
+  extractScanningDocuments,
   organizeScanningDocuments,
   ScanningProviderError,
 } from "@/lib/scanning/openrouter";
@@ -17,7 +17,7 @@ vi.mock("@/lib/scanning/openrouter", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/scanning/openrouter")>();
   return {
     ...original,
-    extractScanningDocument: vi.fn(),
+    extractScanningDocuments: vi.fn(),
     organizeScanningDocuments: vi.fn(),
   };
 });
@@ -50,6 +50,7 @@ function pdf(name: string, marker = 0): File {
 
 function extracted(upload: ScanningUpload): ScanningDocument {
   return {
+    documentId: `${upload.id}:1`,
     fileId: upload.id,
     fileName: upload.name,
     documentType: "Rechnung",
@@ -79,10 +80,10 @@ describe("POST /api/scanning", () => {
     vi.mocked(authenticateSupabaseRequest).mockImplementation(async (request) => ({
       id: request.headers.get("authorization")?.replace("Bearer ", "") || "user",
     }));
-    vi.mocked(extractScanningDocument).mockImplementation(async (upload) => extracted(upload));
+    vi.mocked(extractScanningDocuments).mockImplementation(async (upload) => [extracted(upload)]);
     vi.mocked(organizeScanningDocuments).mockImplementation(async (documents) => ({
       summary: `${documents.length} Dokumente ausgewertet.`,
-      categories: documents.map((document) => ({ fileId: document.fileId, category: document.category })),
+      categories: documents.map((document) => ({ documentId: document.documentId, category: document.category })),
     }));
   });
 
@@ -98,10 +99,38 @@ describe("POST /api/scanning", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("application/x-ndjson");
     expect(response.headers.get("cache-control")).toContain("no-store");
-    expect(extractScanningDocument).toHaveBeenCalledTimes(10);
+    expect(extractScanningDocuments).toHaveBeenCalledTimes(10);
     expect(final).toMatchObject({ type: "final", model: "google/gemini-3.5-flash" });
     if (final?.type === "final") expect(final.files).toHaveLength(10);
     expect(getSupabaseServerClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes every independent invoice found across a multi-page PDF", async () => {
+    vi.mocked(extractScanningDocuments).mockImplementationOnce(async (upload) => [
+      { ...extracted(upload), documentId: `${upload.id}:1`, documentNumber: "RE-100", date: "2026-01-10" },
+      { ...extracted(upload), documentId: `${upload.id}:2`, documentNumber: "RE-200", date: "2026-02-10" },
+      { ...extracted(upload), documentId: `${upload.id}:3`, documentNumber: "RE-300", date: "2026-03-10" },
+    ]);
+    const response = await POST(multipart([{ field: "pdf", file: pdf("Sammelrechnungen.pdf") }], "multipage-user"));
+    const final = (await events(response)).find((event) => event?.type === "final");
+
+    expect(final).toMatchObject({
+      type: "final",
+      report: expect.stringContaining("RE-100"),
+    });
+    if (final?.type === "final") {
+      expect(final.report).toContain("RE-200");
+      expect(final.report).toContain("RE-300");
+      expect(final.report).toContain("Netto 30,00, USt 6,00, Brutto 36,00");
+    }
+    expect(organizeScanningDocuments).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ documentId: expect.stringContaining(":1") }),
+        expect.objectContaining({ documentId: expect.stringContaining(":2") }),
+        expect.objectContaining({ documentId: expect.stringContaining(":3") }),
+      ]),
+      expect.any(AbortSignal),
+    );
   });
 
   it("rejects empty batches, a sixth file and unknown form fields", async () => {
@@ -116,7 +145,7 @@ describe("POST /api/scanning", () => {
 
     const unknown = await POST(multipart([{ field: "attachment", file: pdf("beleg.pdf") }], "unknown-user"));
     expect(unknown.status).toBe(400);
-    expect(extractScanningDocument).not.toHaveBeenCalled();
+    expect(extractScanningDocuments).not.toHaveBeenCalled();
   });
 
   it("accepts files exactly at 5 and 10 MiB and rejects one byte above", async () => {
@@ -161,7 +190,7 @@ describe("POST /api/scanning", () => {
     ], "duplicate-user"));
     const final = (await events(response)).find((event) => event?.type === "final");
 
-    expect(extractScanningDocument).toHaveBeenCalledTimes(1);
+    expect(extractScanningDocuments).toHaveBeenCalledTimes(1);
     expect(final).toMatchObject({
       type: "final",
       files: expect.arrayContaining([expect.objectContaining({ name: "Kopie.png", status: "duplicate" })]),
@@ -169,8 +198,8 @@ describe("POST /api/scanning", () => {
   });
 
   it("keeps a partial result and falls back if category organization fails", async () => {
-    vi.mocked(extractScanningDocument)
-      .mockImplementationOnce(async (upload) => extracted(upload))
+    vi.mocked(extractScanningDocuments)
+      .mockImplementationOnce(async (upload) => [extracted(upload)])
       .mockRejectedValueOnce(new ScanningProviderError("Datei nicht lesbar", 502));
     vi.mocked(organizeScanningDocuments).mockRejectedValueOnce(new ScanningProviderError("Ausgelastet", 429));
     const response = await POST(multipart([
@@ -187,11 +216,11 @@ describe("POST /api/scanning", () => {
   });
 
   it("emits a friendly error for complete and fatal provider failures", async () => {
-    vi.mocked(extractScanningDocument).mockRejectedValueOnce(new ScanningProviderError("Nicht lesbar", 502));
+    vi.mocked(extractScanningDocuments).mockRejectedValueOnce(new ScanningProviderError("Nicht lesbar", 502));
     const completeFailure = await POST(multipart([{ field: "pdf", file: pdf("a.pdf") }], "failed-user"));
     expect(await events(completeFailure)).toContainEqual({ type: "error", error: "Keine Datei konnte ausgewertet werden." });
 
-    vi.mocked(extractScanningDocument).mockRejectedValueOnce(
+    vi.mocked(extractScanningDocuments).mockRejectedValueOnce(
       new ScanningProviderError("Scanning ist serverseitig nicht konfiguriert.", 503, true),
     );
     const fatalFailure = await POST(multipart([{ field: "pdf", file: pdf("b.pdf") }], "fatal-user"));

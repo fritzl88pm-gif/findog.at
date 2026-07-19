@@ -19,7 +19,7 @@ import {
   SCANNING_RATE_LIMIT_WINDOW_MS,
 } from "@/lib/scanning/config";
 import {
-  extractScanningDocument,
+  extractScanningDocuments,
   organizeScanningDocuments,
   ScanningProviderError,
 } from "@/lib/scanning/openrouter";
@@ -215,7 +215,7 @@ export async function POST(request: Request) {
           if (!lifetime.signal.aborted) controller.enqueue(encoder.encode(encodeScanningStreamEvent(event)));
         };
         const statusById = new Map(parsed.statuses.map((status) => [status.id, status]));
-        const documents: ScanningDocument[] = [];
+        const documentsByUpload: ScanningDocument[][] = [];
         let cursor = 0;
         let completed = 0;
         let fatalError: ScanningProviderError | null = null;
@@ -235,8 +235,8 @@ export async function POST(request: Request) {
               fileName: upload.name,
             });
             try {
-              const document = await extractScanningDocument(upload, lifetime.signal);
-              documents[index] = document;
+              const extractedDocuments = await extractScanningDocuments(upload, lifetime.signal);
+              documentsByUpload[index] = extractedDocuments;
               statusById.set(upload.id, {
                 id: upload.id,
                 name: upload.name,
@@ -272,7 +272,7 @@ export async function POST(request: Request) {
             controller.close();
             return;
           }
-          const successfulDocuments = documents.filter((document): document is ScanningDocument => Boolean(document));
+          const successfulDocuments = documentsByUpload.flat();
           if (successfulDocuments.length === 0) {
             send({ type: "error", error: "Keine Datei konnte ausgewertet werden." });
             controller.close();
@@ -289,9 +289,9 @@ export async function POST(request: Request) {
           try {
             const organization = await organizeScanningDocuments(successfulDocuments, lifetime.signal);
             summary = organization.summary;
-            const categories = new Map(organization.categories.map((entry) => [entry.fileId, entry.category]));
+            const categories = new Map(organization.categories.map((entry) => [entry.documentId, entry.category]));
             for (const document of successfulDocuments) {
-              document.category = categories.get(document.fileId) ?? document.category;
+              document.category = categories.get(document.documentId) ?? document.category;
             }
           } catch {
             // A deterministic report remains available when optional consolidation fails.

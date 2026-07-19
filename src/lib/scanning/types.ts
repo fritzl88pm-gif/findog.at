@@ -18,6 +18,7 @@ export type ScanningVatEntry = {
 };
 
 export type ScanningDocument = {
+  documentId: string;
   fileId: string;
   fileName: string;
   documentType: string;
@@ -63,5 +64,5 @@ export type ScanningStreamEvent =
 
 export type ScanningOrganization = {
   summary: string;
-  categories: Array<{ fileId: string; category: string }>;
+  categories: Array<{ documentId: string; category: string }>;
 };

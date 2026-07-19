@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  extractScanningDocument,
+  extractScanningDocuments,
   organizeScanningDocuments,
   parseScanningDocument,
+  parseScanningDocuments,
   parseScanningOrganization,
   ScanningProviderError,
 } from "./openrouter";
@@ -51,6 +52,7 @@ describe("OpenRouter scanning adapter", () => {
   it("normalizes structured values without estimating invalid fields", () => {
     const parsed = parseScanningDocument(rawDocument(), { id: "file-1", name: "Beleg.pdf" });
     expect(parsed).toMatchObject({
+      documentId: "file-1:1",
       fileId: "file-1",
       date: null,
       currency: "EUR",
@@ -61,7 +63,10 @@ describe("OpenRouter scanning adapter", () => {
   });
 
   it("sends private PDFs inline as Base64 to Gemini with a strict JSON schema", async () => {
-    vi.mocked(fetch).mockResolvedValue(providerResponse(rawDocument()));
+    vi.mocked(fetch).mockResolvedValue(providerResponse({ documents: [rawDocument(), {
+      ...rawDocument(),
+      documentNumber: "R-8",
+    }] }));
     const upload: ScanningUpload = {
       id: "file-1",
       name: "Beleg.pdf",
@@ -72,35 +77,46 @@ describe("OpenRouter scanning adapter", () => {
       bytes: new TextEncoder().encode("%PDF-"),
     };
 
-    await expect(extractScanningDocument(upload)).resolves.toMatchObject({ fileId: "file-1", issuer: "Muster GmbH" });
+    await expect(extractScanningDocuments(upload)).resolves.toMatchObject([
+      { documentId: "file-1:1", fileId: "file-1", issuer: "Muster GmbH", documentNumber: "R-7" },
+      { documentId: "file-1:2", fileId: "file-1", issuer: "Muster GmbH", documentNumber: "R-8" },
+    ]);
     const init = vi.mocked(fetch).mock.calls[0]?.[1];
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     expect(body.model).toBe("google/gemini-3.5-flash");
     expect(JSON.stringify(body)).toContain("data:application/pdf;base64,");
     expect(JSON.stringify(body)).toContain('"strict":true');
+    expect(JSON.stringify(body)).toContain('"engine":"native"');
+    expect(JSON.stringify(body)).toContain("Untersuche bei PDFs ausnahmslos alle Seiten");
+    expect(JSON.stringify(body)).toContain("jeden eigenständigen Beleg genau einen Eintrag");
     expect(JSON.stringify(body)).toContain("fremdsprachige Sachtexte sinngemäß und sachlich ins Deutsche");
     expect(JSON.stringify(body)).toContain("Belegnummern, Aktenzeichen, Artikelnummern, Beträge");
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
   });
 
-  it("uses only known file ids when harmonizing categories", async () => {
+  it("uses only known document ids when harmonizing categories", async () => {
     const document = parseScanningDocument(rawDocument(), { id: "file-1", name: "Beleg.pdf" });
     vi.mocked(fetch).mockResolvedValue(providerResponse({
       summary: "Ein Beleg wurde erfasst.",
       categories: [
-        { fileId: "file-1", category: "Bürobedarf" },
-        { fileId: "foreign", category: "Ignorieren" },
+        { documentId: "file-1:1", category: "Bürobedarf" },
+        { documentId: "foreign", category: "Ignorieren" },
       ],
     }));
 
     await expect(organizeScanningDocuments([document])).resolves.toEqual({
       summary: "Ein Beleg wurde erfasst.",
-      categories: [{ fileId: "file-1", category: "Bürobedarf" }],
+      categories: [{ documentId: "file-1:1", category: "Bürobedarf" }],
     });
     const organizationBody = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
     expect(JSON.stringify(organizationBody)).toContain("alle von dir formulierten Texte müssen auf Deutsch sein");
     expect(JSON.stringify(organizationBody)).toContain("Eigennamen, Aussteller, Belegnummern");
     expect(parseScanningOrganization({ summary: "x", categories: [] }, [document])).toEqual({ summary: "x", categories: [] });
+  });
+
+  it("rejects an empty multi-document result", () => {
+    expect(() => parseScanningDocuments({ documents: [] }, { id: "file-1", name: "Leer.pdf" }))
+      .toThrowError("Die Datei lieferte keine verwertbaren Belege.");
   });
 
   it("treats missing configuration and provider authentication as fatal", async () => {
@@ -114,11 +130,11 @@ describe("OpenRouter scanning adapter", () => {
       sha256: "hash",
       bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     } satisfies ScanningUpload;
-    await expect(extractScanningDocument(upload)).rejects.toMatchObject({ fatal: true, status: 503 });
+    await expect(extractScanningDocuments(upload)).rejects.toMatchObject({ fatal: true, status: 503 });
 
     process.env.OPENROUTER_API_KEY = "test-key";
     vi.mocked(fetch).mockResolvedValue(new Response("unauthorized", { status: 401 }));
-    const failure = extractScanningDocument(upload);
+    const failure = extractScanningDocuments(upload);
     await expect(failure).rejects.toBeInstanceOf(ScanningProviderError);
     await expect(failure).rejects.toMatchObject({ fatal: true, status: 503 });
   });

@@ -79,7 +79,7 @@ export function buildScanningReport(options: {
   files: ScanningFileStatus[];
   summary?: string;
 }): string {
-  const successful = options.files.filter((file) => file.status === "completed").length;
+  const successfulFiles = options.files.filter((file) => file.status === "completed").length;
   const failed = options.files.filter((file) => file.status === "failed");
   const duplicates = options.files.filter((file) => file.status === "duplicate");
   const lines = [
@@ -87,7 +87,7 @@ export function buildScanningReport(options: {
     "",
     "## Übersicht",
     "",
-    safeCell(options.summary?.trim() || `${successful} Dokument${successful === 1 ? "" : "e"} wurden ausgewertet und nach Kategorien geordnet.`),
+    safeCell(options.summary?.trim() || `${options.documents.length} Beleg${options.documents.length === 1 ? "" : "e"} aus ${successfulFiles} Datei${successfulFiles === 1 ? "" : "en"} wurden ausgewertet und nach Kategorien geordnet.`),
     "",
   ];
 
