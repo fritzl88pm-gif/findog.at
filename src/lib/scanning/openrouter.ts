@@ -65,6 +65,12 @@ function responseText(payload: unknown): string {
   }).join("\n");
 }
 
+function stripThinkingBlocks(value: string): string {
+  return value
+    .replace(/<\s*(think|thinking)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/giu, "")
+    .replace(/<\s*\/?\s*(?:think|thinking)\b[^>]*>/giu, "");
+}
+
 function scanningPrompt(fileNames: string[]): string {
   return `Lies alle beigefügten Rechnungen und Belege vollständig aus (bei PDFs jede Seite, Anfang bis Ende) und erstelle eine kompakte, nach Kategorie gruppierte Belegübersicht.
 
@@ -130,6 +136,7 @@ export async function analyzeScanningBatch(
             ...uploads.map(attachment),
           ],
         }],
+        reasoning: { exclude: true },
         temperature: 0,
         max_tokens: 16_000,
       }),
@@ -149,7 +156,7 @@ export async function analyzeScanningBatch(
   } catch {
     throw new ScanningProviderError("Die Dokumentauswertung lieferte keine gültige Antwort.", 502);
   }
-  const report = responseText(payload)
+  const report = stripThinkingBlocks(responseText(payload))
     .replace(/<br\s*\/?\s*>/giu, " ")
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, "")
     .trim();

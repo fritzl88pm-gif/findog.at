@@ -56,6 +56,7 @@ describe("OpenRouter scanning adapter", () => {
     expect(serialized).toContain("data:image/png;base64,");
     expect(body.response_format).toBeUndefined();
     expect(body.plugins).toBeUndefined();
+    expect(body.reasoning).toEqual({ exclude: true });
     expect(serialized).toContain("bei PDFs jede Seite, Anfang bis Ende");
     expect(serialized).toContain("Gedrehte oder auf dem Kopf stehende Seiten automatisch korrigieren");
     expect(serialized).toContain("Bilde selbst sinnvolle inhaltliche Kategorien");
@@ -75,6 +76,27 @@ describe("OpenRouter scanning adapter", () => {
     ));
     await expect(analyzeScanningBatch([upload("pdf", "belege")]))
       .resolves.toBe("| 1 | 01.11.2024 | Betreuung November Wien | 2.060,00 EUR |");
+  });
+
+  it("keeps reasoning enabled but removes leaked thinking blocks before display", async () => {
+    vi.mocked(fetch).mockResolvedValue(providerResponse(
+      "<thinking>Ich ordne die Belege zunächst intern.</thinking>\n\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.11.2024 | Betreuung | 2.060,00 EUR |",
+    ));
+
+    const result = await analyzeScanningBatch([upload("pdf", "belege")]);
+    expect(result).toContain("| Pos. | Datum | Beschreibung | Summe |");
+    expect(result).not.toContain("thinking");
+    expect(result).not.toContain("Ich ordne die Belege zunächst intern.");
+  });
+
+  it("removes stray thinking tags without deleting the report", async () => {
+    vi.mocked(fetch).mockResolvedValue(providerResponse(
+      "<think>\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.11.2024 | Betreuung | 2.060,00 EUR |\n</think-invalid>",
+    ));
+
+    const result = await analyzeScanningBatch([upload("pdf", "belege")]);
+    expect(result).toContain("| Pos. | Datum | Beschreibung | Summe |");
+    expect(result).not.toContain("<think>");
   });
 
   it("accepts assistant text returned in content parts", async () => {
