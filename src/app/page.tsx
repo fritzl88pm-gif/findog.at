@@ -3313,7 +3313,7 @@ export default function Home() {
       ) : appView === "l17b-currency" ? (
         <L17bCurrencyView />
       ) : appView === "fredrun" ? (
-        <FredRunView />
+        <FredRunView key={user?.id ?? "fredrun"} accessToken={session?.access_token ?? ""} />
       ) : appView === "scanning" ? (
         <ScanningView accessToken={session?.access_token ?? ""} />
       ) : appView === "german-sv-pension" ? (

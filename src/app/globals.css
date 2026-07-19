@@ -1106,6 +1106,10 @@ textarea:focus {
   visibility: hidden;
 }
 
+.fredrun-stage--game-over {
+  min-height: 350px;
+}
+
 .fredrun-intro {
   position: absolute;
   inset: 0;
@@ -1172,6 +1176,7 @@ textarea:focus {
 .fredrun-overlay {
   position: absolute;
   inset: 0;
+  isolation: isolate;
   display: grid;
   place-content: center;
   justify-items: center;
@@ -1227,6 +1232,92 @@ textarea:focus {
   padding: 0 18px;
 }
 
+.fredrun-game-over-overlay {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  justify-content: stretch;
+  gap: 5px;
+}
+
+.fredrun-game-over-overlay > * {
+  justify-self: center;
+}
+
+.fredrun-game-over-overlay::before {
+  width: min(620px, 94%);
+  height: min(326px, calc(100% - 24px));
+}
+
+.fredrun-score-form {
+  display: grid;
+  width: min(520px, calc(100% - 20px));
+  gap: 6px;
+  margin-top: 5px;
+  text-align: left;
+}
+
+.fredrun-score-form label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--bmf-blue-deep);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.fredrun-score-form label span {
+  color: var(--muted);
+  font-size: 0.65rem;
+  font-weight: 650;
+}
+
+.fredrun-score-form-row {
+  display: flex;
+  gap: 8px;
+}
+
+.fredrun-score-form input {
+  min-width: 0;
+  min-height: 40px;
+  flex: 1 1 auto;
+  border: 1px solid rgba(40, 111, 156, 0.24);
+  border-radius: 10px;
+  padding: 0 12px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.82rem;
+  outline: none;
+}
+
+.fredrun-score-form input:focus {
+  border-color: var(--bmf-blue);
+  box-shadow: 0 0 0 3px rgba(40, 111, 156, 0.12);
+}
+
+.fredrun-score-form-row .primary-button {
+  min-width: 142px;
+  margin-top: 0;
+  white-space: nowrap;
+}
+
+.fredrun-score-feedback {
+  min-height: 16px;
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.fredrun-score-feedback--success {
+  color: #167443;
+}
+
+.fredrun-score-feedback--error {
+  color: #a82020;
+}
+
 .fredrun-milestone-message {
   position: absolute;
   inset: 0;
@@ -1271,6 +1362,136 @@ textarea:focus {
   color: var(--muted);
   font-size: 0.74rem;
   text-align: center;
+}
+
+.fredrun-leaderboard {
+  overflow: hidden;
+  border: 1px solid rgba(40, 111, 156, 0.18);
+  border-radius: 20px;
+  background: var(--bg-surface);
+  box-shadow: 0 12px 34px rgba(19, 53, 75, 0.09);
+}
+
+.fredrun-leaderboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px 15px;
+  border-bottom: 1px solid rgba(40, 111, 156, 0.12);
+}
+
+.fredrun-leaderboard-header .eyebrow,
+.fredrun-leaderboard-header h2 {
+  margin: 0;
+}
+
+.fredrun-leaderboard-header h2 {
+  margin-top: 2px;
+  color: var(--bmf-blue-deep);
+  font-size: 1.25rem;
+}
+
+.fredrun-leaderboard-header > span {
+  border: 1px solid rgba(40, 111, 156, 0.18);
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: rgba(40, 111, 156, 0.06);
+  color: var(--bmf-blue-deep);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.fredrun-leaderboard-state {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  margin: 0;
+  padding: 22px 20px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.fredrun-leaderboard-state p {
+  margin: 0;
+}
+
+.fredrun-leaderboard-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 12px;
+  list-style: none;
+}
+
+.fredrun-leaderboard-entry {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 50px;
+  border: 1px solid rgba(40, 111, 156, 0.11);
+  border-radius: 12px;
+  padding: 6px 14px 6px 8px;
+  background: rgba(244, 249, 251, 0.72);
+  color: var(--bmf-blue-deep);
+}
+
+.fredrun-leaderboard-entry > strong {
+  overflow: hidden;
+  font-size: 0.86rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fredrun-leaderboard-entry > span:last-child {
+  font-size: 0.8rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.fredrun-leaderboard-rank {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 50%;
+  background: #e8f1f5;
+  color: var(--bmf-blue-deep);
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.fredrun-leaderboard-entry--rank-1 {
+  border-color: rgba(207, 157, 0, 0.38);
+  background: linear-gradient(90deg, rgba(255, 212, 0, 0.2), rgba(255, 250, 226, 0.74));
+}
+
+.fredrun-leaderboard-entry--rank-1 .fredrun-leaderboard-rank {
+  background: #ffd400;
+  color: #5a4300;
+}
+
+.fredrun-leaderboard-entry--rank-2 {
+  border-color: rgba(124, 143, 153, 0.34);
+  background: linear-gradient(90deg, rgba(205, 216, 221, 0.42), rgba(248, 250, 251, 0.78));
+}
+
+.fredrun-leaderboard-entry--rank-2 .fredrun-leaderboard-rank {
+  background: #cbd6db;
+  color: #344a55;
+}
+
+.fredrun-leaderboard-entry--rank-3 {
+  border-color: rgba(173, 103, 48, 0.3);
+  background: linear-gradient(90deg, rgba(213, 139, 81, 0.2), rgba(252, 246, 240, 0.78));
+}
+
+.fredrun-leaderboard-entry--rank-3 .fredrun-leaderboard-rank {
+  background: #c98959;
+  color: #fff;
 }
 
 /* Standalone Findok BFG decisions view */
@@ -4070,6 +4291,61 @@ textarea:focus {
 
   .fredrun-overlay .primary-button {
     min-height: 32px;
+  }
+
+  .fredrun-stage--game-over {
+    min-height: 390px;
+  }
+
+  .fredrun-game-over-overlay {
+    gap: 4px;
+  }
+
+  .fredrun-game-over-overlay::before {
+    width: calc(100% - 16px);
+    height: calc(100% - 16px);
+  }
+
+  .fredrun-score-form {
+    width: min(300px, calc(100% - 24px));
+  }
+
+  .fredrun-score-form-row {
+    flex-direction: column;
+  }
+
+  .fredrun-score-form-row .primary-button {
+    width: 100%;
+    min-height: 36px;
+  }
+
+  .fredrun-leaderboard {
+    border-radius: 14px;
+  }
+
+  .fredrun-leaderboard-header {
+    padding: 15px 14px 12px;
+  }
+
+  .fredrun-leaderboard-list {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .fredrun-leaderboard-entry {
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+    gap: 8px;
+    min-height: 46px;
+    padding-right: 9px;
+  }
+
+  .fredrun-leaderboard-rank {
+    width: 30px;
+    height: 30px;
+  }
+
+  .fredrun-leaderboard-entry > span:last-child {
+    font-size: 0.72rem;
   }
 
   .fredrun-mobile-action {

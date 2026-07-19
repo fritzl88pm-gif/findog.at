@@ -63,7 +63,9 @@ describe("Fredrun UI surface", () => {
     expect(pageSource).toContain('title="Fredrun"');
     expect(pageSource).toContain('aria-label="Fredrun"');
     expect(pageSource).toContain('appView === "fredrun"');
-    expect(pageSource).toContain('<FredRunView />');
+    expect(pageSource).toContain(
+      '<FredRunView key={user?.id ?? "fredrun"} accessToken={session?.access_token ?? ""} />',
+    );
   });
 
   it("exposes keyboard, pointer, pause, restart, and accessible status controls", () => {
@@ -74,6 +76,16 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain("pauseFredRun");
     expect(viewSource).toContain("restartRound");
     expect(viewSource).toContain('aria-live="polite"');
+  });
+
+  it("offers authenticated score submission and a global top ten", () => {
+    expect(viewSource).toContain('fetch("/api/fredrun/highscores"');
+    expect(viewSource).toContain('Authorization: `Bearer ${accessToken}`');
+    expect(viewSource).toContain('maxLength={FREDRUN_PLAYER_NAME_MAX_LENGTH}');
+    expect(viewSource).toContain('Score einreichen');
+    expect(viewSource).toContain('id="fredrun-leaderboard-title">Top 10');
+    expect(viewSource).toContain('fredrun-leaderboard-entry--rank-${entry.rank}');
+    expect(viewSource).toContain('input, textarea, button, [contenteditable=\'true\']');
   });
 
   it("ships only the three approved normalized atlases below the size budget", () => {

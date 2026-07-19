@@ -1,7 +1,7 @@
 "use client";
 
 import NextImage from "next/image";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
   FREDRUN_GROUND_Y,
@@ -24,6 +24,12 @@ import {
   type FredRunPhase,
   type FredRunState,
 } from "@/lib/fredrun";
+import {
+  FREDRUN_PLAYER_NAME_MAX_LENGTH,
+  normalizeFredRunPlayerName,
+  parseFredRunHighscoresResponse,
+  type FredRunLeaderboardEntry,
+} from "@/lib/fredrun-highscores";
 
 const SPRITE_CELL_SIZE = 192;
 const SPRITE_DRAW_SIZE = 166;
@@ -297,17 +303,42 @@ function localHighScoreStorage(): Storage | null {
   }
 }
 
-export default function FredRunView() {
+function highscoreResponseError(payload: unknown, fallback: string): string {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return fallback;
+  const error = (payload as Record<string, unknown>).error;
+  return typeof error === "string" && error.length <= 240 ? error : fallback;
+}
+
+function createRunId(): string {
+  return crypto.randomUUID();
+}
+
+export default function FredRunView({ accessToken }: { accessToken: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<number | null>(null);
   const gameRef = useRef<FredRunState>(createFredRunState());
   const imagesRef = useRef<FredRunImages | null>(null);
   const bestScoreRef = useRef(0);
   const reducedMotionRef = useRef(false);
+  const scoreSubmissionAbortRef = useRef<AbortController | null>(null);
   const [snapshot, setSnapshot] = useState<FredRunSnapshot>(() => snapshotFrom(createFredRunState()));
   const [bestScore, setBestScore] = useState(0);
   const [assetState, setAssetState] = useState<"loading" | "ready" | "error">("loading");
   const [assetAttempt, setAssetAttempt] = useState(0);
+  const [leaderboard, setLeaderboard] = useState<FredRunLeaderboardEntry[]>([]);
+  const [leaderboardState, setLeaderboardState] = useState<"loading" | "ready" | "error">(
+    accessToken ? "loading" : "error",
+  );
+  const [leaderboardError, setLeaderboardError] = useState(
+    accessToken ? "" : "Die Topliste kann ohne aktive Anmeldung nicht geladen werden.",
+  );
+  const [leaderboardAttempt, setLeaderboardAttempt] = useState(0);
+  const [playerName, setPlayerName] = useState("");
+  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
+  const [isSubmittingScore, setIsSubmittingScore] = useState(false);
+  const [submittedRunId, setSubmittedRunId] = useState<string | null>(null);
+  const [scoreSubmissionMessage, setScoreSubmissionMessage] = useState("");
+  const [scoreSubmissionError, setScoreSubmissionError] = useState("");
 
   const publish = useCallback((state: FredRunState) => {
     setSnapshot((current) => {
@@ -326,25 +357,39 @@ export default function FredRunView() {
     }
   }, [publish]);
 
+  const prepareNewRun = useCallback(() => {
+    setCurrentRunId(createRunId());
+    setSubmittedRunId(null);
+    setScoreSubmissionMessage("");
+    setScoreSubmissionError("");
+  }, []);
+
   const startOrJump = useCallback(() => {
     if (assetState !== "ready") return;
     let state = gameRef.current;
     if (state.phase === "ready") {
+      prepareNewRun();
       state = startFredRun(state);
     } else if (state.phase === "paused") {
       state = resumeFredRun(state);
     } else if (state.phase === "game-over") {
+      prepareNewRun();
       state = startFredRun(restartFredRun());
     }
     replaceGame(jumpFredRun(state));
-  }, [assetState, replaceGame]);
+  }, [assetState, prepareNewRun, replaceGame]);
 
   const startRound = useCallback(() => {
     if (assetState !== "ready") return;
+    prepareNewRun();
     replaceGame(startFredRun(gameRef.current.phase === "ready" ? gameRef.current : restartFredRun()));
-  }, [assetState, replaceGame]);
+  }, [assetState, prepareNewRun, replaceGame]);
 
   const restartRound = useCallback(() => {
+    setCurrentRunId(null);
+    setSubmittedRunId(null);
+    setScoreSubmissionMessage("");
+    setScoreSubmissionError("");
     replaceGame(restartFredRun());
   }, [replaceGame]);
 
@@ -359,6 +404,35 @@ export default function FredRunView() {
     bestScoreRef.current = readFredRunHighScore(localHighScoreStorage());
     setBestScore(bestScoreRef.current);
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!accessToken) return () => controller.abort();
+    void fetch("/api/fredrun/highscores", {
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: controller.signal,
+    }).then(async (response) => {
+      const payload = await response.json().catch(() => null) as unknown;
+      if (!response.ok) {
+        throw new Error(highscoreResponseError(payload, "Die Topliste konnte nicht geladen werden."));
+      }
+      const parsed = parseFredRunHighscoresResponse(payload);
+      if (!parsed) throw new Error("Die Topliste lieferte ein ungültiges Antwortformat.");
+      setLeaderboard(parsed.entries);
+      setPlayerName((current) => current.trim() ? current : parsed.playerName);
+      setLeaderboardState("ready");
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return;
+      setLeaderboardState("error");
+      setLeaderboardError(error instanceof Error ? error.message : "Die Topliste konnte nicht geladen werden.");
+    });
+
+    return () => controller.abort();
+  }, [accessToken, leaderboardAttempt]);
+
+  useEffect(() => () => scoreSubmissionAbortRef.current?.abort(), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -453,6 +527,12 @@ export default function FredRunView() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.code !== "Space" && event.code !== "ArrowUp") return;
+      if (
+        event.target instanceof HTMLElement
+        && event.target.closest("input, textarea, button, [contenteditable='true']")
+      ) {
+        return;
+      }
       event.preventDefault();
       if (!event.repeat) startOrJump();
     };
@@ -471,9 +551,62 @@ export default function FredRunView() {
     };
   }, [replaceGame, startOrJump]);
 
+  async function submitScore(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const normalizedName = normalizeFredRunPlayerName(playerName);
+    const runId = currentRunId;
+    if (!normalizedName) {
+      setScoreSubmissionError(`Bitte einen Namen mit höchstens ${FREDRUN_PLAYER_NAME_MAX_LENGTH} Zeichen eingeben.`);
+      return;
+    }
+    if (!accessToken || !runId || snapshot.phase !== "game-over" || submittedRunId === runId) return;
+
+    const controller = new AbortController();
+    scoreSubmissionAbortRef.current?.abort();
+    scoreSubmissionAbortRef.current = controller;
+    setIsSubmittingScore(true);
+    setScoreSubmissionMessage("");
+    setScoreSubmissionError("");
+    try {
+      const response = await fetch("/api/fredrun/highscores", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ runId, name: normalizedName, score: snapshot.score }),
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null) as unknown;
+      if (!response.ok) {
+        throw new Error(highscoreResponseError(payload, "Der Score konnte nicht eingereicht werden."));
+      }
+      const parsed = parseFredRunHighscoresResponse(payload);
+      if (!parsed) throw new Error("Die Topliste lieferte ein ungültiges Antwortformat.");
+      setLeaderboard(parsed.entries);
+      setLeaderboardState("ready");
+      setLeaderboardError("");
+      setPlayerName(parsed.playerName || normalizedName);
+      setSubmittedRunId(runId);
+      setScoreSubmissionMessage(
+        parsed.submitted === false ? "Dieser Score wurde bereits eingereicht." : "Score eingereicht.",
+      );
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setScoreSubmissionError(error instanceof Error ? error.message : "Der Score konnte nicht eingereicht werden.");
+    } finally {
+      if (scoreSubmissionAbortRef.current === controller) scoreSubmissionAbortRef.current = null;
+      if (!controller.signal.aborted) setIsSubmittingScore(false);
+    }
+  }
+
   const isPaused = snapshot.phase === "paused";
   const showPauseButton = snapshot.phase === "running" || snapshot.phase === "milestone" || isPaused;
   const showIntro = assetState !== "error" && snapshot.phase === "ready";
+  const normalizedPlayerName = normalizeFredRunPlayerName(playerName);
+  const scoreWasSubmitted = Boolean(currentRunId && submittedRunId === currentRunId);
 
   return (
     <section className="forms-panel fredrun-panel" aria-labelledby="fredrun-view-title">
@@ -502,7 +635,7 @@ export default function FredRunView() {
             </div>
           ) : null}
 
-          <div className={`fredrun-stage${showIntro ? " fredrun-stage--intro" : ""}`}>
+          <div className={`fredrun-stage${showIntro ? " fredrun-stage--intro" : ""}${snapshot.phase === "game-over" ? " fredrun-stage--game-over" : ""}`}>
             <canvas
               ref={canvasRef}
               className="fredrun-canvas"
@@ -566,11 +699,50 @@ export default function FredRunView() {
               </div>
             ) : null}
             {snapshot.phase === "game-over" ? (
-              <div className="fredrun-overlay">
+              <div className="fredrun-overlay fredrun-game-over-overlay">
                 <p className="fredrun-overlay-kicker">Runde beendet</p>
                 <h2>{snapshot.score} Punkte</h2>
                 <p>Bestwert: {bestScore}</p>
                 <button className="primary-button" type="button" onClick={restartRound}>Noch einmal</button>
+                <form className="fredrun-score-form" onSubmit={(event) => void submitScore(event)}>
+                  <label htmlFor="fredrun-player-name">
+                    Name für die Topliste
+                    <span>{Array.from(playerName).length}/{FREDRUN_PLAYER_NAME_MAX_LENGTH}</span>
+                  </label>
+                  <div className="fredrun-score-form-row">
+                    <input
+                      id="fredrun-player-name"
+                      type="text"
+                      value={playerName}
+                      maxLength={FREDRUN_PLAYER_NAME_MAX_LENGTH}
+                      autoComplete="nickname"
+                      spellCheck={false}
+                      disabled={isSubmittingScore || scoreWasSubmitted}
+                      onChange={(event) => {
+                        setPlayerName(event.target.value);
+                        setScoreSubmissionError("");
+                      }}
+                      placeholder="Dein Name"
+                    />
+                    <button
+                      className="primary-button"
+                      type="submit"
+                      disabled={!accessToken || !normalizedPlayerName || isSubmittingScore || scoreWasSubmitted}
+                    >
+                      {isSubmittingScore ? "Wird eingereicht …" : "Score einreichen"}
+                    </button>
+                  </div>
+                  {scoreSubmissionMessage ? (
+                    <p className="fredrun-score-feedback fredrun-score-feedback--success" role="status">
+                      {scoreSubmissionMessage}
+                    </p>
+                  ) : null}
+                  {scoreSubmissionError ? (
+                    <p className="fredrun-score-feedback fredrun-score-feedback--error" role="alert">
+                      {scoreSubmissionError}
+                    </p>
+                  ) : null}
+                </form>
               </div>
             ) : null}
           </div>
@@ -587,6 +759,50 @@ export default function FredRunView() {
             </>
           ) : null}
         </div>
+
+        <section className="fredrun-leaderboard" aria-labelledby="fredrun-leaderboard-title">
+          <div className="fredrun-leaderboard-header">
+            <div>
+              <p className="eyebrow">Beste Runden</p>
+              <h2 id="fredrun-leaderboard-title">Top 10</h2>
+            </div>
+            <span>Global</span>
+          </div>
+
+          {leaderboardState === "loading" ? (
+            <p className="fredrun-leaderboard-state" role="status">Topliste wird geladen …</p>
+          ) : leaderboardState === "error" ? (
+            <div className="fredrun-leaderboard-state" role="alert">
+              <p>{leaderboardError}</p>
+              <button
+                className="secondary-button compact-button"
+                type="button"
+                onClick={() => {
+                  setLeaderboardState("loading");
+                  setLeaderboardError("");
+                  setLeaderboardAttempt((attempt) => attempt + 1);
+                }}
+              >
+                Erneut versuchen
+              </button>
+            </div>
+          ) : leaderboard.length === 0 ? (
+            <p className="fredrun-leaderboard-state">Noch kein Score eingereicht – hol dir Platz 1.</p>
+          ) : (
+            <ol className="fredrun-leaderboard-list">
+              {leaderboard.map((entry) => (
+                <li
+                  className={`fredrun-leaderboard-entry${entry.rank <= 3 ? ` fredrun-leaderboard-entry--rank-${entry.rank}` : ""}`}
+                  key={`${entry.rank}-${entry.name}-${entry.score}`}
+                >
+                  <span className="fredrun-leaderboard-rank" aria-label={`Platz ${entry.rank}`}>{entry.rank}</span>
+                  <strong>{entry.name}</strong>
+                  <span>{entry.score.toLocaleString("de-AT")} Punkte</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
       </div>
     </section>
   );
