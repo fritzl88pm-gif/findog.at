@@ -14,6 +14,16 @@ export type FredUpstreamConfig = {
   agentId: string;
   knowledgeBaseIds: string[];
   allowWebSearch: boolean;
+  allowFileUpload: boolean;
+};
+
+export type FredUpstreamAttachment = {
+  kind: "image" | "file";
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+  dataUri: string;
 };
 
 export type FredUpstreamSession = {
@@ -126,6 +136,7 @@ export async function fetchFredUpstreamConfig(options: {
     agentId,
     knowledgeBaseIds,
     allowWebSearch: payload.data.allow_web_search === true && payload.data.agent_web_search_enabled === true,
+    allowFileUpload: payload.data.allow_file_upload === true && payload.data.agent_image_upload_enabled === true,
   };
 }
 
@@ -178,6 +189,8 @@ export async function openFredUpstreamStream(options: {
   upstreamSession: FredUpstreamSession;
   visitorId: string;
   query: string;
+  webSearchEnabled: boolean;
+  attachments: FredUpstreamAttachment[];
   signal: AbortSignal;
   fetchImpl?: typeof fetch;
 }): Promise<Response> {
@@ -203,10 +216,28 @@ export async function openFredUpstreamStream(options: {
         knowledge_base_ids: options.upstreamConfig.knowledgeBaseIds,
         knowledge_ids: [],
         agent_id: options.upstreamConfig.agentId,
-        web_search_enabled: options.upstreamConfig.allowWebSearch,
+        web_search_enabled: options.upstreamConfig.allowWebSearch && options.webSearchEnabled,
         summary_model_id: "",
         mcp_service_ids: [],
         mentioned_items: [],
+        ...(options.attachments.some((attachment) => attachment.kind === "image")
+          ? {
+              images: options.attachments
+                .filter((attachment) => attachment.kind === "image")
+                .map((attachment) => ({ data: attachment.dataUri })),
+            }
+          : {}),
+        ...(options.attachments.some((attachment) => attachment.kind === "file")
+          ? {
+              attachment_uploads: options.attachments
+                .filter((attachment) => attachment.kind === "file")
+                .map((attachment) => ({
+                  data: attachment.dataUri,
+                  file_name: attachment.name,
+                  file_size: attachment.sizeBytes,
+                })),
+            }
+          : {}),
         channel: "embed",
       }),
       cache: "no-store",

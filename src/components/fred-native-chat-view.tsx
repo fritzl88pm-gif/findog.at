@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import type { FormEvent, KeyboardEvent, ReactNode } from "react";
+import type { ChangeEvent, FormEvent, KeyboardEvent, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -14,7 +14,28 @@ export type FredNativeMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  attachments?: FredNativeAttachment[];
+  webSearchEnabled?: boolean;
 };
+
+export type FredNativeAttachment = {
+  kind: "image" | "file";
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256?: string;
+};
+
+type FredCapabilities = { webSearch: boolean; fileUpload: boolean };
+
+const MAX_IMAGE_UPLOADS = 5;
+const MAX_FILE_UPLOADS = 5;
+const MAX_IMAGE_UPLOAD_BYTES = 10 * 1_024 * 1_024;
+const MAX_FILE_UPLOAD_BYTES = 20 * 1_024 * 1_024;
+const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+const FILE_EXTENSIONS = new Set([
+  ".pdf", ".doc", ".docx", ".txt", ".md", ".csv", ".xlsx", ".xls", ".ppt", ".pptx",
+]);
 
 type FredNativeChatViewProps = {
   accessToken: string;
@@ -46,6 +67,15 @@ function responseError(payload: unknown, fallback: string): string {
   return fallback;
 }
 
+function displayFileSize(bytes: number): string {
+  if (bytes < 1_024 * 1_024) return `${Math.max(1, Math.round(bytes / 1_024))} KB`;
+  return `${(bytes / (1_024 * 1_024)).toFixed(1)} MB`;
+}
+
+function fileExtension(name: string): string {
+  return /\.[^.]+$/u.exec(name.toLowerCase())?.[0] ?? "";
+}
+
 export default function FredNativeChatView({
   accessToken,
   conversationId,
@@ -59,10 +89,19 @@ export default function FredNativeChatView({
   const [composer, setComposer] = useState("");
   const [error, setError] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [capabilities, setCapabilities] = useState<FredCapabilities>({
+    webSearch: false,
+    fileUpload: false,
+  });
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [selectedImages, setSelectedImages] = useState<File[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [welcomeGreeting] = useState(() => getWelcomeGreeting());
   const activeConversationIdRef = useRef(conversationId);
   const abortControllerRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (conversationId === activeConversationIdRef.current) return;
@@ -70,7 +109,30 @@ export default function FredNativeChatView({
     setMessages(initialMessages);
     setComposer("");
     setError("");
+    setSelectedImages([]);
+    setSelectedFiles([]);
   }, [conversationId, initialMessages]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    const controller = new AbortController();
+    void fetch("/api/fred/capabilities", {
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: controller.signal,
+    }).then(async (response) => {
+      const payload = await response.json().catch(() => null) as unknown;
+      if (!response.ok || !payload || typeof payload !== "object" || Array.isArray(payload)) return;
+      const value = payload as Record<string, unknown>;
+      setCapabilities({
+        webSearch: value.webSearch === true,
+        fileUpload: value.fileUpload === true,
+      });
+      if (value.webSearch !== true) setWebSearchEnabled(false);
+    }).catch(() => undefined);
+    return () => controller.abort();
+  }, [accessToken]);
 
   useEffect(() => () => abortControllerRef.current?.abort(), []);
 
@@ -97,15 +159,46 @@ export default function FredNativeChatView({
       content: "",
       createdAt: new Date().toISOString(),
     };
+    const attachedImages = selectedImages;
+    const attachedFiles = selectedFiles;
+    userMessage.attachments = [
+      ...attachedImages.map((file): FredNativeAttachment => ({
+        kind: "image",
+        name: file.name,
+        mimeType: file.type,
+        sizeBytes: file.size,
+      })),
+      ...attachedFiles.map((file): FredNativeAttachment => ({
+        kind: "file",
+        name: file.name,
+        mimeType: file.type || "application/octet-stream",
+        sizeBytes: file.size,
+      })),
+    ];
+    userMessage.webSearchEnabled = webSearchEnabled;
     const baseMessages = [...messages, userMessage];
     setMessages([...baseMessages, assistantMessage]);
     setComposer("");
+    setSelectedImages([]);
+    setSelectedFiles([]);
     setError("");
     setIsSending(true);
 
     let answer = "";
     let receivedFinal = false;
     try {
+      const requestPayload = {
+        query,
+        conversationId: activeConversationIdRef.current || undefined,
+        webSearchEnabled,
+      };
+      const hasAttachments = attachedImages.length > 0 || attachedFiles.length > 0;
+      const formData = hasAttachments ? new FormData() : null;
+      if (formData) {
+        formData.append("payload", JSON.stringify(requestPayload));
+        for (const file of attachedImages) formData.append("image", file, file.name);
+        for (const file of attachedFiles) formData.append("attachment", file, file.name);
+      }
       const response = await fetch("/api/fred/chat", {
         method: "POST",
         cache: "no-store",
@@ -113,12 +206,9 @@ export default function FredNativeChatView({
         headers: {
           Accept: "application/x-ndjson",
           Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
+          ...(formData ? {} : { "Content-Type": "application/json" }),
         },
-        body: JSON.stringify({
-          query,
-          conversationId: activeConversationIdRef.current || undefined,
-        }),
+        body: formData ?? JSON.stringify(requestPayload),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -181,6 +271,44 @@ export default function FredNativeChatView({
     }
   }
 
+  function addImages(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (selectedImages.length + files.length > MAX_IMAGE_UPLOADS) {
+      setError("Bitte maximal fünf Bilder pro Anfrage auswählen.");
+      return;
+    }
+    if (files.some((file) => !IMAGE_MIME_TYPES.has(file.type))) {
+      setError("Erlaubt sind JPEG-, PNG-, GIF- und WebP-Bilder.");
+      return;
+    }
+    if (files.some((file) => file.size < 1 || file.size > MAX_IMAGE_UPLOAD_BYTES)) {
+      setError("Ein Bild darf nicht leer und maximal 10 MB groß sein.");
+      return;
+    }
+    setError("");
+    setSelectedImages((current) => [...current, ...files]);
+  }
+
+  function addFiles(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (selectedFiles.length + files.length > MAX_FILE_UPLOADS) {
+      setError("Bitte maximal fünf Dateien pro Anfrage auswählen.");
+      return;
+    }
+    if (files.some((file) => !FILE_EXTENSIONS.has(fileExtension(file.name)))) {
+      setError("Erlaubt sind PDF-, Word-, Text-, Markdown-, CSV-, Excel- und PowerPoint-Dateien.");
+      return;
+    }
+    if (files.some((file) => file.size < 1 || file.size > MAX_FILE_UPLOAD_BYTES)) {
+      setError("Eine Datei darf nicht leer und maximal 20 MB groß sein.");
+      return;
+    }
+    setError("");
+    setSelectedFiles((current) => [...current, ...files]);
+  }
+
   function stopAnswer() {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
@@ -237,6 +365,22 @@ export default function FredNativeChatView({
                     ? renderAssistantContent(message.content)
                     : <p className="message-body">Fred denkt nach …</p>)
                   : renderUserContent(message.content)}
+                {message.role === "user" && (message.attachments?.length || message.webSearchEnabled) ? (
+                  <div className="fred-native-message-options">
+                    {message.webSearchEnabled ? (
+                      <span className="fred-native-option-badge">Websuche</span>
+                    ) : null}
+                    {message.attachments?.map((attachment, attachmentIndex) => (
+                      <span
+                        className="fred-native-option-badge"
+                        key={`${attachment.name}-${attachmentIndex}`}
+                        title={`${attachment.mimeType} · ${displayFileSize(attachment.sizeBytes)}`}
+                      >
+                        {attachment.kind === "image" ? "Bild" : "Datei"}: {attachment.name}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
               </article>
             ))}
           </div>
@@ -247,6 +391,54 @@ export default function FredNativeChatView({
             <div className="error-box composer-error" role="alert">{error || externalError}</div>
           ) : null}
           <form className="composer" onSubmit={(event) => void sendMessage(event)}>
+            <input
+              ref={imageInputRef}
+              className="fred-native-file-input"
+              type="file"
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              multiple
+              onChange={addImages}
+              tabIndex={-1}
+            />
+            <input
+              ref={fileInputRef}
+              className="fred-native-file-input"
+              type="file"
+              accept=".pdf,.doc,.docx,.txt,.md,.csv,.xlsx,.xls,.ppt,.pptx,application/pdf,text/plain"
+              multiple
+              onChange={addFiles}
+              tabIndex={-1}
+            />
+            {selectedImages.length > 0 || selectedFiles.length > 0 ? (
+              <div className="attachment-chips">
+                {selectedImages.map((file, index) => (
+                  <span className="attachment-chip" key={`image-${file.name}-${index}`}>
+                    <span title={file.name}>Bild: {file.name}</span>
+                    <small>{displayFileSize(file.size)}</small>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedImages((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                      aria-label={`${file.name} entfernen`}
+                    >
+                      Entfernen
+                    </button>
+                  </span>
+                ))}
+                {selectedFiles.map((file, index) => (
+                  <span className="attachment-chip" key={`file-${file.name}-${index}`}>
+                    <span title={file.name}>Datei: {file.name}</span>
+                    <small>{displayFileSize(file.size)}</small>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                      aria-label={`${file.name} entfernen`}
+                    >
+                      Entfernen
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
             <textarea
               value={composer}
               onChange={(event) => setComposer(event.target.value)}
@@ -257,7 +449,40 @@ export default function FredNativeChatView({
               rows={2}
             />
             <div className="composer-toolbar">
-              <span className="fred-native-composer-note">Enter zum Senden · Shift + Enter für neue Zeile</span>
+              <div className="fred-native-composer-tools">
+                {capabilities.fileUpload ? (
+                  <>
+                    <button
+                      className="fred-native-tool-button"
+                      type="button"
+                      onClick={() => imageInputRef.current?.click()}
+                      disabled={isSending}
+                    >
+                      Bild
+                    </button>
+                    <button
+                      className="fred-native-tool-button"
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isSending}
+                    >
+                      Datei
+                    </button>
+                  </>
+                ) : null}
+                {capabilities.webSearch ? (
+                  <button
+                    className={`fred-native-tool-button${webSearchEnabled ? " is-active" : ""}`}
+                    type="button"
+                    aria-pressed={webSearchEnabled}
+                    onClick={() => setWebSearchEnabled((current) => !current)}
+                    disabled={isSending}
+                  >
+                    Websuche
+                  </button>
+                ) : null}
+                <span className="fred-native-composer-note">Enter zum Senden · Shift + Enter für neue Zeile</span>
+              </div>
               <div className="composer-actions">
                 {isSending ? (
                   <button className="secondary-button" type="button" onClick={stopAnswer}>

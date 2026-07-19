@@ -77,7 +77,10 @@ import {
   getL17bSourceNote,
   parseL17bGermanAmount,
 } from "@/lib/l17b-currency";
-import FredNativeChatView, { type FredNativeMessage } from "@/components/fred-native-chat-view";
+import FredNativeChatView, {
+  type FredNativeAttachment,
+  type FredNativeMessage,
+} from "@/components/fred-native-chat-view";
 import FredRunView from "@/components/fredrun-view";
 import AgentStepTimeline from "@/components/agent-step-timeline";
 
@@ -89,6 +92,8 @@ type ChatMessage = {
   agentRun?: AgentRunMetadata;
   pdfOffer?: PdfOffer;
   pdfArtifacts?: PdfArtifactOffer[];
+  attachments?: FredNativeAttachment[];
+  webSearchEnabled?: boolean;
 };
 
 type PreparedChatRequest = {
@@ -507,6 +512,45 @@ async function fetchConversationHistory(accessToken: string, id: string): Promis
   return { title, messages: normalizeMessages(payload.messages) };
 }
 
+function normalizeFredAttachments(value: unknown): FredNativeAttachment[] {
+  if (!Array.isArray(value) || value.length > 10) return [];
+  return value.flatMap((candidate): FredNativeAttachment[] => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const item = candidate as Record<string, unknown>;
+    if (
+      (item.kind !== "image" && item.kind !== "file")
+      || typeof item.name !== "string"
+      || typeof item.mimeType !== "string"
+      || typeof item.sizeBytes !== "number"
+      || (item.sha256 !== undefined && typeof item.sha256 !== "string")
+    ) return [];
+    return [{
+      kind: item.kind,
+      name: item.name,
+      mimeType: item.mimeType,
+      sizeBytes: item.sizeBytes,
+      ...(typeof item.sha256 === "string" ? { sha256: item.sha256 } : {}),
+    }];
+  });
+}
+
+function normalizeFredMessages(value: unknown): ChatMessage[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((message): ChatMessage[] => {
+    const base = normalizeMessages([message])[0];
+    if (!base || !message || typeof message !== "object" || Array.isArray(message)) return [];
+    const item = message as Record<string, unknown>;
+    const attachments = base.role === "user" ? normalizeFredAttachments(item.attachments) : [];
+    return [{
+      ...base,
+      ...(attachments.length ? { attachments } : {}),
+      ...(base.role === "user" && item.webSearchEnabled === true
+        ? { webSearchEnabled: true }
+        : {}),
+    }];
+  });
+}
+
 async function fetchFredConversationHistory(accessToken: string, id: string): Promise<{
   title: string;
   messages: ChatMessage[];
@@ -527,7 +571,7 @@ async function fetchFredConversationHistory(accessToken: string, id: string): Pr
     && typeof (conversation as Record<string, unknown>).title === "string"
     ? ((conversation as Record<string, unknown>).title as string)
     : "Fred-Unterhaltung";
-  return { title, messages: normalizeMessages(payload.messages) };
+  return { title, messages: normalizeFredMessages(payload.messages) };
 }
 
 function normalizeEnabledModelDescriptors(value: unknown): EnabledModelDescriptor[] {

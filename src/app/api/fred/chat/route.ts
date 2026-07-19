@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
@@ -24,6 +24,7 @@ import {
   openFredUpstreamStream,
   relayFredWebhookEvent,
   stopFredUpstreamSession,
+  type FredUpstreamAttachment,
   type FredUpstreamSession,
 } from "@/lib/weknora/fred-native";
 
@@ -32,11 +33,25 @@ export const runtime = "nodejs";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_REQUEST_BYTES = 64 * 1_024;
 const MAX_QUERY_LENGTH = 50_000;
+const MAX_IMAGE_UPLOADS = 5;
+const MAX_FILE_UPLOADS = 5;
+const MAX_IMAGE_UPLOAD_BYTES = 10 * 1_024 * 1_024;
+const MAX_FILE_UPLOAD_BYTES = 20 * 1_024 * 1_024;
+const MAX_MULTIPART_REQUEST_BYTES = MAX_REQUEST_BYTES
+  + MAX_IMAGE_UPLOADS * MAX_IMAGE_UPLOAD_BYTES
+  + MAX_FILE_UPLOADS * MAX_FILE_UPLOAD_BYTES
+  + 1_024 * 1_024; // Multipart boundaries and per-part headers.
 const MAX_REQUESTS_PER_WINDOW = 30;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1_000;
 const STREAM_TIMEOUT_MS = 5 * 60 * 1_000;
 
 type RateLimitEntry = { count: number; resetAt: number };
+type ParsedFredChatRequest = {
+  query: string;
+  conversationId: string;
+  webSearchEnabled: boolean;
+  attachments: FredUpstreamAttachment[];
+};
 type FredConversationRow = {
   id: string;
   title: string;
@@ -47,6 +62,19 @@ type FredConversationRow = {
 };
 
 const rateLimit = new Map<string, RateLimitEntry>();
+const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+const FILE_MIME_BY_EXTENSION: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".doc": "application/msword",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".csv": "text/csv",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".xls": "application/vnd.ms-excel",
+  ".ppt": "application/vnd.ms-powerpoint",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+};
 
 function json(payload: unknown, status = 200): NextResponse {
   return NextResponse.json(payload, {
@@ -80,7 +108,82 @@ function enforceRateLimit(userId: string): void {
   current.count += 1;
 }
 
-async function readRequestBody(request: Request): Promise<{ query: string; conversationId: string }> {
+function validatedRequestFields(value: unknown): Omit<ParsedFredChatRequest, "attachments"> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new UserVisibleError("Die Fred-Anfrage ist ungültig.", 400);
+  }
+  const body = value as Record<string, unknown>;
+  const query = typeof body.query === "string" ? body.query.trim() : "";
+  const conversationId = typeof body.conversationId === "string" ? body.conversationId.trim() : "";
+  const webSearchEnabled = body.webSearchEnabled === true;
+  if (body.webSearchEnabled !== undefined && typeof body.webSearchEnabled !== "boolean") {
+    throw new UserVisibleError("Die Websuche-Einstellung ist ungültig.", 400);
+  }
+  if (!query || query.length > MAX_QUERY_LENGTH) {
+    throw new UserVisibleError("Bitte gib eine gültige Frage an Fred ein.", 400);
+  }
+  if (conversationId && !UUID_PATTERN.test(conversationId)) {
+    throw new UserVisibleError("Die Fred-Unterhaltung ist ungültig.", 400);
+  }
+  return { query, conversationId, webSearchEnabled };
+}
+
+function sanitizedFilename(value: string): string {
+  const normalized = value
+    .normalize("NFKC")
+    .replace(/[\u0000-\u001f\u007f]/gu, "")
+    .replace(/[\\/]/gu, "_")
+    .trim()
+    .slice(0, 255);
+  return normalized || "datei";
+}
+
+function uploadedFile(value: FormDataEntryValue): value is File {
+  return typeof File !== "undefined" && value instanceof File;
+}
+
+async function upstreamAttachment(
+  file: File,
+  kind: FredUpstreamAttachment["kind"],
+): Promise<FredUpstreamAttachment> {
+  const name = sanitizedFilename(file.name);
+  let mimeType: string;
+  if (kind === "image") {
+    mimeType = file.type.toLowerCase();
+    if (!IMAGE_MIME_TYPES.has(mimeType)) {
+      throw new UserVisibleError("Erlaubt sind JPEG-, PNG-, GIF- und WebP-Bilder.", 400);
+    }
+    if (file.size > MAX_IMAGE_UPLOAD_BYTES) {
+      throw new UserVisibleError("Ein Bild darf maximal 10 MB groß sein.", 413);
+    }
+  } else {
+    const extension = /\.[^.]+$/u.exec(name.toLowerCase())?.[0] ?? "";
+    mimeType = FILE_MIME_BY_EXTENSION[extension] ?? "";
+    if (!mimeType) {
+      throw new UserVisibleError(
+        "Erlaubt sind PDF-, Word-, Text-, Markdown-, CSV-, Excel- und PowerPoint-Dateien.",
+        400,
+      );
+    }
+    if (file.size > MAX_FILE_UPLOAD_BYTES) {
+      throw new UserVisibleError("Eine Datei darf maximal 20 MB groß sein.", 413);
+    }
+  }
+  if (file.size < 1) {
+    throw new UserVisibleError("Leere Dateien können nicht hochgeladen werden.", 400);
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return {
+    kind,
+    name,
+    mimeType,
+    sizeBytes: bytes.byteLength,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    dataUri: `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
+  };
+}
+
+async function readJsonRequestBody(request: Request): Promise<ParsedFredChatRequest> {
   const declaredLength = Number(request.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_BYTES) {
     throw new UserVisibleError("Die Fred-Anfrage ist zu groß.", 413);
@@ -113,19 +216,82 @@ async function readRequestBody(request: Request): Promise<{ query: string; conve
   } catch {
     throw new UserVisibleError("Die Fred-Anfrage enthält kein gültiges JSON.", 400);
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new UserVisibleError("Die Fred-Anfrage ist ungültig.", 400);
+  return { ...validatedRequestFields(value), attachments: [] };
+}
+
+async function readMultipartRequestBody(request: Request): Promise<ParsedFredChatRequest> {
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_MULTIPART_REQUEST_BYTES) {
+    throw new UserVisibleError("Die Fred-Anfrage ist zu groß.", 413);
   }
-  const body = value as Record<string, unknown>;
-  const query = typeof body.query === "string" ? body.query.trim() : "";
-  const conversationId = typeof body.conversationId === "string" ? body.conversationId.trim() : "";
-  if (!query || query.length > MAX_QUERY_LENGTH) {
-    throw new UserVisibleError("Bitte gib eine gültige Frage an Fred ein.", 400);
+  if (!request.body) throw new UserVisibleError("Die Fred-Anfrage ist leer.", 400);
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_MULTIPART_REQUEST_BYTES) {
+      await reader.cancel();
+      throw new UserVisibleError("Die Fred-Anfrage ist zu groß.", 413);
+    }
+    chunks.push(value);
   }
-  if (conversationId && !UUID_PATTERN.test(conversationId)) {
-    throw new UserVisibleError("Die Fred-Unterhaltung ist ungültig.", 400);
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
   }
-  return { query, conversationId };
+  const contentType = request.headers.get("content-type") ?? "";
+  let formData: FormData;
+  try {
+    formData = await new Request("http://localhost", {
+      method: "POST",
+      headers: { "Content-Type": contentType },
+      body: bytes,
+    }).formData();
+  } catch {
+    throw new UserVisibleError("Die Fred-Anfrage enthält keine gültigen Formulardaten.", 400);
+  }
+  const payload = formData.get("payload");
+  if (typeof payload !== "string") {
+    throw new UserVisibleError("Die Fred-Anfrage enthält kein gültiges Payload.", 400);
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(payload);
+  } catch {
+    throw new UserVisibleError("Die Fred-Anfrage enthält kein gültiges JSON-Payload.", 400);
+  }
+  const images = formData.getAll("image");
+  const files = formData.getAll("attachment");
+  if (images.some((entry) => !uploadedFile(entry)) || files.some((entry) => !uploadedFile(entry))) {
+    throw new UserVisibleError("Ein Fred-Anhang ist ungültig.", 400);
+  }
+  if (images.length > MAX_IMAGE_UPLOADS) {
+    throw new UserVisibleError("Bitte maximal fünf Bilder pro Anfrage hochladen.", 400);
+  }
+  if (files.length > MAX_FILE_UPLOADS) {
+    throw new UserVisibleError("Bitte maximal fünf Dateien pro Anfrage hochladen.", 400);
+  }
+  const attachments = await Promise.all([
+    ...images.map((entry) => upstreamAttachment(entry as File, "image")),
+    ...files.map((entry) => upstreamAttachment(entry as File, "file")),
+  ]);
+  return { ...validatedRequestFields(value), attachments };
+}
+
+async function readRequestBody(request: Request): Promise<ParsedFredChatRequest> {
+  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+  if (contentType.startsWith("multipart/form-data")) {
+    return readMultipartRequestBody(request);
+  }
+  if (contentType.startsWith("application/json")) {
+    return readJsonRequestBody(request);
+  }
+  throw new UserVisibleError("Die Fred-Anfrage muss JSON oder Formulardaten enthalten.", 415);
 }
 
 async function recordEvent(options: {
@@ -137,6 +303,8 @@ async function recordEvent(options: {
   eventType: "message_sent" | "message_received";
   content: string;
   occurredAt: string;
+  attachments?: FredUpstreamAttachment[];
+  webSearchEnabled?: boolean;
 }) {
   const payload = {
     client_id: options.userId,
@@ -146,9 +314,17 @@ async function recordEvent(options: {
     event_type: options.eventType,
     content: options.content,
     occurred_at: options.occurredAt,
+    attachments: (options.attachments ?? []).map((attachment) => ({
+      kind: attachment.kind,
+      name: attachment.name,
+      mime_type: attachment.mimeType,
+      size_bytes: attachment.sizeBytes,
+      sha256: attachment.sha256,
+    })),
+    web_search_enabled: options.webSearchEnabled ?? false,
   };
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const { data, error } = await options.supabase.rpc("record_fred_bridge_event", { payload });
+    const { data, error } = await options.supabase.rpc("record_fred_native_event", { payload });
     if (!error) return parseFredConversationSummary(data);
   }
   throw new UserVisibleError("Der Fred-Verlauf konnte nicht gespeichert werden.", 503);
@@ -228,9 +404,6 @@ export async function POST(request: Request) {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let onRequestAbort: (() => void) | undefined;
   try {
-    if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
-      throw new UserVisibleError("Die Fred-Anfrage muss JSON enthalten.", 415);
-    }
     const supabase = getSupabaseServerClient();
     if (!supabase) throw new UserVisibleError("Fred ist derzeit nicht verfügbar.", 503);
     const user = await authenticateSupabaseRequest(request, supabase);
@@ -261,6 +434,12 @@ export async function POST(request: Request) {
         signal: lifetime.signal,
       }),
     ]);
+    if (body.webSearchEnabled && !upstreamConfig.allowWebSearch) {
+      throw new UserVisibleError("Die Websuche ist für diesen Fred-Kanal nicht freigeschaltet.", 400);
+    }
+    if (body.attachments.length > 0 && !upstreamConfig.allowFileUpload) {
+      throw new UserVisibleError("Dateianhänge sind für diesen Fred-Kanal nicht freigeschaltet.", 400);
+    }
     const userOccurredAt = new Date().toISOString();
     const conversation = await recordEvent({
       supabase,
@@ -271,6 +450,8 @@ export async function POST(request: Request) {
       eventType: "message_sent",
       content: body.query,
       occurredAt: userOccurredAt,
+      attachments: body.attachments,
+      webSearchEnabled: body.webSearchEnabled,
     });
     void relayFredWebhookEvent({
       session: embedSession,
@@ -287,6 +468,8 @@ export async function POST(request: Request) {
       upstreamSession,
       visitorId: fredVisitorId(config.publishToken, user.id),
       query: body.query,
+      webSearchEnabled: body.webSearchEnabled,
+      attachments: body.attachments,
       signal: lifetime.signal,
     });
     const upstreamReader = upstream.body!.getReader();

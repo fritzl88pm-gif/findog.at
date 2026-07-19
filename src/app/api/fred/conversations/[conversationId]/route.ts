@@ -21,7 +21,31 @@ type FredMessageRow = {
   content: string;
   provider_created_at: string | null;
   created_at: string;
+  attachments: unknown;
+  web_search_enabled: boolean;
 };
+
+function attachmentMetadata(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const item = candidate as Record<string, unknown>;
+    if (
+      (item.kind !== "image" && item.kind !== "file")
+      || typeof item.name !== "string"
+      || typeof item.mime_type !== "string"
+      || typeof item.size_bytes !== "number"
+      || typeof item.sha256 !== "string"
+    ) return [];
+    return [{
+      kind: item.kind,
+      name: item.name,
+      mimeType: item.mime_type,
+      sizeBytes: item.size_bytes,
+      sha256: item.sha256,
+    }];
+  });
+}
 
 function json(payload: unknown, status = 200): NextResponse {
   return NextResponse.json(payload, {
@@ -63,7 +87,7 @@ export async function GET(
     }
     const { data: messages, error: messagesError } = await supabase
       .from("fred_messages")
-      .select("id,role,content,provider_created_at,created_at")
+      .select("id,role,content,provider_created_at,created_at,attachments,web_search_enabled")
       .eq("conversation_id", conversationId)
       .eq("client_id", user.id)
       .order("provider_created_at", { ascending: true, nullsFirst: false })
@@ -84,6 +108,8 @@ export async function GET(
         role: message.role,
         content: message.content,
         createdAt: message.provider_created_at ?? message.created_at,
+        attachments: attachmentMetadata(message.attachments),
+        webSearchEnabled: message.web_search_enabled,
       })),
     });
   } catch (error) {

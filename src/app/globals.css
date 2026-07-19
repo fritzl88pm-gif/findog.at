@@ -768,6 +768,68 @@ textarea:focus {
   font-size: 0.76rem;
 }
 
+.fred-native-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.fred-native-composer-tools,
+.fred-native-message-options {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.fred-native-tool-button,
+.fred-native-option-badge {
+  min-height: 30px;
+  border: 1px solid rgba(40, 111, 156, 0.2);
+  border-radius: 999px;
+  padding: 0 11px;
+  background: rgba(40, 111, 156, 0.05);
+  color: var(--bmf-blue-deep);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.fred-native-tool-button {
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.fred-native-tool-button:hover:not(:disabled),
+.fred-native-tool-button.is-active {
+  border-color: var(--bmf-blue);
+  background: var(--bmf-blue);
+  color: #ffffff;
+}
+
+.fred-native-tool-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.fred-native-message-options {
+  margin-top: 10px;
+}
+
+.fred-native-option-badge {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Fredrun */
 .fredrun-panel {
   background:

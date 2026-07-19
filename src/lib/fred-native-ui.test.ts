@@ -57,6 +57,19 @@ describe("Fred native Findog UI", () => {
     expect(pageSource).not.toContain("schreibgeschützter Verlauf");
   });
 
+  it("offers only the WeKnora-enabled upload and web-search controls", () => {
+    expect(viewSource).toContain('fetch("/api/fred/capabilities"');
+    expect(viewSource).toContain("capabilities.fileUpload");
+    expect(viewSource).toContain("capabilities.webSearch");
+    expect(viewSource).toContain('formData.append("image"');
+    expect(viewSource).toContain('formData.append("attachment"');
+    expect(viewSource).toContain("webSearchEnabled");
+    expect(routeSource).toContain("MAX_IMAGE_UPLOADS = 5");
+    expect(routeSource).toContain("MAX_FILE_UPLOADS = 5");
+    expect(routeSource).toContain('rpc("record_fred_native_event"');
+    expect(pageSource).toContain("normalizeFredAttachments");
+  });
+
   it("keeps WeKnora credentials server-side and tightens framing policy", () => {
     expect(routeSource).toContain("mintFredEmbedSession");
     expect(routeSource).toContain("openFredUpstreamStream");

@@ -62,6 +62,29 @@ function request(body: Record<string, unknown>): Request {
   });
 }
 
+function multipartRequest(options: {
+  query: string;
+  webSearchEnabled?: boolean;
+  image?: File;
+  attachment?: File;
+}): Request {
+  const formData = new FormData();
+  formData.append("payload", JSON.stringify({
+    query: options.query,
+    webSearchEnabled: options.webSearchEnabled ?? false,
+  }));
+  if (options.image) formData.append("image", options.image, options.image.name);
+  if (options.attachment) formData.append("attachment", options.attachment, options.attachment.name);
+  return new Request("https://findog.at/api/fred/chat", {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer access-token",
+      "Sec-Fetch-Site": "same-origin",
+    },
+    body: formData,
+  });
+}
+
 function upstreamStream(): Response {
   return new Response([
     'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
@@ -99,6 +122,7 @@ describe("POST /api/fred/chat", () => {
       agentId: "agent-1",
       knowledgeBaseIds: ["kb-1"],
       allowWebSearch: false,
+      allowFileUpload: true,
     });
     vi.mocked(createFredUpstreamSession).mockResolvedValue({
       id: "session-1",
@@ -137,15 +161,17 @@ describe("POST /api/fred/chat", () => {
         conversation: expect.objectContaining({ id: conversationId }),
       },
     ]);
-    expect(rpc).toHaveBeenNthCalledWith(1, "record_fred_bridge_event", {
+    expect(rpc).toHaveBeenNthCalledWith(1, "record_fred_native_event", {
       payload: expect.objectContaining({
         client_id: userId,
         event_type: "message_sent",
         content: "Wie ist die Rechtslage?",
         session_id: "session-1",
+        attachments: [],
+        web_search_enabled: false,
       }),
     });
-    expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_bridge_event", {
+    expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
       payload: expect.objectContaining({
         client_id: userId,
         event_type: "message_received",
@@ -199,5 +225,51 @@ describe("POST /api/fred/chat", () => {
     expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
       upstreamSession: { id: "session-existing", signature: "derived-signature" },
     }));
+  });
+
+  it("validates and forwards frame-compatible attachments and per-request web search", async () => {
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
+      agentId: "agent-1",
+      knowledgeBaseIds: ["kb-1"],
+      allowWebSearch: true,
+      allowFileUpload: true,
+    });
+    const pdf = new File([new Uint8Array([1, 2, 3])], "Beleg.pdf", {
+      type: "application/pdf",
+    });
+
+    const response = await POST(multipartRequest({
+      query: "Bitte prüfe den Beleg",
+      webSearchEnabled: true,
+      attachment: pdf,
+    }));
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+      webSearchEnabled: true,
+      attachments: [expect.objectContaining({
+        kind: "file",
+        name: "Beleg.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 3,
+        sha256: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+        dataUri: "data:application/pdf;base64,AQID",
+      })],
+    }));
+    expect(rpc).toHaveBeenNthCalledWith(1, "record_fred_native_event", {
+      payload: expect.objectContaining({
+        web_search_enabled: true,
+        attachments: [{
+          kind: "file",
+          name: "Beleg.pdf",
+          mime_type: "application/pdf",
+          size_bytes: 3,
+          sha256: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+        }],
+      }),
+    });
   });
 });

@@ -55,6 +55,8 @@ describe("Fred native WeKnora client", () => {
         knowledge_base_ids: ["kb-1"],
         allow_web_search: true,
         agent_web_search_enabled: true,
+        allow_file_upload: true,
+        agent_image_upload_enabled: true,
       },
     }), { status: 200 }));
     const upstreamConfig = await fetchFredUpstreamConfig({
@@ -73,6 +75,15 @@ describe("Fred native WeKnora client", () => {
       upstreamSession: { id: "session-123", signature },
       visitorId: "visitor-hash",
       query: "Meine Frage",
+      webSearchEnabled: true,
+      attachments: [{
+        kind: "file",
+        name: "beleg.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 3,
+        sha256: "a".repeat(64),
+        dataUri: "data:application/pdf;base64,cGRm",
+      }],
       signal: new AbortController().signal,
       fetchImpl: streamFetch,
     });
@@ -88,6 +99,12 @@ describe("Fred native WeKnora client", () => {
       agent_enabled: true,
       agent_id: "agent-123",
       knowledge_base_ids: ["kb-1"],
+      web_search_enabled: true,
+      attachment_uploads: [{
+        data: "data:application/pdf;base64,cGRm",
+        file_name: "beleg.pdf",
+        file_size: 3,
+      }],
       channel: "embed",
     });
   });
