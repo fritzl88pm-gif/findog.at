@@ -11,6 +11,10 @@ const stylesSource = readFileSync(
   fileURLToPath(new URL("../../app/globals.css", import.meta.url)),
   "utf8",
 );
+const fredNativeSource = readFileSync(
+  fileURLToPath(new URL("../../components/fred-native-chat-view.tsx", import.meta.url)),
+  "utf8",
+);
 
 function cssRule(selector: string): string {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -19,10 +23,13 @@ function cssRule(selector: string): string {
 
 describe("assistant identity", () => {
   it("uses Fred's decorative public avatar in live, pending, and stored Fred messages", () => {
-    expect(
-      pageSource.match(/<img className="message-avatar fred-avatar" src="\/fred-avatar\.png" alt="" \/>/g),
-    ).toHaveLength(3);
+    const avatarPattern = /<img className="message-avatar fred-avatar" src="\/fred-avatar\.png" alt="" \/>/g;
+    expect([
+      ...(pageSource.match(avatarPattern) ?? []),
+      ...(fredNativeSource.match(avatarPattern) ?? []),
+    ]).toHaveLength(3);
     expect(pageSource.match(/<span className="sender-name">Fred<\/span>/g)).toHaveLength(2);
+    expect(fredNativeSource).toContain('message.role === "user" ? "Du" : "Fred"');
     expect(pageSource).not.toContain("Findog/Fred");
     expect(pageSource).not.toMatch(/>FF</);
     expect(pageSource).toContain('<div className="message-avatar">DU</div>');

@@ -1,0 +1,70 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
+
+const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.meta.url)), "utf8");
+const viewSource = readFileSync(
+  fileURLToPath(new URL("../components/fred-native-chat-view.tsx", import.meta.url)),
+  "utf8",
+);
+const routeSource = readFileSync(
+  fileURLToPath(new URL("../app/api/fred/chat/route.ts", import.meta.url)),
+  "utf8",
+);
+const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
+const nextConfigSource = readFileSync(fileURLToPath(new URL("../../next.config.ts", import.meta.url)), "utf8");
+
+describe("Fred native Findog UI", () => {
+  it("keeps Fred in authenticated navigation and renders the native chat", () => {
+    expect(pageSource).toContain('type AppView = "chat" | "fred"');
+    expect(pageSource.match(/onClick=\{openFredView\}/gu)).toHaveLength(2);
+    expect(pageSource).toContain("<FredNativeChatView");
+    expect(pageSource).toContain("initialMessages={fredMessages}");
+    expect(pageSource).toContain("renderAssistantContent={(content) => <RichAnswer content={content} />}");
+    expect(pageSource).not.toContain("<FredEmbedView");
+    expect(pageSource).not.toContain("<FredHistoryTranscript");
+  });
+
+  it("renders Fred's image and greeting on the left in the existing Findog colours", () => {
+    expect(viewSource).toContain('src="/fred.png"');
+    expect(viewSource).toContain('className="fred-embed-hero"');
+    expect(viewSource).toContain('<h1 className="fred-embed-greeting">{welcomeGreeting}</h1>');
+    expect(viewSource.indexOf('src="/fred.png"')).toBeLessThan(
+      viewSource.indexOf('className="fred-embed-greeting"'),
+    );
+    expect(cssSource).toMatch(/\.fred-embed-hero \{[\s\S]*?display: flex;[\s\S]*?align-items: center;/u);
+    expect(cssSource).toMatch(/\.fred-embed-greeting \{[\s\S]*?color: var\(--bmf-blue-deep\);/u);
+  });
+
+  it("uses Findog message bubbles, rich answers and the native composer for live responses", () => {
+    expect(viewSource).toContain('className={`message ${message.role}');
+    expect(viewSource).toContain("renderAssistantContent(message.content)");
+    expect(viewSource).toContain('className="composer"');
+    expect(viewSource).toContain('fetch("/api/fred/chat"');
+    expect(viewSource).toContain("parseFredNativeStreamLine");
+    expect(viewSource).toContain("Stoppen");
+    expect(viewSource).not.toContain("<iframe");
+    expect(viewSource).not.toContain("postMessage");
+  });
+
+  it("continues a selected stored Fred conversation instead of showing it read-only", () => {
+    expect(pageSource).toContain("selectFredConversation(conversation)");
+    expect(pageSource).toContain("setFredConversationId(conversation.id)");
+    expect(viewSource).toContain("conversationId: activeConversationIdRef.current || undefined");
+    expect(routeSource).toContain('.eq("client_id", options.userId)');
+    expect(routeSource).toContain("deriveFredSessionSignature");
+    expect(pageSource).not.toContain("schreibgeschützter Verlauf");
+  });
+
+  it("keeps WeKnora credentials server-side and tightens framing policy", () => {
+    expect(routeSource).toContain("mintFredEmbedSession");
+    expect(routeSource).toContain("openFredUpstreamStream");
+    expect(viewSource).toContain('Authorization: `Bearer ${accessToken}`');
+    expect(viewSource).not.toContain("WEKNORA_FRED_PUBLISH_TOKEN");
+    expect(viewSource).not.toContain("taxdog.cloud");
+    expect(nextConfigSource).toContain("frame-src 'self'");
+    expect(nextConfigSource).not.toContain("frame-src 'self' https://taxdog.cloud");
+    expect(nextConfigSource).toContain("frame-ancestors 'none'");
+  });
+});

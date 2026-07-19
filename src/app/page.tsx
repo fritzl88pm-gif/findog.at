@@ -77,7 +77,7 @@ import {
   getL17bSourceNote,
   parseL17bGermanAmount,
 } from "@/lib/l17b-currency";
-import FredEmbedView from "@/components/fred-embed-view";
+import FredNativeChatView, { type FredNativeMessage } from "@/components/fred-native-chat-view";
 import FredRunView from "@/components/fredrun-view";
 import AgentStepTimeline from "@/components/agent-step-timeline";
 
@@ -1708,60 +1708,6 @@ function GermanPensionOptionView() {
 }
 
 
-function FredHistoryTranscript({
-  title,
-  messages,
-  error,
-  onOpenLiveChat,
-}: {
-  title: string;
-  messages: ChatMessage[];
-  error: string;
-  onOpenLiveChat: () => void;
-}) {
-  return (
-    <section className="chat-panel fred-history-panel" aria-labelledby="fred-history-title">
-      <header className="fred-history-header">
-        <div>
-          <p className="eyebrow">Fred · Web Embed</p>
-          <h1 id="fred-history-title">{title || "Fred-Unterhaltung"}</h1>
-          <p>Gespeicherter, schreibgeschützter Verlauf dieser WeKnora-Sitzung.</p>
-        </div>
-        <button className="primary-button" type="button" onClick={onOpenLiveChat}>
-          Zum aktuellen Fred-Chat
-        </button>
-      </header>
-      {error ? <div className="error-box fred-history-error" role="alert">{error}</div> : null}
-      <div className="transcript">
-        <div className="transcript-content">
-          {messages.length === 0 ? (
-            <p className="conversation-empty">Für diese Unterhaltung wurden noch keine Nachrichten gespeichert.</p>
-          ) : messages.map((message, index) => (
-            <article className={`message ${message.role}`} key={`${message.createdAt}-${index}`}>
-              <div className="message-header">
-                {message.role === "user" ? (
-                  <div className="message-avatar">DU</div>
-                ) : (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img className="message-avatar fred-avatar" src="/fred-avatar.png" alt="" />
-                )}
-                <div className="message-meta">
-                  <span className="sender-name">{message.role === "user" ? "Du" : "Fred"}</span>
-                  <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
-                </div>
-              </div>
-              {message.role === "assistant"
-                ? <RichAnswer content={message.content} />
-                : renderUserMessageContent(message.content)}
-            </article>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-
 export default function Home() {
   const supabase = getSupabaseBrowserClient();
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_CHAT_SETTINGS);
@@ -1771,7 +1717,6 @@ export default function Home() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [selectedConversationIds, setSelectedConversationIds] = useState<string[]>([]);
   const [fredConversationId, setFredConversationId] = useState("");
-  const [fredConversationTitle, setFredConversationTitle] = useState("");
   const [fredMessages, setFredMessages] = useState<ChatMessage[]>([]);
   const [fredConversations, setFredConversations] = useState<ConversationSummary[]>([]);
   const [selectedFredConversationIds, setSelectedFredConversationIds] = useState<string[]>([]);
@@ -1874,7 +1819,6 @@ export default function Home() {
   const settingsDialogRef = useRef<HTMLElement>(null);
   const settingsDialogCloseRef = useRef<HTMLButtonElement>(null);
   const authenticatedUserIdRef = useRef<string | null>(null);
-  const secureEmbedOwnerIdRef = useRef<string | null>(null);
   const feedbackCloseRef = useRef<HTMLButtonElement>(null);
   const feedbackTextareaRef = useRef<HTMLTextAreaElement>(null);
   const feedbackTriggerRef = useRef<HTMLButtonElement>(null);
@@ -1943,17 +1887,6 @@ export default function Home() {
         return;
       }
 
-      const previousUserId = secureEmbedOwnerIdRef.current;
-      const nextUserId = nextSession?.user.id ?? null;
-      if (previousUserId && previousUserId !== nextUserId) {
-        // Credentialless iframe storage is isolated for the lifetime of the
-        // top-level document. A reload on sign-out/account change guarantees
-        // that another Findog account cannot inherit Fred's ephemeral state.
-        window.location.reload();
-        return;
-      }
-      secureEmbedOwnerIdRef.current = nextUserId;
-
       setSession(nextSession);
       setError("");
       setAuthError("");
@@ -1986,7 +1919,6 @@ export default function Home() {
         setConversations([]);
         setSelectedConversationIds([]);
         setFredConversationId("");
-        setFredConversationTitle("");
         setFredMessages([]);
         setFredConversations([]);
         setSelectedFredConversationIds([]);
@@ -2032,7 +1964,6 @@ export default function Home() {
         setConversationTitle("");
         setMessages([]);
         setFredConversationId("");
-        setFredConversationTitle("");
         setFredMessages([]);
         setComposer("");
         setOpenComposerMenu(null);
@@ -2522,7 +2453,6 @@ export default function Home() {
       setConversations([]);
       setSelectedConversationIds([]);
       setFredConversationId("");
-      setFredConversationTitle("");
       setFredMessages([]);
       setFredConversations([]);
       setSelectedFredConversationIds([]);
@@ -2568,7 +2498,6 @@ export default function Home() {
       setConversations([]);
       setSelectedConversationIds([]);
       setFredConversationId("");
-      setFredConversationTitle("");
       setFredMessages([]);
       setFredConversations([]);
       setSelectedFredConversationIds([]);
@@ -2714,7 +2643,6 @@ export default function Home() {
   function openFredView() {
     setAppView("fred");
     setFredConversationId("");
-    setFredConversationTitle("");
     setFredMessages([]);
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -3646,7 +3574,6 @@ export default function Home() {
       const history = await fetchFredConversationHistory(session.access_token, conversation.id);
       setAppView("fred");
       setFredConversationId(conversation.id);
-      setFredConversationTitle(history.title);
       setFredMessages(history.messages);
       if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
         setSettingsOpen(false);
@@ -3672,7 +3599,12 @@ export default function Home() {
     );
   }
 
-  function handleFredConversationUpdated(conversation: ConversationSummary) {
+  function handleFredConversationUpdated(
+    conversation: ConversationSummary,
+    updatedMessages?: FredNativeMessage[],
+  ) {
+    setFredConversationId(conversation.id);
+    if (updatedMessages) setFredMessages(updatedMessages);
     setFredConversations((current) => [
       conversation,
       ...current.filter((entry) => entry.id !== conversation.id),
@@ -4932,19 +4864,15 @@ export default function Home() {
       ) : null}
 
       {appView === "fred" ? (
-        fredConversationId ? (
-          <FredHistoryTranscript
-            title={fredConversationTitle}
-            messages={fredMessages}
-            error={error}
-            onOpenLiveChat={openFredView}
-          />
-        ) : (
-          <FredEmbedView
-            accessToken={session?.access_token ?? ""}
-            onConversationUpdated={handleFredConversationUpdated}
-          />
-        )
+        <FredNativeChatView
+          accessToken={session?.access_token ?? ""}
+          conversationId={fredConversationId}
+          initialMessages={fredMessages}
+          externalError={error}
+          renderAssistantContent={(content) => <RichAnswer content={content} />}
+          renderUserContent={renderUserMessageContent}
+          onConversationUpdated={handleFredConversationUpdated}
+        />
       ) : appView === "bfg-pro" ? (
         <section className="forms-panel" aria-labelledby="bfg-pro-view-title">
           <div className="forms-view bfg-decisions-view bfg-pro-view">

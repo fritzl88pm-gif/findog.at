@@ -43,7 +43,7 @@ const nextConfig: NextConfig = {
           {
             key: "Content-Security-Policy",
             value:
-              `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: ${supabaseImageSources.join(" ")}; connect-src 'self' ${supabaseConnectSources.join(" ")}; frame-src 'self' https://taxdog.cloud; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`,
+              `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: ${supabaseImageSources.join(" ")}; connect-src 'self' ${supabaseConnectSources.join(" ")}; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`,
           },
           { key: "Referrer-Policy", value: "same-origin" },
           { key: "X-Content-Type-Options", value: "nosniff" },
