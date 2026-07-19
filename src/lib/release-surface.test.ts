@@ -143,14 +143,10 @@ describe("approved release surface", () => {
     );
   });
 
-  it("exposes one admin-managed global system prompt and uses it as the sole runtime source", () => {
+  it("retires the legacy global system prompt: absent from the Administration client UI, not called by chat, server file preserved", () => {
     const settingsDialog = pageSource.slice(
       pageSource.indexOf('{isSettingsDialogOpen ? ('),
       pageSource.indexOf('{appView === "chat" ? ('),
-    );
-    const chatSubmit = pageSource.slice(
-      pageSource.indexOf('async function handleSubmit('),
-      pageSource.indexOf('async function handlePasswordChange('),
     );
 
     expect(settingsDialog).not.toContain('settings-tab-system-prompt');
@@ -165,25 +161,21 @@ describe("approved release surface", () => {
     expect(settingsDialog).toContain('id="account-deletion-title"');
     expect(pageSource).toContain('fetch("/api/account"');
     expect(pageSource).toContain('window.confirm');
-    expect(chatSubmit).not.toContain('systemPromptForChatRequest');
-    expect(chatSubmit).not.toContain('usesGlobalDefault');
-    expect(chatSubmit).not.toContain('requestBody.systemPrompt');
+    expect(pageSource).not.toContain('systemPromptForChatRequest');
+    expect(pageSource).not.toContain('usesGlobalDefault');
+    expect(pageSource).not.toContain('requestBody.systemPrompt');
     expect(publicSettingsSource).not.toContain('globalSystemPrompt');
-    expect(pageSource).toContain('adminSystemPrompt');
-    expect(pageSource).toContain('saveAdminSystemPrompt');
-    expect(pageSource).toContain('/api/admin/settings');
-    expect(pageSource).toContain('Globaler Systemprompt');
-    expect(pageSource).toContain('id="admin-system-prompt"');
-    expect(pageSource).toContain('Keine Zeichenbegrenzung');
-    const promptTextarea = pageSource.slice(
-      pageSource.indexOf('id="admin-system-prompt"'),
-      pageSource.indexOf('/>', pageSource.indexOf('id="admin-system-prompt"')),
-    );
-    expect(promptTextarea).not.toContain('maxLength');
+    expect(pageSource).not.toContain('adminSystemPrompt');
+    expect(pageSource).not.toContain('saveAdminSystemPrompt');
+    expect(pageSource).not.toContain('/api/admin/settings');
+    expect(pageSource).not.toContain('Globaler Systemprompt');
+    expect(pageSource).not.toContain('id="admin-system-prompt"');
+    expect(pageSource).not.toContain('Keine Zeichenbegrenzung');
     expect(pageSource).not.toContain('DEFAULT_SYSTEM_PROMPT');
     expect(pageSource).toContain('<p className="eyebrow">Systemkonfiguration</p>');
     expect(pageSource).toContain('fetch("/api/admin/users"');
     expect(existsSync(adminSettingsPath)).toBe(true);
+    expect(chatRouteSource).not.toContain('getGlobalSystemPrompt');
     expect(chatRouteSource).toContain('retiredApiResponse');
   });
 

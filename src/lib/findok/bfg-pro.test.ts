@@ -6,7 +6,7 @@ import { fetchBfgProCandidates } from "./bfg-decisions";
 import {
   BfgProModelError,
   buildDeterministicExcerpt,
-  runBfgProSearch as runBfgProSearchWithSystemPrompt,
+  runBfgProSearch,
 } from "./bfg-pro";
 
 vi.mock("@/lib/deepseek", () => ({ chatCompletion: vi.fn() }));
@@ -39,15 +39,6 @@ const FIXED_RUNTIME = {
   apiKey: "server-only-key",
   reasoning: "disabled",
 } satisfies LlmRuntime;
-
-const TEST_SYSTEM_PROMPT = "Globaler Systemprompt aus der Datenbank";
-
-function runBfgProSearch(scenario: string) {
-  return runBfgProSearchWithSystemPrompt({
-    scenario,
-    systemPrompt: TEST_SYSTEM_PROMPT,
-  });
-}
 
 function candidate(number: number) {
   return {
@@ -330,11 +321,9 @@ describe("BFG PRO query generation and reranking", () => {
 
     const response = await runBfgProSearch("Arbeitszimmer im Wohnungsverband");
     const rerankSystemPrompt = vi.mocked(chatCompletion).mock.calls[1]?.[0].messages[0]?.content;
-    const rerankTaskPrompt = vi.mocked(chatCompletion).mock.calls[1]?.[0].messages[1]?.content;
 
-    expect(rerankSystemPrompt).toBe(TEST_SYSTEM_PROMPT);
-    expect(rerankTaskPrompt).toContain("jeden");
-    expect(rerankTaskPrompt).toContain("18");
+    expect(rerankSystemPrompt).toContain("jeden");
+    expect(rerankSystemPrompt).toContain("18");
     expect(response.results).toHaveLength(10);
   });
 
@@ -493,9 +482,8 @@ describe("BFG PRO query generation and reranking", () => {
       });
 
     await runBfgProSearch("Unterhaltsabsetzbetrag Drittstaat DBA");
-    const rerankMessage = vi.mocked(chatCompletion).mock.calls[1]?.[0].messages[1]?.content ?? "";
     const rerankPayload = JSON.parse(
-      rerankMessage.split("Zu bewertende Daten:\n").at(-1) ?? "{}",
+      vi.mocked(chatCompletion).mock.calls[1]?.[0].messages[1]?.content ?? "{}",
     ) as { candidates?: Array<{ candidateId: string; excerpt: string }> };
 
     expect(rerankPayload.candidates?.find(({ candidateId }) => candidateId === "candidate-1")?.excerpt)

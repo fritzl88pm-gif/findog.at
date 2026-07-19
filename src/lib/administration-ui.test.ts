@@ -7,13 +7,12 @@ const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.
 const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
 describe("Administration UI tabs and scanning settings", () => {
-  it("has exactly three ARIA tab elements for Scanning, BFG PRO, and Benutzer", () => {
+  it("has exactly two ARIA tab elements for Scanning and Benutzer (no BFG PRO tab)", () => {
     const tabMatches = pageSource.match(/role="tab"/gu);
-    expect(tabMatches).toHaveLength(3);
+    expect(tabMatches).toHaveLength(2);
   });
 
   it("loads scanning settings from /api/admin/scanning-settings when administration opens", () => {
-    // Template literal or string literal form
     const loadCall = pageSource.match(
       /\/api\/admin\/scanning-settings/u,
     );
@@ -39,5 +38,12 @@ describe("Administration UI tabs and scanning settings", () => {
 
   it("contains minimal tab CSS in globals.css", () => {
     expect(cssSource).toMatch(/admin-tab-button|admin-tabs/u);
+  });
+
+  it("does not reference /api/admin/settings or the global/BFG prompt editor", () => {
+    expect(pageSource).not.toContain("/api/admin/settings");
+    expect(pageSource).not.toContain("adminSystemPrompt");
+    expect(pageSource).not.toContain("Globaler Systemprompt");
+    expect(pageSource).not.toContain("BFG PRO");
   });
 });

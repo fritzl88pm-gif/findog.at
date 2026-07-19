@@ -4,7 +4,6 @@ import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { FindokUpstreamError } from "@/lib/findok/bfg-decisions";
 import { BfgProModelError, runBfgProSearch } from "@/lib/findok/bfg-pro";
-import { getGlobalSystemPrompt } from "@/lib/global-system-prompt";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -88,8 +87,7 @@ export async function POST(request: Request) {
     const user = await authenticateSupabaseRequest(request, supabase);
     const scenario = await parseScenario(request);
     enforceRateLimit(request, user.id);
-    const systemPrompt = await getGlobalSystemPrompt(supabase);
-    return json(await runBfgProSearch({ scenario, systemPrompt }));
+    return json(await runBfgProSearch(scenario));
   } catch (error) {
     if (error instanceof UserVisibleError) {
       return json({ error: error.message }, error.status);

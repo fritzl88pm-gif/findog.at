@@ -1096,7 +1096,7 @@ function GermanPensionOptionView() {
 
 
 
-const ADMIN_TAB_IDS = ["scanning", "bfg-pro", "benutzer"] as const;
+const ADMIN_TAB_IDS = ["scanning", "benutzer"] as const;
 function handleAdminTabKeyDown(event: React.KeyboardEvent, currentTab: string): void {
   const currentIndex = ADMIN_TAB_IDS.indexOf(currentTab as typeof ADMIN_TAB_IDS[number]);
   let nextIndex: number | undefined;
@@ -1132,17 +1132,13 @@ export default function Home() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminError, setAdminError] = useState("");
   const [adminNotice, setAdminNotice] = useState("");
-  const [adminSystemPrompt, setAdminSystemPrompt] = useState("");
-  const [adminSystemPromptUpdatedAt, setAdminSystemPromptUpdatedAt] = useState<string | null>(null);
-  const [isAdminSystemPromptLoading, setIsAdminSystemPromptLoading] = useState(false);
-  const [isAdminSystemPromptSaving, setIsAdminSystemPromptSaving] = useState(false);
   const [adminUsers, setAdminUsers] = useState<AdminUserSummary[]>([]);
   const [adminUserProfile, setAdminUserProfile] = useState<AdminUserProfile | null>(null);
   const [adminUserForm, setAdminUserForm] = useState({ email: "", password: "" });
   const [isAdminUsersLoading, setIsAdminUsersLoading] = useState(false);
   const [isAdminUserCreating, setIsAdminUserCreating] = useState(false);
   const [isAdminUserMutationRunning, setIsAdminUserMutationRunning] = useState(false);
-  const [adminTab, setAdminTab] = useState<"scanning" | "bfg-pro" | "benutzer">("scanning");
+  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer">("scanning");
   const [scanningModelId, setScanningModelId] = useState("");
   const [scanningPrompt, setScanningPrompt] = useState("");
   const [isScanningSettingsLoading, setIsScanningSettingsLoading] = useState(false);
@@ -1275,8 +1271,6 @@ export default function Home() {
         setFormError("");
         setFormNotice("");
         setIsGeneratingForm(false);
-        setAdminSystemPrompt("");
-        setAdminSystemPromptUpdatedAt(null);
         setAdminUsers([]);
         setAdminUserProfile(null);
         setAdminUserForm({ email: "", password: "" });
@@ -1565,8 +1559,6 @@ export default function Home() {
       setFredMessages([]);
       setFredConversations([]);
       setSelectedFredConversationIds([]);
-      setAdminSystemPrompt("");
-      setAdminSystemPromptUpdatedAt(null);
       setIsAdmin(false);
       setAppView("chat");
       closeSettingsDialog();
@@ -1812,83 +1804,6 @@ export default function Home() {
     }
   }
 
-  async function loadAdminSystemPrompt(accessToken: string) {
-    setIsAdminSystemPromptLoading(true);
-    try {
-      const response = await fetch("/api/admin/settings", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      if (
-        !response.ok
-        || typeof payload.systemPrompt !== "string"
-        || !payload.systemPrompt.trim()
-        || typeof payload.updatedAt !== "string"
-      ) {
-        throw new Error(
-          typeof payload.error === "string"
-            ? payload.error
-            : "Der globale Systemprompt konnte nicht geladen werden.",
-        );
-      }
-      setAdminSystemPrompt(payload.systemPrompt);
-      setAdminSystemPromptUpdatedAt(payload.updatedAt);
-    } catch (promptError) {
-      setAdminError(promptError instanceof Error
-        ? promptError.message
-        : "Der globale Systemprompt konnte nicht geladen werden.");
-    } finally {
-      setIsAdminSystemPromptLoading(false);
-    }
-  }
-
-  async function saveAdminSystemPrompt() {
-    const accessToken = session?.access_token;
-    if (
-      !accessToken
-      || !isAdmin
-      || isAdminSystemPromptSaving
-      || !adminSystemPrompt.trim()
-    ) {
-      return;
-    }
-    setAdminError("");
-    setAdminNotice("");
-    setIsAdminSystemPromptSaving(true);
-    try {
-      const response = await fetch("/api/admin/settings", {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ systemPrompt: adminSystemPrompt }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      if (
-        !response.ok
-        || typeof payload.systemPrompt !== "string"
-        || !payload.systemPrompt.trim()
-        || typeof payload.updatedAt !== "string"
-      ) {
-        throw new Error(
-          typeof payload.error === "string"
-            ? payload.error
-            : "Der globale Systemprompt konnte nicht gespeichert werden.",
-        );
-      }
-      setAdminSystemPrompt(payload.systemPrompt);
-      setAdminSystemPromptUpdatedAt(payload.updatedAt);
-      setAdminNotice("Der globale Systemprompt wurde gespeichert und gilt für alle Benutzer.");
-    } catch (promptError) {
-      setAdminError(promptError instanceof Error
-        ? promptError.message
-        : "Der globale Systemprompt konnte nicht gespeichert werden.");
-    } finally {
-      setIsAdminSystemPromptSaving(false);
-    }
-  }
-
   async function loadScanningSettings(accessToken: string) {
     setIsScanningSettingsLoading(true);
     try {
@@ -1982,7 +1897,6 @@ export default function Home() {
     setAdminNotice("");
     setIsAdminUsersLoading(true);
     setAdminUserProfile(null);
-    void loadAdminSystemPrompt(accessToken);
     void loadScanningSettings(accessToken);
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
@@ -3580,17 +3494,6 @@ export default function Home() {
                 Scanning
               </button>
               <button
-                id="admin-tab-bfg-pro"
-                className={`admin-tab-button ${adminTab === "bfg-pro" ? "active" : ""}`}
-                role="tab"
-                aria-selected={adminTab === "bfg-pro"}
-                aria-controls="admin-panel-bfg-pro"
-                onClick={() => setAdminTab("bfg-pro")}
-                onKeyDown={(e) => handleAdminTabKeyDown(e, "bfg-pro")}
-              >
-                BFG PRO
-              </button>
-              <button
                 id="admin-tab-benutzer"
                 className={`admin-tab-button ${adminTab === "benutzer" ? "active" : ""}`}
                 role="tab"
@@ -3654,47 +3557,6 @@ export default function Home() {
                     }
                   >
                     {isScanningSettingsSaving ? "Wird gespeichert…" : "Scanning-Einstellungen speichern"}
-                  </button>
-                </div>
-              </section>
-            ) : adminTab === "bfg-pro" ? (
-              <section className="form-generator-card admin-system-prompt-card" role="tabpanel" id="admin-panel-bfg-pro" aria-labelledby="admin-tab-bfg-pro">
-                <div className="form-generator-heading">
-                  <h2>Globaler Systemprompt</h2>
-                  <p>Dieser gespeicherte Prompt steuert weiterhin die KI-Reihung der BFG Suche PRO.</p>
-                </div>
-                <div className="field-group">
-                  <label htmlFor="admin-system-prompt">Systemprompt</label>
-                  <textarea
-                    id="admin-system-prompt"
-                    className="admin-system-prompt-textarea"
-                    value={adminSystemPrompt}
-                    onChange={(event) => {
-                      setAdminSystemPrompt(event.target.value);
-                      setAdminError("");
-                      setAdminNotice("");
-                    }}
-                    rows={24}
-                    spellCheck={false}
-                    disabled={isAdminSystemPromptLoading || isAdminSystemPromptSaving}
-                  />
-                  <small>
-                    Keine Zeichenbegrenzung · {adminSystemPrompt.length.toLocaleString("de-AT")} Zeichen
-                    {adminSystemPromptUpdatedAt ? ` · zuletzt gespeichert ${formatAdminDate(adminSystemPromptUpdatedAt)}` : ""}
-                  </small>
-                </div>
-                <div className="admin-model-actions">
-                  <button
-                    className="primary-button"
-                    type="button"
-                    onClick={() => void saveAdminSystemPrompt()}
-                    disabled={
-                      isAdminSystemPromptLoading
-                      || isAdminSystemPromptSaving
-                      || !adminSystemPrompt.trim()
-                    }
-                  >
-                    {isAdminSystemPromptSaving ? "Wird gespeichert…" : "Systemprompt speichern"}
                   </button>
                 </div>
               </section>
