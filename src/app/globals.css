@@ -695,9 +695,10 @@ textarea:focus {
   min-height: 108px;
   flex: 0 0 auto;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: clamp(16px, 3vw, 28px);
   overflow: hidden;
-  padding: 14px 22px;
+  padding: 8px 22px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   background:
@@ -706,36 +707,21 @@ textarea:focus {
   box-shadow: var(--shadow-sm);
 }
 
-.fred-embed-hero-copy {
-  position: relative;
-  z-index: 1;
-}
-
-.fred-embed-hero-copy .eyebrow,
-.fred-embed-hero-copy h1,
-.fred-embed-hero-copy > p:last-child {
+.fred-embed-greeting {
+  min-width: 0;
   margin: 0;
-}
-
-.fred-embed-hero-copy h1 {
-  margin-top: 2px;
   color: var(--bmf-blue-deep);
   font-size: clamp(1.55rem, 3vw, 2rem);
+  font-weight: 750;
   letter-spacing: -0.025em;
-}
-
-.fred-embed-hero-copy > p:last-child {
-  margin-top: 5px;
-  color: var(--muted);
-  line-height: 1.4;
+  line-height: 1.25;
 }
 
 .fred-embed-hero-image {
-  position: absolute;
-  right: 18px;
-  bottom: -24px;
-  width: 132px;
-  height: 132px;
+  display: block;
+  width: 104px;
+  height: 104px;
+  flex: 0 0 auto;
   object-fit: contain;
   filter: drop-shadow(0 8px 12px rgba(13, 62, 89, 0.14));
 }
@@ -3439,23 +3425,17 @@ textarea:focus {
   .fred-embed-hero {
     min-height: 78px;
     margin: 0 10px;
-    padding: 10px 14px;
+    gap: 12px;
+    padding: 5px 12px;
   }
 
-  .fred-embed-hero-copy h1 {
+  .fred-embed-greeting {
     font-size: 1.3rem;
   }
 
-  .fred-embed-hero-copy > p:last-child {
-    max-width: calc(100vw - 125px);
-    font-size: 0.82rem;
-  }
-
   .fred-embed-hero-image {
-    right: 8px;
-    bottom: -18px;
-    width: 94px;
-    height: 94px;
+    width: 68px;
+    height: 68px;
   }
 
   .fred-embed-frame-shell {

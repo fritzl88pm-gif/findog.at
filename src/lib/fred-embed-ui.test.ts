@@ -96,6 +96,14 @@ describe("Fred secure embed UI", () => {
     expect(viewSource).toContain('src="/fred.png"');
     expect(viewSource).toContain('alt="Fred, der Findog-Assistent"');
     expect(viewSource).toContain('className="fred-embed-hero"');
+    expect(viewSource).toContain('import { getWelcomeGreeting } from "@/lib/chat/welcome"');
+    expect(viewSource).toContain('const [welcomeGreeting] = useState(() => getWelcomeGreeting())');
+    expect(viewSource).toContain('<h1 className="fred-embed-greeting">{welcomeGreeting}</h1>');
+    expect(viewSource.indexOf('src="/fred.png"')).toBeLessThan(
+      viewSource.indexOf('className="fred-embed-greeting"'),
+    );
+    expect(viewSource).not.toContain("Frag Fred");
+    expect(cssSource).toMatch(/\.fred-embed-hero \{[\s\S]*?align-items: center;/u);
     expect(cssSource).toMatch(/\.fred-embed-hero-image \{[\s\S]*?object-fit: contain;/u);
   });
 

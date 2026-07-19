@@ -3,6 +3,8 @@
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { getWelcomeGreeting } from "@/lib/chat/welcome";
+
 const EMBED_TOKEN_ENDPOINT = "/api/fred/embed-token";
 const EMBED_ORIGIN = "https://taxdog.cloud";
 const HOST_SOURCE = "weknora-host";
@@ -93,6 +95,7 @@ function FredEmbedSession({
   const [phase, setPhase] = useState<ViewPhase>("loading");
   const [errorMessage, setErrorMessage] = useState("");
   const [iframeGeneration, setIframeGeneration] = useState(0);
+  const [welcomeGreeting] = useState(() => getWelcomeGreeting());
 
   const provideToken = useCallback(() => {
     const currentConfig = configRef.current;
@@ -298,11 +301,6 @@ function FredEmbedSession({
   return (
     <section className="fred-embed-panel" aria-label="Fred">
       <header className="fred-embed-hero">
-        <div className="fred-embed-hero-copy">
-          <p className="eyebrow">Findog</p>
-          <h1>Frag Fred</h1>
-          <p>Dein Assistent für österreichische Rechtsauskunft.</p>
-        </div>
         <Image
           className="fred-embed-hero-image"
           src="/fred.png"
@@ -311,6 +309,7 @@ function FredEmbedSession({
           height={380}
           priority
         />
+        <h1 className="fred-embed-greeting">{welcomeGreeting}</h1>
       </header>
       <div className="fred-embed-frame-shell" aria-busy={phase === "loading"}>
         {config ? (
