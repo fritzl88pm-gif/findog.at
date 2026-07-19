@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const EMBED_TOKEN_ENDPOINT = "/api/fred/embed-token";
@@ -296,6 +297,21 @@ function FredEmbedSession({
 
   return (
     <section className="fred-embed-panel" aria-label="Fred">
+      <header className="fred-embed-hero">
+        <div className="fred-embed-hero-copy">
+          <p className="eyebrow">Findog</p>
+          <h1>Frag Fred</h1>
+          <p>Dein Assistent für österreichische Rechtsauskunft.</p>
+        </div>
+        <Image
+          className="fred-embed-hero-image"
+          src="/fred.png"
+          alt="Fred, der Findog-Assistent"
+          width={380}
+          height={380}
+          priority
+        />
+      </header>
       <div className="fred-embed-frame-shell" aria-busy={phase === "loading"}>
         {config ? (
           <iframe

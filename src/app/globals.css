@@ -677,14 +677,67 @@ textarea:focus {
 /* Fred secure embed */
 .fred-embed-panel {
   display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   flex: 1;
   height: 100%;
   padding: 16px;
+  gap: 12px;
   background:
     radial-gradient(circle at 88% 0%, rgba(255, 212, 0, 0.1), transparent 25rem),
     var(--bg-app);
+}
+
+.fred-embed-hero {
+  position: relative;
+  display: flex;
+  min-height: 108px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  overflow: hidden;
+  padding: 14px 22px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 88% 20%, rgba(255, 212, 0, 0.22), transparent 13rem),
+    var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.fred-embed-hero-copy {
+  position: relative;
+  z-index: 1;
+}
+
+.fred-embed-hero-copy .eyebrow,
+.fred-embed-hero-copy h1,
+.fred-embed-hero-copy > p:last-child {
+  margin: 0;
+}
+
+.fred-embed-hero-copy h1 {
+  margin-top: 2px;
+  color: var(--bmf-blue-deep);
+  font-size: clamp(1.55rem, 3vw, 2rem);
+  letter-spacing: -0.025em;
+}
+
+.fred-embed-hero-copy > p:last-child {
+  margin-top: 5px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.fred-embed-hero-image {
+  position: absolute;
+  right: 18px;
+  bottom: -24px;
+  width: 132px;
+  height: 132px;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 12px rgba(13, 62, 89, 0.14));
 }
 
 .fred-embed-frame-shell {
@@ -3358,6 +3411,10 @@ textarea:focus {
     padding: 64px 12px 12px;
   }
 
+  .fred-embed-hero {
+    min-height: 96px;
+  }
+
   .mobile-menu-toggle {
     display: flex;
   }
@@ -3376,6 +3433,29 @@ textarea:focus {
     padding-right: 0;
     padding-bottom: 0;
     padding-left: 0;
+    gap: 8px;
+  }
+
+  .fred-embed-hero {
+    min-height: 78px;
+    margin: 0 10px;
+    padding: 10px 14px;
+  }
+
+  .fred-embed-hero-copy h1 {
+    font-size: 1.3rem;
+  }
+
+  .fred-embed-hero-copy > p:last-child {
+    max-width: calc(100vw - 125px);
+    font-size: 0.82rem;
+  }
+
+  .fred-embed-hero-image {
+    right: 8px;
+    bottom: -18px;
+    width: 94px;
+    height: 94px;
   }
 
   .fred-embed-frame-shell {

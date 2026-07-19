@@ -92,6 +92,13 @@ describe("Fred secure embed UI", () => {
     expect(cssSource).toMatch(/@media \(max-width: 960px\) \{[\s\S]*?\.fred-embed-panel/u);
   });
 
+  it("brands the Findog host page with the Fred image without weakening iframe isolation", () => {
+    expect(viewSource).toContain('src="/fred.png"');
+    expect(viewSource).toContain('alt="Fred, der Findog-Assistent"');
+    expect(viewSource).toContain('className="fred-embed-hero"');
+    expect(cssSource).toMatch(/\.fred-embed-hero-image \{[\s\S]*?object-fit: contain;/u);
+  });
+
   it("allows only the taxdog iframe while preserving Findog anti-framing headers", () => {
     expect(nextConfigSource).toContain("frame-src 'self' https://taxdog.cloud");
     expect(nextConfigSource).toContain("frame-ancestors 'none'");
