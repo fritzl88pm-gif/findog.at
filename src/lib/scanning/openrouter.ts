@@ -86,14 +86,17 @@ function scanningPrompt(fileNames: string[]): string {
 
 **Tabellenformat** (pro Kategorie genau eine Tabelle)
 - Spalten: Pos., Datum, Beschreibung, Summe.
-- Jede Zeile = ein vollständiger Beleg, nicht seine Einzelpositionen.
+- Bei wiederkehrenden Dienstleistungsrechnungen oder inhaltlich gleichartigen Einzelrechnungen: Jede Zeile = ein vollständiger Beleg, nicht seine Einzelpositionen.
+- Bei Waren-, Kassen-, Apotheken- und Einkaufsbelegen mit mehreren unterschiedlichen Artikeln: Jede einzelne Warenposition = eine eigene Tabellenzeile. Übernimm ausnahmslos alle Positionen aller Belegseiten; enthält ein Beleg 20 Positionen, muss die Tabelle 20 Positionszeilen enthalten.
+- Verwende bei Warenpositionen das Belegdatum in jeder Zeile, die Artikel- oder Leistungsbezeichnung als Beschreibung und den ausgewiesenen Gesamtpreis der Position als Summe. Führe den vollständigen Beleg nicht zusätzlich als eigene Zeile auf.
+- Rabatte, Versandkosten, Pfand, Zuschläge oder Rundungsdifferenzen, die den Zahlbetrag verändern, werden als eigene Tabellenzeilen erfasst, damit die Gesamtsumme mit dem Beleg übereinstimmt.
 - Beschreibung: kurze, einzeilige deutsche Zusammenfassung der Leistung, ohne HTML oder Zeilenumbrüche.
 - Summe: der tatsächlich ausgewiesene Gesamt-/Zahlbetrag inkl. Währung (kein Netto-Betrag nötig).
 - Innerhalb jeder Tabelle chronologisch sortieren und fortlaufend nummerieren.
 - Am Ende jeder Tabelle eine Zeile „Gesamtsumme". Bei mehreren Währungen innerhalb einer Kategorie: getrennte Tabellen pro Währung.
 
 **Vollständigkeit**
-- Zähle vor der Ausgabe intern alle erkannten Belege und prüfe, dass jeder genau einmal erscheint – keine Auslassungen, keine Doppelzählung mehrseitiger Rechnungen.
+- Zähle vor der Ausgabe intern alle erkannten Belege und bei Waren-/Kassen-/Apotheken-/Einkaufsbelegen zusätzlich alle Einzelpositionen. Prüfe, dass jeder Beleg beziehungsweise jede auszugebende Warenposition genau einmal erscheint – keine Auslassungen, keine Doppelzählung mehrseitiger Rechnungen.
 
 **Sonstiges**
 - Keine separaten Rechnungsüberschriften, keine Blöcke zu Aussteller, Kunde, Adresse, Zahlungsart, Bankverbindung, Rechnungsnummer o. Ä.

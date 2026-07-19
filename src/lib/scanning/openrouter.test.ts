@@ -63,7 +63,14 @@ describe("OpenRouter scanning adapter", () => {
     expect(serialized).toContain("Amazon-Bestellungen, Reisekosten, Bürobedarf");
     expect(serialized).toContain("Tabelle „Sonstiges");
     expect(serialized).toContain("Spalten: Pos., Datum, Beschreibung, Summe");
+    expect(serialized).toContain("Bei wiederkehrenden Dienstleistungsrechnungen");
     expect(serialized).toContain("Jede Zeile = ein vollständiger Beleg, nicht seine Einzelpositionen");
+    expect(serialized).toContain("Bei Waren-, Kassen-, Apotheken- und Einkaufsbelegen");
+    expect(serialized).toContain("enthält ein Beleg 20 Positionen, muss die Tabelle 20 Positionszeilen enthalten");
+    expect(serialized).toContain("den ausgewiesenen Gesamtpreis der Position als Summe");
+    expect(serialized).toContain("nicht zusätzlich als eigene Zeile");
+    expect(serialized).toContain("Rabatte, Versandkosten, Pfand, Zuschläge oder Rundungsdifferenzen");
+    expect(serialized).toContain("zusätzlich alle Einzelpositionen");
     expect(serialized).toContain("Am Ende jeder Tabelle eine Zeile „Gesamtsumme");
     expect(serialized).toContain("Keine separaten Rechnungsüberschriften");
     expect(serialized).toContain("Antworte direkt in gut lesbarem deutschem Markdown, kein JSON");
