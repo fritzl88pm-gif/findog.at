@@ -56,7 +56,9 @@ describe("OpenRouter scanning adapter", () => {
     expect(serialized).toContain("data:image/png;base64,");
     expect(body.response_format).toBeUndefined();
     expect(body.plugins).toBeUndefined();
-    expect(body.reasoning).toEqual({ exclude: true });
+    expect(body.reasoning).toEqual({ effort: "minimal", exclude: true });
+    expect(serialized).toContain("Gib niemals Arbeitsnotizen, Gedankengänge, Selbstgespräche");
+    expect(serialized).toContain("Jede Ergebnistabelle muss exakt mit der Kopfzeile");
     expect(serialized).toContain("bei PDFs jede Seite, Anfang bis Ende");
     expect(serialized).toContain("Gedrehte oder auf dem Kopf stehende Seiten automatisch korrigieren");
     expect(serialized).toContain("Bilde selbst sinnvolle inhaltliche Kategorien");
@@ -79,10 +81,10 @@ describe("OpenRouter scanning adapter", () => {
 
   it("removes HTML line-break fragments from Gemini table cells", async () => {
     vi.mocked(fetch).mockResolvedValue(providerResponse(
-      "| 1 | 01.11.2024 | Betreuung<br>November<br />Wien | 2.060,00 EUR |",
+      "| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.11.2024 | Betreuung<br>November<br />Wien | 2.060,00 EUR |",
     ));
     await expect(analyzeScanningBatch([upload("pdf", "belege")]))
-      .resolves.toBe("| 1 | 01.11.2024 | Betreuung November Wien | 2.060,00 EUR |");
+      .resolves.toContain("| 1 | 01.11.2024 | Betreuung November Wien | 2.060,00 EUR |");
   });
 
   it("keeps reasoning enabled but removes leaked thinking blocks before display", async () => {
@@ -108,16 +110,18 @@ describe("OpenRouter scanning adapter", () => {
 
   it("accepts assistant text returned in content parts", async () => {
     vi.mocked(fetch).mockResolvedValue(providerResponse([
-      { type: "text", text: "# Bericht" },
-      { type: "text", text: { value: "Zahlbetrag: 42,00 EUR" } },
+      { type: "text", text: "## Sonstiges\n\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|" },
+      { type: "text", text: { value: "| 1 | 01.11.2024 | Beleg | 42,00 EUR |" } },
     ]));
 
     await expect(analyzeScanningBatch([upload("pdf", "beleg")]))
-      .resolves.toBe("# Bericht\nZahlbetrag: 42,00 EUR");
+      .resolves.toContain("| 1 | 01.11.2024 | Beleg | 42,00 EUR |");
   });
 
   it("caps oversized reports for the existing PDF export", async () => {
-    vi.mocked(fetch).mockResolvedValue(providerResponse("x".repeat(70_000)));
+    vi.mocked(fetch).mockResolvedValue(providerResponse(
+      `| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.11.2024 | ${"x".repeat(70_000)} | 1,00 EUR |`,
+    ));
     const result = await analyzeScanningBatch([upload("pdf", "lang")]);
     expect(result.length).toBeLessThanOrEqual(58_000);
     expect(result).toContain("gekürzt");
@@ -149,8 +153,44 @@ describe("OpenRouter scanning adapter", () => {
     await expect(analyzeScanningBatch([upload("pdf", "json")]))
       .rejects.toThrow("Die Dokumentauswertung lieferte keine gültige Antwort.");
 
-    vi.mocked(fetch).mockResolvedValueOnce(providerResponse("   "));
+    vi.mocked(fetch).mockImplementation(async () => providerResponse("   "));
     await expect(analyzeScanningBatch([upload("pdf", "leer")]))
-      .rejects.toThrow("Die Dokumentauswertung lieferte keinen Bericht.");
+      .rejects.toThrow("Die Dokumentauswertung lieferte keine gültige Ergebnistabelle. Bitte erneut versuchen.");
+  });
+
+  it("drops plain-text work notes before a valid result table", async () => {
+    vi.mocked(fetch).mockResolvedValue(providerResponse(
+      "Wait, let's inspect the upside-down page first.\n- I need to read every product.\n\n## Apotheke & Gesundheit\n\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 15.05.2024 | Amoxicillin 500 mg | 6,35 EUR |",
+    ));
+
+    const result = await analyzeScanningBatch([upload("pdf", "apotheke")]);
+    expect(result).toContain("## Apotheke & Gesundheit");
+    expect(result).toContain("Amoxicillin 500 mg");
+    expect(result).not.toContain("Wait");
+    expect(result).not.toContain("I need");
+  });
+
+  it("retries once when Gemini returns only work notes", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(providerResponse("Wait, let's look at the image directly. I need to inspect every line."))
+      .mockResolvedValueOnce(providerResponse(
+        "## Apotheke & Gesundheit\n\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 15.05.2024 | Amoxicillin 500 mg | 6,35 EUR |",
+      ));
+
+    await expect(analyzeScanningBatch([upload("pdf", "apotheke")]))
+      .resolves.toContain("Amoxicillin 500 mg");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const retryBody = JSON.parse(String(vi.mocked(fetch).mock.calls[1]?.[1]?.body)) as Record<string, unknown>;
+    expect(JSON.stringify(retryBody)).toContain("WICHTIGER NEUVERSUCH");
+  });
+
+  it("never exposes work notes when both attempts lack a result table", async () => {
+    vi.mocked(fetch).mockImplementation(async () => providerResponse(
+      "Let's read the upside-down page. Wait, I need to inspect the letters.",
+    ));
+
+    await expect(analyzeScanningBatch([upload("pdf", "apotheke")]))
+      .rejects.toThrow("Die Dokumentauswertung lieferte keine gültige Ergebnistabelle. Bitte erneut versuchen.");
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });

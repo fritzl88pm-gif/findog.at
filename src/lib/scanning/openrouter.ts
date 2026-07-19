@@ -6,6 +6,14 @@ import type { ScanningUpload } from "./types";
 export const OPENROUTER_SCANNING_URL = "https://openrouter.ai/api/v1/chat/completions";
 export const SCANNING_OPENROUTER_TIMEOUT_MS = 270_000;
 
+const SCANNING_SYSTEM_PROMPT = [
+  "Du darfst die Dokumente intern gründlich analysieren und prüfen.",
+  "Gib niemals Arbeitsnotizen, Gedankengänge, Selbstgespräche, Zwischenschritte oder Aussagen wie 'Wait' und 'Let's' im sichtbaren Antworttext aus.",
+  "Der sichtbare Antworttext darf ausschließlich aus den fertigen deutschen Kategorietabellen bestehen.",
+  "Schreibe jeden Kategorienamen als Markdown-Überschrift direkt vor seine Tabelle.",
+  "Jede Ergebnistabelle muss exakt mit der Kopfzeile | Pos. | Datum | Beschreibung | Summe | beginnen.",
+].join("\n");
+
 type JsonRecord = Record<string, unknown>;
 
 export class ScanningProviderError extends UserVisibleError {
@@ -71,6 +79,61 @@ function stripThinkingBlocks(value: string): string {
     .replace(/<\s*\/?\s*(?:think|thinking)\b[^>]*>/giu, "");
 }
 
+function markdownTableCells(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) return null;
+  return trimmed.slice(1, -1).split("|").map((cell) => cell.replace(/[*_`]/gu, "").trim());
+}
+
+function isScanningTableHeader(line: string): boolean {
+  const cells = markdownTableCells(line)?.map((cell) => cell.toLocaleLowerCase("de-AT"));
+  return cells?.length === 4
+    && /^pos\.?$/u.test(cells[0] ?? "")
+    && cells[1] === "datum"
+    && cells[2] === "beschreibung"
+    && cells[3] === "summe";
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  const cells = markdownTableCells(line);
+  return cells?.length === 4 && cells.every((cell) => /^:?-{3,}:?$/u.test(cell));
+}
+
+function categoryHeadingBefore(lines: string[], headerIndex: number): string | null {
+  let index = headerIndex - 1;
+  while (index >= 0 && !lines[index]?.trim()) index -= 1;
+  const candidate = lines[index]?.trim() ?? "";
+  if (!candidate || headerIndex - index > 3 || candidate.length > 120) return null;
+  if (/^#{1,6}\s+\S/u.test(candidate) || /^\*\*[^*]+\*\*$/u.test(candidate)) return candidate;
+  if (
+    /[|<>]/u.test(candidate)
+    || /^[-*•]\s/u.test(candidate)
+    || /^(?:wait|let['’]?s|we need|i need|thinking|analysis|analyse|ich |zunächst)/iu.test(candidate)
+  ) return null;
+  return `## ${candidate}`;
+}
+
+function extractScanningTables(value: string): string {
+  const normalized = stripThinkingBlocks(value)
+    .replace(/<br\s*\/?\s*>/giu, " ")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, "")
+    .trim();
+  const lines = normalized.split(/\r?\n/u);
+  const tables: string[] = [];
+  for (let index = 0; index < lines.length - 2; index += 1) {
+    if (!isScanningTableHeader(lines[index] ?? "") || !isMarkdownTableSeparator(lines[index + 1] ?? "")) {
+      continue;
+    }
+    let end = index + 2;
+    while (end < lines.length && markdownTableCells(lines[end] ?? "")) end += 1;
+    if (end === index + 2) continue;
+    const heading = categoryHeadingBefore(lines, index);
+    tables.push([heading, lines.slice(index, end).join("\n")].filter(Boolean).join("\n\n"));
+    index = end - 1;
+  }
+  return tables.join("\n\n").trim();
+}
+
 function scanningPrompt(fileNames: string[]): string {
   return `Lies alle beigefügten Rechnungen und Belege vollständig aus (bei PDFs jede Seite, Anfang bis Ende) und erstelle eine kompakte, nach Kategorie gruppierte Belegübersicht.
 
@@ -115,12 +178,16 @@ function attachment(upload: ScanningUpload): JsonRecord {
     : { type: "image_url", image_url: { url: dataUrl } };
 }
 
-export async function analyzeScanningBatch(
+async function requestScanningContent(
   uploads: ScanningUpload[],
+  key: string,
+  retry: boolean,
   signal?: AbortSignal,
 ): Promise<string> {
-  if (uploads.length === 0) throw new ScanningProviderError("Bitte mindestens eine Datei hochladen.", 400);
-  const key = apiKey();
+  const prompt = scanningPrompt(uploads.map((upload) => upload.name));
+  const retryInstruction = retry
+    ? "\n\nWICHTIGER NEUVERSUCH: Die vorherige Ausgabe enthielt keine gültige Ergebnistabelle. Analysiere die Dateien erneut. Gib keinerlei Arbeitsnotizen aus und beginne die sichtbare Antwort direkt mit einer Kategorieüberschrift und danach der verlangten Tabellenkopfzeile."
+    : "";
   const { response, text } = await runWithTimeout(
     (activeSignal) => fetch(OPENROUTER_SCANNING_URL, {
       method: "POST",
@@ -132,14 +199,17 @@ export async function analyzeScanningBatch(
       },
       body: JSON.stringify({
         model: SCANNING_MODEL,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "text", text: scanningPrompt(uploads.map((upload) => upload.name)) },
-            ...uploads.map(attachment),
-          ],
-        }],
-        reasoning: { exclude: true },
+        messages: [
+          { role: "system", content: SCANNING_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: `${prompt}${retryInstruction}` },
+              ...uploads.map(attachment),
+            ],
+          },
+        ],
+        reasoning: { effort: "minimal", exclude: true },
         temperature: 0,
         max_tokens: 16_000,
       }),
@@ -159,11 +229,23 @@ export async function analyzeScanningBatch(
   } catch {
     throw new ScanningProviderError("Die Dokumentauswertung lieferte keine gültige Antwort.", 502);
   }
-  const report = stripThinkingBlocks(responseText(payload))
-    .replace(/<br\s*\/?\s*>/giu, " ")
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, "")
-    .trim();
-  if (!report) throw new ScanningProviderError("Die Dokumentauswertung lieferte keinen Bericht.", 502);
+  return responseText(payload);
+}
+
+export async function analyzeScanningBatch(
+  uploads: ScanningUpload[],
+  signal?: AbortSignal,
+): Promise<string> {
+  if (uploads.length === 0) throw new ScanningProviderError("Bitte mindestens eine Datei hochladen.", 400);
+  const key = apiKey();
+  let report = extractScanningTables(await requestScanningContent(uploads, key, false, signal));
+  if (!report) report = extractScanningTables(await requestScanningContent(uploads, key, true, signal));
+  if (!report) {
+    throw new ScanningProviderError(
+      "Die Dokumentauswertung lieferte keine gültige Ergebnistabelle. Bitte erneut versuchen.",
+      502,
+    );
+  }
   if (report.length <= MAX_SCANNING_REPORT_CHARS) return report;
   return `${report.slice(0, MAX_SCANNING_REPORT_CHARS - 80).trimEnd()}\n\n[Bericht aus technischen Gründen gekürzt.]`;
 }
