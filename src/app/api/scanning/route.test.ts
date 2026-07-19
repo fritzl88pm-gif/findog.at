@@ -51,7 +51,7 @@ describe("POST /api/scanning", () => {
       id: request.headers.get("authorization")?.replace("Bearer ", "") || "user",
     }));
     vi.mocked(analyzeScanningBatch).mockResolvedValue(
-      "# Auswertung\n\n| Beleg | Ausgewiesener Betrag |\n|---|---:|\n| R-1 | 12,00 EUR |",
+      "| Pos. | Beschreibung | Menge | Einzelpreis | Betrag |\n|---:|---|---:|---:|---:|\n| 1 | Ware | 1 | 12,00 EUR | 12,00 EUR |\n| | Gesamtsumme | | | 12,00 EUR |",
     );
   });
 
@@ -73,7 +73,7 @@ describe("POST /api/scanning", () => {
     expect(final).toMatchObject({
       type: "final",
       model: "google/gemini-3.5-flash",
-      report: expect.stringContaining("Ausgewiesener Betrag"),
+      report: expect.stringContaining("Gesamtsumme"),
     });
     if (final?.type === "final") {
       expect(final.files).toHaveLength(10);
@@ -82,15 +82,15 @@ describe("POST /api/scanning", () => {
     expect(getSupabaseServerClient).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards Gemini Markdown without imposing net, VAT or gross fields", async () => {
+  it("forwards the complete line-item table without adding metadata blocks", async () => {
     vi.mocked(analyzeScanningBatch).mockResolvedValueOnce(
-      "## Rechnung\n\nZahlbetrag laut Beleg: **87,40 EUR**. Die zweite Seite wurde gedreht gelesen.",
+      "| Pos. | Beschreibung | Menge | Einzelpreis | Betrag |\n|---:|---|---:|---:|---:|\n| 1 | Leistung A | 1 | 40,00 EUR | 40,00 EUR |\n| 2 | Leistung B | 1 | 47,40 EUR | 47,40 EUR |\n| | Zahlbetrag | | | 87,40 EUR |",
     );
     const response = await POST(multipart([{ field: "pdf", file: pdf("gedreht.pdf") }], "rotated-user"));
     const final = (await events(response)).find((event) => event?.type === "final");
     expect(final).toMatchObject({
       type: "final",
-      report: expect.stringContaining("Zahlbetrag laut Beleg: **87,40 EUR**"),
+      report: expect.stringContaining("| | Zahlbetrag | | | 87,40 EUR |"),
     });
   });
 

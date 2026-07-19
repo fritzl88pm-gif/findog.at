@@ -41,7 +41,7 @@ describe("OpenRouter scanning adapter", () => {
   });
 
   it("sends the complete mixed batch in one direct Gemini request and returns its Markdown", async () => {
-    const report = "# Auswertung\n\n| Beleg | Betrag |\n|---|---:|\n| R-1 | 12,00 EUR |";
+    const report = "| Pos. | Beschreibung | Menge | Einzelpreis | Betrag |\n|---:|---|---:|---:|---:|\n| 1 | Ware | 1 | 12,00 EUR | 12,00 EUR |\n| | Gesamtsumme | | | 12,00 EUR |";
     vi.mocked(fetch).mockResolvedValue(providerResponse(report));
 
     await expect(analyzeScanningBatch([upload("pdf", "sammel"), upload("image", "foto")]))
@@ -58,8 +58,12 @@ describe("OpenRouter scanning adapter", () => {
     expect(body.plugins).toBeUndefined();
     expect(serialized).toContain("jede Seite");
     expect(serialized).toContain("gedrehte, seitlich liegende oder auf dem Kopf stehende Seiten");
-    expect(serialized).toContain("keine starren Netto-, USt- und Brutto-Spalten");
-    expect(serialized).toContain("Nettogesamtbetrag ist kein Fehler");
+    expect(serialized).toContain("jede einzelne Position aller Seiten");
+    expect(serialized).toContain("20 Positionen umfasst, muss die Tabelle 20 Positionszeilen enthalten");
+    expect(serialized).toContain("Pos., Beschreibung, Menge, Einzelpreis und Betrag");
+    expect(serialized).toContain("Summenzeilen derselben Tabelle");
+    expect(serialized).toContain("Zeige keine separaten Blöcke oder Zusammenfassungen zu Aussteller");
+    expect(serialized).toContain("darf im Ergebnis nicht erwähnt werden");
     expect(serialized).toContain("deutschem Markdown");
   });
 
