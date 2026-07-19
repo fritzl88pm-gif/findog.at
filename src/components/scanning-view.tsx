@@ -7,6 +7,7 @@ import RichAnswer from "@/components/rich-answer";
 import {
   MAX_SCANNING_IMAGE_BYTES,
   MAX_SCANNING_IMAGES,
+  MAX_SCANNING_INSTRUCTIONS_CHARS,
   MAX_SCANNING_PDF_BYTES,
   MAX_SCANNING_PDFS,
   SCANNING_IMAGE_MIME_TYPES,
@@ -44,6 +45,8 @@ export default function ScanningView({ accessToken }: { accessToken: string }) {
   const [images, setImages] = useState<File[]>([]);
   const [pdfs, setPdfs] = useState<File[]>([]);
   const [submittedFiles, setSubmittedFiles] = useState<SubmittedFile[]>([]);
+  const [instructions, setInstructions] = useState("");
+  const [submittedInstructions, setSubmittedInstructions] = useState("");
   const [submittedAt, setSubmittedAt] = useState("");
   const [report, setReport] = useState("");
   const [statuses, setStatuses] = useState<ScanningFileStatus[]>([]);
@@ -119,7 +122,10 @@ export default function ScanningView({ accessToken }: { accessToken: string }) {
     const formData = new FormData();
     for (const image of images) formData.append("image", image, image.name);
     for (const pdf of pdfs) formData.append("pdf", pdf, pdf.name);
+    const normalizedInstructions = instructions.trim();
+    if (normalizedInstructions) formData.append("instructions", normalizedInstructions);
     setSubmittedFiles(submitted);
+    setSubmittedInstructions(normalizedInstructions);
     setSubmittedAt(new Date().toISOString());
     setReport("");
     setStatuses([]);
@@ -194,6 +200,8 @@ export default function ScanningView({ accessToken }: { accessToken: string }) {
     abortRef.current?.abort();
     setImages([]);
     setPdfs([]);
+    setInstructions("");
+    setSubmittedInstructions("");
     setSubmittedFiles([]);
     setSubmittedAt("");
     setReport("");
@@ -263,6 +271,11 @@ export default function ScanningView({ accessToken }: { accessToken: string }) {
                       </span>
                     ))}
                   </div>
+                  {submittedInstructions ? (
+                    <p className="scanning-submitted-instructions">
+                      <strong>Zusätzliche Anweisung:</strong> {submittedInstructions}
+                    </p>
+                  ) : null}
                 </article>
                 <article className={`message assistant${isProcessing ? " pending" : ""}`}>
                   <div className="message-header">
@@ -286,7 +299,7 @@ export default function ScanningView({ accessToken }: { accessToken: string }) {
                   ) : null}
                   {report ? (
                     <div className="scanning-result-actions">
-                      <button className="secondary-button compact-button" type="button" onClick={() => void downloadPdf()} disabled={isDownloading}>
+                      <button className="secondary-button compact-button scanning-pdf-button" type="button" onClick={() => void downloadPdf()} disabled={isDownloading}>
                         {isDownloading ? "PDF wird erstellt …" : "Als PDF herunterladen"}
                       </button>
                       <button className="primary-button compact-button" type="button" onClick={resetScanning}>Neue Auswertung</button>
@@ -318,6 +331,21 @@ export default function ScanningView({ accessToken }: { accessToken: string }) {
                   Ausgewählt: {images.length}/{MAX_SCANNING_IMAGES} Bilder · {pdfs.length}/{MAX_SCANNING_PDFS} PDFs
                 </small>
               </div>
+              <label className="scanning-instructions-field">
+                <span>Zusätzliche Anweisungen <small>(optional)</small></span>
+                <textarea
+                  value={instructions}
+                  onChange={(event) => setInstructions(event.target.value)}
+                  maxLength={MAX_SCANNING_INSTRUCTIONS_CHARS}
+                  rows={2}
+                  placeholder="z. B. nur Apothekenrechnungen, nur Büromaterialien oder nur Amazon-Rechnungen"
+                  disabled={isProcessing}
+                  aria-describedby="scanning-instructions-limit"
+                />
+                <small id="scanning-instructions-limit">
+                  {instructions.length}/{MAX_SCANNING_INSTRUCTIONS_CHARS.toLocaleString("de-AT")} Zeichen
+                </small>
+              </label>
               <div className="composer-toolbar scanning-toolbar">
                 <div className="scanning-file-buttons">
                   <button className="secondary-button compact-button" type="button" onClick={() => imageInputRef.current?.click()} disabled={isProcessing || images.length >= MAX_SCANNING_IMAGES}>Bilder auswählen</button>

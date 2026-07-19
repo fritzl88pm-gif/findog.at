@@ -21,9 +21,14 @@ function pdfBytes(marker = 0): Uint8Array<ArrayBuffer> {
   return Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x2d, marker]);
 }
 
-function multipart(files: Array<{ field: string; file: File }>, userToken = "token"): Request {
+function multipart(
+  files: Array<{ field: string; file: File }>,
+  userToken = "token",
+  instructions?: string,
+): Request {
   const body = new FormData();
   for (const item of files) body.append(item.field, item.file, item.file.name);
+  if (instructions !== undefined) body.append("instructions", instructions);
   return new Request("https://findog.at/api/scanning", {
     method: "POST",
     headers: { Authorization: `Bearer ${userToken}`, "Sec-Fetch-Site": "same-origin" },
@@ -92,6 +97,34 @@ describe("POST /api/scanning", () => {
       type: "final",
       report: expect.stringContaining("| | | Gesamtsumme | 4.740,00 EUR |"),
     });
+  });
+
+  it("forwards optional bounded instructions to the Gemini adapter", async () => {
+    const response = await POST(multipart(
+      [{ field: "pdf", file: pdf("apotheke.pdf") }],
+      "instructions-user",
+      "  nur Apothekenrechnungen  ",
+    ));
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(analyzeScanningBatch).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(AbortSignal),
+      "nur Apothekenrechnungen",
+    );
+  });
+
+  it("rejects oversized optional instructions", async () => {
+    const response = await POST(multipart(
+      [{ field: "pdf", file: pdf("beleg.pdf") }],
+      "long-instructions-user",
+      "x".repeat(1_001),
+    ));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Zusätzliche Anweisungen dürfen maximal 1.000 Zeichen lang sein.",
+    });
+    expect(analyzeScanningBatch).not.toHaveBeenCalled();
   });
 
   it("rejects empty batches, a sixth file and unknown form fields", async () => {

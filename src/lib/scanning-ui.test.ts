@@ -25,6 +25,10 @@ describe("Scanning UI integration", () => {
     expect(viewSource).toContain("Entfernen");
     expect(viewSource).toContain("Abbrechen");
     expect(viewSource).toContain("Neue Auswertung");
+    expect(viewSource).toContain("Zusätzliche Anweisungen");
+    expect(viewSource).toContain("nur Apothekenrechnungen, nur Büromaterialien oder nur Amazon-Rechnungen");
+    expect(viewSource).toContain('formData.append("instructions", normalizedInstructions)');
+    expect(viewSource).toContain("scanning-pdf-button");
     expect(viewSource).toContain('fetch("/api/scanning"');
     expect(viewSource).toContain('fetch("/api/tools/pdf"');
     expect(viewSource).toContain("abortRef.current?.abort()");

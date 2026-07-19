@@ -77,6 +77,32 @@ describe("OpenRouter scanning adapter", () => {
     expect(serialized).toContain("Keine separaten Rechnungsüberschriften");
     expect(serialized).toContain("Antworte direkt in gut lesbarem deutschem Markdown, kein JSON");
     expect(serialized).toContain("Dateien: sammel.pdf, foto.png");
+    expect(serialized).toContain("Ist kein Datum erkennbar oder ausgewiesen");
+    expect(serialized).toContain("Der Beleg bleibt trotzdem in der Tabelle");
+  });
+
+  it("adds optional user instructions to the prompt without weakening output rules", async () => {
+    vi.mocked(fetch).mockResolvedValue(providerResponse(
+      "## Apotheke\n\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 15.05.2024 | Medikament | 6,35 EUR |",
+    ));
+
+    await analyzeScanningBatch([upload("pdf", "belege")], undefined, "nur Apothekenrechnungen");
+    const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    const serialized = JSON.stringify(body);
+    expect(serialized).toContain("**Zusätzliche Anweisung des Nutzers**");
+    expect(serialized).toContain("nur Apothekenrechnungen");
+    expect(serialized).toContain("gib ausschließlich passende Belege aus");
+    expect(serialized).toContain("darf das Tabellenformat");
+  });
+
+  it("keeps undated documents and fills only their date cell with a dash", async () => {
+    vi.mocked(fetch).mockResolvedValue(providerResponse(
+      "## Bürobedarf\n\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | | Büromaterial | 12,00 EUR |\n| | | Gesamtsumme | 12,00 EUR |",
+    ));
+
+    const result = await analyzeScanningBatch([upload("pdf", "ohne-datum")]);
+    expect(result).toContain("| 1 | – | Büromaterial | 12,00 EUR |");
+    expect(result).toContain("| | | Gesamtsumme | 12,00 EUR |");
   });
 
   it("removes HTML line-break fragments from Gemini table cells", async () => {

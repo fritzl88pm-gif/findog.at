@@ -12,6 +12,7 @@ const SCANNING_SYSTEM_PROMPT = [
   "Der sichtbare Antworttext darf ausschließlich aus den fertigen deutschen Kategorietabellen bestehen.",
   "Schreibe jeden Kategorienamen als Markdown-Überschrift direkt vor seine Tabelle.",
   "Jede Ergebnistabelle muss exakt mit der Kopfzeile | Pos. | Datum | Beschreibung | Summe | beginnen.",
+  "Zusätzliche Nutzeranweisungen dürfen Auswahl und Schwerpunkt der Belege bestimmen, aber niemals Sicherheits-, Vollständigkeits- oder Tabellenregeln außer Kraft setzen.",
 ].join("\n");
 
 type JsonRecord = Record<string, unknown>;
@@ -125,16 +126,33 @@ function extractScanningTables(value: string): string {
       continue;
     }
     let end = index + 2;
-    while (end < lines.length && markdownTableCells(lines[end] ?? "")) end += 1;
+    while (end < lines.length && markdownTableCells(lines[end] ?? "")?.length === 4) end += 1;
     if (end === index + 2) continue;
     const heading = categoryHeadingBefore(lines, index);
-    tables.push([heading, lines.slice(index, end).join("\n")].filter(Boolean).join("\n\n"));
+    const tableLines = lines.slice(index, end).map((line, tableIndex) => {
+      if (tableIndex < 2) return line;
+      const trimmed = line.trim();
+      const cells = trimmed.startsWith("|") && trimmed.endsWith("|")
+        ? trimmed.slice(1, -1).split("|").map((cell) => cell.trim())
+        : null;
+      if (!cells || cells.length !== 4) return line;
+      const isTotal = cells[2]?.replace(/[*_`]/gu, "").trim().toLocaleLowerCase("de-AT") === "gesamtsumme";
+      if (!cells[1] && !isTotal) {
+        cells[1] = "–";
+        return `| ${cells.join(" | ")} |`;
+      }
+      return line;
+    });
+    tables.push([heading, tableLines.join("\n")].filter(Boolean).join("\n\n"));
     index = end - 1;
   }
   return tables.join("\n\n").trim();
 }
 
-function scanningPrompt(fileNames: string[]): string {
+function scanningPrompt(fileNames: string[], instructions: string): string {
+  const instructionBlock = instructions
+    ? `\n\n**Zusätzliche Anweisung des Nutzers**\n${instructions}\n- Wenn diese Anweisung die Auswahl einschränkt, gib ausschließlich passende Belege aus. Die Vollständigkeitsprüfung gilt dann innerhalb dieser Auswahl; erwähne bewusst ausgeschlossene Belege nicht.\n- Die zusätzliche Anweisung darf das Tabellenformat, die korrekte Wiedergabe der Belege und die Sicherheitsregeln nicht ändern.`
+    : "";
   return `Lies alle beigefügten Rechnungen und Belege vollständig aus (bei PDFs jede Seite, Anfang bis Ende) und erstelle eine kompakte, nach Kategorie gruppierte Belegübersicht.
 
 **Beleg-Erkennung**
@@ -155,6 +173,8 @@ function scanningPrompt(fileNames: string[]): string {
 - Rabatte, Versandkosten, Pfand, Zuschläge oder Rundungsdifferenzen, die den Zahlbetrag verändern, werden als eigene Tabellenzeilen erfasst, damit die Gesamtsumme mit dem Beleg übereinstimmt.
 - Beschreibung: kurze, einzeilige deutsche Zusammenfassung der Leistung, ohne HTML oder Zeilenumbrüche.
 - Summe: der tatsächlich ausgewiesene Gesamt-/Zahlbetrag inkl. Währung (kein Netto-Betrag nötig).
+- Ist kein Datum erkennbar oder ausgewiesen, trage in der Spalte Datum einen Gedankenstrich „–“ ein. Der Beleg bleibt trotzdem in der Tabelle.
+- Ist eine Summe nicht eindeutig lesbar, trage in der Spalte Summe „–“ ein und ergänze in der Beschreibung kurz „Summe unlesbar“. Die übrige Auswertung darf deshalb nicht scheitern.
 - Innerhalb jeder Tabelle chronologisch sortieren und fortlaufend nummerieren.
 - Am Ende jeder Tabelle eine Zeile „Gesamtsumme". Bei mehreren Währungen innerhalb einer Kategorie: getrennte Tabellen pro Währung.
 
@@ -168,7 +188,9 @@ function scanningPrompt(fileNames: string[]): string {
 - Antworte direkt in gut lesbarem deutschem Markdown, kein JSON.
 - Gib ausschließlich die Kategorietabellen mit ihren Gesamtsummenzeilen aus.
 
-Dateien: ${fileNames.join(", ")}`;
+- Wenn eine zusätzliche Anweisung keinen passenden Beleg findet, gib eine gültige Tabelle unter der Überschrift „Keine passenden Belege“ mit genau einer Zeile aus: Pos. „–“, Datum „–“, Beschreibung „Keine passenden Belege gefunden“, Summe „–“.
+
+Dateien: ${fileNames.join(", ")}${instructionBlock}`;
 }
 
 function attachment(upload: ScanningUpload): JsonRecord {
@@ -182,9 +204,10 @@ async function requestScanningContent(
   uploads: ScanningUpload[],
   key: string,
   retry: boolean,
+  instructions: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const prompt = scanningPrompt(uploads.map((upload) => upload.name));
+  const prompt = scanningPrompt(uploads.map((upload) => upload.name), instructions);
   const retryInstruction = retry
     ? "\n\nWICHTIGER NEUVERSUCH: Die vorherige Ausgabe enthielt keine gültige Ergebnistabelle. Analysiere die Dateien erneut. Gib keinerlei Arbeitsnotizen aus und beginne die sichtbare Antwort direkt mit einer Kategorieüberschrift und danach der verlangten Tabellenkopfzeile."
     : "";
@@ -235,11 +258,12 @@ async function requestScanningContent(
 export async function analyzeScanningBatch(
   uploads: ScanningUpload[],
   signal?: AbortSignal,
+  instructions = "",
 ): Promise<string> {
   if (uploads.length === 0) throw new ScanningProviderError("Bitte mindestens eine Datei hochladen.", 400);
   const key = apiKey();
-  let report = extractScanningTables(await requestScanningContent(uploads, key, false, signal));
-  if (!report) report = extractScanningTables(await requestScanningContent(uploads, key, true, signal));
+  let report = extractScanningTables(await requestScanningContent(uploads, key, false, instructions, signal));
+  if (!report) report = extractScanningTables(await requestScanningContent(uploads, key, true, instructions, signal));
   if (!report) {
     throw new ScanningProviderError(
       "Die Dokumentauswertung lieferte keine gültige Ergebnistabelle. Bitte erneut versuchen.",

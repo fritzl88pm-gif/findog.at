@@ -8,6 +8,7 @@ import {
   matchesScanningFileSignature,
   MAX_SCANNING_IMAGE_BYTES,
   MAX_SCANNING_IMAGES,
+  MAX_SCANNING_INSTRUCTIONS_CHARS,
   MAX_SCANNING_MULTIPART_BYTES,
   MAX_SCANNING_PDF_BYTES,
   MAX_SCANNING_PDFS,
@@ -101,6 +102,7 @@ function uploadedFile(value: FormDataEntryValue): value is File {
 async function parseUploads(request: Request, contentType: string): Promise<{
   uploads: ScanningUpload[];
   statuses: ScanningFileStatus[];
+  instructions: string;
 }> {
   const body = await readBoundedBody(request);
   let formData: FormData;
@@ -113,11 +115,26 @@ async function parseUploads(request: Request, contentType: string): Promise<{
   } catch {
     throw new UserVisibleError("Die Scanning-Anfrage enthält keine gültigen Formulardaten.", 400);
   }
-  if ([...formData.keys()].some((key) => key !== "image" && key !== "pdf")) {
+  if ([...formData.keys()].some((key) => key !== "image" && key !== "pdf" && key !== "instructions")) {
     throw new UserVisibleError("Die Scanning-Anfrage enthält unbekannte Felder.", 400);
   }
   const images = formData.getAll("image");
   const pdfs = formData.getAll("pdf");
+  const instructionEntries = formData.getAll("instructions");
+  if (instructionEntries.length > 1 || instructionEntries.some((entry) => typeof entry !== "string")) {
+    throw new UserVisibleError("Die zusätzlichen Anweisungen sind ungültig.", 400);
+  }
+  const instructions = typeof instructionEntries[0] === "string"
+    ? instructionEntries[0]
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, "")
+      .trim()
+    : "";
+  if (instructions.length > MAX_SCANNING_INSTRUCTIONS_CHARS) {
+    throw new UserVisibleError(
+      "Zusätzliche Anweisungen dürfen maximal 1.000 Zeichen lang sein.",
+      400,
+    );
+  }
   if (images.length > MAX_SCANNING_IMAGES) {
     throw new UserVisibleError("Bitte maximal fünf Bilder hochladen.", 400);
   }
@@ -176,7 +193,7 @@ async function parseUploads(request: Request, contentType: string): Promise<{
     });
     statuses.push({ id, name, kind: candidate.kind, status: "failed", detail: "Noch nicht ausgewertet" });
   }
-  return { uploads, statuses };
+  return { uploads, statuses, instructions };
 }
 
 function fileError(error: unknown): string {
@@ -218,7 +235,7 @@ export async function POST(request: Request) {
             total: parsed.uploads.length,
             fileName: parsed.uploads.length === 1 ? parsed.uploads[0]?.name : `${parsed.uploads.length} Dateien`,
           });
-          const report = await analyzeScanningBatch(parsed.uploads, lifetime.signal);
+          const report = await analyzeScanningBatch(parsed.uploads, lifetime.signal, parsed.instructions);
           const completedIds = new Set(parsed.uploads.map((upload) => upload.id));
           const statuses = parsed.statuses.map((status): ScanningFileStatus => (
             completedIds.has(status.id)

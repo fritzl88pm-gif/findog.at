@@ -4,6 +4,7 @@ import {
   matchesScanningFileSignature,
   MAX_SCANNING_IMAGE_BYTES,
   MAX_SCANNING_IMAGES,
+  MAX_SCANNING_INSTRUCTIONS_CHARS,
   MAX_SCANNING_PDF_BYTES,
   MAX_SCANNING_PDFS,
   sanitizeScanningFilename,
@@ -15,6 +16,7 @@ describe("scanning upload configuration", () => {
     expect(MAX_SCANNING_PDFS).toBe(5);
     expect(MAX_SCANNING_IMAGE_BYTES).toBe(5 * 1_024 * 1_024);
     expect(MAX_SCANNING_PDF_BYTES).toBe(10 * 1_024 * 1_024);
+    expect(MAX_SCANNING_INSTRUCTIONS_CHARS).toBe(1_000);
   });
 
   it.each([
