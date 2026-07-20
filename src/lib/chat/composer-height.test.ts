@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   autosizeComposer,
   clampComposerHeight,
+  COMPOSER_MAX_HEIGHT,
   COMPOSER_MIN_HEIGHT,
   resetComposerHeight,
 } from "@/lib/chat/composer-height";
@@ -22,6 +23,10 @@ const componentSource = readFileSync(
 );
 
 describe("clampComposerHeight", () => {
+  it("caps the composer height at 120px", () => {
+    expect(COMPOSER_MAX_HEIGHT).toBe(120);
+  });
+
   it("uses the minimum height for short content", () => {
     expect(clampComposerHeight(COMPOSER_MIN_HEIGHT - 12)).toBe(COMPOSER_MIN_HEIGHT);
   });
@@ -30,12 +35,10 @@ describe("clampComposerHeight", () => {
     expect(clampComposerHeight(80)).toBe(80);
   });
 
-  it("passes through long content without capping", () => {
-    // No maximum cap — long content grows unbounded.
-    expect(clampComposerHeight(600)).toBe(600);
-    expect(clampComposerHeight(2048)).toBe(2048);
+  it("caps long content at COMPOSER_MAX_HEIGHT", () => {
+    expect(clampComposerHeight(600)).toBe(COMPOSER_MAX_HEIGHT);
+    expect(clampComposerHeight(2048)).toBe(COMPOSER_MAX_HEIGHT);
   });
-
 });
 
 describe("resetComposerHeight", () => {
@@ -56,10 +59,10 @@ describe("autosizeComposer", () => {
     expect(textarea.style.height).toBe(`${COMPOSER_MIN_HEIGHT}px`);
   });
 
-  it("grows to large scrollHeight without capping", () => {
+  it("caps a large scrollHeight at COMPOSER_MAX_HEIGHT", () => {
     const textarea = { style: { height: "" }, scrollHeight: 600 } as HTMLTextAreaElement;
     autosizeComposer(textarea);
-    expect(textarea.style.height).toBe("600px");
+    expect(textarea.style.height).toBe(`${COMPOSER_MAX_HEIGHT}px`);
   });
 
   it("preserves an intermediate scrollHeight", () => {
@@ -71,30 +74,40 @@ describe("autosizeComposer", () => {
 
 describe("composer textarea source assertions", () => {
   it("starts with one visible text row (rows=1)", () => {
-    // The <textarea> in the component should have rows={1} so it starts
-    // at exactly one line instead of two.
     const textareaMatch = componentSource.match(/rows\s*=\s*\{?\d+\}?/u);
     expect(textareaMatch).not.toBeNull();
-    // Accept either rows={1} or rows="1" or rows=1
     expect(textareaMatch![0]).toMatch(/1/u);
     expect(textareaMatch![0]).not.toMatch(/2/u);
   });
 
-  it("has no max-height on .composer textarea in globals.css", () => {
-    // Find the .composer textarea rule block and ensure no max-height
+  it("caps .composer textarea at 120px in globals.css", () => {
     const blockStart = cssSource.indexOf(".composer textarea");
     expect(blockStart).not.toBe(-1);
     const blockEnd = cssSource.indexOf("}", blockStart);
     const block = cssSource.slice(blockStart, blockEnd);
-    expect(block).not.toMatch(/max-height/u);
+    expect(block).toMatch(/max-height\s*:\s*120px/u);
   });
 
-  it("does not have overflow-y: auto on .composer textarea (uses hidden)", () => {
+  it("scrolls overflowing .composer textarea content instead of hiding it", () => {
     const blockStart = cssSource.indexOf(".composer textarea");
     expect(blockStart).not.toBe(-1);
     const blockEnd = cssSource.indexOf("}", blockStart);
     const block = cssSource.slice(blockStart, blockEnd);
-    expect(block).not.toMatch(/overflow-y\s*:\s*auto/u);
-    expect(block).toMatch(/overflow-y\s*:\s*hidden/u);
+    expect(block).toMatch(/overflow-y\s*:\s*auto/u);
+    expect(block).not.toMatch(/overflow-y\s*:\s*hidden/u);
+  });
+
+  it("disables height transitions so autosizing can shrink synchronously", () => {
+    const blockStart = cssSource.indexOf(".composer textarea");
+    expect(blockStart).not.toBe(-1);
+    const blockEnd = cssSource.indexOf("}", blockStart);
+    const block = cssSource.slice(blockStart, blockEnd);
+    expect(block).toMatch(/transition\s*:\s*none/u);
+  });
+
+  it("resets the composer height immediately after clearing on submit", () => {
+    expect(componentSource).toMatch(
+      /setComposer\(""\);\s*resetComposerHeight\(composerRef\.current\);/u,
+    );
   });
 });

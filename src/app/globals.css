@@ -3494,8 +3494,10 @@ textarea:focus {
 .composer textarea {
   box-sizing: border-box;
   min-height: 48px;
-  overflow-y: hidden;
+  max-height: 120px;
+  overflow-y: auto;
   resize: none;
+  transition: none;
   font-size: 0.95rem;
   padding: 8px 12px;
   background-color: transparent;
