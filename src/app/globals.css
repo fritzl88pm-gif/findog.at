@@ -3407,8 +3407,7 @@ textarea:focus {
 .composer textarea {
   box-sizing: border-box;
   min-height: 48px;
-  max-height: 120px;
-  overflow-y: auto;
+  overflow-y: hidden;
   resize: none;
   font-size: 0.95rem;
   padding: 8px 12px;

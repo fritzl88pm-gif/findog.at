@@ -572,7 +572,7 @@ export default function FredNativeChatView({
               placeholder="Frage zu BFG, EStG, UStG oder Verfahrensrecht..."
               aria-label="Nachricht an Fred"
               disabled={isSending || !accessToken}
-              rows={2}
+              rows={1}
             />
             <div className="composer-toolbar">
               {capabilities.fileUpload ? (
