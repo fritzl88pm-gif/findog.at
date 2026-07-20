@@ -44,8 +44,10 @@ describe("Fred native Findog UI", () => {
   it("uses Findog message bubbles, rich answers and the native composer for live responses", () => {
     expect(viewSource).toContain('className={`message ${message.role}');
     expect(viewSource).toContain("renderAssistantContent(message.content)");
-    expect(cssSource).toContain('url("/fred-sniff.gif")');
-    expect(cssSource).toContain(".message.assistant.pending .message-body");
+    expect(viewSource).toContain('src="/fred-sniff.gif"');
+    expect(viewSource).toContain('className="fred-thinking-indicator"');
+    expect(viewSource).not.toContain('<p className="message-body">Fred denkt nach');
+    expect(cssSource).toContain(".fred-thinking-indicator img");
     expect(viewSource).toContain('className="composer"');
     expect(viewSource).toContain('className="composer-icon-button"');
     expect(viewSource).toContain("autosizeComposer(textarea)");

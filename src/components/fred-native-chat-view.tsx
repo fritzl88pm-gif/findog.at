@@ -527,7 +527,12 @@ export default function FredNativeChatView({
                 {message.role === "assistant"
                   ? (message.content
                     ? renderAssistantContent(message.content)
-                    : <p className="message-body">Fred denkt nach …</p>)
+                    : (
+                      <div className="fred-thinking-indicator" role="status" aria-label="Fred denkt nach">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src="/fred-sniff.gif" alt="" />
+                      </div>
+                    ))
                   : renderUserContent(message.content)}
                 {message.role === "user" && (message.attachments?.length || message.webSearchEnabled) ? (
                   <div className="fred-native-message-options">
