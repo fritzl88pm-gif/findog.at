@@ -1898,6 +1898,18 @@ textarea:focus {
   text-decoration: underline;
 }
 
+.message.assistant.pending .message-body {
+  width: 112px;
+  height: 82px;
+  min-height: 82px;
+  margin: 0;
+  overflow: hidden;
+  background: url("/fred-sniff.gif") center / contain no-repeat;
+  color: transparent;
+  font-size: 0;
+  line-height: 0;
+}
+
 .fred-native-tool-button {
   cursor: pointer;
   transition: var(--transition);
