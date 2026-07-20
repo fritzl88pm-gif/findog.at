@@ -39,6 +39,7 @@ describe("Gemini image context via OpenRouter", () => {
     expect(callUrl).toBe(ENDPOINT);
     const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
     expect(body.model).toBe(MODEL);
+    expect(body.max_tokens).toBe(4096);
     const messages = body.messages as Array<Record<string, unknown>>;
     expect(messages[0].role).toBe("user");
     const userContent = messages[0].content as Array<Record<string, unknown>>;
@@ -144,5 +145,38 @@ describe("Gemini image context via OpenRouter", () => {
     expect(error).toBeInstanceOf(GeminiImageError);
     expect(error.message).toMatch(/abgebrochen/i);
     expect(error.message).not.toMatch(/nicht erreichbar/i);
+  });
+
+  it("allows an image analysis to run for 75 seconds before timing out", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetch = vi.fn((_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        }));
+      let settled = false;
+      const pending = describeImage(imageDataUri(), { fetch });
+      const observed = pending.then(
+        (value) => ({ status: "fulfilled" as const, value }),
+        (reason: unknown) => ({ status: "rejected" as const, reason }),
+      );
+      void observed.then(() => { settled = true; });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(44_999);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const outcome = await observed;
+      expect(outcome.status).toBe("rejected");
+      if (outcome.status === "rejected") {
+        expect(outcome.reason).toBeInstanceOf(GeminiImageError);
+        expect((outcome.reason as Error).message).toBe("Die Bildanalyse hat nicht rechtzeitig geantwortet.");
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
