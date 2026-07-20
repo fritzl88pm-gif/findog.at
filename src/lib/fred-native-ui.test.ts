@@ -93,4 +93,15 @@ describe("Fred native Findog UI", () => {
     expect(nextConfigSource).not.toContain("frame-src 'self' https://taxdog.cloud");
     expect(nextConfigSource).toContain("frame-ancestors 'none'");
   });
+
+  it("gives .fred-web-search-toggle.is-active at least as many class/pseudo-class selectors as .composer-model-trigger:hover:not(:disabled) in globals.css", () => {
+    /* CSS specificity: .composer-model-trigger:hover:not(:disabled) = 0,3,0
+       (one class + :hover + :disabled inside :not).
+       .fred-web-search-toggle.is-active = 0,2,0 → too low, sticky mobile :hover still wins.
+       The fix adds the .composer-model-trigger class to raise it to 0,3,0 or higher. */
+    const hasHigherSpec = cssSource.includes(
+      ".composer-model-trigger.fred-web-search-toggle.is-active",
+    );
+    expect(hasHigherSpec).toBe(true);
+  });
 });

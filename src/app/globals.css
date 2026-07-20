@@ -3509,7 +3509,7 @@ textarea:focus {
   background: rgba(40, 111, 156, 0.08);
 }
 
-.fred-web-search-toggle.is-active {
+.composer-model-trigger.fred-web-search-toggle.is-active {
   border-color: var(--bmf-blue);
   background: var(--bmf-blue);
   color: #ffffff;
