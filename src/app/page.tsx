@@ -64,6 +64,7 @@ import FredNativeChatView, {
 } from "@/components/fred-native-chat-view";
 import FredRunView from "@/components/fredrun-view";
 import ScanningView from "@/components/scanning-view";
+import KnowledgeLandscapeView from "@/components/knowledge-landscape-view";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -80,7 +81,7 @@ type ConversationSummary = {
   updatedAt: string;
 };
 
-type AppView = "chat" | "scanning" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "administration";
+type AppView = "chat" | "scanning" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "administration" | "data";
 
 type AuthForm = {
   email: string;
@@ -1749,6 +1750,14 @@ export default function Home() {
     }
   }
 
+  function openDataView() {
+    setAppView("data");
+    setError("");
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
   function openBfgDecisionsView() {
     setAppView("bfg-decisions");
     setBfgError("");
@@ -2868,6 +2877,15 @@ export default function Home() {
                 <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
                 Formulare
               </button>
+              <button
+                className={`sidebar-view-button ${appView === "data" ? "active" : ""}`}
+                type="button"
+                onClick={openDataView}
+                aria-current={appView === "data" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="7" ry="3"></ellipse><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path></svg>
+                Daten
+              </button>
               {isAdmin ? (
                 <button
                   className={`sidebar-view-button ${appView === "administration" ? "active" : ""}`}
@@ -2905,6 +2923,16 @@ export default function Home() {
               aria-current={appView === "forms" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
+            </button>
+            <button
+              className={`icon-button rail-icon-btn ${appView === "data" ? "active" : ""}`}
+              type="button"
+              onClick={openDataView}
+              title="Daten"
+              aria-label="Daten"
+              aria-current={appView === "data" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="7" ry="3"></ellipse><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path></svg>
             </button>
             <button
               className={`icon-button rail-icon-btn ${appView === "bfg-decisions" ? "active" : ""}`}
@@ -3170,6 +3198,8 @@ export default function Home() {
           renderUserContent={renderUserMessageContent}
           onConversationUpdated={handleFredConversationUpdated}
         />
+      ) : appView === "data" ? (
+        <KnowledgeLandscapeView accessToken={session?.access_token ?? ""} />
       ) : appView === "bfg-pro" ? (
         <section className="forms-panel" aria-labelledby="bfg-pro-view-title">
           <div className="forms-view bfg-decisions-view bfg-pro-view">
