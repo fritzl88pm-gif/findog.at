@@ -61,4 +61,24 @@ describe("knowledge landscape UI integration", () => {
     expect(cssSource).toMatch(/@media \(max-width: 900px\)[\s\S]*?\.knowledge-landscape-groups[\s\S]*?1fr/u);
     expect(cssSource).not.toMatch(/\.knowledge-landscape[^{}]*\{[^}]*overflow-x:\s*auto/gu);
   });
+
+  it("exposes V2 derived summaries: dominant source, ranked coverage, and group subtotals", () => {
+    expect(viewSource).toContain("Hauptwissensquelle");
+    expect(viewSource).toContain("Quellen-Ranking");
+    expect(viewSource).toContain("calculateGroupSubtotal");
+    expect(viewSource).toContain("getDominantKnowledgeBase");
+    expect(viewSource).toContain("getRankedKnowledgeBases");
+    expect(viewSource).toContain("knowledge-dominant-card");
+    expect(viewSource).toContain("knowledge-ranking-list");
+    expect(viewSource).toContain("knowledge-group-subtotal");
+  });
+
+  it("defines CSS styling for V2 dominant source, ranking list, progress indicators, and reduced motion", () => {
+    expect(cssSource).toContain(".knowledge-dominant-card");
+    expect(cssSource).toContain(".knowledge-ranking-section");
+    expect(cssSource).toContain(".knowledge-ranking-list");
+    expect(cssSource).toContain(".knowledge-source-progress");
+    expect(cssSource).toContain(".knowledge-group-subtotal");
+    expect(cssSource).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/u);
+  });
 });
