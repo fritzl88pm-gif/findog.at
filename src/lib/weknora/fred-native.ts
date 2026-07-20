@@ -17,15 +17,6 @@ export type FredUpstreamConfig = {
   allowFileUpload: boolean;
 };
 
-export type FredUpstreamAttachment = {
-  kind: "image" | "file";
-  name: string;
-  mimeType: string;
-  sizeBytes: number;
-  sha256: string;
-  dataUri: string;
-};
-
 export type FredUpstreamSession = {
   id: string;
   signature: string;
@@ -190,7 +181,6 @@ export async function openFredUpstreamStream(options: {
   visitorId: string;
   query: string;
   webSearchEnabled: boolean;
-  attachments: FredUpstreamAttachment[];
   signal: AbortSignal;
   fetchImpl?: typeof fetch;
 }): Promise<Response> {
@@ -220,24 +210,6 @@ export async function openFredUpstreamStream(options: {
         summary_model_id: "",
         mcp_service_ids: [],
         mentioned_items: [],
-        ...(options.attachments.some((attachment) => attachment.kind === "image")
-          ? {
-              images: options.attachments
-                .filter((attachment) => attachment.kind === "image")
-                .map((attachment) => ({ data: attachment.dataUri })),
-            }
-          : {}),
-        ...(options.attachments.some((attachment) => attachment.kind === "file")
-          ? {
-              attachment_uploads: options.attachments
-                .filter((attachment) => attachment.kind === "file")
-                .map((attachment) => ({
-                  data: attachment.dataUri,
-                  file_name: attachment.name,
-                  file_size: attachment.sizeBytes,
-                })),
-            }
-          : {}),
         channel: "embed",
       }),
       cache: "no-store",

@@ -23,6 +23,12 @@ function json(payload: unknown, status = 200): NextResponse {
   });
 }
 
+function findogFileUploadEnabled(): boolean {
+  const mineruToken = process.env.MINERU_API_TOKEN?.trim() ?? "";
+  const openrouterKey = process.env.OPENROUTER_API_KEY?.trim() ?? "";
+  return mineruToken !== "" && openrouterKey !== "";
+}
+
 export async function GET(request: Request) {
   try {
     const supabase = getSupabaseServerClient();
@@ -40,7 +46,7 @@ export async function GET(request: Request) {
     });
     return json({
       webSearch: capabilities.allowWebSearch,
-      fileUpload: capabilities.allowFileUpload,
+      fileUpload: findogFileUploadEnabled(),
     });
   } catch (error) {
     if (error instanceof UserVisibleError) return json({ error: error.message }, error.status);

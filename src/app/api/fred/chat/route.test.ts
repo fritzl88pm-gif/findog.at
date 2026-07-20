@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
+import { buildAttachmentContext } from "@/lib/attachments/context";
 import {
   mintFredEmbedSession,
   readFredEmbedServerConfig,
@@ -19,6 +20,10 @@ import { resolveBfgCitation } from "@/lib/findok/bfg-citations";
 import { POST } from "./route";
 
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
+vi.mock("@/lib/attachments/context", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/lib/attachments/context")>();
+  return { ...original, buildAttachmentContext: vi.fn() };
+});
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
 vi.mock("@/lib/findok/bfg-citations", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/findok/bfg-citations")>();
@@ -99,6 +104,25 @@ function upstreamStream(): Response {
   ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } });
 }
 
+function pdfFile(name = "Beleg.pdf"): File {
+  return new File([new TextEncoder().encode("%PDF-1.7\nfixture")], name, {
+    type: "application/pdf",
+  });
+}
+
+function responseFromReader(reader: {
+  read: () => Promise<ReadableStreamReadResult<Uint8Array>>;
+  cancel: (reason?: unknown) => Promise<void>;
+}): Response {
+  return { body: { getReader: () => reader } } as unknown as Response;
+}
+
+async function nextEvent(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  const result = await reader.read();
+  if (result.done) return null;
+  return parseFredNativeStreamLine(new TextDecoder().decode(result.value).trim());
+}
+
 function rpcForTurn() {
   return vi.fn()
     .mockResolvedValueOnce({ data: summaryRow, error: null })
@@ -134,6 +158,11 @@ describe("POST /api/fred/chat", () => {
       signature: "session-signature",
     });
     vi.mocked(openFredUpstreamStream).mockImplementation(async () => upstreamStream());
+    vi.mocked(buildAttachmentContext).mockImplementation(async (question) => `${question}\n\nEXTRACTED`);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("streams a native answer and persists both sides under the authenticated user", async () => {
@@ -356,7 +385,129 @@ describe("POST /api/fred/chat", () => {
     }));
   });
 
-  it("validates and forwards frame-compatible attachments and per-request web search", async () => {
+  it("cancels an active upstream answer and requests an independent upstream stop", async () => {
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    let markSecondReadStarted!: () => void;
+    const secondReadStarted = new Promise<void>((resolve) => {
+      markSecondReadStarted = resolve;
+    });
+    const read = vi.fn()
+      .mockResolvedValueOnce({
+        done: false,
+        value: new TextEncoder().encode(
+          'data: {"response_type":"agent_query","assistant_message_id":"answer-active"}\n\n',
+        ),
+      })
+      .mockImplementationOnce(() => {
+        markSecondReadStarted();
+        return new Promise<ReadableStreamReadResult<Uint8Array>>(() => undefined);
+      });
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(openFredUpstreamStream).mockResolvedValue(responseFromReader({ read, cancel }));
+
+    const response = await POST(request({ query: "Bitte abbrechen" }));
+    const reader = response.body!.getReader();
+    await nextEvent(reader);
+    await secondReadStarted;
+    await reader.cancel("browser-cancel");
+
+    expect(stopFredUpstreamSession).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: "answer-active",
+      signal: expect.any(AbortSignal),
+    }));
+    const stopSignal = vi.mocked(stopFredUpstreamSession).mock.calls[0][0].signal;
+    expect(stopSignal.aborted).toBe(false);
+    expect(cancel).toHaveBeenCalledWith("browser-cancel");
+  });
+
+  it("best-effort stops and cancels the upstream reader after a streamed processing error", async () => {
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    const read = vi.fn()
+      .mockResolvedValueOnce({
+        done: false,
+        value: new TextEncoder().encode(
+          'data: {"response_type":"agent_query","assistant_message_id":"answer-error"}\n\n',
+        ),
+      })
+      .mockRejectedValueOnce(new Error("upstream read failed"));
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(openFredUpstreamStream).mockResolvedValue(responseFromReader({ read, cancel }));
+
+    const response = await POST(request({ query: "Fehlerfall" }));
+    const events = (await response.text())
+      .split("\n")
+      .map(parseFredNativeStreamLine)
+      .filter(Boolean);
+
+    expect(events).toContainEqual({ type: "error", error: "Fred konnte die Anfrage nicht abschließen." });
+    expect(stopFredUpstreamSession).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: "answer-error",
+    }));
+    expect(cancel).toHaveBeenCalledWith(expect.any(Error));
+  });
+
+  it("cleans deadline timers and the request abort listener after early provider failure", async () => {
+    vi.useFakeTimers();
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    vi.mocked(buildAttachmentContext).mockRejectedValue(new Error("provider failed"));
+    const fredRequest = multipartRequest({ query: "Prüfen", attachment: pdfFile() });
+    const addListener = vi.spyOn(fredRequest.signal, "addEventListener");
+    const removeListener = vi.spyOn(fredRequest.signal, "removeEventListener");
+
+    const response = await POST(fredRequest);
+    await response.text();
+
+    expect(addListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+    expect(removeListener).toHaveBeenCalledWith("abort", addListener.mock.calls[0][1]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cleans deadline timers and the request abort listener after normal completion", async () => {
+    vi.useFakeTimers();
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    const fredRequest = request({ query: "Normal" });
+    const addListener = vi.spyOn(fredRequest.signal, "addEventListener");
+    const removeListener = vi.spyOn(fredRequest.signal, "removeEventListener");
+
+    const response = await POST(fredRequest);
+    await response.text();
+
+    expect(removeListener).toHaveBeenCalledWith("abort", addListener.mock.calls[0][1]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("emits bounded attachment heartbeats only while preprocessing is pending", async () => {
+    vi.useFakeTimers();
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    let resolveContext!: (value: string) => void;
+    vi.mocked(buildAttachmentContext).mockReturnValue(new Promise((resolve) => {
+      resolveContext = resolve;
+    }));
+
+    const response = await POST(multipartRequest({ query: "Prüfen", attachment: pdfFile() }));
+    const reader = response.body!.getReader();
+    const events = [await nextEvent(reader)];
+    await vi.advanceTimersByTimeAsync(15_000);
+    events.push(await nextEvent(reader));
+    resolveContext("Prüfen\n\nEXTRACTED");
+    while (true) {
+      const event = await nextEvent(reader);
+      if (!event) break;
+      events.push(event);
+    }
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(events.filter((event) => event?.type === "status" && event.label === "Anhänge werden analysiert …"))
+      .toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("preprocesses valid attachments locally and sends only the combined query upstream", async () => {
     const rpc = rpcForTurn();
     vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
     vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
@@ -365,9 +516,7 @@ describe("POST /api/fred/chat", () => {
       allowWebSearch: true,
       allowFileUpload: true,
     });
-    const pdf = new File([new Uint8Array([1, 2, 3])], "Beleg.pdf", {
-      type: "application/pdf",
-    });
+    const pdf = pdfFile();
 
     const response = await POST(multipartRequest({
       query: "Bitte prüfe den Beleg",
@@ -379,26 +528,56 @@ describe("POST /api/fred/chat", () => {
     expect(response.status).toBe(200);
     expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
       webSearchEnabled: true,
-      attachments: [expect.objectContaining({
-        kind: "file",
-        name: "Beleg.pdf",
-        mimeType: "application/pdf",
-        sizeBytes: 3,
-        sha256: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
-        dataUri: "data:application/pdf;base64,AQID",
-      })],
+      query: "Bitte prüfe den Beleg\n\nEXTRACTED",
     }));
+    expect(vi.mocked(openFredUpstreamStream).mock.calls[0][0]).not.toHaveProperty("attachments");
     expect(rpc).toHaveBeenNthCalledWith(1, "record_fred_native_event", {
       payload: expect.objectContaining({
+        content: "Bitte prüfe den Beleg",
         web_search_enabled: true,
         attachments: [{
           kind: "file",
           name: "Beleg.pdf",
           mime_type: "application/pdf",
-          size_bytes: 3,
-          sha256: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+          size_bytes: pdf.size,
+          sha256: expect.any(String),
         }],
       }),
     });
+  });
+
+  it.each([
+    ["PDF", new File(["not-pdf"], "Beleg.pdf", { type: "application/pdf" }), "attachment"],
+    ["PNG", new File(["not-png"], "Bild.png", { type: "image/png" }), "image"],
+    ["JPEG", new File(["not-jpeg"], "Bild.jpg", { type: "image/jpeg" }), "image"],
+    ["GIF", new File(["not-gif"], "Bild.gif", { type: "image/gif" }), "image"],
+    ["WebP", new File(["not-webp"], "Bild.webp", { type: "image/webp" }), "image"],
+    ["DOCX", new File(["not-zip"], "Text.docx"), "attachment"],
+    ["DOC", new File(["not-ole"], "Text.doc"), "attachment"],
+    ["TXT", new File([new Uint8Array([65, 0, 66])], "Text.txt"), "attachment"],
+  ])("rejects a %s signature mismatch before providers, persistence, and WeKnora", async (
+    category,
+    file,
+    field,
+  ) => {
+    const rpc = vi.fn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    const response = await POST(multipartRequest({
+      query: "Prüfen",
+      ...(field === "image" ? { image: file } : { attachment: file }),
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: expect.stringContaining(category),
+    });
+    expect(buildAttachmentContext).not.toHaveBeenCalled();
+    expect(mintFredEmbedSession).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+    expect(fetchFredUpstreamConfig).not.toHaveBeenCalled();
+    expect(createFredUpstreamSession).not.toHaveBeenCalled();
+    expect(openFredUpstreamStream).not.toHaveBeenCalled();
+    expect(stopFredUpstreamSession).not.toHaveBeenCalled();
+    expect(relayFredWebhookEvent).not.toHaveBeenCalled();
   });
 });

@@ -19,6 +19,7 @@ export type FredNativeStreamEvent =
   | { type: "delta"; content: string }
   | { type: "replace"; answer: string }
   | { type: "research"; step: FredResearchStep }
+  | { type: "status"; label: string }
   | {
     type: "final";
     answer: string;
@@ -89,6 +90,12 @@ export function parseFredNativeStreamLine(line: string): FredNativeStreamEvent |
     const step = parseStoredFredResearchTrace([value.step])[0];
     if (!step) throw new Error("Ungültiges Fred-Streaming-Ereignis.");
     return { type: "research", step };
+  }
+  if (value.type === "status") {
+    if (typeof value.label !== "string" || !value.label) {
+      throw new Error("Ungültiges Fred-Streaming-Ereignis.");
+    }
+    return { type: "status", label: value.label };
   }
   if (value.type === "final") {
     const conversation = parseConversation(value.conversation);

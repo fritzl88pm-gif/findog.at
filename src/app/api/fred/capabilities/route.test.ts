@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
@@ -39,9 +39,15 @@ describe("GET /api/fred/capabilities", () => {
       allowWebSearch: true,
       allowFileUpload: true,
     });
+    vi.stubEnv("MINERU_API_TOKEN", "test-mineru-token");
+    vi.stubEnv("OPENROUTER_API_KEY", "test-openrouter-key");
   });
 
-  it("returns only authenticated channel capabilities", async () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("returns webSearch from WeKnora and fileUpload from env vars", async () => {
     const request = new Request("https://findog.at/api/fred/capabilities", {
       headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
     });
@@ -50,6 +56,54 @@ describe("GET /api/fred/capabilities", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ webSearch: true, fileUpload: true });
     expect(authenticateSupabaseRequest).toHaveBeenCalledWith(request, expect.anything());
+  });
+
+  it("returns fileUpload false when MINERU_API_TOKEN is missing", async () => {
+    vi.stubEnv("MINERU_API_TOKEN", "");
+    const request = new Request("https://findog.at/api/fred/capabilities", {
+      headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
+    });
+    const response = await GET(request);
+    const data = await response.json() as Record<string, unknown>;
+    expect(data.fileUpload).toBe(false);
+    expect(data.webSearch).toBe(true);
+  });
+
+  it("returns fileUpload false when OPENROUTER_API_KEY is missing", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+    const request = new Request("https://findog.at/api/fred/capabilities", {
+      headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
+    });
+    const response = await GET(request);
+    const data = await response.json() as Record<string, unknown>;
+    expect(data.fileUpload).toBe(false);
+    expect(data.webSearch).toBe(true);
+  });
+
+  it("returns fileUpload false when both env vars are missing", async () => {
+    vi.stubEnv("MINERU_API_TOKEN", "");
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+    const request = new Request("https://findog.at/api/fred/capabilities", {
+      headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
+    });
+    const response = await GET(request);
+    const data = await response.json() as Record<string, unknown>;
+    expect(data.fileUpload).toBe(false);
+    expect(data.webSearch).toBe(true);
+  });
+
+  it("returns webSearch false from WeKnora config without breaking fileUpload", async () => {
+    vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
+      agentId: "agent-1",
+      knowledgeBaseIds: [],
+      allowWebSearch: false,
+      allowFileUpload: false,
+    });
+    const request = new Request("https://findog.at/api/fred/capabilities", {
+      headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
+    });
+    const response = await GET(request);
+    await expect(response.json()).resolves.toEqual({ webSearch: false, fileUpload: true });
   });
 
   it("rejects cross-site capability requests before contacting WeKnora", async () => {

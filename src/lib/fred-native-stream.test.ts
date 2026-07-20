@@ -13,11 +13,15 @@ const conversation = {
 };
 
 describe("Fred native stream", () => {
-  it("round-trips conversation, delta, research and final events", () => {
+  it("round-trips conversation, status, delta, replace, research and final events", () => {
     expect(parseFredNativeStreamLine(encodeFredNativeStreamEvent({
       type: "conversation",
       conversation,
     }))).toEqual({ type: "conversation", conversation });
+    expect(parseFredNativeStreamLine(encodeFredNativeStreamEvent({
+      type: "status",
+      label: "Anhänge werden analysiert …",
+    }))).toEqual({ type: "status", label: "Anhänge werden analysiert …" });
     expect(parseFredNativeStreamLine(encodeFredNativeStreamEvent({
       type: "delta",
       content: "Hallo",
@@ -61,6 +65,9 @@ describe("Fred native stream", () => {
 
   it("rejects malformed events", () => {
     expect(() => parseFredNativeStreamLine('{"type":"delta"}')).toThrow(
+      "Ungültiges Fred-Streaming-Ereignis.",
+    );
+    expect(() => parseFredNativeStreamLine('{"type":"status"}')).toThrow(
       "Ungültiges Fred-Streaming-Ereignis.",
     );
     expect(() => parseFredNativeStreamLine('{"type":"other"}')).toThrow(

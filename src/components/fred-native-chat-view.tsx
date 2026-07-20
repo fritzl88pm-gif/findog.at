@@ -353,6 +353,16 @@ export default function FredNativeChatView({
           setMessages([...baseMessages, updatedAssistant]);
           return;
         }
+        if (streamEvent.type === "status") {
+          const updatedAssistant = {
+            ...assistantMessage,
+            content: streamEvent.label,
+            researchTrace,
+            sourceReferences,
+          };
+          setMessages([...baseMessages, updatedAssistant]);
+          return;
+        }
         if (streamEvent.type === "research") {
           researchTrace = mergeFredResearchStep(researchTrace, streamEvent.step);
           const updatedAssistant = {

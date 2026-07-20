@@ -3,6 +3,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
+import {
+  buildAttachmentContext,
+  type AttachmentInput,
+} from "@/lib/attachments/context";
+import { processMineruBatch } from "@/lib/attachments/mineru-cloud";
+import { describeImage } from "@/lib/attachments/gemini-image-context";
+import {
+  createDeadline,
+  runWithTimeout,
+} from "@/lib/deadline";
 import { UserVisibleError } from "@/lib/errors";
 import {
   extractStreamStableBfgGzCandidates,
@@ -31,7 +41,6 @@ import {
   openFredUpstreamStream,
   relayFredWebhookEvent,
   stopFredUpstreamSession,
-  type FredUpstreamAttachment,
   type FredUpstreamSession,
 } from "@/lib/weknora/fred-native";
 import {
@@ -59,7 +68,10 @@ const MAX_MULTIPART_REQUEST_BYTES = MAX_REQUEST_BYTES
   + 1_024 * 1_024; // Multipart boundaries and per-part headers.
 const MAX_REQUESTS_PER_WINDOW = 30;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1_000;
-const STREAM_TIMEOUT_MS = 5 * 60 * 1_000;
+const TOTAL_TIMEOUT_MS = 600_000;
+const PREPROCESSING_TIMEOUT_MS = 240_000;
+const FRED_RESERVE_MS = 300_000;
+const ATTACHMENT_HEARTBEAT_INTERVAL_MS = 15_000;
 const MAX_LIVE_BFG_CITATIONS = 20;
 const MAX_CONCURRENT_LIVE_BFG_VERIFICATIONS = 4;
 
@@ -68,7 +80,7 @@ type ParsedFredChatRequest = {
   query: string;
   conversationId: string;
   webSearchEnabled: boolean;
-  attachments: FredUpstreamAttachment[];
+  attachments: FindogAttachment[];
 };
 type FredConversationRow = {
   id: string;
@@ -77,6 +89,15 @@ type FredConversationRow = {
   updated_at: string;
   weknora_channel_id: string;
   weknora_session_id: string;
+};
+
+type FindogAttachment = {
+  kind: "image" | "file";
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+  bytes: Uint8Array;
 };
 
 const rateLimit = new Map<string, RateLimitEntry>();
@@ -92,6 +113,23 @@ const FILE_MIME_BY_EXTENSION: Record<string, string> = {
   ".xls": "application/vnd.ms-excel",
   ".ppt": "application/vnd.ms-powerpoint",
   ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+};
+
+const MIME_TO_ATTACHMENT_KIND: Record<string, AttachmentInput["kind"]> = {
+  "application/pdf": "pdf",
+  "application/msword": "doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/vnd.ms-excel": "xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  "application/vnd.ms-powerpoint": "ppt",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+  "text/plain": "txt",
+  "text/markdown": "md",
+  "text/csv": "csv",
+  "image/jpeg": "jpeg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
 };
 
 function json(payload: unknown, status = 200): NextResponse {
@@ -160,10 +198,69 @@ function uploadedFile(value: FormDataEntryValue): value is File {
   return typeof File !== "undefined" && value instanceof File;
 }
 
-async function upstreamAttachment(
-  file: File,
-  kind: FredUpstreamAttachment["kind"],
-): Promise<FredUpstreamAttachment> {
+function startsWithBytes(bytes: Uint8Array, signature: readonly number[], offset = 0): boolean {
+  return signature.every((value, index) => bytes[offset + index] === value);
+}
+
+function attachmentTypeCategory(mimeType: string): string {
+  const categories: Record<string, string> = {
+    "application/pdf": "PDF",
+    "application/msword": "DOC",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX",
+    "application/vnd.ms-excel": "XLS",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "XLSX",
+    "application/vnd.ms-powerpoint": "PPT",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PPTX",
+    "text/plain": "TXT",
+    "text/markdown": "Markdown",
+    "text/csv": "CSV",
+    "image/jpeg": "JPEG",
+    "image/png": "PNG",
+    "image/gif": "GIF",
+    "image/webp": "WebP",
+  };
+  return categories[mimeType] ?? "Datei";
+}
+
+function hasExpectedAttachmentSignature(bytes: Uint8Array, mimeType: string): boolean {
+  if (mimeType === "application/pdf") {
+    return startsWithBytes(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d]);
+  }
+  if (mimeType === "image/png") {
+    return startsWithBytes(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  }
+  if (mimeType === "image/jpeg") {
+    return startsWithBytes(bytes, [0xff, 0xd8, 0xff]);
+  }
+  if (mimeType === "image/gif") {
+    return startsWithBytes(bytes, [0x47, 0x49, 0x46, 0x38, 0x37, 0x61])
+      || startsWithBytes(bytes, [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
+  }
+  if (mimeType === "image/webp") {
+    return startsWithBytes(bytes, [0x52, 0x49, 0x46, 0x46])
+      && startsWithBytes(bytes, [0x57, 0x45, 0x42, 0x50], 8);
+  }
+  if (
+    mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    || mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    || mimeType === "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+  ) {
+    return startsWithBytes(bytes, [0x50, 0x4b, 0x03, 0x04]);
+  }
+  if (
+    mimeType === "application/msword"
+    || mimeType === "application/vnd.ms-excel"
+    || mimeType === "application/vnd.ms-powerpoint"
+  ) {
+    return startsWithBytes(bytes, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+  }
+  if (mimeType === "text/plain" || mimeType === "text/markdown" || mimeType === "text/csv") {
+    return !bytes.includes(0);
+  }
+  return false;
+}
+
+async function validatedAttachment(file: File, kind: "image" | "file"): Promise<FindogAttachment> {
   const name = sanitizedFilename(file.name);
   let mimeType: string;
   if (kind === "image") {
@@ -191,13 +288,45 @@ async function upstreamAttachment(
     throw new UserVisibleError("Leere Dateien können nicht hochgeladen werden.", 400);
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
+  if (!hasExpectedAttachmentSignature(bytes, mimeType)) {
+    const category = attachmentTypeCategory(mimeType);
+    throw new UserVisibleError(`${name}: Inhalt entspricht nicht dem erwarteten ${category}-Dateityp.`, 400);
+  }
   return {
     kind,
     name,
     mimeType,
     sizeBytes: bytes.byteLength,
     sha256: createHash("sha256").update(bytes).digest("hex"),
-    dataUri: `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
+    bytes,
+  };
+}
+
+function attachmentToInput(a: FindogAttachment): AttachmentInput {
+  const mappedKind = MIME_TO_ATTACHMENT_KIND[a.mimeType];
+  if (!mappedKind) {
+    throw new UserVisibleError(
+      `${sanitizedFilename(a.name)}: nicht unterstützter Anhangstyp.`,
+      400,
+    );
+  }
+  return {
+    kind: mappedKind,
+    name: a.name,
+    mimeType: a.mimeType,
+    sizeBytes: a.sizeBytes,
+    sha256: a.sha256,
+    bytes: a.bytes,
+  };
+}
+
+function attachmentMetadata(a: FindogAttachment) {
+  return {
+    kind: a.kind,
+    name: a.name,
+    mime_type: a.mimeType,
+    size_bytes: a.sizeBytes,
+    sha256: a.sha256,
   };
 }
 
@@ -295,8 +424,8 @@ async function readMultipartRequestBody(request: Request): Promise<ParsedFredCha
     throw new UserVisibleError("Bitte maximal fünf Dateien pro Anfrage hochladen.", 400);
   }
   const attachments = await Promise.all([
-    ...images.map((entry) => upstreamAttachment(entry as File, "image")),
-    ...files.map((entry) => upstreamAttachment(entry as File, "file")),
+    ...images.map((entry) => validatedAttachment(entry as File, "image")),
+    ...files.map((entry) => validatedAttachment(entry as File, "file")),
   ]);
   return { ...validatedRequestFields(value), attachments };
 }
@@ -321,7 +450,7 @@ async function recordEvent(options: {
   eventType: "message_sent" | "message_received";
   content: string;
   occurredAt: string;
-  attachments?: FredUpstreamAttachment[];
+  attachments?: FindogAttachment[];
   webSearchEnabled?: boolean;
   displayContent?: string;
   researchTrace?: FredResearchStep[];
@@ -335,13 +464,7 @@ async function recordEvent(options: {
     event_type: options.eventType,
     content: options.content,
     occurred_at: options.occurredAt,
-    attachments: (options.attachments ?? []).map((attachment) => ({
-      kind: attachment.kind,
-      name: attachment.name,
-      mime_type: attachment.mimeType,
-      size_bytes: attachment.sizeBytes,
-      sha256: attachment.sha256,
-    })),
+    attachments: (options.attachments ?? []).map(attachmentMetadata),
     web_search_enabled: options.webSearchEnabled ?? false,
     ...(options.displayContent !== undefined ? {
       display_content: options.displayContent,
@@ -423,9 +546,9 @@ function sseData(frame: string): string | null {
 }
 
 export async function POST(request: Request) {
-  let lifetime: AbortController | undefined;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let lifetimeAbort: AbortController | undefined;
   let onRequestAbort: (() => void) | undefined;
+  let cleanupResources: (() => void) | undefined;
   try {
     const supabase = getSupabaseServerClient();
     if (!supabase) throw new UserVisibleError("Fred ist derzeit nicht verfügbar.", 503);
@@ -433,207 +556,276 @@ export async function POST(request: Request) {
     requireSameSiteRequest(request);
     enforceRateLimit(user.id);
     const body = await readRequestBody(request);
-    const config = readFredEmbedServerConfig();
 
-    lifetime = new AbortController();
-    onRequestAbort = () => lifetime?.abort(request.signal.reason);
+    lifetimeAbort = new AbortController();
+    const deadline = createDeadline(TOTAL_TIMEOUT_MS, {
+      parentSignal: lifetimeAbort.signal,
+      timeoutMessage: "Die Verarbeitung der Anfrage hat zu lange gedauert.",
+    });
+    let attachmentHeartbeat: ReturnType<typeof setInterval> | undefined;
+    let activeUpstreamReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let requestUpstreamStop: (() => Promise<void>) | undefined;
+    let upstreamCancelRequested = false;
+    let cleanedUp = false;
+    const clearAttachmentHeartbeat = () => {
+      if (attachmentHeartbeat !== undefined) {
+        clearInterval(attachmentHeartbeat);
+        attachmentHeartbeat = undefined;
+      }
+    };
+    const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      clearAttachmentHeartbeat();
+      deadline.dispose();
+      if (onRequestAbort) request.signal.removeEventListener("abort", onRequestAbort);
+    };
+    cleanupResources = cleanup;
+    const stopAndCancelUpstream = async (reason?: unknown) => {
+      const stopPromise = requestUpstreamStop?.().catch(() => undefined) ?? Promise.resolve();
+      let cancelPromise = Promise.resolve();
+      if (activeUpstreamReader && !upstreamCancelRequested) {
+        upstreamCancelRequested = true;
+        cancelPromise = activeUpstreamReader.cancel(reason).catch(() => undefined);
+      }
+      await Promise.all([stopPromise, cancelPromise]);
+    };
+    onRequestAbort = () => {
+      lifetimeAbort?.abort(request.signal.reason);
+      const upstreamCleanup = stopAndCancelUpstream(request.signal.reason);
+      cleanup();
+      void upstreamCleanup;
+    };
     request.signal.addEventListener("abort", onRequestAbort, { once: true });
-    timeout = setTimeout(
-      () => lifetime?.abort(new UserVisibleError("Fred hat zu lange gebraucht.", 504)),
-      STREAM_TIMEOUT_MS,
-    );
 
-    const embedSession = await mintFredEmbedSession({ signal: lifetime.signal });
-    const [upstreamConfig, upstreamSession] = await Promise.all([
-      fetchFredUpstreamConfig({ session: embedSession, config, signal: lifetime.signal }),
-      resolveUpstreamSession({
-        supabase,
-        userId: user.id,
-        conversationId: body.conversationId,
-        channelId: config.channelId,
-        publishToken: config.publishToken,
-        session: embedSession,
-        config,
-        signal: lifetime.signal,
-      }),
-    ]);
-    if (body.webSearchEnabled && !upstreamConfig.allowWebSearch) {
-      throw new UserVisibleError("Die Websuche ist für diesen Fred-Kanal nicht freigeschaltet.", 400);
-    }
-    if (body.attachments.length > 0 && !upstreamConfig.allowFileUpload) {
-      throw new UserVisibleError("Dateianhänge sind für diesen Fred-Kanal nicht freigeschaltet.", 400);
-    }
-    const userOccurredAt = new Date().toISOString();
-    const conversation = await recordEvent({
-      supabase,
-      userId: user.id,
-      channelId: config.channelId,
-      sessionId: upstreamSession.id,
-      eventId: randomUUID(),
-      eventType: "message_sent",
-      content: body.query,
-      occurredAt: userOccurredAt,
-      attachments: body.attachments,
-      webSearchEnabled: body.webSearchEnabled,
-    });
-    void relayFredWebhookEvent({
-      session: embedSession,
-      config,
-      upstreamSession,
-      type: "message_sent",
-      content: body.query,
-      signal: lifetime.signal,
-    });
-    const upstream = await openFredUpstreamStream({
-      session: embedSession,
-      config,
-      upstreamConfig,
-      upstreamSession,
-      visitorId: fredVisitorId(config.publishToken, user.id),
-      query: body.query,
-      webSearchEnabled: body.webSearchEnabled,
-      attachments: body.attachments,
-      signal: lifetime.signal,
-    });
-    const upstreamReader = upstream.body!.getReader();
     const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
-    const activeLifetime = lifetime;
-    const activeTimeout = timeout;
-    const activeAbortListener = onRequestAbort;
-    let assistantMessageId = "";
-    let stopRequested = false;
-    const requestUpstreamStop = async () => {
-      if (!assistantMessageId || stopRequested) return;
-      stopRequested = true;
-      await stopFredUpstreamSession({
-        session: embedSession,
-        config,
-        upstreamSession,
-        messageId: assistantMessageId,
-        signal: AbortSignal.timeout(5_000),
-      });
+    const send = (controller: ReadableStreamDefaultController<Uint8Array>, event: Parameters<typeof encodeFredNativeStreamEvent>[0]) => {
+      if (!lifetimeAbort!.signal.aborted) {
+        controller.enqueue(encoder.encode(encodeFredNativeStreamEvent(event)));
+      }
     };
 
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
-        let buffer = "";
-        let rawAnswer = "";
-        let visibleAnswer = "";
-        let researchTrace: FredResearchStep[] = [];
-        let sourceReferences: FredSourceReference[] = [];
-        let failed = false;
-        let acceptingCitationUpdates = true;
-        let activeCitationVerifications = 0;
-        const citationTasks = new Map<string, Promise<void>>();
-        const verifiedCitations = new Map<string, VerifiedBfgCitation>();
-        const citationQueue: Array<{
-          gz: string;
-          resolve: (result: BfgCitationResolution) => void;
-        }> = [];
-        const send = (event: Parameters<typeof encodeFredNativeStreamEvent>[0]) => {
-          if (!activeLifetime.signal.aborted) {
-            controller.enqueue(encoder.encode(encodeFredNativeStreamEvent(event)));
-          }
-        };
-        const pumpCitationQueue = () => {
-          while (
-            activeCitationVerifications < MAX_CONCURRENT_LIVE_BFG_VERIFICATIONS
-            && citationQueue.length > 0
-          ) {
-            const queued = citationQueue.shift();
-            if (!queued) break;
-            activeCitationVerifications += 1;
-            void resolveBfgCitation(queued.gz, fetch, { signal: activeLifetime.signal })
-              .then(queued.resolve)
-              .finally(() => {
-                activeCitationVerifications -= 1;
-                pumpCitationQueue();
-              });
-          }
-        };
-        const queuedCitationResolution = (gz: string) => new Promise<BfgCitationResolution>((resolve) => {
-          citationQueue.push({ gz, resolve });
-          pumpCitationQueue();
-        });
-        const beginCitationVerification = (text: string, streamComplete = false) => {
-          for (const gz of extractStreamStableBfgGzCandidates(text, streamComplete)) {
-            if (
-              citationTasks.has(gz)
-              || citationTasks.size >= MAX_LIVE_BFG_CITATIONS
-            ) continue;
-            const task = queuedCitationResolution(gz).then((resolution) => {
-              if (!acceptingCitationUpdates || resolution.status !== "verified") return;
-              verifiedCitations.set(gz, resolution);
-              sourceReferences = mergeFredSources(sourceReferences, [{
-                kind: "web",
-                url: resolution.fullTextUrl,
-                title: `BFG ${resolution.gz}: ${resolution.title}`.slice(0, 512),
-              }]);
-              const verificationStep: FredResearchStep = {
-                id: `findok:${resolution.gz}`,
-                kind: "sources",
-                status: "completed",
-                label: `BFG-Fundstelle ${resolution.gz} verifiziert`,
-              };
-              researchTrace = mergeFredResearchStep(researchTrace, verificationStep);
-              send({ type: "research", step: verificationStep });
-              const linkedAnswer = linkVerifiedBfgCitations(
-                visibleAnswer,
-                [...verifiedCitations.values()],
-                { target: "fullText" },
-              );
-              if (linkedAnswer !== visibleAnswer) send({ type: "replace", answer: linkedAnswer });
-            });
-            citationTasks.set(gz, task);
-          }
-        };
-        const processFrame = (frame: string) => {
-          const data = sseData(frame);
-          if (!data || data === "[DONE]") return;
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(data);
-          } catch {
-            throw new UserVisibleError("Fred hat ein ungültiges Streaming-Ereignis geliefert.", 502);
-          }
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            const upstreamEvent = parsed as Record<string, unknown>;
-            if (
-              upstreamEvent.response_type === "agent_query"
-              && typeof upstreamEvent.assistant_message_id === "string"
-            ) {
-              assistantMessageId = upstreamEvent.assistant_message_id;
-            }
-          }
-          const research = parseWeKnoraResearchEvent(parsed);
-          if (research.fatalError) {
-            throw new UserVisibleError("Fred konnte die Anfrage nicht abschließen.", 502);
-          }
-          if (research.unsupported) {
-            throw new UserVisibleError("Diese Fred-Aktion benötigt eine zusätzliche Bestätigung, die hier noch nicht unterstützt wird.", 409);
-          }
-          sourceReferences = mergeFredSources(sourceReferences, research.sources);
-          if (research.step) {
-            researchTrace = mergeFredResearchStep(researchTrace, research.step);
-            send({ type: "research", step: research.step });
-          }
-          const event = upstreamDelta(parsed);
-          if (event.content) {
-            rawAnswer += event.content;
-            const transformed = transformWeKnoraAnswer(rawAnswer, { streaming: true });
-            sourceReferences = mergeFredSources(sourceReferences, transformed.sources);
-            if (transformed.text.startsWith(visibleAnswer)) {
-              const delta = transformed.text.slice(visibleAnswer.length);
-              visibleAnswer = transformed.text;
-              if (delta) send({ type: "delta", content: delta });
-            }
-            beginCitationVerification(transformed.text);
-          }
-        };
+        let upstreamQuery = body.query;
 
+        if (body.attachments.length > 0) {
+          send(controller, { type: "status", label: "Anhänge werden analysiert …" });
+          attachmentHeartbeat = setInterval(() => {
+            send(controller, { type: "status", label: "Anhänge werden analysiert …" });
+          }, ATTACHMENT_HEARTBEAT_INTERVAL_MS);
+          try {
+            const attachmentInputs = body.attachments.map(attachmentToInput);
+            const combined = await runWithTimeout(
+              async (signal) => buildAttachmentContext(body.query, attachmentInputs, {
+                mineruProvider: (files) => processMineruBatch(files, { signal }),
+                geminiProvider: (uri) => describeImage(uri, { signal }),
+              }),
+              {
+                deadline,
+                timeoutMs: PREPROCESSING_TIMEOUT_MS,
+                reserveMs: FRED_RESERVE_MS,
+                timeoutMessage: "Die Anhänge konnten nicht analysiert werden.",
+              },
+            );
+            upstreamQuery = combined;
+          } catch (error) {
+            if (!lifetimeAbort!.signal.aborted) {
+              send(controller, {
+                type: "error",
+                error: error instanceof UserVisibleError
+                  ? error.message
+                  : "Die Anhänge konnten nicht analysiert werden.",
+              });
+            }
+            try { controller.close(); } catch { /* already closed */ }
+            cleanup();
+            return;
+          } finally {
+            clearAttachmentHeartbeat();
+          }
+          send(controller, { type: "status", label: "Fred bearbeitet die Frage …" });
+        }
+
+        let acceptingCitationUpdates = true;
         try {
-          send({ type: "conversation", conversation });
+          const config = readFredEmbedServerConfig();
+          const embedSession = await mintFredEmbedSession({ signal: deadline.signal });
+          const [upstreamConfig, upstreamSession] = await Promise.all([
+            fetchFredUpstreamConfig({ session: embedSession, config, signal: deadline.signal }),
+            resolveUpstreamSession({
+              supabase,
+              userId: user.id,
+              conversationId: body.conversationId,
+              channelId: config.channelId,
+              publishToken: config.publishToken,
+              session: embedSession,
+              config,
+              signal: deadline.signal,
+            }),
+          ]);
+          if (body.webSearchEnabled && !upstreamConfig.allowWebSearch) {
+            throw new UserVisibleError("Die Websuche ist für diesen Fred-Kanal nicht freigeschaltet.", 400);
+          }
+
+          const userOccurredAt = new Date().toISOString();
+          const conversation = await recordEvent({
+            supabase,
+            userId: user.id,
+            channelId: config.channelId,
+            sessionId: upstreamSession.id,
+            eventId: randomUUID(),
+            eventType: "message_sent",
+            content: body.query,
+            occurredAt: userOccurredAt,
+            attachments: body.attachments,
+            webSearchEnabled: body.webSearchEnabled,
+          });
+          void relayFredWebhookEvent({
+            session: embedSession,
+            config,
+            upstreamSession,
+            type: "message_sent",
+            content: body.query,
+            signal: deadline.signal,
+          });
+
+          const upstream = await openFredUpstreamStream({
+            session: embedSession,
+            config,
+            upstreamConfig,
+            upstreamSession,
+            visitorId: fredVisitorId(config.publishToken, user.id),
+            query: upstreamQuery,
+            webSearchEnabled: body.webSearchEnabled,
+            signal: deadline.signal,
+          });
+          const upstreamReader = upstream.body!.getReader();
+          activeUpstreamReader = upstreamReader;
+          const decoder = new TextDecoder();
+          let assistantMessageId = "";
+          let stopRequested = false;
+          requestUpstreamStop = async () => {
+            if (!assistantMessageId || stopRequested) return;
+            stopRequested = true;
+            await stopFredUpstreamSession({
+              session: embedSession,
+              config,
+              upstreamSession,
+              messageId: assistantMessageId,
+              signal: AbortSignal.timeout(5_000),
+            });
+          };
+
+          let buffer = "";
+          let rawAnswer = "";
+          let visibleAnswer = "";
+          let researchTrace: FredResearchStep[] = [];
+          let sourceReferences: FredSourceReference[] = [];
+          let activeCitationVerifications = 0;
+          const citationTasks = new Map<string, Promise<void>>();
+          const verifiedCitations = new Map<string, VerifiedBfgCitation>();
+          const citationQueue: Array<{
+            gz: string;
+            resolve: (result: BfgCitationResolution) => void;
+          }> = [];
+          const pumpCitationQueue = () => {
+            while (
+              activeCitationVerifications < MAX_CONCURRENT_LIVE_BFG_VERIFICATIONS
+              && citationQueue.length > 0
+            ) {
+              const queued = citationQueue.shift();
+              if (!queued) break;
+              activeCitationVerifications += 1;
+              void resolveBfgCitation(queued.gz, fetch, { signal: deadline.signal })
+                .then(queued.resolve)
+                .finally(() => {
+                  activeCitationVerifications -= 1;
+                  pumpCitationQueue();
+                });
+            }
+          };
+          const queuedCitationResolution = (gz: string) => new Promise<BfgCitationResolution>((resolve) => {
+            citationQueue.push({ gz, resolve });
+            pumpCitationQueue();
+          });
+          const beginCitationVerification = (text: string, streamComplete = false) => {
+            for (const gz of extractStreamStableBfgGzCandidates(text, streamComplete)) {
+              if (
+                citationTasks.has(gz)
+                || citationTasks.size >= MAX_LIVE_BFG_CITATIONS
+              ) continue;
+              const task = queuedCitationResolution(gz).then((resolution) => {
+                if (!acceptingCitationUpdates || resolution.status !== "verified") return;
+                verifiedCitations.set(gz, resolution);
+                sourceReferences = mergeFredSources(sourceReferences, [{
+                  kind: "web",
+                  url: resolution.fullTextUrl,
+                  title: `BFG ${resolution.gz}: ${resolution.title}`.slice(0, 512),
+                }]);
+                const verificationStep: FredResearchStep = {
+                  id: `findok:${resolution.gz}`,
+                  kind: "sources",
+                  status: "completed",
+                  label: `BFG-Fundstelle ${resolution.gz} verifiziert`,
+                };
+                researchTrace = mergeFredResearchStep(researchTrace, verificationStep);
+                send(controller, { type: "research", step: verificationStep });
+                const linkedAnswer = linkVerifiedBfgCitations(
+                  visibleAnswer,
+                  [...verifiedCitations.values()],
+                  { target: "fullText" },
+                );
+                if (linkedAnswer !== visibleAnswer) send(controller, { type: "replace", answer: linkedAnswer });
+              });
+              citationTasks.set(gz, task);
+            }
+          };
+          const processFrame = (frame: string) => {
+            const data = sseData(frame);
+            if (!data || data === "[DONE]") return;
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(data);
+            } catch {
+              throw new UserVisibleError("Fred hat ein ungültiges Streaming-Ereignis geliefert.", 502);
+            }
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              const upstreamEvent = parsed as Record<string, unknown>;
+              if (
+                upstreamEvent.response_type === "agent_query"
+                && typeof upstreamEvent.assistant_message_id === "string"
+              ) {
+                assistantMessageId = upstreamEvent.assistant_message_id;
+              }
+            }
+            const research = parseWeKnoraResearchEvent(parsed);
+            if (research.fatalError) {
+              throw new UserVisibleError("Fred konnte die Anfrage nicht abschließen.", 502);
+            }
+            if (research.unsupported) {
+              throw new UserVisibleError("Diese Fred-Aktion benötigt eine zusätzliche Bestätigung, die hier noch nicht unterstützt wird.", 409);
+            }
+            sourceReferences = mergeFredSources(sourceReferences, research.sources);
+            if (research.step) {
+              researchTrace = mergeFredResearchStep(researchTrace, research.step);
+              send(controller, { type: "research", step: research.step });
+            }
+            const event = upstreamDelta(parsed);
+            if (event.content) {
+              rawAnswer += event.content;
+              const transformed = transformWeKnoraAnswer(rawAnswer, { streaming: true });
+              sourceReferences = mergeFredSources(sourceReferences, transformed.sources);
+              if (transformed.text.startsWith(visibleAnswer)) {
+                const delta = transformed.text.slice(visibleAnswer.length);
+                visibleAnswer = transformed.text;
+                if (delta) send(controller, { type: "delta", content: delta });
+              }
+              beginCitationVerification(transformed.text);
+            }
+          };
+
+          send(controller, { type: "conversation", conversation });
           while (true) {
             const { value, done } = await upstreamReader.read();
             if (done) break;
@@ -676,44 +868,40 @@ export async function POST(request: Request) {
             upstreamSession,
             type: "message_received",
             content: rawAnswer,
-            signal: activeLifetime.signal,
+            signal: deadline.signal,
           });
-          send({
+          send(controller, {
             type: "final",
             answer: finalAnswer,
             conversation: finalConversation,
             researchTrace,
             sourceReferences,
           });
+          if (!lifetimeAbort!.signal.aborted) {
+            try { controller.close(); } catch { /* already closed */ }
+          }
         } catch (error) {
-          failed = true;
           acceptingCitationUpdates = false;
-          if (!activeLifetime.signal.aborted) {
-            send({
+          await stopAndCancelUpstream(error);
+          if (!deadline.signal.aborted && !lifetimeAbort!.signal.aborted) {
+            send(controller, {
               type: "error",
               error: error instanceof UserVisibleError
                 ? error.message
                 : "Fred konnte die Anfrage nicht abschließen.",
             });
           }
+          try { controller.close(); } catch { /* already closed */ }
         } finally {
           acceptingCitationUpdates = false;
-          if (activeLifetime.signal.aborted) void requestUpstreamStop();
-          clearTimeout(activeTimeout);
-          request.signal.removeEventListener("abort", activeAbortListener);
-          if (!failed && !activeLifetime.signal.aborted) controller.close();
-          else {
-            try { controller.close(); } catch { /* The browser already cancelled the stream. */ }
-          }
+          cleanup();
         }
       },
       async cancel(reason) {
-        const stopPromise = requestUpstreamStop();
-        activeLifetime.abort(reason);
-        await Promise.all([
-          stopPromise,
-          upstreamReader.cancel(reason).catch(() => undefined),
-        ]);
+        lifetimeAbort?.abort(reason);
+        const upstreamCleanup = stopAndCancelUpstream(reason);
+        cleanup();
+        await upstreamCleanup;
       },
     });
 
@@ -726,9 +914,8 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    if (timeout) clearTimeout(timeout);
-    if (onRequestAbort) request.signal.removeEventListener("abort", onRequestAbort);
-    lifetime?.abort(error);
+    cleanupResources?.();
+    lifetimeAbort?.abort(error);
     if (error instanceof UserVisibleError) return json({ error: error.message }, error.status);
     if (error instanceof FredEmbedConfigurationError) {
       return json({ error: "Fred ist noch nicht vollständig eingerichtet." }, 503);

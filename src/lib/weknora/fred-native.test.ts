@@ -47,7 +47,7 @@ describe("Fred native WeKnora client", () => {
     })).resolves.toEqual({ id, signature });
   });
 
-  it("loads the public agent binding and opens the correct embed agent stream", async () => {
+  it("loads the public agent binding and opens the correct embed agent stream without attachment fields", async () => {
     const configFetch = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       success: true,
       data: {
@@ -74,16 +74,8 @@ describe("Fred native WeKnora client", () => {
       upstreamConfig,
       upstreamSession: { id: "session-123", signature },
       visitorId: "visitor-hash",
-      query: "Meine Frage",
+      query: "Meine Frage\n\n--- BEGINN DER ANHÄNGE ---\nExtracted content\n--- ENDE DER ANHÄNGE ---",
       webSearchEnabled: true,
-      attachments: [{
-        kind: "file",
-        name: "beleg.pdf",
-        mimeType: "application/pdf",
-        sizeBytes: 3,
-        sha256: "a".repeat(64),
-        dataUri: "data:application/pdf;base64,cGRm",
-      }],
       signal: new AbortController().signal,
       fetchImpl: streamFetch,
     });
@@ -94,18 +86,38 @@ describe("Fred native WeKnora client", () => {
     expect(headers.get("authorization")).toBe(`Embed ${session.token}`);
     expect(headers.get("x-embed-session")).toBe(signature);
     expect(headers.get("x-embed-visitor")).toBe("visitor-hash");
-    expect(JSON.parse(String(init?.body))).toMatchObject({
-      query: "Meine Frage",
+    const body = JSON.parse(String(init?.body));
+    expect(body).toMatchObject({
+      query: "Meine Frage\n\n--- BEGINN DER ANHÄNGE ---\nExtracted content\n--- ENDE DER ANHÄNGE ---",
       agent_enabled: true,
       agent_id: "agent-123",
       knowledge_base_ids: ["kb-1"],
       web_search_enabled: true,
-      attachment_uploads: [{
-        data: "data:application/pdf;base64,cGRm",
-        file_name: "beleg.pdf",
-        file_size: 3,
-      }],
       channel: "embed",
     });
+    expect(body).not.toHaveProperty("images");
+    expect(body).not.toHaveProperty("attachment_uploads");
+  });
+
+  it("keeps upstream config parsing compatible even when allowFileUpload is false for WeKnora", async () => {
+    const configFetch = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        agent_id: "agent-123",
+        knowledge_base_ids: [],
+        allow_web_search: false,
+        agent_web_search_enabled: false,
+        allow_file_upload: false,
+        agent_image_upload_enabled: false,
+      },
+    }), { status: 200 }));
+    const upstreamConfig = await fetchFredUpstreamConfig({
+      session,
+      config,
+      signal: new AbortController().signal,
+      fetchImpl: configFetch,
+    });
+    expect(upstreamConfig.allowWebSearch).toBe(false);
+    expect(upstreamConfig.allowFileUpload).toBe(false);
   });
 });
