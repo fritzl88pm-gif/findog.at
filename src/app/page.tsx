@@ -6,6 +6,16 @@ import Image from "next/image";
 import Link from "next/link";
 
 import { applyConversationDeletion } from "@/lib/chat/deletion";
+import {
+  clampSidebarHistoryPercent,
+  DEFAULT_SIDEBAR_HISTORY_PERCENT,
+  MAX_SIDEBAR_HISTORY_PERCENT,
+  MIN_SIDEBAR_HISTORY_PERCENT,
+  parseStoredApplicationNavigationExpanded,
+  parseStoredSidebarHistoryPercent,
+  SIDEBAR_APPLICATION_NAVIGATION_STORAGE_KEY,
+  SIDEBAR_HISTORY_PERCENT_STORAGE_KEY,
+} from "@/lib/chat/sidebar-split";
 import { ellipsizeFilename } from "@/lib/attachment-names";
 import RichAnswer from "@/components/rich-answer";
 import {
@@ -1128,6 +1138,11 @@ export default function Home() {
   const [error, setError] = useState("");
   const [isLoaded, setIsLoaded] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(true);
+  const [sidebarHistoryPercent, setSidebarHistoryPercent] = useState(
+    DEFAULT_SIDEBAR_HISTORY_PERCENT,
+  );
+  const [isApplicationNavigationExpanded, setIsApplicationNavigationExpanded] = useState(true);
+  const [isSidebarSplitResizing, setIsSidebarSplitResizing] = useState(false);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminError, setAdminError] = useState("");
@@ -1186,6 +1201,8 @@ export default function Home() {
   const settingsDialogRef = useRef<HTMLElement>(null);
   const settingsDialogCloseRef = useRef<HTMLButtonElement>(null);
   const authenticatedUserIdRef = useRef<string | null>(null);
+  const sidebarSplitRegionRef = useRef<HTMLDivElement>(null);
+  const sidebarHistoryPercentRef = useRef(DEFAULT_SIDEBAR_HISTORY_PERCENT);
   const user = session?.user ?? null;
   const signedInEmail = user?.email ?? "";
   const closeSettingsDialog = useCallback(() => {
@@ -1211,6 +1228,123 @@ export default function Home() {
       isActive = false;
     };
   }, []);
+
+  useEffect(() => {
+    let isActive = true;
+
+    queueMicrotask(() => {
+      if (!isActive) {
+        return;
+      }
+
+      try {
+        const storedHistoryPercent = parseStoredSidebarHistoryPercent(
+          window.localStorage.getItem(SIDEBAR_HISTORY_PERCENT_STORAGE_KEY),
+        );
+        sidebarHistoryPercentRef.current = storedHistoryPercent;
+        setSidebarHistoryPercent(storedHistoryPercent);
+        setIsApplicationNavigationExpanded(
+          parseStoredApplicationNavigationExpanded(
+            window.localStorage.getItem(SIDEBAR_APPLICATION_NAVIGATION_STORAGE_KEY),
+          ),
+        );
+      } catch {
+        // Storage can be unavailable in privacy-restricted browser contexts.
+      }
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  const persistSidebarHistoryPercent = useCallback((value: number) => {
+    try {
+      window.localStorage.setItem(SIDEBAR_HISTORY_PERCENT_STORAGE_KEY, String(value));
+    } catch {
+      // Resizing remains usable when storage is unavailable.
+    }
+  }, []);
+
+  const updateSidebarHistoryPercent = useCallback((value: number, persist = false) => {
+    const nextValue = clampSidebarHistoryPercent(value);
+    sidebarHistoryPercentRef.current = nextValue;
+    setSidebarHistoryPercent(nextValue);
+    if (persist) {
+      persistSidebarHistoryPercent(nextValue);
+    }
+  }, [persistSidebarHistoryPercent]);
+
+  const updateSidebarHistoryPercentFromPointer = useCallback((clientY: number) => {
+    const splitRegion = sidebarSplitRegionRef.current;
+    if (!splitRegion) {
+      return;
+    }
+
+    const bounds = splitRegion.getBoundingClientRect();
+    if (bounds.height <= 0) {
+      return;
+    }
+
+    updateSidebarHistoryPercent(((clientY - bounds.top) / bounds.height) * 100);
+  }, [updateSidebarHistoryPercent]);
+
+  const handleSidebarSplitPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!event.isPrimary || event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setIsSidebarSplitResizing(true);
+  };
+
+  const handleSidebarSplitPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
+      return;
+    }
+
+    updateSidebarHistoryPercentFromPointer(event.clientY);
+  };
+
+  const finishSidebarSplitResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setIsSidebarSplitResizing(false);
+    persistSidebarHistoryPercent(sidebarHistoryPercentRef.current);
+  };
+
+  const handleSidebarSplitKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    let nextValue: number | undefined;
+    if (event.key === "ArrowUp") {
+      nextValue = sidebarHistoryPercentRef.current - 5;
+    } else if (event.key === "ArrowDown") {
+      nextValue = sidebarHistoryPercentRef.current + 5;
+    } else if (event.key === "Home") {
+      nextValue = MIN_SIDEBAR_HISTORY_PERCENT;
+    } else if (event.key === "End") {
+      nextValue = MAX_SIDEBAR_HISTORY_PERCENT;
+    }
+
+    if (nextValue !== undefined) {
+      event.preventDefault();
+      updateSidebarHistoryPercent(nextValue, true);
+    }
+  };
+
+  const toggleApplicationNavigation = () => {
+    const nextValue = !isApplicationNavigationExpanded;
+    setIsApplicationNavigationExpanded(nextValue);
+    try {
+      window.localStorage.setItem(
+        SIDEBAR_APPLICATION_NAVIGATION_STORAGE_KEY,
+        String(nextValue),
+      );
+    } catch {
+      // The toggle remains usable when storage is unavailable.
+    }
+  };
 
   useEffect(() => {
     if (!supabase) {
@@ -2558,65 +2692,119 @@ export default function Home() {
               <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
               Neue Unterhaltung
             </button>
-            <div className="conversation-history" aria-label="Gespeicherte Unterhaltungen">
-              <div className="conversation-history-heading">
-                <span>Unterhaltungen</span>
-                {isHistoryLoading || isDeleting ? (
-                  <span className="history-loading">{isDeleting ? "Löscht…" : "Lädt…"}</span>
-                ) : null}
-              </div>
-              <div className="conversation-bulk-actions">
-                <span>{visibleSelectedConversationIds.length} ausgewählt</span>
-                <button
-                  className="bulk-delete-button"
-                  type="button"
-                  onClick={() => void deleteFredConversations(visibleSelectedConversationIds, true)}
-                  disabled={historyControlsDisabled || visibleSelectedConversationIds.length === 0}
-                >
-                  Auswahl löschen
-                </button>
-              </div>
-              <div className="conversation-list">
-                {!isHistoryLoading && visibleConversations.length === 0 ? (
-                  <p className="conversation-empty">Noch keine gespeicherten Unterhaltungen.</p>
-                ) : null}
-                {visibleConversations.map((conversation) => (
-                  <div
-                    className={`conversation-row ${conversation.id === visibleActiveConversationId ? "active" : ""}`}
-                    key={conversation.id}
+            <div
+              ref={sidebarSplitRegionRef}
+              className={`sidebar-split-region${isSidebarSplitResizing ? " is-resizing" : ""}${
+                isApplicationNavigationExpanded ? "" : " applications-collapsed"
+              }`}
+              style={{
+                "--sidebar-history-share": `${sidebarHistoryPercent}%`,
+              } as React.CSSProperties}
+            >
+              <div className="conversation-history" aria-label="Gespeicherte Unterhaltungen">
+                <div className="conversation-history-heading">
+                  <span>Unterhaltungen</span>
+                  {isHistoryLoading || isDeleting ? (
+                    <span className="history-loading">{isDeleting ? "Löscht…" : "Lädt…"}</span>
+                  ) : null}
+                </div>
+                <div className="conversation-bulk-actions">
+                  <span>{visibleSelectedConversationIds.length} ausgewählt</span>
+                  <button
+                    className="bulk-delete-button"
+                    type="button"
+                    onClick={() => void deleteFredConversations(visibleSelectedConversationIds, true)}
+                    disabled={historyControlsDisabled || visibleSelectedConversationIds.length === 0}
                   >
-                    <input
-                      className="conversation-checkbox"
-                      type="checkbox"
-                      checked={visibleSelectedConversationIds.includes(conversation.id)}
-                      onChange={() => toggleFredConversationSelection(conversation.id)}
-                      disabled={historyControlsDisabled}
-                      aria-label={`Unterhaltung „${conversation.title}“ auswählen`}
-                    />
-                    <button
-                      className="conversation-open"
-                      type="button"
-                      onClick={() => void selectFredConversation(conversation)}
-                      disabled={historyControlsDisabled}
-                      aria-current={conversation.id === visibleActiveConversationId ? "page" : undefined}
+                    Auswahl löschen
+                  </button>
+                </div>
+                <div className="conversation-list">
+                  {!isHistoryLoading && visibleConversations.length === 0 ? (
+                    <p className="conversation-empty">Noch keine gespeicherten Unterhaltungen.</p>
+                  ) : null}
+                  {visibleConversations.map((conversation) => (
+                    <div
+                      className={`conversation-row ${conversation.id === visibleActiveConversationId ? "active" : ""}`}
+                      key={conversation.id}
                     >
-                      <span title={conversation.title}>{conversation.title}</span>
-                      <time dateTime={conversation.updatedAt}>{formatHistoryDate(conversation.updatedAt)}</time>
-                    </button>
-                    <button
-                      className="conversation-delete"
-                      type="button"
-                      onClick={() => void deleteFredConversations([conversation.id])}
-                      disabled={historyControlsDisabled}
-                      aria-label={`Unterhaltung „${conversation.title}“ löschen`}
-                    >
-                      Löschen
-                    </button>
-                  </div>
-                ))}
+                      <input
+                        className="conversation-checkbox"
+                        type="checkbox"
+                        checked={visibleSelectedConversationIds.includes(conversation.id)}
+                        onChange={() => toggleFredConversationSelection(conversation.id)}
+                        disabled={historyControlsDisabled}
+                        aria-label={`Unterhaltung „${conversation.title}“ auswählen`}
+                      />
+                      <button
+                        className="conversation-open"
+                        type="button"
+                        onClick={() => void selectFredConversation(conversation)}
+                        disabled={historyControlsDisabled}
+                        aria-current={conversation.id === visibleActiveConversationId ? "page" : undefined}
+                      >
+                        <span title={conversation.title}>{conversation.title}</span>
+                        <time dateTime={conversation.updatedAt}>{formatHistoryDate(conversation.updatedAt)}</time>
+                      </button>
+                      <button
+                        className="conversation-delete"
+                        type="button"
+                        onClick={() => void deleteFredConversations([conversation.id])}
+                        disabled={historyControlsDisabled}
+                        aria-label={`Unterhaltung „${conversation.title}“ löschen`}
+                      >
+                        Löschen
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-            <nav className="forms-navigation" aria-label="Anwendungsbereiche">
+              {isApplicationNavigationExpanded ? (
+                <div
+                  className="sidebar-split-divider"
+                  role="separator"
+                  aria-label="Höhe der Unterhaltungshistorie anpassen"
+                  aria-orientation="horizontal"
+                  aria-valuemin={MIN_SIDEBAR_HISTORY_PERCENT}
+                  aria-valuemax={MAX_SIDEBAR_HISTORY_PERCENT}
+                  aria-valuenow={sidebarHistoryPercent}
+                  tabIndex={0}
+                  onPointerDown={handleSidebarSplitPointerDown}
+                  onPointerMove={handleSidebarSplitPointerMove}
+                  onPointerUp={finishSidebarSplitResize}
+                  onPointerCancel={finishSidebarSplitResize}
+                  onLostPointerCapture={() => setIsSidebarSplitResizing(false)}
+                  onKeyDown={handleSidebarSplitKeyDown}
+                />
+              ) : null}
+              <section className="application-navigation-section">
+                <button
+                  className="application-navigation-toggle"
+                  type="button"
+                  onClick={toggleApplicationNavigation}
+                  aria-expanded={isApplicationNavigationExpanded}
+                  aria-controls="application-navigation"
+                >
+                  <span>Anwendungsbereiche</span>
+                  <svg
+                    aria-hidden="true"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polyline points={isApplicationNavigationExpanded ? "6 9 12 15 18 9" : "9 6 15 12 9 18"}></polyline>
+                  </svg>
+                </button>
+                {isApplicationNavigationExpanded ? (
+                  <nav className="forms-navigation"
+                    id="application-navigation"
+                    aria-label="Anwendungsbereiche"
+                  >
               <button
                 className={`sidebar-view-button ${appView === "bfg-decisions" ? "active" : ""}`}
                 type="button"
@@ -2691,7 +2879,10 @@ export default function Home() {
                   Administration
                 </button>
               ) : null}
-            </nav>
+                  </nav>
+                ) : null}
+              </section>
+            </div>
           </div>
         ) : (
           <div className="rail-content">

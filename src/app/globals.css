@@ -210,20 +210,107 @@ button:disabled {
   gap: 8px;
 }
 
-.conversation-history {
-  display: flex;
+.sidebar-split-region {
+  --sidebar-history-share: 50%;
+  display: grid;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+  grid-template-rows:
+    minmax(0, var(--sidebar-history-share))
+    12px
+    minmax(0, calc(100% - var(--sidebar-history-share) - 12px));
+  transition: grid-template-rows 160ms ease;
+}
+
+.sidebar-split-region.is-resizing {
+  transition: none;
+  user-select: none;
+}
+
+.sidebar-split-region.applications-collapsed {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.conversation-history {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   flex-direction: column;
   gap: 8px;
 }
 
+.sidebar-split-divider {
+  position: relative;
+  min-height: 12px;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.sidebar-split-divider::before {
+  position: absolute;
+  top: 5px;
+  right: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--border-color);
+  content: "";
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.sidebar-split-divider:hover::before,
+.sidebar-split-divider:focus-visible::before,
+.sidebar-split-region.is-resizing .sidebar-split-divider::before {
+  background: var(--bmf-blue);
+  box-shadow: 0 0 0 2px rgba(40, 111, 156, 0.14);
+}
+
+.sidebar-split-divider:focus-visible {
+  outline: none;
+}
+
+.application-navigation-section {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
+}
+
+.application-navigation-toggle {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+  transition: var(--transition);
+}
+
+.application-navigation-toggle:hover,
+.application-navigation-toggle:focus-visible {
+  background: rgba(40, 111, 156, 0.08);
+  color: var(--bmf-blue-deep);
+}
+
 .forms-navigation {
   display: grid;
+  min-height: 0;
+  overflow-y: auto;
+  grid-auto-rows: max-content;
   gap: 4px;
-  flex-shrink: 0;
-  border-top: 1px solid var(--border-color);
-  padding-top: 14px;
+  overscroll-behavior: contain;
+  padding: 4px 3px 0 0;
 }
 
 .sidebar-view-button {
