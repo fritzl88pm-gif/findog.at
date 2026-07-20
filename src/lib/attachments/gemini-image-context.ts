@@ -153,7 +153,7 @@ export async function describeImage(
             ],
           },
         ],
-        max_tokens: 4096,
+        max_tokens: 15_000,
       }),
       cache: "no-store",
       signal: controller.signal,

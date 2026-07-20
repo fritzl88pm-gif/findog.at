@@ -39,7 +39,7 @@ describe("Gemini image context via OpenRouter", () => {
     expect(callUrl).toBe(ENDPOINT);
     const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
     expect(body.model).toBe(MODEL);
-    expect(body.max_tokens).toBe(4096);
+    expect(body.max_tokens).toBe(15_000);
     const messages = body.messages as Array<Record<string, unknown>>;
     expect(messages[0].role).toBe("user");
     const userContent = messages[0].content as Array<Record<string, unknown>>;
