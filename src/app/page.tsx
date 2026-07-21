@@ -68,6 +68,7 @@ import FredRunView from "@/components/fredrun-view";
 import L17bCountrySelect from "@/components/l17b-country-select";
 import ScanningView from "@/components/scanning-view";
 import KnowledgeLandscapeView from "@/components/knowledge-landscape-view";
+import QuizView from "@/components/quiz-view";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -84,7 +85,7 @@ type ConversationSummary = {
   updatedAt: string;
 };
 
-type AppView = "chat" | "scanning" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "administration" | "data";
+type AppView = "chat" | "scanning" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data";
 
 type AuthForm = {
   email: string;
@@ -1790,6 +1791,13 @@ export default function Home() {
     }
   }
 
+  function openQuizView() {
+    setAppView("quiz");
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
   function openFredView() {
     setAppView("chat");
     setFredConversationId("");
@@ -2908,6 +2916,15 @@ export default function Home() {
                 Fredrun
               </button>
               <button
+                className={`sidebar-view-button ${appView === "quiz" ? "active" : ""}`}
+                type="button"
+                onClick={openQuizView}
+                aria-current={appView === "quiz" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9 9a3 3 0 0 1 6 0c0 2-3 3-3 5"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                Quiz
+              </button>
+              <button
                 className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
                 type="button"
                 onClick={openFormsView}
@@ -3032,6 +3049,16 @@ export default function Home() {
               aria-current={appView === "fredrun" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17h3l2-4 3 2 2-5 2 4h4"></path><path d="M5 7h.01M9 5h.01M13 7h.01"></path></svg>
+            </button>
+            <button
+              className={`icon-button rail-icon-btn ${appView === "quiz" ? "active" : ""}`}
+              type="button"
+              onClick={openQuizView}
+              title="Quiz"
+              aria-label="Quiz"
+              aria-current={appView === "quiz" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9 9a3 3 0 0 1 6 0c0 2-3 3-3 5"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
             </button>
             {isAdmin ? (
               <button
@@ -3603,6 +3630,8 @@ export default function Home() {
         <L17bCurrencyView />
       ) : appView === "fredrun" ? (
         <FredRunView key={user?.id ?? "fredrun"} accessToken={session?.access_token ?? ""} />
+      ) : appView === "quiz" ? (
+        <QuizView accessToken={session?.access_token ?? ""} />
       ) : appView === "scanning" ? (
         <ScanningView accessToken={session?.access_token ?? ""} />
       ) : appView === "german-sv-pension" ? (
