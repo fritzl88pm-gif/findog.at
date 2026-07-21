@@ -11,6 +11,51 @@ export type L17bYearDef = {
   sourceNote: string;
 };
 
+export const L17B_FREQUENT_CURRENCY_CODES = ["HUF", "PLN", "CZK", "CHF", "RON"] as const;
+
+const COUNTRY_CODE_BY_CURRENCY: Readonly<Record<string, string>> = {
+  AUD: "AU",
+  BGN: "BG",
+  BRL: "BR",
+  CAD: "CA",
+  CHF: "CH",
+  CNY: "CN",
+  CZK: "CZ",
+  DKK: "DK",
+  GBP: "GB",
+  HKD: "HK",
+  HRK: "HR",
+  HUF: "HU",
+  IDR: "ID",
+  ILS: "IL",
+  INR: "IN",
+  ISK: "IS",
+  JPY: "JP",
+  KRW: "KR",
+  MXN: "MX",
+  MYR: "MY",
+  NOK: "NO",
+  NZD: "NZ",
+  PHP: "PH",
+  PLN: "PL",
+  RON: "RO",
+  RUB: "RU",
+  SEK: "SE",
+  SGD: "SG",
+  THB: "TH",
+  TRY: "TR",
+  USD: "US",
+  ZAR: "ZA",
+};
+
+export function getL17bCountryFlag(currencyCode: string): string {
+  const countryCode = COUNTRY_CODE_BY_CURRENCY[currencyCode];
+  if (!countryCode) return "";
+  return [...countryCode]
+    .map((letter) => String.fromCodePoint(0x1f1e6 + letter.charCodeAt(0) - 65))
+    .join("");
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 function parseCommaDecimal(raw: string): number {

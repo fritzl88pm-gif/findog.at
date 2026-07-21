@@ -306,4 +306,17 @@ describe("approved release surface", () => {
     // it should be rendered unconditionally after the input fields.
     expect(beforeCard).not.toMatch(/: null\s*$/);
   });
+
+  it("groups frequently used L17b countries first and shows flags in every country option", () => {
+    const l17bView = pageSource.slice(
+      pageSource.indexOf("function L17bCurrencyView("),
+      pageSource.indexOf("type GermanSvPensionViewProps"),
+    );
+
+    expect(l17bView).toContain('<optgroup label="Häufig verwendet">');
+    expect(l17bView).toContain('<optgroup label="Alle Länder">');
+    expect(l17bView).toContain("L17B_FREQUENT_CURRENCY_CODES.flatMap");
+    expect(l17bView).toContain("!frequentCurrencyCodes.has(candidate.currencyCode)");
+    expect(l17bView.match(/getL17bCountryFlag\(e\.currencyCode\)/gu)).toHaveLength(2);
+  });
 });

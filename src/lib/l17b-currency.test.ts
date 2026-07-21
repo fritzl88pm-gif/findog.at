@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  L17B_FREQUENT_CURRENCY_CODES,
   L17B_YEARS,
   getL17bYearEntries,
+  getL17bCountryFlag,
   lookupL17bEntry,
   convertL17bCurrency,
   getL17bSourceNote,
@@ -10,6 +12,29 @@ import {
   formatL17bEuro,
   formatL17bForeignAmount,
 } from "./l17b-currency";
+
+describe("L17b currency calculator – country dropdown", () => {
+  it("keeps the requested frequently used countries in a fixed order", () => {
+    expect(L17B_FREQUENT_CURRENCY_CODES).toEqual(["HUF", "PLN", "CZK", "CHF", "RON"]);
+    expect(L17B_FREQUENT_CURRENCY_CODES.map((code) => lookupL17bEntry("2025", code)?.country)).toEqual([
+      "Ungarn",
+      "Polen",
+      "Tschechische Republik",
+      "Schweiz",
+      "Rumänien",
+    ]);
+  });
+
+  it("provides a country flag for every selectable entry", () => {
+    for (const year of L17B_YEARS) {
+      for (const entry of getL17bYearEntries(year) ?? []) {
+        expect(getL17bCountryFlag(entry.currencyCode)).not.toBe("");
+      }
+    }
+    expect(getL17bCountryFlag("HUF")).toBe("🇭🇺");
+    expect(getL17bCountryFlag("PLN")).toBe("🇵🇱");
+  });
+});
 
 describe("L17b currency calculator – year availability", () => {
   it("has exactly six selectable years in descending order", () => {

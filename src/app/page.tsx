@@ -49,8 +49,10 @@ import {
 } from "@/lib/german-pension-option";
 
 import {
+  L17B_FREQUENT_CURRENCY_CODES,
   L17B_YEARS,
   getL17bYearEntries,
+  getL17bCountryFlag,
   convertL17bCurrency,
   formatL17bForeignAmount,
   formatL17bEuro,
@@ -579,6 +581,12 @@ function L17bCurrencyView() {
   const [amountInput, setAmountInput] = useState("");
 
   const entries = getL17bYearEntries(selectedYear) ?? [];
+  const frequentCurrencyCodes = new Set<string>(L17B_FREQUENT_CURRENCY_CODES);
+  const frequentEntries = L17B_FREQUENT_CURRENCY_CODES.flatMap((currencyCode) => {
+    const frequentEntry = entries.find((candidate) => candidate.currencyCode === currencyCode);
+    return frequentEntry ? [frequentEntry] : [];
+  });
+  const otherEntries = entries.filter((candidate) => !frequentCurrencyCodes.has(candidate.currencyCode));
   const amount = parseL17bGermanAmount(amountInput);
   const entry = selectedCode ? lookupL17bEntry(selectedYear, selectedCode) : undefined;
   const result = entry !== undefined && amount !== null ? convertL17bCurrency(selectedYear, selectedCode, amount) : null;
@@ -641,11 +649,20 @@ function L17bCurrencyView() {
               autoComplete="off"
             >
               <option value="">— Land auswählen —</option>
-              {entries.map((e) => (
-                <option key={e.currencyCode} value={e.currencyCode}>
-                  {e.country} ({e.currencyCode}, {e.currencyName})
-                </option>
-              ))}
+              <optgroup label="Häufig verwendet">
+                {frequentEntries.map((e) => (
+                  <option key={e.currencyCode} value={e.currencyCode}>
+                    {getL17bCountryFlag(e.currencyCode)} {e.country} ({e.currencyCode}, {e.currencyName})
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Alle Länder">
+                {otherEntries.map((e) => (
+                  <option key={e.currencyCode} value={e.currencyCode}>
+                    {getL17bCountryFlag(e.currencyCode)} {e.country} ({e.currencyCode}, {e.currencyName})
+                  </option>
+                ))}
+              </optgroup>
             </select>
           </div>
           <div className="field-group">
