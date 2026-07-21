@@ -440,6 +440,41 @@ button:disabled {
   padding: 0 5px;
 }
 
+.conversation-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.conversation-export {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--bmf-blue);
+}
+
+.conversation-export:hover:not(:disabled) {
+  background: rgba(40, 111, 156, 0.12);
+}
+
+.conversation-export:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.conversation-export svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
 .conversation-delete:hover:not(:disabled),
 .bulk-delete-button:hover:not(:disabled) {
   background: #fff0ef;
@@ -4164,32 +4199,6 @@ textarea:focus {
 .message-action-button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
-}
-
-.fred-chat-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  padding: 12px 20px 0;
-}
-
-.fred-chat-toolbar + .transcript {
-  padding-top: 18px;
-}
-
-.fred-chat-pdf-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.fred-chat-pdf-button svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.8;
 }
 
 .message-avatar {

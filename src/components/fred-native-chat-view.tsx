@@ -19,11 +19,9 @@ import {
   resetComposerHeight,
 } from "@/lib/chat/composer-height";
 import {
-  MAX_FRED_PDF_EXPORT_CHARS,
-  buildFredConversationPdfContent,
-  pdfFilenameFromHeader,
   precedingUserMessage,
 } from "@/lib/chat/fred-actions";
+import { downloadFredPdfFile } from "@/lib/chat/pdf-download";
 import { getWelcomeGreeting } from "@/lib/chat/welcome";
 import {
   mergeFredResearchStep,
@@ -63,7 +61,6 @@ const FILE_EXTENSIONS = new Set([
 type FredNativeChatViewProps = {
   accessToken: string;
   conversationId: string;
-  conversationTitle: string;
   initialMessages: FredNativeMessage[];
   externalError?: string;
   renderAssistantContent: (content: string) => ReactNode;
@@ -156,7 +153,6 @@ function ResearchTrace({
 export default function FredNativeChatView({
   accessToken,
   conversationId,
-  conversationTitle,
   initialMessages,
   externalError = "",
   renderAssistantContent,
@@ -473,39 +469,10 @@ export default function FredNativeChatView({
 
   async function downloadFredPdf(title: string, content: string, key: string): Promise<void> {
     if (!accessToken || pdfDownloadKey || !content.trim()) return;
-    if (content.length > MAX_FRED_PDF_EXPORT_CHARS) {
-      setError("Der Inhalt ist für einen einzelnen PDF-Export zu umfangreich.");
-      return;
-    }
     setError("");
     setPdfDownloadKey(key);
     try {
-      const response = await fetch("/api/tools/pdf", {
-        method: "POST",
-        cache: "no-store",
-        credentials: "same-origin",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ title, content }),
-      });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null) as unknown;
-        throw new Error(responseError(payload, "Das PDF konnte nicht erstellt werden."));
-      }
-      const blob = await response.blob();
-      const downloadUrl = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = downloadUrl;
-      link.download = pdfFilenameFromHeader(
-        response.headers.get("content-disposition"),
-        "Fred.pdf",
-      );
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+      await downloadFredPdfFile({ accessToken, title, content });
     } catch (downloadError) {
       setError(downloadError instanceof Error
         ? downloadError.message
@@ -513,12 +480,6 @@ export default function FredNativeChatView({
     } finally {
       setPdfDownloadKey("");
     }
-  }
-
-  function exportConversationPdf(): void {
-    const content = buildFredConversationPdfContent(messages);
-    const title = conversationTitle.trim() || "Fred-Unterhaltung";
-    void downloadFredPdf(title, content, "conversation");
   }
 
   function addImageFiles(files: File[]) {
@@ -592,22 +553,6 @@ export default function FredNativeChatView({
   return (
     <section className={`chat-panel ${messages.length === 0 ? "empty-chat" : ""}`} aria-label="Fred">
       <div className="chat-content-group">
-        {messages.some((message) => message.content.trim()) ? (
-          <div className="fred-chat-toolbar">
-            <button
-              className="secondary-button compact-button fred-chat-pdf-button"
-              type="button"
-              disabled={isSending || Boolean(pdfDownloadKey)}
-              aria-busy={pdfDownloadKey === "conversation"}
-              onClick={exportConversationPdf}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 18v2h14v-2" />
-              </svg>
-              {pdfDownloadKey === "conversation" ? "PDF wird erstellt …" : "Verlauf als PDF"}
-            </button>
-          </div>
-        ) : null}
         <div className="transcript" ref={transcriptRef} aria-live="polite">
           <div className="transcript-content">
             {messages.length === 0 ? (

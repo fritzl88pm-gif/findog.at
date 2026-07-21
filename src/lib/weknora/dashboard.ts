@@ -43,6 +43,11 @@ const APPROVED_KNOWLEDGE_BASES: readonly ApprovedKnowledgeBase[] = [
     kind: "document",
   },
   {
+    id: "d4cda9b9-23c6-4aa4-abae-9539146e227b",
+    name: "Formulare",
+    kind: "document",
+  },
+  {
     id: "442ad2e8-c69f-4cb5-985c-f3afadeb8645",
     name: "Betragstabelle FAQ",
     kind: "faq",

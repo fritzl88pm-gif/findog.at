@@ -6,6 +6,8 @@ import Image from "next/image";
 import Link from "next/link";
 
 import { applyConversationDeletion } from "@/lib/chat/deletion";
+import { buildFredConversationPdfContent } from "@/lib/chat/fred-actions";
+import { downloadFredPdfFile } from "@/lib/chat/pdf-download";
 import {
   clampSidebarHistoryPercent,
   DEFAULT_SIDEBAR_HISTORY_PERCENT,
@@ -1125,6 +1127,7 @@ export default function Home() {
   const [selectedFredConversationIds, setSelectedFredConversationIds] = useState<string[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDownloadingFredConversationPdf, setIsDownloadingFredConversationPdf] = useState(false);
   const [error, setError] = useState("");
   const [isLoaded, setIsLoaded] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(true);
@@ -2398,6 +2401,33 @@ export default function Home() {
     ]);
   }
 
+  async function exportFredConversationPdf(conversation: ConversationSummary): Promise<void> {
+    const accessToken = session?.access_token;
+    if (
+      !accessToken
+      || conversation.id !== fredConversationId
+      || isDownloadingFredConversationPdf
+    ) {
+      return;
+    }
+
+    setError("");
+    setIsDownloadingFredConversationPdf(true);
+    try {
+      await downloadFredPdfFile({
+        accessToken,
+        title: conversation.title.trim() || "Fred-Unterhaltung",
+        content: buildFredConversationPdfContent(fredMessages),
+      });
+    } catch (downloadError) {
+      setError(downloadError instanceof Error
+        ? downloadError.message
+        : "Das PDF konnte nicht erstellt werden.");
+    } finally {
+      setIsDownloadingFredConversationPdf(false);
+    }
+  }
+
   async function deleteFredConversations(ids: string[], useBulkEndpoint = false) {
     if (
       ids.length === 0
@@ -2744,15 +2774,32 @@ export default function Home() {
                         <span title={conversation.title}>{conversation.title}</span>
                         <time dateTime={conversation.updatedAt}>{formatHistoryDate(conversation.updatedAt)}</time>
                       </button>
-                      <button
-                        className="conversation-delete"
-                        type="button"
-                        onClick={() => void deleteFredConversations([conversation.id])}
-                        disabled={historyControlsDisabled}
-                        aria-label={`Unterhaltung „${conversation.title}“ löschen`}
-                      >
-                        Löschen
-                      </button>
+                      <div className="conversation-actions">
+                        {conversation.id === visibleActiveConversationId ? (
+                          <button
+                            className="conversation-export"
+                            type="button"
+                            onClick={() => void exportFredConversationPdf(conversation)}
+                            disabled={historyControlsDisabled || isDownloadingFredConversationPdf}
+                            aria-label={`Unterhaltung „${conversation.title}“ als PDF exportieren`}
+                            aria-busy={isDownloadingFredConversationPdf}
+                            title={isDownloadingFredConversationPdf ? "PDF wird erstellt …" : "Verlauf als PDF"}
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 18v2h14v-2" />
+                            </svg>
+                          </button>
+                        ) : null}
+                        <button
+                          className="conversation-delete"
+                          type="button"
+                          onClick={() => void deleteFredConversations([conversation.id])}
+                          disabled={historyControlsDisabled}
+                          aria-label={`Unterhaltung „${conversation.title}“ löschen`}
+                        >
+                          Löschen
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -3181,7 +3228,6 @@ export default function Home() {
         <FredNativeChatView
           accessToken={session?.access_token ?? ""}
           conversationId={fredConversationId}
-          conversationTitle={fredConversations.find((entry) => entry.id === fredConversationId)?.title ?? "Fred-Unterhaltung"}
           initialMessages={fredMessages}
           externalError={error}
           renderAssistantContent={(content) => <RichAnswer content={content} />}

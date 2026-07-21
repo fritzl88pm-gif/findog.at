@@ -18,6 +18,7 @@ const IDS = {
   internal: "22dee3ae-2c61-438e-8609-f9e12144157e",
   fexklusiv: "7eac30a9-3add-4f84-bac2-4a3ae3c7c2c2",
   laws: "e0282ab8-b94f-4553-962e-68705201cf9a",
+  forms: "d4cda9b9-23c6-4aa4-abae-9539146e227b",
   amounts: "442ad2e8-c69f-4cb5-985c-f3afadeb8645",
   winAnv: "952bd9ad-59a5-4ca4-ad28-3c945dab9515",
   bfg: "7e203a75-9e51-4839-afd4-7d24d2e5b033",
@@ -29,6 +30,7 @@ function knowledgeBases(wikiCount = 129): Array<Record<string, unknown>> {
     { id: IDS.internal, name: "private internal name", knowledge_count: 76, is_processing: false, processing_count: 0 },
     { id: IDS.fexklusiv, name: "private FEX name", knowledge_count: 25, is_processing: false, processing_count: 0 },
     { id: IDS.laws, name: "private law name", knowledge_count: 146, is_processing: false, processing_count: 0 },
+    { id: IDS.forms, name: "private forms name", knowledge_count: 32, is_processing: false, processing_count: 0 },
     { id: IDS.amounts, name: "private amount name", knowledge_count: 0, is_processing: false, processing_count: 0 },
     { id: IDS.winAnv, name: "private Win ANV name", knowledge_count: 0, is_processing: false, processing_count: 0 },
     { id: IDS.bfg, name: "private BFG name", knowledge_count: 9_583, is_processing: false, processing_count: 0 },
@@ -81,15 +83,16 @@ describe("WeKnora dashboard normalization", () => {
       { id: IDS.internal, name: "Arbeitsbehelfe und interne Dokumente", kind: "document", count: 76 },
       { id: IDS.fexklusiv, name: "FEXklusiv", kind: "document", count: 25 },
       { id: IDS.laws, name: "Gesetze und Verordnungen", kind: "document", count: 146 },
+      { id: IDS.forms, name: "Formulare", kind: "document", count: 32 },
       { id: IDS.amounts, name: "Betragstabelle FAQ", kind: "faq", count: 794 },
       { id: IDS.winAnv, name: "Win ANV", kind: "faq", count: 1_276 },
       { id: IDS.bfg, name: "BFG Entscheidungen Findok", kind: "document", count: 9_583 },
     ]);
     expect(dashboard.totals).toEqual({
-      knowledgeBases: 7,
-      documents: 9_959,
+      knowledgeBases: 8,
+      documents: 9_991,
       faqEntries: 2_070,
-      contents: 12_029,
+      contents: 12_061,
       processing: 0,
     });
     const published = JSON.stringify(dashboard);
@@ -146,7 +149,7 @@ describe("WeKnora MCP transport", () => {
       now: () => Date.parse("2026-07-20T10:00:00.000Z"),
     });
 
-    expect(dashboard.totals.contents).toBe(12_029);
+    expect(dashboard.totals.contents).toBe(12_061);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     const bodies = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)) as {
       params: { name: string; arguments: Record<string, unknown> };
@@ -205,7 +208,7 @@ describe("WeKnora dashboard cache", () => {
     now += 1;
     queueSuccessfulSnapshot(fetchMock, 130);
     const refreshed = await getWeKnoraDashboard({ fetchImpl: fetchMock as typeof fetch, now: () => now });
-    expect(refreshed.totals.documents).toBe(9_960);
+    expect(refreshed.totals.documents).toBe(9_992);
     expect(refreshed.fetchedAt).not.toBe(first.fetchedAt);
     expect(fetchMock).toHaveBeenCalledTimes(6);
 
@@ -213,7 +216,7 @@ describe("WeKnora dashboard cache", () => {
     fetchMock.mockRejectedValueOnce(new Error("raw upstream detail must stay private"));
     const stale = await getWeKnoraDashboard({ fetchImpl: fetchMock as typeof fetch, now: () => now });
     expect(stale.stale).toBe(true);
-    expect(stale.totals.documents).toBe(9_960);
+    expect(stale.totals.documents).toBe(9_992);
     expect(JSON.stringify(stale)).not.toContain("raw upstream detail");
     expect(fetchMock).toHaveBeenCalledTimes(7);
 
@@ -227,7 +230,7 @@ describe("WeKnora dashboard cache", () => {
     queueSuccessfulSnapshot(fetchMock, 131);
     const recovered = await getWeKnoraDashboard({ fetchImpl: fetchMock as typeof fetch, now: () => now });
     expect(recovered.stale).toBe(false);
-    expect(recovered.totals.documents).toBe(9_961);
+    expect(recovered.totals.documents).toBe(9_993);
     expect(fetchMock).toHaveBeenCalledTimes(10);
   });
 

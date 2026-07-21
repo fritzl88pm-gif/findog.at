@@ -16,6 +16,10 @@ const copyButtonSource = readFileSync(
   fileURLToPath(new URL("../components/copy-icon-button.tsx", import.meta.url)),
   "utf8",
 );
+const pdfDownloadSource = readFileSync(
+  fileURLToPath(new URL("./chat/pdf-download.ts", import.meta.url)),
+  "utf8",
+);
 const routeSource = readFileSync(
   fileURLToPath(new URL("../app/api/fred/chat/route.ts", import.meta.url)),
   "utf8",
@@ -87,12 +91,14 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).toContain('aria-label="Frage bearbeiten"');
     expect(viewSource).toContain('aria-label="Antwort erneut erzeugen"');
     expect(viewSource).toContain('aria-label="Antwort als PDF exportieren"');
-    expect(viewSource).toContain("Verlauf als PDF");
-    expect(viewSource).toContain('fetch("/api/tools/pdf"');
-    expect(viewSource).toContain("buildFredConversationPdfContent(messages)");
+    expect(pageSource).toContain("Verlauf als PDF");
+    expect(pageSource).toContain("className=\"conversation-export\"");
+    expect(pageSource).toContain("buildFredConversationPdfContent(fredMessages)");
+    expect(viewSource).not.toContain("fred-chat-toolbar");
+    expect(pdfDownloadSource).toContain('fetch("/api/tools/pdf"');
     expect(viewSource).toContain("precedingUserMessage(messages, assistantIndex)");
-    expect(viewSource).toContain('Authorization: `Bearer ${accessToken}`');
-    expect(cssSource).toContain(".fred-chat-pdf-button");
+    expect(pdfDownloadSource).toContain('Authorization: `Bearer ${accessToken}`');
+    expect(cssSource).toContain(".conversation-export");
   });
 
   it("continues a selected stored Fred conversation instead of showing it read-only", () => {
