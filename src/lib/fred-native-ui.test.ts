@@ -8,6 +8,14 @@ const viewSource = readFileSync(
   fileURLToPath(new URL("../components/fred-native-chat-view.tsx", import.meta.url)),
   "utf8",
 );
+const richAnswerSource = readFileSync(
+  fileURLToPath(new URL("../components/rich-answer.tsx", import.meta.url)),
+  "utf8",
+);
+const copyButtonSource = readFileSync(
+  fileURLToPath(new URL("../components/copy-icon-button.tsx", import.meta.url)),
+  "utf8",
+);
 const routeSource = readFileSync(
   fileURLToPath(new URL("../app/api/fred/chat/route.ts", import.meta.url)),
   "utf8",
@@ -63,6 +71,28 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).toContain("Stoppen");
     expect(viewSource).not.toContain("<iframe");
     expect(viewSource).not.toContain("postMessage");
+  });
+
+  it("copies complete Fred answers and individual tables with icon controls", () => {
+    expect(viewSource).toContain('label="Antwort kopieren"');
+    expect(viewSource).toContain('className="message-actions"');
+    expect(richAnswerSource).toContain('label="Tabelle kopieren"');
+    expect(richAnswerSource).toContain("richTableClipboardContent(block)");
+    expect(copyButtonSource).toContain('"text/html"');
+    expect(copyButtonSource).toContain('aria-live="polite"');
+    expect(cssSource).toContain(".copy-icon-button.is-copied");
+  });
+
+  it("supports editing, regenerating and authenticated answer or conversation PDF exports", () => {
+    expect(viewSource).toContain('aria-label="Frage bearbeiten"');
+    expect(viewSource).toContain('aria-label="Antwort erneut erzeugen"');
+    expect(viewSource).toContain('aria-label="Antwort als PDF exportieren"');
+    expect(viewSource).toContain("Verlauf als PDF");
+    expect(viewSource).toContain('fetch("/api/tools/pdf"');
+    expect(viewSource).toContain("buildFredConversationPdfContent(messages)");
+    expect(viewSource).toContain("precedingUserMessage(messages, assistantIndex)");
+    expect(viewSource).toContain('Authorization: `Bearer ${accessToken}`');
+    expect(cssSource).toContain(".fred-chat-pdf-button");
   });
 
   it("continues a selected stored Fred conversation instead of showing it read-only", () => {

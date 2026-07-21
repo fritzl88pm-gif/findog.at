@@ -13,6 +13,46 @@ export type RichBlock =
   | { type: "table"; headers: RichInline[][]; rows: RichInline[][][] }
   | { type: "blockquote"; children: RichInline[] };
 
+export type RichTableClipboardContent = {
+  text: string;
+  html: string;
+};
+
+export function richInlinePlainText(nodes: RichInline[]): string {
+  return nodes.map((node) => {
+    if (node.type === "text" || node.type === "code") return node.text;
+    return richInlinePlainText(node.children);
+  }).join("");
+}
+
+function normalizedClipboardCell(nodes: RichInline[]): string {
+  return richInlinePlainText(nodes).replace(/[\t\r\n]+/gu, " ").trim();
+}
+
+function escapeClipboardHtml(value: string): string {
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;")
+    .replace(/'/gu, "&#39;");
+}
+
+export function richTableClipboardContent(
+  table: Extract<RichBlock, { type: "table" }>,
+): RichTableClipboardContent {
+  const headers = table.headers.map(normalizedClipboardCell);
+  const rows = table.rows.map((row) => row.map(normalizedClipboardCell));
+  const text = [headers, ...rows].map((row) => row.join("\t")).join("\n");
+  const htmlHeaders = headers.map((cell) => `<th>${escapeClipboardHtml(cell)}</th>`).join("");
+  const htmlRows = rows.map((row) =>
+    `<tr>${row.map((cell) => `<td>${escapeClipboardHtml(cell)}</td>`).join("")}</tr>`).join("");
+  return {
+    text,
+    html: `<table><thead><tr>${htmlHeaders}</tr></thead><tbody>${htmlRows}</tbody></table>`,
+  };
+}
+
 const headingPattern = /^(#{1,3})\s+(.+)$/;
 const unorderedListPattern = /^\s*[-*+]\s+(.+)$/;
 const orderedListPattern = /^\s*\d+[.)]\s+(.+)$/;

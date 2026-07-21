@@ -3181,6 +3181,7 @@ export default function Home() {
         <FredNativeChatView
           accessToken={session?.access_token ?? ""}
           conversationId={fredConversationId}
+          conversationTitle={fredConversations.find((entry) => entry.id === fredConversationId)?.title ?? "Fred-Unterhaltung"}
           initialMessages={fredMessages}
           externalError={error}
           renderAssistantContent={(content) => <RichAnswer content={content} />}

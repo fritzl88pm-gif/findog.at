@@ -1,8 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { parseRichAnswer } from "./answer-rendering";
+import { parseRichAnswer, richTableClipboardContent } from "./answer-rendering";
 
 describe("parseRichAnswer", () => {
+  it("serializes an individual rich table as spreadsheet text and safe HTML", () => {
+    const table = parseRichAnswer(`| Punkt | Ergebnis |
+| --- | --- |
+| **Betrag** | <1 & \`2\` |`)[0];
+    expect(table.type).toBe("table");
+    if (table.type !== "table") return;
+
+    expect(richTableClipboardContent(table)).toEqual({
+      text: "Punkt\tErgebnis\nBetrag\t<1 & 2",
+      html: "<table><thead><tr><th>Punkt</th><th>Ergebnis</th></tr></thead><tbody><tr><td>Betrag</td><td>&lt;1 &amp; 2</td></tr></tbody></table>",
+    });
+  });
+
   it("renders the standardized legal answer sections and their tables as distinct blocks", () => {
     const blocks = parseRichAnswer(`# 📘 Überblick
 

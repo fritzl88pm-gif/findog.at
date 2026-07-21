@@ -9,6 +9,7 @@ import type {
 } from "react";
 import { useEffect, useRef, useState } from "react";
 
+import CopyIconButton from "@/components/copy-icon-button";
 import {
   parseFredNativeStreamLine,
   type FredNativeConversation,
@@ -17,6 +18,12 @@ import {
   autosizeComposer,
   resetComposerHeight,
 } from "@/lib/chat/composer-height";
+import {
+  MAX_FRED_PDF_EXPORT_CHARS,
+  buildFredConversationPdfContent,
+  pdfFilenameFromHeader,
+  precedingUserMessage,
+} from "@/lib/chat/fred-actions";
 import { getWelcomeGreeting } from "@/lib/chat/welcome";
 import {
   mergeFredResearchStep,
@@ -56,6 +63,7 @@ const FILE_EXTENSIONS = new Set([
 type FredNativeChatViewProps = {
   accessToken: string;
   conversationId: string;
+  conversationTitle: string;
   initialMessages: FredNativeMessage[];
   externalError?: string;
   renderAssistantContent: (content: string) => ReactNode;
@@ -148,6 +156,7 @@ function ResearchTrace({
 export default function FredNativeChatView({
   accessToken,
   conversationId,
+  conversationTitle,
   initialMessages,
   externalError = "",
   renderAssistantContent,
@@ -166,6 +175,7 @@ export default function FredNativeChatView({
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isAttachmentMenuOpen, setIsAttachmentMenuOpen] = useState(false);
+  const [pdfDownloadKey, setPdfDownloadKey] = useState("");
   const [welcomeGreeting] = useState(() => getWelcomeGreeting());
   const activeConversationIdRef = useRef(conversationId);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -186,6 +196,7 @@ export default function FredNativeChatView({
     setSelectedImages([]);
     setSelectedFiles([]);
     setIsAttachmentMenuOpen(false);
+    setPdfDownloadKey("");
   }, [conversationId, initialMessages]);
 
   useEffect(() => {
@@ -241,10 +252,15 @@ export default function FredNativeChatView({
     transcript.scrollTop = transcript.scrollHeight;
   }, [messages]);
 
-  async function sendMessage(event?: FormEvent) {
-    event?.preventDefault();
-    const query = composer.trim();
-    if (!query || isSending || !accessToken) return;
+  async function submitQuery(options: {
+    query: string;
+    webSearchEnabled: boolean;
+    images: File[];
+    files: File[];
+    clearDraft: boolean;
+  }) {
+    const query = options.query.trim();
+    if (!query || isSending || !accessToken || abortControllerRef.current) return;
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -258,8 +274,8 @@ export default function FredNativeChatView({
       content: "",
       createdAt: new Date().toISOString(),
     };
-    const attachedImages = selectedImages;
-    const attachedFiles = selectedFiles;
+    const attachedImages = options.images;
+    const attachedFiles = options.files;
     userMessage.attachments = [
       ...attachedImages.map((file): FredNativeAttachment => ({
         kind: "image",
@@ -274,13 +290,15 @@ export default function FredNativeChatView({
         sizeBytes: file.size,
       })),
     ];
-    userMessage.webSearchEnabled = webSearchEnabled;
+    userMessage.webSearchEnabled = options.webSearchEnabled;
     const baseMessages = [...messages, userMessage];
     setMessages([...baseMessages, assistantMessage]);
-    setComposer("");
-    resetComposerHeight(composerRef.current);
-    setSelectedImages([]);
-    setSelectedFiles([]);
+    if (options.clearDraft) {
+      setComposer("");
+      resetComposerHeight(composerRef.current);
+      setSelectedImages([]);
+      setSelectedFiles([]);
+    }
     setError("");
     setIsSending(true);
 
@@ -292,7 +310,7 @@ export default function FredNativeChatView({
       const requestPayload = {
         query,
         conversationId: activeConversationIdRef.current || undefined,
-        webSearchEnabled,
+        webSearchEnabled: options.webSearchEnabled,
       };
       const hasAttachments = attachedImages.length > 0 || attachedFiles.length > 0;
       const formData = hasAttachments ? new FormData() : null;
@@ -417,6 +435,92 @@ export default function FredNativeChatView({
     }
   }
 
+  async function sendMessage(event?: FormEvent) {
+    event?.preventDefault();
+    await submitQuery({
+      query: composer,
+      webSearchEnabled,
+      images: selectedImages,
+      files: selectedFiles,
+      clearDraft: true,
+    });
+  }
+
+  function editQuestion(message: FredNativeMessage): void {
+    if (isSending) return;
+    setComposer(message.content);
+    setWebSearchEnabled(Boolean(message.webSearchEnabled && capabilities.webSearch));
+    setSelectedImages([]);
+    setSelectedFiles([]);
+    setError("");
+    requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      if (composerRef.current) autosizeComposer(composerRef.current);
+    });
+  }
+
+  function regenerateAnswer(assistantIndex: number): void {
+    const question = precedingUserMessage(messages, assistantIndex);
+    if (!question || isSending) return;
+    void submitQuery({
+      query: question.content,
+      webSearchEnabled: Boolean(question.webSearchEnabled && capabilities.webSearch),
+      images: [],
+      files: [],
+      clearDraft: false,
+    });
+  }
+
+  async function downloadFredPdf(title: string, content: string, key: string): Promise<void> {
+    if (!accessToken || pdfDownloadKey || !content.trim()) return;
+    if (content.length > MAX_FRED_PDF_EXPORT_CHARS) {
+      setError("Der Inhalt ist für einen einzelnen PDF-Export zu umfangreich.");
+      return;
+    }
+    setError("");
+    setPdfDownloadKey(key);
+    try {
+      const response = await fetch("/api/tools/pdf", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title, content }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as unknown;
+        throw new Error(responseError(payload, "Das PDF konnte nicht erstellt werden."));
+      }
+      const blob = await response.blob();
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = pdfFilenameFromHeader(
+        response.headers.get("content-disposition"),
+        "Fred.pdf",
+      );
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+    } catch (downloadError) {
+      setError(downloadError instanceof Error
+        ? downloadError.message
+        : "Das PDF konnte nicht erstellt werden.");
+    } finally {
+      setPdfDownloadKey("");
+    }
+  }
+
+  function exportConversationPdf(): void {
+    const content = buildFredConversationPdfContent(messages);
+    const title = conversationTitle.trim() || "Fred-Unterhaltung";
+    void downloadFredPdf(title, content, "conversation");
+  }
+
   function addImageFiles(files: File[]) {
     if (files.length === 0) return;
     if (selectedImages.length + files.length > MAX_IMAGE_UPLOADS) {
@@ -488,6 +592,22 @@ export default function FredNativeChatView({
   return (
     <section className={`chat-panel ${messages.length === 0 ? "empty-chat" : ""}`} aria-label="Fred">
       <div className="chat-content-group">
+        {messages.some((message) => message.content.trim()) ? (
+          <div className="fred-chat-toolbar">
+            <button
+              className="secondary-button compact-button fred-chat-pdf-button"
+              type="button"
+              disabled={isSending || Boolean(pdfDownloadKey)}
+              aria-busy={pdfDownloadKey === "conversation"}
+              onClick={exportConversationPdf}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 18v2h14v-2" />
+              </svg>
+              {pdfDownloadKey === "conversation" ? "PDF wird erstellt …" : "Verlauf als PDF"}
+            </button>
+          </div>
+        ) : null}
         <div className="transcript" ref={transcriptRef} aria-live="polite">
           <div className="transcript-content">
             {messages.length === 0 ? (
@@ -515,6 +635,67 @@ export default function FredNativeChatView({
                   <div className="message-meta">
                     <span className="sender-name">{message.role === "user" ? "Du" : "Fred"}</span>
                     <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
+                  </div>
+                  <div className="message-actions">
+                    {message.role === "user" && message.content ? (
+                      <button
+                        className="message-action-button"
+                        type="button"
+                        aria-label="Frage bearbeiten"
+                        title="Frage bearbeiten"
+                        disabled={isSending}
+                        onClick={() => editQuestion(message)}
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="m4 20 4.4-1 9.8-9.8-3.4-3.4L5 15.6 4 20Z" />
+                          <path d="m13.8 6.8 3.4 3.4M14.8 5.8l1.4-1.4a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8l-1.4 1.4" />
+                        </svg>
+                      </button>
+                    ) : null}
+                    {message.role === "assistant"
+                      && message.content
+                      && !(isSending && index === messages.length - 1) ? (
+                        <>
+                          <CopyIconButton
+                            text={message.content}
+                            label="Antwort kopieren"
+                          />
+                          <button
+                            className="message-action-button"
+                            type="button"
+                            aria-label="Antwort als PDF exportieren"
+                            title={pdfDownloadKey === `answer-${index}`
+                              ? "PDF wird erstellt …"
+                              : "Antwort als PDF exportieren"}
+                            aria-busy={pdfDownloadKey === `answer-${index}`}
+                            disabled={Boolean(pdfDownloadKey)}
+                            onClick={() => void downloadFredPdf(
+                              "Fred-Antwort",
+                              message.content,
+                              `answer-${index}`,
+                            )}
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 18v2h14v-2" />
+                            </svg>
+                          </button>
+                          {index === messages.length - 1 ? (
+                            <button
+                              className="message-action-button"
+                              type="button"
+                              aria-label="Antwort erneut erzeugen"
+                              title="Antwort erneut erzeugen"
+                              disabled={isSending}
+                              onClick={() => regenerateAnswer(index)}
+                            >
+                              <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M20 11a8 8 0 1 0-2.3 5.7" />
+                                <path d="M20 4v7h-7" />
+                              </svg>
+                            </button>
+                          ) : null}
+                        </>
+                      ) : null}
                   </div>
                 </div>
                 {message.role === "assistant" ? (

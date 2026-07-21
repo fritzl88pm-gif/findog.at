@@ -40,7 +40,7 @@ describe("POST /api/tools/pdf", () => {
 
   it("rejects invalid and oversized payloads", async () => {
     const invalid = await POST(pdfRequest({ title: "Berechnung" }));
-    const oversized = await POST(pdfRequest({ title: "Berechnung", content: "x".repeat(100_001) }));
+    const oversized = await POST(pdfRequest({ title: "Berechnung", content: "x".repeat(500_001) }));
 
     expect(invalid.status).toBe(400);
     expect(oversized.status).toBe(413);

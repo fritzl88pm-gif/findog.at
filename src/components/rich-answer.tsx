@@ -1,6 +1,12 @@
 import type { ReactNode } from "react";
 
-import { parseRichAnswer, type RichBlock, type RichInline } from "@/lib/answer-rendering";
+import CopyIconButton from "@/components/copy-icon-button";
+import {
+  parseRichAnswer,
+  richTableClipboardContent,
+  type RichBlock,
+  type RichInline,
+} from "@/lib/answer-rendering";
 
 function renderRichInline(nodes: RichInline[], keyPrefix: string): ReactNode[] {
   return nodes.map((node, index) => {
@@ -48,30 +54,41 @@ function renderRichBlock(block: RichBlock, index: number): ReactNode {
     );
   }
   if (block.type === "table") {
+    const clipboard = richTableClipboardContent(block);
     return (
-      <div className="answer-table-scroll" key={`table-${index}`}>
-        <table>
-          <thead>
-            <tr>
-              {block.headers.map((cell, cellIndex) => (
-                <th key={`table-${index}-head-${cellIndex}`} scope="col">
-                  {renderRichInline(cell, `table-${index}-head-${cellIndex}`)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {block.rows.map((row, rowIndex) => (
-              <tr key={`table-${index}-row-${rowIndex}`}>
-                {row.map((cell, cellIndex) => (
-                  <td key={`table-${index}-row-${rowIndex}-${cellIndex}`}>
-                    {renderRichInline(cell, `table-${index}-row-${rowIndex}-${cellIndex}`)}
-                  </td>
+      <div className="answer-table-block" key={`table-${index}`}>
+        <div className="answer-table-toolbar">
+          <CopyIconButton
+            className="answer-table-copy-button"
+            text={clipboard.text}
+            html={clipboard.html}
+            label="Tabelle kopieren"
+          />
+        </div>
+        <div className="answer-table-scroll">
+          <table>
+            <thead>
+              <tr>
+                {block.headers.map((cell, cellIndex) => (
+                  <th key={`table-${index}-head-${cellIndex}`} scope="col">
+                    {renderRichInline(cell, `table-${index}-head-${cellIndex}`)}
+                  </th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {block.rows.map((row, rowIndex) => (
+                <tr key={`table-${index}-row-${rowIndex}`}>
+                  {row.map((cell, cellIndex) => (
+                    <td key={`table-${index}-row-${rowIndex}-${cellIndex}`}>
+                      {renderRichInline(cell, `table-${index}-row-${rowIndex}-${cellIndex}`)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     );
   }

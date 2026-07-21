@@ -1,6 +1,11 @@
 import PizZip from "pizzip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MineruBatchError, processMineruBatch, type MineruFileInput } from "./mineru-cloud";
+import {
+  MAX_MINERU_MARKDOWN_BYTES,
+  MineruBatchError,
+  processMineruBatch,
+  type MineruFileInput,
+} from "./mineru-cloud";
 
 const BASE = "https://mineru.net/api/v4";
 const CDN = "https://cdn-mineru.openxlab.org.cn/results";
@@ -287,6 +292,17 @@ describe("MinerU cloud adapter", () => {
     handlers[resultUrls[0]] = () => zipResponse(zipBuf({ "full.md": "x".repeat(65) }));
     await expect(processMineruBatch([input], { fetch, maxMarkdownBytes: 64, maxPolls: 1 }))
       .rejects.toThrow(MineruBatchError);
+  });
+
+  it("accepts Markdown above the former 100 KB cap and keeps a 5 MB safety limit", async () => {
+    const input = file("large.pdf", "large");
+    const markdown = "x".repeat(100_001);
+    const { fetch, handlers, resultUrls } = officialBatch([input], ["unused"]);
+    handlers[resultUrls[0]] = () => zipResponse(zipBuf({ "full.md": markdown }));
+
+    await expect(processMineruBatch([input], { fetch, maxPolls: 1 }))
+      .resolves.toEqual([markdown]);
+    expect(MAX_MINERU_MARKDOWN_BYTES).toBe(5 * 1024 * 1024);
   });
 
   it.each([

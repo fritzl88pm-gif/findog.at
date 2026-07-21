@@ -4105,6 +4105,93 @@ textarea:focus {
   margin-bottom: 6px;
 }
 
+.copy-icon-button,
+.message-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.copy-icon-button:hover:not(:disabled),
+.copy-icon-button:focus-visible,
+.message-action-button:hover:not(:disabled),
+.message-action-button:focus-visible {
+  border-color: rgba(40, 111, 156, 0.2);
+  outline: none;
+  background: rgba(40, 111, 156, 0.08);
+  color: var(--bmf-blue-deep);
+}
+
+.copy-icon-button.is-copied {
+  border-color: rgba(31, 122, 78, 0.2);
+  background: rgba(31, 122, 78, 0.08);
+  color: #17633e;
+}
+
+.copy-icon-button.is-error {
+  border-color: rgba(179, 38, 30, 0.2);
+  background: rgba(179, 38, 30, 0.06);
+  color: var(--danger);
+}
+
+.copy-icon-button svg,
+.message-action-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.message-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.message-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.fred-chat-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 20px 0;
+}
+
+.fred-chat-toolbar + .transcript {
+  padding-top: 18px;
+}
+
+.fred-chat-pdf-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.fred-chat-pdf-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
 .message-avatar {
   display: flex;
   align-items: center;
@@ -4287,6 +4374,22 @@ textarea:focus {
   border: 1px solid rgba(40, 111, 156, 0.16);
   border-radius: var(--radius-sm);
   background: #ffffff;
+}
+
+.answer-table-block {
+  display: grid;
+  gap: 5px;
+}
+
+.answer-table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.answer-table-copy-button {
+  width: 28px;
+  height: 28px;
+  flex-basis: 28px;
 }
 
 .answer-table-scroll table {

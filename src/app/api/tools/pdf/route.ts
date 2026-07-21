@@ -9,8 +9,8 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 export const runtime = "nodejs";
 
 const MAX_PDF_TITLE_CHARS = 160;
-const MAX_PDF_CONTENT_CHARS = 60_000;
-const MAX_PDF_JSON_BYTES = 100_000;
+const MAX_PDF_CONTENT_CHARS = 500_000;
+const MAX_PDF_JSON_BYTES = 2 * 1024 * 1024;
 
 type PdfRequestBody = {
   title: string;
@@ -93,14 +93,10 @@ function validatePayload(value: unknown): PdfRequestBody {
 
   const title = body.title.trim();
   const content = body.content.trim();
-  if (
-    !title
-    || !content
-    || title.length > MAX_PDF_TITLE_CHARS
-    || content.length > MAX_PDF_CONTENT_CHARS
-  ) {
+  if (!title || !content || title.length > MAX_PDF_TITLE_CHARS) {
     throw invalidRequest();
   }
+  if (content.length > MAX_PDF_CONTENT_CHARS) throw invalidRequest(413);
   return { title, content };
 }
 

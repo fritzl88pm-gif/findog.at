@@ -32,7 +32,10 @@ const BASE_URL = "https://mineru.net/api/v4";
 const MAX_BATCH_SIZE = 5;
 const MAX_JSON_BYTES = 256 * 1024;
 const MAX_ZIP_BYTES = 100 * 1024 * 1024;
-const MAX_MARKDOWN_BYTES = 100_000;
+// Large legal PDFs can produce substantially more than 100 KB of Markdown.
+// The combined model context is capped separately, while this limit protects
+// the server from unexpectedly large decompressed MinerU results.
+export const MAX_MINERU_MARKDOWN_BYTES = 5 * 1024 * 1024;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLLS = 45;
 const RESULT_STATES = new Set(["waiting-file", "pending", "running", "converting", "done", "failed"]);
@@ -395,7 +398,7 @@ export async function processMineruBatch(
   const maxPolls = options.maxPolls ?? MAX_POLLS;
   const maxJsonBytes = options.maxJsonBytes ?? MAX_JSON_BYTES;
   const maxZipBytes = options.maxZipBytes ?? MAX_ZIP_BYTES;
-  const maxMarkdownBytes = options.maxMarkdownBytes ?? MAX_MARKDOWN_BYTES;
+  const maxMarkdownBytes = options.maxMarkdownBytes ?? MAX_MINERU_MARKDOWN_BYTES;
   const requested = requestedFiles(files);
 
   const { batchId, uploadUrls } = await obtainUploadUrls(requested, key, fetcher, maxJsonBytes, options.signal);
