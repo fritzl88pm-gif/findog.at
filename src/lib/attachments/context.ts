@@ -14,10 +14,12 @@ export type AttachmentInput = {
 
 export type MineruProvider = (files: MineruFileInput[]) => Promise<string[]>;
 export type GeminiProvider = (imageDataUri: string) => Promise<string>;
+export type DocumentFallbackProvider = (files: MineruFileInput[]) => Promise<string[]>;
 
 export type BuildAttachmentOptions = {
   mineruProvider?: MineruProvider;
   geminiProvider?: GeminiProvider;
+  documentFallbackProvider?: DocumentFallbackProvider;
 };
 
 const MINERU_KINDS = new Set<MineruFileInput["kind"]>(["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"]);
@@ -129,20 +131,31 @@ export async function buildAttachmentContext(
     throw new AttachmentsError("Gemini-Provider nicht verfügbar.");
   }
 
+  const mineruFiles = mineruEntries.map(({ file }) => file);
   const mineruPromise = mineruEntries.length === 0
     ? Promise.resolve<string[]>([])
-    : options.mineruProvider!(mineruEntries.map(({ file }) => file));
+    : (async () => {
+      try {
+        return validateProviderResults(
+          "MinerU",
+          mineruFiles,
+          await options.mineruProvider!(mineruFiles),
+        );
+      } catch (error) {
+        if (!options.documentFallbackProvider) throw error;
+        return validateProviderResults(
+          "Dokument-Fallback",
+          mineruFiles,
+          await options.documentFallbackProvider(mineruFiles),
+        );
+      }
+    })();
   const geminiPromise = geminiEntries.length === 0
     ? Promise.resolve<string[]>([])
     : mapWithConcurrency(geminiEntries, 2, async ({ file }) =>
       options.geminiProvider!(bytesToDataUri(file.bytes, file.mimeType)));
 
-  const [rawMineruResults, rawGeminiResults] = await Promise.all([mineruPromise, geminiPromise]);
-  const mineruResults = validateProviderResults(
-    "MinerU",
-    mineruEntries.map(({ file }) => file),
-    rawMineruResults,
-  );
+  const [mineruResults, rawGeminiResults] = await Promise.all([mineruPromise, geminiPromise]);
   const geminiResults = validateProviderResults(
     "Gemini",
     geminiEntries.map(({ file }) => file),

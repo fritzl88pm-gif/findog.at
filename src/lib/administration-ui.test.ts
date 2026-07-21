@@ -25,6 +25,7 @@ describe("Administration UI tabs and scanning settings", () => {
 
   it("renders a model ID text input field for scanning settings", () => {
     expect(pageSource).toContain("OpenRouter-Modell-ID");
+    expect(pageSource).toContain("Freds Dokument-Fallback");
   });
 
   it("renders a prompt textarea for scanning settings", () => {

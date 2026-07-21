@@ -169,6 +169,49 @@ describe("Attachment context builder", () => {
       .rejects.toThrow();
   });
 
+  it("falls back to the configured document provider when MinerU fails", async () => {
+    const mineruProvider = vi.fn().mockRejectedValue(new Error("MinerU unavailable"));
+    const documentFallbackProvider = vi.fn().mockResolvedValue(["# Gemini document content"]);
+
+    const result = await buildAttachmentContext("Q", [pdfInput("fallback.pdf")], {
+      mineruProvider,
+      documentFallbackProvider,
+    });
+
+    expect(documentFallbackProvider).toHaveBeenCalledWith([
+      expect.objectContaining({ name: "fallback.pdf", kind: "pdf" }),
+    ]);
+    expect(result).toContain("# Gemini document content");
+  });
+
+  it("does not call the document fallback when MinerU succeeds", async () => {
+    const mineruProvider = vi.fn().mockResolvedValue(["MinerU content"]);
+    const documentFallbackProvider = vi.fn();
+
+    await buildAttachmentContext("Q", [pdfInput()], {
+      mineruProvider,
+      documentFallbackProvider,
+    });
+
+    expect(documentFallbackProvider).not.toHaveBeenCalled();
+  });
+
+  it("falls back when MinerU returns an invalid result and validates the fallback", async () => {
+    const mineruProvider = vi.fn().mockResolvedValue(["   "]);
+    const documentFallbackProvider = vi.fn().mockResolvedValue(["Fallback content"]);
+
+    await expect(buildAttachmentContext("Q", [pdfInput()], {
+      mineruProvider,
+      documentFallbackProvider,
+    })).resolves.toContain("Fallback content");
+
+    documentFallbackProvider.mockResolvedValueOnce([]);
+    await expect(buildAttachmentContext("Q", [pdfInput()], {
+      mineruProvider,
+      documentFallbackProvider,
+    })).rejects.toThrow("Dokument-Fallback lieferte eine unvollständige Antwort");
+  });
+
   it("processes MinerU batch and Gemini images in a single call", async () => {
     const mineruProvider = vi.fn().mockResolvedValue(["PDF result"]);
     const geminiProvider = vi.fn().mockResolvedValueOnce("Image description");

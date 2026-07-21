@@ -42,6 +42,14 @@ describe("Fred native Findog UI", () => {
     expect(pageSource).not.toContain("<FredHistoryTranscript");
   });
 
+  it("uses an accessible trash icon for deleting individual conversations", () => {
+    expect(pageSource).toContain('className="conversation-delete"');
+    expect(pageSource).toContain('title="Unterhaltung löschen"');
+    expect(pageSource).toContain('d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"');
+    expect(pageSource).not.toMatch(/className="conversation-delete"[\s\S]*?>\s*Löschen\s*<\/button>/u);
+    expect(cssSource).toContain(".conversation-delete svg");
+  });
+
   it("renders Fred's image and greeting in the existing centered empty state", () => {
     expect(viewSource).toContain('src="/fred.png"');
     expect(viewSource).toContain('className="empty-state"');

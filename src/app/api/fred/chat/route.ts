@@ -7,6 +7,7 @@ import {
   buildAttachmentContext,
   type AttachmentInput,
 } from "@/lib/attachments/context";
+import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-fallback";
 import { processMineruBatch } from "@/lib/attachments/mineru-cloud";
 import { describeImage } from "@/lib/attachments/gemini-image-context";
 import {
@@ -26,6 +27,7 @@ import {
   encodeFredNativeStreamEvent,
 } from "@/lib/fred-native-stream";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getScanningSettings } from "@/lib/scanning/settings";
 import {
   FredEmbedConfigurationError,
   FredEmbedUpstreamError,
@@ -620,6 +622,13 @@ export async function POST(request: Request) {
               async (signal) => buildAttachmentContext(body.query, attachmentInputs, {
                 mineruProvider: (files) => processMineruBatch(files, { signal }),
                 geminiProvider: (uri) => describeImage(uri, { signal }),
+                documentFallbackProvider: async (files) => {
+                  const settings = await getScanningSettings(supabase);
+                  return extractDocumentsWithConfiguredModel(files, {
+                    model: settings.modelId,
+                    signal,
+                  });
+                },
               }),
               {
                 deadline,

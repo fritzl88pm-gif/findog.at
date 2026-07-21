@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { buildAttachmentContext } from "@/lib/attachments/context";
+import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-fallback";
 import {
   mintFredEmbedSession,
   readFredEmbedServerConfig,
@@ -15,6 +16,7 @@ import {
   stopFredUpstreamSession,
 } from "@/lib/weknora/fred-native";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getScanningSettings } from "@/lib/scanning/settings";
 import { parseFredNativeStreamLine } from "@/lib/fred-native-stream";
 import { resolveBfgCitation } from "@/lib/findok/bfg-citations";
 import { POST } from "./route";
@@ -24,7 +26,14 @@ vi.mock("@/lib/attachments/context", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/attachments/context")>();
   return { ...original, buildAttachmentContext: vi.fn() };
 });
+vi.mock("@/lib/attachments/document-fallback", () => ({
+  extractDocumentsWithConfiguredModel: vi.fn(),
+}));
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
+vi.mock("@/lib/scanning/settings", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/lib/scanning/settings")>();
+  return { ...original, getScanningSettings: vi.fn() };
+});
 vi.mock("@/lib/findok/bfg-citations", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/findok/bfg-citations")>();
   return { ...original, resolveBfgCitation: vi.fn() };
@@ -159,6 +168,13 @@ describe("POST /api/fred/chat", () => {
     });
     vi.mocked(openFredUpstreamStream).mockImplementation(async () => upstreamStream());
     vi.mocked(buildAttachmentContext).mockImplementation(async (question) => `${question}\n\nEXTRACTED`);
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      modelId: "google/gemini-3.5-flash",
+      prompt: "Configured scanning prompt",
+      updatedAt: "2026-07-19T10:00:00.000Z",
+      updatedBy: userId,
+    });
+    vi.mocked(extractDocumentsWithConfiguredModel).mockResolvedValue(["FALLBACK"]);
   });
 
   afterEach(() => {
@@ -544,6 +560,41 @@ describe("POST /api/fred/chat", () => {
         }],
       }),
     });
+  });
+
+  it("uses the admin-configured model only when the MinerU document fallback is invoked", async () => {
+    const rpc = rpcForTurn();
+    const supabase = { rpc };
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase as never);
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      modelId: "google/gemini-3.5-flash:online",
+      prompt: "Scanning-specific prompt must not be used for Fred extraction",
+      updatedAt: "2026-07-19T10:00:00.000Z",
+      updatedBy: userId,
+    });
+    vi.mocked(buildAttachmentContext).mockImplementationOnce(async (question, attachments, options) => {
+      if (!options?.documentFallbackProvider) throw new Error("document fallback missing");
+      const fallback = await options.documentFallbackProvider(attachments as never);
+      return `${question}\n\n${fallback.join("\n")}`;
+    });
+
+    const response = await POST(multipartRequest({
+      query: "Bitte Dokument prüfen",
+      attachment: pdfFile("Fallback.pdf"),
+    }));
+    await response.text();
+
+    expect(getScanningSettings).toHaveBeenCalledWith(supabase);
+    expect(extractDocumentsWithConfiguredModel).toHaveBeenCalledWith(
+      [expect.objectContaining({ name: "Fallback.pdf", kind: "pdf" })],
+      {
+        model: "google/gemini-3.5-flash:online",
+        signal: expect.any(AbortSignal),
+      },
+    );
+    expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+      query: "Bitte Dokument prüfen\n\nFALLBACK",
+    }));
   });
 
   it.each([

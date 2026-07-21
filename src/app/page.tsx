@@ -2796,8 +2796,11 @@ export default function Home() {
                           onClick={() => void deleteFredConversations([conversation.id])}
                           disabled={historyControlsDisabled}
                           aria-label={`Unterhaltung „${conversation.title}“ löschen`}
+                          title="Unterhaltung löschen"
                         >
-                          Löschen
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" />
+                          </svg>
                         </button>
                       </div>
                     </div>
@@ -3766,7 +3769,10 @@ export default function Home() {
               <section className="form-generator-card admin-system-prompt-card" role="tabpanel" id="admin-panel-scanning" aria-labelledby="admin-tab-scanning">
                 <div className="form-generator-heading">
                   <h2>Scanning-Einstellungen</h2>
-                  <p>OpenRouter-Modell und vollständiger statischer Prompt für die Belegauswertung.</p>
+                  <p>
+                    OpenRouter-Modell für die Belegauswertung und Freds Dokument-Fallback.
+                    Der statische Prompt gilt nur für die Belegauswertung.
+                  </p>
                 </div>
                 <div className="field-group">
                   <label htmlFor="scanning-model-id">OpenRouter-Modell-ID</label>
