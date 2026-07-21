@@ -49,10 +49,8 @@ import {
 } from "@/lib/german-pension-option";
 
 import {
-  L17B_FREQUENT_CURRENCY_CODES,
   L17B_YEARS,
   getL17bYearEntries,
-  getL17bCountryFlag,
   convertL17bCurrency,
   formatL17bForeignAmount,
   formatL17bEuro,
@@ -65,6 +63,7 @@ import FredNativeChatView, {
   type FredNativeMessage,
 } from "@/components/fred-native-chat-view";
 import FredRunView from "@/components/fredrun-view";
+import L17bCountrySelect from "@/components/l17b-country-select";
 import ScanningView from "@/components/scanning-view";
 import KnowledgeLandscapeView from "@/components/knowledge-landscape-view";
 
@@ -581,12 +580,6 @@ function L17bCurrencyView() {
   const [amountInput, setAmountInput] = useState("");
 
   const entries = getL17bYearEntries(selectedYear) ?? [];
-  const frequentCurrencyCodes = new Set<string>(L17B_FREQUENT_CURRENCY_CODES);
-  const frequentEntries = L17B_FREQUENT_CURRENCY_CODES.flatMap((currencyCode) => {
-    const frequentEntry = entries.find((candidate) => candidate.currencyCode === currencyCode);
-    return frequentEntry ? [frequentEntry] : [];
-  });
-  const otherEntries = entries.filter((candidate) => !frequentCurrencyCodes.has(candidate.currencyCode));
   const amount = parseL17bGermanAmount(amountInput);
   const entry = selectedCode ? lookupL17bEntry(selectedYear, selectedCode) : undefined;
   const result = entry !== undefined && amount !== null ? convertL17bCurrency(selectedYear, selectedCode, amount) : null;
@@ -600,10 +593,6 @@ function L17bCurrencyView() {
     if (!stillAvailable) {
       setSelectedCode("");
     }
-  }
-
-  function handleCountryChange(event: React.ChangeEvent<HTMLSelectElement>) {
-    setSelectedCode(event.target.value);
   }
 
   function handleAmountChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -642,28 +631,11 @@ function L17bCurrencyView() {
           </div>
           <div className="field-group">
             <label htmlFor="l17b-country-select">Land</label>
-            <select
-              id="l17b-country-select"
-              value={selectedCode}
-              onChange={handleCountryChange}
-              autoComplete="off"
-            >
-              <option value="">— Land auswählen —</option>
-              <optgroup label="Häufig verwendet">
-                {frequentEntries.map((e) => (
-                  <option key={e.currencyCode} value={e.currencyCode}>
-                    {getL17bCountryFlag(e.currencyCode)} {e.country} ({e.currencyCode}, {e.currencyName})
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label="Alle Länder">
-                {otherEntries.map((e) => (
-                  <option key={e.currencyCode} value={e.currencyCode}>
-                    {getL17bCountryFlag(e.currencyCode)} {e.country} ({e.currencyCode}, {e.currencyName})
-                  </option>
-                ))}
-              </optgroup>
-            </select>
+            <L17bCountrySelect
+              entries={entries}
+              selectedCode={selectedCode}
+              onChange={setSelectedCode}
+            />
           </div>
           <div className="field-group">
             <label htmlFor="l17b-amount-input">

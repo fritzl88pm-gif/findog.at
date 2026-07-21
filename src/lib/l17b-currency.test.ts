@@ -4,7 +4,7 @@ import {
   L17B_FREQUENT_CURRENCY_CODES,
   L17B_YEARS,
   getL17bYearEntries,
-  getL17bCountryFlag,
+  getL17bCountryCode,
   lookupL17bEntry,
   convertL17bCurrency,
   getL17bSourceNote,
@@ -25,14 +25,14 @@ describe("L17b currency calculator – country dropdown", () => {
     ]);
   });
 
-  it("provides a country flag for every selectable entry", () => {
+  it("provides a country code for every selectable entry", () => {
     for (const year of L17B_YEARS) {
       for (const entry of getL17bYearEntries(year) ?? []) {
-        expect(getL17bCountryFlag(entry.currencyCode)).not.toBe("");
+        expect(getL17bCountryCode(entry.currencyCode)).toMatch(/^[A-Z]{2}$/);
       }
     }
-    expect(getL17bCountryFlag("HUF")).toBe("🇭🇺");
-    expect(getL17bCountryFlag("PLN")).toBe("🇵🇱");
+    expect(getL17bCountryCode("HUF")).toBe("HU");
+    expect(getL17bCountryCode("PLN")).toBe("PL");
   });
 });
 

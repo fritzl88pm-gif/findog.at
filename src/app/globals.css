@@ -2774,6 +2774,138 @@ textarea:focus {
   box-shadow: var(--shadow-md);
 }
 
+.l17b-country-picker {
+  position: relative;
+}
+
+.l17b-country-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 42px;
+  gap: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: #fafbfc;
+  padding: 10px 14px;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  transition: var(--transition);
+}
+
+.l17b-country-trigger:hover {
+  border-color: var(--border-hover);
+  background: #fff;
+}
+
+.l17b-country-trigger:focus-visible {
+  border-color: var(--border-focus);
+  outline: none;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(40, 111, 156, 0.12);
+}
+
+.l17b-country-trigger-value {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+}
+
+.l17b-country-trigger-value > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.l17b-country-chevron {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  transition: transform 160ms ease;
+}
+
+.l17b-country-trigger[aria-expanded="true"] .l17b-country-chevron {
+  transform: rotate(180deg);
+}
+
+.l17b-country-listbox {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 5px);
+  right: 0;
+  left: 0;
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  padding: 6px;
+  box-shadow: var(--shadow-md);
+}
+
+.l17b-country-group-label {
+  padding: 9px 10px 5px;
+  color: var(--bmf-blue-deep);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.l17b-country-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 9px 10px;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+}
+
+.l17b-country-option:hover,
+.l17b-country-option:focus-visible {
+  outline: none;
+  background: rgba(40, 111, 156, 0.08);
+}
+
+.l17b-country-option.is-selected {
+  background: var(--bmf-blue);
+  color: #fff;
+}
+
+.l17b-country-option.is-placeholder {
+  color: var(--muted);
+}
+
+.l17b-country-option.is-placeholder.is-selected {
+  color: #fff;
+}
+
+.l17b-country-flag {
+  flex: 0 0 27px;
+  width: 27px;
+  height: 18px;
+  border-radius: 2px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px rgba(13, 57, 84, 0.16);
+}
+
 .german-sv-rate-line {
   display: flex;
   flex-wrap: wrap;

@@ -17,6 +17,7 @@ describe("approved release surface", () => {
   const germanSvPensionIllustrationPath = fileURLToPath(new URL("../../public/fred-german-sv-pension.png", import.meta.url));
   const l17bIllustrationPath = fileURLToPath(new URL("../../public/fred_l17b.png", import.meta.url));
   const germanSvPensionPath = fileURLToPath(new URL("./german-sv-pension.ts", import.meta.url));
+  const l17bCountrySelectPath = fileURLToPath(new URL("../components/l17b-country-select.tsx", import.meta.url));
   const nextConfigPath = fileURLToPath(new URL("../../next.config.ts", import.meta.url));
   const pageSource = readFileSync(pagePath, "utf8");
   const globalsSource = readFileSync(globalsPath, "utf8");
@@ -24,6 +25,7 @@ describe("approved release surface", () => {
   const publicSettingsSource = readFileSync(publicSettingsPath, "utf8");
   const chatRouteSource = readFileSync(chatRoutePath, "utf8");
   const germanSvPensionSource = readFileSync(germanSvPensionPath, "utf8");
+  const l17bCountrySelectSource = readFileSync(l17bCountrySelectPath, "utf8");
   const nextConfigSource = readFileSync(nextConfigPath, "utf8");
 
   it("labels the standalone BFG view as BFG Suche in expanded and collapsed navigation", () => {
@@ -307,16 +309,21 @@ describe("approved release surface", () => {
     expect(beforeCard).not.toMatch(/: null\s*$/);
   });
 
-  it("groups frequently used L17b countries first and shows flags in every country option", () => {
+  it("uses an accessible L17b country picker with SVG flags and frequent countries first", () => {
     const l17bView = pageSource.slice(
       pageSource.indexOf("function L17bCurrencyView("),
       pageSource.indexOf("type GermanSvPensionViewProps"),
     );
 
-    expect(l17bView).toContain('<optgroup label="Häufig verwendet">');
-    expect(l17bView).toContain('<optgroup label="Alle Länder">');
-    expect(l17bView).toContain("L17B_FREQUENT_CURRENCY_CODES.flatMap");
-    expect(l17bView).toContain("!frequentCurrencyCodes.has(candidate.currencyCode)");
-    expect(l17bView.match(/getL17bCountryFlag\(e\.currencyCode\)/gu)).toHaveLength(2);
+    expect(l17bView).toContain("<L17bCountrySelect");
+    expect(l17bCountrySelectSource).toContain('from "country-flag-icons/react/3x2"');
+    expect(l17bCountrySelectSource).toContain('role="combobox"');
+    expect(l17bCountrySelectSource).toContain('role="listbox"');
+    expect(l17bCountrySelectSource).toContain("Häufig verwendet");
+    expect(l17bCountrySelectSource).toContain("Alle Länder");
+    expect(l17bCountrySelectSource).toContain("L17B_FREQUENT_CURRENCY_CODES.flatMap");
+    expect(l17bCountrySelectSource).toContain("!frequentCurrencyCodes.has(entry.currencyCode)");
+    expect(l17bCountrySelectSource).toContain("<CountryFlag");
+    expect(globalsSource).toContain(".l17b-country-flag");
   });
 });

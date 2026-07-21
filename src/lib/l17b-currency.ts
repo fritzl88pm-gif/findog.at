@@ -48,12 +48,8 @@ const COUNTRY_CODE_BY_CURRENCY: Readonly<Record<string, string>> = {
   ZAR: "ZA",
 };
 
-export function getL17bCountryFlag(currencyCode: string): string {
-  const countryCode = COUNTRY_CODE_BY_CURRENCY[currencyCode];
-  if (!countryCode) return "";
-  return [...countryCode]
-    .map((letter) => String.fromCodePoint(0x1f1e6 + letter.charCodeAt(0) - 65))
-    .join("");
+export function getL17bCountryCode(currencyCode: string): string | undefined {
+  return COUNTRY_CODE_BY_CURRENCY[currencyCode];
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
