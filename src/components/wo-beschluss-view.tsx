@@ -123,10 +123,8 @@ export default function WoBeschlussView() {
           ) : null}
           {snapshot.finished ? (
             <div className="wo-beschluss-end-card">
-              <p className="eyebrow">RUNDE VORBEI</p>
-              <h2>Die Figur ist K. o.</h2>
-              <p>Du hast <strong>{snapshot.hits}</strong> Treffer gebraucht.</p>
-              <button type="button" onClick={resetRound}>Noch einmal</button>
+              <h2>Auszahlung erfolgt! Endlich...</h2>
+              <button type="button" onClick={resetRound}>Nochmal</button>
             </div>
           ) : null}
         </section>

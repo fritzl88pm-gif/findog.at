@@ -6261,7 +6261,7 @@ textarea:focus {
 }
 
 .wo-beschluss-end-card h2 {
-  font-size: clamp(1.65rem, 6vw, 2.35rem);
+  font-size: clamp(2rem, 7vw, 3rem);
   font-weight: 800;
 }
 
@@ -6270,7 +6270,7 @@ textarea:focus {
 }
 
 .wo-beschluss-end-card button {
-  margin-top: 6px;
+  margin-top: 20px;
   border-color: var(--bmf-blue);
   background: var(--bmf-blue);
   color: #ffffff;

@@ -29,6 +29,12 @@ describe("Wo Beschluss UI surface", () => {
     expect(sceneSource).toContain("WO_BESCHLUSS_ASSETS");
   });
 
+  it("shows the requested payout message and replay action on the winning screen", () => {
+    expect(viewSource).toContain("<h2>Auszahlung erfolgt! Endlich...</h2>");
+    expect(viewSource).toContain(">Nochmal</button>");
+    expect(viewSource).not.toContain("Die Figur ist K. o.");
+  });
+
   it("ships exactly the seven runtime sprite sheets with provenance", () => {
     expect(Object.keys(manifest.assets)).toHaveLength(7);
     for (const [name, hash] of Object.entries(manifest.assets)) {
