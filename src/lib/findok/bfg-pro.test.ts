@@ -168,7 +168,27 @@ describe("BFG PRO query generation and reranking", () => {
     expect(fetchBfgProCandidates).not.toHaveBeenCalled();
   });
 
-  it("normalizes and deduplicates query-plan variants before fallback retrieval", async () => {
+  it("accepts model JSON wrapped in a markdown code fence", async () => {
+    vi.mocked(chatCompletion)
+      .mockResolvedValueOnce({
+        content: '```json\n{"queries":["Arbeitszimmer Vorsteuer"],"norm":null}\n```',
+        toolCalls: [],
+        finishReason: "stop",
+      })
+      .mockResolvedValueOnce({
+        content: '```\n{"selections":[{"candidateId":"candidate-1","score":80,"comment":"Passend.","caseSummary":"Ein Arbeitszimmer war strittig; das BFG entschied darüber."}]}\n```',
+        toolCalls: [],
+        finishReason: "stop",
+      });
+
+    const response = await runBfgProSearch("Arbeitszimmer im Wohnungsverband");
+
+    expect(fetchBfgProCandidates).toHaveBeenCalledWith({ query: "Arbeitszimmer Vorsteuer" });
+    expect(response.results).toHaveLength(1);
+    expect(response.results[0]).toMatchObject({ gz: officialCandidate.gz, score: 80 });
+  });
+
+  it("normalizes and deduplicates query-plan variants before retrieval", async () => {
     vi.mocked(fetchBfgProCandidates).mockResolvedValue([]);
     vi.mocked(chatCompletion).mockResolvedValueOnce({
       content: JSON.stringify({
@@ -186,10 +206,11 @@ describe("BFG PRO query generation and reranking", () => {
     ]);
   });
 
-  it("always adds a supplied norm-filtered precision source without running broader recall at five", async () => {
+  it("runs the norm-filtered precision source and every planned query variant", async () => {
     vi.mocked(fetchBfgProCandidates)
       .mockResolvedValueOnce(Array.from({ length: 5 }, (_value, index) => candidate(index + 1)))
-      .mockResolvedValueOnce([candidate(1)]);
+      .mockResolvedValueOnce([candidate(1)])
+      .mockResolvedValueOnce([candidate(6)]);
     vi.mocked(chatCompletion)
       .mockResolvedValueOnce({
         content: JSON.stringify({
@@ -210,41 +231,15 @@ describe("BFG PRO query generation and reranking", () => {
     expect(vi.mocked(fetchBfgProCandidates).mock.calls).toEqual([
       [{ query: "Arbeitszimmer" }],
       [{ query: "Arbeitszimmer", norm: "EStG 1988 § 20" }],
+      [{ query: "betrieblicher Raum" }],
     ]);
   });
 
-  it("runs broader fallback queries only while merged candidate recall stays below five", async () => {
+  it("runs every planned query variant even when the first already has broad recall", async () => {
     vi.mocked(fetchBfgProCandidates)
-      .mockResolvedValueOnce([candidate(1), candidate(2)])
-      .mockResolvedValueOnce([candidate(3), candidate(4), candidate(5)]);
-    vi.mocked(chatCompletion)
-      .mockResolvedValueOnce({
-        content: JSON.stringify({
-          queries: ["präzise Begriffe", "breitere Synonyme", "weitere Normbegriffe"],
-          norm: null,
-        }),
-        toolCalls: [],
-        finishReason: "stop",
-      })
-      .mockResolvedValueOnce({
-        content: '{"selections":[{"candidateId":"candidate-1","score":80,"comment":"Passend.","caseSummary":"Der offizielle Fall war einschlägig; das BFG entschied darüber."}]}',
-        toolCalls: [],
-        finishReason: "stop",
-      });
-
-    await runBfgProSearch("Sachverhalt");
-
-    expect(vi.mocked(fetchBfgProCandidates).mock.calls).toEqual([
-      [{ query: "präzise Begriffe" }],
-      [{ query: "breitere Synonyme" }],
-    ]);
-  });
-
-  it("runs the third planned query when recall remains below five after the second", async () => {
-    vi.mocked(fetchBfgProCandidates)
-      .mockResolvedValueOnce([candidate(1)])
-      .mockResolvedValueOnce([candidate(2)])
-      .mockResolvedValueOnce([candidate(3), candidate(4), candidate(5)]);
+      .mockResolvedValueOnce(Array.from({ length: 12 }, (_value, index) => candidate(index + 1)))
+      .mockResolvedValueOnce([candidate(13)])
+      .mockResolvedValueOnce([candidate(14), candidate(15)]);
     vi.mocked(chatCompletion)
       .mockResolvedValueOnce({
         content: JSON.stringify({
@@ -266,6 +261,32 @@ describe("BFG PRO query generation and reranking", () => {
       [{ query: "präzise Begriffe" }],
       [{ query: "breitere Synonyme" }],
       [{ query: "weitere Normbegriffe" }],
+    ]);
+  });
+
+  it("stops running further planned queries once the merged candidate pool is full", async () => {
+    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce(
+      Array.from({ length: 60 }, (_value, index) => candidate(index + 1)),
+    );
+    vi.mocked(chatCompletion)
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          queries: ["präzise Begriffe", "breitere Synonyme"],
+          norm: null,
+        }),
+        toolCalls: [],
+        finishReason: "stop",
+      })
+      .mockResolvedValueOnce({
+        content: '{"selections":[{"candidateId":"candidate-1","score":80,"comment":"Passend.","caseSummary":"Der offizielle Fall war einschlägig; das BFG entschied darüber."}]}',
+        toolCalls: [],
+        finishReason: "stop",
+      });
+
+    await runBfgProSearch("Sachverhalt");
+
+    expect(vi.mocked(fetchBfgProCandidates).mock.calls).toEqual([
+      [{ query: "präzise Begriffe" }],
     ]);
   });
 
