@@ -38,7 +38,7 @@ describe("approved release surface", () => {
   });
 
   it("adds a separate BFG Suche PRO view and controls without replacing the normal search", () => {
-    expect(pageSource).toContain('type AppView = "chat" | "scanning" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data"');
+    expect(pageSource).toContain('type AppView = "chat" | "scanning" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "wo-beschluss" | "quiz" | "administration" | "data"');
     expect(pageSource).toMatch(/className={`sidebar-view-button[\s\S]*?BFG Suche PRO\s*<\/button>/);
     expect(pageSource).toContain('title="BFG Suche PRO"');
     expect(pageSource).toContain('aria-label="BFG Suche PRO"');
@@ -56,7 +56,7 @@ describe("approved release surface", () => {
   });
 
   it("keeps the Quiz view behind the administrator capability in every client path", () => {
-    expect(pageSource).toContain('function openQuizView() {\n    if (!isAdmin)');
+    expect(pageSource).toMatch(/function openQuizView\(\) \{\r?\n\s+if \(!isAdmin\)/);
     expect(pageSource.match(/\{isAdmin \? \(\s*<button[\s\S]{0,500}?appView === "quiz"/g)).toHaveLength(2);
     expect(pageSource).toContain('current === "administration" || current === "quiz"');
     expect(pageSource).toContain('appView === "quiz" && isAdmin ?');

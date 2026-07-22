@@ -6065,3 +6065,249 @@ textarea:focus {
   margin-top: 24px;
   flex-wrap: wrap;
 }
+
+/* Wo Beschluss? */
+.wo-beschluss-panel {
+  background:
+    radial-gradient(circle at 88% 3%, rgba(255, 212, 0, 0.12), transparent 24rem),
+    var(--bg-app);
+  color: var(--ink);
+}
+
+.wo-beschluss-view {
+  display: grid;
+  width: min(980px, 100%);
+  min-height: calc(100% - 4px);
+  grid-template-rows: auto auto minmax(420px, 1fr) auto;
+  gap: 16px;
+  margin: 0 auto;
+}
+
+.wo-beschluss-header,
+.wo-beschluss-status-row,
+.wo-beschluss-stats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.wo-beschluss-header h1,
+.wo-beschluss-end-card h2 {
+  margin: 0;
+  color: var(--bmf-blue-deep);
+  font-family: var(--font-sans);
+  line-height: 1.05;
+}
+
+.wo-beschluss-header h1 {
+  font-size: clamp(1.8rem, 4vw, 2.35rem);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
+
+.wo-beschluss-header .eyebrow,
+.wo-beschluss-end-card .eyebrow {
+  margin: 0 0 7px;
+  color: var(--bmf-blue);
+  font-size: 0.73rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.wo-beschluss-reset,
+.wo-beschluss-end-card button {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px 16px;
+  background: var(--bg-surface);
+  color: var(--bmf-blue-deep);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: var(--transition);
+}
+
+.wo-beschluss-reset:hover:not(:disabled),
+.wo-beschluss-end-card button:hover {
+  border-color: var(--border-hover);
+  background: #f7fbfd;
+  color: var(--bmf-blue);
+}
+
+.wo-beschluss-reset:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.wo-beschluss-reset:focus-visible,
+.wo-beschluss-end-card button:focus-visible {
+  outline: 3px solid rgba(40, 111, 156, 0.22);
+  outline-offset: 2px;
+}
+
+.wo-beschluss-hud {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.wo-beschluss-status-row {
+  margin-bottom: 10px;
+  color: var(--muted);
+}
+
+.wo-beschluss-status-row strong,
+.wo-beschluss-stats strong {
+  color: var(--bmf-blue-deep);
+}
+
+.wo-beschluss-meter {
+  height: 14px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5edf2;
+}
+
+.wo-beschluss-meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--bmf-blue), #4b9bc5);
+  transition: width 180ms ease, background 180ms ease;
+}
+
+.wo-beschluss-meter[data-level="shaken"] .wo-beschluss-meter-fill { background: #d6a500; }
+.wo-beschluss-meter[data-level="dazed"] .wo-beschluss-meter-fill { background: #ff8a47; }
+.wo-beschluss-meter[data-level="critical"] .wo-beschluss-meter-fill,
+.wo-beschluss-meter[data-level="down"] .wo-beschluss-meter-fill { background: #ff4c5f; }
+
+.wo-beschluss-stats {
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.wo-beschluss-stage {
+  position: relative;
+  min-height: 420px;
+  overflow: hidden;
+  border: 1px solid rgba(40, 111, 156, 0.18);
+  border-radius: 20px;
+  background: #eef4f7;
+  box-shadow: var(--shadow-md);
+}
+
+.wo-beschluss-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.wo-beschluss-canvas canvas {
+  display: block;
+  cursor: none;
+}
+
+.wo-beschluss-hint,
+.wo-beschluss-loading,
+.wo-beschluss-error {
+  position: absolute;
+  left: 50%;
+  z-index: 2;
+  bottom: 18px;
+  margin: 0;
+  transform: translateX(-50%);
+  border: 1px solid rgba(40, 111, 156, 0.18);
+  border-radius: 999px;
+  padding: 9px 14px;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--bmf-blue-deep);
+  font-size: 0.82rem;
+  font-weight: 650;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: var(--shadow-sm);
+}
+
+.wo-beschluss-loading,
+.wo-beschluss-error {
+  top: 50%;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+}
+
+.wo-beschluss-error {
+  color: var(--danger);
+}
+
+.wo-beschluss-end-card {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 3;
+  width: min(86%, 390px);
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--border-color);
+  border-top: 4px solid var(--accent-yellow);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+  backdrop-filter: blur(8px);
+}
+
+.wo-beschluss-end-card h2 {
+  font-size: clamp(1.65rem, 6vw, 2.35rem);
+  font-weight: 800;
+}
+
+.wo-beschluss-end-card > p:not(.eyebrow) {
+  color: var(--muted);
+}
+
+.wo-beschluss-end-card button {
+  margin-top: 6px;
+  border-color: var(--bmf-blue);
+  background: var(--bmf-blue);
+  color: #ffffff;
+}
+
+.wo-beschluss-end-card button:hover {
+  border-color: var(--bmf-blue-dark);
+  background: var(--bmf-blue-dark);
+  color: #ffffff;
+}
+
+.wo-beschluss-footer {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+@media (max-width: 600px) {
+  .wo-beschluss-view {
+    grid-template-rows: auto auto minmax(380px, 1fr) auto;
+  }
+
+  .wo-beschluss-reset {
+    padding: 8px 12px;
+    font-size: 0.82rem;
+  }
+
+  .wo-beschluss-stage {
+    min-height: 380px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wo-beschluss-panel *,
+  .wo-beschluss-panel *::before,
+  .wo-beschluss-panel *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

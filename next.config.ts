@@ -35,6 +35,9 @@ const supabaseImageSources = supabaseConnectSources.filter((source) => (
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  turbopack: {
+    root: process.cwd(),
+  },
   async headers() {
     return [
       {
