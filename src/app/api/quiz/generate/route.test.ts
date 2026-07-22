@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { isAdminUser } from "@/lib/admin-auth";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { generateQuiz } from "@/lib/quiz/generate";
@@ -8,6 +9,10 @@ import { POST } from "./route";
 vi.mock("@/lib/auth/server", () => ({
   authenticateSupabaseRequest: vi.fn(),
   getBearerToken: vi.fn(),
+}));
+
+vi.mock("@/lib/admin-auth", () => ({
+  isAdminUser: vi.fn(),
 }));
 
 vi.mock("@/lib/quiz/generate", () => ({
@@ -69,6 +74,7 @@ describe("POST /api/quiz/generate", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-21T12:00:00Z"));
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "default-test-user" });
+    vi.mocked(isAdminUser).mockResolvedValue(true);
   });
 
   afterAll(() => {
@@ -99,6 +105,19 @@ describe("POST /api/quiz/generate", () => {
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "Bitte zuerst anmelden." });
+    expect(generateQuiz).not.toHaveBeenCalled();
+  });
+
+  it("rejects an authenticated non-admin before quiz generation", async () => {
+    vi.mocked(isAdminUser).mockResolvedValueOnce(false);
+
+    const response = await POST(mockRequest({ category: "Arbeitnehmerveranlagung" }));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Du hast keine Administrationsberechtigung.",
+    });
+    expect(isAdminUser).toHaveBeenCalledWith(expect.anything(), "default-test-user");
     expect(generateQuiz).not.toHaveBeenCalled();
   });
 

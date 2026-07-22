@@ -55,6 +55,13 @@ describe("approved release surface", () => {
     expect(pageSource).toContain('/api/findok/bfg?');
   });
 
+  it("keeps the Quiz view behind the administrator capability in every client path", () => {
+    expect(pageSource).toContain('function openQuizView() {\n    if (!isAdmin)');
+    expect(pageSource.match(/\{isAdmin \? \(\s*<button[\s\S]{0,500}?appView === "quiz"/g)).toHaveLength(2);
+    expect(pageSource).toContain('current === "administration" || current === "quiz"');
+    expect(pageSource).toContain('appView === "quiz" && isAdmin ?');
+  });
+
   it("adds the local Deutsche SV Rente AppView directly below BFG Suche PRO", () => {
     const expandedNavigation = pageSource.slice(
       pageSource.indexOf('<nav className="forms-navigation"'),

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { isAdminUser } from "@/lib/admin-auth";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
@@ -144,6 +145,9 @@ export async function POST(request: Request) {
     }
 
     const user = await authenticateSupabaseRequest(request, supabase);
+    if (!await isAdminUser(supabase, user.id)) {
+      throw new UserVisibleError("Du hast keine Administrationsberechtigung.", 403);
+    }
 
     const body = await readBoundedJsonBody(request);
     const { category } = validateRequestBody(body);
