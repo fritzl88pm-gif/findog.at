@@ -77,6 +77,7 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).toContain("Datei anhängen");
     expect(viewSource).toContain("max. {MAX_IMAGE_UPLOADS} · je 10 MB");
     expect(viewSource).toContain("max. {MAX_FILE_UPLOADS} · je 20 MB");
+    expect(viewSource).toContain('className="fred-pro-icon"');
     expect(viewSource).toContain('className="fred-web-search-icon"');
     expect(viewSource).toContain('fetch("/api/fred/chat"');
     expect(viewSource).toContain("parseFredNativeStreamLine");
@@ -160,17 +161,32 @@ describe("Fred Pro Mode UI", () => {
     expect(pageSource).toContain("proMode");
   });
 
-  it("renders a compact Pro button immediately before the Websuche button in composer-actions", () => {
-    const proIndex = viewSource.indexOf("Pro");
+  it("renders compact icon-only Pro and Websuche buttons in the requested order", () => {
+    const proIndex = viewSource.indexOf("fred-pro-toggle");
     const webSearchIndex = viewSource.indexOf("fred-web-search-toggle");
     expect(proIndex).toBeGreaterThan(0);
     expect(proIndex).toBeLessThan(webSearchIndex);
+
+    const proButton = viewSource.slice(proIndex, viewSource.indexOf("</button>", proIndex));
+    const webSearchButton = viewSource.slice(webSearchIndex, viewSource.indexOf("</button>", webSearchIndex));
+    expect(proButton).toContain('className="fred-pro-icon"');
+    expect(webSearchButton).toContain('className="fred-web-search-icon"');
+    expect(proButton).toContain('fill="none" stroke="currentColor"');
+    expect(webSearchButton).toContain('fill="none" stroke="currentColor"');
+    expect(proButton).not.toContain("<span>");
+    expect(webSearchButton).not.toContain("<span>");
+    expect(cssSource).toContain(".composer-model-trigger.composer-icon-toggle");
   });
 
   it("uses aria-pressed, dynamic title/aria-label on the Pro button", () => {
     expect(viewSource).toContain('aria-pressed={proModeEnabled}');
-    expect(viewSource).toContain('"Pro-Modus verwenden"');
-    expect(viewSource).toContain('"Pro-Modus aktiv"');
+    expect(viewSource).toContain('title={proModeEnabled ? "Pro-Modus aktiv" : "Pro-Modus verwenden"}');
+    expect(viewSource).toContain('aria-label={proModeEnabled ? "Pro-Modus aktiv" : "Pro-Modus verwenden"}');
+  });
+
+  it("uses dynamic title/aria-label on the icon-only Websuche button", () => {
+    expect(viewSource).toContain('title={webSearchEnabled ? "Websuche aktiv" : "Websuche verwenden"}');
+    expect(viewSource).toContain('aria-label={webSearchEnabled ? "Websuche aktiv" : "Websuche verwenden"}');
   });
 
   it("uses type=button and is disabled while sending", () => {

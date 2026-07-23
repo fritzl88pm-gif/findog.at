@@ -4717,6 +4717,15 @@ textarea:focus {
   gap: 6px;
 }
 
+.composer-model-trigger.composer-icon-toggle {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  max-width: 34px;
+  padding: 0;
+  border-radius: 50%;
+}
+
 .composer-model-trigger > span {
   min-width: 0;
   overflow: hidden;
@@ -4777,13 +4786,7 @@ textarea:focus {
   opacity: 0.78;
 }
 
-.fred-pro-toggle > span {
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-
-
+.fred-pro-icon,
 .fred-web-search-icon {
   width: 16px;
   height: 16px;

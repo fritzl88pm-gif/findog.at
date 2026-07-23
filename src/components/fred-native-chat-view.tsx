@@ -835,7 +835,7 @@ export default function FredNativeChatView({
               <div className="composer-actions">
                 {capabilities.proMode ? (
                   <button
-                    className={`composer-model-trigger fred-pro-toggle${proModeEnabled ? " is-active" : ""}`}
+                    className={`composer-model-trigger composer-icon-toggle fred-pro-toggle${proModeEnabled ? " is-active" : ""}`}
                     type="button"
                     aria-pressed={proModeEnabled}
                     title={proModeEnabled ? "Pro-Modus aktiv" : "Pro-Modus verwenden"}
@@ -848,7 +848,11 @@ export default function FredNativeChatView({
                       });
                     }}
                   >
-                    <span>Pro</span>
+                    <svg className="fred-pro-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M9.5 4.5A2.5 2.5 0 0 0 7 7v.5a3.5 3.5 0 0 0-1 6.85V15a3 3 0 0 0 6 0V7a2.5 2.5 0 0 0-2.5-2.5Z" />
+                      <path d="M14.5 4.5A2.5 2.5 0 0 1 17 7v.5a3.5 3.5 0 0 1 1 6.85V15a3 3 0 0 1-6 0V7a2.5 2.5 0 0 1 2.5-2.5Z" />
+                      <path d="M8 10h1a3 3 0 0 1 3 3M16 10h-1a3 3 0 0 0-3 3M9 14a3 3 0 0 0 3 3M15 14a3 3 0 0 1-3 3" />
+                    </svg>
                   </button>
                 ) : null}
                 {capabilities.quickFred || conversationAgentKey !== null ? (
@@ -881,17 +885,18 @@ export default function FredNativeChatView({
                 ) : null}
                 {capabilities.webSearch ? (
                   <button
-                    className={`composer-model-trigger fred-web-search-toggle${webSearchEnabled ? " is-active" : ""}`}
+                    className={`composer-model-trigger composer-icon-toggle fred-web-search-toggle${webSearchEnabled ? " is-active" : ""}`}
                     type="button"
                     aria-pressed={webSearchEnabled}
+                    title={webSearchEnabled ? "Websuche aktiv" : "Websuche verwenden"}
+                    aria-label={webSearchEnabled ? "Websuche aktiv" : "Websuche verwenden"}
                     onClick={() => setWebSearchEnabled((current) => !current)}
                     disabled={isSending}
                   >
-                    <svg className="fred-web-search-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <svg className="fred-web-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <circle cx="12" cy="12" r="9" />
                       <path d="M3 12h18M12 3c2.3 2.45 3.5 5.45 3.5 9s-1.2 6.55-3.5 9M12 3c-2.3 2.45-3.5 5.45-3.5 9s1.2 6.55 3.5 9" />
                     </svg>
-                    <span>{webSearchEnabled ? "Websuche aktiv" : "Websuche"}</span>
                   </button>
                 ) : null}
                 {isSending ? (
