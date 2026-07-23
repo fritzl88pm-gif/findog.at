@@ -110,6 +110,13 @@ describe("Fred native Findog UI", () => {
     expect(cssSource).toContain(".conversation-export");
   });
 
+  it("replaces the answered turn during regeneration instead of appending a duplicate", () => {
+    expect(viewSource).toContain("messagesBeforeRegeneratedAnswer(messages, assistantIndex)");
+    expect(viewSource).toContain("messagesBeforeQuery,");
+    expect(viewSource).toContain("rollbackMessages: messages,");
+    expect(viewSource).toContain("...(options.messagesBeforeQuery ?? messages), userMessage");
+  });
+
   it("continues a selected stored Fred conversation instead of showing it read-only", () => {
     expect(pageSource).toContain("selectFredConversation(conversation)");
     expect(pageSource).toContain("setFredConversationId(conversation.id)");

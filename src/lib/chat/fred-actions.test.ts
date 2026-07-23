@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_FRED_PDF_EXPORT_CHARS,
   buildFredConversationPdfContent,
+  messagesBeforeRegeneratedAnswer,
   pdfFilenameFromHeader,
   precedingUserMessage,
   type FredActionMessage,
@@ -27,6 +28,16 @@ describe("Fred message actions", () => {
   it("finds the user question belonging to a completed assistant answer", () => {
     expect(precedingUserMessage(messages, 1)?.content).toBe("Wie ist die Rechtslage?");
     expect(precedingUserMessage(messages, 0)).toBeUndefined();
+  });
+
+  it("builds a regeneration base without the answered question and stale answer", () => {
+    const transcript: FredActionMessage[] = [
+      { role: "user", content: "Erste Frage", createdAt: "" },
+      { role: "assistant", content: "Erste Antwort", createdAt: "" },
+      { role: "user", content: "Zweite Frage", createdAt: "" },
+      { role: "assistant", content: "Veraltete Antwort", createdAt: "" },
+    ];
+    expect(messagesBeforeRegeneratedAnswer(transcript, 3)).toEqual(transcript.slice(0, 2));
   });
 
   it("creates a structured full-conversation PDF source with metadata", () => {

@@ -19,6 +19,7 @@ import {
   resetComposerHeight,
 } from "@/lib/chat/composer-height";
 import {
+  messagesBeforeRegeneratedAnswer,
   precedingUserMessage,
 } from "@/lib/chat/fred-actions";
 import { downloadFredPdfFile } from "@/lib/chat/pdf-download";
@@ -297,6 +298,8 @@ export default function FredNativeChatView({
     images: File[];
     files: File[];
     clearDraft: boolean;
+    messagesBeforeQuery?: FredNativeMessage[];
+    rollbackMessages?: FredNativeMessage[];
   }) {
     const query = options.query.trim();
     if (!query || isSending || !accessToken || abortControllerRef.current) return;
@@ -337,7 +340,7 @@ export default function FredNativeChatView({
     userMessage.webSearchEnabled = options.webSearchEnabled;
     const isProMode = options.proModeEnabled === true;
     userMessage.proModeEnabled = isProMode;
-    const baseMessages = [...messages, userMessage];
+    const baseMessages = [...(options.messagesBeforeQuery ?? messages), userMessage];
     setMessages([...baseMessages, assistantMessage]);
     if (options.clearDraft) {
       setComposer("");
@@ -404,7 +407,9 @@ export default function FredNativeChatView({
           if (streamEvent.conversation.agentKey === "quickfred") {
             setProModeEnabled(false);
           }
-          onConversationUpdated(streamEvent.conversation, baseMessages);
+          if (!options.rollbackMessages) {
+            onConversationUpdated(streamEvent.conversation, baseMessages);
+          }
           return;
         }
         if (streamEvent.type === "delta") {
@@ -490,7 +495,11 @@ export default function FredNativeChatView({
           ? sendError.message
           : `${agentName} konnte die Anfrage nicht abschließen.`);
       }
-      if (!answer) setMessages(baseMessages);
+      if (options.rollbackMessages) {
+        setMessages(options.rollbackMessages);
+      } else if (!answer) {
+        setMessages(baseMessages);
+      }
     } finally {
       if (abortControllerRef.current === controller) abortControllerRef.current = null;
       setIsSending(false);
@@ -526,7 +535,8 @@ export default function FredNativeChatView({
 
   function regenerateAnswer(assistantIndex: number): void {
     const question = precedingUserMessage(messages, assistantIndex);
-    if (!question || isSending) return;
+    const messagesBeforeQuery = messagesBeforeRegeneratedAnswer(messages, assistantIndex);
+    if (!question || !messagesBeforeQuery || isSending) return;
     const originalProMode = Boolean(question.proModeEnabled && capabilities.proMode);
     setProModeEnabled(originalProMode);
     void submitQuery({
@@ -537,6 +547,8 @@ export default function FredNativeChatView({
       images: [],
       files: [],
       clearDraft: false,
+      messagesBeforeQuery,
+      rollbackMessages: messages,
     });
   }
 

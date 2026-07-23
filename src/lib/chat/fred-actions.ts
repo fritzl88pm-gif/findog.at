@@ -39,6 +39,19 @@ export function precedingUserMessage(
   return undefined;
 }
 
+export function messagesBeforeRegeneratedAnswer<T extends FredActionMessage>(
+  messages: ReadonlyArray<T>,
+  assistantIndex: number,
+): T[] | undefined {
+  if (assistantIndex !== messages.length - 1 || messages[assistantIndex]?.role !== "assistant") {
+    return undefined;
+  }
+  for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") return messages.slice(0, index);
+  }
+  return undefined;
+}
+
 export function buildFredConversationPdfContent(
   messages: ReadonlyArray<FredActionMessage>,
 ): string {
