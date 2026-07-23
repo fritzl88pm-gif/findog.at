@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import type { FredAgentKey } from "@/lib/weknora/fred-agent";
 
 export const runtime = "nodejs";
 
@@ -14,6 +15,7 @@ type FredConversationRow = {
   title: string;
   created_at: string;
   updated_at: string;
+  agent_key: FredAgentKey;
 };
 
 function json(payload: unknown, status = 200): NextResponse {
@@ -63,7 +65,7 @@ export async function GET(request: Request) {
     const { supabase, user } = await authenticatedContext(request);
     const { data, error } = await supabase
       .from("fred_conversations")
-      .select("id,title,created_at,updated_at")
+      .select("id,title,created_at,updated_at,agent_key")
       .eq("client_id", user.id)
       .order("updated_at", { ascending: false });
     if (error) {
@@ -75,6 +77,7 @@ export async function GET(request: Request) {
         title: conversation.title,
         createdAt: conversation.created_at,
         updatedAt: conversation.updated_at,
+        agentKey: conversation.agent_key,
       })),
     });
   } catch (error) {

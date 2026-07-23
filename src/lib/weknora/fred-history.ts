@@ -1,6 +1,10 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import { UserVisibleError } from "../errors";
+import {
+  isFredAgentKey,
+  type FredAgentKey,
+} from "./fred-agent";
 
 export const FRED_EVENT_BODY_MAX_BYTES = 1_048_576;
 export const FRED_EVENT_CONTENT_MAX_LENGTH = 500_000;
@@ -34,6 +38,7 @@ export type FredConversationSummary = {
   title: string;
   createdAt: string;
   updatedAt: string;
+  agentKey: FredAgentKey;
 };
 
 function recordOf(value: unknown): Record<string, unknown> {
@@ -87,12 +92,15 @@ export function parseFredBridgeEvent(value: unknown, expectedChannelId: string):
 
 export function parseFredWebhookEvent(
   value: unknown,
-  expectedChannelId: string,
+  expectedChannelIds: string | readonly string[],
   now = new Date(),
 ): FredWebhookEvent {
   const record = recordOf(value);
   const channelId = identifier(record.channel_id, "Der Fred-Kanal");
-  if (channelId !== expectedChannelId) {
+  const allowedChannelIds = typeof expectedChannelIds === "string"
+    ? [expectedChannelIds]
+    : expectedChannelIds;
+  if (!allowedChannelIds.includes(channelId)) {
     throw new UserVisibleError("Der Fred-Kanal stimmt nicht überein.", 403);
   }
   const type = eventType(record.type);
@@ -183,6 +191,7 @@ export function parseFredConversationSummary(value: unknown): FredConversationSu
     || typeof record.title !== "string"
     || typeof record.created_at !== "string"
     || typeof record.updated_at !== "string"
+    || !isFredAgentKey(record.agent_key)
   ) {
     throw new UserVisibleError("Fred hat ein ungültiges Speicherergebnis geliefert.", 503);
   }
@@ -191,5 +200,6 @@ export function parseFredConversationSummary(value: unknown): FredConversationSu
     title: record.title,
     createdAt: record.created_at,
     updatedAt: record.updated_at,
+    agentKey: record.agent_key,
   };
 }

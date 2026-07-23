@@ -29,6 +29,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
           title: "Beleg prüfen",
           created_at: "2026-07-19T07:00:00.000Z",
           updated_at: "2026-07-19T07:01:00.000Z",
+          agent_key: "fred",
         },
         error: null,
       }),
@@ -94,6 +95,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.messages[0]).toMatchObject({
+      agentKey: "fred",
       attachments: [{
         kind: "file",
         name: "beleg.pdf",
@@ -105,6 +107,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
       proModeEnabled: true,
     });
     expect(payload.messages[1]).toMatchObject({
+      agentKey: "fred",
       content: "Ergebnis",
       researchTrace: [{
         id: "call-1",

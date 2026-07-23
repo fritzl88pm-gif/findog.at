@@ -4752,6 +4752,31 @@ textarea:focus {
   color: #ffffff;
 }
 
+.fred-quick-toggle {
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+}
+
+.composer-model-trigger.fred-quick-toggle.is-active {
+  border-color: #d38b00;
+  background: var(--accent-yellow);
+  color: #5f3b00;
+}
+
+.fred-quick-icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-linejoin: round;
+}
+
+.composer-model-trigger.fred-quick-toggle.is-active:disabled {
+  opacity: 0.78;
+}
+
 .fred-pro-toggle > span {
   font-weight: 700;
   letter-spacing: 0.02em;

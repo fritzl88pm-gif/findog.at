@@ -3,11 +3,17 @@ import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { readFredEmbedServerConfig } from "@/lib/weknora/fred-embed";
+import {
+  readFredEmbedServerConfig,
+  readQuickFredEmbedServerConfig,
+} from "@/lib/weknora/fred-embed";
 import { POST } from "./route";
 
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
-vi.mock("@/lib/weknora/fred-embed", () => ({ readFredEmbedServerConfig: vi.fn() }));
+vi.mock("@/lib/weknora/fred-embed", () => ({
+  readFredEmbedServerConfig: vi.fn(),
+  readQuickFredEmbedServerConfig: vi.fn(),
+}));
 
 const SECRET = "fred-webhook-secret-that-is-long-enough";
 
@@ -82,5 +88,34 @@ describe("POST /api/webhooks/weknora", () => {
 
     expect(response.status).toBe(401);
     expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("accepts a signed event from the optional QuickFred channel", async () => {
+    vi.mocked(readQuickFredEmbedServerConfig).mockReturnValue({
+      agentKey: "quickfred",
+      channelId: "quickfred-channel",
+      publishToken: "em_quickfred_publish_123456",
+      exchangeOrigin: "https://findog.at",
+      expectedAgentId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
+    });
+    const rpc = vi.fn().mockResolvedValue({ data: { pending: false }, error: null });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    const event = {
+      type: "message_received",
+      channel_id: "quickfred-channel",
+      session_id: "quick-session-1",
+      timestamp: new Date().toISOString(),
+      content: "QuickFred antwortet.",
+    };
+
+    const response = await POST(signedRequest(JSON.stringify(event)));
+
+    expect(response.status).toBe(200);
+    expect(rpc).toHaveBeenCalledWith("record_fred_webhook_event", {
+      payload: expect.objectContaining({
+        channel_id: "quickfred-channel",
+        session_id: "quick-session-1",
+      }),
+    });
   });
 });

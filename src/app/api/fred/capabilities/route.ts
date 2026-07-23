@@ -9,8 +9,12 @@ import {
   mintFredEmbedSession,
   readFredEmbedServerConfig,
   readFredProModelId,
+  readQuickFredEmbedServerConfig,
 } from "@/lib/weknora/fred-embed";
-import { fetchFredUpstreamConfig } from "@/lib/weknora/fred-native";
+import {
+  fetchFredUpstreamConfig,
+  type FredUpstreamConfig,
+} from "@/lib/weknora/fred-native";
 
 export const runtime = "nodejs";
 
@@ -39,6 +43,28 @@ function fredProModeEnabled(): boolean {
   }
 }
 
+async function quickFredModeEnabled(options: {
+  fredChannelId: string;
+  fredUpstreamConfig: FredUpstreamConfig;
+  signal: AbortSignal;
+}): Promise<boolean> {
+  try {
+    const config = readQuickFredEmbedServerConfig();
+    if (config.channelId === options.fredChannelId) return false;
+    const session = await mintFredEmbedSession({ config, signal: options.signal });
+    const upstreamConfig = await fetchFredUpstreamConfig({
+      session,
+      config,
+      signal: options.signal,
+    });
+    return upstreamConfig.agentId === config.expectedAgentId
+      && upstreamConfig.agentId !== options.fredUpstreamConfig.agentId
+      && upstreamConfig.allowWebSearch === options.fredUpstreamConfig.allowWebSearch;
+  } catch {
+    return false;
+  }
+}
+
 export async function GET(request: Request) {
   try {
     const supabase = getSupabaseServerClient();
@@ -54,10 +80,16 @@ export async function GET(request: Request) {
       config,
       signal: request.signal,
     });
+    const quickFred = await quickFredModeEnabled({
+      fredChannelId: config.channelId,
+      fredUpstreamConfig: capabilities,
+      signal: request.signal,
+    });
     return json({
       webSearch: capabilities.allowWebSearch,
       fileUpload: findogFileUploadEnabled(),
       proMode: fredProModeEnabled(),
+      quickFred,
     });
   } catch (error) {
     if (error instanceof UserVisibleError) return json({ error: error.message }, error.status);

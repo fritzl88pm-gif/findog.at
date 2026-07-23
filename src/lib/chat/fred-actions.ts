@@ -1,9 +1,15 @@
+import {
+  fredAgentName,
+  type FredAgentKey,
+} from "../weknora/fred-agent";
+
 export const MAX_FRED_PDF_EXPORT_CHARS = 500_000;
 
 export type FredActionMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  agentKey?: FredAgentKey;
   attachments?: ReadonlyArray<{ name: string }>;
   webSearchEnabled?: boolean;
   proModeEnabled?: boolean;
@@ -40,8 +46,12 @@ export function buildFredConversationPdfContent(
     const content = message.content.trim();
     if (!content) return [];
     const timestamp = viennaTimestamp(message.createdAt);
-    const heading = `## ${message.role === "user" ? "Du" : "Fred"}${timestamp ? ` · ${timestamp}` : ""}`;
+    const agentKey = message.agentKey ?? "fred";
+    const heading = `## ${message.role === "user" ? "Du" : fredAgentName(agentKey)}${timestamp ? ` · ${timestamp}` : ""}`;
     const metadata: string[] = [];
+    if (message.role === "user") {
+      metadata.push(`Agent: ${fredAgentName(agentKey)}`);
+    }
     if (message.role === "user" && message.webSearchEnabled) {
       metadata.push("Websuche: aktiviert");
     }

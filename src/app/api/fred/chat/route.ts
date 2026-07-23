@@ -34,7 +34,12 @@ import {
   mintFredEmbedSession,
   readFredEmbedServerConfig,
   readFredProModelId,
+  readQuickFredEmbedServerConfig,
 } from "@/lib/weknora/fred-embed";
+import {
+  fredAgentName,
+  type FredAgentKey,
+} from "@/lib/weknora/fred-agent";
 import { parseFredConversationSummary } from "@/lib/weknora/fred-history";
 import {
   createFredUpstreamSession,
@@ -84,6 +89,7 @@ type ParsedFredChatRequest = {
   conversationId: string;
   webSearchEnabled: boolean;
   proModeEnabled: boolean;
+  quickFredEnabled: boolean | undefined;
   attachments: FindogAttachment[];
 };
 type FredConversationRow = {
@@ -93,6 +99,8 @@ type FredConversationRow = {
   updated_at: string;
   weknora_channel_id: string;
   weknora_session_id: string;
+  agent_key: FredAgentKey;
+  weknora_agent_id: string | null;
 };
 
 type FindogAttachment = {
@@ -183,13 +191,28 @@ function validatedRequestFields(value: unknown): Omit<ParsedFredChatRequest, "at
   if (body.proModeEnabled !== undefined && typeof body.proModeEnabled !== "boolean") {
     throw new UserVisibleError("Die Fred-Pro-Einstellung ist ungültig.", 400);
   }
+  const quickFredEnabled = body.quickFredEnabled === undefined
+    ? undefined
+    : body.quickFredEnabled === true;
+  if (body.quickFredEnabled !== undefined && typeof body.quickFredEnabled !== "boolean") {
+    throw new UserVisibleError("Die QuickFred-Einstellung ist ungültig.", 400);
+  }
+  if (quickFredEnabled === true && proModeEnabled) {
+    throw new UserVisibleError("QuickFred und Fred Pro können nicht gleichzeitig verwendet werden.", 400);
+  }
   if (!query || query.length > MAX_QUERY_LENGTH) {
     throw new UserVisibleError("Bitte gib eine gültige Frage an Fred ein.", 400);
   }
   if (conversationId && !UUID_PATTERN.test(conversationId)) {
     throw new UserVisibleError("Die Fred-Unterhaltung ist ungültig.", 400);
   }
-  return { query, conversationId, webSearchEnabled, proModeEnabled };
+  return {
+    query,
+    conversationId,
+    webSearchEnabled,
+    proModeEnabled,
+    quickFredEnabled,
+  };
 }
 
 function sanitizedFilename(value: string): string {
@@ -461,6 +484,8 @@ async function recordEvent(options: {
   attachments?: FindogAttachment[];
   webSearchEnabled?: boolean;
   proModeEnabled?: boolean;
+  agentKey: FredAgentKey;
+  weknoraAgentId: string;
   displayContent?: string;
   researchTrace?: FredResearchStep[];
   sourceReferences?: FredSourceReference[];
@@ -476,6 +501,8 @@ async function recordEvent(options: {
     attachments: (options.attachments ?? []).map(attachmentMetadata),
     web_search_enabled: options.webSearchEnabled ?? false,
     pro_mode_enabled: options.proModeEnabled ?? false,
+    agent_key: options.agentKey,
+    weknora_agent_id: options.weknoraAgentId,
     ...(options.displayContent !== undefined ? {
       display_content: options.displayContent,
       research_trace: options.researchTrace ?? [],
@@ -490,27 +517,15 @@ async function recordEvent(options: {
   throw new UserVisibleError("Der Fred-Verlauf konnte nicht gespeichert werden.", 503);
 }
 
-async function resolveUpstreamSession(options: {
+async function loadOwnedConversation(options: {
   supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>;
   userId: string;
   conversationId: string;
-  channelId: string;
-  publishToken: string;
-  session: Awaited<ReturnType<typeof mintFredEmbedSession>>;
-  config: ReturnType<typeof readFredEmbedServerConfig>;
-  signal: AbortSignal;
-}): Promise<FredUpstreamSession> {
-  if (!options.conversationId) {
-    return createFredUpstreamSession({
-      session: options.session,
-      config: options.config,
-      signal: options.signal,
-    });
-  }
-
+}): Promise<FredConversationRow | null> {
+  if (!options.conversationId) return null;
   const { data, error } = await options.supabase
     .from("fred_conversations")
-    .select("id,title,created_at,updated_at,weknora_channel_id,weknora_session_id")
+    .select("id,title,created_at,updated_at,weknora_channel_id,weknora_session_id,agent_key,weknora_agent_id")
     .eq("id", options.conversationId)
     .eq("client_id", options.userId)
     .maybeSingle();
@@ -520,7 +535,26 @@ async function resolveUpstreamSession(options: {
   if (!data) {
     throw new UserVisibleError("Die Fred-Unterhaltung wurde nicht gefunden.", 404);
   }
-  const row = data as FredConversationRow;
+  return data as FredConversationRow;
+}
+
+async function resolveUpstreamSession(options: {
+  conversation: FredConversationRow | null;
+  channelId: string;
+  publishToken: string;
+  session: Awaited<ReturnType<typeof mintFredEmbedSession>>;
+  config: ReturnType<typeof readFredEmbedServerConfig>;
+  signal: AbortSignal;
+}): Promise<FredUpstreamSession> {
+  if (!options.conversation) {
+    return createFredUpstreamSession({
+      session: options.session,
+      config: options.config,
+      signal: options.signal,
+    });
+  }
+
+  const row = options.conversation;
   if (row.weknora_channel_id !== options.channelId) {
     throw new UserVisibleError("Diese Fred-Unterhaltung gehört zu einer älteren Kanalkonfiguration.", 409);
   }
@@ -566,6 +600,54 @@ export async function POST(request: Request) {
     requireSameSiteRequest(request);
     enforceRateLimit(user.id);
     const body = await readRequestBody(request);
+    const storedConversation = await loadOwnedConversation({
+      supabase,
+      userId: user.id,
+      conversationId: body.conversationId,
+    });
+    const requestedAgentKey: FredAgentKey = body.quickFredEnabled === true
+      ? "quickfred"
+      : "fred";
+    if (
+      storedConversation
+      && body.quickFredEnabled !== undefined
+      && storedConversation.agent_key !== requestedAgentKey
+    ) {
+      throw new UserVisibleError(
+        "Der Agent ist für diese Unterhaltung bereits festgelegt.",
+        409,
+      );
+    }
+    const agentKey = storedConversation?.agent_key ?? requestedAgentKey;
+    const selectedAgentName = fredAgentName(agentKey);
+    if (agentKey === "quickfred" && body.proModeEnabled) {
+      throw new UserVisibleError(
+        "Fred Pro ist in einer QuickFred-Unterhaltung nicht verfügbar.",
+        400,
+      );
+    }
+    let config: ReturnType<typeof readFredEmbedServerConfig>;
+    if (agentKey === "quickfred") {
+      try {
+        const quickFredConfig = readQuickFredEmbedServerConfig();
+        const fredConfig = readFredEmbedServerConfig();
+        if (quickFredConfig.channelId === fredConfig.channelId) {
+          throw new UserVisibleError(
+            "QuickFred benötigt einen eigenen WeKnora-Kanal.",
+            503,
+          );
+        }
+        config = quickFredConfig;
+      } catch (error) {
+        if (error instanceof UserVisibleError) throw error;
+        throw new UserVisibleError(
+          "QuickFred ist noch nicht vollständig eingerichtet.",
+          503,
+        );
+      }
+    } else {
+      config = readFredEmbedServerConfig();
+    }
 
     lifetimeAbort = new AbortController();
     const deadline = createDeadline(TOTAL_TIMEOUT_MS, {
@@ -617,63 +699,66 @@ export async function POST(request: Request) {
 
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
-        let upstreamQuery = body.query;
-
-        if (body.attachments.length > 0) {
-          send(controller, { type: "status", label: "Anhänge werden analysiert …" });
-          attachmentHeartbeat = setInterval(() => {
-            send(controller, { type: "status", label: "Anhänge werden analysiert …" });
-          }, ATTACHMENT_HEARTBEAT_INTERVAL_MS);
-          try {
-            const attachmentInputs = body.attachments.map(attachmentToInput);
-            const combined = await runWithTimeout(
-              async (signal) => buildAttachmentContext(body.query, attachmentInputs, {
-                mineruProvider: (files) => processMineruBatch(files, { signal }),
-                geminiProvider: (uri) => describeImage(uri, { signal }),
-                documentFallbackProvider: async (files) => {
-                  const settings = await getScanningSettings(supabase);
-                  return extractDocumentsWithConfiguredModel(files, {
-                    model: settings.modelId,
-                    signal,
-                  });
-                },
-              }),
-              {
-                deadline,
-                timeoutMs: PREPROCESSING_TIMEOUT_MS,
-                reserveMs: FRED_RESERVE_MS,
-                timeoutMessage: "Die Anhänge konnten nicht analysiert werden.",
-              },
-            );
-            upstreamQuery = combined;
-          } catch (error) {
-            if (!lifetimeAbort!.signal.aborted) {
-              send(controller, {
-                type: "error",
-                error: error instanceof UserVisibleError
-                  ? error.message
-                  : "Die Anhänge konnten nicht analysiert werden.",
-              });
-            }
-            try { controller.close(); } catch { /* already closed */ }
-            cleanup();
-            return;
-          } finally {
-            clearAttachmentHeartbeat();
-          }
-          send(controller, { type: "status", label: "Fred bearbeitet die Frage …" });
-        }
-
         let acceptingCitationUpdates = true;
         try {
-          const config = readFredEmbedServerConfig();
-          const embedSession = await mintFredEmbedSession({ signal: deadline.signal });
+          let upstreamQuery = body.query;
+
+          if (body.attachments.length > 0) {
+            send(controller, { type: "status", label: "Anhänge werden analysiert …" });
+            attachmentHeartbeat = setInterval(() => {
+              send(controller, { type: "status", label: "Anhänge werden analysiert …" });
+            }, ATTACHMENT_HEARTBEAT_INTERVAL_MS);
+            try {
+              const attachmentInputs = body.attachments.map(attachmentToInput);
+              const combined = await runWithTimeout(
+                async (signal) => buildAttachmentContext(body.query, attachmentInputs, {
+                  mineruProvider: (files) => processMineruBatch(files, { signal }),
+                  geminiProvider: (uri) => describeImage(uri, { signal }),
+                  documentFallbackProvider: async (files) => {
+                    const settings = await getScanningSettings(supabase);
+                    return extractDocumentsWithConfiguredModel(files, {
+                      model: settings.modelId,
+                      signal,
+                    });
+                  },
+                }),
+                {
+                  deadline,
+                  timeoutMs: PREPROCESSING_TIMEOUT_MS,
+                  reserveMs: FRED_RESERVE_MS,
+                  timeoutMessage: "Die Anhänge konnten nicht analysiert werden.",
+                },
+              );
+              upstreamQuery = combined;
+            } catch (error) {
+              if (!lifetimeAbort!.signal.aborted) {
+                send(controller, {
+                  type: "error",
+                  error: error instanceof UserVisibleError
+                    ? error.message
+                    : "Die Anhänge konnten nicht analysiert werden.",
+                });
+              }
+              try { controller.close(); } catch { /* already closed */ }
+              cleanup();
+              return;
+            } finally {
+              clearAttachmentHeartbeat();
+            }
+            send(controller, {
+              type: "status",
+              label: `${selectedAgentName} bearbeitet die Frage …`,
+            });
+          }
+
+          const embedSession = await mintFredEmbedSession({
+            config,
+            signal: deadline.signal,
+          });
           const [upstreamConfig, upstreamSession] = await Promise.all([
             fetchFredUpstreamConfig({ session: embedSession, config, signal: deadline.signal }),
             resolveUpstreamSession({
-              supabase,
-              userId: user.id,
-              conversationId: body.conversationId,
+              conversation: storedConversation,
               channelId: config.channelId,
               publishToken: config.publishToken,
               session: embedSession,
@@ -681,8 +766,29 @@ export async function POST(request: Request) {
               signal: deadline.signal,
             }),
           ]);
+          if (
+            config.expectedAgentId
+            && upstreamConfig.agentId !== config.expectedAgentId
+          ) {
+            throw new UserVisibleError(
+              "Der QuickFred-Kanal ist nicht an den erwarteten Agenten gebunden.",
+              503,
+            );
+          }
+          if (
+            storedConversation?.weknora_agent_id
+            && storedConversation.weknora_agent_id !== upstreamConfig.agentId
+          ) {
+            throw new UserVisibleError(
+              "Die Agentenkonfiguration dieser Unterhaltung hat sich geändert.",
+              409,
+            );
+          }
           if (body.webSearchEnabled && !upstreamConfig.allowWebSearch) {
-            throw new UserVisibleError("Die Websuche ist für diesen Fred-Kanal nicht freigeschaltet.", 400);
+            throw new UserVisibleError(
+              `Die Websuche ist für ${selectedAgentName} nicht freigeschaltet.`,
+              400,
+            );
           }
           const summaryModelId = body.proModeEnabled
             ? readFredProModelId()
@@ -701,7 +807,10 @@ export async function POST(request: Request) {
             attachments: body.attachments,
             webSearchEnabled: body.webSearchEnabled,
             proModeEnabled: body.proModeEnabled,
+            agentKey,
+            weknoraAgentId: upstreamConfig.agentId,
           });
+          send(controller, { type: "conversation", conversation });
           void relayFredWebhookEvent({
             session: embedSession,
             config,
@@ -823,7 +932,10 @@ export async function POST(request: Request) {
             }
             const research = parseWeKnoraResearchEvent(parsed);
             if (research.fatalError) {
-              throw new UserVisibleError("Fred konnte die Anfrage nicht abschließen.", 502);
+              throw new UserVisibleError(
+                `${selectedAgentName} konnte die Anfrage nicht abschließen.`,
+                502,
+              );
             }
             if (research.unsupported) {
               throw new UserVisibleError("Diese Fred-Aktion benötigt eine zusätzliche Bestätigung, die hier noch nicht unterstützt wird.", 409);
@@ -847,7 +959,6 @@ export async function POST(request: Request) {
             }
           };
 
-          send(controller, { type: "conversation", conversation });
           while (true) {
             const { value, done } = await upstreamReader.read();
             if (done) break;
@@ -862,7 +973,10 @@ export async function POST(request: Request) {
           const plainFinalAnswer = finalTransformation.text.trim();
           sourceReferences = mergeFredSources(sourceReferences, finalTransformation.sources);
           if (!plainFinalAnswer) {
-            throw new UserVisibleError("Fred hat keine Antwort geliefert.", 502);
+            throw new UserVisibleError(
+              `${selectedAgentName} hat keine Antwort geliefert.`,
+              502,
+            );
           }
           beginCitationVerification(plainFinalAnswer, true);
           await Promise.all(citationTasks.values());
@@ -884,6 +998,8 @@ export async function POST(request: Request) {
             researchTrace,
             sourceReferences,
             proModeEnabled: false,
+            agentKey,
+            weknoraAgentId: upstreamConfig.agentId,
           });
           void relayFredWebhookEvent({
             session: embedSession,
@@ -911,7 +1027,7 @@ export async function POST(request: Request) {
               type: "error",
               error: error instanceof UserVisibleError
                 ? error.message
-                : "Fred konnte die Anfrage nicht abschließen.",
+                : `${selectedAgentName} konnte die Anfrage nicht abschließen.`,
             });
           }
           try { controller.close(); } catch { /* already closed */ }

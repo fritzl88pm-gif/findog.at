@@ -33,6 +33,7 @@ describe("Fred message actions", () => {
     const content = buildFredConversationPdfContent(messages);
     expect(content).toContain("## Du · 21.07.26, 14:30");
     expect(content).toContain("Websuche: aktiviert");
+    expect(content).toContain("Agent: Fred");
     expect(content).toContain("Anhänge: Urteil 2025.pdf");
     expect(content).toContain("## Fred · 21.07.26, 14:31");
     expect(content).toContain("| Punkt | Wert |");
@@ -67,6 +68,25 @@ describe("Fred message actions", () => {
   it("does not include Pro-Modus metadata for non-Pro user turns", () => {
     const content = buildFredConversationPdfContent(messages);
     expect(content).not.toContain("Pro-Modus");
+  });
+
+  it("attributes QuickFred user turns and answers in the PDF source", () => {
+    const content = buildFredConversationPdfContent([
+      {
+        role: "user",
+        content: "Kurzfrage",
+        createdAt: "2026-07-21T12:30:00.000Z",
+        agentKey: "quickfred",
+      },
+      {
+        role: "assistant",
+        content: "Kurzantwort",
+        createdAt: "2026-07-21T12:31:00.000Z",
+        agentKey: "quickfred",
+      },
+    ]);
+    expect(content).toContain("Agent: QuickFred");
+    expect(content).toContain("## QuickFred");
   });
 
   it("precedingUserMessage returns proModeEnabled when set", () => {

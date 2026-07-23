@@ -9,6 +9,7 @@ import {
   type VerifiedBfgCitation,
 } from "@/lib/findok/bfg-citations";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import type { FredAgentKey } from "@/lib/weknora/fred-agent";
 import {
   mergeFredSources,
   parseStoredFredResearchTrace,
@@ -26,6 +27,7 @@ type FredConversationRow = {
   title: string;
   created_at: string;
   updated_at: string;
+  agent_key: FredAgentKey;
 };
 
 type FredMessageRow = {
@@ -106,7 +108,7 @@ export async function GET(
     const { supabase, user } = await contextFor(request, conversationId);
     const { data: conversation, error: conversationError } = await supabase
       .from("fred_conversations")
-      .select("id,title,created_at,updated_at")
+      .select("id,title,created_at,updated_at,agent_key")
       .eq("id", conversationId)
       .eq("client_id", user.id)
       .maybeSingle();
@@ -155,6 +157,7 @@ export async function GET(
         title: row.title,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
+        agentKey: row.agent_key,
       },
       messages: preparedMessages.map((message) => {
         const candidateSet = new Set(message.legacyBfgCandidates);
@@ -171,6 +174,7 @@ export async function GET(
           role: message.role,
           content: displayContent.trim(),
           createdAt: message.provider_created_at ?? message.created_at,
+          agentKey: row.agent_key,
           attachments: attachmentMetadata(message.attachments),
           webSearchEnabled: message.web_search_enabled,
           proModeEnabled: message.pro_mode_enabled,

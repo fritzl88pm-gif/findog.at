@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { runWithTimeout } from "../deadline";
+import type { FredAgentKey } from "./fred-agent";
 
 export const FRED_EMBED_ORIGIN = "https://taxdog.cloud";
 export const FRED_EMBED_EXCHANGE_TIMEOUT_MS = 15_000;
@@ -15,9 +16,11 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 type Environment = Record<string, string | undefined>;
 
 export type FredEmbedServerConfig = {
+  agentKey?: FredAgentKey;
   channelId: string;
   publishToken: string;
   exchangeOrigin: string;
+  expectedAgentId?: string;
 };
 
 export type FredEmbedSession = {
@@ -76,7 +79,37 @@ export function readFredEmbedServerConfig(
     throw new FredEmbedConfigurationError();
   }
 
-  return { channelId, publishToken, exchangeOrigin };
+  return { agentKey: "fred", channelId, publishToken, exchangeOrigin };
+}
+
+export function readQuickFredEmbedServerConfig(
+  environment: Environment = process.env,
+): FredEmbedServerConfig & { expectedAgentId: string } {
+  const channelId = environment.WEKNORA_QUICKFRED_CHANNEL_ID?.trim() ?? "";
+  const publishToken = environment.WEKNORA_QUICKFRED_PUBLISH_TOKEN?.trim() ?? "";
+  const exchangeOrigin = exactHttpOrigin(
+    environment.WEKNORA_QUICKFRED_EXCHANGE_ORIGIN?.trim()
+      || environment.WEKNORA_FRED_EXCHANGE_ORIGIN?.trim()
+      || DEFAULT_EXCHANGE_ORIGIN,
+  );
+  const expectedAgentId = environment.WEKNORA_QUICKFRED_AGENT_ID?.trim() ?? "";
+
+  if (
+    !CHANNEL_ID_PATTERN.test(channelId)
+    || !PUBLISH_TOKEN_PATTERN.test(publishToken)
+    || !exchangeOrigin
+    || !UUID_PATTERN.test(expectedAgentId)
+  ) {
+    throw new FredEmbedConfigurationError();
+  }
+
+  return {
+    agentKey: "quickfred",
+    channelId,
+    publishToken,
+    exchangeOrigin,
+    expectedAgentId,
+  };
 }
 
 export function readFredProModelId(
@@ -140,10 +173,11 @@ async function readBoundedResponseText(response: Response): Promise<string> {
 
 export async function mintFredEmbedSession(options: {
   environment?: Environment;
+  config?: FredEmbedServerConfig;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
 } = {}): Promise<FredEmbedSession> {
-  const config = readFredEmbedServerConfig(options.environment);
+  const config = options.config ?? readFredEmbedServerConfig(options.environment);
   const fetchImpl = options.fetchImpl ?? fetch;
   let response: Response;
   let bodyText: string;

@@ -1,4 +1,8 @@
 import {
+  isFredAgentKey,
+  type FredAgentKey,
+} from "./weknora/fred-agent";
+import {
   parseStoredFredResearchTrace,
   parseStoredFredSources,
   type FredResearchStep,
@@ -12,6 +16,7 @@ export type FredNativeConversation = {
   title: string;
   createdAt: string;
   updatedAt: string;
+  agentKey: FredAgentKey;
 };
 
 export type FredNativeStreamEvent =
@@ -40,6 +45,7 @@ function parseConversation(value: unknown): FredNativeConversation | null {
     || typeof value.title !== "string"
     || typeof value.createdAt !== "string"
     || typeof value.updatedAt !== "string"
+    || !isFredAgentKey(value.agentKey)
   ) {
     return null;
   }
@@ -48,6 +54,7 @@ function parseConversation(value: unknown): FredNativeConversation | null {
     title: value.title,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
+    agentKey: value.agentKey,
   };
 }
 

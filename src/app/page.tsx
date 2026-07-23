@@ -64,6 +64,10 @@ import FredNativeChatView, {
   type FredNativeAttachment,
   type FredNativeMessage,
 } from "@/components/fred-native-chat-view";
+import {
+  isFredAgentKey,
+  type FredAgentKey,
+} from "@/lib/weknora/fred-agent";
 import FredRunView from "@/components/fredrun-view";
 import WoBeschlussView from "@/components/wo-beschluss-view";
 import L17bCountrySelect from "@/components/l17b-country-select";
@@ -75,6 +79,7 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  agentKey: FredAgentKey;
   attachments?: FredNativeAttachment[];
   webSearchEnabled?: boolean;
   proModeEnabled?: boolean;
@@ -85,6 +90,7 @@ type ConversationSummary = {
   title: string;
   createdAt: string;
   updatedAt: string;
+  agentKey: FredAgentKey;
 };
 
 type AppView = "chat" | "scanning" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "wo-beschluss" | "quiz" | "administration" | "data";
@@ -228,6 +234,7 @@ function normalizeConversationSummaries(value: unknown): ConversationSummary[] {
       title: conversation.title,
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
+      agentKey: isFredAgentKey(conversation.agentKey) ? conversation.agentKey : "fred",
     }];
   });
 }
@@ -268,6 +275,7 @@ function normalizeFredMessages(value: unknown): ChatMessage[] {
       role: item.role,
       content: item.content,
       createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString(),
+      agentKey: isFredAgentKey(item.agentKey) ? item.agentKey : "fred",
       ...(attachments.length ? { attachments } : {}),
       ...(item.role === "user" && item.webSearchEnabled === true
         ? { webSearchEnabled: true }
@@ -1128,6 +1136,7 @@ function handleAdminTabKeyDown(event: React.KeyboardEvent, currentTab: string): 
 export default function Home() {
   const supabase = getSupabaseBrowserClient();
   const [fredConversationId, setFredConversationId] = useState("");
+  const [fredChatInstance, setFredChatInstance] = useState(0);
   const [fredMessages, setFredMessages] = useState<ChatMessage[]>([]);
   const [fredConversations, setFredConversations] = useState<ConversationSummary[]>([]);
   const [selectedFredConversationIds, setSelectedFredConversationIds] = useState<string[]>([]);
@@ -1810,6 +1819,7 @@ export default function Home() {
     setAppView("chat");
     setFredConversationId("");
     setFredMessages([]);
+    setFredChatInstance((current) => current + 1);
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
@@ -3295,6 +3305,7 @@ export default function Home() {
 
       {appView === "chat" ? (
         <FredNativeChatView
+          key={fredChatInstance}
           accessToken={session?.access_token ?? ""}
           conversationId={fredConversationId}
           initialMessages={fredMessages}

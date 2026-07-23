@@ -266,3 +266,41 @@ describe("Fred Pro Mode options.proModeEnabled regression (TDD)", () => {
     expect(regenBlock).not.toBeNull();
   });
 });
+
+describe("QuickFred immutable conversation UI", () => {
+  it("adds the QuickFred capability and sends only a boolean selection", () => {
+    expect(viewSource).toContain("quickFred: boolean");
+    expect(viewSource).toContain("quickFredEnabled: agentKey === \"quickfred\"");
+    expect(viewSource).not.toContain("WEKNORA_QUICKFRED_AGENT_ID");
+    expect(viewSource).not.toContain("WEKNORA_QUICKFRED_PUBLISH_TOKEN");
+  });
+
+  it("places the lightning control between Pro and Websuche", () => {
+    const proIndex = viewSource.indexOf("fred-pro-toggle");
+    const quickIndex = viewSource.indexOf("fred-quick-toggle");
+    const webIndex = viewSource.indexOf("fred-web-search-toggle");
+    expect(proIndex).toBeGreaterThan(0);
+    expect(quickIndex).toBeGreaterThan(proIndex);
+    expect(quickIndex).toBeLessThan(webIndex);
+    expect(viewSource).toContain("fred-quick-icon");
+  });
+
+  it("locks the lightning control once the conversation has an agent", () => {
+    expect(viewSource).toContain("conversationAgentKey !== null");
+    expect(viewSource).toContain("Agent für diese Unterhaltung festgelegt");
+    expect(viewSource).toContain("isSending || conversationAgentKey !== null || !capabilities.quickFred");
+  });
+
+  it("makes Pro and QuickFred mutually exclusive", () => {
+    expect(viewSource).toContain("setQuickFredEnabled(false)");
+    expect(viewSource).toContain("setProModeEnabled(false)");
+    expect(viewSource).toContain('conversationAgentKey === "quickfred"');
+  });
+
+  it("renders QuickFred attribution and scoped toggle styles", () => {
+    expect(viewSource).toContain("fredAgentName(message.agentKey)");
+    expect(viewSource).toContain(">QuickFred</span>");
+    expect(cssSource).toContain(".fred-quick-toggle");
+    expect(cssSource).toContain(".fred-quick-icon");
+  });
+});

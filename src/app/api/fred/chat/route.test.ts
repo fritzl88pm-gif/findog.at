@@ -7,6 +7,7 @@ import {
   mintFredEmbedSession,
   readFredEmbedServerConfig,
   readFredProModelId,
+  readQuickFredEmbedServerConfig,
 } from "@/lib/weknora/fred-embed";
 import {
   createFredUpstreamSession,
@@ -46,6 +47,7 @@ vi.mock("@/lib/weknora/fred-embed", async (importOriginal) => {
     mintFredEmbedSession: vi.fn(),
     readFredEmbedServerConfig: vi.fn(),
     readFredProModelId: vi.fn(),
+    readQuickFredEmbedServerConfig: vi.fn(),
   };
 });
 vi.mock("@/lib/weknora/fred-native", async (importOriginal) => {
@@ -69,6 +71,7 @@ const summaryRow = {
   title: "Wie ist die Rechtslage?",
   created_at: "2026-07-19T10:00:00.000Z",
   updated_at: "2026-07-19T10:00:01.000Z",
+  agent_key: "fred",
 };
 
 function request(body: Record<string, unknown>): Request {
@@ -204,6 +207,7 @@ describe("POST /api/fred/chat", () => {
           title: "Wie ist die Rechtslage?",
           createdAt: "2026-07-19T10:00:00.000Z",
           updatedAt: "2026-07-19T10:00:01.000Z",
+          agentKey: "fred",
         },
       },
       { type: "delta", content: "Hallo " },
@@ -370,6 +374,8 @@ describe("POST /api/fred/chat", () => {
         updated_at: "2026-07-19T09:00:00.000Z",
         weknora_channel_id: "fred-channel",
         weknora_session_id: "session-existing",
+        agent_key: "fred",
+        weknora_agent_id: "agent-1",
       },
       error: null,
     });
@@ -636,6 +642,245 @@ describe("POST /api/fred/chat", () => {
   });
 
 
+  describe("QuickFred conversation binding", () => {
+    const quickFredConfig = {
+      agentKey: "quickfred" as const,
+      channelId: "quickfred-channel",
+      publishToken: "em_quickfred_publish_fixture_123456",
+      exchangeOrigin: "https://findog.at",
+      expectedAgentId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
+    };
+
+    it("routes a new QuickFred conversation through its dedicated channel and persists the binding", async () => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+        id: "33333333-3333-4333-8333-333333333333",
+      });
+      const quickSummary = { ...summaryRow, agent_key: "quickfred" };
+      const rpc = vi.fn()
+        .mockResolvedValueOnce({ data: quickSummary, error: null })
+        .mockResolvedValueOnce({ data: quickSummary, error: null });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+      vi.mocked(readQuickFredEmbedServerConfig).mockReturnValue(quickFredConfig);
+      vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
+        agentId: quickFredConfig.expectedAgentId,
+        knowledgeBaseIds: ["kb-quick"],
+        allowWebSearch: false,
+        allowFileUpload: true,
+      });
+
+      const response = await POST(request({
+        query: "Schnelle Antwort",
+        quickFredEnabled: true,
+      }));
+      const events = (await response.text())
+        .trim()
+        .split("\n")
+        .map(parseFredNativeStreamLine)
+        .filter(Boolean);
+
+      expect(response.status).toBe(200);
+      expect(readQuickFredEmbedServerConfig).toHaveBeenCalledOnce();
+      expect(readFredEmbedServerConfig).toHaveBeenCalledOnce();
+      expect(mintFredEmbedSession).toHaveBeenCalledWith(expect.objectContaining({
+        config: quickFredConfig,
+      }));
+      expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+        config: quickFredConfig,
+        upstreamConfig: expect.objectContaining({
+          agentId: quickFredConfig.expectedAgentId,
+        }),
+      }));
+      expect(rpc).toHaveBeenNthCalledWith(1, "record_fred_native_event", {
+        payload: expect.objectContaining({
+          agent_key: "quickfred",
+          weknora_agent_id: quickFredConfig.expectedAgentId,
+        }),
+      });
+      expect(events).toContainEqual({
+        type: "conversation",
+        conversation: expect.objectContaining({ agentKey: "quickfred" }),
+      });
+    });
+
+    it("rejects malformed QuickFred flags and the QuickFred/Pro combination", async () => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+        id: "44444444-4444-4444-8444-444444444444",
+      });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc: vi.fn() } as never);
+
+      const malformed = await POST(request({ query: "Test", quickFredEnabled: "yes" }));
+      expect(malformed.status).toBe(400);
+      const combined = await POST(request({
+        query: "Test",
+        quickFredEnabled: true,
+        proModeEnabled: true,
+      }));
+      expect(combined.status).toBe(400);
+      expect(mintFredEmbedSession).not.toHaveBeenCalled();
+    });
+
+    it("rejects a browser flag that contradicts an existing fixed agent", async () => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+        id: "55555555-5555-4555-8555-555555555555",
+      });
+      const maybeSingle = vi.fn().mockResolvedValue({
+        data: {
+          id: conversationId,
+          title: "Quick",
+          created_at: "2026-07-19T09:00:00.000Z",
+          updated_at: "2026-07-19T09:00:00.000Z",
+          weknora_channel_id: "quickfred-channel",
+          weknora_session_id: "quick-session",
+          agent_key: "quickfred",
+          weknora_agent_id: quickFredConfig.expectedAgentId,
+        },
+        error: null,
+      });
+      const chain = { select: vi.fn(), eq: vi.fn(), maybeSingle };
+      chain.select.mockReturnValue(chain);
+      chain.eq.mockReturnValue(chain);
+      vi.mocked(getSupabaseServerClient).mockReturnValue({
+        rpc: vi.fn(),
+        from: vi.fn(() => chain),
+      } as never);
+
+      const response = await POST(request({
+        query: "Wechseln",
+        conversationId,
+        quickFredEnabled: false,
+      }));
+
+      expect(response.status).toBe(409);
+      expect(openFredUpstreamStream).not.toHaveBeenCalled();
+    });
+
+    it("continues an existing QuickFred conversation from its stored binding when the browser flag is omitted", async () => {
+      const quickSummary = { ...summaryRow, agent_key: "quickfred" };
+      const rpc = vi.fn()
+        .mockResolvedValueOnce({ data: quickSummary, error: null })
+        .mockResolvedValueOnce({ data: quickSummary, error: null });
+      const maybeSingle = vi.fn().mockResolvedValue({
+        data: {
+          id: conversationId,
+          title: "Quick",
+          created_at: "2026-07-19T09:00:00.000Z",
+          updated_at: "2026-07-19T09:00:00.000Z",
+          weknora_channel_id: "quickfred-channel",
+          weknora_session_id: "quick-session",
+          agent_key: "quickfred",
+          weknora_agent_id: quickFredConfig.expectedAgentId,
+        },
+        error: null,
+      });
+      const chain = { select: vi.fn(), eq: vi.fn(), maybeSingle };
+      chain.select.mockReturnValue(chain);
+      chain.eq.mockReturnValue(chain);
+      vi.mocked(getSupabaseServerClient).mockReturnValue({
+        rpc,
+        from: vi.fn(() => chain),
+      } as never);
+      vi.mocked(readQuickFredEmbedServerConfig).mockReturnValue(quickFredConfig);
+      vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
+        agentId: quickFredConfig.expectedAgentId,
+        knowledgeBaseIds: ["kb-quick"],
+        allowWebSearch: false,
+        allowFileUpload: true,
+      });
+      vi.mocked(deriveFredSessionSignature).mockReturnValue("quick-signature");
+
+      const response = await POST(request({
+        query: "Anschlussfrage",
+        conversationId,
+      }));
+      await response.text();
+
+      expect(response.status).toBe(200);
+      expect(readQuickFredEmbedServerConfig).toHaveBeenCalledOnce();
+      expect(deriveFredSessionSignature).toHaveBeenCalledWith(
+        expect.objectContaining({ channelId: "quickfred-channel" }),
+        "quick-session",
+      );
+      expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+        config: quickFredConfig,
+        upstreamSession: { id: "quick-session", signature: "quick-signature" },
+      }));
+    });
+
+    it("fails closed on a QuickFred agent rebinding without persisting or falling back to Fred", async () => {
+      const rpc = vi.fn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+      vi.mocked(readQuickFredEmbedServerConfig).mockReturnValue(quickFredConfig);
+      vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
+        agentId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        knowledgeBaseIds: ["kb-wrong"],
+        allowWebSearch: false,
+        allowFileUpload: true,
+      });
+
+      const response = await POST(request({
+        query: "Schnelle Antwort",
+        quickFredEnabled: true,
+      }));
+      const events = (await response.text())
+        .trim()
+        .split("\n")
+        .map(parseFredNativeStreamLine)
+        .filter(Boolean);
+
+      expect(response.status).toBe(200);
+      expect(events).toContainEqual({
+        type: "error",
+        error: "Der QuickFred-Kanal ist nicht an den erwarteten Agenten gebunden.",
+      });
+      expect(rpc).not.toHaveBeenCalled();
+      expect(openFredUpstreamStream).not.toHaveBeenCalled();
+      expect(mintFredEmbedSession).toHaveBeenCalledWith(expect.objectContaining({
+        config: quickFredConfig,
+      }));
+    });
+
+    it("keeps the QuickFred binding after the first user turn when the answer request fails", async () => {
+      const quickSummary = { ...summaryRow, agent_key: "quickfred" };
+      const rpc = vi.fn().mockResolvedValueOnce({ data: quickSummary, error: null });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+      vi.mocked(readQuickFredEmbedServerConfig).mockReturnValue(quickFredConfig);
+      vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
+        agentId: quickFredConfig.expectedAgentId,
+        knowledgeBaseIds: ["kb-quick"],
+        allowWebSearch: false,
+        allowFileUpload: true,
+      });
+      vi.mocked(openFredUpstreamStream).mockRejectedValue(new Error("provider unavailable"));
+
+      const response = await POST(request({
+        query: "Schnelle Antwort",
+        quickFredEnabled: true,
+      }));
+      const events = (await response.text())
+        .trim()
+        .split("\n")
+        .map(parseFredNativeStreamLine)
+        .filter(Boolean);
+
+      expect(events[0]).toEqual({
+        type: "conversation",
+        conversation: expect.objectContaining({ agentKey: "quickfred" }),
+      });
+      expect(events.at(-1)).toEqual({
+        type: "error",
+        error: "QuickFred konnte die Anfrage nicht abschließen.",
+      });
+      expect(rpc).toHaveBeenCalledTimes(1);
+      expect(rpc).toHaveBeenCalledWith("record_fred_native_event", {
+        payload: expect.objectContaining({
+          event_type: "message_sent",
+          agent_key: "quickfred",
+          weknora_agent_id: quickFredConfig.expectedAgentId,
+        }),
+      });
+    });
+  });
+
   describe("Pro Mode", () => {
     it("treats omitted proModeEnabled as false and sends empty summaryModelId", async () => {
       const rpc = rpcForTurn();
@@ -743,8 +988,8 @@ describe("POST /api/fred/chat", () => {
         });
       vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
 
-      await POST(request({ query: "Pro Frage", proModeEnabled: true }));
-      await new Promise(process.nextTick);
+      const response = await POST(request({ query: "Pro Frage", proModeEnabled: true }));
+      await response.text();
 
       expect(rpc).toHaveBeenNthCalledWith(1, "record_fred_native_event", {
         payload: expect.objectContaining({

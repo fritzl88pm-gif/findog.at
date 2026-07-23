@@ -28,11 +28,16 @@ import {
   type FredResearchStep,
   type FredSourceReference,
 } from "@/lib/weknora/fred-research";
+import {
+  fredAgentName,
+  type FredAgentKey,
+} from "@/lib/weknora/fred-agent";
 
 export type FredNativeMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  agentKey: FredAgentKey;
   attachments?: FredNativeAttachment[];
   webSearchEnabled?: boolean;
   proModeEnabled?: boolean;
@@ -48,7 +53,12 @@ export type FredNativeAttachment = {
   sha256?: string;
 };
 
-type FredCapabilities = { webSearch: boolean; fileUpload: boolean; proMode: boolean };
+type FredCapabilities = {
+  webSearch: boolean;
+  fileUpload: boolean;
+  proMode: boolean;
+  quickFred: boolean;
+};
 
 const MAX_IMAGE_UPLOADS = 5;
 const MAX_FILE_UPLOADS = 5;
@@ -102,15 +112,17 @@ function ResearchTrace({
   steps,
   sources,
   active,
+  agentName,
 }: {
   steps: FredResearchStep[];
   sources: FredSourceReference[];
   active: boolean;
+  agentName: "Fred" | "QuickFred";
 }) {
   if (steps.length === 0 && sources.length === 0) return null;
   const completed = steps.filter((step) => step.status === "completed").length;
   const summary = active
-    ? "Fred recherchiert …"
+    ? `${agentName} recherchiert …`
     : `Rechercheverlauf${completed > 0 ? ` · ${completed} Schritte` : ""}`;
   return (
     <details className="fred-research-trace" open={active}>
@@ -168,9 +180,16 @@ export default function FredNativeChatView({
     webSearch: false,
     fileUpload: false,
     proMode: false,
+    quickFred: false,
   });
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [proModeEnabled, setProModeEnabled] = useState(false);
+  const [quickFredEnabled, setQuickFredEnabled] = useState(
+    conversationId !== "" && initialMessages[0]?.agentKey === "quickfred",
+  );
+  const [conversationAgentKey, setConversationAgentKey] = useState<FredAgentKey | null>(
+    conversationId ? initialMessages[0]?.agentKey ?? "fred" : null,
+  );
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isAttachmentMenuOpen, setIsAttachmentMenuOpen] = useState(false);
@@ -192,6 +211,12 @@ export default function FredNativeChatView({
     setMessages(initialMessages);
     setComposer("");
     setError("");
+    const nextAgentKey = conversationId
+      ? initialMessages[0]?.agentKey ?? "fred"
+      : null;
+    setConversationAgentKey(nextAgentKey);
+    setQuickFredEnabled(nextAgentKey === "quickfred");
+    setProModeEnabled(false);
     setSelectedImages([]);
     setSelectedFiles([]);
     setIsAttachmentMenuOpen(false);
@@ -232,8 +257,12 @@ export default function FredNativeChatView({
         webSearch: value.webSearch === true,
         fileUpload: value.fileUpload === true,
         proMode: value.proMode === true,
+        quickFred: value.quickFred === true,
       });
       if (value.webSearch !== true) setWebSearchEnabled(false);
+      if (value.quickFred !== true && !activeConversationIdRef.current) {
+        setQuickFredEnabled(false);
+      }
     }).catch(() => undefined);
     return () => controller.abort();
   }, [accessToken]);
@@ -256,6 +285,7 @@ export default function FredNativeChatView({
     query: string;
     webSearchEnabled?: boolean;
     proModeEnabled?: boolean;
+    quickFredEnabled?: boolean;
     images: File[];
     files: File[];
     clearDraft: boolean;
@@ -265,15 +295,20 @@ export default function FredNativeChatView({
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    const agentKey: FredAgentKey = conversationAgentKey
+      ?? (options.quickFredEnabled === true ? "quickfred" : "fred");
+    const agentName = fredAgentName(agentKey);
     const userMessage: FredNativeMessage = {
       role: "user",
       content: query,
       createdAt: new Date().toISOString(),
+      agentKey,
     };
     const assistantMessage: FredNativeMessage = {
       role: "assistant",
       content: "",
       createdAt: new Date().toISOString(),
+      agentKey,
     };
     const attachedImages = options.images;
     const attachedFiles = options.files;
@@ -315,6 +350,7 @@ export default function FredNativeChatView({
         conversationId: activeConversationIdRef.current || undefined,
         webSearchEnabled: options.webSearchEnabled,
         proModeEnabled: isProMode,
+        quickFredEnabled: agentKey === "quickfred",
       };
       const hasAttachments = attachedImages.length > 0 || attachedFiles.length > 0;
       const formData = hasAttachments ? new FormData() : null;
@@ -337,10 +373,15 @@ export default function FredNativeChatView({
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null) as unknown;
-        throw new Error(responseError(payload, "Fred konnte die Anfrage nicht verarbeiten."));
+        throw new Error(responseError(
+          payload,
+          `${agentName} konnte die Anfrage nicht verarbeiten.`,
+        ));
       }
       const reader = response.body?.getReader();
-      if (!reader) throw new Error("Der Fred-Antwortstream konnte nicht gelesen werden.");
+      if (!reader) {
+        throw new Error(`Der ${agentName}-Antwortstream konnte nicht gelesen werden.`);
+      }
       const decoder = new TextDecoder();
       let buffer = "";
 
@@ -350,6 +391,11 @@ export default function FredNativeChatView({
         if (streamEvent.type === "error") throw new Error(streamEvent.error);
         if (streamEvent.type === "conversation") {
           activeConversationIdRef.current = streamEvent.conversation.id;
+          setConversationAgentKey(streamEvent.conversation.agentKey);
+          setQuickFredEnabled(streamEvent.conversation.agentKey === "quickfred");
+          if (streamEvent.conversation.agentKey === "quickfred") {
+            setProModeEnabled(false);
+          }
           onConversationUpdated(streamEvent.conversation, baseMessages);
           return;
         }
@@ -401,6 +447,8 @@ export default function FredNativeChatView({
         sourceReferences = streamEvent.sourceReferences ?? sourceReferences;
         receivedFinal = true;
         activeConversationIdRef.current = streamEvent.conversation.id;
+        setConversationAgentKey(streamEvent.conversation.agentKey);
+        setQuickFredEnabled(streamEvent.conversation.agentKey === "quickfred");
         const completedMessages = [
           ...baseMessages,
           {
@@ -424,13 +472,15 @@ export default function FredNativeChatView({
       }
       buffer += decoder.decode();
       processLine(buffer);
-      if (!answer.trim()) throw new Error("Fred hat keine Antwort geliefert.");
-      if (!receivedFinal) throw new Error("Der Fred-Antwortstream wurde ohne Abschluss beendet.");
+      if (!answer.trim()) throw new Error(`${agentName} hat keine Antwort geliefert.`);
+      if (!receivedFinal) {
+        throw new Error(`Der ${agentName}-Antwortstream wurde ohne Abschluss beendet.`);
+      }
     } catch (sendError) {
       if (!controller.signal.aborted) {
         setError(sendError instanceof Error
           ? sendError.message
-          : "Fred konnte die Anfrage nicht abschließen.");
+          : `${agentName} konnte die Anfrage nicht abschließen.`);
       }
       if (!answer) setMessages(baseMessages);
     } finally {
@@ -445,6 +495,7 @@ export default function FredNativeChatView({
       query: composer,
       webSearchEnabled,
       proModeEnabled,
+      quickFredEnabled,
       images: selectedImages,
       files: selectedFiles,
       clearDraft: true,
@@ -474,6 +525,7 @@ export default function FredNativeChatView({
       query: question.content,
       webSearchEnabled: Boolean(question.webSearchEnabled && capabilities.webSearch),
       proModeEnabled: originalProMode,
+      quickFredEnabled,
       images: [],
       files: [],
       clearDraft: false,
@@ -591,7 +643,9 @@ export default function FredNativeChatView({
                     <img className="message-avatar fred-avatar" src="/fred-avatar.png" alt="" />
                   )}
                   <div className="message-meta">
-                    <span className="sender-name">{message.role === "user" ? "Du" : "Fred"}</span>
+                    <span className="sender-name">
+                      {message.role === "user" ? "Du" : fredAgentName(message.agentKey)}
+                    </span>
                     <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
                   </div>
                   <div className="message-actions">
@@ -628,7 +682,7 @@ export default function FredNativeChatView({
                             aria-busy={pdfDownloadKey === `answer-${index}`}
                             disabled={Boolean(pdfDownloadKey)}
                             onClick={() => void downloadFredPdf(
-                              "Fred-Antwort",
+                              `${fredAgentName(message.agentKey)}-Antwort`,
                               message.content,
                               `answer-${index}`,
                             )}
@@ -661,20 +715,33 @@ export default function FredNativeChatView({
                     steps={message.researchTrace ?? []}
                     sources={message.sourceReferences ?? []}
                     active={isSending && index === messages.length - 1}
+                    agentName={fredAgentName(message.agentKey)}
                   />
                 ) : null}
                 {message.role === "assistant"
                   ? (message.content
                     ? renderAssistantContent(message.content)
                     : (
-                      <div className="fred-thinking-indicator" role="status" aria-label="Fred denkt nach">
+                      <div
+                        className="fred-thinking-indicator"
+                        role="status"
+                        aria-label={`${fredAgentName(message.agentKey)} denkt nach`}
+                      >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src="/fred-sniff.gif" alt="" />
                       </div>
                     ))
                   : renderUserContent(message.content)}
-                {message.role === "user" && (message.attachments?.length || message.webSearchEnabled || message.proModeEnabled) ? (
+                {message.role === "user" && (
+                  message.agentKey === "quickfred"
+                  || message.attachments?.length
+                  || message.webSearchEnabled
+                  || message.proModeEnabled
+                ) ? (
                   <div className="fred-native-message-options">
+                    {message.agentKey === "quickfred" ? (
+                      <span className="fred-native-option-badge">QuickFred</span>
+                    ) : null}
                     {message.proModeEnabled ? (
                       <span className="fred-native-option-badge">Pro</span>
                     ) : null}
@@ -773,10 +840,43 @@ export default function FredNativeChatView({
                     aria-pressed={proModeEnabled}
                     title={proModeEnabled ? "Pro-Modus aktiv" : "Pro-Modus verwenden"}
                     aria-label={proModeEnabled ? "Pro-Modus aktiv" : "Pro-Modus verwenden"}
-                    disabled={isSending}
-                    onClick={() => setProModeEnabled((current) => !current)}
+                    disabled={isSending || conversationAgentKey === "quickfred"}
+                    onClick={() => {
+                      setProModeEnabled((current) => {
+                        if (!current) setQuickFredEnabled(false);
+                        return !current;
+                      });
+                    }}
                   >
                     <span>Pro</span>
+                  </button>
+                ) : null}
+                {capabilities.quickFred || conversationAgentKey !== null ? (
+                  <button
+                    className={`composer-model-trigger fred-quick-toggle${quickFredEnabled ? " is-active" : ""}`}
+                    type="button"
+                    aria-pressed={quickFredEnabled}
+                    title={conversationAgentKey !== null
+                      ? "Agent für diese Unterhaltung festgelegt"
+                      : quickFredEnabled
+                        ? "QuickFred aktiv"
+                        : "QuickFred verwenden"}
+                    aria-label={conversationAgentKey !== null
+                      ? `Agent für diese Unterhaltung festgelegt: ${fredAgentName(conversationAgentKey)}`
+                      : quickFredEnabled
+                        ? "QuickFred aktiv"
+                        : "QuickFred verwenden"}
+                    disabled={isSending || conversationAgentKey !== null || !capabilities.quickFred}
+                    onClick={() => {
+                      setQuickFredEnabled((current) => {
+                        if (!current) setProModeEnabled(false);
+                        return !current;
+                      });
+                    }}
+                  >
+                    <svg className="fred-quick-icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M13.5 2 5 13h6l-.5 9L19 10h-6l.5-8Z" />
+                    </svg>
                   </button>
                 ) : null}
                 {capabilities.webSearch ? (

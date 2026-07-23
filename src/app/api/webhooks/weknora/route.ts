@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 
 import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { readFredEmbedServerConfig } from "@/lib/weknora/fred-embed";
+import {
+  readFredEmbedServerConfig,
+  readQuickFredEmbedServerConfig,
+} from "@/lib/weknora/fred-embed";
 import {
   fredWebhookDeliverySha256,
   parseFredWebhookEvent,
@@ -35,13 +38,22 @@ export async function POST(request: Request) {
       throw new UserVisibleError("Webhook signature rejected.", 401);
     }
     const config = readFredEmbedServerConfig();
+    const channelIds = [config.channelId];
+    try {
+      const quickFredConfig = readQuickFredEmbedServerConfig();
+      if (!channelIds.includes(quickFredConfig.channelId)) {
+        channelIds.push(quickFredConfig.channelId);
+      }
+    } catch {
+      // QuickFred is optional; Fred webhooks remain available without it.
+    }
     let body: unknown;
     try {
       body = JSON.parse(rawBody);
     } catch {
       throw new UserVisibleError("Webhook JSON rejected.", 400);
     }
-    const event = parseFredWebhookEvent(body, config.channelId);
+    const event = parseFredWebhookEvent(body, channelIds);
     const supabase = getSupabaseServerClient();
     if (!supabase) {
       throw new UserVisibleError("Webhook storage unavailable.", 503);

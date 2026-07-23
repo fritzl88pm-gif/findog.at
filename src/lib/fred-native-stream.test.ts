@@ -10,6 +10,7 @@ const conversation = {
   title: "Testfrage",
   createdAt: "2026-07-19T10:00:00.000Z",
   updatedAt: "2026-07-19T10:00:01.000Z",
+  agentKey: "fred" as const,
 };
 
 describe("Fred native stream", () => {

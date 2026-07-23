@@ -6,6 +6,7 @@ import {
   mintFredEmbedSession,
   readFredEmbedServerConfig,
   readFredProModelId,
+  readQuickFredEmbedServerConfig,
 } from "./fred-embed";
 
 const VALID_ENVIRONMENT = {
@@ -31,10 +32,44 @@ function upstreamSession(overrides: Record<string, unknown> = {}): Response {
 describe("Fred WeKnora Secure Embed", () => {
   it("accepts only server-side channel, em publish token and an exact HTTPS origin", () => {
     expect(readFredEmbedServerConfig(VALID_ENVIRONMENT)).toEqual({
+      agentKey: "fred",
       channelId: "fred-channel-2026",
       publishToken: "em_publish_token_fixture_123456",
       exchangeOrigin: "https://findog.at",
     });
+  });
+
+  it("accepts a complete server-only QuickFred channel and expected agent UUID", () => {
+    expect(readQuickFredEmbedServerConfig({
+      ...VALID_ENVIRONMENT,
+      WEKNORA_QUICKFRED_CHANNEL_ID: "quickfred-channel-2026",
+      WEKNORA_QUICKFRED_PUBLISH_TOKEN: "em_quickfred_publish_fixture_123456",
+      WEKNORA_QUICKFRED_EXCHANGE_ORIGIN: "https://findog.at",
+      WEKNORA_QUICKFRED_AGENT_ID: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
+    })).toEqual({
+      agentKey: "quickfred",
+      channelId: "quickfred-channel-2026",
+      publishToken: "em_quickfred_publish_fixture_123456",
+      exchangeOrigin: "https://findog.at",
+      expectedAgentId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
+    });
+  });
+
+  it.each([
+    ["missing channel", { WEKNORA_QUICKFRED_CHANNEL_ID: "" }],
+    ["wrong token", { WEKNORA_QUICKFRED_PUBLISH_TOKEN: "sk-not-an-embed-token" }],
+    ["unsafe origin", { WEKNORA_QUICKFRED_EXCHANGE_ORIGIN: "http://findog.at" }],
+    ["missing agent", { WEKNORA_QUICKFRED_AGENT_ID: "" }],
+    ["non-UUID agent", { WEKNORA_QUICKFRED_AGENT_ID: "quickfred" }],
+  ])("rejects incomplete QuickFred configuration: %s", (_label, override) => {
+    expect(() => readQuickFredEmbedServerConfig({
+      ...VALID_ENVIRONMENT,
+      WEKNORA_QUICKFRED_CHANNEL_ID: "quickfred-channel-2026",
+      WEKNORA_QUICKFRED_PUBLISH_TOKEN: "em_quickfred_publish_fixture_123456",
+      WEKNORA_QUICKFRED_EXCHANGE_ORIGIN: "https://findog.at",
+      WEKNORA_QUICKFRED_AGENT_ID: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
+      ...override,
+    })).toThrow(FredEmbedConfigurationError);
   });
 
   it.each([
