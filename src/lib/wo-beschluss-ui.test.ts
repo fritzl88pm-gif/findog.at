@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.meta.url)), "utf8");
 const viewSource = readFileSync(fileURLToPath(new URL("../components/wo-beschluss-view.tsx", import.meta.url)), "utf8");
 const sceneSource = readFileSync(fileURLToPath(new URL("../components/wo-beschluss-scene.ts", import.meta.url)), "utf8");
+const stylesSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 const manifest = JSON.parse(readFileSync(
   fileURLToPath(new URL("../../public/wo-beschluss/manifest.json", import.meta.url)),
   "utf8",
@@ -27,6 +28,22 @@ describe("Wo Beschluss UI surface", () => {
     expect(viewSource).toContain('aria-live="polite"');
     expect(sceneSource).toContain("applyWoBeschlussHit");
     expect(sceneSource).toContain("WO_BESCHLUSS_ASSETS");
+  });
+
+  it("keeps the supplied loading screen visible until Phaser finishes every asset", () => {
+    expect(existsSync(fileURLToPath(new URL("../../public/wo-beschluss/loading.jpg", import.meta.url)))).toBe(true);
+    expect(viewSource).toContain('const LOADING_SCREEN_SOURCE = "/wo-beschluss/loading.jpg"');
+    expect(viewSource).toContain('const isReady = sceneAssetsReady && loadingScreenReady');
+    expect(viewSource).toContain("image.decode()");
+    expect(viewSource).toContain("setSceneAssetsReady(true)");
+    expect(viewSource).toContain('className="wo-beschluss-loading-screen"');
+    expect(viewSource).toContain("wo-beschluss-canvas--loading");
+    expect(sceneSource).toContain("onAssetsReady: () => void");
+    expect(sceneSource).toContain("onAssetsError: () => void");
+    expect(sceneSource).toContain("PhaserRuntime.Loader.Events.FILE_LOAD_ERROR");
+    expect(sceneSource).toContain("onAssetsReady();");
+    expect(stylesSource).toContain(".wo-beschluss-loading-image {");
+    expect(stylesSource).toContain("object-fit: contain;");
   });
 
   it("shows the requested payout message and replay action on the winning screen", () => {

@@ -6206,9 +6206,28 @@ textarea:focus {
   inset: 0;
 }
 
+.wo-beschluss-canvas--loading {
+  pointer-events: none;
+}
+
 .wo-beschluss-canvas canvas {
   display: block;
   cursor: none;
+}
+
+.wo-beschluss-loading-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  background: #080808;
+}
+
+.wo-beschluss-loading-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .wo-beschluss-hint,

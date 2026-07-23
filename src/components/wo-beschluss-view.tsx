@@ -1,5 +1,6 @@
 "use client";
 
+import NextImage from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { WoBeschlussSceneHandle } from "@/components/wo-beschluss-scene";
@@ -17,13 +18,37 @@ const conditionLabels: Record<WoBeschlussCondition, string> = {
   critical: "Kurz vor K. o.",
   down: "K. o.",
 };
+const LOADING_SCREEN_SOURCE = "/wo-beschluss/loading.jpg";
 
 export default function WoBeschlussView() {
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<WoBeschlussSceneHandle | null>(null);
   const [snapshot, setSnapshot] = useState<WoBeschlussState>(createWoBeschlussState);
-  const [isReady, setIsReady] = useState(false);
+  const [sceneAssetsReady, setSceneAssetsReady] = useState(false);
+  const [loadingScreenReady, setLoadingScreenReady] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const isReady = sceneAssetsReady && loadingScreenReady;
+
+  useEffect(() => {
+    let isDisposed = false;
+    const image = new Image();
+    image.decoding = "async";
+    image.onload = () => {
+      void image.decode()
+        .then(() => {
+          if (!isDisposed) setLoadingScreenReady(true);
+        })
+        .catch(() => {
+          if (!isDisposed) setLoadError("Der Ladebildschirm konnte nicht geladen werden.");
+        });
+    };
+    image.onerror = () => {
+      if (!isDisposed) setLoadError("Der Ladebildschirm konnte nicht geladen werden.");
+    };
+    image.src = LOADING_SCREEN_SOURCE;
+
+    return () => { isDisposed = true; };
+  }, []);
 
   useEffect(() => {
     let isDisposed = false;
@@ -39,6 +64,10 @@ export default function WoBeschlussView() {
 
         const scene = createWoBeschlussScene(Phaser, (state) => {
           if (!isDisposed) setSnapshot(state);
+        }, () => {
+          if (!isDisposed) setSceneAssetsReady(true);
+        }, () => {
+          if (!isDisposed) setLoadError("Die Spielgrafiken konnten nicht geladen werden.");
         });
         sceneRef.current = scene;
         game = new Phaser.Game({
@@ -54,7 +83,6 @@ export default function WoBeschlussView() {
           loader: { imageLoadType: "HTMLImageElement" },
           scene: [scene],
         });
-        setIsReady(true);
       } catch {
         if (!isDisposed) setLoadError("Das Spiel konnte nicht geladen werden.");
       }
@@ -115,8 +143,24 @@ export default function WoBeschlussView() {
         </section>
 
         <section className="wo-beschluss-stage" aria-label="Spielfeld" aria-busy={!isReady && !loadError}>
-          <div ref={gameContainerRef} className="wo-beschluss-canvas" />
-          {!isReady && !loadError ? <p className="wo-beschluss-loading">Spiel wird geladen…</p> : null}
+          <div
+            ref={gameContainerRef}
+            className={`wo-beschluss-canvas${isReady ? "" : " wo-beschluss-canvas--loading"}`}
+            aria-hidden={!isReady || undefined}
+          />
+          {!isReady && !loadError ? (
+            <div className="wo-beschluss-loading-screen" role="status" aria-live="polite">
+              <NextImage
+                className="wo-beschluss-loading-image"
+                src={LOADING_SCREEN_SOURCE}
+                alt="Wo Beschluss wird geladen."
+                fill
+                loading="eager"
+                sizes="(max-width: 600px) 100vw, 980px"
+                unoptimized
+              />
+            </div>
+          ) : null}
           {loadError ? <p className="wo-beschluss-error" role="alert">{loadError}</p> : null}
           {!snapshot.finished && snapshot.hits === 0 && isReady ? (
             <p className="wo-beschluss-hint">Klicke oder tippe auf das Gesicht</p>

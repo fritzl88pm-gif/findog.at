@@ -69,6 +69,8 @@ export type WoBeschlussSceneHandle = {
 export function createWoBeschlussScene(
   PhaserRuntime: typeof Phaser,
   onStateChange: (state: WoBeschlussState) => void,
+  onAssetsReady: () => void,
+  onAssetsError: () => void,
 ): Phaser.Scene & WoBeschlussSceneHandle {
   class WoBeschlussScene extends PhaserRuntime.Scene implements WoBeschlussSceneHandle {
     private state: WoBeschlussState = createWoBeschlussState();
@@ -86,6 +88,7 @@ export function createWoBeschlussScene(
     private isHitAnimating = false;
     private isGlovePunching = false;
     private isPointerInside = false;
+    private hasAssetLoadError = false;
 
     private pointerMoveHandler = (pointer: Phaser.Input.Pointer) => {
       this.isPointerInside = true;
@@ -108,6 +111,10 @@ export function createWoBeschlussScene(
 
     preload(): void {
       const sheet = { frameWidth: FRAME_SIZE, frameHeight: FRAME_SIZE };
+      this.load.once(PhaserRuntime.Loader.Events.FILE_LOAD_ERROR, () => {
+        this.hasAssetLoadError = true;
+        onAssetsError();
+      });
       this.load.spritesheet(CHARACTER_KEY, WO_BESCHLUSS_ASSETS.reactions, sheet);
       this.load.spritesheet(INTERMEDIATE_KEY, WO_BESCHLUSS_ASSETS.intermediate, sheet);
       this.load.spritesheet(CHARACTER_VARIANT_B_KEY, WO_BESCHLUSS_ASSETS.reactionsVariantB, sheet);
@@ -118,6 +125,7 @@ export function createWoBeschlussScene(
     }
 
     create(): void {
+      if (this.hasAssetLoadError) return;
       const { width, height } = this.scale;
       this.add.rectangle(width / 2, height / 2, width, height, 0xeef4f7);
       this.add.circle(width * 0.18, height * 0.22, 110, 0x286f9c, 0.09);
@@ -163,6 +171,7 @@ export function createWoBeschlussScene(
       this.scale.on("resize", this.layout, this);
       this.events.once(PhaserRuntime.Scenes.Events.SHUTDOWN, this.teardown, this);
       onStateChange(this.state);
+      onAssetsReady();
     }
 
     private teardown(): void {
