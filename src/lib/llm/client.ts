@@ -92,6 +92,7 @@ function completionPayload(
   runtime: LlmRuntime,
   messages: LlmMessage[],
   tools: DeepSeekTool[],
+  temperature?: number,
 ): JsonObject {
   const usesThinking = thinkingEnabled(runtime);
   const isOpenAICompatible = runtime.provider === "openai_compatible";
@@ -110,7 +111,7 @@ function completionPayload(
   };
 
   if (isOpenAICompatible) {
-    payload.temperature = 0.2;
+    payload.temperature = temperature ?? 0.2;
     payload.max_tokens = 16000;
   } else {
     payload.thinking = { type: usesThinking ? "enabled" : "disabled" };
@@ -120,7 +121,7 @@ function completionPayload(
         payload.reasoning_effort = runtime.reasoning;
       }
     } else {
-      payload.temperature = 0.2;
+      payload.temperature = temperature ?? 0.2;
     }
   }
 
@@ -168,13 +169,14 @@ export async function chatCompletion(options: {
   runtime: LlmRuntime;
   messages: LlmMessage[];
   tools?: DeepSeekTool[];
+  temperature?: number;
   deadline?: Deadline;
   signal?: AbortSignal;
   timeoutMs?: number;
   reserveMs?: number;
 }): Promise<LlmResult> {
   const tools = options.tools ?? [];
-  const payload = completionPayload(options.runtime, options.messages, tools);
+  const payload = completionPayload(options.runtime, options.messages, tools, options.temperature);
   const headers: Record<string, string> = {
     Accept: "application/json",
     Authorization: `Bearer ${options.runtime.apiKey}`,

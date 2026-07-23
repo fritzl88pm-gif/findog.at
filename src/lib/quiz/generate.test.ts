@@ -27,6 +27,7 @@ vi.mock("../llm/client", () => ({
 
 import {
   CATEGORIES,
+  buildSearchPlan,
   generateQuiz,
   parseQuizQuestions,
   shuffleQuestionOptions,
@@ -49,6 +50,25 @@ function rawQuestions(): QuizQuestion[] {
 describe("CATEGORIES", () => {
   it("has exactly the two approved categories", () => {
     expect(CATEGORIES).toEqual(["Arbeitnehmerveranlagung", "Verfahrensrecht"]);
+  });
+});
+
+describe("buildSearchPlan", () => {
+  it("builds queries from the category anchor plus three distinct focus topics", () => {
+    for (const category of CATEGORIES) {
+      const plan = buildSearchPlan(category);
+      const anchor = category === "Arbeitnehmerveranlagung" ? "Arbeitnehmerveranlagung" : "BAO Verfahrensrecht";
+      expect(plan.query.startsWith(`${anchor} `)).toBe(true);
+      expect(plan.focusTopics).toHaveLength(3);
+      expect(new Set(plan.focusTopics).size).toBe(3);
+    }
+  });
+
+  it("varies queries across generations instead of always retrieving the same sources", () => {
+    const queries = new Set(
+      Array.from({ length: 40 }, () => buildSearchPlan("Verfahrensrecht").query),
+    );
+    expect(queries.size).toBeGreaterThan(1);
   });
 });
 
@@ -169,21 +189,15 @@ describe("generateQuiz", () => {
 
     expect(faqCall.name).toBe("faq_search");
     expect(faqCall.token).toBe("mcp-token");
-    expect(faqCall.arguments).toEqual({
-      kb_id: "952bd9ad-59a5-4ca4-ad28-3c945dab9515",
-      query: "Arbeitnehmerveranlagung Werbungskosten Pendlerpauschale Fortbildung außergewöhnliche Belastungen Krankheitskosten Absetzbeträge",
-      match_count: 8,
-    });
+    expect(faqCall.arguments.kb_id).toBe("952bd9ad-59a5-4ca4-ad28-3c945dab9515");
     expect(lawCall.name).toBe("hybrid_search");
     expect(lawCall.token).toBe("mcp-token");
-    expect(lawCall.arguments).toEqual({
-      kb_id: "e0282ab8-b94f-4553-962e-68705201cf9a",
-      query: "Arbeitnehmerveranlagung Werbungskosten Pendlerpauschale Fortbildung außergewöhnliche Belastungen Krankheitskosten Absetzbeträge",
-      match_count: 8,
-    });
+    expect(lawCall.arguments.kb_id).toBe("e0282ab8-b94f-4553-962e-68705201cf9a");
+    expect(lawCall.arguments.query).toBe(faqCall.arguments.query);
     for (const call of [faqCall, lawCall]) {
-      expect(call.arguments).not.toHaveProperty("knowledge_base_id");
-      expect(call.arguments).not.toHaveProperty("limit");
+      expect(Object.keys(call.arguments).sort()).toEqual(["kb_id", "match_count", "query"]);
+      expect(call.arguments.match_count).toBe(8);
+      expect(call.arguments.query).toMatch(/^Arbeitnehmerveranlagung /u);
       expect(call.deadline).toBe(faqCall.deadline);
       expect(call.signal).toBe(faqCall.deadline.signal);
     }
@@ -193,28 +207,46 @@ describe("generateQuiz", () => {
     expect(llmCall.signal).toBe(faqCall.deadline.signal);
   });
 
-  it("uses only the approved Verfahrensrecht query across two broad hybrid searches", async () => {
+  it("uses one shared Verfahrensrecht query across two broad hybrid searches", async () => {
     await generateQuiz("Verfahrensrecht");
 
     expect(mocks.callToolDetailed).toHaveBeenCalledTimes(2);
     const calls = mocks.callToolDetailed.mock.calls.map(([options]) => options);
     expect(calls.map((call) => call.name)).toEqual(["hybrid_search", "hybrid_search"]);
-    expect(calls.map((call) => call.arguments)).toEqual([
-      {
-        kb_id: "e0282ab8-b94f-4553-962e-68705201cf9a",
-        query: "BAO Fristen Zustellung Beschwerden Vorlageanträge Wiederaufnahme Rechtsmittel Bescheidänderungen Beweislast Nachweise Zurückweisung Abweisung",
-        match_count: 8,
-      },
-      {
-        kb_id: "7e203a75-9e51-4839-afd4-7d24d2e5b033",
-        query: "BAO Fristen Zustellung Beschwerden Vorlageanträge Wiederaufnahme Rechtsmittel Bescheidänderungen Beweislast Nachweise Zurückweisung Abweisung",
-        match_count: 8,
-      },
+    expect(calls.map((call) => call.arguments.kb_id)).toEqual([
+      "e0282ab8-b94f-4553-962e-68705201cf9a",
+      "7e203a75-9e51-4839-afd4-7d24d2e5b033",
     ]);
+    expect(calls[0].arguments.query).toBe(calls[1].arguments.query);
     for (const call of calls) {
-      expect(call.arguments).not.toHaveProperty("knowledge_base_id");
-      expect(call.arguments).not.toHaveProperty("limit");
+      expect(Object.keys(call.arguments).sort()).toEqual(["kb_id", "match_count", "query"]);
+      expect(call.arguments.match_count).toBe(8);
+      expect(call.arguments.query).toMatch(/^BAO Verfahrensrecht /u);
     }
+  });
+
+  it("requests fresh output via focus topics, a variation seed, and higher sampling temperature", async () => {
+    await generateQuiz("Arbeitnehmerveranlagung");
+
+    const llmCall = mocks.chatCompletion.mock.calls[0][0];
+    expect(llmCall.temperature).toBe(0.9);
+    const userPrompt = llmCall.messages[1].content as string;
+    expect(userPrompt).toContain("Variationskennung:");
+    expect(userPrompt).toContain("Setze die inhaltlichen Schwerpunkte dieses Durchlaufs auf:");
+  });
+
+  it("keeps both sources represented when each search returns oversized text", async () => {
+    mocks.callToolDetailed
+      .mockReset()
+      .mockResolvedValueOnce({ text: "A".repeat(20_000), isError: false })
+      .mockResolvedValueOnce({ text: "B".repeat(20_000), isError: false });
+
+    await generateQuiz("Verfahrensrecht");
+
+    const userPrompt = mocks.chatCompletion.mock.calls[0][0].messages[1].content as string;
+    expect(userPrompt).toContain("[Quelle 1]");
+    expect(userPrompt).toContain("[Quelle 2]");
+    expect(userPrompt).toContain("B".repeat(1_000));
   });
 
   it("keeps approved category scope and treats retrieved content as untrusted data", async () => {

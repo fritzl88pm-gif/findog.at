@@ -223,6 +223,22 @@ describe("provider-neutral chatCompletion", () => {
     expect(JSON.stringify(requestBody(fetchMock))).not.toContain("deepseek-secret");
   });
 
+  it("applies a caller temperature override when reasoning is disabled", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(responseMessage({ content: "Antwort" }, "stop"));
+
+    await chatCompletion({
+      runtime: FLASH_RUNTIME,
+      messages: [{ role: "user", content: "Frage" }],
+      temperature: 0.9,
+    });
+
+    expect(requestBody(fetchMock)).toMatchObject({
+      thinking: { type: "disabled" },
+      temperature: 0.9,
+    });
+  });
+
   it("omits temperature and tool_choice in thinking mode and preserves reasoning plus object arguments", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(responseMessage({
