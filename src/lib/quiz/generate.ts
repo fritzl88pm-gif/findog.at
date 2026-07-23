@@ -35,8 +35,8 @@ function isValidCategory(value: string): value is QuizCategory {
 const MAX_SOURCE_CHARS = 12_000;
 const PER_SOURCE_MAX_CHARS = MAX_SOURCE_CHARS / 2;
 const MAX_PROMPT_CHARS = 16_000;
-const QUIZ_TIMEOUT_MS = 90_000;
-const QUIZ_TEMPERATURE = 0.9;
+// Covers retrieval plus the reasoning-mode LLM call, which needs far more headroom than a flash call.
+const QUIZ_TIMEOUT_MS = 240_000;
 const MAX_QUESTIONS = 10;
 const MAX_QUESTION_CHARS = 500;
 const MAX_OPTION_CHARS = 300;
@@ -135,6 +135,8 @@ Wichtige Regeln:
 - Jede Frage hat genau 4 Antwortmöglichkeiten (a, b, c, d).
 - Genau 1 Antwort ist richtig.
 - Die Fragen müssen auf den Quellen basieren und fachlich korrekt sein.
+- Jede Frage und die als richtig markierte Antwort müssen sich direkt aus dem Quellenmaterial belegen lassen. Erfinde keine Inhalte ohne Quellenbasis.
+- Es gilt ausschließlich die aktuelle österreichische Rechtslage. Stelle keine Fragen zu überholten Rechtslagen und markiere keine veraltete Rechtsfolge als richtig.
 - Die Erklärung muss kurz (max. 3 Sätze) den richtigen Sachverhalt erläutern.
 - Schreibe die Fragen auf Deutsch.
 - Variiere die Unterthemen innerhalb der Kategorie.
@@ -331,10 +333,10 @@ export async function generateQuiz(category: string): Promise<Quiz> {
       );
     }
 
-    // Use fixed deepseek-v4-flash with reasoning disabled
+    // Pro with high reasoning: fachliche Korrektheit schlägt hier Latenz, das Quiz ist admin-exklusiv.
     const runtime = resolveLlmRuntime({
-      model: "deepseek-v4-flash",
-      reasoning: "disabled",
+      model: "deepseek-v4-pro",
+      reasoning: "high",
     });
 
     const systemPrompt = buildCategoryPrompt(category);
@@ -349,7 +351,6 @@ export async function generateQuiz(category: string): Promise<Quiz> {
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      temperature: QUIZ_TEMPERATURE,
       deadline,
       signal: deadline.signal,
     });

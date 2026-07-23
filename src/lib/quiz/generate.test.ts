@@ -18,12 +18,14 @@ vi.mock("../mcp/server-token", () => ({
 }));
 
 vi.mock("../llm/runtime", () => ({
-  resolveLlmRuntime: vi.fn(() => ({ provider: "deepseek", model: "deepseek-v4-flash" })),
+  resolveLlmRuntime: vi.fn(() => ({ provider: "deepseek", model: "deepseek-v4-pro", reasoning: "high" })),
 }));
 
 vi.mock("../llm/client", () => ({
   chatCompletion: mocks.chatCompletion,
 }));
+
+import { resolveLlmRuntime } from "../llm/runtime";
 
 import {
   CATEGORIES,
@@ -225,11 +227,17 @@ describe("generateQuiz", () => {
     }
   });
 
-  it("requests fresh output via focus topics, a variation seed, and higher sampling temperature", async () => {
+  it("generates on the pro model with high reasoning, focus topics, and a variation seed", async () => {
     await generateQuiz("Arbeitnehmerveranlagung");
 
+    expect(vi.mocked(resolveLlmRuntime)).toHaveBeenCalledWith({
+      model: "deepseek-v4-pro",
+      reasoning: "high",
+    });
     const llmCall = mocks.chatCompletion.mock.calls[0][0];
-    expect(llmCall.temperature).toBe(0.9);
+    const systemPrompt = llmCall.messages[0].content as string;
+    expect(systemPrompt).toContain("direkt aus dem Quellenmaterial belegen");
+    expect(systemPrompt).toContain("aktuelle österreichische Rechtslage");
     const userPrompt = llmCall.messages[1].content as string;
     expect(userPrompt).toContain("Variationskennung:");
     expect(userPrompt).toContain("Setze die inhaltlichen Schwerpunkte dieses Durchlaufs auf:");
