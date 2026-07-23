@@ -857,7 +857,7 @@ export default function FredNativeChatView({
                 ) : null}
                 {capabilities.quickFred || conversationAgentKey !== null ? (
                   <button
-                    className={`composer-model-trigger fred-quick-toggle${quickFredEnabled ? " is-active" : ""}`}
+                    className={`composer-model-trigger composer-icon-toggle fred-quick-toggle${quickFredEnabled ? " is-active" : ""}`}
                     type="button"
                     aria-pressed={quickFredEnabled}
                     title={conversationAgentKey !== null
