@@ -838,7 +838,7 @@ export default function FredNativeChatView({
                     className={`composer-model-trigger composer-icon-toggle fred-pro-toggle${proModeEnabled ? " is-active" : ""}`}
                     type="button"
                     aria-pressed={proModeEnabled}
-                    title={proModeEnabled ? "Pro-Modus aktiv" : "Pro-Modus verwenden"}
+                    title="Thinking"
                     aria-label={proModeEnabled ? "Pro-Modus aktiv" : "Pro-Modus verwenden"}
                     disabled={isSending || conversationAgentKey === "quickfred"}
                     onClick={() => {
@@ -860,11 +860,7 @@ export default function FredNativeChatView({
                     className={`composer-model-trigger composer-icon-toggle fred-quick-toggle${quickFredEnabled ? " is-active" : ""}`}
                     type="button"
                     aria-pressed={quickFredEnabled}
-                    title={conversationAgentKey !== null
-                      ? "Agent für diese Unterhaltung festgelegt"
-                      : quickFredEnabled
-                        ? "QuickFred aktiv"
-                        : "QuickFred verwenden"}
+                    title="Fastmode für einfache Fragen"
                     aria-label={conversationAgentKey !== null
                       ? `Agent für diese Unterhaltung festgelegt: ${fredAgentName(conversationAgentKey)}`
                       : quickFredEnabled
@@ -888,7 +884,7 @@ export default function FredNativeChatView({
                     className={`composer-model-trigger composer-icon-toggle fred-web-search-toggle${webSearchEnabled ? " is-active" : ""}`}
                     type="button"
                     aria-pressed={webSearchEnabled}
-                    title={webSearchEnabled ? "Websuche aktiv" : "Websuche verwenden"}
+                    title="Websuche"
                     aria-label={webSearchEnabled ? "Websuche aktiv" : "Websuche verwenden"}
                     onClick={() => setWebSearchEnabled((current) => !current)}
                     disabled={isSending}

@@ -178,15 +178,19 @@ describe("Fred Pro Mode UI", () => {
     expect(cssSource).toContain(".composer-model-trigger.composer-icon-toggle");
   });
 
-  it("uses aria-pressed, dynamic title/aria-label on the Pro button", () => {
+  it("uses the requested tooltip and dynamic aria-label on the Pro button", () => {
     expect(viewSource).toContain('aria-pressed={proModeEnabled}');
-    expect(viewSource).toContain('title={proModeEnabled ? "Pro-Modus aktiv" : "Pro-Modus verwenden"}');
+    expect(viewSource).toContain('title="Thinking"');
     expect(viewSource).toContain('aria-label={proModeEnabled ? "Pro-Modus aktiv" : "Pro-Modus verwenden"}');
   });
 
-  it("uses dynamic title/aria-label on the icon-only Websuche button", () => {
-    expect(viewSource).toContain('title={webSearchEnabled ? "Websuche aktiv" : "Websuche verwenden"}');
+  it("uses the requested tooltip and dynamic aria-label on the icon-only Websuche button", () => {
+    expect(viewSource).toContain('title="Websuche"');
     expect(viewSource).toContain('aria-label={webSearchEnabled ? "Websuche aktiv" : "Websuche verwenden"}');
+  });
+
+  it("uses the requested QuickFred tooltip", () => {
+    expect(viewSource).toContain('title="Fastmode für einfache Fragen"');
   });
 
   it("uses type=button and is disabled while sending", () => {
