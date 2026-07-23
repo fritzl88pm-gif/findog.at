@@ -176,6 +176,7 @@ export default function FredNativeChatView({
   const [composer, setComposer] = useState("");
   const [error, setError] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [modeNotice, setModeNotice] = useState("");
   const [capabilities, setCapabilities] = useState<FredCapabilities>({
     webSearch: false,
     fileUpload: false,
@@ -211,6 +212,7 @@ export default function FredNativeChatView({
     setMessages(initialMessages);
     setComposer("");
     setError("");
+    setModeNotice("");
     const nextAgentKey = conversationId
       ? initialMessages[0]?.agentKey ?? "fred"
       : null;
@@ -240,6 +242,12 @@ export default function FredNativeChatView({
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isAttachmentMenuOpen]);
+
+  useEffect(() => {
+    if (!modeNotice) return;
+    const timer = window.setTimeout(() => setModeNotice(""), 1_800);
+    return () => window.clearTimeout(timer);
+  }, [modeNotice]);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -765,6 +773,11 @@ export default function FredNativeChatView({
         </div>
 
         <div className="composer-container">
+          {modeNotice ? (
+            <div className="fred-mode-notice" role="status" aria-live="polite" aria-atomic="true" key={modeNotice}>
+              {modeNotice}
+            </div>
+          ) : null}
           {error || externalError ? (
             <div className="error-box composer-error" role="alert">{error || externalError}</div>
           ) : null}
@@ -842,10 +855,10 @@ export default function FredNativeChatView({
                     aria-label={proModeEnabled ? "Pro-Modus aktiv" : "Pro-Modus verwenden"}
                     disabled={isSending || conversationAgentKey === "quickfred"}
                     onClick={() => {
-                      setProModeEnabled((current) => {
-                        if (!current) setQuickFredEnabled(false);
-                        return !current;
-                      });
+                      const nextEnabled = !proModeEnabled;
+                      if (nextEnabled) setQuickFredEnabled(false);
+                      setProModeEnabled(nextEnabled);
+                      setModeNotice(nextEnabled ? "Thinking aktiviert" : "Thinking deaktiviert");
                     }}
                   >
                     <svg className="fred-pro-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -868,10 +881,10 @@ export default function FredNativeChatView({
                         : "QuickFred verwenden"}
                     disabled={isSending || conversationAgentKey !== null || !capabilities.quickFred}
                     onClick={() => {
-                      setQuickFredEnabled((current) => {
-                        if (!current) setProModeEnabled(false);
-                        return !current;
-                      });
+                      const nextEnabled = !quickFredEnabled;
+                      if (nextEnabled) setProModeEnabled(false);
+                      setQuickFredEnabled(nextEnabled);
+                      setModeNotice(nextEnabled ? "Fastmode aktiviert" : "Fastmode deaktiviert");
                     }}
                   >
                     <svg className="fred-quick-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -886,7 +899,11 @@ export default function FredNativeChatView({
                     aria-pressed={webSearchEnabled}
                     title="Websuche"
                     aria-label={webSearchEnabled ? "Websuche aktiv" : "Websuche verwenden"}
-                    onClick={() => setWebSearchEnabled((current) => !current)}
+                    onClick={() => {
+                      const nextEnabled = !webSearchEnabled;
+                      setWebSearchEnabled(nextEnabled);
+                      setModeNotice(nextEnabled ? "Websuche aktiviert" : "Websuche deaktiviert");
+                    }}
                     disabled={isSending}
                   >
                     <svg className="fred-web-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

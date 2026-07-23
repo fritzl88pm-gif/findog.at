@@ -193,6 +193,19 @@ describe("Fred Pro Mode UI", () => {
     expect(viewSource).toContain('title="Fastmode für einfache Fragen"');
   });
 
+  it("shows auto-hiding mobile status popups for all three mode toggles", () => {
+    expect(viewSource).toContain('role="status" aria-live="polite" aria-atomic="true"');
+    expect(viewSource).toContain('"Thinking aktiviert"');
+    expect(viewSource).toContain('"Thinking deaktiviert"');
+    expect(viewSource).toContain('"Fastmode aktiviert"');
+    expect(viewSource).toContain('"Fastmode deaktiviert"');
+    expect(viewSource).toContain('"Websuche aktiviert"');
+    expect(viewSource).toContain('"Websuche deaktiviert"');
+    expect(viewSource).toContain('window.setTimeout(() => setModeNotice(""), 1_800)');
+    expect(cssSource).toContain(".fred-mode-notice");
+    expect(cssSource).toContain("@keyframes fredModeNoticeIn");
+  });
+
   it("uses type=button and is disabled while sending", () => {
     expect(viewSource).toContain('type="button"');
     expect(viewSource).toContain('disabled={isSending}');

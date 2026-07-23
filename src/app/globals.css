@@ -4622,6 +4622,21 @@ textarea:focus {
   margin: 0 auto 12px;
 }
 
+.fred-mode-notice {
+  display: none;
+}
+
+@keyframes fredModeNoticeIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
 .composer {
   display: flex;
   flex-direction: column;
@@ -5359,6 +5374,27 @@ textarea:focus {
 }
 
 @media (max-width: 640px) {
+  .fred-mode-notice {
+    position: fixed;
+    z-index: 80;
+    bottom: calc(142px + env(safe-area-inset-bottom, 0px));
+    left: 50%;
+    display: block;
+    max-width: calc(100vw - 32px);
+    transform: translateX(-50%);
+    border-radius: 999px;
+    padding: 9px 14px;
+    background: rgba(25, 45, 58, 0.94);
+    box-shadow: 0 8px 24px rgba(16, 34, 46, 0.2);
+    color: #ffffff;
+    font-size: 0.82rem;
+    font-weight: 650;
+    line-height: 1.2;
+    pointer-events: none;
+    white-space: nowrap;
+    animation: fredModeNoticeIn 160ms ease-out;
+  }
+
   .transcript {
     padding: 64px 12px 16px 12px;
   }
