@@ -4746,6 +4746,18 @@ textarea:focus {
   background: var(--bmf-blue);
   color: #ffffff;
 }
+.composer-model-trigger.fred-pro-toggle.is-active {
+  border-color: var(--bmf-blue-deep);
+  background: var(--bmf-blue-deep);
+  color: #ffffff;
+}
+
+.fred-pro-toggle > span {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+
 
 .fred-web-search-icon {
   width: 16px;

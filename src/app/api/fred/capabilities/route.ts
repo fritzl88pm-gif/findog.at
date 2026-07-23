@@ -8,6 +8,7 @@ import {
   FredEmbedUpstreamError,
   mintFredEmbedSession,
   readFredEmbedServerConfig,
+  readFredProModelId,
 } from "@/lib/weknora/fred-embed";
 import { fetchFredUpstreamConfig } from "@/lib/weknora/fred-native";
 
@@ -29,6 +30,15 @@ function findogFileUploadEnabled(): boolean {
   return mineruToken !== "" && openrouterKey !== "";
 }
 
+function fredProModeEnabled(): boolean {
+  try {
+    readFredProModelId();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function GET(request: Request) {
   try {
     const supabase = getSupabaseServerClient();
@@ -47,6 +57,7 @@ export async function GET(request: Request) {
     return json({
       webSearch: capabilities.allowWebSearch,
       fileUpload: findogFileUploadEnabled(),
+      proMode: fredProModeEnabled(),
     });
   } catch (error) {
     if (error instanceof UserVisibleError) return json({ error: error.message }, error.status);

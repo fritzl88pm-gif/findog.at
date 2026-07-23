@@ -33,6 +33,7 @@ import {
   FredEmbedUpstreamError,
   mintFredEmbedSession,
   readFredEmbedServerConfig,
+  readFredProModelId,
 } from "@/lib/weknora/fred-embed";
 import { parseFredConversationSummary } from "@/lib/weknora/fred-history";
 import {
@@ -82,6 +83,7 @@ type ParsedFredChatRequest = {
   query: string;
   conversationId: string;
   webSearchEnabled: boolean;
+  proModeEnabled: boolean;
   attachments: FindogAttachment[];
 };
 type FredConversationRow = {
@@ -177,13 +179,17 @@ function validatedRequestFields(value: unknown): Omit<ParsedFredChatRequest, "at
   if (body.webSearchEnabled !== undefined && typeof body.webSearchEnabled !== "boolean") {
     throw new UserVisibleError("Die Websuche-Einstellung ist ungültig.", 400);
   }
+  const proModeEnabled = body.proModeEnabled === true;
+  if (body.proModeEnabled !== undefined && typeof body.proModeEnabled !== "boolean") {
+    throw new UserVisibleError("Die Fred-Pro-Einstellung ist ungültig.", 400);
+  }
   if (!query || query.length > MAX_QUERY_LENGTH) {
     throw new UserVisibleError("Bitte gib eine gültige Frage an Fred ein.", 400);
   }
   if (conversationId && !UUID_PATTERN.test(conversationId)) {
     throw new UserVisibleError("Die Fred-Unterhaltung ist ungültig.", 400);
   }
-  return { query, conversationId, webSearchEnabled };
+  return { query, conversationId, webSearchEnabled, proModeEnabled };
 }
 
 function sanitizedFilename(value: string): string {
@@ -454,6 +460,7 @@ async function recordEvent(options: {
   occurredAt: string;
   attachments?: FindogAttachment[];
   webSearchEnabled?: boolean;
+  proModeEnabled?: boolean;
   displayContent?: string;
   researchTrace?: FredResearchStep[];
   sourceReferences?: FredSourceReference[];
@@ -468,6 +475,7 @@ async function recordEvent(options: {
     occurred_at: options.occurredAt,
     attachments: (options.attachments ?? []).map(attachmentMetadata),
     web_search_enabled: options.webSearchEnabled ?? false,
+    pro_mode_enabled: options.proModeEnabled ?? false,
     ...(options.displayContent !== undefined ? {
       display_content: options.displayContent,
       research_trace: options.researchTrace ?? [],
@@ -676,6 +684,9 @@ export async function POST(request: Request) {
           if (body.webSearchEnabled && !upstreamConfig.allowWebSearch) {
             throw new UserVisibleError("Die Websuche ist für diesen Fred-Kanal nicht freigeschaltet.", 400);
           }
+          const summaryModelId = body.proModeEnabled
+            ? readFredProModelId()
+            : "";
 
           const userOccurredAt = new Date().toISOString();
           const conversation = await recordEvent({
@@ -689,6 +700,7 @@ export async function POST(request: Request) {
             occurredAt: userOccurredAt,
             attachments: body.attachments,
             webSearchEnabled: body.webSearchEnabled,
+            proModeEnabled: body.proModeEnabled,
           });
           void relayFredWebhookEvent({
             session: embedSession,
@@ -708,6 +720,7 @@ export async function POST(request: Request) {
             query: upstreamQuery,
             webSearchEnabled: body.webSearchEnabled,
             signal: deadline.signal,
+            summaryModelId,
           });
           const upstreamReader = upstream.body!.getReader();
           activeUpstreamReader = upstreamReader;
@@ -870,6 +883,7 @@ export async function POST(request: Request) {
             displayContent: finalAnswer,
             researchTrace,
             sourceReferences,
+            proModeEnabled: false,
           });
           void relayFredWebhookEvent({
             session: embedSession,

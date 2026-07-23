@@ -35,6 +35,7 @@ export type FredNativeMessage = {
   createdAt: string;
   attachments?: FredNativeAttachment[];
   webSearchEnabled?: boolean;
+  proModeEnabled?: boolean;
   researchTrace?: FredResearchStep[];
   sourceReferences?: FredSourceReference[];
 };
@@ -47,7 +48,7 @@ export type FredNativeAttachment = {
   sha256?: string;
 };
 
-type FredCapabilities = { webSearch: boolean; fileUpload: boolean };
+type FredCapabilities = { webSearch: boolean; fileUpload: boolean; proMode: boolean };
 
 const MAX_IMAGE_UPLOADS = 5;
 const MAX_FILE_UPLOADS = 5;
@@ -166,8 +167,10 @@ export default function FredNativeChatView({
   const [capabilities, setCapabilities] = useState<FredCapabilities>({
     webSearch: false,
     fileUpload: false,
+    proMode: false,
   });
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [proModeEnabled, setProModeEnabled] = useState(false);
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isAttachmentMenuOpen, setIsAttachmentMenuOpen] = useState(false);
@@ -228,6 +231,7 @@ export default function FredNativeChatView({
       setCapabilities({
         webSearch: value.webSearch === true,
         fileUpload: value.fileUpload === true,
+        proMode: value.proMode === true,
       });
       if (value.webSearch !== true) setWebSearchEnabled(false);
     }).catch(() => undefined);
@@ -250,7 +254,8 @@ export default function FredNativeChatView({
 
   async function submitQuery(options: {
     query: string;
-    webSearchEnabled: boolean;
+    webSearchEnabled?: boolean;
+    proModeEnabled?: boolean;
     images: File[];
     files: File[];
     clearDraft: boolean;
@@ -287,6 +292,8 @@ export default function FredNativeChatView({
       })),
     ];
     userMessage.webSearchEnabled = options.webSearchEnabled;
+    const isProMode = options.proModeEnabled === true;
+    userMessage.proModeEnabled = isProMode;
     const baseMessages = [...messages, userMessage];
     setMessages([...baseMessages, assistantMessage]);
     if (options.clearDraft) {
@@ -307,6 +314,7 @@ export default function FredNativeChatView({
         query,
         conversationId: activeConversationIdRef.current || undefined,
         webSearchEnabled: options.webSearchEnabled,
+        proModeEnabled: isProMode,
       };
       const hasAttachments = attachedImages.length > 0 || attachedFiles.length > 0;
       const formData = hasAttachments ? new FormData() : null;
@@ -436,6 +444,7 @@ export default function FredNativeChatView({
     await submitQuery({
       query: composer,
       webSearchEnabled,
+      proModeEnabled,
       images: selectedImages,
       files: selectedFiles,
       clearDraft: true,
@@ -446,6 +455,7 @@ export default function FredNativeChatView({
     if (isSending) return;
     setComposer(message.content);
     setWebSearchEnabled(Boolean(message.webSearchEnabled && capabilities.webSearch));
+    setProModeEnabled(Boolean(message.proModeEnabled && capabilities.proMode));
     setSelectedImages([]);
     setSelectedFiles([]);
     setError("");
@@ -458,9 +468,12 @@ export default function FredNativeChatView({
   function regenerateAnswer(assistantIndex: number): void {
     const question = precedingUserMessage(messages, assistantIndex);
     if (!question || isSending) return;
+    const originalProMode = Boolean(question.proModeEnabled && capabilities.proMode);
+    setProModeEnabled(originalProMode);
     void submitQuery({
       query: question.content,
       webSearchEnabled: Boolean(question.webSearchEnabled && capabilities.webSearch),
+      proModeEnabled: originalProMode,
       images: [],
       files: [],
       clearDraft: false,
@@ -660,8 +673,11 @@ export default function FredNativeChatView({
                       </div>
                     ))
                   : renderUserContent(message.content)}
-                {message.role === "user" && (message.attachments?.length || message.webSearchEnabled) ? (
+                {message.role === "user" && (message.attachments?.length || message.webSearchEnabled || message.proModeEnabled) ? (
                   <div className="fred-native-message-options">
+                    {message.proModeEnabled ? (
+                      <span className="fred-native-option-badge">Pro</span>
+                    ) : null}
                     {message.webSearchEnabled ? (
                       <span className="fred-native-option-badge">Websuche</span>
                     ) : null}
@@ -750,6 +766,19 @@ export default function FredNativeChatView({
                 </div>
               ) : <span />}
               <div className="composer-actions">
+                {capabilities.proMode ? (
+                  <button
+                    className={`composer-model-trigger fred-pro-toggle${proModeEnabled ? " is-active" : ""}`}
+                    type="button"
+                    aria-pressed={proModeEnabled}
+                    title={proModeEnabled ? "Pro-Modus aktiv" : "Pro-Modus verwenden"}
+                    aria-label={proModeEnabled ? "Pro-Modus aktiv" : "Pro-Modus verwenden"}
+                    disabled={isSending}
+                    onClick={() => setProModeEnabled((current) => !current)}
+                  >
+                    <span>Pro</span>
+                  </button>
+                ) : null}
                 {capabilities.webSearch ? (
                   <button
                     className={`composer-model-trigger fred-web-search-toggle${webSearchEnabled ? " is-active" : ""}`}

@@ -153,3 +153,116 @@ describe("Fred native Findog UI", () => {
     expect(hasHigherSpec).toBe(true);
   });
 });
+
+describe("Fred Pro Mode UI", () => {
+  it("includes proMode in FredCapabilities", () => {
+    expect(viewSource).toContain("proMode");
+    expect(pageSource).toContain("proMode");
+  });
+
+  it("renders a compact Pro button immediately before the Websuche button in composer-actions", () => {
+    const proIndex = viewSource.indexOf("Pro");
+    const webSearchIndex = viewSource.indexOf("fred-web-search-toggle");
+    expect(proIndex).toBeGreaterThan(0);
+    expect(proIndex).toBeLessThan(webSearchIndex);
+  });
+
+  it("uses aria-pressed, dynamic title/aria-label on the Pro button", () => {
+    expect(viewSource).toContain('aria-pressed={proModeEnabled}');
+    expect(viewSource).toContain('"Pro-Modus verwenden"');
+    expect(viewSource).toContain('"Pro-Modus aktiv"');
+  });
+
+  it("uses type=button and is disabled while sending", () => {
+    expect(viewSource).toContain('type="button"');
+    expect(viewSource).toContain('disabled={isSending}');
+  });
+
+  it("renders the Pro button only when capabilities.proMode is true", () => {
+    expect(viewSource).toContain("capabilities.proMode");
+  });
+
+  it("keeps Pro and Websuche independent", () => {
+    expect(viewSource).toContain("proModeEnabled");
+    expect(viewSource).toContain("webSearchEnabled");
+  });
+
+  it("sends proModeEnabled in the request payload for both JSON and multipart", () => {
+    expect(viewSource).toContain("proModeEnabled");
+    const payloadAssignment = /requestPayload\s*=\s*\{[^}]*proModeEnabled[^}]*\}/u;
+    expect(viewSource).toMatch(payloadAssignment);
+  });
+
+  it("does not contain any model UUID or name in the component source", () => {
+    expect(viewSource).not.toContain("8bf35269");
+    expect(viewSource).not.toContain("deepseek-v4-pro");
+    expect(viewSource).not.toContain("summary_model_id");
+    expect(viewSource).not.toContain("WEKNORA_FRED_PRO_MODEL_ID");
+  });
+
+  it("preserves proMode state after sending for later messages", () => {
+    expect(viewSource).toContain("proModeEnabled");
+  });
+
+  it("restores proModeEnabled on edit", () => {
+    expect(viewSource).toContain("proModeEnabled");
+    expect(viewSource).toContain("editQuestion");
+  });
+
+  it("reuses preceding user turn's proModeEnabled on regenerate", () => {
+    expect(viewSource).toContain("regenerateAnswer");
+  });
+
+  it("renders a compact Pro badge on user messages where true", () => {
+    expect(viewSource).toContain("Pro");
+    expect(viewSource).toContain("fred-native-option-badge");
+    expect(viewSource).toContain("proModeEnabled");
+  });
+
+  it("uses scoped CSS class .fred-pro-toggle in globals.css", () => {
+    expect(cssSource).toContain(".fred-pro-toggle");
+    expect(cssSource).toContain(".fred-pro-toggle.is-active");
+  });
+
+  it("includes proModeEnabled in the FredNativeMessage type", () => {
+    expect(viewSource).toContain("proModeEnabled?: boolean");
+    expect(pageSource).toContain("proModeEnabled");
+  });
+});
+describe("Fred Pro Mode options.proModeEnabled regression (TDD)", () => {
+  it("submitQuery reads proModeEnabled from options.proModeEnabled (normalised via isProMode), not the closure variable", () => {
+    // MUST use the normalised local variable, not the React closure
+    expect(viewSource).toContain("userMessage.proModeEnabled = isProMode;");
+    // The old buggy pattern using the closure variable directly MUST NOT exist
+    expect(viewSource).not.toMatch(/userMessage\.proModeEnabled\s*=\s*proModeEnabled(?!\s*\.)/u);
+  });
+
+  it("submitQuery reads requestPayload proModeEnabled from normalised isProMode, not the closure variable", () => {
+    // MUST use the normalised local variable in the requestPayload
+    expect(viewSource).toContain("proModeEnabled: isProMode,");
+    // The requestPayload object must NOT contain the old standalone shorthand
+    // "proModeEnabled," that would read from the closure
+    const reqPayloadStart = viewSource.indexOf("requestPayload =");
+    if (reqPayloadStart >= 0) {
+      const reqPayloadBlock = viewSource.slice(reqPayloadStart, viewSource.indexOf("};", reqPayloadStart) + 2);
+      expect(reqPayloadBlock).not.toMatch(/^\s+proModeEnabled,$/mu);
+    }
+  });
+
+  it("submitQuery normalises options.proModeEnabled === true once into isProMode", () => {
+    expect(viewSource).toContain("const isProMode = options.proModeEnabled === true;");
+    expect(viewSource).toContain("userMessage.proModeEnabled = isProMode;");
+    expect(viewSource).toContain("proModeEnabled: isProMode,");
+  });
+
+  it("sendMessage passes proModeEnabled to submitQuery", () => {
+    expect(viewSource).toMatch(/sendMessage[\s\S]*?submitQuery\s*\(\{[\s\S]*?proModeEnabled[\s\S]*?\}\s*\)/u);
+  });
+
+  it("regenerateAnswer computes gated originalProMode once and passes it to submitQuery", () => {
+    expect(viewSource).toContain("const originalProMode = Boolean(question.proModeEnabled && capabilities.proMode);");
+    expect(viewSource).toContain("proModeEnabled: originalProMode,");
+    const regenBlock = /regenerateAnswer[\s\S]*?submitQuery\s*\(\{[\s\S]*?proModeEnabled: originalProMode[\s\S]*?\}\s*\)/u.exec(viewSource);
+    expect(regenBlock).not.toBeNull();
+  });
+});

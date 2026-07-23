@@ -6,6 +6,7 @@ import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-
 import {
   mintFredEmbedSession,
   readFredEmbedServerConfig,
+  readFredProModelId,
 } from "@/lib/weknora/fred-embed";
 import {
   createFredUpstreamSession,
@@ -44,6 +45,7 @@ vi.mock("@/lib/weknora/fred-embed", async (importOriginal) => {
     ...original,
     mintFredEmbedSession: vi.fn(),
     readFredEmbedServerConfig: vi.fn(),
+    readFredProModelId: vi.fn(),
   };
 });
 vi.mock("@/lib/weknora/fred-native", async (importOriginal) => {
@@ -150,6 +152,7 @@ describe("POST /api/fred/chat", () => {
       publishToken: "em_publish_token_fixture_123456",
       exchangeOrigin: "https://findog.at",
     });
+    vi.mocked(readFredProModelId).mockReturnValue("a1b2c3d4-e5f6-4789-abcd-ef0123456789");
     vi.mocked(mintFredEmbedSession).mockResolvedValue({
       token: "ems_session_token_fixture_123456",
       expiresIn: 1800,
@@ -630,5 +633,131 @@ describe("POST /api/fred/chat", () => {
     expect(openFredUpstreamStream).not.toHaveBeenCalled();
     expect(stopFredUpstreamSession).not.toHaveBeenCalled();
     expect(relayFredWebhookEvent).not.toHaveBeenCalled();
+  });
+
+
+  describe("Pro Mode", () => {
+    it("treats omitted proModeEnabled as false and sends empty summaryModelId", async () => {
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+
+      const response = await POST(request({ query: "Normal" }));
+      await response.text();
+
+      expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+        summaryModelId: "",
+      }));
+      expect(readFredProModelId).not.toHaveBeenCalled();
+    });
+
+    it("treats explicit proModeEnabled false as false and sends empty summaryModelId", async () => {
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+
+      const response = await POST(request({ query: "Normal", proModeEnabled: false }));
+      await response.text();
+
+      expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+        summaryModelId: "",
+      }));
+      expect(readFredProModelId).not.toHaveBeenCalled();
+    });
+
+    it("resolves proModeEnabled true via readFredProModelId and sends the model ID upstream", async () => {
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+
+      const response = await POST(request({ query: "Pro Frage", proModeEnabled: true }));
+      await response.text();
+
+      expect(readFredProModelId).toHaveBeenCalledOnce();
+      expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+        summaryModelId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
+      }));
+    });
+
+    it("rejects non-boolean proModeEnabled with 400", async () => {
+      const rpc = vi.fn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+
+      const response = await POST(request({ query: "Test", proModeEnabled: "yes" }));
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: expect.any(String) });
+      expect(openFredUpstreamStream).not.toHaveBeenCalled();
+      expect(rpc).not.toHaveBeenCalled();
+    });
+
+    it("rejects numeric proModeEnabled with 400", async () => {
+      const rpc = vi.fn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+
+      const response = await POST(request({ query: "Test", proModeEnabled: 1 }));
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: expect.any(String) });
+      expect(openFredUpstreamStream).not.toHaveBeenCalled();
+      expect(rpc).not.toHaveBeenCalled();
+    });
+
+    it("ignores client-provided modelId or summaryModelId", async () => {
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+
+      const response = await POST(request({
+        query: "Hack",
+        modelId: "client-model",
+        summaryModelId: "client-model",
+      }));
+      await response.text();
+
+      expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+        summaryModelId: "",
+      }));
+    });
+
+    it("allows webSearchEnabled and proModeEnabled simultaneously", async () => {
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+      vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
+        agentId: "agent-1",
+        knowledgeBaseIds: ["kb-1"],
+        allowWebSearch: true,
+        allowFileUpload: true,
+      });
+
+      const response = await POST(request({ query: "Pro Web", proModeEnabled: true, webSearchEnabled: true }));
+      await response.text();
+
+      expect(readFredProModelId).toHaveBeenCalledOnce();
+      expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+        summaryModelId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
+        webSearchEnabled: true,
+      }));
+    });
+
+    it("records pro_mode_enabled on the user event but not on the assistant event", async () => {
+      const rpc = vi.fn()
+        .mockResolvedValueOnce({ data: summaryRow, error: null })
+        .mockResolvedValueOnce({
+          data: { ...summaryRow, updated_at: "2026-07-19T10:00:02.000Z" },
+          error: null,
+        });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+
+      await POST(request({ query: "Pro Frage", proModeEnabled: true }));
+      await new Promise(process.nextTick);
+
+      expect(rpc).toHaveBeenNthCalledWith(1, "record_fred_native_event", {
+        payload: expect.objectContaining({
+          pro_mode_enabled: true,
+          event_type: "message_sent",
+        }),
+      });
+      expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
+        payload: expect.objectContaining({
+          pro_mode_enabled: false,
+          event_type: "message_received",
+        }),
+      });
+    });
   });
 });

@@ -45,4 +45,35 @@ describe("Fred message actions", () => {
     expect(pdfFilenameFromHeader('attachment; filename="../unsafe.pdf"', "fallback.pdf"))
       .toBe("fallback.pdf");
   });
+
+  it("includes Pro-Modus: aktiviert in PDF metadata for Pro user turns", () => {
+    const proMessages: FredActionMessage[] = [
+      {
+        role: "user",
+        content: "Steuerfrage",
+        createdAt: "2026-07-21T12:30:00.000Z",
+        proModeEnabled: true,
+      },
+      {
+        role: "assistant",
+        content: "Antwort",
+        createdAt: "2026-07-21T12:31:00.000Z",
+      },
+    ];
+    const content = buildFredConversationPdfContent(proMessages);
+    expect(content).toContain("Pro-Modus: aktiviert");
+  });
+
+  it("does not include Pro-Modus metadata for non-Pro user turns", () => {
+    const content = buildFredConversationPdfContent(messages);
+    expect(content).not.toContain("Pro-Modus");
+  });
+
+  it("precedingUserMessage returns proModeEnabled when set", () => {
+    const msgs: FredActionMessage[] = [
+      { role: "user", content: "Pro Frage", createdAt: "", proModeEnabled: true },
+      { role: "assistant", content: "Antwort", createdAt: "" },
+    ];
+    expect(precedingUserMessage(msgs, 1)?.proModeEnabled).toBe(true);
+  });
 });

@@ -5,6 +5,7 @@ import {
   FredEmbedConfigurationError,
   mintFredEmbedSession,
   readFredEmbedServerConfig,
+  readFredProModelId,
 } from "./fred-embed";
 
 const VALID_ENVIRONMENT = {
@@ -111,6 +112,27 @@ describe("Fred WeKnora Secure Embed", () => {
     })).rejects.toMatchObject({
       name: "FredEmbedUpstreamError",
       kind: "invalid_response",
+    });
+  });
+
+  describe("readFredProModelId", () => {
+    const VALID_UUID = "a1b2c3d4-e5f6-4789-abcd-ef0123456789";
+
+    it("accepts a valid canonical UUID as the Pro model ID", () => {
+      expect(readFredProModelId({ WEKNORA_FRED_PRO_MODEL_ID: VALID_UUID })).toBe(VALID_UUID);
+    });
+
+    it.each([
+      ["missing variable", {}],
+      ["blank", { WEKNORA_FRED_PRO_MODEL_ID: "" }],
+      ["whitespace-only", { WEKNORA_FRED_PRO_MODEL_ID: "  " }],
+      ["path-like value", { WEKNORA_FRED_PRO_MODEL_ID: "../model" }],
+      ["URL-like value", { WEKNORA_FRED_PRO_MODEL_ID: "https://model" }],
+      ["short model name", { WEKNORA_FRED_PRO_MODEL_ID: "deepseek-v4" }],
+      ["arbitrary label", { WEKNORA_FRED_PRO_MODEL_ID: "deepseek-chat" }],
+      ["malformed UUID", { WEKNORA_FRED_PRO_MODEL_ID: "zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz" }],
+    ])("rejects an invalid or absent Pro model ID: %s", (_label, environment) => {
+      expect(() => readFredProModelId(environment)).toThrow(FredEmbedConfigurationError);
     });
   });
 });

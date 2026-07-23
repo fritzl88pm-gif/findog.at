@@ -10,6 +10,7 @@ const MAX_EXCHANGE_RESPONSE_BYTES = 64 * 1_024;
 const CHANNEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 const PUBLISH_TOKEN_PATTERN = /^em_[A-Za-z0-9_-]{16,512}$/u;
 const SESSION_TOKEN_PATTERN = /^ems_[A-Za-z0-9_-]{16,512}$/u;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 type Environment = Record<string, string | undefined>;
 
@@ -76,6 +77,16 @@ export function readFredEmbedServerConfig(
   }
 
   return { channelId, publishToken, exchangeOrigin };
+}
+
+export function readFredProModelId(
+  environment: Environment = process.env,
+): string {
+  const raw = environment.WEKNORA_FRED_PRO_MODEL_ID?.trim() ?? "";
+  if (!UUID_PATTERN.test(raw)) {
+    throw new FredEmbedConfigurationError();
+  }
+  return raw;
 }
 
 function parsedSessionPayload(value: unknown): { token: string; expiresIn: number } | undefined {

@@ -48,6 +48,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
           sha256: "0".repeat(64),
         }],
         web_search_enabled: true,
+        pro_mode_enabled: true,
         display_content: null,
         research_trace: [],
         source_references: [],
@@ -67,6 +68,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
         created_at: "2026-07-19T07:00:02.000Z",
         attachments: [],
         web_search_enabled: false,
+        pro_mode_enabled: false,
       }],
       error: null,
     };
@@ -100,6 +102,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
         sha256: "0".repeat(64),
       }],
       webSearchEnabled: true,
+      proModeEnabled: true,
     });
     expect(payload.messages[1]).toMatchObject({
       content: "Ergebnis",
@@ -115,6 +118,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
         chunkId: "chunk-1",
         knowledgeBaseId: "kb-1",
       }],
+      proModeEnabled: false,
     });
     expect(payload.messages[1].content).not.toContain("<kb");
   });
@@ -145,6 +149,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
         created_at: "2026-07-18T07:01:00.000Z",
         attachments: [],
         web_search_enabled: false,
+        pro_mode_enabled: false,
       }],
       error: null,
     };
