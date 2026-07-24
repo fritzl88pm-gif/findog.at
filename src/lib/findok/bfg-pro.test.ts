@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chatCompletion } from "@/lib/deepseek";
 import { resolveLlmRuntime, type LlmRuntime } from "@/lib/llm/runtime";
 import { fetchBfgProCandidates } from "./bfg-decisions";
+import type { BfgProProgress } from "./bfg-pro-stream";
 import {
   BfgProModelError,
   buildDeterministicExcerpt,
@@ -221,6 +222,54 @@ describe("BFG PRO query generation and reranking", () => {
     expect(vi.mocked(fetchBfgProCandidates).mock.calls).toEqual([
       [{ query: "Arbeitszimmer" }],
       [{ query: "Vorsteuer" }],
+    ]);
+  });
+
+  it("reports the real pipeline stages in order while the search runs", async () => {
+    vi.mocked(fetchBfgProCandidates)
+      .mockResolvedValueOnce(Array.from({ length: 5 }, (_value, index) => candidate(index + 1)))
+      .mockResolvedValueOnce([candidate(6)]);
+    vi.mocked(chatCompletion)
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ queries: ["Arbeitszimmer", "betrieblicher Raum"], norm: null }),
+        toolCalls: [],
+        finishReason: "stop",
+      })
+      .mockResolvedValueOnce({
+        content: '{"selections":[{"candidateId":"candidate-1","score":80,"comment":"Passend.","caseSummary":"Ein Arbeitszimmer war strittig; das BFG entschied darüber."}]}',
+        toolCalls: [],
+        finishReason: "stop",
+      });
+    const progress: BfgProProgress[] = [];
+
+    await runBfgProSearch("Sachverhalt", { onProgress: (event) => progress.push(event) });
+
+    expect(progress).toEqual([
+      { stage: "queries" },
+      { stage: "fetching" },
+      { stage: "fetching", count: 5 },
+      { stage: "fetching", count: 6 },
+      { stage: "sorting", count: 6 },
+      { stage: "summarizing", count: 6 },
+    ]);
+  });
+
+  it("stops reporting progress once retrieval found no official candidate", async () => {
+    vi.mocked(fetchBfgProCandidates).mockResolvedValue([]);
+    vi.mocked(chatCompletion).mockResolvedValueOnce({
+      content: '{"queries":["Arbeitszimmer"],"norm":null}',
+      toolCalls: [],
+      finishReason: "stop",
+    });
+    const progress: BfgProProgress[] = [];
+
+    await expect(runBfgProSearch("Sachverhalt", { onProgress: (event) => progress.push(event) }))
+      .resolves.toEqual({ results: [] });
+
+    expect(progress).toEqual([
+      { stage: "queries" },
+      { stage: "fetching" },
+      { stage: "fetching", count: 0 },
     ]);
   });
 

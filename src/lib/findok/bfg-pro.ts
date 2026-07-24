@@ -4,6 +4,7 @@ import {
   fetchBfgProCandidates,
   type BfgProCandidate,
 } from "@/lib/findok/bfg-decisions";
+import type { BfgProProgress } from "@/lib/findok/bfg-pro-stream";
 
 const BFG_PRO_QUERY_MODEL = "deepseek-v4-flash" as const;
 const BFG_PRO_RERANK_MODEL = "deepseek-v4-pro" as const;
@@ -44,6 +45,10 @@ export type BfgProResult = {
 
 export type BfgProResponse = {
   results: BfgProResult[];
+};
+
+export type BfgProSearchOptions = {
+  onProgress?: (progress: BfgProProgress) => void;
 };
 
 type RerankerSelection = {
@@ -436,7 +441,13 @@ function rerankMessages(
   ];
 }
 
-export async function runBfgProSearch(scenario: string): Promise<BfgProResponse> {
+export async function runBfgProSearch(
+  scenario: string,
+  options: BfgProSearchOptions = {},
+): Promise<BfgProResponse> {
+  const report = (progress: BfgProProgress): void => {
+    options.onProgress?.(progress);
+  };
   let queryRuntime: LlmRuntime;
   let rerankRuntime: LlmRuntime;
   try {
@@ -449,20 +460,24 @@ export async function runBfgProSearch(scenario: string): Promise<BfgProResponse>
     throw new BfgProModelError();
   }
 
+  report({ stage: "queries" });
   const queryPlan = parseGeneratedQueryPlan(
     await completeJson(queryRuntime, queryMessages(scenario)),
   );
   const primaryQuery = queryPlan.queries[0];
   const officialCandidates: BfgProCandidate[] = [];
+  report({ stage: "fetching" });
   mergeOfficialCandidates(
     officialCandidates,
     await fetchBfgProCandidates({ query: primaryQuery }),
   );
+  report({ stage: "fetching", count: officialCandidates.length });
   if (queryPlan.norm && officialCandidates.length < MAX_MERGED_CANDIDATES) {
     mergeOfficialCandidates(
       officialCandidates,
       await fetchBfgProCandidates({ query: primaryQuery, norm: queryPlan.norm }),
     );
+    report({ stage: "fetching", count: officialCandidates.length });
   }
   for (const alternativeQuery of queryPlan.queries.slice(1)) {
     if (officialCandidates.length >= MAX_MERGED_CANDIDATES) {
@@ -472,12 +487,15 @@ export async function runBfgProSearch(scenario: string): Promise<BfgProResponse>
       officialCandidates,
       await fetchBfgProCandidates({ query: alternativeQuery }),
     );
+    report({ stage: "fetching", count: officialCandidates.length });
   }
   if (officialCandidates.length === 0) {
     return { results: [] };
   }
+  report({ stage: "sorting", count: officialCandidates.length });
   const candidates = reduceCandidates(officialCandidates, scenario, queryPlan.queries);
   const candidateById = new Map(candidates.map((candidate) => [candidate.candidateId, candidate]));
+  report({ stage: "summarizing", count: candidates.length });
   const selections = parseSelections(
     await completeJson(rerankRuntime, rerankMessages(scenario, candidates), 600_000),
   );

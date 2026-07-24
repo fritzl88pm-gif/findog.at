@@ -19,6 +19,11 @@ import {
   SIDEBAR_HISTORY_PERCENT_STORAGE_KEY,
 } from "@/lib/chat/sidebar-split";
 import { ellipsizeFilename } from "@/lib/attachment-names";
+import {
+  BFG_PRO_STREAM_CONTENT_TYPE,
+  bfgProStageLabel,
+  parseBfgProStreamLine,
+} from "@/lib/findok/bfg-pro-stream";
 import RichAnswer from "@/components/rich-answer";
 import {
   getSupabaseBrowserClient,
@@ -1196,6 +1201,7 @@ export default function Home() {
   const [bfgProScenario, setBfgProScenario] = useState("");
   const [bfgProResults, setBfgProResults] = useState<BfgProResult[] | null>(null);
   const [bfgProError, setBfgProError] = useState("");
+  const [bfgProStatus, setBfgProStatus] = useState("");
   const [isSearchingBfgPro, setIsSearchingBfgPro] = useState(false);
   const [selectedFormId, setSelectedFormId] = useState<"" | typeof VERF5_FORM_ID>("");
   const [formImage, setFormImage] = useState<File | null>(null);
@@ -1840,18 +1846,21 @@ export default function Home() {
 
     setBfgProError("");
     setBfgProResults(null);
+    setBfgProStatus(bfgProStageLabel({ stage: "queries" }));
     setIsSearchingBfgPro(true);
     try {
       const response = await fetch("/api/findok/bfg/pro", {
         method: "POST",
+        cache: "no-store",
         headers: {
+          Accept: BFG_PRO_STREAM_CONTENT_TYPE,
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ scenario }),
       });
-      const payload = (await response.json().catch(() => ({}))) as unknown;
       if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as unknown;
         const errorPayload = payload && typeof payload === "object" && !Array.isArray(payload)
           ? payload as Record<string, unknown>
           : {};
@@ -1861,11 +1870,44 @@ export default function Home() {
             : "Die BFG Suche PRO konnte nicht durchgeführt werden.",
         );
       }
-      const results = normalizeBfgProResults(payload);
-      if (!results) {
-        throw new Error("Die BFG Suche PRO lieferte eine ungültige Antwort.");
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("Der PRO-Antwortstream konnte nicht gelesen werden.");
       }
-      setBfgProResults(results);
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let streamedResults: BfgProResult[] | null = null;
+
+      const processLine = (line: string) => {
+        const streamEvent = parseBfgProStreamLine(line);
+        if (!streamEvent) return;
+        if (streamEvent.type === "error") {
+          throw new Error(streamEvent.error);
+        }
+        if (streamEvent.type === "status") {
+          setBfgProStatus(bfgProStageLabel(streamEvent));
+          return;
+        }
+        streamedResults = normalizeBfgProResults({ results: streamEvent.results });
+        if (!streamedResults) {
+          throw new Error("Die BFG Suche PRO lieferte eine ungültige Antwort.");
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) processLine(line);
+      }
+      buffer += decoder.decode();
+      processLine(buffer);
+      if (!streamedResults) {
+        throw new Error("Der PRO-Antwortstream wurde ohne Ergebnis beendet.");
+      }
+      setBfgProResults(streamedResults);
     } catch (searchError) {
       setBfgProError(
         searchError instanceof Error
@@ -1873,6 +1915,7 @@ export default function Home() {
           : "Die BFG Suche PRO konnte nicht durchgeführt werden.",
       );
     } finally {
+      setBfgProStatus("");
       setIsSearchingBfgPro(false);
     }
   }
@@ -3372,11 +3415,12 @@ export default function Home() {
 
             {isSearchingBfgPro ? (
               <div className="bfg-pro-loading-state" role="status" aria-live="polite">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/fred-sniff.gif" alt="" />
+                <span className="bfg-pro-loading-indicator" aria-hidden="true" />
                 <p>
-                  Passende BFG-Entscheidungen werden gesucht und gereiht…
-                  Die PRO-Suche kann einige Minuten dauern.
+                  <strong className="bfg-pro-loading-status">{bfgProStatus}</strong>
+                  <span className="bfg-pro-loading-hint">
+                    Die PRO-Suche kann einige Minuten dauern.
+                  </span>
                 </p>
               </div>
             ) : null}

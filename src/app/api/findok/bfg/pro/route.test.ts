@@ -4,10 +4,20 @@ import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { FindokUpstreamError } from "@/lib/findok/bfg-decisions";
 import { BfgProModelError, runBfgProSearch } from "@/lib/findok/bfg-pro";
+import { parseBfgProStreamLine, type BfgProStreamEvent } from "@/lib/findok/bfg-pro-stream";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { POST } from "./route";
 
 const MAX_BFG_PRO_SCENARIO_CHARS = 2_000;
+
+async function streamEvents(response: Response): Promise<BfgProStreamEvent[]> {
+  return (await response.text())
+    .split("\n")
+    .flatMap((line) => {
+      const event = parseBfgProStreamLine(line);
+      return event ? [event] : [];
+    });
+}
 
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
 vi.mock("@/lib/findok/bfg-pro", () => ({
@@ -87,23 +97,48 @@ describe("POST /api/findok/bfg/pro", () => {
     expect(runBfgProSearch).not.toHaveBeenCalled();
   });
 
-  it("returns bounded no-store JSON for a valid scenario", async () => {
-    const payload = { results: [{ title: "Entscheidung", caseSummary: "Sachverhalt und Ergebnis", whyRelevant: "Passend" }] } as never;
-    vi.mocked(runBfgProSearch).mockResolvedValueOnce(payload);
+  it("streams bounded unbuffered NDJSON results for a valid scenario", async () => {
+    const results = [{ title: "Entscheidung", caseSummary: "Sachverhalt und Ergebnis", whyRelevant: "Passend" }];
+    vi.mocked(runBfgProSearch).mockResolvedValueOnce({ results } as never);
 
     const response = await POST(request(undefined, "192.0.2.5"));
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(runBfgProSearch).toHaveBeenCalledWith("Beruflich genutztes Arbeitszimmer");
-    await expect(response.json()).resolves.toEqual(payload);
+    expect(response.headers.get("content-type")).toBe("application/x-ndjson; charset=utf-8");
+    expect(response.headers.get("cache-control")).toBe("no-store, no-transform");
+    expect(response.headers.get("x-accel-buffering")).toBe("no");
+    expect(runBfgProSearch).toHaveBeenCalledWith(
+      "Beruflich genutztes Arbeitszimmer",
+      { onProgress: expect.any(Function) },
+    );
+    await expect(streamEvents(response)).resolves.toEqual([{ type: "result", results }]);
+  });
+
+  it("streams the real pipeline stages ahead of the result", async () => {
+    vi.mocked(runBfgProSearch).mockImplementationOnce(async (_scenario, options) => {
+      options?.onProgress?.({ stage: "queries" });
+      options?.onProgress?.({ stage: "fetching", count: 18 });
+      options?.onProgress?.({ stage: "sorting", count: 18 });
+      options?.onProgress?.({ stage: "summarizing", count: 18 });
+      return { results: [] };
+    });
+
+    const response = await POST(request(undefined, "192.0.2.9"));
+
+    await expect(streamEvents(response)).resolves.toEqual([
+      { type: "status", stage: "queries" },
+      { type: "status", stage: "fetching", count: 18 },
+      { type: "status", stage: "sorting", count: 18 },
+      { type: "status", stage: "summarizing", count: 18 },
+      { type: "result", results: [] },
+    ]);
   });
 
   it("keeps an empty official or reranker result as a successful empty list", async () => {
     const response = await POST(request(undefined, "192.0.2.6"));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ results: [] });
+    await expect(streamEvents(response)).resolves.toEqual([{ type: "result", results: [] }]);
   });
 
   it("maps Findok failures without upstream details", async () => {
@@ -111,10 +146,10 @@ describe("POST /api/findok/bfg/pro", () => {
 
     const response = await POST(request(undefined, "192.0.2.7"));
 
-    expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toEqual({
+    await expect(streamEvents(response)).resolves.toEqual([{
+      type: "error",
       error: "Findok ist derzeit nicht erreichbar. Bitte später erneut versuchen.",
-    });
+    }]);
   });
 
   it("maps model parse/provider failures without provider details", async () => {
@@ -122,10 +157,21 @@ describe("POST /api/findok/bfg/pro", () => {
 
     const response = await POST(request(undefined, "192.0.2.8"));
 
-    expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toEqual({
+    await expect(streamEvents(response)).resolves.toEqual([{
+      type: "error",
       error: "Die KI-Reihung konnte nicht durchgeführt werden. Bitte erneut versuchen.",
-    });
+    }]);
+  });
+
+  it("keeps an in-search user-visible failure inside the stream", async () => {
+    vi.mocked(runBfgProSearch).mockRejectedValueOnce(new UserVisibleError("Zu viele Anfragen.", 429));
+
+    const response = await POST(request(undefined, "192.0.2.10"));
+
+    expect(response.status).toBe(200);
+    await expect(streamEvents(response)).resolves.toEqual([
+      { type: "error", error: "Zu viele Anfragen." },
+    ]);
   });
 
   it("applies a route-local limit lower than normal chat", async () => {

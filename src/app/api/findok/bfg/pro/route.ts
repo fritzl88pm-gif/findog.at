@@ -4,6 +4,11 @@ import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { FindokUpstreamError } from "@/lib/findok/bfg-decisions";
 import { BfgProModelError, runBfgProSearch } from "@/lib/findok/bfg-pro";
+import {
+  BFG_PRO_STREAM_CONTENT_TYPE,
+  encodeBfgProStreamEvent,
+  type BfgProStreamEvent,
+} from "@/lib/findok/bfg-pro-stream";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -78,32 +83,77 @@ function enforceRateLimit(request: Request, userId: string): void {
   current.count += 1;
 }
 
+function searchErrorMessage(error: unknown): string {
+  if (error instanceof UserVisibleError) {
+    return error.message;
+  }
+  if (error instanceof FindokUpstreamError) {
+    return "Findok ist derzeit nicht erreichbar. Bitte später erneut versuchen.";
+  }
+  if (error instanceof BfgProModelError) {
+    return "Die KI-Reihung konnte nicht durchgeführt werden. Bitte erneut versuchen.";
+  }
+  return "Die BFG Suche PRO konnte nicht durchgeführt werden.";
+}
+
 export async function POST(request: Request) {
+  let scenario: string;
   try {
     const supabase = getSupabaseServerClient();
     if (!supabase) {
       throw new UserVisibleError("Die BFG Suche PRO ist derzeit nicht verfügbar.", 503);
     }
     const user = await authenticateSupabaseRequest(request, supabase);
-    const scenario = await parseScenario(request);
+    scenario = await parseScenario(request);
     enforceRateLimit(request, user.id);
-    return json(await runBfgProSearch(scenario));
   } catch (error) {
-    if (error instanceof UserVisibleError) {
-      return json({ error: error.message }, error.status);
-    }
-    if (error instanceof FindokUpstreamError) {
-      return json(
-        { error: "Findok ist derzeit nicht erreichbar. Bitte später erneut versuchen." },
-        502,
-      );
-    }
-    if (error instanceof BfgProModelError) {
-      return json(
-        { error: "Die KI-Reihung konnte nicht durchgeführt werden. Bitte erneut versuchen." },
-        502,
-      );
-    }
-    return json({ error: "Die BFG Suche PRO konnte nicht durchgeführt werden." }, 500);
+    return json(
+      { error: searchErrorMessage(error) },
+      error instanceof UserVisibleError ? error.status : 500,
+    );
   }
+
+  const encoder = new TextEncoder();
+  let open = true;
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: BfgProStreamEvent) => {
+        if (!open) {
+          return;
+        }
+        try {
+          controller.enqueue(encoder.encode(encodeBfgProStreamEvent(event)));
+        } catch {
+          open = false;
+        }
+      };
+      try {
+        const { results } = await runBfgProSearch(scenario, {
+          onProgress: (progress) => send({ type: "status", ...progress }),
+        });
+        send({ type: "result", results });
+      } catch (error) {
+        send({ type: "error", error: searchErrorMessage(error) });
+      } finally {
+        open = false;
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      }
+    },
+    cancel() {
+      open = false;
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": `${BFG_PRO_STREAM_CONTENT_TYPE}; charset=utf-8`,
+      "Cache-Control": "no-store, no-transform",
+      "X-Accel-Buffering": "no",
+      Vary: "Authorization",
+    },
+  });
 }

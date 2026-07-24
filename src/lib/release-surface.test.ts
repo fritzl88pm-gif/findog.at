@@ -52,12 +52,26 @@ describe("approved release surface", () => {
     expect(pageSource).toContain('<span className="bfg-pro-score">Relevanz {result.score}/100</span>');
     expect(globalsSource).toMatch(/\.bfg-pro-score \{[\s\S]*?border-radius: 999px;[\s\S]*?\}/);
     expect(pageSource).toMatch(/id="bfg-pro-scenario"[\s\S]*?onKeyDown=\{\(event\) => \{\s*if \(event\.key === "Enter" && !event\.shiftKey && !event\.nativeEvent\.isComposing\) \{\s*event\.preventDefault\(\);\s*void searchBfgPro\(\);/);
-    expect(pageSource).toMatch(/<div className="bfg-pro-loading-state" role="status" aria-live="polite">[\s\S]*?<img src="\/fred-sniff\.gif" alt="" \/>[\s\S]*?Die PRO-Suche kann einige Minuten dauern\./);
-    expect(globalsSource).toMatch(/\.bfg-pro-loading-state img \{[\s\S]*?width: 112px;[\s\S]*?\}/);
+    expect(pageSource).toMatch(/<div className="bfg-pro-loading-state" role="status" aria-live="polite">[\s\S]*?<strong className="bfg-pro-loading-status">\{bfgProStatus\}<\/strong>[\s\S]*?Die PRO-Suche kann einige Minuten dauern\./);
+    expect(globalsSource).toMatch(/\.bfg-pro-loading-indicator \{[\s\S]*?animation: bfg-pro-loading-spin[\s\S]*?\}/);
     expect(pageSource).toContain('<h3>Sachverhalt</h3>');
     expect(pageSource).not.toContain('Originaltext-Auszug');
     expect(pageSource).toContain('Keine relevanten BFG-Entscheidungen gefunden.');
     expect(pageSource).toContain('/api/findok/bfg?');
+  });
+
+  it("replaces the PRO loading GIF with the streamed pipeline status", () => {
+    const bfgProView = pageSource.slice(
+      pageSource.indexOf(') : appView === "bfg-pro" ? ('),
+      pageSource.indexOf(') : appView === "bfg-decisions" ? ('),
+    );
+
+    expect(bfgProView).not.toContain("fred-sniff.gif");
+    expect(bfgProView).not.toContain("<img");
+    expect(bfgProView).toContain('<span className="bfg-pro-loading-indicator" aria-hidden="true" />');
+    expect(pageSource).toContain("Accept: BFG_PRO_STREAM_CONTENT_TYPE");
+    expect(pageSource).toContain("parseBfgProStreamLine(line)");
+    expect(pageSource).toContain("setBfgProStatus(bfgProStageLabel(streamEvent))");
   });
 
   it("keeps the Quiz view behind the administrator capability in every client path", () => {
