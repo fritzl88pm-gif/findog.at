@@ -51,6 +51,9 @@ describe("approved release surface", () => {
     expect(pageSource).toContain('Warum relevant');
     expect(pageSource).toContain('<span className="bfg-pro-score">Relevanz {result.score}/100</span>');
     expect(globalsSource).toMatch(/\.bfg-pro-score \{[\s\S]*?border-radius: 999px;[\s\S]*?\}/);
+    expect(pageSource).toMatch(/id="bfg-pro-scenario"[\s\S]*?onKeyDown=\{\(event\) => \{\s*if \(event\.key === "Enter" && !event\.shiftKey && !event\.nativeEvent\.isComposing\) \{\s*event\.preventDefault\(\);\s*void searchBfgPro\(\);/);
+    expect(pageSource).toMatch(/<div className="bfg-pro-loading-state" role="status" aria-live="polite">[\s\S]*?<img src="\/fred-sniff\.gif" alt="" \/>[\s\S]*?Die PRO-Suche kann einige Minuten dauern\./);
+    expect(globalsSource).toMatch(/\.bfg-pro-loading-state img \{[\s\S]*?width: 112px;[\s\S]*?\}/);
     expect(pageSource).toContain('<h3>Sachverhalt</h3>');
     expect(pageSource).not.toContain('Originaltext-Auszug');
     expect(pageSource).toContain('Keine relevanten BFG-Entscheidungen gefunden.');

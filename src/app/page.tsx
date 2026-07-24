@@ -3350,6 +3350,12 @@ export default function Home() {
                   setBfgProScenario(event.target.value);
                   setBfgProError("");
                 }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    void searchBfgPro();
+                  }
+                }}
                 maxLength={2000}
                 rows={7}
                 placeholder="Beschreibe den steuerrechtlichen Sachverhalt in eigenen Worten."
@@ -3365,9 +3371,14 @@ export default function Home() {
             </form>
 
             {isSearchingBfgPro ? (
-              <p className="bfg-pro-loading-state" role="status" aria-live="polite">
-                Passende BFG-Entscheidungen werden gesucht und gereiht…
-              </p>
+              <div className="bfg-pro-loading-state" role="status" aria-live="polite">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/fred-sniff.gif" alt="" />
+                <p>
+                  Passende BFG-Entscheidungen werden gesucht und gereiht…
+                  Die PRO-Suche kann einige Minuten dauern.
+                </p>
+              </div>
             ) : null}
 
             {bfgProError ? (
