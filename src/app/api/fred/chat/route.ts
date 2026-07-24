@@ -27,6 +27,7 @@ import {
   encodeFredNativeStreamEvent,
 } from "@/lib/fred-native-stream";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { recordAdminRequest } from "@/lib/admin-request-history";
 import { getScanningSettings } from "@/lib/scanning/settings";
 import {
   FredEmbedConfigurationError,
@@ -809,6 +810,12 @@ export async function POST(request: Request) {
             proModeEnabled: body.proModeEnabled,
             agentKey,
             weknoraAgentId: upstreamConfig.agentId,
+          });
+          await recordAdminRequest({
+            supabase,
+            userId: user.id,
+            conversationId: conversation.id,
+            content: body.query,
           });
           send(controller, { type: "conversation", conversation });
           void relayFredWebhookEvent({
