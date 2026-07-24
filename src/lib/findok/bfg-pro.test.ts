@@ -31,13 +31,22 @@ const officialCandidate = {
   content: `Arbeitszimmer im Wohnungsverband. ${"Unwichtiger Text. ".repeat(100)}FULL-CONTENT-SECRET`,
 };
 
-const FIXED_RUNTIME = {
+const QUERY_RUNTIME = {
   model: "deepseek-v4-flash",
   provider: "deepseek",
   upstreamModel: "deepseek-v4-flash",
   baseUrl: "https://api.deepseek.com",
   apiKey: "server-only-key",
   reasoning: "disabled",
+} satisfies LlmRuntime;
+
+const RERANK_RUNTIME = {
+  model: "deepseek-v4-pro",
+  provider: "deepseek",
+  upstreamModel: "deepseek-v4-pro",
+  baseUrl: "https://api.deepseek.com",
+  apiKey: "server-only-key",
+  reasoning: "max",
 } satisfies LlmRuntime;
 
 function candidate(number: number) {
@@ -121,11 +130,13 @@ describe("deterministic BFG PRO excerpts", () => {
 describe("BFG PRO query generation and reranking", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(resolveLlmRuntime).mockReturnValue(FIXED_RUNTIME);
+    vi.mocked(resolveLlmRuntime).mockImplementation(({ model }) => (
+      model === "deepseek-v4-pro" ? RERANK_RUNTIME : QUERY_RUNTIME
+    ));
     vi.mocked(fetchBfgProCandidates).mockResolvedValue([officialCandidate]);
   });
 
-  it("uses the server key and fixed Flash model for both model calls", async () => {
+  it("plans queries with fast Flash and reranks with max-reasoning Pro on the server key", async () => {
     vi.mocked(chatCompletion)
       .mockResolvedValueOnce({
         content: '{"queries":["Arbeitszimmer Vorsteuer"],"norm":null}',
@@ -144,9 +155,14 @@ describe("BFG PRO query generation and reranking", () => {
       model: "deepseek-v4-flash",
       reasoning: "disabled",
     });
+    expect(resolveLlmRuntime).toHaveBeenCalledWith({
+      model: "deepseek-v4-pro",
+      reasoning: "max",
+    });
     expect(chatCompletion).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(chatCompletion).mock.calls[0]?.[0]).toMatchObject({ runtime: QUERY_RUNTIME });
+    expect(vi.mocked(chatCompletion).mock.calls[1]?.[0]).toMatchObject({ runtime: RERANK_RUNTIME });
     for (const [options] of vi.mocked(chatCompletion).mock.calls) {
-      expect(options).toMatchObject({ runtime: FIXED_RUNTIME });
       expect(options.tools).toBeUndefined();
     }
     expect(fetchBfgProCandidates).toHaveBeenCalledWith({ query: "Arbeitszimmer Vorsteuer" });
@@ -317,7 +333,7 @@ describe("BFG PRO query generation and reranking", () => {
     await expect(runBfgProSearch("Sachverhalt")).rejects.toBeInstanceOf(BfgProModelError);
   });
 
-  it("requires Flash to score every supplied candidate and accepts all 18 scores", async () => {
+  it("requires the reranker to score every supplied candidate and accepts all 18 scores", async () => {
     vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce(
       Array.from({ length: 18 }, (_value, index) => candidate(index + 1)),
     );
@@ -445,7 +461,7 @@ describe("BFG PRO query generation and reranking", () => {
     expect(response.results[0]?.caseSummary.length).toBeLessThanOrEqual(400);
   });
 
-  it("sends only the bounded excerpt to Flash and returns only the bounded generated summary", async () => {
+  it("sends only the bounded excerpt to the reranker and returns only the bounded generated summary", async () => {
     vi.mocked(chatCompletion)
       .mockResolvedValueOnce({
         content: '{"queries":["Arbeitszimmer"],"norm":null}',

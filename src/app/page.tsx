@@ -3397,7 +3397,10 @@ export default function Home() {
                           ].filter(Boolean).join(" · ")}
                         </p>
                         <div className="bfg-pro-relevance">
-                          <h3>Warum relevant</h3>
+                          <div className="bfg-pro-relevance-heading">
+                            <h3>Warum relevant</h3>
+                            <span className="bfg-pro-score">Relevanz {result.score}/100</span>
+                          </div>
                           <p>{result.whyRelevant}</p>
                         </div>
                         {result.caseSummary ? (

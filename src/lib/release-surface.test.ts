@@ -49,6 +49,8 @@ describe("approved release surface", () => {
     expect(pageSource).toContain('<textarea');
     expect(pageSource).toContain('/api/findok/bfg/pro');
     expect(pageSource).toContain('Warum relevant');
+    expect(pageSource).toContain('<span className="bfg-pro-score">Relevanz {result.score}/100</span>');
+    expect(globalsSource).toMatch(/\.bfg-pro-score \{[\s\S]*?border-radius: 999px;[\s\S]*?\}/);
     expect(pageSource).toContain('<h3>Sachverhalt</h3>');
     expect(pageSource).not.toContain('Originaltext-Auszug');
     expect(pageSource).toContain('Keine relevanten BFG-Entscheidungen gefunden.');

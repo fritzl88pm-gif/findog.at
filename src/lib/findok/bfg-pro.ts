@@ -5,7 +5,9 @@ import {
   type BfgProCandidate,
 } from "@/lib/findok/bfg-decisions";
 
-const BFG_PRO_MODEL = "deepseek-v4-flash" as const;
+const BFG_PRO_QUERY_MODEL = "deepseek-v4-flash" as const;
+const BFG_PRO_RERANK_MODEL = "deepseek-v4-pro" as const;
+const BFG_PRO_RERANK_REASONING = "max" as const;
 const MAX_FINDOK_QUERY_CHARS = 200;
 const MAX_FINDOK_NORM_CHARS = 120;
 const MAX_RERANK_CANDIDATES = 18;
@@ -434,15 +436,20 @@ function rerankMessages(
 }
 
 export async function runBfgProSearch(scenario: string): Promise<BfgProResponse> {
-  let runtime: LlmRuntime;
+  let queryRuntime: LlmRuntime;
+  let rerankRuntime: LlmRuntime;
   try {
-    runtime = resolveLlmRuntime({ model: BFG_PRO_MODEL, reasoning: "disabled" });
+    queryRuntime = resolveLlmRuntime({ model: BFG_PRO_QUERY_MODEL, reasoning: "disabled" });
+    rerankRuntime = resolveLlmRuntime({
+      model: BFG_PRO_RERANK_MODEL,
+      reasoning: BFG_PRO_RERANK_REASONING,
+    });
   } catch {
     throw new BfgProModelError();
   }
 
   const queryPlan = parseGeneratedQueryPlan(
-    await completeJson(runtime, queryMessages(scenario)),
+    await completeJson(queryRuntime, queryMessages(scenario)),
   );
   const primaryQuery = queryPlan.queries[0];
   const officialCandidates: BfgProCandidate[] = [];
@@ -471,7 +478,7 @@ export async function runBfgProSearch(scenario: string): Promise<BfgProResponse>
   const candidates = reduceCandidates(officialCandidates, scenario, queryPlan.queries);
   const candidateById = new Map(candidates.map((candidate) => [candidate.candidateId, candidate]));
   const selections = parseSelections(
-    await completeJson(runtime, rerankMessages(scenario, candidates)),
+    await completeJson(rerankRuntime, rerankMessages(scenario, candidates)),
   );
   const seen = new Set<string>();
   const validSelections = selections
