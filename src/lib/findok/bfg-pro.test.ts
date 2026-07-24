@@ -161,6 +161,8 @@ describe("BFG PRO query generation and reranking", () => {
     });
     expect(chatCompletion).toHaveBeenCalledTimes(2);
     expect(vi.mocked(chatCompletion).mock.calls[0]?.[0]).toMatchObject({ runtime: QUERY_RUNTIME });
+    expect(vi.mocked(chatCompletion).mock.calls[0]?.[0]).not.toHaveProperty("timeoutMs");
+    expect(vi.mocked(chatCompletion).mock.calls[1]?.[0]).toHaveProperty("timeoutMs", 600_000);
     expect(vi.mocked(chatCompletion).mock.calls[1]?.[0]).toMatchObject({ runtime: RERANK_RUNTIME });
     for (const [options] of vi.mocked(chatCompletion).mock.calls) {
       expect(options.tools).toBeUndefined();

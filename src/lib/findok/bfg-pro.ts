@@ -368,11 +368,12 @@ function mergeOfficialCandidates(
   }
 }
 
-async function completeJson(runtime: LlmRuntime, messages: DeepSeekMessage[]): Promise<string | null> {
+async function completeJson(runtime: LlmRuntime, messages: DeepSeekMessage[], timeoutMs?: number): Promise<string | null> {
   try {
     const response = await chatCompletion({
       runtime,
       messages,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     });
     return response.content;
   } catch {
@@ -478,7 +479,7 @@ export async function runBfgProSearch(scenario: string): Promise<BfgProResponse>
   const candidates = reduceCandidates(officialCandidates, scenario, queryPlan.queries);
   const candidateById = new Map(candidates.map((candidate) => [candidate.candidateId, candidate]));
   const selections = parseSelections(
-    await completeJson(rerankRuntime, rerankMessages(scenario, candidates)),
+    await completeJson(rerankRuntime, rerankMessages(scenario, candidates), 600_000),
   );
   const seen = new Set<string>();
   const validSelections = selections
