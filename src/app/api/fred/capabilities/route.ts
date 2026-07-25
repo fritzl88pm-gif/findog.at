@@ -6,17 +6,13 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 import {
   FredEmbedConfigurationError,
   FredEmbedUpstreamError,
-  mintFredEmbedSession,
-  readFredEmbedServerConfig,
   readFredProModelId,
-  readQuickFredEmbedServerConfig,
 } from "@/lib/weknora/fred-embed";
-import {
-  fetchFredUpstreamConfig,
-  type FredUpstreamConfig,
-} from "@/lib/weknora/fred-native";
+
+import { getDerivedFredCapabilities } from "./cache";
 
 export const runtime = "nodejs";
+
 
 function json(payload: unknown, status = 200): NextResponse {
   return NextResponse.json(payload, {
@@ -43,28 +39,6 @@ function fredProModeEnabled(): boolean {
   }
 }
 
-async function quickFredModeEnabled(options: {
-  fredChannelId: string;
-  fredUpstreamConfig: FredUpstreamConfig;
-  signal: AbortSignal;
-}): Promise<boolean> {
-  try {
-    const config = readQuickFredEmbedServerConfig();
-    if (config.channelId === options.fredChannelId) return false;
-    const session = await mintFredEmbedSession({ config, signal: options.signal });
-    const upstreamConfig = await fetchFredUpstreamConfig({
-      session,
-      config,
-      signal: options.signal,
-    });
-    return upstreamConfig.agentId === config.expectedAgentId
-      && upstreamConfig.agentId !== options.fredUpstreamConfig.agentId
-      && upstreamConfig.allowWebSearch === options.fredUpstreamConfig.allowWebSearch;
-  } catch {
-    return false;
-  }
-}
-
 export async function GET(request: Request) {
   try {
     const supabase = getSupabaseServerClient();
@@ -73,23 +47,12 @@ export async function GET(request: Request) {
     if (request.headers.get("sec-fetch-site")?.toLowerCase() === "cross-site") {
       throw new UserVisibleError("Diese Fred-Anfrage ist nicht erlaubt.", 403);
     }
-    const config = readFredEmbedServerConfig();
-    const session = await mintFredEmbedSession({ signal: request.signal });
-    const capabilities = await fetchFredUpstreamConfig({
-      session,
-      config,
-      signal: request.signal,
-    });
-    const quickFred = await quickFredModeEnabled({
-      fredChannelId: config.channelId,
-      fredUpstreamConfig: capabilities,
-      signal: request.signal,
-    });
+    const capabilities = await getDerivedFredCapabilities();
     return json({
-      webSearch: capabilities.allowWebSearch,
+      webSearch: capabilities.webSearch,
       fileUpload: findogFileUploadEnabled(),
       proMode: fredProModeEnabled(),
-      quickFred,
+      quickFred: capabilities.quickFred,
     });
   } catch (error) {
     if (error instanceof UserVisibleError) return json({ error: error.message }, error.status);

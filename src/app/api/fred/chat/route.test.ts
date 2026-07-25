@@ -20,7 +20,10 @@ import {
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getScanningSettings } from "@/lib/scanning/settings";
 import { parseFredNativeStreamLine } from "@/lib/fred-native-stream";
-import { resolveBfgCitation } from "@/lib/findok/bfg-citations";
+import {
+  extractStreamStableBfgGzCandidates,
+  resolveBfgCitation,
+} from "@/lib/findok/bfg-citations";
 
 import { UserVisibleError } from "@/lib/errors";
 import { POST } from "./route";
@@ -47,7 +50,11 @@ vi.mock("@/lib/scanning/settings", async (importOriginal) => {
 });
 vi.mock("@/lib/findok/bfg-citations", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/findok/bfg-citations")>();
-  return { ...original, resolveBfgCitation: vi.fn() };
+  return {
+    ...original,
+    extractStreamStableBfgGzCandidates: vi.fn(),
+    resolveBfgCitation: vi.fn(),
+  };
 });
 vi.mock("@/lib/weknora/fred-embed", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/weknora/fred-embed")>();
@@ -184,6 +191,10 @@ describe("POST /api/fred/chat", () => {
       signature: "session-signature",
     });
     vi.mocked(openFredUpstreamStream).mockImplementation(async () => upstreamStream());
+    vi.mocked(extractStreamStableBfgGzCandidates).mockImplementation((text, streamComplete) => {
+      if (!streamComplete) return [];
+      return [...text.matchAll(/RV\/\d{7}\/\d{4}/gu)].map(([gz]) => gz);
+    });
     vi.mocked(buildAttachmentContext).mockImplementation(async (question) => `${question}\n\nEXTRACTED`);
     vi.mocked(getScanningSettings).mockResolvedValue({
       modelId: "google/gemini-3.5-flash",
@@ -253,15 +264,16 @@ describe("POST /api/fred/chat", () => {
     expect(stopFredUpstreamSession).not.toHaveBeenCalled();
   });
 
-  it("streams German research steps, strips split KB tags and persists raw provenance", async () => {
+  it("streams German research steps and persists structured source provenance", async () => {
     const rpc = rpcForTurn();
     vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
     vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
       'data: {"response_type":"thinking","data":{"event_id":"think-1","done":false},"content":"hidden reasoning"}\n\n',
       'data: {"response_type":"tool_call","data":{"tool_call_id":"call-1","tool_name":"knowledge_search","arguments":{"query":"hidden"}}}\n\n',
       'data: {"response_type":"tool_result","data":{"tool_call_id":"call-1","tool_name":"knowledge_search","success":true,"duration_ms":120}}\n\n',
-      'data: {"response_type":"answer","content":"Nachweis <k","done":false}\n\n',
-      'data: {"response_type":"answer","content":"b doc=\\"EStG.md\\" chunk_id=\\"chunk-1\\" kb_id=\\"kb-1\\" /> erbracht.","done":true}\n\n',
+      'data: {"response_type":"references","data":{"event_id":"sources-1","references":[{"document_name":"EStG.md","chunk_id":"chunk-1","kb_id":"kb-1"}]}}\n\n',
+      'data: {"response_type":"answer","content":"Nachweis ","done":false}\n\n',
+      'data: {"response_type":"answer","content":"erbracht.","done":true}\n\n',
       'data: {"response_type":"complete","data":{}}\n\n',
     ].join(""), { headers: { "Content-Type": "text/event-stream" } }));
 
@@ -283,11 +295,11 @@ describe("POST /api/fred/chat", () => {
     });
     expect(events.filter((event) => event?.type === "delta")).toEqual([
       { type: "delta", content: "Nachweis " },
-      { type: "delta", content: " erbracht." },
+      { type: "delta", content: "erbracht." },
     ]);
     expect(events.at(-1)).toMatchObject({
       type: "final",
-      answer: "Nachweis  erbracht.",
+      answer: "Nachweis erbracht.",
       sourceReferences: [{
         kind: "knowledge",
         doc: "EStG.md",
@@ -299,8 +311,8 @@ describe("POST /api/fred/chat", () => {
     expect(JSON.stringify(events)).not.toContain("hidden\"");
     expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
       payload: expect.objectContaining({
-        content: 'Nachweis <kb doc="EStG.md" chunk_id="chunk-1" kb_id="kb-1" /> erbracht.',
-        display_content: "Nachweis  erbracht.",
+        content: "Nachweis erbracht.",
+        display_content: "Nachweis erbracht.",
         content_transformation: "weknora-research-de-v1",
         research_trace: expect.arrayContaining([
           expect.objectContaining({ id: "call-1", label: "Wissensbasis durchsucht" }),
@@ -315,7 +327,7 @@ describe("POST /api/fred/chat", () => {
     });
   });
 
-  it("verifies BFG citations live, links only verified cases and leaves others unchanged", async () => {
+  it("forwards many small deltas and resolves BFG citations only during final processing", async () => {
     const rpc = rpcForTurn();
     vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
     vi.mocked(resolveBfgCitation).mockImplementation(async (gz) => gz === "RV/1100290/2023"
@@ -331,9 +343,15 @@ describe("POST /api/fred/chat", () => {
           pdfUrl: "https://findok.bmf.gv.at/findok/resources/pdf/segment/entscheidung.pdf",
         }
       : { status: "not_found", gz, reason: "Nicht gefunden." });
+    const rawAnswer = "Siehe RV/1100290/2023 und RV/9999999/2023.";
     vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
-      'data: {"response_type":"answer","content":"Siehe RV/1100290/2023 und ","done":false}\n\n',
-      'data: {"response_type":"answer","content":"RV/9999999/2023.","done":true}\n\n',
+      ...[...rawAnswer].map((content, index) => (
+        `data: ${JSON.stringify({
+          response_type: "answer",
+          content,
+          done: index === rawAnswer.length - 1,
+        })}\n\n`
+      )),
       'data: {"response_type":"complete","data":{}}\n\n',
     ].join(""), { headers: { "Content-Type": "text/event-stream" } }));
 
@@ -343,10 +361,10 @@ describe("POST /api/fred/chat", () => {
       .map(parseFredNativeStreamLine)
       .filter(Boolean);
 
-    expect(events).toContainEqual({
-      type: "replace",
-      answer: "Siehe [RV/1100290/2023](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F1100290%2F2023) und RV/9999999/2023.",
-    });
+    expect(events.filter((event) => event?.type === "delta")
+      .map((event) => event?.type === "delta" ? event.content : "")
+      .join("")).toBe(rawAnswer);
+    expect(events.some((event) => event?.type === "replace")).toBe(false);
     expect(events).toContainEqual({
       type: "research",
       step: {
@@ -362,6 +380,8 @@ describe("POST /api/fred/chat", () => {
     });
     expect(JSON.stringify(events)).toContain("RV/9999999/2023");
     expect(JSON.stringify(events)).not.toContain("[RV/9999999/2023]");
+    expect(extractStreamStableBfgGzCandidates).toHaveBeenCalledTimes(1);
+    expect(extractStreamStableBfgGzCandidates).toHaveBeenCalledWith(rawAnswer, true);
     expect(resolveBfgCitation).toHaveBeenCalledTimes(2);
     expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
       payload: expect.objectContaining({

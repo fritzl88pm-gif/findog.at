@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { createStreamingTextBuffer } from "@/lib/chat/streaming-text-buffer";
+
 const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.meta.url)), "utf8");
 const viewSource = readFileSync(
   fileURLToPath(new URL("../components/fred-native-chat-view.tsx", import.meta.url)),
@@ -84,6 +86,63 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).toContain("Stoppen");
     expect(viewSource).not.toContain("<iframe");
     expect(viewSource).not.toContain("postMessage");
+  });
+
+  it("keeps live deltas out of committed messages and rich answer rendering", () => {
+    const deltaBranch = /if \(streamEvent\.type === "delta"\) \{([\s\S]*?)\n        \}/u
+      .exec(viewSource)?.[1] ?? "";
+    expect(deltaBranch).toContain("streamingPreviewRef.current?.append(streamEvent.content)");
+    expect(deltaBranch).toContain("answerChunks.push(streamEvent.content)");
+    expect(deltaBranch).not.toContain("answer += streamEvent.content");
+    expect(deltaBranch).not.toContain("setMessages");
+    expect(deltaBranch).not.toContain("renderAssistantContent");
+    expect(viewSource).toContain("<StreamingAssistantPreview");
+    expect(viewSource).toContain("setMessages(baseMessages)");
+    expect(cssSource).toMatch(
+      /\.fred-streaming-preview-text \{[\s\S]*?white-space: pre-wrap;/u,
+    );
+  });
+
+  it("batches streaming text appends and safely flushes replacements and cancellations", () => {
+    const appended: string[] = [];
+    const replaced: string[] = [];
+    const scheduled = new Map<number, () => void>();
+    const cancelled: number[] = [];
+    let nextFrame = 1;
+    const buffer = createStreamingTextBuffer({
+      appendText: (text) => appended.push(text),
+      replaceText: (text) => replaced.push(text),
+      requestFrame: (callback) => {
+        const frame = nextFrame;
+        nextFrame += 1;
+        scheduled.set(frame, callback);
+        return frame;
+      },
+      cancelFrame: (frame) => {
+        cancelled.push(frame);
+        scheduled.delete(frame);
+      },
+    });
+
+    buffer.append("Hal");
+    buffer.append("lo");
+    expect(scheduled.size).toBe(1);
+    expect(appended).toEqual([]);
+    scheduled.get(1)?.();
+    expect(appended).toEqual(["Hallo"]);
+
+    buffer.replace("Neu");
+    buffer.append("!");
+    buffer.flush();
+    expect(replaced).toEqual(["Neu"]);
+    expect(appended).toEqual(["Hallo", "!"]);
+    expect(cancelled).toContain(2);
+
+    buffer.append("verwerfen");
+    buffer.cancel();
+    expect(cancelled).toContain(3);
+    buffer.flush();
+    expect(appended).toEqual(["Hallo", "!"]);
   });
 
   it("copies complete Fred answers and individual tables with icon controls", () => {

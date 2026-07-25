@@ -57,7 +57,6 @@ import {
   mergeFredResearchStep,
   mergeFredSources,
   parseWeKnoraResearchEvent,
-  transformWeKnoraAnswer,
   type FredResearchStep,
   type FredSourceReference,
 } from "@/lib/weknora/fred-research";
@@ -856,8 +855,7 @@ export async function POST(request: Request) {
           };
 
           let buffer = "";
-          let rawAnswer = "";
-          let visibleAnswer = "";
+          const answerChunks: string[] = [];
           let researchTrace: FredResearchStep[] = [];
           let sourceReferences: FredSourceReference[] = [];
           let activeCitationVerifications = 0;
@@ -887,8 +885,11 @@ export async function POST(request: Request) {
             citationQueue.push({ gz, resolve });
             pumpCitationQueue();
           });
-          const beginCitationVerification = (text: string, streamComplete = false) => {
-            for (const gz of extractStreamStableBfgGzCandidates(text, streamComplete)) {
+          const beginFinalCitationVerification = (text: string) => {
+            const candidates = [
+              ...new Set(extractStreamStableBfgGzCandidates(text, true)),
+            ].slice(0, MAX_LIVE_BFG_CITATIONS);
+            for (const gz of candidates) {
               if (
                 citationTasks.has(gz)
                 || citationTasks.size >= MAX_LIVE_BFG_CITATIONS
@@ -909,12 +910,6 @@ export async function POST(request: Request) {
                 };
                 researchTrace = mergeFredResearchStep(researchTrace, verificationStep);
                 send(controller, { type: "research", step: verificationStep });
-                const linkedAnswer = linkVerifiedBfgCitations(
-                  visibleAnswer,
-                  [...verifiedCitations.values()],
-                  { target: "fullText" },
-                );
-                if (linkedAnswer !== visibleAnswer) send(controller, { type: "replace", answer: linkedAnswer });
               });
               citationTasks.set(gz, task);
             }
@@ -954,15 +949,8 @@ export async function POST(request: Request) {
             }
             const event = upstreamDelta(parsed);
             if (event.content) {
-              rawAnswer += event.content;
-              const transformed = transformWeKnoraAnswer(rawAnswer, { streaming: true });
-              sourceReferences = mergeFredSources(sourceReferences, transformed.sources);
-              if (transformed.text.startsWith(visibleAnswer)) {
-                const delta = transformed.text.slice(visibleAnswer.length);
-                visibleAnswer = transformed.text;
-                if (delta) send(controller, { type: "delta", content: delta });
-              }
-              beginCitationVerification(transformed.text);
+              answerChunks.push(event.content);
+              send(controller, { type: "delta", content: event.content });
             }
           };
 
@@ -976,16 +964,15 @@ export async function POST(request: Request) {
           }
           buffer += decoder.decode();
           if (buffer.trim()) processFrame(buffer);
-          const finalTransformation = transformWeKnoraAnswer(rawAnswer);
-          const plainFinalAnswer = finalTransformation.text.trim();
-          sourceReferences = mergeFredSources(sourceReferences, finalTransformation.sources);
+          const rawAnswer = answerChunks.join("");
+          const plainFinalAnswer = rawAnswer.trim();
           if (!plainFinalAnswer) {
             throw new UserVisibleError(
               `${selectedAgentName} hat keine Antwort geliefert.`,
               502,
             );
           }
-          beginCitationVerification(plainFinalAnswer, true);
+          beginFinalCitationVerification(plainFinalAnswer);
           await Promise.all(citationTasks.values());
           const finalAnswer = linkVerifiedBfgCitations(
             plainFinalAnswer,

@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
+import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { mintFredEmbedSession, readFredEmbedServerConfig,
+import {
+  FredEmbedUpstreamError,
+  mintFredEmbedSession,
+  readFredEmbedServerConfig,
   readFredProModelId,
   readQuickFredEmbedServerConfig,
 } from "@/lib/weknora/fred-embed";
 import { fetchFredUpstreamConfig } from "@/lib/weknora/fred-native";
+import { resetFredCapabilitiesCacheForTests } from "./cache";
 import { GET } from "./route";
 
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
@@ -21,21 +26,55 @@ vi.mock("@/lib/weknora/fred-native", async (importOriginal) => {
   return { ...original, fetchFredUpstreamConfig: vi.fn() };
 });
 
+const fredConfig = {
+  agentKey: "fred" as const,
+  channelId: "fred-channel",
+  publishToken: "em_publish_token_fixture_123456",
+  exchangeOrigin: "https://findog.at",
+};
+const quickFredConfig = {
+  agentKey: "quickfred" as const,
+  channelId: "quickfred-channel",
+  publishToken: "em_quickfred_publish_fixture_123456",
+  exchangeOrigin: "https://findog.at",
+  expectedAgentId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
+};
+
+function capabilityRequest(signal?: AbortSignal): Request {
+  return new Request("https://findog.at/api/fred/capabilities", {
+    headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
+    signal,
+  });
+}
+
+function embedSession(channelId: string) {
+  return {
+    token: `ems_session_token_${channelId}_123456`,
+    expiresIn: 1800,
+    channelId,
+    embedOrigin: "https://taxdog.cloud" as const,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("GET /api/fred/capabilities", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    resetFredCapabilitiesCacheForTests();
     vi.mocked(getSupabaseServerClient).mockReturnValue({ auth: {} } as never);
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "user-1" });
-    vi.mocked(readFredEmbedServerConfig).mockReturnValue({
-      channelId: "fred-channel",
-      publishToken: "em_publish_token_fixture_123456",
-      exchangeOrigin: "https://findog.at",
-    });
-    vi.mocked(mintFredEmbedSession).mockResolvedValue({
-      token: "ems_session_token_fixture_123456",
-      expiresIn: 1800,
-      channelId: "fred-channel",
-      embedOrigin: "https://taxdog.cloud",
+    vi.mocked(readFredEmbedServerConfig).mockReturnValue(fredConfig);
+    vi.mocked(mintFredEmbedSession).mockImplementation(async (options = {}) => {
+      return embedSession(options.config?.channelId ?? fredConfig.channelId);
     });
     vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
       agentId: "agent-1",
@@ -48,6 +87,7 @@ describe("GET /api/fred/capabilities", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 
@@ -210,5 +250,131 @@ describe("GET /api/fred/capabilities", () => {
     }));
     const data = await response.json() as Record<string, unknown>;
     expect(data).toMatchObject({ webSearch: true, quickFred: false });
+  });
+
+  it("starts cold Fred and QuickFred probe paths concurrently with independent sequential config fetches", async () => {
+    vi.mocked(readQuickFredEmbedServerConfig).mockReturnValue(quickFredConfig);
+    const fredSession = deferred<ReturnType<typeof embedSession>>();
+    const quickSession = deferred<ReturnType<typeof embedSession>>();
+    vi.mocked(mintFredEmbedSession).mockImplementation((options = {}) => (
+      options.config?.channelId === quickFredConfig.channelId
+        ? quickSession.promise
+        : fredSession.promise
+    ));
+    vi.mocked(fetchFredUpstreamConfig).mockImplementation(async ({ session }) => ({
+      agentId: session.channelId === quickFredConfig.channelId
+        ? quickFredConfig.expectedAgentId
+        : "fred-agent",
+      knowledgeBaseIds: [],
+      allowWebSearch: true,
+      allowFileUpload: true,
+    }));
+    const browserController = new AbortController();
+    const request = capabilityRequest(browserController.signal);
+    const responsePromise = GET(request);
+
+    await vi.waitFor(() => expect(mintFredEmbedSession).toHaveBeenCalledTimes(2));
+    expect(fetchFredUpstreamConfig).not.toHaveBeenCalled();
+    expect(vi.mocked(mintFredEmbedSession).mock.calls.map(([options]) => (
+      options?.config?.channelId
+    ))).toEqual(expect.arrayContaining([
+      fredConfig.channelId,
+      quickFredConfig.channelId,
+    ]));
+    expect(vi.mocked(mintFredEmbedSession).mock.calls[0][0]?.signal).not.toBe(request.signal);
+
+    fredSession.resolve(embedSession(fredConfig.channelId));
+    quickSession.resolve(embedSession(quickFredConfig.channelId));
+    const response = await responsePromise;
+    await expect(response.json()).resolves.toMatchObject({
+      webSearch: true,
+      quickFred: true,
+    });
+    expect(fetchFredUpstreamConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves a fresh derived hit without upstream calls and recomputes local flags", async () => {
+    await GET(capabilityRequest());
+    vi.mocked(mintFredEmbedSession).mockClear();
+    vi.mocked(fetchFredUpstreamConfig).mockClear();
+    vi.stubEnv("MINERU_API_TOKEN", "");
+    vi.mocked(readFredProModelId).mockImplementation(() => {
+      throw new Error("disabled");
+    });
+
+    const response = await GET(capabilityRequest());
+
+    await expect(response.json()).resolves.toEqual({
+      webSearch: true,
+      fileUpload: false,
+      proMode: false,
+      quickFred: false,
+    });
+    expect(mintFredEmbedSession).not.toHaveBeenCalled();
+    expect(fetchFredUpstreamConfig).not.toHaveBeenCalled();
+    expect(authenticateSupabaseRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares one in-flight refresh across concurrent cache misses", async () => {
+    const session = deferred<ReturnType<typeof embedSession>>();
+    vi.mocked(mintFredEmbedSession).mockReturnValue(session.promise);
+
+    const firstResponse = GET(capabilityRequest());
+    const secondResponse = GET(capabilityRequest());
+    await vi.waitFor(() => expect(mintFredEmbedSession).toHaveBeenCalledTimes(1));
+    session.resolve(embedSession(fredConfig.channelId));
+
+    const responses = await Promise.all([firstResponse, secondResponse]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(fetchFredUpstreamConfig).toHaveBeenCalledTimes(1);
+    expect(authenticateSupabaseRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves stale derived capabilities when a refresh fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-25T00:00:00.000Z"));
+    await GET(capabilityRequest());
+    vi.setSystemTime(new Date("2026-07-25T00:01:00.001Z"));
+    vi.mocked(mintFredEmbedSession).mockRejectedValue(
+      new FredEmbedUpstreamError("unavailable"),
+    );
+
+    const response = await GET(capabilityRequest());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      webSearch: true,
+      quickFred: false,
+    });
+  });
+
+  it("does not hide a Fred failure after the stale window expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-25T00:00:00.000Z"));
+    await GET(capabilityRequest());
+    vi.setSystemTime(new Date("2026-07-25T00:10:00.001Z"));
+    vi.mocked(mintFredEmbedSession).mockRejectedValue(
+      new FredEmbedUpstreamError("unavailable"),
+    );
+
+    const response = await GET(capabilityRequest());
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "Fred ist derzeit nicht erreichbar.",
+    });
+  });
+
+  it("authenticates every fresh-cache request before returning derived capabilities", async () => {
+    await GET(capabilityRequest());
+    vi.mocked(mintFredEmbedSession).mockClear();
+    vi.mocked(authenticateSupabaseRequest).mockRejectedValue(
+      new UserVisibleError("Nicht angemeldet.", 401),
+    );
+
+    const response = await GET(capabilityRequest());
+
+    expect(response.status).toBe(401);
+    expect(mintFredEmbedSession).not.toHaveBeenCalled();
   });
 });

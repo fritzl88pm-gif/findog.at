@@ -20,7 +20,7 @@ function cssRule(selector: string): string {
 describe("assistant identity", () => {
   it("uses Fred's decorative public avatar in native stored and live messages", () => {
     const avatarPattern = /<img className="message-avatar fred-avatar" src="\/fred-avatar\.png" alt="" \/>/g;
-    expect(fredNativeSource.match(avatarPattern)).toHaveLength(1);
+    expect(fredNativeSource.match(avatarPattern)).toHaveLength(2);
     expect(fredNativeSource).toContain(
       'message.role === "user" ? "Du" : fredAgentName(message.agentKey)',
     );

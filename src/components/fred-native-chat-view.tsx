@@ -7,9 +7,16 @@ import type {
   KeyboardEvent,
   ReactNode,
 } from "react";
-import { useEffect, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 
 import CopyIconButton from "@/components/copy-icon-button";
+import { createStreamingTextBuffer } from "@/lib/chat/streaming-text-buffer";
 import {
   parseFredNativeStreamLine,
   type FredNativeConversation,
@@ -164,6 +171,75 @@ function ResearchTrace({
   );
 }
 
+type StreamingAssistantPreviewHandle = {
+  append: (text: string) => void;
+  replace: (text: string) => void;
+  setStatus: (text: string) => void;
+  flush: () => void;
+  cancel: () => void;
+};
+
+const StreamingAssistantPreview = forwardRef<
+  StreamingAssistantPreviewHandle,
+  { agentName: "Fred" | "QuickFred"; onGrowth: () => void }
+>(function StreamingAssistantPreview({ agentName, onGrowth }, ref) {
+  const textContainerRef = useRef<HTMLSpanElement>(null);
+  const textNodeRef = useRef<Text | null>(null);
+  const bufferRef = useRef<ReturnType<typeof createStreamingTextBuffer> | null>(null);
+  const onGrowthRef = useRef(onGrowth);
+
+  useEffect(() => {
+    onGrowthRef.current = onGrowth;
+  }, [onGrowth]);
+
+  useEffect(() => {
+    const textContainer = textContainerRef.current;
+    if (!textContainer) return;
+    const textNode = document.createTextNode("");
+    textContainer.replaceChildren(textNode);
+    textNodeRef.current = textNode;
+    bufferRef.current = createStreamingTextBuffer({
+      appendText: (text) => {
+        textNode.appendData(text);
+        onGrowthRef.current();
+      },
+      replaceText: (text) => {
+        textNode.data = text;
+        onGrowthRef.current();
+      },
+      requestFrame: (callback) => window.requestAnimationFrame(callback),
+      cancelFrame: (frame) => window.cancelAnimationFrame(frame),
+    });
+    return () => {
+      bufferRef.current?.cancel();
+      bufferRef.current = null;
+      textNodeRef.current = null;
+    };
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    append: (text) => bufferRef.current?.append(text),
+    replace: (text) => bufferRef.current?.replace(text),
+    setStatus: (text) => bufferRef.current?.replace(text),
+    flush: () => bufferRef.current?.flush(),
+    cancel: () => bufferRef.current?.cancel(),
+  }), []);
+
+  return (
+    <div className="fred-streaming-preview">
+      <span className="message-body fred-streaming-preview-text" ref={textContainerRef} />
+      <div
+        className="fred-thinking-indicator"
+        role="status"
+        aria-label={`${agentName} denkt nach`}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/fred-sniff.gif" alt="" />
+      </div>
+    </div>
+  );
+});
+
 export default function FredNativeChatView({
   accessToken,
   conversationId,
@@ -174,6 +250,7 @@ export default function FredNativeChatView({
   onConversationUpdated,
 }: FredNativeChatViewProps) {
   const [messages, setMessages] = useState<FredNativeMessage[]>(initialMessages);
+  const [activeAssistant, setActiveAssistant] = useState<FredNativeMessage | null>(null);
   const [composer, setComposer] = useState("");
   const [error, setError] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -199,6 +276,8 @@ export default function FredNativeChatView({
   const [welcomeGreeting] = useState(() => getWelcomeGreeting());
   const activeConversationIdRef = useRef(conversationId);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const streamingPreviewRef = useRef<StreamingAssistantPreviewHandle>(null);
+  const followStreamGrowthRef = useRef(true);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -209,8 +288,11 @@ export default function FredNativeChatView({
     if (conversationId === activeConversationIdRef.current) return;
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    streamingPreviewRef.current?.cancel();
+    followStreamGrowthRef.current = true;
     activeConversationIdRef.current = conversationId;
     setMessages(initialMessages);
+    setActiveAssistant(null);
     setComposer("");
     setError("");
     setModeNotice("");
@@ -276,7 +358,10 @@ export default function FredNativeChatView({
     return () => controller.abort();
   }, [accessToken]);
 
-  useEffect(() => () => abortControllerRef.current?.abort(), []);
+  useEffect(() => () => {
+    streamingPreviewRef.current?.cancel();
+    abortControllerRef.current?.abort();
+  }, []);
 
   useEffect(() => {
     const textarea = composerRef.current;
@@ -286,9 +371,23 @@ export default function FredNativeChatView({
 
   useEffect(() => {
     const transcript = transcriptRef.current;
-    if (!transcript) return;
+    if (!transcript || !followStreamGrowthRef.current) return;
     transcript.scrollTop = transcript.scrollHeight;
   }, [messages]);
+
+  function scrollWithStreamGrowth(): void {
+    const transcript = transcriptRef.current;
+    if (!transcript || !followStreamGrowthRef.current) return;
+    transcript.scrollTop = transcript.scrollHeight;
+  }
+
+  function trackTranscriptPosition(): void {
+    const transcript = transcriptRef.current;
+    if (!transcript) return;
+    followStreamGrowthRef.current = (
+      transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight
+    ) <= 96;
+  }
 
   async function submitQuery(options: {
     query: string;
@@ -341,7 +440,8 @@ export default function FredNativeChatView({
     const isProMode = options.proModeEnabled === true;
     userMessage.proModeEnabled = isProMode;
     const baseMessages = [...(options.messagesBeforeQuery ?? messages), userMessage];
-    setMessages([...baseMessages, assistantMessage]);
+    setMessages(baseMessages);
+    setActiveAssistant(assistantMessage);
     if (options.clearDraft) {
       setComposer("");
       resetComposerHeight(composerRef.current);
@@ -351,7 +451,8 @@ export default function FredNativeChatView({
     setError("");
     setIsSending(true);
 
-    let answer = "";
+    let answerChunks: string[] = [];
+    let hasAnswerContent = false;
     let researchTrace: FredResearchStep[] = [];
     let sourceReferences: FredSourceReference[] = [];
     let receivedFinal = false;
@@ -413,49 +514,33 @@ export default function FredNativeChatView({
           return;
         }
         if (streamEvent.type === "delta") {
-          answer += streamEvent.content;
-          const updatedAssistant = {
-            ...assistantMessage,
-            content: answer,
-            researchTrace,
-            sourceReferences,
-          };
-          setMessages([...baseMessages, updatedAssistant]);
+          if (answerChunks.length === 0) streamingPreviewRef.current?.replace("");
+          streamingPreviewRef.current?.append(streamEvent.content);
+          answerChunks.push(streamEvent.content);
+          hasAnswerContent ||= streamEvent.content.trim() !== "";
           return;
         }
         if (streamEvent.type === "replace") {
-          answer = streamEvent.answer;
-          const updatedAssistant = {
-            ...assistantMessage,
-            content: answer,
-            researchTrace,
-            sourceReferences,
-          };
-          setMessages([...baseMessages, updatedAssistant]);
+          answerChunks = [streamEvent.answer];
+          hasAnswerContent = streamEvent.answer.trim() !== "";
+          streamingPreviewRef.current?.replace(streamEvent.answer);
           return;
         }
         if (streamEvent.type === "status") {
-          const updatedAssistant = {
-            ...assistantMessage,
-            content: streamEvent.label,
-            researchTrace,
-            sourceReferences,
-          };
-          setMessages([...baseMessages, updatedAssistant]);
+          streamingPreviewRef.current?.setStatus(streamEvent.label);
           return;
         }
         if (streamEvent.type === "research") {
           researchTrace = mergeFredResearchStep(researchTrace, streamEvent.step);
-          const updatedAssistant = {
-            ...assistantMessage,
-            content: answer,
+          setActiveAssistant((current) => current ? {
+            ...current,
             researchTrace,
             sourceReferences,
-          };
-          setMessages([...baseMessages, updatedAssistant]);
+          } : current);
           return;
         }
-        answer = streamEvent.answer;
+        answerChunks = [streamEvent.answer];
+        hasAnswerContent = streamEvent.answer.trim() !== "";
         researchTrace = streamEvent.researchTrace ?? researchTrace;
         sourceReferences = streamEvent.sourceReferences ?? sourceReferences;
         receivedFinal = true;
@@ -471,6 +556,8 @@ export default function FredNativeChatView({
             sourceReferences,
           },
         ];
+        streamingPreviewRef.current?.flush();
+        setActiveAssistant(null);
         setMessages(completedMessages);
         onConversationUpdated(streamEvent.conversation, completedMessages);
       };
@@ -485,7 +572,7 @@ export default function FredNativeChatView({
       }
       buffer += decoder.decode();
       processLine(buffer);
-      if (!answer.trim()) throw new Error(`${agentName} hat keine Antwort geliefert.`);
+      if (!hasAnswerContent) throw new Error(`${agentName} hat keine Antwort geliefert.`);
       if (!receivedFinal) {
         throw new Error(`Der ${agentName}-Antwortstream wurde ohne Abschluss beendet.`);
       }
@@ -497,9 +584,20 @@ export default function FredNativeChatView({
       }
       if (options.rollbackMessages) {
         setMessages(options.rollbackMessages);
-      } else if (!answer) {
-        setMessages(baseMessages);
+      } else if (hasAnswerContent) {
+        const partialAnswer = answerChunks.join("");
+        setMessages([
+          ...baseMessages,
+          {
+            ...assistantMessage,
+            content: partialAnswer,
+            researchTrace,
+            sourceReferences,
+          },
+        ]);
       }
+      streamingPreviewRef.current?.flush();
+      setActiveAssistant(null);
     } finally {
       if (abortControllerRef.current === controller) abortControllerRef.current = null;
       setIsSending(false);
@@ -638,7 +736,12 @@ export default function FredNativeChatView({
   return (
     <section className={`chat-panel ${messages.length === 0 ? "empty-chat" : ""}`} aria-label="Fred">
       <div className="chat-content-group">
-        <div className="transcript" ref={transcriptRef} aria-live="polite">
+        <div
+          className="transcript"
+          ref={transcriptRef}
+          aria-live="polite"
+          onScroll={trackTranscriptPosition}
+        >
           <div className="transcript-content">
             {messages.length === 0 ? (
               <div className="empty-state">
@@ -781,6 +884,29 @@ export default function FredNativeChatView({
                 ) : null}
               </article>
             ))}
+            {activeAssistant ? (
+              <article className="message assistant pending">
+                <div className="message-header">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img className="message-avatar fred-avatar" src="/fred-avatar.png" alt="" />
+                  <div className="message-meta">
+                    <span className="sender-name">{fredAgentName(activeAssistant.agentKey)}</span>
+                    <time dateTime={activeAssistant.createdAt}>{formatTime(activeAssistant.createdAt)}</time>
+                  </div>
+                </div>
+                <ResearchTrace
+                  steps={activeAssistant.researchTrace ?? []}
+                  sources={activeAssistant.sourceReferences ?? []}
+                  active
+                  agentName={fredAgentName(activeAssistant.agentKey)}
+                />
+                <StreamingAssistantPreview
+                  ref={streamingPreviewRef}
+                  agentName={fredAgentName(activeAssistant.agentKey)}
+                  onGrowth={scrollWithStreamGrowth}
+                />
+              </article>
+            ) : null}
           </div>
         </div>
 

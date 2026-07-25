@@ -4320,6 +4320,19 @@ textarea:focus {
   font-size: 0.95rem;
 }
 
+.fred-streaming-preview-text {
+  display: block;
+  white-space: pre-wrap;
+}
+
+.fred-streaming-preview-text:empty {
+  display: none;
+}
+
+.fred-streaming-preview-text:not(:empty) + .fred-thinking-indicator {
+  display: none;
+}
+
 .attachment-message-line {
   display: inline-flex;
   max-width: 100%;
