@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MineruFileInput } from "./mineru-cloud";
 import {
   DOCUMENT_FALLBACK_PROMPT,
+  DOCUMENT_FALLBACK_TIMEOUT_MS,
   DocumentFallbackError,
   extractDocumentsWithConfiguredModel,
 } from "./document-fallback";
@@ -27,6 +28,12 @@ function providerResponse(content: unknown): Response {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+describe("document fallback timeout constant", () => {
+  it("DOCUMENT_FALLBACK_TIMEOUT_MS is 180_000", () => {
+    expect(DOCUMENT_FALLBACK_TIMEOUT_MS).toBe(180_000);
+  });
+});
 
 describe("configured Gemini document fallback", () => {
   beforeEach(() => {

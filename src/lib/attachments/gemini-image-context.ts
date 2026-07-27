@@ -14,7 +14,7 @@ export const GEMINI_CONTEXT_PROMPT =
 const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 const MODEL = "google/gemini-3.5-flash";
 const MAX_DESCRIPTION_CHARS = 15_000;
-const REQUEST_TIMEOUT_MS = 75_000;
+export const GEMINI_IMAGE_TIMEOUT_MS = 180_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 
 export type DescribeImageOptions = {
@@ -131,7 +131,7 @@ export async function describeImage(
 
   const timeout = setTimeout(() => {
     if (!controller.signal.aborted) controller.abort(new GeminiImageError("Die Bildanalyse hat nicht rechtzeitig geantwortet."));
-  }, REQUEST_TIMEOUT_MS);
+  }, GEMINI_IMAGE_TIMEOUT_MS);
 
   try {
     const response = await fetcher(ENDPOINT, {

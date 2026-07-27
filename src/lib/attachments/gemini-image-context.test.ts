@@ -1,6 +1,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { describeImage, GeminiImageError, GEMINI_CONTEXT_PROMPT } from "./gemini-image-context";
+import {
+  describeImage,
+  GeminiImageError,
+  GEMINI_CONTEXT_PROMPT,
+  GEMINI_IMAGE_TIMEOUT_MS,
+} from "./gemini-image-context";
 
 const originalKey = process.env.OPENROUTER_API_KEY;
 
@@ -10,6 +15,12 @@ const MODEL = "google/gemini-3.5-flash";
 function imageDataUri(): string {
   return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 }
+
+describe("Gemini image timeout constant", () => {
+  it("GEMINI_IMAGE_TIMEOUT_MS is 180_000", () => {
+    expect(GEMINI_IMAGE_TIMEOUT_MS).toBe(180_000);
+  });
+});
 
 describe("Gemini image context via OpenRouter", () => {
   beforeEach(() => {
@@ -147,7 +158,7 @@ describe("Gemini image context via OpenRouter", () => {
     expect(error.message).not.toMatch(/nicht erreichbar/i);
   });
 
-  it("allows an image analysis to run for 75 seconds before timing out", async () => {
+  it("allows an image analysis to run for 180 seconds before timing out", async () => {
     vi.useFakeTimers();
     try {
       const fetch = vi.fn((_url: string | URL | Request, init?: RequestInit) =>
@@ -162,10 +173,10 @@ describe("Gemini image context via OpenRouter", () => {
       );
       void observed.then(() => { settled = true; });
 
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(120_000);
       expect(settled).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(44_999);
+      await vi.advanceTimersByTimeAsync(59_999);
       expect(settled).toBe(false);
 
       await vi.advanceTimersByTimeAsync(1);
