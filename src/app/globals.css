@@ -1126,6 +1126,10 @@ textarea:focus {
   flex: 0 0 auto;
 }
 
+.reasoning-copy-button {
+  margin-right: 2px;
+}
+
 .reasoning-card-content {
   margin: 0;
   color: var(--text-main);

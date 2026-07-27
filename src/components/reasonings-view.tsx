@@ -7,6 +7,7 @@ import {
   MAX_REASONING_CONTENT_CHARS,
   MAX_REASONING_TITLE_CHARS,
 } from "@/lib/reasonings";
+import CopyIconButton from "@/components/copy-icon-button";
 
 type ReasoningCategory = {
   id: string;
@@ -655,6 +656,11 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
                   <div className="reasoning-card-heading">
                     <h3>{reasoning.title}</h3>
                     <div className="reasoning-card-actions">
+                      <CopyIconButton
+                        className="reasoning-copy-button"
+                        text={reasoning.content}
+                        label={`Begründungstext „${reasoning.title}“ kopieren`}
+                      />
                       <button
                         className="text-button"
                         type="button"

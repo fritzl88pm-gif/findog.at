@@ -156,4 +156,12 @@ describe("reasonings UI integration", () => {
     expect(viewSource).toContain("reasoning.categoryIds.includes(activeCategoryId)");
     expect(viewSource).toContain("Kategorie wurde gelöscht. Die Begründungen bleiben erhalten.");
   });
+
+  it("copies only the reasoning body without title or categories", () => {
+    expect(viewSource).toMatch(
+      /<CopyIconButton[\s\S]*?text=\{reasoning\.content\}[\s\S]*?Begründungstext/iu,
+    );
+    expect(viewSource).not.toContain("text={reasoning.title}");
+    expect(viewSource).not.toContain("text={reasoning.categoryIds");
+  });
 });
