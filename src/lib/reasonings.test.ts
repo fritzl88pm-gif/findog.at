@@ -38,6 +38,10 @@ const viewSource = readFileSync(
   fileURLToPath(new URL("../components/reasonings-view.tsx", import.meta.url)),
   "utf8",
 );
+const cssSource = readFileSync(
+  fileURLToPath(new URL("../app/globals.css", import.meta.url)),
+  "utf8",
+);
 
 describe("reasoning input validation", () => {
   it("normalizes text and de-duplicates category assignments", () => {
@@ -163,5 +167,21 @@ describe("reasonings UI integration", () => {
     );
     expect(viewSource).not.toContain("text={reasoning.title}");
     expect(viewSource).not.toContain("text={reasoning.categoryIds");
+  });
+
+  it("uses accessible edit and delete icons and emphasizes copy", () => {
+    expect(
+      viewSource.match(/className="reasoning-card-icon-button(?: is-danger)?"/gu),
+    ).toHaveLength(2);
+    expect(viewSource).toContain(
+      'aria-label={`Begründung „${reasoning.title}“ bearbeiten`}',
+    );
+    expect(viewSource).toContain(
+      'aria-label={`Begründung „${reasoning.title}“ löschen`}',
+    );
+    expect(cssSource).toMatch(
+      /\.copy-icon-button\.reasoning-copy-button\s*\{[\s\S]*?background: var\(--bmf-blue\)/u,
+    );
+    expect(cssSource).toMatch(/\.reasoning-card-icon-button\.is-danger/u);
   });
 });

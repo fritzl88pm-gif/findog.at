@@ -1124,10 +1124,89 @@ textarea:focus {
 
 .reasoning-card-actions {
   flex: 0 0 auto;
+  gap: 7px;
 }
 
-.reasoning-copy-button {
-  margin-right: 2px;
+.copy-icon-button.reasoning-copy-button {
+  flex-basis: 38px;
+  width: 38px;
+  height: 38px;
+  margin-right: 3px;
+  border-color: var(--bmf-blue);
+  border-radius: 10px;
+  background: var(--bmf-blue);
+  box-shadow: 0 4px 10px rgba(0, 82, 147, 0.2);
+  color: #fff;
+}
+
+.copy-icon-button.reasoning-copy-button:hover:not(:disabled),
+.copy-icon-button.reasoning-copy-button:focus-visible {
+  border-color: var(--bmf-blue-deep);
+  background: var(--bmf-blue-deep);
+  box-shadow: 0 5px 14px rgba(0, 55, 98, 0.26);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.copy-icon-button.reasoning-copy-button.is-copied {
+  border-color: #17633e;
+  background: #17633e;
+  color: #fff;
+}
+
+.copy-icon-button.reasoning-copy-button.is-error {
+  border-color: var(--danger, #b42318);
+  background: var(--danger, #b42318);
+  color: #fff;
+}
+
+.copy-icon-button.reasoning-copy-button svg {
+  width: 19px;
+  height: 19px;
+}
+
+.reasoning-card-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--bg-surface);
+  color: var(--bmf-blue-deep);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.reasoning-card-icon-button:hover:not(:disabled),
+.reasoning-card-icon-button:focus-visible {
+  border-color: rgba(0, 82, 147, 0.34);
+  outline: none;
+  background: rgba(0, 82, 147, 0.08);
+  transform: translateY(-1px);
+}
+
+.reasoning-card-icon-button.is-danger {
+  color: var(--danger, #b42318);
+}
+
+.reasoning-card-icon-button.is-danger:hover:not(:disabled),
+.reasoning-card-icon-button.is-danger:focus-visible {
+  border-color: rgba(180, 35, 24, 0.3);
+  background: rgba(180, 35, 24, 0.08);
+}
+
+.reasoning-card-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.reasoning-card-icon-button svg {
+  width: 17px;
+  height: 17px;
 }
 
 .reasoning-card-content {

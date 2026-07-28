@@ -662,20 +662,48 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
                         label={`Begründungstext „${reasoning.title}“ kopieren`}
                       />
                       <button
-                        className="text-button"
+                        className="reasoning-card-icon-button"
                         type="button"
                         onClick={() => openEditEditor(reasoning)}
                         disabled={isSaving}
+                        aria-label={`Begründung „${reasoning.title}“ bearbeiten`}
+                        title="Begründung bearbeiten"
                       >
-                        Bearbeiten
+                        <svg
+                          aria-hidden="true"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.9"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="m4 20 4.4-1 9.8-9.8-3.4-3.4L5 15.6 4 20Z" />
+                          <path d="m13.8 6.8 3.4 3.4M14.8 5.8l1.4-1.4a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8l-1.4 1.4" />
+                        </svg>
                       </button>
                       <button
-                        className="text-button danger-text-button"
+                        className="reasoning-card-icon-button is-danger"
                         type="button"
                         onClick={() => void deleteReasoning(reasoning)}
                         disabled={isSaving}
+                        aria-label={`Begründung „${reasoning.title}“ löschen`}
+                        title="Begründung löschen"
                       >
-                        Löschen
+                        <svg
+                          aria-hidden="true"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.9"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M4 7h16" />
+                          <path d="M9 7V4h6v3" />
+                          <path d="m6 7 1 13h10l1-13" />
+                          <path d="M10 11v5M14 11v5" />
+                        </svg>
                       </button>
                     </div>
                   </div>
