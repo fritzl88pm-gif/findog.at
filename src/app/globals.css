@@ -4742,6 +4742,194 @@ textarea:focus {
   margin-left: auto;
 }
 
+.fred-assistant-answer {
+  min-width: 0;
+}
+
+.fred-reasoning-context-menu {
+  position: fixed;
+  z-index: 1350;
+  width: min(240px, calc(100vw - 20px));
+  border: 1px solid rgba(0, 82, 147, 0.2);
+  border-radius: 10px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+}
+
+.fred-reasoning-context-menu button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 9px 10px;
+  color: var(--bmf-blue-deep);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 750;
+  text-align: left;
+}
+
+.fred-reasoning-context-menu button:hover,
+.fred-reasoning-context-menu button:focus-visible {
+  outline: none;
+  background: rgba(0, 82, 147, 0.08);
+}
+
+.fred-reasoning-context-menu svg {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  color: var(--bmf-blue);
+}
+
+.fred-reasoning-dialog-backdrop {
+  z-index: 1400;
+}
+
+.fred-reasoning-dialog {
+  width: min(620px, 100%);
+  max-height: min(760px, calc(100dvh - 48px));
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-top: 4px solid var(--accent-yellow);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+  padding: 22px;
+}
+
+.fred-reasoning-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.fred-reasoning-dialog-header .eyebrow {
+  margin: 0 0 3px;
+  color: var(--bmf-blue);
+}
+
+.fred-reasoning-dialog-header h2 {
+  margin: 0;
+  color: var(--bmf-blue-deep);
+  font-size: 1.35rem;
+}
+
+.fred-reasoning-dialog-header .icon-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.fred-reasoning-form {
+  display: grid;
+  gap: 18px;
+}
+
+.fred-reasoning-selection-preview {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--border-color);
+  border-left: 4px solid var(--accent-yellow);
+  border-radius: var(--radius-sm);
+  background: var(--bg-app);
+  padding: 13px 14px;
+}
+
+.fred-reasoning-selection-preview > span {
+  color: var(--bmf-blue-deep);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.fred-reasoning-selection-preview p {
+  max-height: 180px;
+  overflow-y: auto;
+  margin: 0;
+  color: var(--text-main);
+  font-size: 0.9rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.fred-reasoning-selection-preview small,
+.fred-reasoning-category-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.fred-reasoning-category-choice {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.fred-reasoning-category-choice legend {
+  margin-bottom: 9px;
+  color: var(--text-main);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.fred-reasoning-category-mode {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  color: var(--text-main);
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.fred-reasoning-category-mode input {
+  accent-color: var(--bmf-blue);
+}
+
+.fred-reasoning-category-choice > select,
+.fred-reasoning-category-choice > input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  padding: 9px 11px;
+  color: var(--text-main);
+  font: inherit;
+}
+
+.fred-reasoning-category-choice > select:focus,
+.fred-reasoning-category-choice > input:focus {
+  border-color: var(--bmf-blue);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 82, 147, 0.1);
+}
+
+.fred-reasoning-category-choice > select:disabled,
+.fred-reasoning-category-choice > input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.fred-reasoning-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 16px;
+}
+
 .message-action-button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
@@ -5959,6 +6147,20 @@ textarea:focus {
 
   .message {
     max-width: 95%;
+  }
+
+  .fred-reasoning-dialog-backdrop {
+    padding: 10px;
+  }
+
+  .fred-reasoning-dialog {
+    max-height: calc(100dvh - 20px);
+    padding: 18px 16px;
+  }
+
+  .fred-reasoning-dialog-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
   }
 
   .fred-native-panel {

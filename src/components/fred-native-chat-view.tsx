@@ -5,6 +5,7 @@ import type {
   ClipboardEvent,
   FormEvent,
   KeyboardEvent,
+  MouseEvent as ReactMouseEvent,
   ReactNode,
 } from "react";
 import {
@@ -31,6 +32,11 @@ import {
 } from "@/lib/chat/fred-actions";
 import { downloadFredPdfFile } from "@/lib/chat/pdf-download";
 import { getWelcomeGreeting } from "@/lib/chat/welcome";
+import {
+  MAX_REASONING_CATEGORY_NAME_CHARS,
+  MAX_REASONING_CONTENT_CHARS,
+  MAX_REASONING_TITLE_CHARS,
+} from "@/lib/reasonings";
 import {
   mergeFredResearchStep,
   type FredResearchStep,
@@ -66,6 +72,25 @@ type FredCapabilities = {
   fileUpload: boolean;
   proMode: boolean;
   quickFred: boolean;
+};
+
+type ReasoningCategoryOption = {
+  id: string;
+  name: string;
+};
+
+type ReasoningContextMenu = {
+  text: string;
+  left: number;
+  top: number;
+};
+
+type ReasoningSaveDraft = {
+  text: string;
+  title: string;
+  categoryMode: "existing" | "new";
+  categoryId: string;
+  newCategoryName: string;
 };
 
 const MAX_IMAGE_UPLOADS = 5;
@@ -105,6 +130,23 @@ function responseError(payload: unknown, fallback: string): string {
     if (typeof error === "string" && error.trim()) return error;
   }
   return fallback;
+}
+
+function categoryOption(value: unknown): ReasoningCategoryOption | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const category = value as Record<string, unknown>;
+  if (typeof category.id !== "string" || typeof category.name !== "string") return null;
+  return { id: category.id, name: category.name };
+}
+
+function categoryOptions(payload: unknown): ReasoningCategoryOption[] {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+  const categories = (payload as Record<string, unknown>).categories;
+  if (!Array.isArray(categories)) return [];
+  return categories.flatMap((category) => {
+    const normalized = categoryOption(category);
+    return normalized ? [normalized] : [];
+  });
 }
 
 function displayFileSize(bytes: number): string {
@@ -273,6 +315,15 @@ export default function FredNativeChatView({
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isAttachmentMenuOpen, setIsAttachmentMenuOpen] = useState(false);
   const [pdfDownloadKey, setPdfDownloadKey] = useState("");
+  const [reasoningContextMenu, setReasoningContextMenu] =
+    useState<ReasoningContextMenu | null>(null);
+  const [reasoningSaveDraft, setReasoningSaveDraft] =
+    useState<ReasoningSaveDraft | null>(null);
+  const [reasoningCategories, setReasoningCategories] =
+    useState<ReasoningCategoryOption[]>([]);
+  const [reasoningDialogError, setReasoningDialogError] = useState("");
+  const [isReasoningCategoriesLoading, setIsReasoningCategoriesLoading] = useState(false);
+  const [isSavingReasoning, setIsSavingReasoning] = useState(false);
   const [welcomeGreeting] = useState(() => getWelcomeGreeting());
   const activeConversationIdRef = useRef(conversationId);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -283,6 +334,10 @@ export default function FredNativeChatView({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentMenuRef = useRef<HTMLDivElement>(null);
+  const reasoningContextMenuRef = useRef<HTMLDivElement>(null);
+  const reasoningTitleRef = useRef<HTMLInputElement>(null);
+  const reasoningCategoryRequestRef = useRef(0);
+  const isReasoningDialogOpen = reasoningSaveDraft !== null;
 
   useEffect(() => {
     if (conversationId === activeConversationIdRef.current) return;
@@ -306,6 +361,13 @@ export default function FredNativeChatView({
     setSelectedFiles([]);
     setIsAttachmentMenuOpen(false);
     setPdfDownloadKey("");
+    setReasoningContextMenu(null);
+    setReasoningSaveDraft(null);
+    setReasoningCategories([]);
+    reasoningCategoryRequestRef.current += 1;
+    setReasoningDialogError("");
+    setIsReasoningCategoriesLoading(false);
+    setIsSavingReasoning(false);
   }, [conversationId, initialMessages]);
 
   useEffect(() => {
@@ -325,6 +387,45 @@ export default function FredNativeChatView({
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isAttachmentMenuOpen]);
+
+  useEffect(() => {
+    if (!reasoningContextMenu) return;
+    const closeMenu = () => setReasoningContextMenu(null);
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!reasoningContextMenuRef.current?.contains(event.target as Node)) closeMenu();
+    };
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+    };
+  }, [reasoningContextMenu]);
+
+  useEffect(() => {
+    if (!isReasoningDialogOpen) return;
+    const focusFrame = window.requestAnimationFrame(() => reasoningTitleRef.current?.focus());
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape" && !isSavingReasoning) {
+        reasoningCategoryRequestRef.current += 1;
+        setReasoningSaveDraft(null);
+        setReasoningDialogError("");
+        setIsReasoningCategoriesLoading(false);
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isReasoningDialogOpen, isSavingReasoning]);
 
   useEffect(() => {
     if (!modeNotice) return;
@@ -733,6 +834,233 @@ export default function FredNativeChatView({
     }
   }
 
+  function handleAssistantContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
+    const selection = window.getSelection();
+    if (
+      !selection
+      || selection.isCollapsed
+      || !selection.anchorNode
+      || !selection.focusNode
+      || !event.currentTarget.contains(selection.anchorNode)
+      || !event.currentTarget.contains(selection.focusNode)
+    ) {
+      setReasoningContextMenu(null);
+      return;
+    }
+
+    const selectedText = selection.toString().trim();
+    if (!selectedText) {
+      setReasoningContextMenu(null);
+      return;
+    }
+
+    event.preventDefault();
+    if (selectedText.length > MAX_REASONING_CONTENT_CHARS) {
+      setReasoningContextMenu(null);
+      setModeNotice(
+        `Die Auswahl darf maximal ${MAX_REASONING_CONTENT_CHARS.toLocaleString("de-AT")} Zeichen enthalten.`,
+      );
+      return;
+    }
+
+    const edge = 10;
+    const menuWidth = 240;
+    const menuHeight = 48;
+    setReasoningContextMenu({
+      text: selectedText,
+      left: Math.max(edge, Math.min(event.clientX, window.innerWidth - menuWidth - edge)),
+      top: Math.max(edge, Math.min(event.clientY, window.innerHeight - menuHeight - edge)),
+    });
+  }
+
+  async function loadReasoningCategories(): Promise<void> {
+    if (!accessToken) {
+      setReasoningDialogError("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+      return;
+    }
+    const requestId = reasoningCategoryRequestRef.current + 1;
+    reasoningCategoryRequestRef.current = requestId;
+    setIsReasoningCategoriesLoading(true);
+    try {
+      const response = await fetch("/api/reasoning-categories", {
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const payload = await response.json().catch(() => null) as unknown;
+      if (!response.ok) {
+        throw new Error(responseError(payload, "Kategorien konnten nicht geladen werden."));
+      }
+      if (reasoningCategoryRequestRef.current !== requestId) return;
+      const categories = categoryOptions(payload);
+      setReasoningCategories(categories);
+      setReasoningSaveDraft((current) => {
+        if (!current || current.categoryMode === "new") return current;
+        return {
+          ...current,
+          categoryMode: categories.length > 0 ? "existing" : "new",
+          categoryId: categories[0]?.id ?? "",
+        };
+      });
+    } catch (categoryError) {
+      if (reasoningCategoryRequestRef.current !== requestId) return;
+      setReasoningCategories([]);
+      setReasoningSaveDraft((current) => current ? {
+        ...current,
+        categoryMode: "new",
+        categoryId: "",
+      } : current);
+      setReasoningDialogError(
+        categoryError instanceof Error
+          ? categoryError.message
+          : "Kategorien konnten nicht geladen werden.",
+      );
+    } finally {
+      if (reasoningCategoryRequestRef.current === requestId) {
+        setIsReasoningCategoriesLoading(false);
+      }
+    }
+  }
+
+  function openReasoningSaveDialog(): void {
+    if (!reasoningContextMenu) return;
+    const text = reasoningContextMenu.text;
+    setReasoningContextMenu(null);
+    setReasoningCategories([]);
+    setReasoningDialogError("");
+    setReasoningSaveDraft({
+      text,
+      title: "",
+      categoryMode: "existing",
+      categoryId: "",
+      newCategoryName: "",
+    });
+    void loadReasoningCategories();
+  }
+
+  function closeReasoningSaveDialog(): void {
+    if (isSavingReasoning) return;
+    reasoningCategoryRequestRef.current += 1;
+    setReasoningSaveDraft(null);
+    setReasoningDialogError("");
+    setIsReasoningCategoriesLoading(false);
+  }
+
+  async function saveSelectedReasoning(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!reasoningSaveDraft || isSavingReasoning) return;
+
+    const title = reasoningSaveDraft.title.trim();
+    if (!title) {
+      setReasoningDialogError("Bitte einen Titel eingeben.");
+      return;
+    }
+    if (title.length > MAX_REASONING_TITLE_CHARS) {
+      setReasoningDialogError(
+        `Der Titel darf maximal ${MAX_REASONING_TITLE_CHARS} Zeichen lang sein.`,
+      );
+      return;
+    }
+    if (!reasoningSaveDraft.text || reasoningSaveDraft.text.length > MAX_REASONING_CONTENT_CHARS) {
+      setReasoningDialogError("Der ausgewählte Begründungstext ist ungültig.");
+      return;
+    }
+    if (!accessToken) {
+      setReasoningDialogError("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+      return;
+    }
+
+    setIsSavingReasoning(true);
+    setReasoningDialogError("");
+    try {
+      let categoryId = reasoningSaveDraft.categoryId;
+      if (reasoningSaveDraft.categoryMode === "new") {
+        const categoryName = reasoningSaveDraft.newCategoryName.trim();
+        if (!categoryName) {
+          throw new Error("Bitte einen Namen für die neue Kategorie eingeben.");
+        }
+        if (categoryName.length > MAX_REASONING_CATEGORY_NAME_CHARS) {
+          throw new Error(
+            `Der Kategoriename darf maximal ${MAX_REASONING_CATEGORY_NAME_CHARS} Zeichen lang sein.`,
+          );
+        }
+        const categoryResponse = await fetch("/api/reasoning-categories", {
+          method: "POST",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ name: categoryName }),
+        });
+        const categoryPayload = await categoryResponse.json().catch(() => null) as unknown;
+        if (!categoryResponse.ok) {
+          throw new Error(responseError(
+            categoryPayload,
+            "Kategorie konnte nicht angelegt werden.",
+          ));
+        }
+        const createdCategory = categoryOption(
+          categoryPayload && typeof categoryPayload === "object" && !Array.isArray(categoryPayload)
+            ? (categoryPayload as Record<string, unknown>).category
+            : null,
+        );
+        if (!createdCategory) {
+          throw new Error("Die angelegte Kategorie konnte nicht gelesen werden.");
+        }
+        categoryId = createdCategory.id;
+        setReasoningCategories((current) => (
+          [...current.filter((category) => category.id !== createdCategory.id), createdCategory]
+            .sort((left, right) => left.name.localeCompare(right.name, "de-AT"))
+        ));
+        setReasoningSaveDraft((current) => current ? {
+          ...current,
+          categoryMode: "existing",
+          categoryId: createdCategory.id,
+          newCategoryName: "",
+        } : current);
+      } else if (!categoryId) {
+        throw new Error("Bitte eine Kategorie auswählen.");
+      }
+
+      const reasoningResponse = await fetch("/api/reasonings", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title,
+          content: reasoningSaveDraft.text,
+          categoryIds: [categoryId],
+        }),
+      });
+      const reasoningPayload = await reasoningResponse.json().catch(() => null) as unknown;
+      if (!reasoningResponse.ok) {
+        throw new Error(responseError(
+          reasoningPayload,
+          "Begründung konnte nicht gespeichert werden.",
+        ));
+      }
+
+      setReasoningSaveDraft(null);
+      setReasoningDialogError("");
+      window.getSelection()?.removeAllRanges();
+      setModeNotice("Als Begründung gespeichert");
+    } catch (saveError) {
+      setReasoningDialogError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Begründung konnte nicht gespeichert werden.",
+      );
+    } finally {
+      setIsSavingReasoning(false);
+    }
+  }
+
   return (
     <section className={`chat-panel ${messages.length === 0 ? "empty-chat" : ""}`} aria-label="Fred">
       <div className="chat-content-group">
@@ -843,7 +1171,14 @@ export default function FredNativeChatView({
                 ) : null}
                 {message.role === "assistant"
                   ? (message.content
-                    ? renderAssistantContent(message.content)
+                    ? (
+                      <div
+                        className="fred-assistant-answer"
+                        onContextMenu={handleAssistantContextMenu}
+                      >
+                        {renderAssistantContent(message.content)}
+                      </div>
+                    )
                     : (
                       <div
                         className="fred-thinking-indicator"
@@ -1106,6 +1441,227 @@ export default function FredNativeChatView({
           </form>
         </div>
       </div>
+
+      {reasoningContextMenu ? (
+        <div
+          ref={reasoningContextMenuRef}
+          className="fred-reasoning-context-menu"
+          role="menu"
+          aria-label="Aktionen für markierten Antworttext"
+          style={{ left: reasoningContextMenu.left, top: reasoningContextMenu.top }}
+        >
+          <button type="button" role="menuitem" onClick={openReasoningSaveDialog}>
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4-7 4V5a1 1 0 0 1 1-1Z" />
+              <path d="M12 7v6M9 10h6" />
+            </svg>
+            Als Begründung speichern
+          </button>
+        </div>
+      ) : null}
+
+      {reasoningSaveDraft ? (
+        <div
+          className="dialog-backdrop fred-reasoning-dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeReasoningSaveDialog();
+          }}
+        >
+          <section
+            className="fred-reasoning-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="fred-reasoning-dialog-title"
+          >
+            <header className="fred-reasoning-dialog-header">
+              <div>
+                <p className="eyebrow">Fred-Auswahl</p>
+                <h2 id="fred-reasoning-dialog-title">Als Begründung speichern</h2>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={closeReasoningSaveDialog}
+                disabled={isSavingReasoning}
+                aria-label="Dialog schließen"
+                title="Schließen"
+              >
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                >
+                  <path d="M5 5 19 19M19 5 5 19" />
+                </svg>
+              </button>
+            </header>
+
+            <form className="fred-reasoning-form" onSubmit={saveSelectedReasoning}>
+              <div className="fred-reasoning-selection-preview">
+                <span>Ausgewählter Text</span>
+                <p>{reasoningSaveDraft.text}</p>
+                <small>
+                  {reasoningSaveDraft.text.length.toLocaleString("de-AT")} Zeichen
+                </small>
+              </div>
+
+              <div className="field-group">
+                <label htmlFor="fred-reasoning-title">Titel</label>
+                <input
+                  ref={reasoningTitleRef}
+                  id="fred-reasoning-title"
+                  value={reasoningSaveDraft.title}
+                  onChange={(event) => {
+                    setReasoningSaveDraft((current) => current ? {
+                      ...current,
+                      title: event.target.value,
+                    } : current);
+                    setReasoningDialogError("");
+                  }}
+                  maxLength={MAX_REASONING_TITLE_CHARS}
+                  placeholder="Kurzer, eindeutiger Titel"
+                  disabled={isSavingReasoning}
+                  required
+                />
+              </div>
+
+              <fieldset className="fred-reasoning-category-choice">
+                <legend>Kategorie</legend>
+                <label className="fred-reasoning-category-mode">
+                  <input
+                    type="radio"
+                    name="fred-reasoning-category-mode"
+                    value="existing"
+                    checked={reasoningSaveDraft.categoryMode === "existing"}
+                    onChange={() => {
+                      setReasoningSaveDraft((current) => current ? {
+                        ...current,
+                        categoryMode: "existing",
+                        categoryId: current.categoryId || reasoningCategories[0]?.id || "",
+                      } : current);
+                      setReasoningDialogError("");
+                    }}
+                    disabled={
+                      isSavingReasoning
+                      || isReasoningCategoriesLoading
+                      || reasoningCategories.length === 0
+                    }
+                  />
+                  <span>Vorhandene Kategorie</span>
+                </label>
+                {isReasoningCategoriesLoading ? (
+                  <p className="fred-reasoning-category-status" role="status">
+                    Kategorien werden geladen …
+                  </p>
+                ) : reasoningCategories.length > 0 ? (
+                  <select
+                    aria-label="Vorhandene Begründungskategorie"
+                    value={reasoningSaveDraft.categoryId}
+                    onChange={(event) => {
+                      setReasoningSaveDraft((current) => current ? {
+                        ...current,
+                        categoryId: event.target.value,
+                      } : current);
+                      setReasoningDialogError("");
+                    }}
+                    disabled={
+                      isSavingReasoning
+                      || reasoningSaveDraft.categoryMode !== "existing"
+                    }
+                  >
+                    {reasoningCategories.map((category) => (
+                      <option value={category.id} key={category.id}>{category.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="fred-reasoning-category-status">
+                    Noch keine Kategorie vorhanden.
+                  </p>
+                )}
+
+                <label className="fred-reasoning-category-mode">
+                  <input
+                    type="radio"
+                    name="fred-reasoning-category-mode"
+                    value="new"
+                    checked={reasoningSaveDraft.categoryMode === "new"}
+                    onChange={() => {
+                      setReasoningSaveDraft((current) => current ? {
+                        ...current,
+                        categoryMode: "new",
+                      } : current);
+                      setReasoningDialogError("");
+                    }}
+                    disabled={isSavingReasoning}
+                  />
+                  <span>Neue Kategorie anlegen</span>
+                </label>
+                {reasoningSaveDraft.categoryMode === "new" ? (
+                  <input
+                    aria-label="Name der neuen Begründungskategorie"
+                    value={reasoningSaveDraft.newCategoryName}
+                    onChange={(event) => {
+                      setReasoningSaveDraft((current) => current ? {
+                        ...current,
+                        newCategoryName: event.target.value,
+                      } : current);
+                      setReasoningDialogError("");
+                    }}
+                    maxLength={MAX_REASONING_CATEGORY_NAME_CHARS}
+                    placeholder="z. B. Betriebsausgaben"
+                    disabled={isSavingReasoning}
+                    required
+                  />
+                ) : null}
+              </fieldset>
+
+              {reasoningDialogError ? (
+                <div className="error-box" role="alert" aria-live="polite">
+                  {reasoningDialogError}
+                </div>
+              ) : null}
+
+              <div className="fred-reasoning-dialog-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={closeReasoningSaveDialog}
+                  disabled={isSavingReasoning}
+                >
+                  Abbrechen
+                </button>
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={
+                    isSavingReasoning
+                    || isReasoningCategoriesLoading
+                    || !reasoningSaveDraft.title.trim()
+                    || (
+                      reasoningSaveDraft.categoryMode === "existing"
+                        ? !reasoningSaveDraft.categoryId
+                        : !reasoningSaveDraft.newCategoryName.trim()
+                    )
+                  }
+                >
+                  {isSavingReasoning ? "Wird gespeichert …" : "Speichern"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -155,6 +155,28 @@ describe("Fred native Findog UI", () => {
     expect(cssSource).toContain(".copy-icon-button.is-copied");
   });
 
+  it("saves selected Fred answer text through an accessible context menu and dialog", () => {
+    expect(viewSource).toContain('className="fred-assistant-answer"');
+    expect(viewSource).toContain("onContextMenu={handleAssistantContextMenu}");
+    expect(viewSource).toContain("window.getSelection()");
+    expect(viewSource).toContain("event.currentTarget.contains(selection.anchorNode)");
+    expect(viewSource).toContain("event.currentTarget.contains(selection.focusNode)");
+    expect(viewSource).toContain('role="menu"');
+    expect(viewSource).toContain("Als Begründung speichern");
+    expect(viewSource).toContain('role="dialog"');
+    expect(viewSource).toContain('aria-modal="true"');
+    expect(viewSource).toContain("Vorhandene Kategorie");
+    expect(viewSource).toContain("Neue Kategorie anlegen");
+    expect(viewSource).toContain("Abbrechen");
+    expect(viewSource).toContain('fetch("/api/reasoning-categories"');
+    expect(viewSource).toContain('fetch("/api/reasonings"');
+    expect(viewSource).toContain("content: reasoningSaveDraft.text");
+    expect(viewSource).toContain("categoryIds: [categoryId]");
+    expect(viewSource).toContain("setModeNotice(\"Als Begründung gespeichert\")");
+    expect(cssSource).toContain(".fred-reasoning-context-menu");
+    expect(cssSource).toContain(".fred-reasoning-dialog");
+  });
+
   it("supports editing, regenerating and authenticated answer or conversation PDF exports", () => {
     expect(viewSource).toContain('aria-label="Frage bearbeiten"');
     expect(viewSource).toContain('aria-label="Antwort erneut erzeugen"');
