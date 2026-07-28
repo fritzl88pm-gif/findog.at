@@ -7,9 +7,11 @@ const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.
 const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
 describe("Administration UI tabs and scanning settings", () => {
-  it("has exactly two ARIA tab elements for Scanning and Benutzer (no BFG PRO tab)", () => {
+  it("has exactly three ARIA tabs for Scanning, Benutzer and Rückmeldungen", () => {
     const tabMatches = pageSource.match(/role="tab"/gu);
-    expect(tabMatches).toHaveLength(2);
+    expect(tabMatches).toHaveLength(3);
+    expect(pageSource).toContain('id="admin-tab-feedback"');
+    expect(pageSource).not.toContain('id="admin-tab-bfg-pro"');
   });
 
   it("loads scanning settings from /api/admin/scanning-settings when administration opens", () => {

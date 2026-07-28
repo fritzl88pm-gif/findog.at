@@ -80,6 +80,7 @@ import ScanningView from "@/components/scanning-view";
 import KnowledgeLandscapeView from "@/components/knowledge-landscape-view";
 import QuizView from "@/components/quiz-view";
 import ReasoningsView from "@/components/reasonings-view";
+import AdminFeedbackView from "@/components/admin-feedback-view";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -1118,7 +1119,7 @@ function GermanPensionOptionView() {
 
 
 
-const ADMIN_TAB_IDS = ["scanning", "benutzer"] as const;
+const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback"] as const;
 function handleAdminTabKeyDown(event: React.KeyboardEvent, currentTab: string): void {
   const currentIndex = ADMIN_TAB_IDS.indexOf(currentTab as typeof ADMIN_TAB_IDS[number]);
   let nextIndex: number | undefined;
@@ -1167,7 +1168,7 @@ export default function Home() {
   const [isAdminUsersLoading, setIsAdminUsersLoading] = useState(false);
   const [isAdminUserCreating, setIsAdminUserCreating] = useState(false);
   const [isAdminUserMutationRunning, setIsAdminUserMutationRunning] = useState(false);
-  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer">("scanning");
+  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "feedback">("scanning");
   const [scanningModelId, setScanningModelId] = useState("");
   const [scanningPrompt, setScanningPrompt] = useState("");
   const [isScanningSettingsLoading, setIsScanningSettingsLoading] = useState(false);
@@ -3933,6 +3934,17 @@ export default function Home() {
               >
                 Benutzer
               </button>
+              <button
+                id="admin-tab-feedback"
+                className={`admin-tab-button ${adminTab === "feedback" ? "active" : ""}`}
+                role="tab"
+                aria-selected={adminTab === "feedback"}
+                aria-controls="admin-panel-feedback"
+                onClick={() => setAdminTab("feedback")}
+                onKeyDown={(e) => handleAdminTabKeyDown(e, "feedback")}
+              >
+                Rückmeldungen
+              </button>
             </div>
             {adminTab === "scanning" ? (
               <section className="form-generator-card admin-system-prompt-card" role="tabpanel" id="admin-panel-scanning" aria-labelledby="admin-tab-scanning">
@@ -3992,7 +4004,7 @@ export default function Home() {
                   </button>
                 </div>
               </section>
-            ) : (
+            ) : adminTab === "benutzer" ? (
               <section className="admin-user-management" role="tabpanel" id="admin-panel-benutzer" aria-labelledby="admin-tab-benutzer">
                 <div className="form-generator-card admin-create-user-card">
                   <div className="form-generator-heading">
@@ -4125,6 +4137,11 @@ export default function Home() {
                   )}
                 </div>
               </section>
+            ) : (
+              <AdminFeedbackView
+                accessToken={session?.access_token ?? ""}
+                users={adminUsers}
+              />
             )}
           </div>
         </section>

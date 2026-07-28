@@ -9,7 +9,6 @@ import {
   DELETE as retiredConversationDelete,
   GET as retiredConversation,
 } from "@/app/api/conversations/[conversationId]/route";
-import { POST as retiredFeedback } from "@/app/api/feedback/route";
 import { POST as retiredPdf } from "@/app/api/documents/pdf/route";
 import { GET as retiredPdfArtifact } from "@/app/api/documents/pdf/[artifactId]/route";
 import {
@@ -35,7 +34,6 @@ describe("retired internal Fred APIs", () => {
     retiredConversationBulkDelete,
     retiredConversation,
     retiredConversationDelete,
-    retiredFeedback,
     retiredPdf,
     retiredPdfArtifact,
     retiredModels,

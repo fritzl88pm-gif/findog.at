@@ -17,6 +17,10 @@ import {
 } from "react";
 
 import CopyIconButton, { copyToClipboard } from "@/components/copy-icon-button";
+import {
+  findNearestPrecedingUserMessage,
+  MAX_AGENT_FEEDBACK_CHARS,
+} from "@/lib/agent-feedback";
 import { createStreamingTextBuffer } from "@/lib/chat/streaming-text-buffer";
 import {
   parseFredNativeStreamLine,
@@ -324,6 +328,14 @@ export default function FredNativeChatView({
   const [reasoningDialogError, setReasoningDialogError] = useState("");
   const [isReasoningCategoriesLoading, setIsReasoningCategoriesLoading] = useState(false);
   const [isSavingReasoning, setIsSavingReasoning] = useState(false);
+  const [positiveFeedbackIndexes, setPositiveFeedbackIndexes] =
+    useState<Set<number>>(() => new Set());
+  const [submittedNegativeFeedbackIndexes, setSubmittedNegativeFeedbackIndexes] =
+    useState<Set<number>>(() => new Set());
+  const [feedbackTargetIndex, setFeedbackTargetIndex] = useState<number | null>(null);
+  const [feedbackText, setFeedbackText] = useState("");
+  const [feedbackError, setFeedbackError] = useState("");
+  const [isFeedbackSaving, setIsFeedbackSaving] = useState(false);
   const [welcomeGreeting] = useState(() => getWelcomeGreeting());
   const activeConversationIdRef = useRef(conversationId);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -337,6 +349,8 @@ export default function FredNativeChatView({
   const reasoningContextMenuRef = useRef<HTMLDivElement>(null);
   const reasoningTitleRef = useRef<HTMLInputElement>(null);
   const reasoningCategoryRequestRef = useRef(0);
+  const feedbackTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const feedbackRequestRef = useRef(0);
   const isReasoningDialogOpen = reasoningSaveDraft !== null;
 
   useEffect(() => {
@@ -368,6 +382,13 @@ export default function FredNativeChatView({
     setReasoningDialogError("");
     setIsReasoningCategoriesLoading(false);
     setIsSavingReasoning(false);
+    setPositiveFeedbackIndexes(new Set());
+    setSubmittedNegativeFeedbackIndexes(new Set());
+    feedbackRequestRef.current += 1;
+    setFeedbackTargetIndex(null);
+    setFeedbackText("");
+    setFeedbackError("");
+    setIsFeedbackSaving(false);
   }, [conversationId, initialMessages]);
 
   useEffect(() => {
@@ -426,6 +447,12 @@ export default function FredNativeChatView({
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isReasoningDialogOpen, isSavingReasoning]);
+
+  useEffect(() => {
+    if (feedbackTargetIndex === null) return;
+    const focusFrame = window.requestAnimationFrame(() => feedbackTextareaRef.current?.focus());
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [feedbackTargetIndex]);
 
   useEffect(() => {
     if (!modeNotice) return;
@@ -884,6 +911,116 @@ export default function FredNativeChatView({
     }
   }
 
+  function togglePositiveFeedback(index: number): void {
+    if (submittedNegativeFeedbackIndexes.has(index)) return;
+    setPositiveFeedbackIndexes((current) => {
+      const next = new Set(current);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+    if (feedbackTargetIndex === index) {
+      setFeedbackTargetIndex(null);
+      setFeedbackText("");
+      setFeedbackError("");
+    }
+  }
+
+  function openNegativeFeedback(index: number): void {
+    if (submittedNegativeFeedbackIndexes.has(index)) return;
+    setPositiveFeedbackIndexes((current) => {
+      const next = new Set(current);
+      next.delete(index);
+      return next;
+    });
+    setFeedbackTargetIndex(index);
+    setFeedbackText("");
+    setFeedbackError("");
+  }
+
+  function closeNegativeFeedback(): void {
+    if (isFeedbackSaving) return;
+    setFeedbackTargetIndex(null);
+    setFeedbackText("");
+    setFeedbackError("");
+  }
+
+  async function submitNegativeFeedback(
+    event: FormEvent<HTMLFormElement>,
+    messageIndex: number,
+  ): Promise<void> {
+    event.preventDefault();
+    if (isFeedbackSaving) return;
+    const message = messages[messageIndex];
+    const userRequest = findNearestPrecedingUserMessage(messages, messageIndex);
+    const feedback = feedbackText.trim();
+    const currentConversationId = activeConversationIdRef.current;
+    if (
+      !message
+      || message.role !== "assistant"
+      || !message.content.trim()
+      || !userRequest
+      || !currentConversationId
+    ) {
+      setFeedbackError("Die zugehörige Fred-Antwort konnte nicht zugeordnet werden.");
+      return;
+    }
+    if (!feedback) {
+      setFeedbackError("Bitte beschreibe, warum die Antwort nicht korrekt ist.");
+      return;
+    }
+    if (feedback.length > MAX_AGENT_FEEDBACK_CHARS) {
+      setFeedbackError(
+        `Die Rückmeldung darf maximal ${MAX_AGENT_FEEDBACK_CHARS.toLocaleString("de-AT")} Zeichen enthalten.`,
+      );
+      return;
+    }
+    if (!accessToken) {
+      setFeedbackError("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+      return;
+    }
+
+    setIsFeedbackSaving(true);
+    setFeedbackError("");
+    const requestId = feedbackRequestRef.current + 1;
+    feedbackRequestRef.current = requestId;
+    try {
+      const response = await fetch("/api/feedback", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          conversationId: currentConversationId,
+          userRequest,
+          assistantResponse: message.content,
+          feedback,
+        }),
+      });
+      const payload = await response.json().catch(() => null) as unknown;
+      if (!response.ok) {
+        throw new Error(responseError(payload, "Rückmeldung konnte nicht gespeichert werden."));
+      }
+      if (feedbackRequestRef.current !== requestId) return;
+      setSubmittedNegativeFeedbackIndexes((current) => new Set(current).add(messageIndex));
+      setFeedbackTargetIndex(null);
+      setFeedbackText("");
+      setModeNotice("Danke für deine Rückmeldung.");
+    } catch (feedbackSaveError) {
+      if (feedbackRequestRef.current !== requestId) return;
+      setFeedbackError(
+        feedbackSaveError instanceof Error
+          ? feedbackSaveError.message
+          : "Rückmeldung konnte nicht gespeichert werden.",
+      );
+    } finally {
+      if (feedbackRequestRef.current === requestId) setIsFeedbackSaving(false);
+    }
+  }
+
   async function loadReasoningCategories(): Promise<void> {
     if (!accessToken) {
       setReasoningDialogError("Deine Anmeldung ist abgelaufen. Bitte erneut anmelden.");
@@ -1201,6 +1338,99 @@ export default function FredNativeChatView({
                       </div>
                     ))
                   : renderUserContent(message.content)}
+                {message.role === "assistant"
+                  && message.content
+                  && !(isSending && index === messages.length - 1) ? (
+                    <div className="fred-feedback">
+                      <div
+                        className="feedback-controls"
+                        aria-label="Fred-Antwort bewerten"
+                      >
+                        <button
+                          className={`feedback-button feedback-positive ${
+                            positiveFeedbackIndexes.has(index) ? "is-active" : ""
+                          }`}
+                          type="button"
+                          aria-label="Antwort hilfreich"
+                          title="Antwort hilfreich"
+                          aria-pressed={positiveFeedbackIndexes.has(index)}
+                          disabled={submittedNegativeFeedbackIndexes.has(index)}
+                          onClick={() => togglePositiveFeedback(index)}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M7 10v10H4V10h3Zm3 10V9l4-6 1.5.8-.8 5.2H20v2.5L18.5 20H10Z" />
+                          </svg>
+                        </button>
+                        <button
+                          className={`feedback-button feedback-negative ${
+                            feedbackTargetIndex === index
+                            || submittedNegativeFeedbackIndexes.has(index)
+                              ? "is-active"
+                              : ""
+                          }`}
+                          type="button"
+                          aria-label="Antwort nicht korrekt"
+                          title="Antwort nicht korrekt"
+                          aria-pressed={
+                            feedbackTargetIndex === index
+                            || submittedNegativeFeedbackIndexes.has(index)
+                          }
+                          disabled={submittedNegativeFeedbackIndexes.has(index)}
+                          onClick={() => openNegativeFeedback(index)}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M7 14V4H4v10h3Zm3-10v11l4 6 1.5-.8-.8-5.2H20v-2.5L18.5 4H10Z" />
+                          </svg>
+                        </button>
+                      </div>
+
+                      {feedbackTargetIndex === index ? (
+                        <form
+                          className="feedback-inline-form"
+                          onSubmit={(event) => void submitNegativeFeedback(event, index)}
+                        >
+                          <label htmlFor={`fred-feedback-${index}`}>
+                            Warum ist diese Antwort nicht korrekt?
+                          </label>
+                          <textarea
+                            ref={feedbackTextareaRef}
+                            id={`fred-feedback-${index}`}
+                            value={feedbackText}
+                            onChange={(event) => {
+                              setFeedbackText(event.target.value);
+                              setFeedbackError("");
+                            }}
+                            maxLength={MAX_AGENT_FEEDBACK_CHARS}
+                            placeholder="Bitte beschreibe kurz den Fehler oder was verbessert werden sollte."
+                            disabled={isFeedbackSaving}
+                            required
+                          />
+                          {feedbackError ? (
+                            <div className="error-box" role="alert" aria-live="polite">
+                              {feedbackError}
+                            </div>
+                          ) : null}
+                          <div className="feedback-inline-actions">
+                            <button
+                              className="secondary-button compact-button"
+                              type="button"
+                              onClick={closeNegativeFeedback}
+                              disabled={isFeedbackSaving}
+                            >
+                              Abbrechen
+                            </button>
+                            <button
+                              className="primary-button compact-button"
+                              type="submit"
+                              disabled={isFeedbackSaving || !feedbackText.trim()}
+                            >
+                              {isFeedbackSaving ? "Wird gespeichert …" : "Rückmeldung senden"}
+                            </button>
+                          </div>
+                        </form>
+                      ) : null}
+                    </div>
+                  ) : null}
                 {message.role === "user" && (
                   message.agentKey === "quickfred"
                   || message.attachments?.length
