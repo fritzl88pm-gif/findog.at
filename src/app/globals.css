@@ -4780,6 +4780,13 @@ textarea:focus {
   background: rgba(0, 82, 147, 0.08);
 }
 
+.fred-reasoning-context-menu button.is-primary {
+  margin-top: 3px;
+  border-top: 1px solid rgba(0, 82, 147, 0.12);
+  border-radius: 0 0 7px 7px;
+  color: var(--bmf-blue);
+}
+
 .fred-reasoning-context-menu svg {
   flex: 0 0 18px;
   width: 18px;

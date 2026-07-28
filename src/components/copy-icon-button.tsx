@@ -28,7 +28,7 @@ function legacyCopyText(text: string): void {
   if (!copied) throw new Error("Clipboard copy failed");
 }
 
-async function copyToClipboard(text: string, html?: string): Promise<void> {
+export async function copyToClipboard(text: string, html?: string): Promise<void> {
   if (html && navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
     try {
       await navigator.clipboard.write([

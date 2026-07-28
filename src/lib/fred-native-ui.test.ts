@@ -162,6 +162,9 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).toContain("event.currentTarget.contains(selection.anchorNode)");
     expect(viewSource).toContain("event.currentTarget.contains(selection.focusNode)");
     expect(viewSource).toContain('role="menu"');
+    expect(viewSource).toContain("copyToClipboard(reasoningContextMenu.text)");
+    expect(viewSource).toContain("Auswahl kopiert");
+    expect(viewSource).toMatch(/>\s*Kopieren\s*<\/button>/u);
     expect(viewSource).toContain("Als Begründung speichern");
     expect(viewSource).toContain('role="dialog"');
     expect(viewSource).toContain('aria-modal="true"');
@@ -174,6 +177,7 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).toContain("categoryIds: [categoryId]");
     expect(viewSource).toContain("setModeNotice(\"Als Begründung gespeichert\")");
     expect(cssSource).toContain(".fred-reasoning-context-menu");
+    expect(cssSource).toContain(".fred-reasoning-context-menu button.is-primary");
     expect(cssSource).toContain(".fred-reasoning-dialog");
   });
 

@@ -16,7 +16,7 @@ import {
   useState,
 } from "react";
 
-import CopyIconButton from "@/components/copy-icon-button";
+import CopyIconButton, { copyToClipboard } from "@/components/copy-icon-button";
 import { createStreamingTextBuffer } from "@/lib/chat/streaming-text-buffer";
 import {
   parseFredNativeStreamLine,
@@ -865,12 +865,23 @@ export default function FredNativeChatView({
 
     const edge = 10;
     const menuWidth = 240;
-    const menuHeight = 48;
+    const menuHeight = 92;
     setReasoningContextMenu({
       text: selectedText,
       left: Math.max(edge, Math.min(event.clientX, window.innerWidth - menuWidth - edge)),
       top: Math.max(edge, Math.min(event.clientY, window.innerHeight - menuHeight - edge)),
     });
+  }
+
+  async function copyReasoningContextText(): Promise<void> {
+    if (!reasoningContextMenu) return;
+    try {
+      await copyToClipboard(reasoningContextMenu.text);
+      setReasoningContextMenu(null);
+      setModeNotice("Auswahl kopiert");
+    } catch {
+      setModeNotice("Kopieren fehlgeschlagen");
+    }
   }
 
   async function loadReasoningCategories(): Promise<void> {
@@ -1450,7 +1461,31 @@ export default function FredNativeChatView({
           aria-label="Aktionen für markierten Antworttext"
           style={{ left: reasoningContextMenu.left, top: reasoningContextMenu.top }}
         >
-          <button type="button" role="menuitem" onClick={openReasoningSaveDialog}>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => void copyReasoningContextText()}
+          >
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="8" y="8" width="11" height="11" rx="2" />
+              <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+            </svg>
+            Kopieren
+          </button>
+          <button
+            className="is-primary"
+            type="button"
+            role="menuitem"
+            onClick={openReasoningSaveDialog}
+          >
             <svg
               aria-hidden="true"
               viewBox="0 0 24 24"
