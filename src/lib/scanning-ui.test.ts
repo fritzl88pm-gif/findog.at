@@ -49,4 +49,31 @@ describe("Scanning UI integration", () => {
     expect(providerSource).toContain("data:${upload.mimeType};base64");
     expect(providerSource).not.toContain("/files");
   });
+
+  it("registers a global paste listener with cleanup, uses addFiles, and shows Strg+V hint", () => {
+    // Imports the clipboard helper
+    expect(viewSource).toContain('import { extractClipboardFiles } from "@/lib/scanning/clipboard-files"');
+
+    // Global paste listener with cleanup
+    expect(viewSource).toContain('document.addEventListener("paste", handlePaste)');
+    expect(viewSource).toContain('document.removeEventListener("paste", handlePaste)');
+
+    // Stale-closure avoidance via refs
+    expect(viewSource).toContain("isProcessingRef");
+    expect(viewSource).toContain("addFilesRef");
+
+    // Handler calls addFiles with extracted files
+    expect(viewSource).toContain("addFilesRef.current(files)");
+
+    // Prevents default only when files are present
+    expect(viewSource).toContain("event.preventDefault()");
+
+    // Text paste passes through
+    expect(viewSource).toContain("// text paste passes through");
+
+    // Dropzone hint
+    expect(viewSource).toContain("Strg+V");
+    expect(viewSource).toContain("oder mit Strg+V einfügen");
+
+  });
 });

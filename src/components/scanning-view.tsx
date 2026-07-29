@@ -13,6 +13,7 @@ import {
   MAX_SCANNING_PDFS,
   SCANNING_IMAGE_MIME_TYPES,
 } from "@/lib/scanning/config";
+import { extractClipboardFiles } from "@/lib/scanning/clipboard-files";
 import { parseScanningStreamLine } from "@/lib/scanning/stream";
 import type { ScanningFileStatus, ScanningProgressStage } from "@/lib/scanning/types";
 
@@ -60,11 +61,30 @@ export default function ScanningView({ accessToken }: { accessToken: string }) {
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const isProcessingRef = useRef(false);
+  const addFilesRef = useRef(addFiles);
 
   useEffect(() => () => abortRef.current?.abort(), []);
   useEffect(() => {
     if (submittedFiles.length > 0) transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
   }, [progress, report, submittedFiles.length]);
+  useEffect(() => { isProcessingRef.current = isProcessing; }, [isProcessing]);
+  useEffect(() => { addFilesRef.current = addFiles; });
+
+  // Global paste listener — fires even when the dropzone does not have focus.
+  useEffect(() => {
+    function handlePaste(event: ClipboardEvent) {
+      if (isProcessingRef.current) return;
+      const dt = event.clipboardData;
+      if (!dt) return;
+      const files = extractClipboardFiles(dt.files, dt.items);
+      if (files.length === 0) return; // text paste passes through to textarea
+      event.preventDefault();
+      addFilesRef.current(files);
+    }
+    document.addEventListener("paste", handlePaste);
+    return () => document.removeEventListener("paste", handlePaste);
+  }, []);
 
   function addFiles(candidates: File[]) {
     const nextImages = candidates.filter((file) => SCANNING_IMAGE_MIME_TYPES.has(file.type.toLowerCase()));
@@ -338,6 +358,7 @@ export default function ScanningView({ accessToken }: { accessToken: string }) {
                 <strong>Dateien hier ablegen</strong>
                 <span>oder über die Schaltflächen auswählen</span>
                 <small>Bilder bis 5 MB · PDFs bis 10 MB</small>
+                <small>oder mit Strg+V einfügen</small>
                 <small className="scanning-selection-count">
                   Ausgewählt: {images.length}/{MAX_SCANNING_IMAGES} Bilder · {pdfs.length}/{MAX_SCANNING_PDFS} PDFs
                 </small>
