@@ -44,6 +44,8 @@ describe("Wo Beschluss UI surface", () => {
     expect(sceneSource).toContain("onAssetsReady();");
     expect(stylesSource).toContain(".wo-beschluss-loading-image {");
     expect(stylesSource).toContain("object-fit: contain;");
+    expect(stylesSource).toContain("max-width: 280px;");
+    expect(stylesSource).not.toContain("background: #080808");
   });
 
   it("shows the requested payout message and replay action on the winning screen", () => {

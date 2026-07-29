@@ -154,9 +154,9 @@ export default function WoBeschlussView() {
                 className="wo-beschluss-loading-image"
                 src={LOADING_SCREEN_SOURCE}
                 alt="Wo Beschluss wird geladen."
-                fill
+                width={280}
+                height={210}
                 loading="eager"
-                sizes="(max-width: 600px) 100vw, 980px"
                 unoptimized
               />
             </div>
