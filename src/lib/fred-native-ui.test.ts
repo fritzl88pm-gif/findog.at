@@ -281,16 +281,10 @@ describe("Fred Pro Mode UI", () => {
     expect(viewSource).toContain('aria-label={webSearchEnabled ? "Websuche aktiv" : "Websuche verwenden"}');
   });
 
-  it("uses the requested QuickFred tooltip", () => {
-    expect(viewSource).toContain('title="Fastmode für einfache Fragen"');
-  });
-
-  it("shows auto-hiding mobile status popups for all three mode toggles", () => {
+  it("shows auto-hiding mobile status popups for Thinking and Websuche toggles", () => {
     expect(viewSource).toContain('role="status" aria-live="polite" aria-atomic="true"');
     expect(viewSource).toContain('"Thinking aktiviert"');
     expect(viewSource).toContain('"Thinking deaktiviert"');
-    expect(viewSource).toContain('"Fastmode aktiviert"');
-    expect(viewSource).toContain('"Fastmode deaktiviert"');
     expect(viewSource).toContain('"Websuche aktiviert"');
     expect(viewSource).toContain('"Websuche deaktiviert"');
     expect(viewSource).toContain('window.setTimeout(() => setModeNotice(""), 1_800)');
@@ -392,40 +386,27 @@ describe("Fred Pro Mode options.proModeEnabled regression (TDD)", () => {
   });
 });
 
-describe("QuickFred immutable conversation UI", () => {
-  it("adds the QuickFred capability and sends only a boolean selection", () => {
-    expect(viewSource).toContain("quickFred: boolean");
-    expect(viewSource).toContain("quickFredEnabled: agentKey === \"quickfred\"");
+describe("QuickFred removal — composer control absent, attribution preserved", () => {
+  it("does not render the QuickFred lightning toggle in the composer", () => {
+    expect(viewSource).not.toContain("fred-quick-toggle");
+    expect(viewSource).not.toContain("fred-quick-icon");
+    expect(viewSource).not.toContain('title="Fastmode');
+    expect(viewSource).not.toContain('"Fastmode aktiviert"');
+    expect(viewSource).not.toContain('"Fastmode deaktiviert"');
+  });
+
+  it("keeps QuickFred conversation attribution and scoped badge rendering", () => {
+    expect(viewSource).toContain("fredAgentName(message.agentKey)");
+    expect(viewSource).toContain(">QuickFred</span>");
+    expect(viewSource).toContain('disabled={isSending || conversationAgentKey === "quickfred"}');
+  });
+
+  it("does not leak WeKnora QuickFred server configuration to the client", () => {
     expect(viewSource).not.toContain("WEKNORA_QUICKFRED_AGENT_ID");
     expect(viewSource).not.toContain("WEKNORA_QUICKFRED_PUBLISH_TOKEN");
   });
 
-  it("places the lightning control between Pro and Websuche", () => {
-    const proIndex = viewSource.indexOf("fred-pro-toggle");
-    const quickIndex = viewSource.indexOf("fred-quick-toggle");
-    const webIndex = viewSource.indexOf("fred-web-search-toggle");
-    expect(proIndex).toBeGreaterThan(0);
-    expect(quickIndex).toBeGreaterThan(proIndex);
-    expect(quickIndex).toBeLessThan(webIndex);
-    expect(viewSource).toContain("fred-quick-icon");
-  });
-
-  it("locks the lightning control once the conversation has an agent", () => {
-    expect(viewSource).toContain("conversationAgentKey !== null");
-    expect(viewSource).toContain("Agent für diese Unterhaltung festgelegt");
-    expect(viewSource).toContain("isSending || conversationAgentKey !== null || !capabilities.quickFred");
-  });
-
-  it("makes Pro and QuickFred mutually exclusive", () => {
-    expect(viewSource).toContain("setQuickFredEnabled(false)");
-    expect(viewSource).toContain("setProModeEnabled(false)");
-    expect(viewSource).toContain('conversationAgentKey === "quickfred"');
-  });
-
-  it("renders QuickFred attribution and scoped toggle styles", () => {
-    expect(viewSource).toContain("fredAgentName(message.agentKey)");
-    expect(viewSource).toContain(">QuickFred</span>");
-    expect(cssSource).toContain(".fred-quick-toggle");
-    expect(cssSource).toContain(".fred-quick-icon");
+  it("preserves the QuickFred agent key in the FredAgentKey union", () => {
+    expect(viewSource).toContain('agentName: "Fred" | "QuickFred"');
   });
 });

@@ -75,7 +75,6 @@ type FredCapabilities = {
   webSearch: boolean;
   fileUpload: boolean;
   proMode: boolean;
-  quickFred: boolean;
 };
 
 type ReasoningCategoryOption = {
@@ -305,13 +304,9 @@ export default function FredNativeChatView({
     webSearch: false,
     fileUpload: false,
     proMode: false,
-    quickFred: false,
   });
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [proModeEnabled, setProModeEnabled] = useState(false);
-  const [quickFredEnabled, setQuickFredEnabled] = useState(
-    conversationId !== "" && initialMessages[0]?.agentKey === "quickfred",
-  );
   const [conversationAgentKey, setConversationAgentKey] = useState<FredAgentKey | null>(
     conversationId ? initialMessages[0]?.agentKey ?? "fred" : null,
   );
@@ -369,7 +364,6 @@ export default function FredNativeChatView({
       ? initialMessages[0]?.agentKey ?? "fred"
       : null;
     setConversationAgentKey(nextAgentKey);
-    setQuickFredEnabled(nextAgentKey === "quickfred");
     setProModeEnabled(false);
     setSelectedImages([]);
     setSelectedFiles([]);
@@ -476,12 +470,8 @@ export default function FredNativeChatView({
         webSearch: value.webSearch === true,
         fileUpload: value.fileUpload === true,
         proMode: value.proMode === true,
-        quickFred: value.quickFred === true,
       });
       if (value.webSearch !== true) setWebSearchEnabled(false);
-      if (value.quickFred !== true && !activeConversationIdRef.current) {
-        setQuickFredEnabled(false);
-      }
     }).catch(() => undefined);
     return () => controller.abort();
   }, [accessToken]);
@@ -521,7 +511,6 @@ export default function FredNativeChatView({
     query: string;
     webSearchEnabled?: boolean;
     proModeEnabled?: boolean;
-    quickFredEnabled?: boolean;
     images: File[];
     files: File[];
     clearDraft: boolean;
@@ -533,8 +522,7 @@ export default function FredNativeChatView({
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    const agentKey: FredAgentKey = conversationAgentKey
-      ?? (options.quickFredEnabled === true ? "quickfred" : "fred");
+    const agentKey: FredAgentKey = conversationAgentKey ?? "fred";
     const agentName = fredAgentName(agentKey);
     const userMessage: FredNativeMessage = {
       role: "user",
@@ -590,7 +578,6 @@ export default function FredNativeChatView({
         conversationId: activeConversationIdRef.current || undefined,
         webSearchEnabled: options.webSearchEnabled,
         proModeEnabled: isProMode,
-        quickFredEnabled: agentKey === "quickfred",
       };
       const hasAttachments = attachedImages.length > 0 || attachedFiles.length > 0;
       const formData = hasAttachments ? new FormData() : null;
@@ -632,7 +619,6 @@ export default function FredNativeChatView({
         if (streamEvent.type === "conversation") {
           activeConversationIdRef.current = streamEvent.conversation.id;
           setConversationAgentKey(streamEvent.conversation.agentKey);
-          setQuickFredEnabled(streamEvent.conversation.agentKey === "quickfred");
           if (streamEvent.conversation.agentKey === "quickfred") {
             setProModeEnabled(false);
           }
@@ -674,7 +660,6 @@ export default function FredNativeChatView({
         receivedFinal = true;
         activeConversationIdRef.current = streamEvent.conversation.id;
         setConversationAgentKey(streamEvent.conversation.agentKey);
-        setQuickFredEnabled(streamEvent.conversation.agentKey === "quickfred");
         const completedMessages = [
           ...baseMessages,
           {
@@ -738,7 +723,6 @@ export default function FredNativeChatView({
       query: composer,
       webSearchEnabled,
       proModeEnabled,
-      quickFredEnabled,
       images: selectedImages,
       files: selectedFiles,
       clearDraft: true,
@@ -769,7 +753,6 @@ export default function FredNativeChatView({
       query: question.content,
       webSearchEnabled: Boolean(question.webSearchEnabled && capabilities.webSearch),
       proModeEnabled: originalProMode,
-      quickFredEnabled,
       images: [],
       files: [],
       clearDraft: false,
@@ -1570,7 +1553,6 @@ export default function FredNativeChatView({
                     disabled={isSending || conversationAgentKey === "quickfred"}
                     onClick={() => {
                       const nextEnabled = !proModeEnabled;
-                      if (nextEnabled) setQuickFredEnabled(false);
                       setProModeEnabled(nextEnabled);
                       setModeNotice(nextEnabled ? "Thinking aktiviert" : "Thinking deaktiviert");
                     }}
@@ -1579,30 +1561,6 @@ export default function FredNativeChatView({
                       <path d="M9.5 4.5A2.5 2.5 0 0 0 7 7v.5a3.5 3.5 0 0 0-1 6.85V15a3 3 0 0 0 6 0V7a2.5 2.5 0 0 0-2.5-2.5Z" />
                       <path d="M14.5 4.5A2.5 2.5 0 0 1 17 7v.5a3.5 3.5 0 0 1 1 6.85V15a3 3 0 0 1-6 0V7a2.5 2.5 0 0 1 2.5-2.5Z" />
                       <path d="M8 10h1a3 3 0 0 1 3 3M16 10h-1a3 3 0 0 0-3 3M9 14a3 3 0 0 0 3 3M15 14a3 3 0 0 1-3 3" />
-                    </svg>
-                  </button>
-                ) : null}
-                {capabilities.quickFred || conversationAgentKey !== null ? (
-                  <button
-                    className={`composer-model-trigger composer-icon-toggle fred-quick-toggle${quickFredEnabled ? " is-active" : ""}`}
-                    type="button"
-                    aria-pressed={quickFredEnabled}
-                    title="Fastmode für einfache Fragen"
-                    aria-label={conversationAgentKey !== null
-                      ? `Agent für diese Unterhaltung festgelegt: ${fredAgentName(conversationAgentKey)}`
-                      : quickFredEnabled
-                        ? "QuickFred aktiv"
-                        : "QuickFred verwenden"}
-                    disabled={isSending || conversationAgentKey !== null || !capabilities.quickFred}
-                    onClick={() => {
-                      const nextEnabled = !quickFredEnabled;
-                      if (nextEnabled) setProModeEnabled(false);
-                      setQuickFredEnabled(nextEnabled);
-                      setModeNotice(nextEnabled ? "Fastmode aktiviert" : "Fastmode deaktiviert");
-                    }}
-                  >
-                    <svg className="fred-quick-icon" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M13.5 2 5 13h6l-.5 9L19 10h-6l.5-8Z" />
                     </svg>
                   </button>
                 ) : null}
