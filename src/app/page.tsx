@@ -277,8 +277,12 @@ function normalizeFredMessages(value: unknown): ChatMessage[] {
       (item.role !== "user" && item.role !== "assistant")
       || typeof item.content !== "string"
     ) return [];
+    const messageId = typeof item.id === "number" && Number.isFinite(item.id) && item.id > 0 && Number.isSafeInteger(item.id)
+      ? item.id
+      : undefined;
     const attachments = item.role === "user" ? normalizeFredAttachments(item.attachments) : [];
     return [{
+      ...(messageId !== undefined ? { id: messageId } : {}),
       role: item.role,
       content: item.content,
       createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString(),
@@ -293,7 +297,6 @@ function normalizeFredMessages(value: unknown): ChatMessage[] {
     }];
   });
 }
-
 async function fetchFredConversationHistory(accessToken: string, id: string): Promise<{
   title: string;
   messages: ChatMessage[];

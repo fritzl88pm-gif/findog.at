@@ -103,6 +103,16 @@ describe("Fred native Findog UI", () => {
     );
   });
 
+  it("preserves activeConversationIdRef and conversationAgentKey in the final event branch", () => {
+    // Fix 6: The final event branch must update the conversation ref and agent key state
+    // before constructing and committing completed messages.
+    // This is a surgical regression guard — the assignments were accidentally removed.
+    const finalBranch = /receivedFinal = true;([\s\S]*?)const completedMessages/u
+      .exec(viewSource)?.[1] ?? "";
+    expect(finalBranch).toContain("activeConversationIdRef.current = streamEvent.conversation.id");
+    expect(finalBranch).toContain("setConversationAgentKey(streamEvent.conversation.agentKey)");
+  });
+
   it("batches streaming text appends and safely flushes replacements and cancellations", () => {
     const appended: string[] = [];
     const replaced: string[] = [];
@@ -408,5 +418,127 @@ describe("QuickFred removal — composer control absent, attribution preserved",
 
   it("preserves the QuickFred agent key in the FredAgentKey union", () => {
     expect(viewSource).toContain('agentName: "Fred" | "QuickFred"');
+  });
+});
+
+describe("Fred public answer sharing", () => {
+  it("renders a share button only for completed assistant messages with a positive persisted id", () => {
+    expect(viewSource).toContain('aria-label="Antwort öffentlich teilen"');
+    expect(viewSource).toContain("handleShareAnswer(message.id!)");
+    // Only for messages that have a truthy message.id — disabled only for in-flight target or missing id
+    expect(viewSource).toMatch(/disabled=\{shareInFlightIds\.has\(message\.id!\) \|\| !message\.id\}/);
+  });
+
+  it("keeps loading state per message ID and disables only that button", () => {
+    expect(viewSource).toContain('const [shareInFlightIds, setShareInFlightIds] = useState<Set<number>>(() => new Set())');
+    expect(viewSource).toContain("shareInFlightIds.has(message.id!)");
+    expect(viewSource).toContain("aria-busy={shareInFlightIds.has(message.id!)}");
+    expect(viewSource).toContain("Wird geteilt …");
+  });
+
+  it("renders a visible compact live status for copy and error states", () => {
+    expect(viewSource).toContain('className="fred-share-status"');
+    expect(viewSource).toContain('role="status"');
+    expect(viewSource).toContain('aria-live="polite"');
+    expect(viewSource).toContain("Öffentlicher Link kopiert");
+    expect(viewSource).toContain("Teilen fehlgeschlagen");
+    expect(cssSource).toContain(".fred-share-status");
+  });
+
+  it("POSTs only conversationId and assistantMessageId with bearer token", () => {
+    expect(viewSource).toContain('"/api/fred/public-shares"');
+    expect(viewSource).toContain("conversationId: conversationIdValue");
+    expect(viewSource).toContain("assistantMessageId: messageId");
+    expect(viewSource).toContain("Authorization: `Bearer ${accessToken}`");
+  });
+
+  it("uses native Web Share when available", () => {
+    expect(viewSource).toContain("navigator.share");
+    expect(viewSource).toContain('title: "Geteilte Fred-Antwort"');
+    expect(viewSource).toContain("new URL(payload.sharePath as string, window.location.origin)");
+  });
+
+  it("falls back to clipboard when Web Share is unavailable", () => {
+    expect(viewSource).toContain("await copyToClipboard(url.toString())");
+    expect(viewSource).toContain("Öffentlicher Link kopiert");
+  });
+
+  it("treats Web Share AbortError as cancellation not failure", () => {
+    expect(viewSource).toContain("AbortError");
+    expect(viewSource).toMatch(/err\.name === "AbortError"/);
+    // The return statement after AbortError means no copy/error state is set
+  });
+
+  it("shows compact error and resets share state after timeout", () => {
+    expect(viewSource).toContain('setShareCopiedKey(`error-${messageId}`)');
+    expect(viewSource).toContain("shareStatusTimeoutRef.current");
+    expect(viewSource).toContain("setShareCopiedKey(");
+    // Clears timeout before setting new one
+    expect(viewSource).toContain("clearTimeout(shareStatusTimeoutRef.current)");
+  });
+
+  it("clears share state and timeout on conversation switch", () => {
+    expect(viewSource).toContain("setShareInFlightIds(new Set());");
+    expect(viewSource).toContain('setShareCopiedKey("");');
+    expect(viewSource).toMatch(
+      /if \(conversationId === activeConversationIdRef\.current\) return;[\s\S]*?clearTimeout\(shareStatusTimeoutRef\.current\);[\s\S]*?shareStatusTimeoutRef\.current = null;/u,
+    );
+  });
+
+  it("matches per-message share status keys exactly", () => {
+    expect(viewSource).toContain('shareCopiedKey === `copied-${message.id}`');
+    expect(viewSource).toContain('shareCopiedKey === `error-${message.id}`');
+    expect(viewSource).not.toContain('shareCopiedKey.startsWith(`copied-${message.id}`)');
+    expect(viewSource).not.toContain('shareCopiedKey.startsWith(`error-${message.id}`)');
+  });
+
+  it("cleans share status timeout on unmount", () => {
+    expect(viewSource).toContain("if (shareStatusTimeoutRef.current) clearTimeout(shareStatusTimeoutRef.current)");
+  });
+
+  it("uses a sync ref-backed in-flight set to guard against same-tick duplicate share clicks", () => {
+    expect(viewSource).toContain("const shareInFlightRef = useRef<Set<number>>(new Set())");
+    expect(viewSource).toContain("shareInFlightRef.current.has(messageId)");
+    expect(viewSource).toContain("shareInFlightRef.current.add(messageId)");
+    expect(viewSource).toContain("shareInFlightRef.current.delete(messageId)");
+  });
+
+  it("tracks AbortControllers per message ID and passes signal to fetch", () => {
+    expect(viewSource).toContain("const shareAbortControllersRef = useRef<Map<number, AbortController>>(new Map())");
+    expect(viewSource).toContain("const controller = new AbortController()");
+    expect(viewSource).toContain("shareAbortControllersRef.current.set(messageId, controller)");
+    expect(viewSource).toContain("signal: controller.signal");
+  });
+
+  it("aborts all active share requests and clears refs on conversation switch", () => {
+    expect(viewSource).toContain("for (const ctrl of shareAbortControllersRef.current.values()) ctrl.abort()");
+    expect(viewSource).toContain("shareAbortControllersRef.current.clear()");
+    expect(viewSource).toContain("shareInFlightRef.current.clear()");
+  });
+
+  it("aborts all active share requests and clears refs on unmount", () => {
+    // In the unmount useEffect cleanup
+    const unmountEffect = /useEffect\(\(\) => \(\) => \{[\s\S]*?shareAbortControllersRef\.current\.values\(\)\) ctrl\.abort\(\)[\s\S]*?\}, \[\]\)/;
+    expect(unmountEffect.test(viewSource)).toBe(true);
+  });
+
+  it("only clears state for the request that still owns the controller in finally", () => {
+    expect(viewSource).toMatch(
+      /if \(shareAbortControllersRef\.current\.get\(messageId\) === controller\) \{[\s\S]*?shareAbortControllersRef\.current\.delete\(messageId\);[\s\S]*?shareInFlightRef\.current\.delete\(messageId\);/u,
+    );
+  });
+
+  it("blocks stale requests from clipboard and status side effects", () => {
+    expect(viewSource).toContain("const isCurrentRequest = () => (");
+    expect(viewSource).toContain("if (!isCurrentRequest()) return;");
+    expect(viewSource).toContain("if (isCurrentRequest()) setShareCopiedKey(`copied-${messageId}`)");
+    expect(viewSource).toContain("controller.signal.aborted ||");
+  });
+
+  it("treats fetch AbortError as silent cancellation without setting error status", () => {
+    expect(viewSource).toContain('err instanceof DOMException && err.name === "AbortError"');
+    expect(viewSource).toMatch(
+      /catch\s*\(err:\s*unknown\)\s*\{[\s\S]*?if\s*\(controller\.signal\.aborted\s*\|\|\s*\(err\s+instanceof\s+DOMException\s+&&\s+err\.name\s*===\s*"AbortError"\)\)\s*return/u,
+    );
   });
 });

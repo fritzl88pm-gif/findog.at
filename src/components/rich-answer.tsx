@@ -23,7 +23,11 @@ function renderRichInline(nodes: RichInline[], keyPrefix: string): ReactNode[] {
   });
 }
 
-function renderRichBlock(block: RichBlock, index: number): ReactNode {
+function renderRichBlock(
+  block: RichBlock,
+  index: number,
+  showTableCopyActions: boolean,
+): ReactNode {
   if (block.type === "heading") {
     const HeadingTag = `h${block.level}` as "h2" | "h3" | "h4";
     return <HeadingTag key={`heading-${index}`}>{renderRichInline(block.children, `heading-${index}`)}</HeadingTag>;
@@ -57,14 +61,16 @@ function renderRichBlock(block: RichBlock, index: number): ReactNode {
     const clipboard = richTableClipboardContent(block);
     return (
       <div className="answer-table-block" key={`table-${index}`}>
-        <div className="answer-table-toolbar">
-          <CopyIconButton
-            className="answer-table-copy-button"
-            text={clipboard.text}
-            html={clipboard.html}
-            label="Tabelle kopieren"
-          />
-        </div>
+        {showTableCopyActions ? (
+          <div className="answer-table-toolbar">
+            <CopyIconButton
+              className="answer-table-copy-button"
+              text={clipboard.text}
+              html={clipboard.html}
+              label="Tabelle kopieren"
+            />
+          </div>
+        ) : null}
         <div className="answer-table-scroll">
           <table>
             <thead>
@@ -99,8 +105,18 @@ function renderRichBlock(block: RichBlock, index: number): ReactNode {
   );
 }
 
-export default function RichAnswer({ content }: { content: string }) {
+export default function RichAnswer({
+  content,
+  showTableCopyActions = true,
+}: {
+  content: string;
+  showTableCopyActions?: boolean;
+}) {
   const blocks = parseRichAnswer(content);
   if (blocks.length === 0) return <p className="message-body"></p>;
-  return <div className="answer-content">{blocks.map(renderRichBlock)}</div>;
+  return (
+    <div className="answer-content">
+      {blocks.map((block, index) => renderRichBlock(block, index, showTableCopyActions))}
+    </div>
+  );
 }

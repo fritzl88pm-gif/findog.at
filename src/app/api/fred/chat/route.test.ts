@@ -89,6 +89,7 @@ const summaryRow = {
   created_at: "2026-07-19T10:00:00.000Z",
   updated_at: "2026-07-19T10:00:01.000Z",
   agent_key: "fred",
+  message_id: 1,
 };
 
 function request(body: Record<string, unknown>): Request {
@@ -158,7 +159,7 @@ function rpcForTurn() {
   return vi.fn()
     .mockResolvedValueOnce({ data: summaryRow, error: null })
     .mockResolvedValueOnce({
-      data: { ...summaryRow, updated_at: "2026-07-19T10:00:02.000Z" },
+      data: { ...summaryRow, updated_at: "2026-07-19T10:00:02.000Z", message_id: 2 },
       error: null,
     });
 }
@@ -237,6 +238,7 @@ describe("POST /api/fred/chat", () => {
       {
         type: "final",
         answer: "Hallo Welt",
+        assistantMessageId: 2,
         conversation: expect.objectContaining({ id: conversationId }),
         researchTrace: [],
         sourceReferences: [],
@@ -1014,7 +1016,7 @@ describe("POST /api/fred/chat", () => {
       const rpc = vi.fn()
         .mockResolvedValueOnce({ data: summaryRow, error: null })
         .mockResolvedValueOnce({
-          data: { ...summaryRow, updated_at: "2026-07-19T10:00:02.000Z" },
+          data: { ...summaryRow, updated_at: "2026-07-19T10:00:02.000Z", message_id: 2 },
           error: null,
         });
       vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
@@ -1107,5 +1109,65 @@ describe("POST /api/fred/chat", () => {
       // Only the user-side RPC call ran
       expect(rpc).toHaveBeenCalledTimes(1);
     });
+
+  describe("message_id backward compatibility", () => {
+    it("accepts a legacy RPC response without message_id and emits a successful final event without assistantMessageId", async () => {
+      const legacySummaryRow = {
+        conversation_id: conversationId,
+        title: "Wie ist die Rechtslage?",
+        created_at: "2026-07-19T10:00:00.000Z",
+        updated_at: "2026-07-19T10:00:01.000Z",
+        agent_key: "fred",
+      };
+      const rpc = vi.fn()
+        .mockResolvedValueOnce({ data: legacySummaryRow, error: null })
+        .mockResolvedValueOnce({
+          data: { ...legacySummaryRow, updated_at: "2026-07-19T10:00:02.000Z" },
+          error: null,
+        });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+
+      const response = await POST(request({ query: "Wie ist die Rechtslage?" }));
+      const events = (await response.text())
+        .split("\n")
+        .map(parseFredNativeStreamLine)
+        .filter(Boolean);
+
+      expect(response.status).toBe(200);
+      const finalEvent = events.find((e) => e?.type === "final");
+      expect(finalEvent).toBeTruthy();
+      expect(finalEvent?.type).toBe("final");
+      if (finalEvent?.type === "final") {
+        expect(finalEvent.assistantMessageId).toBeUndefined();
+        expect(finalEvent.answer).toBe("Hallo Welt");
+      }
+      expect(rpc).toHaveBeenCalledTimes(2);
+    });
+
+    it("fails safely when a present message_id is malformed", async () => {
+      const malformedRow = { ...summaryRow, message_id: -1 };
+      const rpc = vi.fn()
+        .mockResolvedValueOnce({ data: summaryRow, error: null })
+        .mockResolvedValueOnce({
+          data: { ...malformedRow, updated_at: "2026-07-19T10:00:02.000Z" },
+          error: null,
+        });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+
+      const response = await POST(request({ query: "Wie ist die Rechtslage?" }));
+      const events = (await response.text())
+        .split("\n")
+        .map(parseFredNativeStreamLine)
+        .filter(Boolean);
+
+      expect(events).toContainEqual({
+        type: "error",
+        error: "Ungültige Fred-Nachrichten-ID.",
+      });
+      // The user message was still persisted
+      expect(rpc).toHaveBeenCalledTimes(2);
+    });
+  });
+
   });
 });

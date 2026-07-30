@@ -54,14 +54,56 @@ describe("Fred native stream", () => {
     expect(parseFredNativeStreamLine(encodeFredNativeStreamEvent({
       type: "final",
       answer: "Hallo!",
+      assistantMessageId: 42,
       conversation,
     }))).toEqual({
       type: "final",
       answer: "Hallo!",
+      assistantMessageId: 42,
       conversation,
       researchTrace: [],
       sourceReferences: [],
     });
+  });
+
+  it("accepts final event with missing assistantMessageId", () => {
+    const result = parseFredNativeStreamLine(JSON.stringify({
+      type: "final",
+      answer: "Hallo!",
+      conversation,
+    }));
+    expect(result).toBeTruthy();
+    expect(result?.type).toBe("final");
+    if (result?.type === "final") {
+      expect(result.assistantMessageId).toBeUndefined();
+    }
+  });
+
+  it("rejects final event with non-positive assistantMessageId", () => {
+    expect(() => parseFredNativeStreamLine(JSON.stringify({
+      type: "final",
+      answer: "Hallo!",
+      assistantMessageId: 0,
+      conversation,
+    }))).toThrow("Ungültiges Fred-Streaming-Ereignis.");
+  });
+
+  it("rejects final event with non-integer assistantMessageId", () => {
+    expect(() => parseFredNativeStreamLine(JSON.stringify({
+      type: "final",
+      answer: "Hallo!",
+      assistantMessageId: 3.14,
+      conversation,
+    }))).toThrow("Ungültiges Fred-Streaming-Ereignis.");
+  });
+
+  it("rejects final event with non-safe assistantMessageId", () => {
+    expect(() => parseFredNativeStreamLine(JSON.stringify({
+      type: "final",
+      answer: "Hallo!",
+      assistantMessageId: Number.MAX_SAFE_INTEGER + 1,
+      conversation,
+    }))).toThrow("Ungültiges Fred-Streaming-Ereignis.");
   });
 
   it("rejects malformed events", () => {

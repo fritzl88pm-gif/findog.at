@@ -4847,10 +4847,30 @@ textarea:focus {
 }
 
 .message-actions {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 2px;
   margin-left: auto;
+}
+
+.fred-share-status {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 4px);
+  right: 0;
+  max-width: min(240px, calc(100vw - 24px));
+  border: 1px solid rgba(40, 111, 156, 0.2);
+  border-radius: 7px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+  padding: 5px 8px;
+  color: var(--bmf-blue-deep);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .fred-assistant-answer {
@@ -7303,4 +7323,43 @@ textarea:focus {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
   }
+}
+
+/* ── Fred public answer sharing ───────────────────────────────────────── */
+
+.fred-public-share {
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+  font-family: var(--font-family, system-ui, -apple-system, sans-serif);
+  color: var(--text-primary, #1a1a1a);
+  line-height: 1.6;
+}
+
+.fred-public-share h1,
+.fred-public-share h2 {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--bmf-blue-deep, #1e3a5f);
+  margin: 0 0 0.75rem;
+}
+
+.fred-public-share h2 {
+  margin-top: 2rem;
+  border-top: 1px solid var(--border-light, #e0e0e0);
+  padding-top: 1.5rem;
+}
+
+.fred-public-share-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+/* Answer content inside public share inherits base styling but stays isolated */
+.fred-public-share .answer-content {
+  font-size: 0.9375rem;
 }

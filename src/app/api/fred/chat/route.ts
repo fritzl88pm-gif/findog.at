@@ -512,7 +512,18 @@ async function recordEvent(options: {
   };
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const { data, error } = await options.supabase.rpc("record_fred_native_event", { payload });
-    if (!error) return parseFredConversationSummary(data);
+    if (!error) {
+      const result = data as Record<string, unknown>;
+      const conversation = parseFredConversationSummary(data);
+      if (!("message_id" in result)) return { conversation, messageId: undefined };
+      const messageId = typeof result.message_id === "number"
+        ? result.message_id
+        : Number(result.message_id);
+      if (!Number.isFinite(messageId) || messageId <= 0 || !Number.isSafeInteger(messageId)) {
+        throw new UserVisibleError("Ungültige Fred-Nachrichten-ID.", 503);
+      }
+      return { conversation, messageId };
+    }
   }
   throw new UserVisibleError("Der Fred-Verlauf konnte nicht gespeichert werden.", 503);
 }
@@ -795,7 +806,7 @@ export async function POST(request: Request) {
             : "";
 
           const userOccurredAt = new Date().toISOString();
-          const conversation = await recordEvent({
+          const { conversation } = await recordEvent({
             supabase,
             userId: user.id,
             channelId: config.channelId,
@@ -840,16 +851,16 @@ export async function POST(request: Request) {
           const upstreamReader = upstream.body!.getReader();
           activeUpstreamReader = upstreamReader;
           const decoder = new TextDecoder();
-          let assistantMessageId = "";
+          let upstreamMsgId = "";
           let stopRequested = false;
           requestUpstreamStop = async () => {
-            if (!assistantMessageId || stopRequested) return;
+            if (!upstreamMsgId || stopRequested) return;
             stopRequested = true;
             await stopFredUpstreamSession({
               session: embedSession,
               config,
               upstreamSession,
-              messageId: assistantMessageId,
+              messageId: upstreamMsgId,
               signal: AbortSignal.timeout(5_000),
             });
           };
@@ -929,7 +940,7 @@ export async function POST(request: Request) {
                 upstreamEvent.response_type === "agent_query"
                 && typeof upstreamEvent.assistant_message_id === "string"
               ) {
-                assistantMessageId = upstreamEvent.assistant_message_id;
+                upstreamMsgId = upstreamEvent.assistant_message_id;
               }
             }
             const research = parseWeKnoraResearchEvent(parsed);
@@ -979,7 +990,7 @@ export async function POST(request: Request) {
             [...verifiedCitations.values()],
             { target: "fullText" },
           );
-          const finalConversation = await recordEvent({
+          const { conversation: finalConversation, messageId: assistantMessageId } = await recordEvent({
             supabase,
             userId: user.id,
             channelId: config.channelId,
@@ -1003,13 +1014,17 @@ export async function POST(request: Request) {
             content: rawAnswer,
             signal: deadline.signal,
           });
-          send(controller, {
+          const finalEvent: Parameters<typeof encodeFredNativeStreamEvent>[0] = {
             type: "final",
             answer: finalAnswer,
             conversation: finalConversation,
             researchTrace,
             sourceReferences,
-          });
+          };
+          if (assistantMessageId !== undefined) {
+            finalEvent.assistantMessageId = assistantMessageId;
+          }
+          send(controller, finalEvent);
           if (!lifetimeAbort!.signal.aborted) {
             try { controller.close(); } catch { /* already closed */ }
           }

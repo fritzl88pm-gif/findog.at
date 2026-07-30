@@ -52,6 +52,7 @@ import {
 } from "@/lib/weknora/fred-agent";
 
 export type FredNativeMessage = {
+  id?: number;
   role: "user" | "assistant";
   content: string;
   createdAt: string;
@@ -62,7 +63,6 @@ export type FredNativeMessage = {
   researchTrace?: FredResearchStep[];
   sourceReferences?: FredSourceReference[];
 };
-
 export type FredNativeAttachment = {
   kind: "image" | "file";
   name: string;
@@ -314,6 +314,8 @@ export default function FredNativeChatView({
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isAttachmentMenuOpen, setIsAttachmentMenuOpen] = useState(false);
   const [pdfDownloadKey, setPdfDownloadKey] = useState("");
+  const [shareInFlightIds, setShareInFlightIds] = useState<Set<number>>(() => new Set());
+  const [shareCopiedKey, setShareCopiedKey] = useState("");
   const [reasoningContextMenu, setReasoningContextMenu] =
     useState<ReasoningContextMenu | null>(null);
   const [reasoningSaveDraft, setReasoningSaveDraft] =
@@ -333,7 +335,10 @@ export default function FredNativeChatView({
   const [isFeedbackSaving, setIsFeedbackSaving] = useState(false);
   const [welcomeGreeting] = useState(() => getWelcomeGreeting());
   const activeConversationIdRef = useRef(conversationId);
+  const shareStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const shareInFlightRef = useRef<Set<number>>(new Set());
+  const shareAbortControllersRef = useRef<Map<number, AbortController>>(new Map());
   const streamingPreviewRef = useRef<StreamingAssistantPreviewHandle>(null);
   const followStreamGrowthRef = useRef(true);
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -350,6 +355,13 @@ export default function FredNativeChatView({
 
   useEffect(() => {
     if (conversationId === activeConversationIdRef.current) return;
+    if (shareStatusTimeoutRef.current) {
+      clearTimeout(shareStatusTimeoutRef.current);
+      shareStatusTimeoutRef.current = null;
+    }
+    for (const ctrl of shareAbortControllersRef.current.values()) ctrl.abort();
+    shareAbortControllersRef.current.clear();
+    shareInFlightRef.current.clear();
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     streamingPreviewRef.current?.cancel();
@@ -369,6 +381,8 @@ export default function FredNativeChatView({
     setSelectedFiles([]);
     setIsAttachmentMenuOpen(false);
     setPdfDownloadKey("");
+    setShareInFlightIds(new Set());
+    setShareCopiedKey("");
     setReasoningContextMenu(null);
     setReasoningSaveDraft(null);
     setReasoningCategories([]);
@@ -479,6 +493,10 @@ export default function FredNativeChatView({
   useEffect(() => () => {
     streamingPreviewRef.current?.cancel();
     abortControllerRef.current?.abort();
+    for (const ctrl of shareAbortControllersRef.current.values()) ctrl.abort();
+    shareAbortControllersRef.current.clear();
+    shareInFlightRef.current.clear();
+    if (shareStatusTimeoutRef.current) clearTimeout(shareStatusTimeoutRef.current);
   }, []);
 
   useEffect(() => {
@@ -660,14 +678,18 @@ export default function FredNativeChatView({
         receivedFinal = true;
         activeConversationIdRef.current = streamEvent.conversation.id;
         setConversationAgentKey(streamEvent.conversation.agentKey);
+        const completedMessage: FredNativeMessage = {
+          ...assistantMessage,
+          content: streamEvent.answer,
+          researchTrace,
+          sourceReferences,
+        };
+        if (streamEvent.assistantMessageId !== undefined) {
+          completedMessage.id = streamEvent.assistantMessageId;
+        }
         const completedMessages = [
           ...baseMessages,
-          {
-            ...assistantMessage,
-            content: streamEvent.answer,
-            researchTrace,
-            sourceReferences,
-          },
+          completedMessage,
         ];
         streamingPreviewRef.current?.flush();
         setActiveAssistant(null);
@@ -741,6 +763,72 @@ export default function FredNativeChatView({
       composerRef.current?.focus();
       if (composerRef.current) autosizeComposer(composerRef.current);
     });
+  }
+
+  async function handleShareAnswer(messageId: number): Promise<void> {
+    if (shareInFlightRef.current.has(messageId) || shareInFlightIds.has(messageId) || !accessToken) return;
+    const conversationIdValue = activeConversationIdRef.current;
+    if (!conversationIdValue) return;
+    shareInFlightRef.current.add(messageId);
+    setShareInFlightIds((prev) => new Set(prev).add(messageId));
+    const controller = new AbortController();
+    shareAbortControllersRef.current.set(messageId, controller);
+    const isCurrentRequest = () => (
+      !controller.signal.aborted
+      && shareAbortControllersRef.current.get(messageId) === controller
+    );
+    try {
+      const response = await fetch("/api/fred/public-shares", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          conversationId: conversationIdValue,
+          assistantMessageId: messageId,
+        }),
+        signal: controller.signal,
+      });
+      const payload = await response.json() as Record<string, unknown>;
+      if (!isCurrentRequest()) return;
+      if (!response.ok || typeof payload.sharePath !== "string") {
+        setShareCopiedKey(`error-${messageId}`);
+        return;
+      }
+      const url = new URL(payload.sharePath as string, window.location.origin);
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: "Geteilte Fred-Antwort", url: url.toString() });
+        } catch (err: unknown) {
+          if (controller.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
+          if (!isCurrentRequest()) return;
+          await copyToClipboard(url.toString());
+          if (isCurrentRequest()) setShareCopiedKey(`copied-${messageId}`);
+        }
+      } else {
+        await copyToClipboard(url.toString());
+        if (isCurrentRequest()) setShareCopiedKey(`copied-${messageId}`);
+      }
+    } catch (err: unknown) {
+      if (controller.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
+      if (isCurrentRequest()) setShareCopiedKey(`error-${messageId}`);
+    } finally {
+      if (shareAbortControllersRef.current.get(messageId) === controller) {
+        shareAbortControllersRef.current.delete(messageId);
+        shareInFlightRef.current.delete(messageId);
+        setShareInFlightIds((prev) => {
+          const next = new Set(prev);
+          next.delete(messageId);
+          return next;
+        });
+        if (shareStatusTimeoutRef.current) clearTimeout(shareStatusTimeoutRef.current);
+        shareStatusTimeoutRef.current = setTimeout(() => {
+          setShareCopiedKey("");
+          shareStatusTimeoutRef.current = null;
+        }, 3_000);
+      }
+    }
   }
 
   function regenerateAnswer(assistantIndex: number): void {
@@ -1273,6 +1361,45 @@ export default function FredNativeChatView({
                               <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 18v2h14v-2" />
                             </svg>
                           </button>
+                          <button
+                            className="message-action-button"
+                            type="button"
+                            aria-label="Antwort öffentlich teilen"
+                            title={
+                              shareInFlightIds.has(message.id!)
+                                ? "Wird geteilt …"
+                                : shareCopiedKey === `copied-${message.id}`
+                                  ? "Öffentlicher Link kopiert"
+                                  : shareCopiedKey === `error-${message.id}`
+                                    ? "Teilen fehlgeschlagen"
+                                    : "Antwort öffentlich teilen"
+                            }
+                            aria-busy={shareInFlightIds.has(message.id!)}
+                            disabled={shareInFlightIds.has(message.id!) || !message.id}
+                            onClick={() => void handleShareAnswer(message.id!)}
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <circle cx="18" cy="5" r="3" />
+                              <circle cx="6" cy="12" r="3" />
+                              <circle cx="18" cy="19" r="3" />
+                              <path d="M8.59 13.51l6.83 3.98M15.41 6.51l-6.82 3.98" />
+                            </svg>
+                          </button>
+                          {(shareInFlightIds.has(message.id!)
+                            || shareCopiedKey === `copied-${message.id}`
+                            || shareCopiedKey === `error-${message.id}`) ? (
+                            <span
+                              className="fred-share-status"
+                              role="status"
+                              aria-live="polite"
+                            >
+                              {shareInFlightIds.has(message.id!)
+                                ? "Wird geteilt …"
+                                : shareCopiedKey === `copied-${message.id}`
+                                  ? "Öffentlicher Link kopiert"
+                                  : "Teilen fehlgeschlagen"}
+                            </span>
+                          ) : null}
                           {index === messages.length - 1 ? (
                             <button
                               className="message-action-button"

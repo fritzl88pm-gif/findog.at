@@ -28,6 +28,7 @@ export type FredNativeStreamEvent =
   | {
     type: "final";
     answer: string;
+    assistantMessageId?: number;
     conversation: FredNativeConversation;
     researchTrace?: FredResearchStep[];
     sourceReferences?: FredSourceReference[];
@@ -109,9 +110,24 @@ export function parseFredNativeStreamLine(line: string): FredNativeStreamEvent |
     if (typeof value.answer !== "string" || !conversation) {
       throw new Error("Ungültiges Fred-Streaming-Ereignis.");
     }
+    let assistantMessageId: number | undefined;
+    if ("assistantMessageId" in value) {
+      const raw = typeof value.assistantMessageId === "number"
+        ? value.assistantMessageId
+        : Number(value.assistantMessageId);
+      if (
+        !Number.isFinite(raw)
+        || raw <= 0
+        || !Number.isSafeInteger(raw)
+      ) {
+        throw new Error("Ungültiges Fred-Streaming-Ereignis.");
+      }
+      assistantMessageId = raw;
+    }
     return {
       type: "final",
       answer: value.answer,
+      assistantMessageId,
       conversation,
       researchTrace: parseStoredFredResearchTrace(value.researchTrace),
       sourceReferences: parseStoredFredSources(value.sourceReferences),
