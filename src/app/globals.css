@@ -931,6 +931,7 @@ textarea:focus {
 }
 
 .reasoning-category-create input,
+.reasoning-category-create select,
 .reasoning-category-list input,
 .reasoning-editor > input,
 .reasoning-editor > textarea {
@@ -945,6 +946,7 @@ textarea:focus {
 }
 
 .reasoning-category-create input,
+.reasoning-category-create select,
 .reasoning-category-list input,
 .reasoning-editor > input {
   min-height: 42px;
@@ -959,6 +961,7 @@ textarea:focus {
 }
 
 .reasoning-category-create input:focus,
+.reasoning-category-create select:focus,
 .reasoning-category-list input:focus,
 .reasoning-editor > input:focus,
 .reasoning-editor > textarea:focus {
@@ -984,6 +987,11 @@ textarea:focus {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-app);
+}
+
+.reasoning-category-list > li.is-subcategory {
+  margin-left: 22px;
+  border-left: 3px solid rgba(0, 82, 147, 0.45);
 }
 
 .reasoning-category-list > li > span:first-child {
@@ -1039,6 +1047,11 @@ textarea:focus {
   background: var(--bg-app);
   cursor: pointer;
   font-size: 0.86rem;
+}
+
+.reasoning-category-options label.subcategory-label {
+  border-style: dashed;
+  background: rgba(0, 82, 147, 0.04);
 }
 
 .reasoning-category-options label:has(input:checked) {

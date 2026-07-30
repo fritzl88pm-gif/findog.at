@@ -4,11 +4,15 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  getChildCategoryIds,
   MAX_REASONING_CATEGORY_NAME_CHARS,
   MAX_REASONING_CONTENT_CHARS,
   MAX_REASONING_TITLE_CHARS,
+  orderReasoningCategories,
+  parseCategoryInput,
   parseCategoryName,
   parseReasoningInput,
+  reasoningCategoryLabel,
   requireReasoningUuid,
 } from "./reasonings";
 
@@ -25,6 +29,15 @@ const indexMigrationSource = readFileSync(
   fileURLToPath(
     new URL(
       "../../supabase/migrations/20260727183824_user_reasoning_owner_fk_indexes.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
+const subcatMigrationSource = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../supabase/migrations/20260730192000_user_reasoning_subcategories.sql",
       import.meta.url,
     ),
   ),
@@ -84,9 +97,34 @@ describe("reasoning input validation", () => {
     })).toThrow("maximal");
     expect(requireReasoningUuid(
       "2c1f1ddf-1f2e-4cc9-9ee5-7d340006fc8d",
-      "Begründungs-ID",
+      "Textbaustein-ID",
     )).toBe("2c1f1ddf-1f2e-4cc9-9ee5-7d340006fc8d");
-    expect(() => requireReasoningUuid("not-a-uuid", "Begründungs-ID")).toThrow("ungültig");
+    expect(() => requireReasoningUuid("not-a-uuid", "Textbaustein-ID")).toThrow("ungültig");
+  });
+});
+
+describe("category input parsing", () => {
+  it("accepts name with null or omitted parentId and valid UUID", () => {
+    expect(parseCategoryInput({ name: "  Umsatzsteuer " })).toEqual({
+      name: "Umsatzsteuer",
+      parentId: null,
+    });
+    expect(parseCategoryInput({ name: "Betriebsausgaben", parentId: null })).toEqual({
+      name: "Betriebsausgaben",
+      parentId: null,
+    });
+    expect(parseCategoryInput({
+      name: "Vorsteuer",
+      parentId: "2c1f1ddf-1f2e-4cc9-9ee5-7d340006fc8d",
+    })).toEqual({
+      name: "Vorsteuer",
+      parentId: "2c1f1ddf-1f2e-4cc9-9ee5-7d340006fc8d",
+    });
+  });
+
+  it("rejects malformed parentId", () => {
+    expect(() => parseCategoryInput({ name: "X", parentId: "not-a-uuid" }))
+      .toThrow("ungültig");
   });
 });
 
@@ -142,8 +180,140 @@ describe("user reasoning schema", () => {
   });
 });
 
+describe("subcategory migration", () => {
+  it("adds nullable parent_id with same-owner foreign key and on-delete-restrict", () => {
+    expect(subcatMigrationSource).toMatch(
+      /alter table public\.user_reasoning_categories\s+add column parent_id uuid/iu,
+    );
+    expect(subcatMigrationSource).toMatch(
+      /foreign key \(parent_id, client_id\)[\s\S]*references public\.user_reasoning_categories \(id, client_id\)[\s\S]*on delete restrict/iu,
+    );
+  });
+
+  it("prevents self-parenting and enforces one-level depth via trigger", () => {
+    expect(subcatMigrationSource).toMatch(
+      /check \(parent_id is null or parent_id <> id\)/iu,
+    );
+    expect(subcatMigrationSource).toMatch(
+      /create or replace function public\.enforce_reasoning_category_one_level_depth/iu,
+    );
+    expect(subcatMigrationSource).toMatch(
+      /before insert or update on public\.user_reasoning_categories/iu,
+    );
+    expect(subcatMigrationSource).toContain(
+      "pg_advisory_xact_lock(hashtextextended(new.client_id::text, 0))",
+    );
+    expect(subcatMigrationSource).toContain(
+      "Kategorien unterstützen nur eine Hierarchieebene.",
+    );
+    expect(subcatMigrationSource).toContain(
+      "Eine Kategorie mit Unterkategorien kann nicht unter eine andere Kategorie verschoben werden.",
+    );
+  });
+
+  it("replaces global unique index with sibling-aware uniqueness", () => {
+    expect(subcatMigrationSource).toMatch(
+      /drop index if exists user_reasoning_categories_client_name_unique/iu,
+    );
+    expect(subcatMigrationSource).toMatch(
+      /create unique index user_reasoning_categories_client_name_parent_unique/iu,
+    );
+    expect(subcatMigrationSource).toContain(
+      "coalesce(parent_id, '00000000-0000-0000-0000-000000000000')",
+    );
+  });
+
+  it("includes index on parent_id", () => {
+    expect(subcatMigrationSource).toMatch(
+      /create index user_reasoning_categories_parent_idx\s+on public\.user_reasoning_categories \(parent_id\)/iu,
+    );
+  });
+});
+
+describe("getChildCategoryIds", () => {
+  it("returns parent plus all direct children when selecting a top-level category", () => {
+    const childIdsByParent = new Map<string, string[]>([
+      ["parent-1", ["child-a", "child-b"]],
+      ["parent-2", ["child-c"]],
+    ]);
+    expect(getChildCategoryIds("parent-1", childIdsByParent)).toEqual([
+      "parent-1",
+      "child-a",
+      "child-b",
+    ]);
+    expect(getChildCategoryIds("parent-2", childIdsByParent)).toEqual([
+      "parent-2",
+      "child-c",
+    ]);
+  });
+
+  it("returns only the child ID when selecting a child category", () => {
+    const childIdsByParent = new Map<string, string[]>([
+      ["parent-1", ["child-a", "child-b"]],
+    ]);
+    expect(getChildCategoryIds("child-a", childIdsByParent)).toEqual(["child-a"]);
+    expect(getChildCategoryIds("child-b", childIdsByParent)).toEqual(["child-b"]);
+  });
+
+  it("returns only the unknown ID value for an unrecognized category", () => {
+    const childIdsByParent = new Map<string, string[]>([
+      ["parent-1", ["child-a"]],
+    ]);
+    expect(getChildCategoryIds("unknown-id", childIdsByParent)).toEqual(["unknown-id"]);
+  });
+
+  it("returns the category itself when the map is empty", () => {
+    expect(getChildCategoryIds("any-id", new Map())).toEqual(["any-id"]);
+  });
+
+  it("returns only one level deep — no recursion", () => {
+    // Even if grandchildren exist by accident, only direct children are returned
+    const childIdsByParent = new Map<string, string[]>([
+      ["grandparent", ["parent"]],
+      ["parent", ["child"]],
+    ]);
+    // Selecting grandparent returns grandparent and parent (direct children only)
+    expect(getChildCategoryIds("grandparent", childIdsByParent)).toEqual([
+      "grandparent",
+      "parent",
+    ]);
+    // Selecting parent returns parent and child
+    expect(getChildCategoryIds("parent", childIdsByParent)).toEqual([
+      "parent",
+      "child",
+    ]);
+    // Selecting child returns only child
+    expect(getChildCategoryIds("child", childIdsByParent)).toEqual(["child"]);
+  });
+});
+
+describe("category hierarchy presentation", () => {
+  const categories = [
+    { id: "parent-b", name: "Umsatzsteuer", parentId: null },
+    { id: "child-a", name: "Rechnungen", parentId: "parent-a" },
+    { id: "parent-a", name: "Betriebsausgaben", parentId: null },
+    { id: "child-b", name: "Vorsteuer", parentId: "parent-b" },
+  ];
+
+  it("groups each direct child after its parent", () => {
+    expect(orderReasoningCategories(categories).map((category) => category.id)).toEqual([
+      "parent-a",
+      "child-a",
+      "parent-b",
+      "child-b",
+    ]);
+  });
+
+  it("shows the parent path for children and the plain name for top-level categories", () => {
+    expect(reasoningCategoryLabel(categories[1], categories)).toBe(
+      "Betriebsausgaben › Rechnungen",
+    );
+    expect(reasoningCategoryLabel(categories[2], categories)).toBe("Betriebsausgaben");
+  });
+});
+
 describe("reasonings UI integration", () => {
-  it("adds Begründungen to expanded and collapsed navigation", () => {
+  it("adds Textbausteine to expanded and collapsed navigation", () => {
     expect(pageSource.match(/onClick=\{openReasoningsView\}/gu)).toHaveLength(2);
     expect(pageSource).toContain('appView === "reasonings"');
     expect(pageSource).toContain(
@@ -157,13 +327,13 @@ describe("reasonings UI integration", () => {
     expect(viewSource).toContain('method: "DELETE"');
     expect(viewSource).toContain('fetch("/api/reasoning-categories"');
     expect(viewSource).toContain("toggleEditorCategory");
-    expect(viewSource).toContain("reasoning.categoryIds.includes(activeCategoryId)");
-    expect(viewSource).toContain("Kategorie wurde gelöscht. Die Begründungen bleiben erhalten.");
+    expect(viewSource).toContain("getChildCategoryIds(activeCategoryId, childIdsByParent)");
+    expect(viewSource).toContain("Kategorie wurde gelöscht. Die Textbausteine bleiben erhalten.");
   });
 
   it("copies only the reasoning body without title or categories", () => {
     expect(viewSource).toMatch(
-      /<CopyIconButton[\s\S]*?text=\{reasoning\.content\}[\s\S]*?Begründungstext/iu,
+      /<CopyIconButton[\s\S]*?text=\{reasoning\.content\}[\s\S]*?Textbaustein/iu,
     );
     expect(viewSource).not.toContain("text={reasoning.title}");
     expect(viewSource).not.toContain("text={reasoning.categoryIds");
@@ -174,14 +344,32 @@ describe("reasonings UI integration", () => {
       viewSource.match(/className="reasoning-card-icon-button(?: is-danger)?"/gu),
     ).toHaveLength(2);
     expect(viewSource).toContain(
-      'aria-label={`Begründung „${reasoning.title}“ bearbeiten`}',
+      'aria-label={`Textbaustein „${reasoning.title}“ bearbeiten`}',
     );
     expect(viewSource).toContain(
-      'aria-label={`Begründung „${reasoning.title}“ löschen`}',
+      'aria-label={`Textbaustein „${reasoning.title}“ löschen`}',
     );
     expect(cssSource).toMatch(
       /\.copy-icon-button\.reasoning-copy-button\s*\{[\s\S]*?background: var\(--bmf-blue\)/u,
     );
     expect(cssSource).toMatch(/\.reasoning-card-icon-button\.is-danger/u);
+  });
+
+  it("uses Textbausteine everywhere and no surviving Begründung product copy", () => {
+    // View source must not contain any stray "Begründung" or "Begründungen"
+    // as visible product language (exclude aria-label which uses Textbaustein now).
+    expect(viewSource).not.toMatch(/Begründung(?!s-ID)/u);
+    expect(viewSource).not.toMatch(/Begründungen/u);
+    // Page source should also say Textbausteine for navigation.
+    expect(pageSource).toContain("Textbausteine");
+    expect(pageSource).not.toMatch(/>\s*Begründungen\s*</u);
+    expect(pageSource).toContain('title="Textbausteine"');
+  });
+
+  it("shows hierarchy UI markers for subcategory disambiguation", () => {
+    expect(viewSource).toContain("reasoningCategoryLabel(category, categories)");
+    expect(viewSource).toContain("subcategory-label");
+    expect(cssSource).toContain(".reasoning-category-list > li.is-subcategory");
+    expect(cssSource).toContain(".reasoning-category-options label.subcategory-label");
   });
 });

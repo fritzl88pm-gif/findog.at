@@ -15,10 +15,10 @@ function json(payload: unknown, status = 200): NextResponse {
 }
 
 async function contextFor(request: Request, reasoningId: string) {
-  requireReasoningUuid(reasoningId, "Begründungs-ID");
+  requireReasoningUuid(reasoningId, "Textbaustein-ID");
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    throw new UserVisibleError("Begründungen sind derzeit nicht verfügbar.", 503);
+    throw new UserVisibleError("Textbausteine sind derzeit nicht verfügbar.", 503);
   }
   const user = await authenticateSupabaseRequest(request, supabase);
   return { supabase, user };
@@ -51,17 +51,17 @@ export async function PATCH(
       const notFound = error?.code === "P0002";
       throw new UserVisibleError(
         notFound
-          ? "Begründung wurde nicht gefunden."
+          ? "Textbaustein wurde nicht gefunden."
           : error?.code === "42501"
             ? "Mindestens eine Kategorie ist nicht verfügbar."
-            : "Begründung konnte nicht gespeichert werden.",
+            : "Textbaustein konnte nicht gespeichert werden.",
         notFound ? 404 : error?.code === "42501" ? 400 : 503,
       );
     }
     return json({ id: data });
   } catch (error) {
     if (error instanceof UserVisibleError) return json({ error: error.message }, error.status);
-    return json({ error: "Begründung konnte nicht gespeichert werden." }, 500);
+    return json({ error: "Textbaustein konnte nicht gespeichert werden." }, 500);
   }
 }
 
@@ -79,14 +79,14 @@ export async function DELETE(
       .eq("client_id", user.id)
       .select("id");
     if (error) {
-      throw new UserVisibleError("Begründung konnte nicht gelöscht werden.", 503);
+      throw new UserVisibleError("Textbaustein konnte nicht gelöscht werden.", 503);
     }
     if (!Array.isArray(data) || data.length === 0) {
-      throw new UserVisibleError("Begründung wurde nicht gefunden.", 404);
+      throw new UserVisibleError("Textbaustein wurde nicht gefunden.", 404);
     }
     return json({ id: reasoningId });
   } catch (error) {
     if (error instanceof UserVisibleError) return json({ error: error.message }, error.status);
-    return json({ error: "Begründung konnte nicht gelöscht werden." }, 500);
+    return json({ error: "Textbaustein konnte nicht gelöscht werden." }, 500);
   }
 }

@@ -2977,7 +2977,7 @@ export default function Home() {
                 aria-current={appView === "reasonings" ? "page" : undefined}
               >
                 <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"></path><path d="M4 5.5v16M8 7h8M8 11h8"></path></svg>
-                Begründungen
+                Textbausteine
               </button>
               <button
                 className={`sidebar-view-button ${appView === "german-sv-pension" ? "active" : ""}`}
@@ -3126,8 +3126,8 @@ export default function Home() {
               className={`icon-button rail-icon-btn ${appView === "reasonings" ? "active" : ""}`}
               type="button"
               onClick={openReasoningsView}
-              title="Begründungen"
-              aria-label="Begründungen"
+              title="Textbausteine"
+              aria-label="Textbausteine"
               aria-current={appView === "reasonings" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"></path><path d="M4 5.5v16M8 7h8M8 11h8"></path></svg>

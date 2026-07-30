@@ -45,7 +45,7 @@ export async function PATCH(
       .update({ name, updated_at: new Date().toISOString() })
       .eq("id", categoryId)
       .eq("client_id", user.id)
-      .select("id,name,created_at,updated_at")
+      .select("id,name,parent_id,created_at,updated_at")
       .maybeSingle();
     if (error) {
       throw new UserVisibleError(
@@ -62,6 +62,7 @@ export async function PATCH(
       category: {
         id: data.id,
         name: data.name,
+        parentId: data.parent_id,
         createdAt: data.created_at,
         updatedAt: data.updated_at,
       },
@@ -86,6 +87,13 @@ export async function DELETE(
       .eq("client_id", user.id)
       .select("id");
     if (error) {
+      // FK violation - parent has children
+      if (error.code === "23503") {
+        throw new UserVisibleError(
+          "Diese Kategorie enthält Unterkategorien und kann daher nicht gelöscht werden. Bitte lösche zuerst die Unterkategorien.",
+          409,
+        );
+      }
       throw new UserVisibleError("Kategorie konnte nicht gelöscht werden.", 503);
     }
     if (!Array.isArray(data) || data.length === 0) {

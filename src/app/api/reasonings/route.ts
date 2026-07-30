@@ -10,6 +10,7 @@ export const runtime = "nodejs";
 type CategoryRow = {
   id: string;
   name: string;
+  parent_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -37,7 +38,7 @@ function json(payload: unknown, status = 200): NextResponse {
 async function authenticatedContext(request: Request) {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
-    throw new UserVisibleError("Begründungen sind derzeit nicht verfügbar.", 503);
+    throw new UserVisibleError("Textbausteine sind derzeit nicht verfügbar.", 503);
   }
   const user = await authenticateSupabaseRequest(request, supabase);
   return { supabase, user };
@@ -57,7 +58,7 @@ export async function GET(request: Request) {
     const [categoriesResult, reasoningsResult, linksResult] = await Promise.all([
       supabase
         .from("user_reasoning_categories")
-        .select("id,name,created_at,updated_at")
+        .select("id,name,parent_id,created_at,updated_at")
         .eq("client_id", user.id)
         .order("name", { ascending: true }),
       supabase
@@ -73,7 +74,7 @@ export async function GET(request: Request) {
     ]);
 
     if (categoriesResult.error || reasoningsResult.error || linksResult.error) {
-      throw new UserVisibleError("Begründungen konnten nicht geladen werden.", 503);
+      throw new UserVisibleError("Textbausteine konnten nicht geladen werden.", 503);
     }
 
     const linksByReasoning = new Map<string, string[]>();
@@ -87,6 +88,7 @@ export async function GET(request: Request) {
       categories: ((categoriesResult.data ?? []) as CategoryRow[]).map((category) => ({
         id: category.id,
         name: category.name,
+        parentId: category.parent_id,
         createdAt: category.created_at,
         updatedAt: category.updated_at,
       })),
@@ -101,7 +103,7 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     if (error instanceof UserVisibleError) return json({ error: error.message }, error.status);
-    return json({ error: "Begründungen konnten nicht geladen werden." }, 500);
+    return json({ error: "Textbausteine konnten nicht geladen werden." }, 500);
   }
 }
 
@@ -120,13 +122,13 @@ export async function POST(request: Request) {
       throw new UserVisibleError(
         error?.code === "42501"
           ? "Mindestens eine Kategorie ist nicht verfügbar."
-          : "Begründung konnte nicht angelegt werden.",
+          : "Textbaustein konnte nicht angelegt werden.",
         error?.code === "42501" ? 400 : 503,
       );
     }
     return json({ id: data }, 201);
   } catch (error) {
     if (error instanceof UserVisibleError) return json({ error: error.message }, error.status);
-    return json({ error: "Begründung konnte nicht angelegt werden." }, 500);
+    return json({ error: "Textbaustein konnte nicht angelegt werden." }, 500);
   }
 }

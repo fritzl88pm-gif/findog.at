@@ -10,6 +10,7 @@ vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
 const USER_ID = "3ee4de5e-e847-485a-adcf-16c2e924332c";
 const REASONING_ID = "7a77d890-175c-40d5-8af2-9a3141bfe63e";
 const CATEGORY_ID = "4411bb00-4ee5-4acd-af3d-f982db70d877";
+const PARENT_ID = "2c1f1ddf-1f2e-4cc9-9ee5-7d340006fc8d";
 
 type QueryResult = { data: unknown; error: unknown };
 
@@ -34,13 +35,14 @@ describe("reasonings API", () => {
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: USER_ID });
   });
 
-  it("loads all three datasets with the authenticated user scope", async () => {
+  it("loads all three datasets with the authenticated user scope and includes parentId", async () => {
     const scopes: Array<[string, unknown]> = [];
     const results: Record<string, QueryResult> = {
       user_reasoning_categories: {
         data: [{
           id: CATEGORY_ID,
           name: "Umsatzsteuer",
+          parent_id: PARENT_ID,
           created_at: "2026-07-27T12:00:00.000Z",
           updated_at: "2026-07-27T12:00:00.000Z",
         }],
@@ -77,6 +79,7 @@ describe("reasonings API", () => {
       categories: [{
         id: CATEGORY_ID,
         name: "Umsatzsteuer",
+        parentId: PARENT_ID,
         createdAt: "2026-07-27T12:00:00.000Z",
         updatedAt: "2026-07-27T12:00:00.000Z",
       }],

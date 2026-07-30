@@ -40,6 +40,8 @@ import {
   MAX_REASONING_CATEGORY_NAME_CHARS,
   MAX_REASONING_CONTENT_CHARS,
   MAX_REASONING_TITLE_CHARS,
+  orderReasoningCategories,
+  reasoningCategoryLabel,
 } from "@/lib/reasonings";
 import {
   mergeFredResearchStep,
@@ -80,6 +82,7 @@ type FredCapabilities = {
 type ReasoningCategoryOption = {
   id: string;
   name: string;
+  parentId: string | null;
 };
 
 type ReasoningContextMenu = {
@@ -139,17 +142,22 @@ function categoryOption(value: unknown): ReasoningCategoryOption | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const category = value as Record<string, unknown>;
   if (typeof category.id !== "string" || typeof category.name !== "string") return null;
-  return { id: category.id, name: category.name };
+  return {
+    id: category.id,
+    name: category.name,
+    parentId: typeof category.parentId === "string" ? category.parentId : null,
+  };
 }
 
 function categoryOptions(payload: unknown): ReasoningCategoryOption[] {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
   const categories = (payload as Record<string, unknown>).categories;
   if (!Array.isArray(categories)) return [];
-  return categories.flatMap((category) => {
-    const normalized = categoryOption(category);
-    return normalized ? [normalized] : [];
+  const normalized = categories.flatMap((category) => {
+    const option = categoryOption(category);
+    return option ? [option] : [];
   });
+  return orderReasoningCategories(normalized);
 }
 
 function displayFileSize(bytes: number): string {
@@ -1181,7 +1189,7 @@ export default function FredNativeChatView({
       return;
     }
     if (!reasoningSaveDraft.text || reasoningSaveDraft.text.length > MAX_REASONING_CONTENT_CHARS) {
-      setReasoningDialogError("Der ausgewählte Begründungstext ist ungültig.");
+      setReasoningDialogError("Der ausgewählte Textbaustein ist ungültig.");
       return;
     }
     if (!accessToken) {
@@ -1229,10 +1237,10 @@ export default function FredNativeChatView({
           throw new Error("Die angelegte Kategorie konnte nicht gelesen werden.");
         }
         categoryId = createdCategory.id;
-        setReasoningCategories((current) => (
-          [...current.filter((category) => category.id !== createdCategory.id), createdCategory]
-            .sort((left, right) => left.name.localeCompare(right.name, "de-AT"))
-        ));
+        setReasoningCategories((current) => orderReasoningCategories([
+          ...current.filter((category) => category.id !== createdCategory.id),
+          createdCategory,
+        ]));
         setReasoningSaveDraft((current) => current ? {
           ...current,
           categoryMode: "existing",
@@ -1261,19 +1269,19 @@ export default function FredNativeChatView({
       if (!reasoningResponse.ok) {
         throw new Error(responseError(
           reasoningPayload,
-          "Begründung konnte nicht gespeichert werden.",
+          "Textbaustein konnte nicht gespeichert werden.",
         ));
       }
 
       setReasoningSaveDraft(null);
       setReasoningDialogError("");
       window.getSelection()?.removeAllRanges();
-      setModeNotice("Als Begründung gespeichert");
+      setModeNotice("Als Textbaustein gespeichert");
     } catch (saveError) {
       setReasoningDialogError(
         saveError instanceof Error
           ? saveError.message
-          : "Begründung konnte nicht gespeichert werden.",
+          : "Textbaustein konnte nicht gespeichert werden.",
       );
     } finally {
       setIsSavingReasoning(false);
@@ -1813,7 +1821,7 @@ export default function FredNativeChatView({
               <path d="M6 4h12a1 1 0 0 1 1 1v15l-7-4-7 4V5a1 1 0 0 1 1-1Z" />
               <path d="M12 7v6M9 10h6" />
             </svg>
-            Als Begründung speichern
+            Als Textbaustein speichern
           </button>
         </div>
       ) : null}
@@ -1834,7 +1842,7 @@ export default function FredNativeChatView({
             <header className="fred-reasoning-dialog-header">
               <div>
                 <p className="eyebrow">Fred-Auswahl</p>
-                <h2 id="fred-reasoning-dialog-title">Als Begründung speichern</h2>
+                <h2 id="fred-reasoning-dialog-title">Als Textbaustein speichern</h2>
               </div>
               <button
                 className="icon-button"
@@ -1916,7 +1924,7 @@ export default function FredNativeChatView({
                   </p>
                 ) : reasoningCategories.length > 0 ? (
                   <select
-                    aria-label="Vorhandene Begründungskategorie"
+                    aria-label="Vorhandene Kategorie"
                     value={reasoningSaveDraft.categoryId}
                     onChange={(event) => {
                       setReasoningSaveDraft((current) => current ? {
@@ -1931,7 +1939,9 @@ export default function FredNativeChatView({
                     }
                   >
                     {reasoningCategories.map((category) => (
-                      <option value={category.id} key={category.id}>{category.name}</option>
+                      <option value={category.id} key={category.id}>
+                        {reasoningCategoryLabel(category, reasoningCategories)}
+                      </option>
                     ))}
                   </select>
                 ) : (
@@ -1959,7 +1969,7 @@ export default function FredNativeChatView({
                 </label>
                 {reasoningSaveDraft.categoryMode === "new" ? (
                   <input
-                    aria-label="Name der neuen Begründungskategorie"
+                    aria-label="Name der neuen Kategorie"
                     value={reasoningSaveDraft.newCategoryName}
                     onChange={(event) => {
                       setReasoningSaveDraft((current) => current ? {

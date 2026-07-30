@@ -3,15 +3,19 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  getChildCategoryIds,
   MAX_REASONING_CATEGORY_NAME_CHARS,
   MAX_REASONING_CONTENT_CHARS,
   MAX_REASONING_TITLE_CHARS,
+  orderReasoningCategories,
+  reasoningCategoryLabel,
 } from "@/lib/reasonings";
 import CopyIconButton from "@/components/copy-icon-button";
 
 type ReasoningCategory = {
   id: string;
   name: string;
+  parentId: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -59,6 +63,7 @@ function normalizePayload(value: unknown): {
         return [{
           id: row.id,
           name: row.name,
+          parentId: typeof row.parentId === "string" ? row.parentId : null,
           createdAt: typeof row.createdAt === "string" ? row.createdAt : "",
           updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : "",
         }];
@@ -111,6 +116,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [isCategoriesOpen, setIsCategoriesOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
+  const [newCategoryParentId, setNewCategoryParentId] = useState("");
   const [editingCategoryId, setEditingCategoryId] = useState("");
   const [editingCategoryName, setEditingCategoryName] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -135,7 +141,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
         throw new Error(
           typeof payload.error === "string"
             ? payload.error
-            : "Begründungen konnten nicht geladen werden.",
+            : "Textbausteine konnten nicht geladen werden.",
         );
       }
       const normalized = normalizePayload(payload);
@@ -150,7 +156,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
     } catch (loadError) {
       setError(loadError instanceof Error
         ? loadError.message
-        : "Begründungen konnten nicht geladen werden.");
+        : "Textbausteine konnten nicht geladen werden.");
     } finally {
       setIsLoading(false);
     }
@@ -165,12 +171,48 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
     () => new Map(categories.map((category) => [category.id, category])),
     [categories],
   );
+  const childIdsByParent = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const category of categories) {
+      if (category.parentId) {
+        const list = map.get(category.parentId) ?? [];
+        list.push(category.id);
+        map.set(category.parentId, list);
+      }
+    }
+    return map;
+  }, [categories]);
+
+  const topLevelCategories = useMemo(
+    () => categories.filter((category) => !category.parentId),
+    [categories],
+  );
+
+  const orderedCategories = useMemo(
+    () => orderReasoningCategories(categories),
+    [categories],
+  );
+
   const visibleReasonings = useMemo(
     () => activeCategoryId
-      ? reasonings.filter((reasoning) => reasoning.categoryIds.includes(activeCategoryId))
+      ? reasonings.filter((reasoning) => {
+          const allowedIds = getChildCategoryIds(activeCategoryId, childIdsByParent);
+          return reasoning.categoryIds.some((id) => allowedIds.includes(id));
+        })
       : reasonings,
-    [activeCategoryId, reasonings],
+    [activeCategoryId, reasonings, childIdsByParent],
   );
+
+  function categoryDisplayName(category: ReasoningCategory): string {
+    return reasoningCategoryLabel(category, categories);
+  }
+
+  function reasoningCountForCategory(categoryId: string): number {
+    const categoryIds = getChildCategoryIds(categoryId, childIdsByParent);
+    return reasonings.filter((reasoning) =>
+      reasoning.categoryIds.some((id) => categoryIds.includes(id))
+    ).length;
+  }
 
   function openNewEditor() {
     setEditor({ ...EMPTY_EDITOR, categoryIds: activeCategoryId ? [activeCategoryId] : [] });
@@ -228,17 +270,17 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
         throw new Error(
           typeof payload.error === "string"
             ? payload.error
-            : "Begründung konnte nicht gespeichert werden.",
+            : "Textbaustein konnte nicht gespeichert werden.",
         );
       }
       const wasEditing = Boolean(editor.id);
       setEditor(null);
       await loadReasonings();
-      setNotice(wasEditing ? "Begründung wurde gespeichert." : "Begründung wurde angelegt.");
+      setNotice(wasEditing ? "Textbaustein wurde gespeichert." : "Textbaustein wurde angelegt.");
     } catch (saveError) {
       setError(saveError instanceof Error
         ? saveError.message
-        : "Begründung konnte nicht gespeichert werden.");
+        : "Textbaustein konnte nicht gespeichert werden.");
     } finally {
       setIsSaving(false);
     }
@@ -262,16 +304,16 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
         throw new Error(
           typeof payload.error === "string"
             ? payload.error
-            : "Begründung konnte nicht gelöscht werden.",
+            : "Textbaustein konnte nicht gelöscht werden.",
         );
       }
       if (editor?.id === reasoning.id) setEditor(null);
       await loadReasonings();
-      setNotice("Begründung wurde gelöscht.");
+      setNotice("Textbaustein wurde gelöscht.");
     } catch (deleteError) {
       setError(deleteError instanceof Error
         ? deleteError.message
-        : "Begründung konnte nicht gelöscht werden.");
+        : "Textbaustein konnte nicht gelöscht werden.");
     } finally {
       setIsSaving(false);
     }
@@ -284,13 +326,17 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
     setError("");
     setNotice("");
     try {
+      const body: Record<string, unknown> = { name: newCategoryName };
+      if (newCategoryParentId) {
+        body.parentId = newCategoryParentId;
+      }
       const response = await fetch("/api/reasoning-categories", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ name: newCategoryName }),
+        body: JSON.stringify(body),
       });
       const payload = await responsePayload(response);
       if (!response.ok) {
@@ -301,6 +347,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
         );
       }
       setNewCategoryName("");
+      setNewCategoryParentId("");
       await loadReasonings();
       setNotice("Kategorie wurde angelegt.");
     } catch (categoryError) {
@@ -354,7 +401,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
   async function deleteCategory(category: ReasoningCategory) {
     if (
       !window.confirm(
-        `Kategorie „${category.name}“ wirklich löschen? Die Begründungen selbst bleiben erhalten.`,
+        `Kategorie „${category.name}“ wirklich löschen? Die Textbausteine selbst bleiben erhalten.`,
       )
       || isSaving
     ) return;
@@ -384,7 +431,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
       if (activeCategoryId === category.id) setActiveCategoryId("");
       if (editingCategoryId === category.id) setEditingCategoryId("");
       await loadReasonings();
-      setNotice("Kategorie wurde gelöscht. Die Begründungen bleiben erhalten.");
+      setNotice("Kategorie wurde gelöscht. Die Textbausteine bleiben erhalten.");
     } catch (categoryError) {
       setError(categoryError instanceof Error
         ? categoryError.message
@@ -400,9 +447,9 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
         <header className="reasonings-header">
           <div>
             <p className="eyebrow">Persönliche Textsammlung</p>
-            <h1 id="reasonings-view-title">Begründungen</h1>
+            <h1 id="reasonings-view-title">Textbausteine</h1>
             <p>
-              Lege wiederverwendbare Begründungstexte an und ordne sie einer oder mehreren
+              Lege wiederverwendbare Textbausteine an und ordne sie einer oder mehreren
               Kategorien zu.
             </p>
           </div>
@@ -417,7 +464,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
               Kategorien
             </button>
             <button className="primary-button" type="button" onClick={openNewEditor}>
-              Neue Begründung
+              Neuer Textbaustein
             </button>
           </div>
         </header>
@@ -434,7 +481,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
             <div className="reasoning-section-heading">
               <div>
                 <h2 id="reasoning-category-manager-title">Kategorien verwalten</h2>
-                <p>Gelöschte Kategorien entfernen nur die Zuordnung, nicht die Begründung.</p>
+                <p>Gelöschte Kategorien entfernen nur die Zuordnung, nicht den Textbaustein.</p>
               </div>
             </div>
             <form className="reasoning-category-create" onSubmit={createCategory}>
@@ -449,6 +496,20 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
                   disabled={isSaving}
                   required
                 />
+              </div>
+              <label htmlFor="new-reasoning-category-parent">Unterkategorie von</label>
+              <div>
+                <select
+                  id="new-reasoning-category-parent"
+                  value={newCategoryParentId}
+                  onChange={(event) => setNewCategoryParentId(event.target.value)}
+                  disabled={isSaving || topLevelCategories.length === 0}
+                >
+                  <option value="">-- Keine (oberste Ebene) --</option>
+                  {topLevelCategories.map((cat) => (
+                    <option key={cat.id} value={cat.id}>{cat.name}</option>
+                  ))}
+                </select>
                 <button
                   className="primary-button compact-button"
                   type="submit"
@@ -460,8 +521,8 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
             </form>
             {categories.length > 0 ? (
               <ul className="reasoning-category-list">
-                {categories.map((category) => (
-                  <li key={category.id}>
+                {orderedCategories.map((category) => (
+                  <li key={category.id} className={category.parentId ? "is-subcategory" : ""}>
                     {editingCategoryId === category.id ? (
                       <form onSubmit={(event) => void renameCategory(event, category.id)}>
                         <input
@@ -491,11 +552,9 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
                     ) : (
                       <>
                         <span>
-                          <strong>{category.name}</strong>
+                          <strong>{categoryDisplayName(category)}</strong>
                           <small>
-                            {reasonings.filter((reasoning) =>
-                              reasoning.categoryIds.includes(category.id)
-                            ).length} Begründungen
+                            {reasoningCountForCategory(category.id)} Textbausteine
                           </small>
                         </span>
                         <span className="reasoning-category-actions">
@@ -535,7 +594,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
             <div className="reasoning-section-heading">
               <div>
                 <p className="eyebrow">{editor.id ? "Bearbeiten" : "Neu anlegen"}</p>
-                <h2>{editor.id ? "Begründung bearbeiten" : "Neue Begründung"}</h2>
+                <h2>{editor.id ? "Textbaustein bearbeiten" : "Neuer Textbaustein"}</h2>
               </div>
               <button className="text-button" type="button" onClick={() => setEditor(null)}>
                 Schließen
@@ -553,7 +612,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
               disabled={isSaving}
               required
             />
-            <label htmlFor="reasoning-content">Begründungstext</label>
+            <label htmlFor="reasoning-content">Textbaustein</label>
             <textarea
               id="reasoning-content"
               value={editor.content}
@@ -562,7 +621,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
               }
               maxLength={MAX_REASONING_CONTENT_CHARS}
               rows={12}
-              placeholder="Formuliere hier deine Begründung …"
+              placeholder="Formuliere hier deinen Textbaustein …"
               disabled={isSaving}
               required
             />
@@ -570,25 +629,25 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
               <legend>Kategorien</legend>
               {categories.length > 0 ? (
                 <div>
-                  {categories.map((category) => (
-                    <label key={category.id}>
+                  {orderedCategories.map((category) => (
+                    <label key={category.id} className={category.parentId ? "subcategory-label" : ""}>
                       <input
                         type="checkbox"
                         checked={editor.categoryIds.includes(category.id)}
                         onChange={() => toggleEditorCategory(category.id)}
                         disabled={isSaving}
                       />
-                      <span>{category.name}</span>
+                      <span>{categoryDisplayName(category)}</span>
                     </label>
                   ))}
                 </div>
               ) : (
-                <p>Noch keine Kategorien vorhanden. Du kannst die Begründung auch ohne Kategorie speichern.</p>
+                <p>Noch keine Kategorien vorhanden. Du kannst den Textbaustein auch ohne Kategorie speichern.</p>
               )}
             </fieldset>
             <div className="reasoning-editor-actions">
               <button className="primary-button" type="submit" disabled={isSaving}>
-                {isSaving ? "Wird gespeichert …" : "Begründung speichern"}
+                {isSaving ? "Wird gespeichert …" : "Textbaustein speichern"}
               </button>
               <button
                 className="secondary-button"
@@ -605,7 +664,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
         <section className="reasoning-library" aria-labelledby="reasoning-library-title">
           <div className="reasoning-library-toolbar">
             <div>
-              <h2 id="reasoning-library-title">Meine Begründungen</h2>
+              <h2 id="reasoning-library-title">Meine Textbausteine</h2>
               <p>
                 {visibleReasonings.length} von {reasonings.length} angezeigt
               </p>
@@ -619,7 +678,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
               >
                 Alle
               </button>
-              {categories.map((category) => (
+              {orderedCategories.map((category) => (
                 <button
                   className={activeCategoryId === category.id ? "active" : ""}
                   type="button"
@@ -627,25 +686,25 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
                   onClick={() => setActiveCategoryId(category.id)}
                   aria-pressed={activeCategoryId === category.id}
                 >
-                  {category.name}
+                  {categoryDisplayName(category)}
                 </button>
               ))}
             </div>
           </div>
 
           {isLoading ? (
-            <p className="reasonings-empty-state" role="status">Begründungen werden geladen …</p>
+            <p className="reasonings-empty-state" role="status">Textbausteine werden geladen …</p>
           ) : visibleReasonings.length === 0 ? (
             <div className="reasonings-empty-state">
-              <h3>{reasonings.length === 0 ? "Noch keine Begründungen" : "Keine Treffer"}</h3>
+              <h3>{reasonings.length === 0 ? "Noch keine Textbausteine" : "Keine Treffer"}</h3>
               <p>
                 {reasonings.length === 0
-                  ? "Lege deine erste Begründung als persönliche Karte an."
-                  : "In dieser Kategorie ist noch keine Begründung gespeichert."}
+                  ? "Lege deinen ersten Textbaustein als persönliche Karte an."
+                  : "In dieser Kategorie ist noch kein Textbaustein gespeichert."}
               </p>
               {reasonings.length === 0 ? (
                 <button className="primary-button" type="button" onClick={openNewEditor}>
-                  Erste Begründung anlegen
+                  Ersten Textbaustein anlegen
                 </button>
               ) : null}
             </div>
@@ -659,15 +718,15 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
                       <CopyIconButton
                         className="reasoning-copy-button"
                         text={reasoning.content}
-                        label={`Begründungstext „${reasoning.title}“ kopieren`}
+                        label={`Textbaustein „${reasoning.title}“ kopieren`}
                       />
                       <button
                         className="reasoning-card-icon-button"
                         type="button"
                         onClick={() => openEditEditor(reasoning)}
                         disabled={isSaving}
-                        aria-label={`Begründung „${reasoning.title}“ bearbeiten`}
-                        title="Begründung bearbeiten"
+                        aria-label={`Textbaustein „${reasoning.title}“ bearbeiten`}
+                        title="Textbaustein bearbeiten"
                       >
                         <svg
                           aria-hidden="true"
@@ -687,8 +746,8 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
                         type="button"
                         onClick={() => void deleteReasoning(reasoning)}
                         disabled={isSaving}
-                        aria-label={`Begründung „${reasoning.title}“ löschen`}
-                        title="Begründung löschen"
+                        aria-label={`Textbaustein „${reasoning.title}“ löschen`}
+                        title="Textbaustein löschen"
                       >
                         <svg
                           aria-hidden="true"
