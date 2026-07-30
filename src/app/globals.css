@@ -6705,6 +6705,8 @@ textarea:focus {
 .feedback-positive:focus-visible {
   outline: 3px solid rgba(46, 125, 50, 0.35);
   outline-offset: 1px;
+}
+
 .feedback-negative:hover:not(:disabled),
 .feedback-negative.is-active {
   border-color: rgba(198, 40, 40, 0.45);
@@ -7327,39 +7329,369 @@ textarea:focus {
 
 /* ── Fred public answer sharing ───────────────────────────────────────── */
 
+.fred-public-share-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background-color: var(--bg-app);
+  background-image:
+    radial-gradient(ellipse at 50% 0%, rgba(40, 111, 156, 0.07) 0%, transparent 60%),
+    radial-gradient(circle at 100% 100%, rgba(255, 212, 0, 0.04) 0%, transparent 40%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.fred-public-share-header {
+  width: 100%;
+  max-width: 52rem;
+  padding: 1.25rem 1.5rem 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.fred-public-share-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.fred-public-share-brand-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--bmf-blue-deep);
+  letter-spacing: -0.02em;
+}
+
+.fred-public-share-badge {
+  border: 1px solid rgba(40, 111, 156, 0.22);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: rgba(40, 111, 156, 0.06);
+  color: var(--bmf-blue-dark);
+  font-size: 0.68rem;
+  font-weight: 750;
+  line-height: 1;
+  letter-spacing: 0.03em;
+}
+
+.fred-public-share-doc-type {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
 .fred-public-share {
-  max-width: 48rem;
-  margin: 0 auto;
-  padding: 2rem 1.5rem;
-  font-family: var(--font-family, system-ui, -apple-system, sans-serif);
-  color: var(--text-primary, #1a1a1a);
-  line-height: 1.6;
+  width: 100%;
+  max-width: 52rem;
+  padding: 1rem 1.5rem 3rem;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.fred-public-share-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-top: 4px solid var(--bmf-blue);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: clamp(1.5rem, 3.5vw, 2.5rem);
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.fred-public-share-card-unavailable {
+  border-top-color: var(--muted);
+  text-align: center;
+  align-items: center;
+  padding: clamp(2.5rem, 5vw, 4rem) 2rem;
+}
+
+.fred-public-share-unavailable-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(98, 114, 128, 0.1);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 0.5rem;
+}
+
+.fred-public-share-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.fred-public-share-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.fred-public-share-section-tag {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-yellow);
+  box-shadow: 0 0 0 3px rgba(255, 212, 0, 0.25);
+}
+
+.fred-public-share-section-tag-answer {
+  background: var(--bmf-blue);
+  box-shadow: 0 0 0 3px rgba(40, 111, 156, 0.2);
 }
 
 .fred-public-share h1,
 .fred-public-share h2 {
   font-size: 0.8125rem;
-  font-weight: 600;
+  font-weight: 750;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--bmf-blue-deep, #1e3a5f);
-  margin: 0 0 0.75rem;
+  letter-spacing: 0.06em;
+  color: var(--bmf-blue-deep);
+  margin: 0;
+  line-height: 1.2;
 }
 
-.fred-public-share h2 {
-  margin-top: 2rem;
-  border-top: 1px solid var(--border-light, #e0e0e0);
-  padding-top: 1.5rem;
+.fred-public-share-question {
+  background: rgba(40, 111, 156, 0.03);
+  border: 1px solid rgba(40, 111, 156, 0.1);
+  border-left: 3px solid var(--bmf-blue);
+  border-radius: var(--radius-md);
+  padding: 1.25rem 1.5rem;
 }
 
 .fred-public-share-text {
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: break-word;
   margin: 0;
-  font-size: 0.9375rem;
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  color: var(--ink);
+  font-weight: 500;
 }
 
-/* Answer content inside public share inherits base styling but stays isolated */
+.fred-public-share-divider {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--border-color) 15%,
+    var(--border-color) 85%,
+    transparent 100%
+  );
+  margin: 0.25rem 0;
+}
+
+/* RichAnswer fine-tuning inside public share for document readability */
 .fred-public-share .answer-content {
-  font-size: 0.9375rem;
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.fred-public-share .answer-content :where(p, h2, h3, h4, ul, ol, blockquote) {
+  margin: 0;
+}
+
+.fred-public-share .answer-content h2 {
+  font-size: 1.25rem;
+  font-weight: 800;
+  text-transform: none;
+  letter-spacing: -0.01em;
+  color: var(--bmf-blue-deep);
+  margin-top: 1.5rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.fred-public-share .answer-content h3 {
+  font-size: 1.1rem;
+  font-weight: 750;
+  text-transform: none;
+  letter-spacing: -0.01em;
+  color: var(--bmf-blue-dark);
+  margin-top: 1.25rem;
+}
+
+.fred-public-share .answer-content h4 {
+  font-size: 0.98rem;
+  font-weight: 700;
+  text-transform: none;
+  color: var(--bmf-blue-deep);
+  margin-top: 1rem;
+}
+
+.fred-public-share .answer-content ul,
+.fred-public-share .answer-content ol {
+  padding-left: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.fred-public-share .answer-content li {
+  line-height: 1.65;
+}
+
+.fred-public-share .answer-content li::marker {
+  color: var(--bmf-blue);
+  font-weight: 700;
+}
+
+.fred-public-share .answer-content blockquote.answer-callout {
+  background: rgba(40, 111, 156, 0.04);
+  border-left: 3px solid var(--bmf-blue);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 0.875rem 1.25rem;
+  color: var(--bmf-blue-deep);
+  font-style: normal;
+  font-size: 0.96rem;
+  line-height: 1.6;
+}
+
+.fred-public-share .answer-content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.875em;
+  background: rgba(19, 53, 75, 0.06);
+  color: var(--bmf-blue-deep);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  border: 1px solid rgba(19, 53, 75, 0.1);
+}
+
+.fred-public-share .answer-content mark {
+  background: rgba(255, 212, 0, 0.35);
+  color: inherit;
+  padding: 0.1em 0.25em;
+  border-radius: 2px;
+}
+
+.fred-public-share .answer-content a {
+  color: var(--bmf-blue);
+  text-decoration: underline;
+  text-decoration-color: rgba(40, 111, 156, 0.3);
+  text-underline-offset: 3px;
+  transition: var(--transition);
+}
+
+.fred-public-share .answer-content a:hover {
+  color: var(--bmf-blue-dark);
+  text-decoration-color: var(--bmf-blue-dark);
+}
+
+/* Tables inside public share document */
+.fred-public-share .answer-table-block {
+  margin: 0.75rem 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  background: var(--bg-surface);
+}
+
+.fred-public-share .answer-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+
+.fred-public-share table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+  text-align: left;
+}
+
+.fred-public-share th {
+  background: rgba(40, 111, 156, 0.06);
+  color: var(--bmf-blue-deep);
+  font-weight: 750;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.fred-public-share td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(40, 111, 156, 0.08);
+  line-height: 1.5;
+}
+
+.fred-public-share tr:last-child td {
+  border-bottom: none;
+}
+
+.fred-public-share tr:nth-child(even) td {
+  background: rgba(244, 247, 249, 0.5);
+}
+
+.fred-public-share-footer {
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.4;
+  padding: 0.5rem 1rem 0;
+}
+
+/* Responsive adjustments for 320px - 430px mobile screens */
+@media (max-width: 480px) {
+  .fred-public-share-header {
+    padding: 1rem 1rem 0.25rem;
+  }
+
+  .fred-public-share-doc-type {
+    display: none;
+  }
+
+  .fred-public-share {
+    padding: 0.75rem 0.75rem 2rem;
+  }
+
+  .fred-public-share-card {
+    padding: 1.25rem 1rem;
+    gap: 1.5rem;
+    border-radius: var(--radius-md);
+  }
+
+  .fred-public-share-question {
+    padding: 1rem;
+  }
+
+  .fred-public-share-text {
+    font-size: 1rem;
+  }
+
+  .fred-public-share .answer-content {
+    font-size: 0.95rem;
+    gap: 1rem;
+  }
+
+  .fred-public-share .answer-content h2 {
+    font-size: 1.15rem;
+  }
+
+  .fred-public-share .answer-content h3 {
+    font-size: 1.05rem;
+  }
+
+  .fred-public-share th,
+  .fred-public-share td {
+    padding: 0.6rem 0.75rem;
+  }
 }

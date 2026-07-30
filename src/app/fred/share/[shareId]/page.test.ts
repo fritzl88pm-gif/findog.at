@@ -19,6 +19,10 @@ const layoutSource = readFileSync(
   fileURLToPath(new URL("../../../layout.tsx", import.meta.url)),
   "utf8",
 );
+const globalCssSource = readFileSync(
+  fileURLToPath(new URL("../../../globals.css", import.meta.url)),
+  "utf8",
+);
 
 describe("Fred public share page", () => {
   it("is dynamic and never statically cached", () => {
@@ -31,6 +35,15 @@ describe("Fred public share page", () => {
     expect(pageSource).toContain("Freds Antwort");
     expect(pageSource).toContain('id="shared-question-heading"');
     expect(pageSource).toContain('id="shared-answer-heading"');
+  });
+
+  it("renders the public document shell with top-level share styles", () => {
+    expect(pageSource).toContain('className="fred-public-share-shell"');
+    expect(pageSource).toContain('className="fred-public-share-card"');
+    expect(globalCssSource).toContain(".fred-public-share-shell {");
+    expect(globalCssSource).toMatch(
+      /\.feedback-positive:focus-visible\s*\{[\s\S]*?outline-offset:\s*1px;\s*\}\s*\.feedback-negative:hover/,
+    );
   });
 
   it("renders question_content directly as a React text child with no manual escape", () => {
