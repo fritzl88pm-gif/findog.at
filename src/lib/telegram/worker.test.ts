@@ -424,6 +424,126 @@ describe("processUpdate: slash commands", () => {
 // ── Free text / Fred turn ────────────────────────────────────────────────────
 
 describe("processUpdate: free text routed to Fred", () => {
+  it("does not send draft previews while Fred emits partial answer deltas", async () => {
+    vi.useFakeTimers();
+    let settleTurn!: () => void;
+    const turnSettled = new Promise<void>((resolve) => { settleTurn = resolve; });
+    let pending: Promise<Awaited<ReturnType<typeof processUpdate>>> | undefined;
+    try {
+      const rpc = fakeRpc();
+      const storage = fakeStorage();
+      const botApi = fakeBotApi();
+      const { executeTurn } = capturingTurn(async function* () {
+        yield { type: "delta", content: "Teilantwort" };
+        await turnSettled;
+        return {
+          answer: "Fertige Antwort",
+          rawAnswer: "Fertige Antwort",
+          conversation: fakeConversation,
+          researchTrace: [],
+          sourceReferences: [],
+          stopped: false,
+        };
+      });
+      const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+      pending = processUpdate(config, makeUpdate());
+      void pending.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(botApi.sendMessageDraft).not.toHaveBeenCalled();
+    } finally {
+      settleTurn();
+      await pending?.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends typing immediately, refreshes every four seconds, and stops after the Fred turn settles", async () => {
+    vi.useFakeTimers();
+    let settleTurn!: () => void;
+    const turnSettled = new Promise<void>((resolve) => { settleTurn = resolve; });
+    let pending: ReturnType<typeof processUpdate> | undefined;
+    try {
+      const rpc = fakeRpc();
+      const storage = fakeStorage();
+      const botApi = fakeBotApi();
+      let fredSignal: AbortSignal | undefined;
+      const { executeTurn } = capturingTurn(async function* (request) {
+        fredSignal = request.signal;
+        await turnSettled;
+        return {
+          answer: "Fertige Antwort",
+          rawAnswer: "Fertige Antwort",
+          conversation: fakeConversation,
+          researchTrace: [],
+          sourceReferences: [],
+          stopped: false,
+        };
+      });
+      const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+      pending = processUpdate(config, makeUpdate());
+      void pending.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(botApi.sendChatAction).toHaveBeenCalledTimes(1);
+      const typingSignal = vi.mocked(botApi.sendChatAction).mock.calls[0]?.[1]?.signal;
+      expect(typingSignal).toBeInstanceOf(AbortSignal);
+      expect(typingSignal).not.toBe(fredSignal);
+      expect(botApi.sendChatAction).toHaveBeenLastCalledWith(
+        { chat_id: telegramChatId, action: "typing" },
+        { signal: typingSignal },
+      );
+
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(botApi.sendChatAction).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(botApi.sendChatAction).toHaveBeenCalledTimes(2);
+      for (const call of vi.mocked(botApi.sendChatAction).mock.calls) {
+        expect(call).toEqual([
+          { chat_id: telegramChatId, action: "typing" },
+          { signal: typingSignal },
+        ]);
+      }
+
+      settleTurn();
+      const result = await pending;
+      expect(result.status).toBe("completed");
+      expect(typingSignal?.aborted).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(botApi.sendChatAction).toHaveBeenCalledTimes(2);
+    } finally {
+      settleTurn();
+      await pending?.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores typing-action rejection and still delivers the final answer", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    vi.mocked(botApi.sendChatAction).mockRejectedValue(new Error("typing unavailable"));
+    const { executeTurn } = answerTurn("Die Antwort wird trotzdem zugestellt.");
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+    const result = await processUpdate(config, makeUpdate());
+
+    expect(result.status).toBe("completed");
+    expect(botApi.sendChatAction).toHaveBeenCalledWith(
+      { chat_id: telegramChatId, action: "typing" },
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(botApi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: telegramChatId,
+      text: expect.stringContaining("trotzdem zugestellt"),
+    }));
+    expect(rpc.complete).toHaveBeenCalled();
+  });
+
   it("passes an existing conversation binding through to the Fred request", async () => {
     const rpc = fakeRpc();
     const storage = fakeStorage({ getActiveConversation: vi.fn().mockResolvedValue("existing-conv-id") });

@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { BotApi } from "./bot-api";
 import { createBotApi } from "./bot-api";
 import { looksLikeSlashCommand, parseSlashCommand } from "./commands";
-import { deliverFinalAnswer, refreshDraftPreview, type DeliveryLedger } from "./delivery";
+import { deliverFinalAnswer, type DeliveryLedger } from "./delivery";
 import {
   cancelUpdate,
   checkUpdateCancelled,
@@ -340,8 +340,20 @@ async function handleFredTurn(
     signal: controller.signal,
   };
 
-  let accumulated = "";
-  let draftCount = 0;
+  const typingController = new AbortController();
+  const sendTypingAction = (): void => {
+    if (typingController.signal.aborted) return;
+    try {
+      void botApi.sendChatAction(
+        { chat_id: chatId, action: "typing" },
+        { signal: typingController.signal },
+      ).catch(() => undefined);
+    } catch {
+      return;
+    }
+  };
+  sendTypingAction();
+  const typingTimer = setInterval(sendTypingAction, 4_000);
   const heartbeatTimer = setInterval(() => {
     void (async () => {
       try {
@@ -361,13 +373,6 @@ async function handleFredTurn(
       }
     })();
   }, config.heartbeatIntervalMs);
-  const draftTimer = setInterval(() => {
-    if (draftCount >= config.maxDraftRefreshes) return;
-    draftCount++;
-    const preview = accumulated.slice(0, 200);
-    if (preview) void refreshDraftPreview(botApi, chatId, `${preview} …`);
-  }, config.draftRefreshIntervalMs);
-
   let finalResult: FredTurnResult | undefined;
   try {
     const gen = executeTurn(request, config.turnUpstream, config.turnPersistence, config.turnConfig);
@@ -378,15 +383,14 @@ async function handleFredTurn(
         break;
       }
       const event = value as FredTurnEvent;
-      if (event.type === "delta") {
-        accumulated += event.content;
-      } else if (event.type === "error") {
+      if (event.type === "error") {
         throw new Error(event.error);
       }
     }
   } finally {
+    clearInterval(typingTimer);
+    typingController.abort();
     clearInterval(heartbeatTimer);
-    clearInterval(draftTimer);
     shutdownSignal?.removeEventListener("abort", handleShutdown);
   }
   const result = finalResult as FredTurnResult;
