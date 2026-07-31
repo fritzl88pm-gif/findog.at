@@ -16,6 +16,8 @@ type FredConversationRow = {
   created_at: string;
   updated_at: string;
   agent_key: FredAgentKey;
+  origin: "web" | "telegram";
+  telegram_integration_id: string | null;
 };
 
 function json(payload: unknown, status = 200): NextResponse {
@@ -65,7 +67,7 @@ export async function GET(request: Request) {
     const { supabase, user } = await authenticatedContext(request);
     const { data, error } = await supabase
       .from("fred_conversations")
-      .select("id,title,created_at,updated_at,agent_key")
+      .select("id,title,created_at,updated_at,agent_key,origin,telegram_integration_id")
       .eq("client_id", user.id)
       .order("updated_at", { ascending: false });
     if (error) {
@@ -78,6 +80,8 @@ export async function GET(request: Request) {
         createdAt: conversation.created_at,
         updatedAt: conversation.updated_at,
         agentKey: conversation.agent_key,
+        origin: conversation.origin,
+        telegramIntegrationId: conversation.telegram_integration_id ?? null,
       })),
     });
   } catch (error) {
@@ -90,12 +94,10 @@ export async function DELETE(request: Request) {
   try {
     const { supabase, user } = await authenticatedContext(request);
     const ids = await parseDeleteIds(request);
-    const { data, error } = await supabase
-      .from("fred_conversations")
-      .delete()
-      .in("id", ids)
-      .eq("client_id", user.id)
-      .select("id");
+    const { data, error } = await supabase.rpc("delete_owned_fred_conversations", {
+      p_client_id: user.id,
+      p_conversation_ids: ids,
+    });
     if (error) {
       throw new UserVisibleError("Fred-Unterhaltungen konnten nicht gelöscht werden.", 503);
     }

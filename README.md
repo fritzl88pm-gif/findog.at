@@ -32,6 +32,10 @@ Copy `.env.example` to `.env.local` and configure Supabase Auth before using the
 | `WEKNORA_QUICKFRED_PUBLISH_TOKEN` | For QuickFred | Server-only `em_` publish token for the dedicated QuickFred channel. |
 | `WEKNORA_QUICKFRED_EXCHANGE_ORIGIN` | For QuickFred | Exact Findog origin registered in the QuickFred channel allowlist. |
 | `WEKNORA_QUICKFRED_AGENT_ID` | For QuickFred | Expected canonical QuickFred agent UUID. Requests fail closed if the channel reports a different agent. |
+| `TELEGRAM_CREDENTIALS_KEY` | For Telegram | Server-only 32-byte key encoded as canonical standard Base64. Generate it with `openssl rand -base64 32`. Both the web and worker services use it for AES-256-GCM bot-token encryption. Never expose it to the browser. |
+| `TELEGRAM_PUBLIC_ORIGIN` | For Telegram | Public HTTPS origin used to register owner-specific Telegram webhooks; production is `https://findog.at`. |
+| `TELEGRAM_WORKER_CONCURRENCY` | Telegram worker | Number of concurrently processed jobs. The production default is `2`. |
+| `TELEGRAM_WORKER_PORT` | Telegram worker | Private health-listener port. The worker must not have a public domain. |
 | `OPENROUTER_API_KEY` | For Scanning and image-assisted forms | Server-only OpenRouter key used by Gemini 3.5 Flash for Scanning and by the form image extraction flow. Never expose it to the browser. |
 
 Fred uses Findog's native chat surface. The authenticated `/api/fred/chat` proxy exchanges the long-lived `em_` publish token server-side, creates or resumes the user-owned WeKnora session, streams Fred's answer and structured research events as NDJSON, and persists both sides of the turn. Findog renders deterministic German research summaries instead of exposing raw model reasoning or tool arguments. Complete BFG business numbers are verified against the official Findok API while the answer streams; verified citations become official Findok full-text links, while unresolved citations remain unchanged and unlinked. WeKnora's internal `<kb ... />` and `<web ... />` citation tags are removed from the visible answer while their source metadata and the unchanged provider answer remain stored for provenance. Neither the short-lived `ems_` token nor the signed WeKnora session handle reaches the browser. There is no Taxdog iframe or cross-origin browser storage.
@@ -78,6 +82,7 @@ Apply all migrations in order through the Supabase SQL editor or your migration 
 22. `supabase/migrations/20260723170000_quickfred_conversation_agent.sql`
 23. `supabase/migrations/20260727182232_user_reasonings.sql`
 24. `supabase/migrations/20260727183824_user_reasoning_owner_fk_indexes.sql`
+25. `supabase/migrations/20260731110000_telegram_bot_integration.sql`
 
 Supabase Auth must be enabled for email/password login. Authorized accounts are manually provisioned; the app does not expose self-service registration. Server persistence stores the authenticated Supabase `user.id` as `conversations.client_id`, `messages.client_id`, and `agent_runs.client_id`. Fred sessions and messages use separate `fred_*` tables and retain their bridge/webhook provenance. For assistant messages, `content` remains the original provider answer; `display_content`, `research_trace`, `source_references`, and `content_transformation` record the bounded native presentation separately. Deleting an owned conversation cascades to its messages, agent runs, and agent steps; deleting a Fred conversation cascades to its Fred messages and processed webhook events. The admin request audit records only submitted user prompts and is deliberately independent of conversation deletion; deleting the audit history does not remove a user's conversations.
 
@@ -89,6 +94,8 @@ Successful research results are stored separately from the 1,200-character agent
 npm run typecheck
 npm run lint
 npm run test
+npm run telegram:typecheck
+npm run telegram:build
 npm run build
 ```
 
@@ -97,3 +104,27 @@ npm run build
 Deploy the Next.js application through Coolify. Configure the Supabase variables, `DEEPSEEK_API_KEY` for BFG Suche PRO, `OPENROUTER_API_KEY` for Scanning and image-assisted forms, and the required `WEKNORA_FRED_*` values as protected runtime environment variables. For QuickFred, configure all four `WEKNORA_QUICKFRED_*` values and bind its dedicated channel to the expected agent UUID. Both channel allowlists must include the exact Findog exchange origin and use the same message webhook URL and HMAC secret. Do not expose provider keys as build arguments or `NEXT_PUBLIC_` variables. Restart or redeploy the application after changing a runtime variable. The Coolify reverse proxy must accept request bodies of at least 100 MiB so that a valid maximum Scanning batch, including multipart overhead, reaches the application. BFG Suche PRO plans Findok queries with deepseek-v4-flash and reranks the official candidates with deepseek-v4-pro at maximum reasoning effort, so a single PRO request can take several minutes; the reverse proxy read/response timeout for `/api/findok/bfg/pro` must allow at least 600 seconds. That route streams newline-delimited JSON progress events (query planning, Findok retrieval, sorting, reranking) before the final result, so the reverse proxy must forward the response unbuffered and must not compress or rewrite `application/x-ndjson`.
 
 The native Fred chat mirrors the WeKnora embed capabilities configured for its channel and agent. When enabled upstream, users can request web search and attach up to five images (JPEG, PNG, GIF, or WebP; 10 MB each) plus five documents (`pdf`, `doc`, `docx`, `txt`, `md`, `csv`, `xlsx`, `xls`, `ppt`, or `pptx`; 20 MB each). Files are forwarded to WeKnora for the current request only. Findog stores auditable attachment metadata (name, MIME type, size, SHA-256) and the web-search flag with the user message, but not the binary file or data URI.
+
+### Telegram worker deployment
+
+Deploy Telegram as two processes from the same revision and environment:
+
+```bash
+# Web application
+npm ci
+npm run build
+npm run start
+
+# Separate persistent worker
+npm ci
+npm run telegram:build
+node dist/telegram-worker.mjs
+```
+
+The Next.js application owns `/api/webhooks/telegram/<webhook-id>` and acknowledges valid updates quickly. The worker claims durable PostgreSQL jobs with per-claim random UUID leases, runs the shared Fred turn service and records every Telegram delivery chunk. Configure `TELEGRAM_CREDENTIALS_KEY`, Supabase service credentials and all Fred/QuickFred variables identically in both services; start with `TELEGRAM_WORKER_CONCURRENCY=2`.
+
+The worker exposes `GET /healthz` and `GET /readyz` only on `TELEGRAM_WORKER_PORT`. Configure Coolify's internal health check against `/healthz`, restart the worker on failure and do **not** assign it a public domain. Only the web application receives public Telegram webhooks.
+
+Bot-token rotation is performed in place from Findog settings. Findog validates and configures the replacement bot first, atomically switches the encrypted credentials while preserving the integration ID and Fred history, clears old bot queue/binding state, and then removes the old webhook and commands. The replacement bot must be paired again. For an emergency disconnect, use the authenticated settings action; it cancels open jobs, calls `deleteWebhook` with `drop_pending_updates=true`, removes commands and only then deletes the encrypted credential row. If required cleanup fails, the integration is retained for a safe retry.
+
+For webhook diagnosis, call Telegram `getWebhookInfo` with the affected user's bot token from a secret-safe administrative shell and compare its URL with `${TELEGRAM_PUBLIC_ORIGIN}/api/webhooks/telegram/<webhook-id>`. Never paste tokens into logs or support tickets. A growing queue with healthy webhooks usually indicates a stopped worker or expired leases; restore the worker first. Leased jobs are reclaimed after their lease expires. Rows marked with uncertain delivery must be inspected rather than blindly replayed, because Telegram may have accepted a message even when the acknowledgement was lost.

@@ -39,6 +39,8 @@ export type FredConversationSummary = {
   createdAt: string;
   updatedAt: string;
   agentKey: FredAgentKey;
+  origin: "web" | "telegram";
+  telegramIntegrationId: string | null;
 };
 
 function recordOf(value: unknown): Record<string, unknown> {
@@ -186,12 +188,19 @@ export async function readBoundedFredEventBody(request: Request): Promise<string
 
 export function parseFredConversationSummary(value: unknown): FredConversationSummary {
   const record = recordOf(value);
+  const origin = record.origin ?? "web";
+  const telegramIntegrationId = record.telegram_integration_id ?? null;
   if (
     typeof record.conversation_id !== "string"
     || typeof record.title !== "string"
     || typeof record.created_at !== "string"
     || typeof record.updated_at !== "string"
     || !isFredAgentKey(record.agent_key)
+    || (origin !== "web" && origin !== "telegram")
+    || (telegramIntegrationId !== null && (
+      typeof telegramIntegrationId !== "string"
+      || !UUID_PATTERN.test(telegramIntegrationId)
+    ))
   ) {
     throw new UserVisibleError("Fred hat ein ungültiges Speicherergebnis geliefert.", 503);
   }
@@ -201,5 +210,7 @@ export function parseFredConversationSummary(value: unknown): FredConversationSu
     createdAt: record.created_at,
     updatedAt: record.updated_at,
     agentKey: record.agent_key,
+    origin,
+    telegramIntegrationId,
   };
 }

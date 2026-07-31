@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src/workers/telegram.ts"],
+  "exclude": [
+    "node_modules",
+    "src/**/*.test.ts",
+    "src/app/**/*.ts",
+    "src/app/**/*.tsx"
+  ]
+}

@@ -3,12 +3,57 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { verifyBfgCitations } from "@/lib/findok/bfg-citations";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { GET } from "./route";
+import { DELETE, GET } from "./route";
 
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
 vi.mock("@/lib/findok/bfg-citations", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/findok/bfg-citations")>();
   return { ...actual, verifyBfgCitations: vi.fn() };
+});
+
+describe("DELETE /api/fred/conversations/[conversationId]", () => {
+  const userId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const conversationId = "33333333-3333-4333-8333-333333333333";
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: userId });
+  });
+
+  it("uses the owner-scoped atomic deletion RPC", async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: [{ id: conversationId }], error: null });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+
+    const response = await DELETE(
+      new Request(`https://findog.at/api/fred/conversations/${conversationId}`, {
+        method: "DELETE",
+        headers: { Authorization: "Bearer token" },
+      }),
+      { params: Promise.resolve({ conversationId }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(rpc).toHaveBeenCalledWith("delete_owned_fred_conversations", {
+      p_client_id: userId,
+      p_conversation_ids: [conversationId],
+    });
+    await expect(response.json()).resolves.toEqual({ deletedIds: [conversationId] });
+  });
+
+  it("does not reveal another owner's conversation", async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: [], error: null });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+
+    const response = await DELETE(
+      new Request(`https://findog.at/api/fred/conversations/${conversationId}`, {
+        method: "DELETE",
+        headers: { Authorization: "Bearer token" },
+      }),
+      { params: Promise.resolve({ conversationId }) },
+    );
+
+    expect(response.status).toBe(404);
+  });
 });
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
 
@@ -30,6 +75,8 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
           created_at: "2026-07-19T07:00:00.000Z",
           updated_at: "2026-07-19T07:01:00.000Z",
           agent_key: "fred",
+          origin: "telegram",
+          telegram_integration_id: "44444444-4444-4444-8444-444444444444",
         },
         error: null,
       }),
@@ -94,6 +141,10 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
 
     expect(response.status).toBe(200);
     const payload = await response.json();
+    expect(payload.conversation).toMatchObject({
+      origin: "telegram",
+      telegramIntegrationId: "44444444-4444-4444-8444-444444444444",
+    });
     expect(payload.messages[0]).toMatchObject({
       agentKey: "fred",
       attachments: [{
@@ -136,6 +187,9 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
           title: "BFG-Fundstellen",
           created_at: "2026-07-18T07:00:00.000Z",
           updated_at: "2026-07-18T07:01:00.000Z",
+          agent_key: "fred",
+          origin: "web",
+          telegram_integration_id: null,
         },
         error: null,
       }),

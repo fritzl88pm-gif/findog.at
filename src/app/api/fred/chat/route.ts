@@ -26,12 +26,19 @@ import {
   FRED_NATIVE_STREAM_CONTENT_TYPE,
   encodeFredNativeStreamEvent,
 } from "@/lib/fred-native-stream";
+import {
+  executeFredTurn,
+  type TurnServiceConfigDeps,
+  type TurnServicePersistenceDeps,
+  type TurnServiceUpstreamDeps,
+} from "@/lib/fred/turn-service";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { recordAdminRequest } from "@/lib/admin-request-history";
 import { getScanningSettings } from "@/lib/scanning/settings";
 import {
   FredEmbedConfigurationError,
   FredEmbedUpstreamError,
+  FRED_EMBED_ORIGIN,
   mintFredEmbedSession,
   readFredEmbedServerConfig,
   readFredProModelId,
@@ -600,6 +607,265 @@ function sseData(frame: string): string | null {
   return data || null;
 }
 
+type FredServerConfig = ReturnType<typeof readFredEmbedServerConfig>;
+
+function buildWebTurnUpstream(
+  registeredConfigs: Map<string, FredServerConfig>,
+): TurnServiceUpstreamDeps {
+  const serverConfig = (channelId: string): FredServerConfig => {
+    const value = registeredConfigs.get(channelId);
+    if (!value) throw new UserVisibleError("Fred ist nicht vollständig konfiguriert.", 503);
+    return value;
+  };
+  return {
+    async mintSession(params) {
+      const session = await mintFredEmbedSession({
+        config: serverConfig(params.channelId),
+        signal: params.signal,
+      });
+      return { token: session.token, expiresIn: session.expiresIn };
+    },
+    async fetchUpstreamConfig(params) {
+      return fetchFredUpstreamConfig({
+        session: {
+          token: params.sessionToken,
+          expiresIn: 0,
+          channelId: params.channelId,
+          embedOrigin: FRED_EMBED_ORIGIN,
+        },
+        config: serverConfig(params.channelId),
+        signal: params.signal,
+      });
+    },
+    async createSession(params) {
+      const session = await createFredUpstreamSession({
+        session: {
+          token: params.sessionToken,
+          expiresIn: 0,
+          channelId: params.channelId,
+          embedOrigin: FRED_EMBED_ORIGIN,
+        },
+        config: serverConfig(params.channelId),
+        signal: params.signal,
+      });
+      return { id: session.id, signature: session.signature };
+    },
+    deriveSessionSignature(params) {
+      return deriveFredSessionSignature(
+        { channelId: params.channelId, publishToken: params.publishToken },
+        params.sessionId,
+      );
+    },
+    async openStream(params) {
+      const response = await openFredUpstreamStream({
+        session: {
+          token: params.sessionToken,
+          expiresIn: 0,
+          channelId: params.channelId,
+          embedOrigin: FRED_EMBED_ORIGIN,
+        },
+        config: serverConfig(params.channelId),
+        upstreamConfig: {
+          agentId: params.agentId,
+          knowledgeBaseIds: params.knowledgeBaseIds,
+          allowWebSearch: params.webSearchEnabled,
+          allowFileUpload: false,
+        },
+        upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
+        visitorId: params.visitorId,
+        query: params.query,
+        webSearchEnabled: params.webSearchEnabled,
+        summaryModelId: params.summaryModelId,
+        signal: params.signal,
+      });
+      if (!response.body) {
+        throw new UserVisibleError("Fred hat keinen Antwortstream geliefert.", 502);
+      }
+      return response.body;
+    },
+    visitorId: (publishToken, userId) => fredVisitorId(publishToken, userId),
+    async relayEvent(params) {
+      await relayFredWebhookEvent({
+        session: {
+          token: params.sessionToken,
+          expiresIn: 0,
+          channelId: params.channelId,
+          embedOrigin: FRED_EMBED_ORIGIN,
+        },
+        config: serverConfig(params.channelId),
+        upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
+        type: params.type,
+        content: params.content,
+        signal: params.signal,
+      });
+    },
+    async stopSession(params) {
+      await stopFredUpstreamSession({
+        session: {
+          token: params.sessionToken,
+          expiresIn: 0,
+          channelId: params.channelId,
+          embedOrigin: FRED_EMBED_ORIGIN,
+        },
+        config: serverConfig(params.channelId),
+        upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
+        messageId: params.messageId,
+        signal: params.signal,
+      });
+    },
+  };
+}
+
+function buildWebTurnPersistence(
+  supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
+): TurnServicePersistenceDeps {
+  return {
+    async recordEvent(params) {
+      return recordEvent({
+        supabase,
+        userId: params.clientId,
+        channelId: params.channelId,
+        sessionId: params.sessionId,
+        eventId: params.eventId,
+        eventType: params.eventType,
+        content: params.content,
+        occurredAt: params.occurredAt,
+        attachments: [],
+        webSearchEnabled: params.webSearchEnabled,
+        proModeEnabled: params.proModeEnabled,
+        agentKey: params.agentKey,
+        weknoraAgentId: params.weknoraAgentId,
+        displayContent: params.displayContent,
+        researchTrace: params.researchTrace,
+        sourceReferences: params.sourceReferences,
+      });
+    },
+    async loadConversation(params) {
+      return loadOwnedConversation({
+        supabase,
+        userId: params.clientId,
+        conversationId: params.conversationId,
+      });
+    },
+    async recordAdminRequest(params) {
+      await recordAdminRequest({
+        supabase,
+        userId: params.clientId,
+        conversationId: params.conversationId,
+        content: params.content,
+      });
+    },
+  };
+}
+
+function buildWebTurnConfig(
+  registeredConfigs: Map<string, FredServerConfig>,
+): TurnServiceConfigDeps {
+  return {
+    readFredConfig: () => {
+      const value = readFredEmbedServerConfig();
+      registeredConfigs.set(value.channelId, value);
+      return value;
+    },
+    readQuickFredConfig: () => {
+      try {
+        const value = readQuickFredEmbedServerConfig();
+        registeredConfigs.set(value.channelId, value);
+        return value;
+      } catch {
+        return null;
+      }
+    },
+    readProModelId: () => readFredProModelId(),
+  };
+}
+
+function streamTextOnlyTurn(options: {
+  request: Request;
+  supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>;
+  userId: string;
+  body: ParsedFredChatRequest;
+  agentKey: FredAgentKey;
+}): Response {
+  const encoder = new TextEncoder();
+  const registeredConfigs = new Map<string, FredServerConfig>();
+  const streamAbort = new AbortController();
+  const onRequestAbort = () => streamAbort.abort(options.request.signal.reason);
+  if (options.request.signal.aborted) onRequestAbort();
+  else options.request.signal.addEventListener("abort", onRequestAbort, { once: true });
+  let resolveTurnFinished: () => void = () => undefined;
+  const turnFinished = new Promise<void>((resolve) => {
+    resolveTurnFinished = resolve;
+  });
+  const deadline = createDeadline(TOTAL_TIMEOUT_MS, {
+    timeoutMessage: "Die Verarbeitung der Anfrage hat zu lange gedauert.",
+  });
+  const onDeadlineAbort = () => {
+    if (!streamAbort.signal.aborted) streamAbort.abort(deadline.signal.reason);
+  };
+  deadline.signal.addEventListener("abort", onDeadlineAbort, { once: true });
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let errorSent = false;
+      try {
+        const turn = executeFredTurn(
+          {
+            clientId: options.userId,
+            ...(options.body.conversationId
+              ? { conversationId: options.body.conversationId }
+              : {}),
+            query: options.body.query,
+            origin: "web",
+            agentKey: options.agentKey,
+            webSearchEnabled: options.body.webSearchEnabled,
+            proModeEnabled: options.body.proModeEnabled,
+            signal: streamAbort.signal,
+          },
+          buildWebTurnUpstream(registeredConfigs),
+          buildWebTurnPersistence(options.supabase),
+          buildWebTurnConfig(registeredConfigs),
+        );
+        while (true) {
+          const { value, done } = await turn.next();
+          if (done) break;
+          if (value.type === "cancelled") continue;
+          if (value.type === "error") errorSent = true;
+          controller.enqueue(encoder.encode(encodeFredNativeStreamEvent(value)));
+        }
+      } catch (error) {
+        if (!errorSent && !options.request.signal.aborted) {
+          controller.enqueue(encoder.encode(encodeFredNativeStreamEvent({
+            type: "error",
+            error: error instanceof UserVisibleError
+              ? error.message
+              : "Fred konnte die Anfrage nicht abschließen.",
+          })));
+        }
+      } finally {
+        deadline.signal.removeEventListener("abort", onDeadlineAbort);
+        deadline.dispose();
+        options.request.signal.removeEventListener("abort", onRequestAbort);
+        resolveTurnFinished();
+        try { controller.close(); } catch { /* already closed */ }
+      }
+    },
+    async cancel(reason) {
+      streamAbort.abort(reason);
+      deadline.dispose();
+      await turnFinished;
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "Content-Type": FRED_NATIVE_STREAM_CONTENT_TYPE,
+      "Cache-Control": "private, no-store, max-age=0",
+      Vary: "Authorization",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
+
 export async function POST(request: Request) {
   let lifetimeAbort: AbortController | undefined;
   let onRequestAbort: (() => void) | undefined;
@@ -636,6 +902,15 @@ export async function POST(request: Request) {
         "Fred Pro ist in einer QuickFred-Unterhaltung nicht verfügbar.",
         400,
       );
+    }
+    if (body.attachments.length === 0) {
+      return streamTextOnlyTurn({
+        request,
+        supabase,
+        userId: user.id,
+        body,
+        agentKey,
+      });
     }
     let config: ReturnType<typeof readFredEmbedServerConfig>;
     if (agentKey === "quickfred") {

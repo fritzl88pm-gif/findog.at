@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { deleteTelegramIntegration } from "@/lib/telegram/settings";
 
 export const runtime = "nodejs";
 
@@ -25,6 +26,17 @@ export async function DELETE(request: Request) {
     }
 
     const user = await authenticateSupabaseRequest(request, supabase);
+    try {
+      const telegramCleanup = await deleteTelegramIntegration(user.id);
+      if (!telegramCleanup.deleted) {
+        throw new UserVisibleError("Das Benutzerkonto konnte nicht gelöscht werden.", 503);
+      }
+    } catch (cleanupError) {
+      if (!(cleanupError instanceof UserVisibleError && cleanupError.status === 404)) {
+        throw new UserVisibleError("Das Benutzerkonto konnte nicht gelöscht werden.", 503);
+      }
+    }
+
     const { error } = await supabase.rpc("admin_delete_managed_user", {
       target_user_id: user.id,
     });

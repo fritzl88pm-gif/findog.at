@@ -30,6 +30,28 @@ const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", impor
 const nextConfigSource = readFileSync(fileURLToPath(new URL("../../next.config.ts", import.meta.url)), "utf8");
 
 describe("Fred native Findog UI", () => {
+  it("reuses the native transcript in read-only Telegram mode without send paths", () => {
+    expect(viewSource).toContain("readOnly?: boolean");
+    expect(viewSource).toContain("readOnlyNotice?: string");
+    expect(viewSource).toContain("telegramBotUrl?: string");
+    expect(viewSource).toContain("{readOnlyNotice}");
+    expect(viewSource).toContain("readOnly ? null : (");
+    expect(viewSource).toContain("!readOnly && message.role === \"user\"");
+    expect(viewSource).toContain("!readOnly && index === messages.length - 1");
+    expect(pageSource).toContain("readOnly={activeConversationOrigin === \"telegram\"}");
+    expect(pageSource).toContain('readOnlyNotice="Diese Unterhaltung wird in Telegram fortgesetzt."');
+    expect(pageSource).not.toContain("fred-telegram-readonly-transcript");
+  });
+
+  it("opens only a sanitized active Telegram bot username", () => {
+    expect(pageSource).toContain("TELEGRAM_BOT_USERNAME_PATTERN");
+    expect(pageSource).toContain("https://t.me/${telegramIntegration.botUsername}");
+    expect(pageSource).toContain("status === \"active\"");
+    expect(viewSource).toContain('target="_blank"');
+    expect(viewSource).toContain('rel="noopener noreferrer"');
+    expect(viewSource).toContain("In Telegram öffnen");
+  });
+
   it("uses the new-conversation action as the only Fred navigation and renders the native chat", () => {
     expect(pageSource).toContain('type AppView = "chat" | "scanning" | "forms"');
     expect(pageSource).not.toContain('type AppView = "chat" | "fred"');

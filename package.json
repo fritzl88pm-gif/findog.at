@@ -9,7 +9,11 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "telegram:worker:dev": "node scripts/build-telegram-worker.mjs --watch",
+    "telegram:build": "node scripts/build-telegram-worker.mjs",
+    "telegram:typecheck": "tsc -p tsconfig.telegram-worker.json --noEmit",
+    "telegram:worker": "node dist/telegram-worker.mjs"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
@@ -28,6 +32,7 @@
     "@types/node": "24.10.1",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
+    "esbuild": "^0.28.1",
     "eslint": "^9.39.4",
     "eslint-config-next": "16.2.10",
     "typescript": "6.0.3",

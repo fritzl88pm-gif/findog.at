@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   fredWebhookDeliverySha256,
   parseFredBridgeEvent,
+  parseFredConversationSummary,
   parseFredWebhookEvent,
   readFredWebhookSecret,
   verifyFredWebhookSignature,
@@ -13,6 +14,21 @@ import {
 const CHANNEL_ID = "fred-channel-2026";
 
 describe("Fred history event validation", () => {
+  it("serializes Telegram conversation origin without requiring a live integration", () => {
+    expect(parseFredConversationSummary({
+      conversation_id: "11111111-1111-4111-8111-111111111111",
+      title: "Telegram-Verlauf",
+      created_at: "2026-07-31T10:00:00.000Z",
+      updated_at: "2026-07-31T10:01:00.000Z",
+      agent_key: "fred",
+      origin: "telegram",
+      telegram_integration_id: null,
+    })).toMatchObject({
+      origin: "telegram",
+      telegramIntegrationId: null,
+    });
+  });
+
   it("accepts a scoped authenticated bridge event", () => {
     expect(parseFredBridgeEvent({
       eventId: "11111111-1111-4111-8111-111111111111",

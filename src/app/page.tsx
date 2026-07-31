@@ -81,6 +81,9 @@ import KnowledgeLandscapeView from "@/components/knowledge-landscape-view";
 import QuizView from "@/components/quiz-view";
 import ReasoningsView from "@/components/reasonings-view";
 import AdminFeedbackView from "@/components/admin-feedback-view";
+import TelegramSettings, {
+  type TelegramIntegrationPublicState,
+} from "@/components/telegram-settings";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -98,9 +101,13 @@ type ConversationSummary = {
   createdAt: string;
   updatedAt: string;
   agentKey: FredAgentKey;
+  origin?: "web" | "telegram";
+  telegramIntegrationId?: string | null;
 };
 
 type AppView = "chat" | "scanning" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "wo-beschluss" | "quiz" | "administration" | "data" | "reasonings";
+
+const TELEGRAM_BOT_USERNAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{4,31}$/u;
 
 type AuthForm = {
   email: string;
@@ -236,12 +243,20 @@ function normalizeConversationSummaries(value: unknown): ConversationSummary[] {
     ) {
       return [];
     }
+    const origin = conversation.origin === "telegram" ? "telegram" as const : "web" as const;
+    const telegramIntegrationId = typeof conversation.telegramIntegrationId === "string"
+      ? conversation.telegramIntegrationId
+      : conversation.telegramIntegrationId === null
+        ? null
+        : undefined;
     return [{
       id: conversation.id,
       title: conversation.title,
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
       agentKey: isFredAgentKey(conversation.agentKey) ? conversation.agentKey : "fred",
+      origin,
+      ...(telegramIntegrationId !== undefined ? { telegramIntegrationId } : {}),
     }];
   });
 }
@@ -318,6 +333,29 @@ async function fetchFredConversationHistory(accessToken: string, id: string): Pr
     ? ((conversation as Record<string, unknown>).title as string)
     : "Fred-Unterhaltung";
   return { title, messages: normalizeFredMessages(payload.messages) };
+}
+
+async function fetchTelegramIntegrationPublicState(
+  accessToken: string,
+  signal: AbortSignal,
+): Promise<TelegramIntegrationPublicState | null> {
+  const response = await fetch("/api/settings/telegram", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal,
+  });
+  if (response.status === 404) return null;
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok || !payload.integration || typeof payload.integration !== "object") return null;
+  const integration = payload.integration as Record<string, unknown>;
+  if (
+    !["awaiting_pairing", "active", "disconnecting", "error"].includes(
+      typeof integration.status === "string" ? integration.status : "",
+    )
+  ) return null;
+  return {
+    status: integration.status as TelegramIntegrationPublicState["status"],
+    botUsername: typeof integration.botUsername === "string" ? integration.botUsername : null,
+  };
 }
 
 async function fetchAdminCapability(accessToken: string): Promise<{ isAdmin: boolean }> {
@@ -1146,6 +1184,9 @@ function handleAdminTabKeyDown(event: React.KeyboardEvent, currentTab: string): 
 export default function Home() {
   const supabase = getSupabaseBrowserClient();
   const [fredConversationId, setFredConversationId] = useState("");
+  const [activeConversationOrigin, setActiveConversationOrigin] = useState<"web" | "telegram">("web");
+  const [telegramIntegration, setTelegramIntegration] =
+    useState<TelegramIntegrationPublicState | null>(null);
   const [fredChatInstance, setFredChatInstance] = useState(0);
   const [fredMessages, setFredMessages] = useState<ChatMessage[]>([]);
   const [fredConversations, setFredConversations] = useState<ConversationSummary[]>([]);
@@ -1438,6 +1479,7 @@ export default function Home() {
       if (isFreshAuthenticatedLanding) {
         setAppView("chat");
         setFredConversationId("");
+        setActiveConversationOrigin("web");
         setFredMessages([]);
         setError("");
       }
@@ -1481,6 +1523,23 @@ export default function Home() {
       isActive = false;
     };
   }, [isAuthLoaded, isLoaded, session?.access_token, user?.id]);
+
+  useEffect(() => {
+    const accessToken = session?.access_token;
+    if (!accessToken || !user?.id) {
+      queueMicrotask(() => setTelegramIntegration(null));
+      return;
+    }
+    const controller = new AbortController();
+    void fetchTelegramIntegrationPublicState(accessToken, controller.signal)
+      .then((integration) => {
+        if (!controller.signal.aborted) setTelegramIntegration(integration);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setTelegramIntegration(null);
+      });
+    return () => controller.abort();
+  }, [session?.access_token, user?.id]);
 
   useEffect(() => {
     const accessToken = session?.access_token;
@@ -1837,6 +1896,7 @@ export default function Home() {
   function openFredView() {
     setAppView("chat");
     setFredConversationId("");
+    setActiveConversationOrigin("web");
     setFredMessages([]);
     setFredChatInstance((current) => current + 1);
     setError("");
@@ -2452,6 +2512,7 @@ export default function Home() {
       const history = await fetchFredConversationHistory(session.access_token, conversation.id);
       setAppView("chat");
       setFredConversationId(conversation.id);
+      setActiveConversationOrigin(conversation.origin ?? "web");
       setFredMessages(history.messages);
       if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
         setSettingsOpen(false);
@@ -2861,7 +2922,14 @@ export default function Home() {
                         disabled={historyControlsDisabled}
                         aria-current={conversation.id === visibleActiveConversationId ? "page" : undefined}
                       >
-                        <span title={conversation.title}>{conversation.title}</span>
+                        <span className="conversation-title-row">
+                          {conversation.origin === "telegram" ? (
+                            <svg className="conversation-telegram-icon" aria-label="Telegram-Unterhaltung" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.81-.75-1-.65-1.56-1.06-2.53-1.7-1.12-.74-.4-1.14.25-1.8.17-.17 3.02-2.77 3.08-3.01.01-.03.01-.18-.07-.25-.08-.07-.19-.05-.27-.03-.12.03-1.99 1.26-5.62 3.72-.53.36-1.01.54-1.44.53-.47-.01-1.38-.27-2.06-.49-.83-.27-1.49-.41-1.43-.87.03-.24.36-.48.99-.73 3.88-1.69 6.47-2.8 7.77-3.34 3.7-1.54 4.47-1.81 4.97-1.82.11 0 .35.03.51.16.13.12.16.27.18.39.01.11.02.37 0 .57z"/>
+                            </svg>
+                          ) : null}
+                          <span title={conversation.title}>{conversation.title}</span>
+                        </span>
                         <time dateTime={conversation.updatedAt}>{formatHistoryDate(conversation.updatedAt)}</time>
                       </button>
                       <div className="conversation-actions">
@@ -3353,6 +3421,10 @@ export default function Home() {
                 </button>
               </form>
               </section>
+              <TelegramSettings
+                accessToken={session?.access_token ?? ""}
+                onIntegrationChange={setTelegramIntegration}
+              />
               <section className="account-settings-section account-deletion-section" aria-labelledby="account-deletion-title">
                 <h3 id="account-deletion-title">Konto löschen</h3>
                 <p>
@@ -3385,6 +3457,16 @@ export default function Home() {
           conversationId={fredConversationId}
           initialMessages={fredMessages}
           externalError={error}
+          readOnly={activeConversationOrigin === "telegram"}
+          readOnlyNotice="Diese Unterhaltung wird in Telegram fortgesetzt."
+          telegramBotUrl={
+            activeConversationOrigin === "telegram"
+            && telegramIntegration?.status === "active"
+            && telegramIntegration.botUsername
+            && TELEGRAM_BOT_USERNAME_PATTERN.test(telegramIntegration.botUsername)
+              ? `https://t.me/${telegramIntegration.botUsername}`
+              : undefined
+          }
           renderAssistantContent={(content) => <RichAnswer content={content} />}
           renderUserContent={renderUserMessageContent}
           onConversationUpdated={handleFredConversationUpdated}

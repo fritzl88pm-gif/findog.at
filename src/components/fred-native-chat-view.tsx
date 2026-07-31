@@ -113,6 +113,9 @@ type FredNativeChatViewProps = {
   conversationId: string;
   initialMessages: FredNativeMessage[];
   externalError?: string;
+  readOnly?: boolean;
+  readOnlyNotice?: string;
+  telegramBotUrl?: string;
   renderAssistantContent: (content: string) => ReactNode;
   renderUserContent: (content: string) => ReactNode;
   onConversationUpdated: (
@@ -298,6 +301,9 @@ export default function FredNativeChatView({
   conversationId,
   initialMessages,
   externalError = "",
+  readOnly = false,
+  readOnlyNotice,
+  telegramBotUrl,
   renderAssistantContent,
   renderUserContent,
   onConversationUpdated,
@@ -477,7 +483,7 @@ export default function FredNativeChatView({
   }, [modeNotice]);
 
   useEffect(() => {
-    if (!accessToken) return;
+    if (!accessToken || readOnly) return;
     const controller = new AbortController();
     void fetch("/api/fred/capabilities", {
       cache: "no-store",
@@ -496,7 +502,7 @@ export default function FredNativeChatView({
       if (value.webSearch !== true) setWebSearchEnabled(false);
     }).catch(() => undefined);
     return () => controller.abort();
-  }, [accessToken]);
+  }, [accessToken, readOnly]);
 
   useEffect(() => () => {
     streamingPreviewRef.current?.cancel();
@@ -544,7 +550,7 @@ export default function FredNativeChatView({
     rollbackMessages?: FredNativeMessage[];
   }) {
     const query = options.query.trim();
-    if (!query || isSending || !accessToken || abortControllerRef.current) return;
+    if (readOnly || !query || isSending || !accessToken || abortControllerRef.current) return;
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -749,6 +755,7 @@ export default function FredNativeChatView({
 
   async function sendMessage(event?: FormEvent) {
     event?.preventDefault();
+    if (readOnly) return;
     await submitQuery({
       query: composer,
       webSearchEnabled,
@@ -760,7 +767,7 @@ export default function FredNativeChatView({
   }
 
   function editQuestion(message: FredNativeMessage): void {
-    if (isSending) return;
+    if (readOnly || isSending) return;
     setComposer(message.content);
     setWebSearchEnabled(Boolean(message.webSearchEnabled && capabilities.webSearch));
     setProModeEnabled(Boolean(message.proModeEnabled && capabilities.proMode));
@@ -840,6 +847,7 @@ export default function FredNativeChatView({
   }
 
   function regenerateAnswer(assistantIndex: number): void {
+    if (readOnly) return;
     const question = precedingUserMessage(messages, assistantIndex);
     const messagesBeforeQuery = messagesBeforeRegeneratedAnswer(messages, assistantIndex);
     if (!question || !messagesBeforeQuery || isSending) return;
@@ -1291,6 +1299,21 @@ export default function FredNativeChatView({
   return (
     <section className={`chat-panel ${messages.length === 0 ? "empty-chat" : ""}`} aria-label="Fred">
       <div className="chat-content-group">
+        {readOnly && readOnlyNotice ? (
+          <div className="fred-readonly-notice" role="status">
+            <span>{readOnlyNotice}</span>
+            {telegramBotUrl ? (
+              <a
+                className="secondary-button compact-button"
+                href={telegramBotUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                In Telegram öffnen
+              </a>
+            ) : null}
+          </div>
+        ) : null}
         <div
           className="transcript"
           ref={transcriptRef}
@@ -1327,7 +1350,7 @@ export default function FredNativeChatView({
                     <time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time>
                   </div>
                   <div className="message-actions">
-                    {message.role === "user" && message.content ? (
+                    {!readOnly && message.role === "user" && message.content ? (
                       <button
                         className="message-action-button"
                         type="button"
@@ -1408,7 +1431,7 @@ export default function FredNativeChatView({
                                   : "Teilen fehlgeschlagen"}
                             </span>
                           ) : null}
-                          {index === messages.length - 1 ? (
+                          {!readOnly && index === messages.length - 1 ? (
                             <button
                               className="message-action-button"
                               type="button"
@@ -1604,6 +1627,7 @@ export default function FredNativeChatView({
           </div>
         </div>
 
+        {readOnly ? null : (
         <div className="composer-container">
           {modeNotice ? (
             <div className="fred-mode-notice" role="status" aria-live="polite" aria-atomic="true" key={modeNotice}>
@@ -1774,6 +1798,7 @@ export default function FredNativeChatView({
             ) : null}
           </form>
         </div>
+        )}
       </div>
 
       {reasoningContextMenu ? (

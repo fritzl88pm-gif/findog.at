@@ -28,6 +28,8 @@ type FredConversationRow = {
   created_at: string;
   updated_at: string;
   agent_key: FredAgentKey;
+  origin: "web" | "telegram";
+  telegram_integration_id: string | null;
 };
 
 type FredMessageRow = {
@@ -108,7 +110,7 @@ export async function GET(
     const { supabase, user } = await contextFor(request, conversationId);
     const { data: conversation, error: conversationError } = await supabase
       .from("fred_conversations")
-      .select("id,title,created_at,updated_at,agent_key")
+      .select("id,title,created_at,updated_at,agent_key,origin,telegram_integration_id")
       .eq("id", conversationId)
       .eq("client_id", user.id)
       .maybeSingle();
@@ -158,6 +160,8 @@ export async function GET(
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         agentKey: row.agent_key,
+        origin: row.origin,
+        telegramIntegrationId: row.telegram_integration_id ?? null,
       },
       messages: preparedMessages.map((message) => {
         const candidateSet = new Set(message.legacyBfgCandidates);
@@ -201,12 +205,10 @@ export async function DELETE(
   try {
     const { conversationId } = await routeContext.params;
     const { supabase, user } = await contextFor(request, conversationId);
-    const { data, error } = await supabase
-      .from("fred_conversations")
-      .delete()
-      .eq("id", conversationId)
-      .eq("client_id", user.id)
-      .select("id");
+    const { data, error } = await supabase.rpc("delete_owned_fred_conversations", {
+      p_client_id: user.id,
+      p_conversation_ids: [conversationId],
+    });
     if (error) {
       throw new UserVisibleError("Fred-Unterhaltung konnte nicht gelöscht werden.", 503);
     }
