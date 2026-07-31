@@ -38,7 +38,7 @@ describe("approved release surface", () => {
   });
 
   it("adds a separate BFG Suche PRO view and controls without replacing the normal search", () => {
-    expect(pageSource).toContain('type AppView = "chat" | "scanning" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "wo-beschluss" | "quiz" | "administration" | "data"');
+    expect(pageSource).toContain('type AppView = "chat" | "scanning" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data"');
     expect(pageSource).toMatch(/className={`sidebar-view-button[\s\S]*?BFG Suche PRO\s*<\/button>/);
     expect(pageSource).toContain('title="BFG Suche PRO"');
     expect(pageSource).toContain('aria-label="BFG Suche PRO"');
@@ -79,6 +79,12 @@ describe("approved release surface", () => {
     expect(pageSource.match(/\{isAdmin \? \(\s*<button[\s\S]{0,500}?appView === "quiz"/g)).toHaveLength(2);
     expect(pageSource).toContain('current === "administration" || current === "quiz"');
     expect(pageSource).toContain('appView === "quiz" && isAdmin ?');
+  });
+
+  it("does not expose the retired Wo Beschluss game", () => {
+    expect(pageSource).not.toContain("wo-beschluss");
+    expect(pageSource).not.toContain("Wo Beschluss?");
+    expect(globalsSource).not.toContain(".wo-beschluss");
   });
 
   it("adds the local Deutsche SV Rente AppView directly below BFG Suche PRO", () => {
