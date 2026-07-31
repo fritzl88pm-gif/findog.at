@@ -1,34 +1,136 @@
 const MAX_CHUNK_LENGTH = 4_000;
 
 const BR_RE = /<br\s*\/?>/giu;
-
-// Fred output may contain these known HTML wrappers. Match only actual tag
-// names so ordinary comparisons such as "amount < 100 and > 5" survive.
 const SUPPORTED_HTML_TAG_RE = /<\/?(?:a|b|blockquote|br|code|del|div|em|h[1-6]|hr|i|li|ol|p|pre|s|span|strike|strong|table|tbody|td|tfoot|th|thead|tr|u|ul)\b(?:\s+[^<>]*?)?\s*\/?>/giu;
+const HTML_TABLE_RE = /<table\b[^>]*>([\s\S]*?)<\/table>/giu;
+const HTML_ROW_RE = /<tr\b[^>]*>([\s\S]*?)<\/tr>/giu;
+const HTML_CELL_RE = /<(th|td)\b[^>]*>([\s\S]*?)<\/\1>/giu;
 
-/**
- * Normalize Fred's answer for Telegram's current plaintext delivery.
- * Markdown markers remain readable plaintext; known HTML wrappers are removed.
- */
+/** Normalize Fred's answer for Telegram's plaintext delivery. */
 export function normalizeFredMarkdown(text: string): string {
-  let result = text;
+  return transformOutsideFences(text, (outside) => {
+    let result = convertHtmlTables(outside);
+    result = convertGfmTables(result);
+    result = result.replace(BR_RE, "\n");
+    result = result.replace(/<h([1-6])>(.*?)<\/h\1>/giu, (_, level: string, content: string) => {
+      return `${"#".repeat(Number.parseInt(level, 10))} ${content.trim()}`;
+    });
+    result = result.replace(SUPPORTED_HTML_TAG_RE, "");
+    return result.replace(/\n{3,}/gu, "\n\n");
+  }).trim();
+}
 
-  // Convert <br> to newlines
-  result = result.replace(BR_RE, "\n");
+function transformOutsideFences(text: string, transform: (value: string) => string): string {
+  let result = "";
+  let outside = "";
+  let fence: { char: string; length: number } | null = null;
+  const lines = text.match(/[^\n]*(?:\n|$)/gu)?.filter(Boolean) ?? [];
 
-  // Convert HTML headings to Markdown equivalents
-  result = result.replace(/<h([1-6])>(.*?)<\/h\1>/giu, (_, level: string, content: string) => {
-    const hashes = "#".repeat(Number.parseInt(level, 10));
-    return `${hashes} ${content.trim()}`;
+  for (const rawLine of lines) {
+    const line = rawLine.endsWith("\n") ? rawLine.slice(0, -1) : rawLine;
+    if (!fence) {
+      const opening = line.match(/^ {0,3}(`{3,}|~{3,})/u);
+      if (!opening) {
+        outside += rawLine;
+        continue;
+      }
+      result += transform(outside) + rawLine;
+      outside = "";
+      fence = { char: opening[1][0], length: opening[1].length };
+      continue;
+    }
+
+    result += rawLine;
+    const closing = line.match(/^ {0,3}(`+|~+)[ \t]*$/u);
+    if (closing && closing[1][0] === fence.char && closing[1].length >= fence.length) {
+      fence = null;
+    }
+  }
+
+  return result + transform(outside);
+}
+
+function convertHtmlTables(text: string): string {
+  return text.replace(HTML_TABLE_RE, (table, body: string) => {
+    const rows = [...body.matchAll(HTML_ROW_RE)].map((match) => {
+      return [...match[1].matchAll(HTML_CELL_RE)].map((cell) => ({
+        tag: cell[1].toLowerCase(),
+        value: cell[2].replace(BR_RE, " / ").replace(SUPPORTED_HTML_TAG_RE, "").trim(),
+      }));
+    }).filter((row) => row.length > 0);
+    const header = rows[0];
+    const data = rows.slice(1).map((row) => row.map((cell) => cell.value));
+    if (!header || header.length < 2 || !header.every((cell) => cell.tag === "th")
+      || data.length === 0 || data.some((row) => row.length !== header.length)) {
+      return table;
+    }
+    return renderTable(header.map((cell) => cell.value), data);
   });
+}
 
-  // Strip remaining HTML tags but preserve content
-  result = result.replace(SUPPORTED_HTML_TAG_RE, "");
+function convertGfmTables(text: string): string {
+  const lines = text.split("\n");
+  const result: string[] = [];
 
-  // Collapse excessive blank lines (more than 2 consecutive newlines)
-  result = result.replace(/\n{3,}/gu, "\n\n");
+  for (let i = 0; i < lines.length;) {
+    const headers = splitRow(lines[i]);
+    const divider = i + 1 < lines.length ? splitRow(lines[i + 1]) : [];
+    const validHeader = headers.length >= 2 && headers.length === divider.length
+      && divider.every((cell) => /^:?-{3,}:?$/u.test(cell));
+    if (!validHeader) {
+      result.push(lines[i++]);
+      continue;
+    }
 
-  return result.trim();
+    const rows: string[][] = [];
+    let end = i + 2;
+    while (end < lines.length && lines[end].includes("|")) {
+      const row = splitRow(lines[end]);
+      if (row.length !== headers.length) break;
+      rows.push(row);
+      end++;
+    }
+    if (rows.length === 0) {
+      result.push(lines[i++]);
+      continue;
+    }
+    result.push(renderTable(headers, rows));
+    i = end;
+  }
+
+  return result.join("\n");
+}
+
+function splitRow(line: string): string[] {
+  const value = line.trim();
+  const cells = [""];
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] !== "|") {
+      cells[cells.length - 1] += value[i];
+      continue;
+    }
+    const current = cells[cells.length - 1];
+    const trailingSlashes = current.match(/\\+$/u)?.[0].length ?? 0;
+    if (trailingSlashes % 2 === 1) {
+      cells[cells.length - 1] = `${current.slice(0, -1)}|`;
+    } else {
+      cells.push("");
+    }
+  }
+  if (cells[0].trim() === "") cells.shift();
+  if (cells.at(-1)?.trim() === "") cells.pop();
+  return cells.map((cell) => cell.trim());
+}
+
+function renderTable(headers: string[], rows: string[][]): string {
+  const cell = (value: string): string => value || "—";
+  if (headers.length === 2) {
+    return [`${cell(headers[0])} · ${cell(headers[1])}`,
+      ...rows.map((row) => `• ${cell(row[0])} — ${cell(row[1])}`)].join("\n");
+  }
+  return rows.map((row) => headers.map((header, index) => {
+    return `${index === 0 ? "▌ " : "  "}${cell(header)}: ${cell(row[index])}`;
+  }).join("\n")).join("\n\n");
 }
 
 /**
