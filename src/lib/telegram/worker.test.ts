@@ -40,6 +40,8 @@ function makeIntegration(overrides: Partial<WorkerIntegration> = {}): WorkerInte
     status: "active",
     pairedTelegramUserId: telegramUserId,
     pairedTelegramChatId: telegramChatId,
+    proModeEnabled: false,
+    webSearchEnabled: false,
     ...overrides,
   };
 }
@@ -115,6 +117,9 @@ function fakeStorage(overrides: Partial<WorkerStorage> = {}): WorkerStorage {
     markTelegramOrigin: vi.fn().mockResolvedValue(undefined),
     getDeliveryState: vi.fn().mockResolvedValue([]),
     recordDelivery: vi.fn().mockResolvedValue(undefined),
+    setMode: vi.fn().mockImplementation(async (_integrationId: string, mode: string, enabled: boolean) => {
+      return { proModeEnabled: mode === "pro" ? enabled : false, webSearchEnabled: mode === "web" ? enabled : false };
+    }),
     ...overrides,
   };
 }
@@ -900,5 +905,344 @@ describe("runWorkerLoop", () => {
     }));
     expect(rpc.cancel).not.toHaveBeenCalled();
     expect(rpc.complete).not.toHaveBeenCalled();
+  });
+});
+
+// ── Pro/Web mode tests ──────────────────────────────────────────────────────
+
+describe("processUpdate: pro command", () => {
+  it("replies with current pro mode status for bare /pro", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: false, webSearchEnabled: false })),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/pro") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(storage.setMode).not.toHaveBeenCalled();
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toContain("Pro-Modus");
+    expect(sentText).toContain("deaktiviert");
+    expect(sentText).toContain("/pro on");
+    expect(rpc.complete).toHaveBeenCalled();
+  });
+
+  it("/pro status reports current state without writing", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: true, webSearchEnabled: false })),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/pro status") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(storage.setMode).not.toHaveBeenCalled();
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toContain("aktiviert");
+    expect(rpc.complete).toHaveBeenCalled();
+  });
+
+  it("/pro on idempotently enables pro mode", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: false, webSearchEnabled: false })),
+      setMode: vi.fn().mockResolvedValue({ proModeEnabled: true, webSearchEnabled: false }),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/pro on") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(storage.setMode).toHaveBeenCalledWith(integrationId, "pro", true);
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toContain("aktiviert");
+    expect(rpc.complete).toHaveBeenCalled();
+  });
+
+  it("/pro off idempotently disables pro mode", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: true, webSearchEnabled: false })),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/pro off") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(storage.setMode).toHaveBeenCalledWith(integrationId, "pro", false);
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toContain("deaktiviert");
+    expect(rpc.complete).toHaveBeenCalled();
+  });
+
+  it("/pro on is idempotent when already enabled", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: true, webSearchEnabled: false })),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/pro on") });
+
+    await processUpdate(config, update);
+
+    expect(storage.setMode).toHaveBeenCalledWith(integrationId, "pro", true);
+  });
+
+  it("/pro nonsense sends pro usage and does NOT call setMode", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: false, webSearchEnabled: false })),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/pro nonsense") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(storage.setMode).not.toHaveBeenCalled();
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toBe("Nutzung: /pro on|off|status");
+    expect(rpc.complete).toHaveBeenCalled();
+  });
+});
+
+describe("processUpdate: web command", () => {
+  it("/web reports deactivated when web search is off", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: false, webSearchEnabled: false })),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/web") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toContain("Websuche");
+    expect(sentText).toContain("deaktiviert");
+    expect(sentText).toContain("/web on");
+    expect(storage.setMode).not.toHaveBeenCalled();
+  });
+
+  it("/web on enables web search", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: false, webSearchEnabled: false })),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/web on") });
+
+    await processUpdate(config, update);
+
+    expect(storage.setMode).toHaveBeenCalledWith(integrationId, "web", true);
+  });
+
+  it("/web off disables web search", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: false, webSearchEnabled: true })),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/web off") });
+
+    await processUpdate(config, update);
+
+    expect(storage.setMode).toHaveBeenCalledWith(integrationId, "web", false);
+  });
+
+  it("/web on please sends web usage and does NOT call setMode", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: false, webSearchEnabled: false })),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/web on please") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(storage.setMode).not.toHaveBeenCalled();
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toBe("Nutzung: /web on|off|status");
+    expect(rpc.complete).toHaveBeenCalled();
+  });
+});
+
+describe("processUpdate: /settings displays dynamic modes", () => {
+  it("shows both pro and web status in settings", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: true, webSearchEnabled: false })),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/settings") });
+
+    await processUpdate(config, update);
+
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toContain("Einstellungen");
+    expect(sentText).toContain("Pro-Modus");
+    expect(sentText).toContain("aktiviert");
+    expect(sentText).toContain("Websuche");
+    expect(sentText).toContain("deaktiviert");
+    expect(sentText).toContain("/pro");
+    expect(sentText).toContain("/web");
+  });
+});
+
+describe("processUpdate: /new preserves modes", () => {
+  it("clears conversation but does not change pro/web mode", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: true, webSearchEnabled: true })),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/new") });
+
+    await processUpdate(config, update);
+
+    expect(storage.clearActiveConversation).toHaveBeenCalledWith(integrationId, telegramChatId);
+    expect(storage.setMode).not.toHaveBeenCalled();
+    expect(rpc.complete).toHaveBeenCalled();
+  });
+});
+
+describe("processUpdate: turn routing with pro/web flags", () => {
+  it("passes proModeEnabled=true and webSearchEnabled=false from integration to FredTurnRequest", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: true, webSearchEnabled: false })),
+    });
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn });
+
+    await processUpdate(config, makeUpdate());
+
+    expect(calls[0]?.proModeEnabled).toBe(true);
+    expect(calls[0]?.webSearchEnabled).toBe(false);
+  });
+
+  it("passes proModeEnabled=false and webSearchEnabled=true", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: false, webSearchEnabled: true })),
+    });
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn });
+
+    await processUpdate(config, makeUpdate());
+
+    expect(calls[0]?.proModeEnabled).toBe(false);
+    expect(calls[0]?.webSearchEnabled).toBe(true);
+  });
+
+  it("passes both true", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: true, webSearchEnabled: true })),
+    });
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn });
+
+    await processUpdate(config, makeUpdate());
+
+    expect(calls[0]?.proModeEnabled).toBe(true);
+    expect(calls[0]?.webSearchEnabled).toBe(true);
+  });
+
+  it("passes both false (default)", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: false, webSearchEnabled: false })),
+    });
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn });
+
+    await processUpdate(config, makeUpdate());
+
+    expect(calls[0]?.proModeEnabled).toBe(false);
+    expect(calls[0]?.webSearchEnabled).toBe(false);
+  });
+});
+
+describe("processUpdate: /help and /start list pro and web", () => {
+  it("/help lists /pro and /web", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/help") });
+
+    await processUpdate(config, update);
+
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toContain("/pro");
+    expect(sentText).toContain("/web");
+  });
+
+  it("/start lists /pro and /web", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/start") });
+
+    await processUpdate(config, update);
+
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toContain("/pro");
+    expect(sentText).toContain("/web");
+  });
+});
+
+describe("processUpdate: bare commands do not toggle", () => {
+  it("bare /pro does NOT toggle pro mode", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: false, webSearchEnabled: false })),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/pro") });
+
+    await processUpdate(config, update);
+
+    expect(storage.setMode).not.toHaveBeenCalled();
+    expect(rpc.complete).toHaveBeenCalled();
+  });
+
+  it("bare /web does NOT toggle web search", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({ proModeEnabled: false, webSearchEnabled: true })),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/web") });
+
+    await processUpdate(config, update);
+
+    expect(storage.setMode).not.toHaveBeenCalled();
+    expect(rpc.complete).toHaveBeenCalled();
   });
 });

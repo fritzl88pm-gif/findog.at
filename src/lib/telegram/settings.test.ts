@@ -737,3 +737,141 @@ describe("replaceTelegramBot", () => {
     expect(result.conflict).toBeUndefined();
   });
 });
+
+describe("TELEGRAM_BOT_COMMANDS includes pro and web", () => {
+  function makeIntegrationRow() {
+    const integrationId = randomUUID();
+    const botUserId = 123456789;
+    const encryptedToken = makeEncryptedToken(integrationId, botUserId);
+    return {
+      id: integrationId,
+      client_id: CLIENT_ID,
+      bot_user_id: botUserId,
+      bot_username: "old_bot",
+      encrypted_token: encryptedToken,
+      webhook_id: randomUUID(),
+      webhook_secret_sha256: "a".repeat(64),
+      status: "active",
+      pairing_token_sha256: null,
+      pairing_expires_at: null,
+      paired_telegram_user_id: 456,
+      paired_telegram_chat_id: 789,
+      last_error_code: null,
+      last_error_description: null,
+      last_error_at: null,
+    };
+  }
+
+  it("registerTelegramIntegration calls setMyCommands with pro and web", async () => {
+    process.env.TELEGRAM_CREDENTIALS_KEY = ENV_KEY;
+    process.env.TELEGRAM_PUBLIC_ORIGIN = "https://findog.at";
+
+    const ms = mockSelectMaybeSingle({ data: null, error: null });
+    const mockInsert = vi.fn().mockResolvedValue({ error: null });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({
+      from: vi.fn().mockReturnValue({ ...ms, insert: mockInsert }),
+    } as never);
+
+    const setMyCommands = vi.fn().mockResolvedValue(true);
+    const botApi = mockBotApi({ setMyCommands });
+
+    await registerTelegramIntegration(CLIENT_ID, TOKEN, botApi);
+
+    expect(setMyCommands).toHaveBeenCalledTimes(1);
+    const cmds = setMyCommands.mock.calls[0][0] as Array<{ command: string; description: string }>;
+    const cmdNames = cmds.map((c: { command: string }) => c.command);
+    expect(cmdNames).toContain("pro");
+    expect(cmdNames).toContain("web");
+    const proCmd = cmds.find((c: { command: string }) => c.command === "pro");
+    expect(proCmd?.description).toBe("Pro-Modus einstellen");
+    const webCmd = cmds.find((c: { command: string }) => c.command === "web");
+    expect(webCmd?.description).toBe("Websuche einstellen");
+    // All original commands still present
+    expect(cmdNames).toContain("start");
+    expect(cmdNames).toContain("new");
+    expect(cmdNames).toContain("stop");
+    expect(cmdNames).toContain("status");
+    expect(cmdNames).toContain("help");
+    expect(cmdNames).toContain("settings");
+  });
+
+  it("replaceTelegramBot sends both pro and web commands", async () => {
+    process.env.TELEGRAM_CREDENTIALS_KEY = ENV_KEY;
+    process.env.TELEGRAM_PUBLIC_ORIGIN = "https://findog.at";
+
+    const integration = makeIntegrationRow();
+
+    let callCount = 0;
+    const from = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return mockSelectMaybeSingle({ data: integration, error: null });
+      return mockSelectMaybeSingle({ data: null, error: null });
+    });
+
+    const mockRpc = vi.fn().mockImplementation(async () => {
+      return { data: true, error: null };
+    });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from, rpc: mockRpc } as never);
+
+    const setMyCommands = vi.fn().mockResolvedValue(true);
+    const botApi = mockBotApi({
+      getMe: vi.fn().mockResolvedValue({ id: 111222333, is_bot: true, first_name: "NewBot", username: "new_bot" }),
+      setMyCommands,
+    });
+
+    const { replaceTelegramBot } = await import("./settings");
+    const oldBotApi = mockBotApi({
+      deleteWebhook: vi.fn().mockResolvedValue(true),
+      deleteMyCommands: vi.fn().mockResolvedValue(true),
+    });
+    await replaceTelegramBot(CLIENT_ID, TOKEN, botApi, { oldBotApi });
+
+    expect(setMyCommands).toHaveBeenCalledTimes(1);
+    const cmds = setMyCommands.mock.calls[0][0] as Array<{ command: string; description: string }>;
+    const cmdNames = cmds.map((c: { command: string }) => c.command);
+    expect(cmdNames).toContain("pro");
+    expect(cmdNames).toContain("web");
+  });
+
+  it("both register and replace use the same centralized command list", async () => {
+    process.env.TELEGRAM_CREDENTIALS_KEY = ENV_KEY;
+    process.env.TELEGRAM_PUBLIC_ORIGIN = "https://findog.at";
+
+    // Register
+    const ms1 = mockSelectMaybeSingle({ data: null, error: null });
+    const mockInsert1 = vi.fn().mockResolvedValue({ error: null });
+    const setMyCommands1 = vi.fn().mockResolvedValue(true);
+    vi.mocked(getSupabaseServerClient).mockReturnValue({
+      from: vi.fn().mockReturnValue({ ...ms1, insert: mockInsert1 }),
+    } as never);
+    await registerTelegramIntegration(CLIENT_ID, TOKEN, mockBotApi({ setMyCommands: setMyCommands1 }));
+
+    // Replace
+    const integration = makeIntegrationRow();
+    let callCount = 0;
+    const from2 = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return mockSelectMaybeSingle({ data: integration, error: null });
+      return mockSelectMaybeSingle({ data: null, error: null });
+    });
+    const mockRpc2 = vi.fn().mockResolvedValue({ data: true, error: null });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from: from2, rpc: mockRpc2 } as never);
+    const setMyCommands2 = vi.fn().mockResolvedValue(true);
+
+    const { replaceTelegramBot } = await import("./settings");
+    const oldBotApi = mockBotApi({
+      deleteWebhook: vi.fn().mockResolvedValue(true),
+      deleteMyCommands: vi.fn().mockResolvedValue(true),
+    });
+    await replaceTelegramBot(CLIENT_ID, TOKEN, mockBotApi({
+      getMe: vi.fn().mockResolvedValue({ id: 111222333, is_bot: true, first_name: "NewBot", username: "new_bot" }),
+      setMyCommands: setMyCommands2,
+    }), { oldBotApi });
+
+    // Both command lists should be identical
+    const cmds1 = setMyCommands1.mock.calls[0][0] as Array<{ command: string }>;
+    const cmds2 = setMyCommands2.mock.calls[0][0] as Array<{ command: string }>;
+    expect(cmds1.map((c: { command: string }) => c.command)).toEqual(cmds2.map((c: { command: string }) => c.command));
+    expect(cmds1.map((c: { command: string; description: string }) => c.description)).toEqual(cmds2.map((c: { command: string; description: string }) => c.description));
+  });
+});

@@ -38,6 +38,8 @@ export interface WorkerIntegration {
   status: string;
   pairedTelegramUserId: number | null;
   pairedTelegramChatId: number | null;
+  proModeEnabled: boolean;
+  webSearchEnabled: boolean;
 }
 
 export interface WorkerStorage {
@@ -54,6 +56,7 @@ export interface WorkerStorage {
     status: "pending" | "sent" | "uncertain" | "failed",
     telegramMessageId?: number,
   ): Promise<void>;
+  setMode(integrationId: string, mode: "pro" | "web", enabled: boolean): Promise<Pick<WorkerIntegration, "proModeEnabled" | "webSearchEnabled">>;
 }
 
 export interface WorkerConfig {
@@ -100,11 +103,27 @@ const MAX_ATTEMPTS = 5;
 const RICH_MESSAGE_MAX_LENGTH = 32_768;
 
 const START_TEXT =
-  "Willkommen bei Findog! 🐕\n\nStelle deine Frage zum österreichischen Steuerrecht und Fred wird sie beantworten.\n\nBefehle:\n/help – Alle Befehle anzeigen\n/new – Neue Unterhaltung\n/stop – Aktuelle Antwort abbrechen\n/status – Verbindungsstatus\n/settings – Einstellungen";
+  "Willkommen bei Findog! 🐕\n\nStelle deine Frage zum österreichischen Steuerrecht und Fred wird sie beantworten.\n\nBefehle:\n/help – Alle Befehle anzeigen\n/new – Neue Unterhaltung\n/stop – Aktuelle Antwort abbrechen\n/status – Verbindungsstatus\n/settings – Einstellungen\n/pro – Pro-Modus einstellen\n/web – Websuche einstellen";
 const HELP_TEXT =
-  "🐕 Findog – Dein Assistent für österreichisches Steuerrecht\n\nBefehle:\n/start – Bot starten\n/new – Neue Unterhaltung beginnen\n/stop – Aktuelle Antwort abbrechen\n/status – Verbindungsstatus prüfen\n/help – Diese Hilfe anzeigen\n/settings – Einstellungen\n\nStelle einfach deine Frage und Fred wird antworten!";
+  "🐕 Findog – Dein Assistent für österreichisches Steuerrecht\n\nBefehle:\n/start – Bot starten\n/new – Neue Unterhaltung beginnen\n/stop – Aktuelle Antwort abbrechen\n/status – Verbindungsstatus prüfen\n/help – Diese Hilfe anzeigen\n/settings – Einstellungen\n/pro – Pro-Modus einstellen\n/web – Websuche einstellen\n\nStelle einfach deine Frage und Fred wird antworten!";
 const STATUS_TEXT = "✅ Findog ist verbunden und bereit.";
-const SETTINGS_TEXT = "Einstellungen können in der Findog Web-App unter Einstellungen → Telegram vorgenommen werden.";
+function buildSettingsText(proEnabled: boolean, webEnabled: boolean): string {
+  const proStatus = proEnabled ? "aktiviert" : "deaktiviert";
+  const webStatus = webEnabled ? "aktiviert" : "deaktiviert";
+  return `Einstellungen\n• Pro-Modus: ${proStatus}\n• Websuche: ${webStatus}\n\nÄndern: /pro on|off · /web on|off`;
+}
+function buildProStatusText(enabled: boolean): string {
+  if (enabled) {
+    return "Pro-Modus: aktiviert.\nGilt für deine nächsten Fragen. Deaktivieren: /pro off";
+  }
+  return "Pro-Modus: deaktiviert.\nAktivieren: /pro on";
+}
+function buildWebStatusText(enabled: boolean): string {
+  if (enabled) {
+    return "Websuche: aktiviert.\nDeaktivieren: /web off";
+  }
+  return "Websuche: deaktiviert.\nAktivieren: /web on";
+}
 const NEW_CONVERSATION_TEXT = "Neue Unterhaltung gestartet. Stelle deine nächste Frage!";
 const STOP_STOPPED_TEXT = "⏹️ Die laufende Antwort wurde abgebrochen.";
 const STOP_NOTHING_TEXT = "Es läuft gerade keine Antwort, die abgebrochen werden könnte.";
@@ -187,7 +206,7 @@ export async function processUpdate(
     const text = message.text.trim();
     const command = parseSlashCommand(text);
     if (command) {
-      return await handleSlashCommand(config, botApi, integration, update, handle, command.command, chatId);
+      return await handleSlashCommand(config, botApi, integration, update, handle, command, chatId);
     }
     if (looksLikeSlashCommand(text)) {
       await botApi.sendMessage({ chat_id: chatId, text: UNKNOWN_COMMAND_TEXT });
@@ -248,10 +267,12 @@ async function handleSlashCommand(
   integration: WorkerIntegration,
   update: ClaimedUpdate,
   handle: UpdateHandle,
-  command: string,
+  parsed: import("./commands").ParsedSlashCommand,
   chatId: number,
 ): Promise<ProcessedUpdateResult> {
   const { rpc, storage } = config;
+  const command = parsed.command;
+  const argument = parsed.argument;
 
   switch (command) {
     case "start":
@@ -266,9 +287,13 @@ async function handleSlashCommand(
       await botApi.sendMessage({ chat_id: chatId, text: STATUS_TEXT });
       break;
 
-    case "settings":
-      await botApi.sendMessage({ chat_id: chatId, text: SETTINGS_TEXT });
+    case "settings": {
+      await botApi.sendMessage({
+        chat_id: chatId,
+        text: buildSettingsText(integration.proModeEnabled, integration.webSearchEnabled),
+      });
       break;
+    }
 
     case "new":
       await storage.clearActiveConversation(integration.id, chatId);
@@ -282,6 +307,32 @@ async function handleSlashCommand(
         excludeRowId: update.id,
       });
       await botApi.sendMessage({ chat_id: chatId, text: stopped ? STOP_STOPPED_TEXT : STOP_NOTHING_TEXT });
+      break;
+    }
+
+    case "pro": {
+      if (argument === undefined || argument === "status") {
+        await botApi.sendMessage({ chat_id: chatId, text: buildProStatusText(integration.proModeEnabled) });
+      } else if (argument === "on" || argument === "off") {
+        const enable = argument === "on";
+        const updated = await storage.setMode(integration.id, "pro", enable);
+        await botApi.sendMessage({ chat_id: chatId, text: buildProStatusText(updated.proModeEnabled) });
+      } else {
+        await botApi.sendMessage({ chat_id: chatId, text: "Nutzung: /pro on|off|status" });
+      }
+      break;
+    }
+
+    case "web": {
+      if (argument === undefined || argument === "status") {
+        await botApi.sendMessage({ chat_id: chatId, text: buildWebStatusText(integration.webSearchEnabled) });
+      } else if (argument === "on" || argument === "off") {
+        const enable = argument === "on";
+        const updated = await storage.setMode(integration.id, "web", enable);
+        await botApi.sendMessage({ chat_id: chatId, text: buildWebStatusText(updated.webSearchEnabled) });
+      } else {
+        await botApi.sendMessage({ chat_id: chatId, text: "Nutzung: /web on|off|status" });
+      }
       break;
     }
 
@@ -330,8 +381,8 @@ async function handleFredTurn(
     origin: "telegram",
     telegramIntegrationId: integration.id,
     agentKey: "fred",
-    webSearchEnabled: false,
-    proModeEnabled: false,
+    webSearchEnabled: integration.webSearchEnabled,
+    proModeEnabled: integration.proModeEnabled,
     userEventId: deriveEventId(`${integration.id}:${update.updateId}:user`),
     assistantEventId: deriveEventId(`${integration.id}:${update.updateId}:assistant`),
     onConversationEvent: async (conversation) => {

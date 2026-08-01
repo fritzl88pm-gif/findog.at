@@ -105,6 +105,17 @@ function mapToPublicResult(row: Record<string, unknown>): GetTelegramIntegration
   };
 }
 
+const TELEGRAM_BOT_COMMANDS: TelegramBotCommand[] = [
+  { command: "start", description: "Bot starten und verknüpfen" },
+  { command: "new", description: "Neue Unterhaltung beginnen" },
+  { command: "stop", description: "Aktuelle Unterhaltung beenden" },
+  { command: "status", description: "Status der Verbindung anzeigen" },
+  { command: "help", description: "Hilfe und Verfügbare Befehle" },
+  { command: "settings", description: "Einstellungen anzeigen" },
+  { command: "pro", description: "Pro-Modus einstellen" },
+  { command: "web", description: "Websuche einstellen" },
+];
+
 export async function getTelegramIntegration(
   clientId: string,
 ): Promise<GetTelegramIntegrationResult | null> {
@@ -206,14 +217,7 @@ export async function registerTelegramIntegration(
   const pairingTokenHash = hashToken(pairingToken);
 
   const webhookUrl = `${publicOrigin}/api/webhooks/telegram/${webhookId}`;
-  const commands: TelegramBotCommand[] = [
-    { command: "start", description: "Bot starten und verknüpfen" },
-    { command: "new", description: "Neue Unterhaltung beginnen" },
-    { command: "stop", description: "Aktuelle Unterhaltung beenden" },
-    { command: "status", description: "Status der Verbindung anzeigen" },
-    { command: "help", description: "Hilfe und Verfügbare Befehle" },
-    { command: "settings", description: "Einstellungen anzeigen" },
-  ];
+  const commands = TELEGRAM_BOT_COMMANDS;
 
   // Persist integration first so the row exists before any external Telegram side effect
   const { error: insertError } = await supabase
@@ -391,14 +395,7 @@ export async function replaceTelegramBot(
   const newPairingTokenHash = hashToken(newPairingToken);
 
   const newWebhookUrl = `${publicOrigin}/api/webhooks/telegram/${newWebhookId}`;
-  const commands: TelegramBotCommand[] = [
-    { command: "start", description: "Bot starten und verknüpfen" },
-    { command: "new", description: "Neue Unterhaltung beginnen" },
-    { command: "stop", description: "Aktuelle Unterhaltung beenden" },
-    { command: "status", description: "Status der Verbindung anzeigen" },
-    { command: "help", description: "Hilfe und Verfügbare Befehle" },
-    { command: "settings", description: "Einstellungen anzeigen" },
-  ];
+  const commands = TELEGRAM_BOT_COMMANDS;
 
   // 7. Configure commands and webhook on the NEW bot FIRST
   try {

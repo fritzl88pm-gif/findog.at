@@ -1,6 +1,7 @@
 /** Standalone Telegram worker entrypoint. */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { fileURLToPath } from "node:url";
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
@@ -51,6 +52,8 @@ interface IntegrationRow {
   status: string;
   paired_telegram_user_id: number | null;
   paired_telegram_chat_id: number | null;
+  pro_mode_enabled: boolean;
+  web_search_enabled: boolean;
 }
 
 interface ConversationRow {
@@ -116,7 +119,7 @@ export function buildStorage(supabase: Supabase): WorkerStorage {
     async loadIntegration(id): Promise<WorkerIntegration | null> {
       const { data, error } = await supabase
         .from("telegram_integrations")
-        .select("id,client_id,bot_user_id,encrypted_token,status,paired_telegram_user_id,paired_telegram_chat_id")
+        .select("id,client_id,bot_user_id,encrypted_token,status,paired_telegram_user_id,paired_telegram_chat_id,pro_mode_enabled,web_search_enabled")
         .eq("id", id)
         .maybeSingle();
       if (error) throw dbError("TELEGRAM_INTEGRATION_READ_FAILED");
@@ -130,6 +133,8 @@ export function buildStorage(supabase: Supabase): WorkerStorage {
         status: row.status,
         pairedTelegramUserId: row.paired_telegram_user_id,
         pairedTelegramChatId: row.paired_telegram_chat_id,
+        proModeEnabled: row.pro_mode_enabled,
+        webSearchEnabled: row.web_search_enabled,
       };
     },
 
@@ -208,6 +213,27 @@ export function buildStorage(supabase: Supabase): WorkerStorage {
         { onConflict: "update_id,chunk_index" },
       );
       if (error) throw dbError("TELEGRAM_DELIVERY_WRITE_FAILED");
+    },
+
+    async setMode(integrationId, mode, enabled) {
+      const column = mode === "pro" ? "pro_mode_enabled" : "web_search_enabled";
+      const { error: updateError } = await supabase
+        .from("telegram_integrations")
+        .update({ [column]: enabled })
+        .eq("id", integrationId);
+      if (updateError) throw dbError("TELEGRAM_MODE_UPDATE_FAILED");
+
+      const { data, error: readError } = await supabase
+        .from("telegram_integrations")
+        .select("pro_mode_enabled,web_search_enabled")
+        .eq("id", integrationId)
+        .maybeSingle();
+      if (readError || !data) throw dbError("TELEGRAM_MODE_READ_FAILED");
+
+      return {
+        proModeEnabled: (data as Record<string, unknown>).pro_mode_enabled as boolean,
+        webSearchEnabled: (data as Record<string, unknown>).web_search_enabled as boolean,
+      };
     },
   };
 }
@@ -510,8 +536,12 @@ async function main(): Promise<void> {
   }
 }
 
-void main().catch((error: unknown) => {
-  const code = error instanceof Error ? error.message.slice(0, 96) : "UNKNOWN_FATAL";
-  console.error("telegram_worker_fatal", { code });
-  process.exitCode = 1;
-});
+// Direct-execution guard: only start the worker when this module is the
+// entrypoint, not when it is imported (e.g. by tests).
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  void main().catch((error: unknown) => {
+    const code = error instanceof Error ? error.message.slice(0, 96) : "UNKNOWN_FATAL";
+    console.error("telegram_worker_fatal", { code });
+    process.exitCode = 1;
+  });
+}
