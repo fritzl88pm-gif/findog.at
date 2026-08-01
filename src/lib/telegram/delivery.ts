@@ -23,6 +23,10 @@ export interface DeliveryOptions {
   maxRetries?: number;
   /** Per-chunk retry delay base in ms. */
   retryDelayMs?: number;
+  /** Raw Markdown eligible for a single native Rich Message attempt. */
+  richMarkdown?: string;
+  /** Overridable sleep for deterministic retry tests. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface DeliveryResult {
@@ -79,7 +83,9 @@ export async function deliverFinalAnswer(
   options: DeliveryOptions,
 ): Promise<DeliveryResult> {
   const { ledger, maxRetries = 5, retryDelayMs = 1000 } = options;
+  const sleepFn = options.sleep ?? sleep;
   const chunks = chunkTelegramMessage(text);
+  const richMarkdown = chunks.length === 1 ? options.richMarkdown : undefined;
 
   if (chunks.length === 0) {
     return { sent: false, uncertain: false };
@@ -98,6 +104,50 @@ export async function deliverFinalAnswer(
       status: "pending",
     };
     ledger.chunks.push(entry);
+
+    if (i === 0 && richMarkdown) {
+      let richError: unknown;
+      let fallbackToLegacy = false;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          const result = await api.sendRichMessage({
+            chat_id: chatId,
+            rich_message: { markdown: richMarkdown },
+          });
+          entry.status = "sent";
+          entry.messageId = result.message_id;
+          anySent = true;
+          richError = null;
+          break;
+        } catch (err) {
+          richError = err;
+          if (isAmbiguousError(err) || isServerError(err)) {
+            entry.status = "uncertain";
+            ledger.uncertainChunks.push(entry);
+            return { sent: anySent, uncertain: true };
+          }
+          if (isPermanentRichRejection(err)) {
+            fallbackToLegacy = true;
+            richError = null;
+            break;
+          }
+
+          const retryAfter = extractRetryAfter(err);
+          if (retryAfter !== undefined) {
+            await sleepFn(retryAfter * 1000);
+          } else if (attempt < maxRetries - 1) {
+            await sleepFn(retryDelayMs * Math.pow(2, attempt));
+          }
+        }
+      }
+
+      if (entry.status === "sent") continue;
+      if (richError || !fallbackToLegacy) {
+        entry.status = "failed";
+        entry.error = String(richError ?? "Telegram Rich Message delivery failed");
+        continue;
+      }
+    }
 
     let lastError: unknown;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -119,10 +169,10 @@ export async function deliverFinalAnswer(
 
         if (retryAfter !== undefined) {
           // 429 with retry_after — wait and retry
-          await sleep(retryAfter * 1000);
+          await sleepFn(retryAfter * 1000);
         } else if (attempt < maxRetries - 1) {
           // Transient error — exponential backoff
-          await sleep(retryDelayMs * Math.pow(2, attempt));
+          await sleepFn(retryDelayMs * Math.pow(2, attempt));
         }
         // If last attempt, don't sleep
       }
@@ -151,6 +201,22 @@ export async function deliverFinalAnswer(
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+function extractErrorCode(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const errorCode = (error as Record<string, unknown>).telegramErrorCode;
+  return typeof errorCode === "number" ? errorCode : undefined;
+}
+
+function isPermanentRichRejection(error: unknown): boolean {
+  const errorCode = extractErrorCode(error);
+  return errorCode === 400 || errorCode === 404;
+}
+
+function isServerError(error: unknown): boolean {
+  const errorCode = extractErrorCode(error);
+  return errorCode !== undefined && errorCode >= 500 && errorCode <= 599;
+}
 
 function extractRetryAfter(error: unknown): number | undefined {
   if (!error || typeof error !== "object") return undefined;

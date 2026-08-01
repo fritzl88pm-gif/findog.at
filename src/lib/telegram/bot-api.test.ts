@@ -188,6 +188,36 @@ describe("createBotApi", () => {
     expect(body.text).toBe("Hello");
   });
 
+  it("sendRichMessage calls the correct endpoint with raw Markdown", async () => {
+    const api = createBotApi(TOKEN, fetchMock as never);
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          result: { message_id: 43, date: 1234567890, chat: { id: 123, type: "private" } },
+        }),
+        { status: 200 },
+      ),
+    );
+    const markdown = "| A | B |\n|---|---|\n| 1 | 2 |";
+
+    const result = await api.sendRichMessage({
+      chat_id: 123,
+      rich_message: { markdown },
+    });
+
+    expect(result.message_id).toBe(43);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_URL}/sendRichMessage`,
+      expect.objectContaining({ method: "POST" }),
+    );
+    const callArgs = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(callArgs[1].body as string)).toEqual({
+      chat_id: 123,
+      rich_message: { markdown },
+    });
+  });
+
   it("throws a real sanitized Error with safe ambiguity metadata on network failure", async () => {
     const fetchFailure = new TypeError(`Network failure for ${BASE_URL}/sendMessage`);
     fetchMock.mockRejectedValue(fetchFailure);

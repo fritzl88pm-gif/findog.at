@@ -45,6 +45,36 @@ export function normalizeFredMarkdown(text: string): string {
   }).trim();
 }
 
+export function hasGfmTable(text: string): boolean {
+  const lines = text.split("\n");
+  let fence: { char: string; length: number } | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!fence) {
+      const opening = line.match(/^ {0,3}(`{3,}|~{3,})/u);
+      if (opening) {
+        fence = { char: opening[1][0], length: opening[1].length };
+        continue;
+      }
+
+      const headers = splitRow(line);
+      const divider = i + 1 < lines.length ? splitRow(lines[i + 1]) : [];
+      const validHeader = headers.length >= 2 && headers.length === divider.length
+        && divider.every((cell) => /^:?-+:?$/u.test(cell));
+      if (validHeader) return true;
+      continue;
+    }
+
+    const closing = line.match(/^ {0,3}(`+|~+)[ \t]*$/u);
+    if (closing && closing[1][0] === fence.char && closing[1].length >= fence.length) {
+      fence = null;
+    }
+  }
+
+  return false;
+}
+
 // ── HTML helpers ────────────────────────────────────────────────────────────
 
 function escapeHtml(text: string): string {
@@ -163,7 +193,7 @@ function convertGfmTables(text: string): string {
     const headers = splitRow(lines[i]);
     const divider = i + 1 < lines.length ? splitRow(lines[i + 1]) : [];
     const validHeader = headers.length >= 2 && headers.length === divider.length
-      && divider.every((cell) => /^:?-{3,}:?$/u.test(cell));
+      && divider.every((cell) => /^:?-+:?$/u.test(cell));
     if (!validHeader) {
       result.push(lines[i++]);
       continue;
@@ -176,10 +206,6 @@ function convertGfmTables(text: string): string {
       if (row.length !== headers.length) break;
       rows.push(row);
       end++;
-    }
-    if (rows.length === 0) {
-      result.push(lines[i++]);
-      continue;
     }
     result.push(renderTable(headers, rows));
     i = end;

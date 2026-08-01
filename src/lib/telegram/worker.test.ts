@@ -87,6 +87,7 @@ function fakeBotApi(): BotApi {
     sendMessageDraft: vi.fn().mockResolvedValue({ message_id: 1, date: 1, chat: { id: telegramChatId, type: "private" } }),
     sendChatAction: vi.fn().mockResolvedValue(true),
     sendMessage: vi.fn().mockResolvedValue({ message_id: 2, date: 1, chat: { id: telegramChatId, type: "private" } }),
+    sendRichMessage: vi.fn().mockResolvedValue({ message_id: 3, date: 1, chat: { id: telegramChatId, type: "private" } }),
   };
 }
 
@@ -598,6 +599,41 @@ describe("processUpdate: free text routed to Fred", () => {
     expect(storage.recordDelivery).toHaveBeenCalledWith(42, 0, expect.any(String), "pending");
     expect(storage.recordDelivery).toHaveBeenCalledWith(42, 0, expect.any(String), "sent", 2);
     expect(rpc.complete).toHaveBeenCalled();
+  });
+
+  it("delivers a valid GFM table as raw Markdown", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const answer = "Ergebnis:\n\n| Steuer | Satz |\n|---|---|\n| USt | 20% |";
+    const { executeTurn } = answerTurn(answer);
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+    const result = await processUpdate(config, makeUpdate({ id: 43 }));
+
+    expect(result.status).toBe("completed");
+    expect(botApi.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: telegramChatId,
+      rich_message: { markdown: answer },
+    });
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+    expect(storage.recordDelivery).toHaveBeenCalledWith(43, 0, expect.stringContaining("<pre>"), "pending");
+    expect(storage.recordDelivery).toHaveBeenCalledWith(43, 0, expect.stringContaining("<pre>"), "sent", 3);
+  });
+
+  it("uses legacy delivery when rich Markdown exceeds the cap", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const answer = `| A | B |\n|---|---|\n| 1 | 2 |\n\n${"x".repeat(32_769)}`;
+    const { executeTurn } = answerTurn(answer);
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+    const result = await processUpdate(config, makeUpdate({ id: 44 }));
+
+    expect(result.status).toBe("completed");
+    expect(botApi.sendRichMessage).not.toHaveBeenCalled();
+    expect(botApi.sendMessage).toHaveBeenCalled();
   });
 
   it("skips chunks already marked sent in delivery state instead of resending them", async () => {

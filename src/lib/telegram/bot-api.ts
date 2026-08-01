@@ -64,6 +64,13 @@ export interface SendMessageParams {
   link_preview_options?: { is_disabled?: boolean };
 }
 
+export interface SendRichMessageParams {
+  chat_id: number;
+  rich_message: {
+    markdown: string;
+  };
+}
+
 export interface SendMessageDraftParams {
   chat_id: number;
   text: string;
@@ -91,6 +98,7 @@ export interface BotApi {
   setMyCommands(commands: TelegramBotCommand[], options?: BotApiOptions): Promise<boolean>;
   deleteMyCommands(options?: BotApiOptions): Promise<boolean>;
   sendMessage(params: SendMessageParams, options?: BotApiOptions): Promise<TelegramMessageResult>;
+  sendRichMessage(params: SendRichMessageParams, options?: BotApiOptions): Promise<TelegramMessageResult>;
   sendMessageDraft(params: SendMessageDraftParams, options?: BotApiOptions): Promise<TelegramMessageResult>;
   sendChatAction(params: SendChatActionParams, options?: BotApiOptions): Promise<boolean>;
 }
@@ -139,6 +147,10 @@ class BotApiImpl implements BotApi {
 
   async sendMessage(params: SendMessageParams, options?: BotApiOptions): Promise<TelegramMessageResult> {
     return this.post<TelegramMessageResult>("sendMessage", params as unknown as Record<string, unknown>, options);
+  }
+
+  async sendRichMessage(params: SendRichMessageParams, options?: BotApiOptions): Promise<TelegramMessageResult> {
+    return this.post<TelegramMessageResult>("sendRichMessage", params as unknown as Record<string, unknown>, options);
   }
 
   async sendMessageDraft(params: SendMessageDraftParams, options?: BotApiOptions): Promise<TelegramMessageResult> {

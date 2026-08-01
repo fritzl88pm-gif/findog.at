@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createBotApi, type BotApi, type SendChatActionParams, type SendMessageDraftParams, type SendMessageParams, type TelegramMessageResult } from "./bot-api";
+import {
+  SanitizedTelegramError,
+  createBotApi,
+  type BotApi,
+  type SendChatActionParams,
+  type SendMessageDraftParams,
+  type SendMessageParams,
+  type SendRichMessageParams,
+  type TelegramMessageResult,
+} from "./bot-api";
 
 import {
   deliverFinalAnswer,
@@ -16,6 +25,7 @@ function fakeBotApi(
     sendMessageDraft: (params: SendMessageDraftParams) => Promise<TelegramMessageResult>;
     sendChatAction: (params: SendChatActionParams) => Promise<boolean>;
     sendMessage: (params: SendMessageParams) => Promise<TelegramMessageResult>;
+    sendRichMessage: (params: SendRichMessageParams) => Promise<TelegramMessageResult>;
   }> = {},
 ): BotApi {
   return {
@@ -34,6 +44,9 @@ function fakeBotApi(
     sendMessage: overrides.sendMessage
       ? vi.fn(overrides.sendMessage)
       : vi.fn().mockResolvedValue({ message_id: 2, date: 1, chat: { id: 123, type: "private" } }),
+    sendRichMessage: overrides.sendRichMessage
+      ? vi.fn(overrides.sendRichMessage)
+      : vi.fn().mockResolvedValue({ message_id: 3, date: 1, chat: { id: 123, type: "private" } }),
   };
 }
 
@@ -89,6 +102,111 @@ describe("deliverFinalAnswer", () => {
       text: "Hello world",
       parse_mode: "HTML",
     });
+  });
+
+  it("delivers eligible raw Markdown through sendRichMessage", async () => {
+    const api = fakeBotApi();
+    const ledger: DeliveryLedger = { chunks: [], uncertainChunks: [] };
+    const rawMarkdown = "| A | B |\n|---|---|\n| 1 | 2 |";
+
+    const result = await deliverFinalAnswer(api, chatId, "<pre>A  B\n─  ─\n1  2</pre>", {
+      ledger,
+      richMarkdown: rawMarkdown,
+    });
+
+    expect(result).toEqual({ sent: true, uncertain: false });
+    expect(api.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: chatId,
+      rich_message: { markdown: rawMarkdown },
+    });
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(ledger.chunks[0]).toMatchObject({ status: "sent", messageId: 3 });
+  });
+
+  it("falls back once after a permanent rich rejection", async () => {
+    const api = fakeBotApi({
+      sendRichMessage: vi.fn().mockRejectedValue(new SanitizedTelegramError({
+        message: "Bad Request: can't parse rich message",
+        errorCode: 400,
+      })),
+    });
+    const ledger: DeliveryLedger = { chunks: [], uncertainChunks: [] };
+    const fallback = "<pre>A  B\n─  ─\n1  2</pre>";
+
+    const result = await deliverFinalAnswer(api, chatId, fallback, {
+      ledger,
+      richMarkdown: "| A | B |\n|---|---|\n| 1 | 2 |",
+    });
+
+    expect(result).toEqual({ sent: true, uncertain: false });
+    expect(api.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith({
+      chat_id: chatId,
+      text: fallback,
+      parse_mode: "HTML",
+    });
+  });
+
+  it("marks ambiguous rich failures uncertain without a legacy resend", async () => {
+    const api = fakeBotApi({
+      sendRichMessage: vi.fn().mockRejectedValue(new TypeError("network connection reset")),
+    });
+    const ledger: DeliveryLedger = { chunks: [], uncertainChunks: [] };
+
+    const result = await deliverFinalAnswer(api, chatId, "fallback", {
+      ledger,
+      richMarkdown: "| A | B |\n|---|---|\n| 1 | 2 |",
+      maxRetries: 5,
+    });
+
+    expect(result).toEqual({ sent: false, uncertain: true });
+    expect(api.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(ledger.chunks[0]?.status).toBe("uncertain");
+  });
+
+  it("treats rich 5xx responses as uncertain without a legacy resend", async () => {
+    const api = fakeBotApi({
+      sendRichMessage: vi.fn().mockRejectedValue(new SanitizedTelegramError({
+        message: "Internal Server Error",
+        errorCode: 500,
+      })),
+    });
+    const ledger: DeliveryLedger = { chunks: [], uncertainChunks: [] };
+
+    const result = await deliverFinalAnswer(api, chatId, "fallback", {
+      ledger,
+      richMarkdown: "| A | B |\n|---|---|\n| 1 | 2 |",
+    });
+
+    expect(result).toEqual({ sent: false, uncertain: true });
+    expect(api.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("retries rich delivery after 429 using retry_after", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const sendRichMessage = vi.fn()
+      .mockRejectedValueOnce(new SanitizedTelegramError({
+        message: "Too Many Requests",
+        errorCode: 429,
+        retryAfter: 2,
+      }))
+      .mockResolvedValueOnce({ message_id: 3, date: 1, chat: { id: 123, type: "private" } });
+    const api = fakeBotApi({ sendRichMessage });
+    const ledger: DeliveryLedger = { chunks: [], uncertainChunks: [] };
+
+    const result = await deliverFinalAnswer(api, chatId, "fallback", {
+      ledger,
+      richMarkdown: "| A | B |\n|---|---|\n| 1 | 2 |",
+      sleep,
+    });
+
+    expect(result).toEqual({ sent: true, uncertain: false });
+    expect(sendRichMessage).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(2_000);
+    expect(api.sendMessage).not.toHaveBeenCalled();
   });
 
   it("delivers a long answer in multiple chunks", async () => {

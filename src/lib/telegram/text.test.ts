@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { chunkTelegramMessage, normalizeFredMarkdown } from "./text";
+import { chunkTelegramMessage, hasGfmTable, normalizeFredMarkdown } from "./text";
+
+
+describe("hasGfmTable", () => {
+  it.each([
+    ["with body rows", "| A | B |\n|---|:---:|\n| 1 | 2 |"],
+    ["with only a header and separator", "A | B\n-|-:"],
+  ])("detects a valid GFM pipe table %s", (_name, input) => {
+    expect(hasGfmTable(input)).toBe(true);
+  });
+
+  it.each([
+    ["table-looking text without separator", "| A | B |\n| 1 | 2 |"],
+    ["table inside a fenced code block", "```markdown\n| A | B |\n|---|---|\n| 1 | 2 |\n```"],
+  ])("ignores %s", (_name, input) => {
+    expect(hasGfmTable(input)).toBe(false);
+  });
+});
 
 describe("normalizeFredMarkdown", () => {
   it("escapes HTML special characters in plain text", () => {

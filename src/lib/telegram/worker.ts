@@ -17,7 +17,7 @@ import {
   type JobQueueRpc,
   type UpdateHandle,
 } from "./jobs";
-import { chunkTelegramMessage, normalizeFredMarkdown } from "./text";
+import { chunkTelegramMessage, hasGfmTable, normalizeFredMarkdown } from "./text";
 import type { EncryptionAad } from "./credentials";
 import type { TelegramUpdate } from "./types";
 import type { FredTurnEvent, FredTurnRequest, FredTurnResult } from "../fred/turn-types";
@@ -97,6 +97,7 @@ export interface WorkerLoopOptions {
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const MAX_ATTEMPTS = 5;
+const RICH_MESSAGE_MAX_LENGTH = 32_768;
 
 const START_TEXT =
   "Willkommen bei Findog! 🐕\n\nStelle deine Frage zum österreichischen Steuerrecht und Fred wird sie beantworten.\n\nBefehle:\n/help – Alle Befehle anzeigen\n/new – Neue Unterhaltung\n/stop – Aktuelle Antwort abbrechen\n/status – Verbindungsstatus\n/settings – Einstellungen";
@@ -438,6 +439,11 @@ async function deliverAnswer(
 ): Promise<void> {
   const { storage } = config;
   const chunks = chunkTelegramMessage(normalizeFredMarkdown(answer));
+  const richMarkdown = hasGfmTable(answer)
+    && answer.length <= RICH_MESSAGE_MAX_LENGTH
+    && chunks.length === 1
+    ? answer
+    : undefined;
   const existing = await storage.getDeliveryState(updateRowId);
   if (existing.some((entry) => entry.status === "uncertain")) {
     throw new UncertainDeliveryError();
@@ -452,7 +458,11 @@ async function deliverAnswer(
 
     await storage.recordDelivery(updateRowId, i, content, "pending");
     const ledger: DeliveryLedger = { chunks: [], uncertainChunks: [] };
-    await deliverFinalAnswer(botApi, chatId, content, { ledger, maxRetries: config.maxDeliveryRetries });
+    await deliverFinalAnswer(botApi, chatId, content, {
+      ledger,
+      maxRetries: config.maxDeliveryRetries,
+      richMarkdown: i === 0 ? richMarkdown : undefined,
+    });
     const entry = ledger.chunks[0];
 
     if (entry?.status === "sent") {

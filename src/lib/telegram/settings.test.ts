@@ -52,6 +52,7 @@ function mockBotApi(overrides: Partial<BotApi> = {}): BotApi {
     setMyCommands: vi.fn().mockResolvedValue(true),
     deleteMyCommands: vi.fn().mockResolvedValue(true),
     sendMessage: vi.fn().mockResolvedValue({ message_id: 1, date: 1, chat: { id: 1, type: "private" } }),
+    sendRichMessage: vi.fn().mockResolvedValue({ message_id: 1, date: 1, chat: { id: 1, type: "private" } }),
     sendMessageDraft: vi.fn().mockResolvedValue({ message_id: 1, date: 1, chat: { id: 1, type: "private" } }),
     sendChatAction: vi.fn().mockResolvedValue(true),
     ...overrides,
