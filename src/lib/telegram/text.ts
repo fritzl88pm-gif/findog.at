@@ -5,25 +5,101 @@ const SUPPORTED_HTML_TAG_RE = /<\/?(?:a|b|blockquote|br|code|del|div|em|h[1-6]|h
 const HTML_TABLE_RE = /<table\b[^>]*>([\s\S]*?)<\/table>/giu;
 const HTML_ROW_RE = /<tr\b[^>]*>([\s\S]*?)<\/tr>/giu;
 const HTML_CELL_RE = /<(th|td)\b[^>]*>([\s\S]*?)<\/\1>/giu;
+const PRE_PLACEHOLDER = /\u0000PRE(\d+)\u0000/gu;
 
-/** Normalize Fred's answer for Telegram's plaintext delivery. */
+/**
+ * Normalize Fred's answer for Telegram HTML delivery.
+ * Converts Markdown tables to aligned <pre> blocks, escapes all HTML
+ * special characters, and converts basic Markdown to Telegram HTML tags.
+ */
 export function normalizeFredMarkdown(text: string): string {
   return transformOutsideFences(text, (outside) => {
+    // 1. Convert tables while HTML structure is still present
     let result = convertHtmlTables(outside);
     result = convertGfmTables(result);
+
+    // 2. Misc HTML cleanup
     result = result.replace(BR_RE, "\n");
-    result = result.replace(/<h([1-6])>(.*?)<\/h\1>/giu, (_, level: string, content: string) => {
-      return `${"#".repeat(Number.parseInt(level, 10))} ${content.trim()}`;
+    result = result.replace(/<h([1-6])>(.*?)<\/h\1>/giu, (_m, level: string, content: string) => {
+      return `${"#".repeat(Number.parseInt(level, 10))} ${stripTags(content).trim()}`;
     });
+
+    // 3. Protect our generated <pre> blocks before stripping model HTML
+    const preBlocks: string[] = [];
+    result = result.replace(/<pre>[\s\S]*?<\/pre>/giu, (m) => {
+      const i = preBlocks.length;
+      preBlocks.push(m);
+      return `\u0000PRE${i}\u0000`;
+    });
+
+    // 4. Strip remaining model HTML tags
     result = result.replace(SUPPORTED_HTML_TAG_RE, "");
+
+    // 5. Restore <pre> blocks
+    result = result.replace(PRE_PLACEHOLDER, (_m, i: string) => preBlocks[Number(i)] ?? "");
+
+    // 6. Escape HTML inside <pre>, convert Markdown to HTML outside
+    result = processPreSections(result);
+
     return result.replace(/\n{3,}/gu, "\n\n");
   }).trim();
 }
+
+// ── HTML helpers ────────────────────────────────────────────────────────────
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
+}
+
+function stripTags(text: string): string {
+  return text.replace(SUPPORTED_HTML_TAG_RE, "");
+}
+
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/gu, "$1")
+    .replace(/`(.+?)`/gu, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/gu, "$1")
+    .replace(/\*([^*]+?)\*/gu, "$1")
+    .trim();
+}
+
+function cleanTableCell(value: string): string {
+  return stripMarkdown(stripTags(value)) || "—";
+}
+
+/** Escape HTML outside <pre> blocks and convert Markdown to HTML tags. */
+function processPreSections(text: string): string {
+  const parts = text.split(/(<pre>[\s\S]*?<\/pre>)/giu);
+  return parts
+    .map((part) => {
+      if (part.toLowerCase().startsWith("<pre>") && part.toLowerCase().endsWith("</pre>")) {
+        const inner = part.slice(5, -6);
+        return `<pre>${escapeHtml(inner)}</pre>`;
+      }
+      return convertMarkdownToHtml(escapeHtml(part));
+    })
+    .join("");
+}
+
+function convertMarkdownToHtml(text: string): string {
+  let result = text;
+  result = result.replace(/^#{1,6}\s+(.+)$/gmu, "<b>$1</b>");
+  result = result.replace(/\*\*(.+?)\*\*/gu, "<b>$1</b>");
+  result = result.replace(/`(.+?)`/gu, "<code>$1</code>");
+  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/gu, (_m, label: string, url: string) => {
+    return `<a href="${url}">${label}</a>`;
+  });
+  return result;
+}
+
+// ── Code fence handling ─────────────────────────────────────────────────────
 
 function transformOutsideFences(text: string, transform: (value: string) => string): string {
   let result = "";
   let outside = "";
   let fence: { char: string; length: number } | null = null;
+  let fenceContent = "";
   const lines = text.match(/[^\n]*(?:\n|$)/gu)?.filter(Boolean) ?? [];
 
   for (const rawLine of lines) {
@@ -34,28 +110,39 @@ function transformOutsideFences(text: string, transform: (value: string) => stri
         outside += rawLine;
         continue;
       }
-      result += transform(outside) + rawLine;
+      result += transform(outside);
       outside = "";
       fence = { char: opening[1][0], length: opening[1].length };
+      fenceContent = "";
       continue;
     }
 
-    result += rawLine;
     const closing = line.match(/^ {0,3}(`+|~+)[ \t]*$/u);
     if (closing && closing[1][0] === fence.char && closing[1].length >= fence.length) {
+      result += `<pre>${escapeHtml(fenceContent)}</pre>`;
+      fenceContent = "";
       fence = null;
+      continue;
     }
+    if (fenceContent) fenceContent += "\n";
+    fenceContent += line;
+  }
+
+  if (fence) {
+    result += `<pre>${escapeHtml(fenceContent)}</pre>`;
   }
 
   return result + transform(outside);
 }
+
+// ── Table conversion ────────────────────────────────────────────────────────
 
 function convertHtmlTables(text: string): string {
   return text.replace(HTML_TABLE_RE, (table, body: string) => {
     const rows = [...body.matchAll(HTML_ROW_RE)].map((match) => {
       return [...match[1].matchAll(HTML_CELL_RE)].map((cell) => ({
         tag: cell[1].toLowerCase(),
-        value: cell[2].replace(BR_RE, " / ").replace(SUPPORTED_HTML_TAG_RE, "").trim(),
+        value: cell[2].replace(BR_RE, " / ").trim(),
       }));
     }).filter((row) => row.length > 0);
     const header = rows[0];
@@ -122,23 +209,38 @@ function splitRow(line: string): string[] {
   return cells.map((cell) => cell.trim());
 }
 
+/**
+ * Render a table as an aligned monospace <pre> block.
+ * Column widths are calculated from all cells; a dash separator
+ * is inserted after the header row.
+ */
 function renderTable(headers: string[], rows: string[][]): string {
-  const cell = (value: string): string => value || "—";
-  if (headers.length === 2) {
-    return [`${cell(headers[0])} · ${cell(headers[1])}`,
-      ...rows.map((row) => `• ${cell(row[0])} — ${cell(row[1])}`)].join("\n");
+  const cleanedHeaders = headers.map(cleanTableCell);
+  const cleanedRows = rows.map((row) => row.map(cleanTableCell));
+
+  const colCount = cleanedHeaders.length;
+  const colWidths = new Array(colCount).fill(0);
+  for (const row of [cleanedHeaders, ...cleanedRows]) {
+    for (let c = 0; c < colCount; c++) {
+      const len = (row[c] ?? "").length;
+      if (len > colWidths[c]) colWidths[c] = len;
+    }
   }
-  return rows.map((row) => headers.map((header, index) => {
-    return `${index === 0 ? "▌ " : "  "}${cell(header)}: ${cell(row[index])}`;
-  }).join("\n")).join("\n\n");
+
+  const pad = (text: string, col: number): string => (text ?? "").padEnd(colWidths[col]);
+
+  const lines: string[] = [];
+  lines.push(cleanedHeaders.map((h, c) => pad(h, c)).join("  "));
+  lines.push(colWidths.map((w) => "\u2500".repeat(w)).join("  "));
+  for (const row of cleanedRows) {
+    lines.push(row.map((cell, c) => pad(cell, c)).join("  "));
+  }
+
+  return `<pre>${lines.join("\n")}</pre>`;
 }
 
-/**
- * Split a normalized message into chunks each ≤ 4000 characters.
- * Prefers paragraph boundaries (\n\n), then list item boundaries,
- * then sentence boundaries, then hard split.
- * Unicode-safe: splits at grapheme-adjacent positions.
- */
+// ── Chunking ────────────────────────────────────────────────────────────────
+
 export function chunkTelegramMessage(text: string): string[] {
   if (text.length <= MAX_CHUNK_LENGTH) {
     return text.length > 0 ? [text] : [];
@@ -153,61 +255,35 @@ export function chunkTelegramMessage(text: string): string[] {
       break;
     }
 
-    // Try to find a split point within the max chunk size
     let splitAt = findSplitPoint(remaining, MAX_CHUNK_LENGTH);
-
-    if (splitAt <= 0) {
-      // Hard split at max length
-      splitAt = MAX_CHUNK_LENGTH;
-    }
+    if (splitAt <= 0) splitAt = MAX_CHUNK_LENGTH;
 
     chunks.push(remaining.slice(0, splitAt).trimEnd());
     remaining = remaining.slice(splitAt).trimStart();
   }
 
-  // Filter out any empty chunks
   return chunks.filter((chunk) => chunk.length > 0);
 }
 
-/**
- * Find the best split point within `maxLen` characters.
- * Prefers paragraph breaks, then list item breaks, then sentence breaks.
- */
 function findSplitPoint(text: string, maxLen: number): number {
-  // Only look in the first maxLen characters
   const searchRegion = text.slice(0, maxLen);
 
-  // 1. Try paragraph break (double newline)
   const paraBreak = searchRegion.lastIndexOf("\n\n");
-  if (paraBreak > maxLen * 0.3) {
-    return paraBreak + 2; // Include the double newline in the first chunk
-  }
+  if (paraBreak > maxLen * 0.3) return paraBreak + 2;
 
-  // 2. Try single newline (list items, line breaks)
   const lineBreak = searchRegion.lastIndexOf("\n");
-  if (lineBreak > maxLen * 0.3) {
-    return lineBreak + 1; // Include the newline in the first chunk
-  }
+  if (lineBreak > maxLen * 0.3) return lineBreak + 1;
 
-  // 3. Try sentence break (. followed by space)
   const sentenceRe = /[.!?]\s+/gu;
   let lastSentenceEnd = 0;
   let match: RegExpExecArray | null;
   while ((match = sentenceRe.exec(searchRegion)) !== null) {
-    if (match.index < maxLen) {
-      lastSentenceEnd = match.index + match[0].length;
-    }
+    if (match.index < maxLen) lastSentenceEnd = match.index + match[0].length;
   }
-  if (lastSentenceEnd > maxLen * 0.3) {
-    return lastSentenceEnd;
-  }
+  if (lastSentenceEnd > maxLen * 0.3) return lastSentenceEnd;
 
-  // 4. Try space break
   const spaceBreak = searchRegion.lastIndexOf(" ");
-  if (spaceBreak > maxLen * 0.3) {
-    return spaceBreak + 1;
-  }
+  if (spaceBreak > maxLen * 0.3) return spaceBreak + 1;
 
-  // 5. Hard split
   return maxLen;
 }

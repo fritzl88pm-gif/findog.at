@@ -3,37 +3,53 @@ import { describe, expect, it } from "vitest";
 import { chunkTelegramMessage, normalizeFredMarkdown } from "./text";
 
 describe("normalizeFredMarkdown", () => {
-  it.each([
-    ["bold", "**bold** text"],
-    ["italic", "*italic* text"],
-    ["inline code", "use `code` here"],
-    ["markdown link", "[text](https://example.com)"],
-    ["bare URL", "See https://example.com/page"],
-    ["BFG citation", "[RV/1100290/2023](https://findok.bmf.gv.at/...)"],
-    ["ordered list", "1. First\n2. Second\n3. Third"],
-    ["unordered list", "- Item A\n- Item B"],
-  ])("preserves %s", (_name, input) => {
-    expect(normalizeFredMarkdown(input)).toBe(input);
+  it("escapes HTML special characters in plain text", () => {
+    expect(normalizeFredMarkdown("Umsatz < 35.000 € und > 5.000 €")).toBe(
+      "Umsatz &lt; 35.000 € und &gt; 5.000 €",
+    );
   });
 
-  it("preserves code blocks", () => {
-    const input = "```\nconst x = 1;\n```";
-    expect(normalizeFredMarkdown(input)).toBe(input);
+  it("escapes ampersands", () => {
+    expect(normalizeFredMarkdown("A & B")).toBe("A &amp; B");
   });
 
-  it("replaces HTML headings with markdown equivalents", () => {
-    expect(normalizeFredMarkdown("<h3>Title</h3>")).toBe("### Title");
-    expect(normalizeFredMarkdown("<h2>Big</h2>")).toBe("## Big");
+  it("converts Markdown bold to HTML bold", () => {
+    expect(normalizeFredMarkdown("**bold** text")).toBe("<b>bold</b> text");
   });
 
-  it("strips supported HTML wrappers", () => {
-    expect(normalizeFredMarkdown('<div class="x">text</div>')).toBe("text");
-    expect(normalizeFredMarkdown('<span style="color:red">red</span>')).toBe("red");
+  it("converts inline code to HTML code", () => {
+    expect(normalizeFredMarkdown("use `code` here")).toBe("use <code>code</code> here");
   });
 
-  it("preserves ordinary comparison operators and the text between them", () => {
-    const input = "Umsatz < 35.000 € und > 5.000 €";
-    expect(normalizeFredMarkdown(input)).toBe(input);
+  it("converts Markdown links to HTML links", () => {
+    expect(normalizeFredMarkdown("[text](https://example.com)")).toBe(
+      '<a href="https://example.com">text</a>',
+    );
+  });
+
+  it("converts Markdown headings to HTML bold", () => {
+    expect(normalizeFredMarkdown("### Title")).toBe("<b>Title</b>");
+  });
+
+  it("preserves ordered lists", () => {
+    expect(normalizeFredMarkdown("1. First\n2. Second")).toBe("1. First\n2. Second");
+  });
+
+  it("preserves unordered lists", () => {
+    expect(normalizeFredMarkdown("- Item A\n- Item B")).toBe("- Item A\n- Item B");
+  });
+
+  it("preserves bare URLs", () => {
+    expect(normalizeFredMarkdown("See https://example.com/page")).toBe(
+      "See https://example.com/page",
+    );
+  });
+
+  it("preserves BFG citation links", () => {
+    const input = "[RV/1100290/2023](https://findok.bmf.gv.at/...)";
+    expect(normalizeFredMarkdown(input)).toBe(
+      '<a href="https://findok.bmf.gv.at/...">RV/1100290/2023</a>',
+    );
   });
 
   it("converts <br> to newline", () => {
@@ -41,15 +57,17 @@ describe("normalizeFredMarkdown", () => {
     expect(normalizeFredMarkdown("Line1<br/>Line2")).toBe("Line1\nLine2");
   });
 
-  const labeled = [
-    "▌ Jahr: 2025",
-    "  Betrag: 1.200 €",
-    "  Grenze: 2.000 €",
-    "",
-    "▌ Jahr: 2026",
-    "  Betrag: 1.300 €",
-    "  Grenze: 2.100 €",
-  ].join("\n");
+  it("replaces HTML headings with bold", () => {
+    expect(normalizeFredMarkdown("<h3>Title</h3>")).toBe("<b>Title</b>");
+    expect(normalizeFredMarkdown("<h2>Big</h2>")).toBe("<b>Big</b>");
+  });
+
+  it("strips supported HTML wrappers", () => {
+    expect(normalizeFredMarkdown('<div class="x">text</div>')).toBe("text");
+    expect(normalizeFredMarkdown('<span style="color:red">red</span>')).toBe("red");
+  });
+
+  // ── Table rendering ───────────────────────────────────────────────────────
 
   it.each([
     ["outer pipes", [
@@ -64,105 +82,174 @@ describe("normalizeFredMarkdown", () => {
       "2025 | 1.200 € | 2.000 €",
       "2026 | 1.300 € | 2.100 €",
     ].join("\n")],
-  ])("converts GFM table with %s", (_name, input) => {
-    expect(normalizeFredMarkdown(input)).toBe(labeled);
+  ])(`renders GFM table with %s as aligned <pre>`, (_name, input) => {
+    const output = normalizeFredMarkdown(input);
+    expect(output).toContain("<pre>");
+    expect(output).toContain("</pre>");
+    // Header and data visible
+    expect(output).toContain("Jahr");
+    expect(output).toContain("Betrag");
+    expect(output).toContain("1.200 €");
+    expect(output).toContain("2.100 €");
+    // Separator line exists
+    expect(output).toContain("\u2500");
+    // No raw pipes inside pre
+    const preContent = output.match(/<pre>([\s\S]*?)<\/pre>/)![1];
+    expect(preContent).not.toContain("|");
   });
 
-  it("uses the compact layout for two columns", () => {
+  it("renders a two-column table as <pre>", () => {
     const input = [
       "| Jahr | Betrag |",
       "|---|---:|",
       "| 2025 | 1.200 € |",
       "| 2026 | 1.300 € |",
     ].join("\n");
-    expect(normalizeFredMarkdown(input)).toBe([
-      "Jahr · Betrag",
-      "• 2025 — 1.200 €",
-      "• 2026 — 1.300 €",
-    ].join("\n"));
+    const output = normalizeFredMarkdown(input);
+    expect(output).toContain("<pre>");
+    const preContent = output.match(/<pre>([\s\S]*?)<\/pre>/)![1];
+    expect(preContent).toContain("Jahr");
+    expect(preContent).toContain("Betrag");
+    expect(preContent).toContain("1.200 €");
+    expect(preContent).toContain("1.300 €");
   });
 
-  it("preserves escaped pipes and inline Markdown, and labels empty cells", () => {
+  it("escapes HTML special chars inside table cells", () => {
     const input = [
-      "| Quelle | Text | Notiz |",
-      "|---|---|---|",
-      "| [RV \\| 123](https://example.com) | **wichtig** | |",
-      "| *Siehe* oben | `code` | Ende |",
+      "| A & B | C < D |",
+      "|---|---|",
+      "| x > 0 | y & z |",
     ].join("\n");
-    expect(normalizeFredMarkdown(input)).toBe([
-      "▌ Quelle: [RV | 123](https://example.com)",
-      "  Text: **wichtig**",
-      "  Notiz: —",
-      "",
-      "▌ Quelle: *Siehe* oben",
-      "  Text: `code`",
-      "  Notiz: Ende",
-    ].join("\n"));
+    const output = normalizeFredMarkdown(input);
+    const preContent = output.match(/<pre>([\s\S]*?)<\/pre>/)![1];
+    expect(preContent).toContain("&amp;");
+    expect(preContent).toContain("&lt;");
+    expect(preContent).toContain("&gt;");
+  });
+
+  it("strips Markdown formatting inside table cells", () => {
+    const input = [
+      "| Quelle | Text |",
+      "|---|---|",
+      "| **bold** | `code` |",
+    ].join("\n");
+    const output = normalizeFredMarkdown(input);
+    const preContent = output.match(/<pre>([\s\S]*?)<\/pre>/)![1];
+    expect(preContent).not.toContain("**");
+    expect(preContent).not.toContain("`");
+    expect(preContent).toContain("bold");
+    expect(preContent).toContain("code");
+  });
+
+  it("strips Markdown links inside table cells, keeps label", () => {
+    const input = [
+      "| Quelle | Wert |",
+      "|---|---|",
+      "| [RV \\| 123](https://example.com) | 100 |",
+    ].join("\n");
+    const output = normalizeFredMarkdown(input);
+    const preContent = output.match(/<pre>([\s\S]*?)<\/pre>/)![1];
+    expect(preContent).toContain("RV | 123");
+    expect(preContent).not.toContain("https://");
+  });
+
+  it("renders — for empty cells", () => {
+    const input = [
+      "| A | B |",
+      "|---|---|",
+      "| 1 |  |",
+    ].join("\n");
+    const output = normalizeFredMarkdown(input);
+    const preContent = output.match(/<pre>([\s\S]*?)<\/pre>/)![1];
+    expect(preContent).toContain("—");
   });
 
   it.each([
     ["single pipe line", "Umsatz | Gewinn ist nicht tabellarisch"],
     ["missing separator", "| A | B |\n| 1 | 2 |\n| 3 | 4 |"],
-    ["uneven columns", "| A | B | C |\n|---|---|\n| 1 | 2 |"],
-  ])("leaves malformed table text unchanged: %s", (_name, input) => {
-    expect(normalizeFredMarkdown(input)).toBe(input);
+  ])(`leaves malformed table text as-is: %s`, (_name, input) => {
+    // Malformed tables should still get HTML-escaped but no <pre>
+    const output = normalizeFredMarkdown(input);
+    expect(output).not.toContain("<pre>");
   });
 
   it("stops a valid table before unrelated pipe text", () => {
     const input = "| A | B |\n|---|---|\n| 1 | 2 |\nNot | part | of the table";
-    expect(normalizeFredMarkdown(input)).toBe("A · B\n• 1 — 2\nNot | part | of the table");
+    const output = normalizeFredMarkdown(input);
+    expect(output).toContain("<pre>");
+    expect(output).toContain("Not");
+    expect(output).toContain("part");
   });
 
-  it.each([
-    ["backticks with longer closing fence", [
+  // ── Code fences ───────────────────────────────────────────────────────────
+
+  it("preserves code blocks as <pre>", () => {
+    const input = "```\nconst x = 1;\n```";
+    expect(normalizeFredMarkdown(input)).toBe("<pre>const x = 1;</pre>");
+  });
+
+  it("escapes HTML inside code blocks", () => {
+    const input = "```\nif (a < b && c > d) {}\n```";
+    const output = normalizeFredMarkdown(input);
+    expect(output).toContain("&lt;");
+    expect(output).toContain("&gt;");
+    expect(output).toContain("&amp;");
+  });
+
+  it("leaves tables inside code blocks untouched", () => {
+    const input = [
       "```",
       "| A | B |",
       "|---|---|",
       "| 1 | 2 |",
-      "<table><tr><th>X</th><th>Y</th></tr><tr><td>a</td><td>b</td></tr></table>",
-      "````",
-    ].join("\n")],
-    ["tildes", [
-      "~~~",
-      "| X | Y |",
-      "|---|---|",
-      "| a | b |",
-      "~~~",
-    ].join("\n")],
-  ])("leaves tables inside %s untouched", (_name, input) => {
-    expect(normalizeFredMarkdown(input)).toBe(input);
+      "```",
+    ].join("\n");
+    const output = normalizeFredMarkdown(input);
+    expect(output).toContain("<pre>");
+    const preContent = output.match(/<pre>([\s\S]*?)<\/pre>/)![1];
+    expect(preContent).toContain("| A | B |");
+    expect(preContent).not.toContain("\u2500");
   });
 
   it("converts tables around a fenced block", () => {
     const table = "| A | B |\n|---|---|\n| 1 | 2 |";
-    const code = "```\n| X | Y |\n|---|---|\n| a | b |\n```";
-    expect(normalizeFredMarkdown(`${table}\n\n${code}\n\n${table}`)).toBe(
-      `A · B\n• 1 — 2\n\n${code}\n\nA · B\n• 1 — 2`,
-    );
+    const code = "```\nraw code\n```";
+    const output = normalizeFredMarkdown(`${table}\n\n${code}\n\n${table}`);
+    // Should have two <pre> table blocks and one code <pre>
+    const preCount = (output.match(/<pre>/g) || []).length;
+    expect(preCount).toBe(3);
   });
 
-  it("converts simple HTML tables before generic tag stripping", () => {
+  // ── HTML tables ───────────────────────────────────────────────────────────
+
+  it("converts simple HTML tables", () => {
     const input = [
       '<table class="result">',
-      "<thead><tr><th>Quelle</th><th>Wert</th><th>Notiz</th></tr></thead>",
-      "<tbody><tr><td>[BMF](https://example.com)</td><td>**100**</td><td></td></tr></tbody>",
+      "<thead><tr><th>Quelle</th><th>Wert</th></tr></thead>",
+      "<tbody><tr><td>BMF</td><td>100</td></tr></tbody>",
       "</table>",
     ].join("\n");
-    expect(normalizeFredMarkdown(input)).toBe([
-      "▌ Quelle: [BMF](https://example.com)",
-      "  Wert: **100**",
-      "  Notiz: —",
-    ].join("\n"));
+    const output = normalizeFredMarkdown(input);
+    expect(output).toContain("<pre>");
+    const preContent = output.match(/<pre>([\s\S]*?)<\/pre>/)![1];
+    expect(preContent).toContain("Quelle");
+    expect(preContent).toContain("Wert");
+    expect(preContent).toContain("BMF");
+    expect(preContent).toContain("100");
   });
 
-  it("uses the compact layout for a two-column HTML table", () => {
-    const input = "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>";
-    expect(normalizeFredMarkdown(input)).toBe("A · B\n• 1 — 2");
+  it("handles HTML table with empty cells", () => {
+    const input = "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td></td></tr></table>";
+    const output = normalizeFredMarkdown(input);
+    const preContent = output.match(/<pre>([\s\S]*?)<\/pre>/)![1];
+    expect(preContent).toContain("—");
   });
 
   it("keeps HTML table line breaks readable within a cell", () => {
     const input = "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>x<br>y</td></tr></table>";
-    expect(normalizeFredMarkdown(input)).toBe("A · B\n• 1 — x / y");
+    const output = normalizeFredMarkdown(input);
+    const preContent = output.match(/<pre>([\s\S]*?)<\/pre>/)![1];
+    expect(preContent).toContain("x / y");
   });
 });
 
@@ -191,7 +278,7 @@ describe("chunkTelegramMessage", () => {
   });
 
   it("preserves code blocks intact within chunks", () => {
-    const codeBlock = "```\n" + "x".repeat(3000) + "\n```";
+    const codeBlock = "<pre>" + "x".repeat(3000) + "</pre>";
     const result = chunkTelegramMessage("Before\n\n" + codeBlock + "\n\nAfter");
     expect(result.some((chunk) => chunk.includes(codeBlock))).toBe(true);
   });

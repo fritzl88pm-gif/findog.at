@@ -87,6 +87,7 @@ describe("deliverFinalAnswer", () => {
     expect(api.sendMessage).toHaveBeenCalledWith({
       chat_id: chatId,
       text: "Hello world",
+      parse_mode: "HTML",
     });
   });
 

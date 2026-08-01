@@ -102,7 +102,7 @@ export async function deliverFinalAnswer(
     let lastError: unknown;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
-        const result = await api.sendMessage({ chat_id: chatId, text: content });
+        const result = await api.sendMessage({ chat_id: chatId, text: content, parse_mode: "HTML" });
         entry.status = "sent";
         entry.messageId = result.message_id;
         anySent = true;
