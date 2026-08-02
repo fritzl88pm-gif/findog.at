@@ -110,7 +110,7 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).not.toContain("postMessage");
   });
 
-  it("keeps live deltas out of committed messages and rich answer rendering", () => {
+  it("keeps live deltas out of committed messages and progressively renders rich answers", () => {
     const deltaBranch = /if \(streamEvent\.type === "delta"\) \{([\s\S]*?)\n        \}/u
       .exec(viewSource)?.[1] ?? "";
     expect(deltaBranch).toContain("streamingPreviewRef.current?.append(streamEvent.content)");
@@ -119,9 +119,18 @@ describe("Fred native Findog UI", () => {
     expect(deltaBranch).not.toContain("setMessages");
     expect(deltaBranch).not.toContain("renderAssistantContent");
     expect(viewSource).toContain("<StreamingAssistantPreview");
+    expect(viewSource).toContain("renderAssistantContent={renderAssistantContent}");
+    expect(viewSource).toContain("memo(function StreamingMarkdownSegment");
+    expect(viewSource).toContain("renderAssistantContent(segment)");
+    expect(viewSource).toContain("statusText ? <span>{statusText}</span>");
+    expect(viewSource).toContain('replacementKindRef.current = "status"');
+    expect(viewSource).not.toContain("renderAssistantContent(statusText)");
+    expect(viewSource).not.toContain("Text.appendData");
+    expect(viewSource).not.toContain("textNode.appendData");
+    expect(viewSource).not.toContain("dangerouslySetInnerHTML");
     expect(viewSource).toContain("setMessages(baseMessages)");
     expect(cssSource).toMatch(
-      /\.fred-streaming-preview-text \{[\s\S]*?white-space: pre-wrap;/u,
+      /\.fred-streaming-preview-text \{[\s\S]*?display: grid;[\s\S]*?gap: 10px;[\s\S]*?white-space: normal;/u,
     );
   });
 

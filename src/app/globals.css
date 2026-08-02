@@ -5142,8 +5142,10 @@ textarea:focus {
 }
 
 .fred-streaming-preview-text {
-  display: block;
-  white-space: pre-wrap;
+  display: grid;
+  width: 100%;
+  gap: 10px;
+  white-space: normal;
 }
 
 .fred-streaming-preview-text:empty {
