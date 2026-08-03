@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { BotApi } from "./bot-api";
+import { TelegramFileTooLargeError, type BotApi } from "./bot-api";
 import type { ClaimedUpdate, JobQueueRpc } from "./jobs";
 import {
   processUpdate,
@@ -12,6 +12,8 @@ import {
 import type { FredTurnRequest, FredTurnResult } from "../fred/turn-types";
 import type { FredNativeConversation } from "../fred-native-stream";
 import { executeFredTurn, type TurnServiceConfigDeps, type TurnServicePersistenceDeps, type TurnServiceUpstreamDeps } from "../fred/turn-service";
+import { UserVisibleError } from "../errors";
+import { createAttachmentPreprocessor } from "./attachment-preprocessor";
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -90,6 +92,8 @@ function fakeBotApi(): BotApi {
     sendChatAction: vi.fn().mockResolvedValue(true),
     sendMessage: vi.fn().mockResolvedValue({ message_id: 2, date: 1, chat: { id: telegramChatId, type: "private" } }),
     sendRichMessage: vi.fn().mockResolvedValue({ message_id: 3, date: 1, chat: { id: telegramChatId, type: "private" } }),
+    getFile: vi.fn().mockResolvedValue({ file_id: "f", file_unique_id: "u", file_path: "path" }),
+    downloadFile: vi.fn().mockResolvedValue(new Uint8Array(100)),
   };
 }
 
@@ -1243,6 +1247,808 @@ describe("processUpdate: bare commands do not toggle", () => {
     await processUpdate(config, update);
 
     expect(storage.setMode).not.toHaveBeenCalled();
+    expect(rpc.complete).toHaveBeenCalled();
+  });
+});
+
+// ── Attachment support ───────────────────────────────────────────────────────
+
+import type { AttachmentPreprocessResult, AttachmentPreprocessor } from "./worker";
+import type { FredTurnAttachmentMeta } from "../fred/turn-types";
+
+const fakeAttachmentMeta: FredTurnAttachmentMeta = {
+  kind: "file",
+  name: "test.pdf",
+  mime_type: "application/pdf",
+  size_bytes: 100,
+  sha256: "abc123",
+};
+
+function docUpdate(fileName = "test.pdf", mimeType = "application/pdf", fileSize = 100, caption?: string) {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: 55,
+      from: { id: telegramUserId, is_bot: false, first_name: "Test" },
+      chat: { id: telegramChatId, type: "private" },
+      date: Math.floor(Date.now() / 1000),
+      document: {
+        file_id: "file-doc-1",
+        file_unique_id: "unq-doc-1",
+        file_name: fileName,
+        mime_type: mimeType,
+        file_size: fileSize,
+      },
+      ...(caption !== undefined ? { caption } : {}),
+    },
+  };
+}
+
+function photoUpdate(fileSizes: Array<number | undefined> = [5000, 15000, 30000], caption?: string) {
+  const sizes = fileSizes.map((fs, i) => ({
+    file_id: `photo-${i}`,
+    file_unique_id: `unq-photo-${i}`,
+    width: 100 * (i + 1),
+    height: 100 * (i + 1),
+    ...(fs !== undefined ? { file_size: fs } : {}),
+  }));
+  return {
+    update_id: updateId,
+    message: {
+      message_id: 55,
+      from: { id: telegramUserId, is_bot: false, first_name: "Test" },
+      chat: { id: telegramChatId, type: "private" },
+      date: Math.floor(Date.now() / 1000),
+      photo: sizes,
+      ...(caption !== undefined ? { caption } : {}),
+    },
+  };
+}
+
+function fakePreprocessor(result: AttachmentPreprocessResult): AttachmentPreprocessor {
+  return vi.fn<AttachmentPreprocessor>().mockResolvedValue(result);
+}
+
+describe("processUpdate: document attachments", () => {
+  it("downloads, validates, preprocesses a PDF document with caption and calls FredTurn with original query and upstreamQuery", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const preprocessor = fakePreprocessor({
+      upstreamQuery: "Wie hoch ist die Umsatzsteuer?\n\n--- BEGINN DER ANHÄNGE ---\nPDF content",
+      metadata: fakeAttachmentMeta,
+    });
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn, attachmentPreprocessor: preprocessor });
+    const update = makeUpdate({ rawUpdate: docUpdate("report.pdf", "application/pdf", 1024, "Wie hoch ist die Umsatzsteuer?") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(preprocessor).toHaveBeenCalledTimes(1);
+    expect(preprocessor).toHaveBeenCalledWith(
+      expect.anything(),
+      "file-doc-1",
+      "report.pdf",
+      "application/pdf",
+      1024,
+      "Wie hoch ist die Umsatzsteuer?",
+      expect.any(AbortSignal),
+    );
+    // FredTurnRequest: query = original question
+    expect(calls[0]?.query).toBe("Wie hoch ist die Umsatzsteuer?");
+    // upstreamQuery = combined attachment context
+    expect(calls[0]?.upstreamQuery).toBe("Wie hoch ist die Umsatzsteuer?\n\n--- BEGINN DER ANHÄNGE ---\nPDF content");
+    // attachments metadata present
+    expect(calls[0]?.attachments).toEqual([expect.objectContaining({ kind: "file", name: "test.pdf" })]);
+  });
+
+  it("uses default German question when caption is absent", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const preprocessor = fakePreprocessor({
+      upstreamQuery: "Bitte analysiere diesen Anhang.\n\n--- BEGINN DER ANHÄNGE ---\nPDF content",
+      metadata: fakeAttachmentMeta,
+    });
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn, attachmentPreprocessor: preprocessor });
+    // caption absent
+    const update = makeUpdate({ rawUpdate: docUpdate("file.pdf", "application/pdf", 500) });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(preprocessor).toHaveBeenCalledWith(
+      expect.anything(),
+      "file-doc-1",
+      "file.pdf",
+      "application/pdf",
+      500,
+      undefined,
+      expect.any(AbortSignal),
+    );
+    expect(calls[0]?.query).toBe("Bitte analysiere diesen Anhang.");
+  });
+
+  it("trims caption whitespace for the query", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const preprocessor = fakePreprocessor({
+      upstreamQuery: "  Frage?  \n\n--- BEGINN DER ANHÄNGE ---\ncontent",
+      metadata: fakeAttachmentMeta,
+    });
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn, attachmentPreprocessor: preprocessor });
+    const update = makeUpdate({ rawUpdate: docUpdate("doc.pdf", "application/pdf", 100, "  Frage?  ") });
+
+    await processUpdate(config, update);
+
+    expect(calls[0]?.query).toBe("Frage?");
+  });
+
+  it("does NOT call FredTurn and sends a German error message when preprocessor throws a user-visible error without retries", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const preprocessor = vi.fn<AttachmentPreprocessor>().mockRejectedValue(
+      new UserVisibleError("Nicht unterstützter Dateityp.", 400),
+    );
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn, attachmentPreprocessor: preprocessor, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: docUpdate("bad.xyz", "application/octet-stream", 100, "Frage") });
+
+    const result = await processUpdate(config, update);
+
+    // Should complete (not retry) and send a user message
+    expect(result.status).toBe("completed");
+    expect(calls).toHaveLength(0);
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toContain("Nicht unterstützter Dateityp");
+    expect(rpc.retry).not.toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
+  it("retries on transient preprocessor errors", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const preprocessor = vi.fn<AttachmentPreprocessor>().mockRejectedValue(new Error("Network timeout"));
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn, attachmentPreprocessor: preprocessor, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: docUpdate("file.pdf", "application/pdf", 100, "Frage") });
+
+    const result = await processUpdate(config, update);
+
+    // Should retry (not fail terminally)
+    expect(result.status).toBe("failed");
+    expect(calls).toHaveLength(0);
+    expect(rpc.retry).toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+});
+
+describe("processUpdate: photo attachments", () => {
+  it("reports the 10 MB image limit for a streamed oversize photo without retrying or calling Fred", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    vi.mocked(botApi.getFile).mockResolvedValue({
+      file_id: "photo-2",
+      file_unique_id: "unq-photo-2",
+      file_path: "photos/file.jpg",
+    });
+    vi.mocked(botApi.downloadFile).mockRejectedValue(
+      new TelegramFileTooLargeError("this message intentionally has no German size wording"),
+    );
+    const preprocessor = createAttachmentPreprocessor({
+      mineru: vi.fn(),
+      gemini: vi.fn(),
+      documentFallback: vi.fn(),
+    });
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({
+      rpc,
+      storage,
+      createBotApiForToken: () => botApi,
+      executeTurn,
+      attachmentPreprocessor: preprocessor,
+    });
+
+    const result = await processUpdate(
+      config,
+      makeUpdate({ rawUpdate: photoUpdate([undefined], "Foto prüfen") }),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(botApi.sendMessage).toHaveBeenCalledWith({
+      chat_id: telegramChatId,
+      text: "Ein Bild darf maximal 10 MB groß sein.",
+    });
+    expect(rpc.complete).toHaveBeenCalledTimes(1);
+    expect(rpc.retry).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("chooses the largest photo by file_size, treats it as JPEG, and preprocesses", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const preprocessor = fakePreprocessor({
+      upstreamQuery: "Was ist auf diesem Bild?\n\n--- BEGINN DER ANHÄNGE ---\nimage desc",
+      metadata: { kind: "image", name: "photo.jpg", mime_type: "image/jpeg", size_bytes: 500, sha256: "sha" },
+    });
+    const { executeTurn } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn, attachmentPreprocessor: preprocessor });
+    // Three photo sizes: small (file_size 5000), large (file_size 40000), no file_size
+    const update = makeUpdate({ rawUpdate: photoUpdate([5000, 40000, 30000], "Was ist auf diesem Bild?") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(preprocessor).toHaveBeenCalledTimes(1);
+    // Should have picked photo-1 (largest file_size: 40000)
+    expect(preprocessor).toHaveBeenCalledWith(
+      expect.anything(),
+      "photo-1",
+      "photo.jpg",
+      "image/jpeg",
+      40000,
+      "Was ist auf diesem Bild?",
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("falls back to width*height when no file_size is provided", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const preprocessor = fakePreprocessor({
+      upstreamQuery: "Bild\n\n--- context ---",
+      metadata: { kind: "image", name: "photo.jpg", mime_type: "image/jpeg", size_bytes: 0, sha256: "sha" },
+    });
+    const { executeTurn } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn, attachmentPreprocessor: preprocessor });
+    // No file_size, so area determines: photo-0=100*100=10000, photo-1=200*200=40000, photo-2=300*300=90000
+    const update = makeUpdate({ rawUpdate: photoUpdate([undefined, undefined, undefined]) });
+
+    await processUpdate(config, update);
+
+    // Should pick photo-2 (largest width*height)
+    expect(preprocessor).toHaveBeenCalledWith(
+      expect.anything(),
+      "photo-2",
+      expect.anything(),
+      expect.anything(),
+      undefined,
+      undefined,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("uses default question for captionless photos", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const preprocessor = fakePreprocessor({
+      upstreamQuery: "Bitte analysiere diesen Anhang.\n\n--- context ---",
+      metadata: { kind: "image", name: "photo.jpg", mime_type: "image/jpeg", size_bytes: 0, sha256: "sha" },
+    });
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn, attachmentPreprocessor: preprocessor });
+    const update = makeUpdate({ rawUpdate: photoUpdate([5000]) });
+
+    await processUpdate(config, update);
+
+    expect(calls[0]?.query).toBe("Bitte analysiere diesen Anhang.");
+  });
+
+  it("uses filename 'photo.jpg' for photos with deterministic sanitized name", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const preprocessor = fakePreprocessor({
+      upstreamQuery: "Frage\n\n--- context ---",
+      metadata: { kind: "image", name: "photo.jpg", mime_type: "image/jpeg", size_bytes: 0, sha256: "sha" },
+    });
+    const { executeTurn } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn, attachmentPreprocessor: preprocessor });
+    const update = makeUpdate({ rawUpdate: photoUpdate([5000], "Frage") });
+
+    await processUpdate(config, update);
+
+    expect(preprocessor).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "photo.jpg",
+      "image/jpeg",
+      expect.anything(),
+      expect.anything(),
+      expect.any(AbortSignal),
+    );
+  });
+});
+
+describe("processUpdate: unchanged text and unsupported media", () => {
+  it("still routes plain text messages to FredTurn normally", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const { executeTurn, calls } = answerTurn();
+    const preprocessor = vi.fn<AttachmentPreprocessor>();
+    const config = fakeConfig({ rpc, storage, executeTurn, attachmentPreprocessor: preprocessor });
+    const update = makeUpdate({ rawUpdate: textUpdate("Normale Frage") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.query).toBe("Normale Frage");
+    expect(calls[0]?.upstreamQuery).toBeUndefined();
+    expect(preprocessor).not.toHaveBeenCalled();
+  });
+
+  it("still sends unsupported notice for video/audio/sticker messages", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+    const update = makeUpdate({
+      rawUpdate: {
+        update_id: updateId,
+        message: {
+          message_id: 55,
+          from: { id: telegramUserId, is_bot: false, first_name: "Test" },
+          chat: { id: telegramChatId, type: "private" },
+          date: Math.floor(Date.now() / 1000),
+          video: { file_id: "vid-1", file_unique_id: "unq", width: 100, height: 100, duration: 10 },
+        },
+      },
+    });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("still handles /start and /help normally", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+    const update = makeUpdate({ rawUpdate: textUpdate("/help") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Attachment lifecycle (typing/heartbeat before preprocessor) ──────────────
+
+describe("processUpdate: attachment lifecycle ordering", () => {
+  it("starts typing action before running the attachment preprocessor", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    let preprocessorStarted = false;
+    let preprocessorResolve!: (value: AttachmentPreprocessResult) => void;
+    const preprocessor = vi.fn<AttachmentPreprocessor>().mockImplementation(
+      () => new Promise<AttachmentPreprocessResult>((resolve) => {
+        preprocessorStarted = true;
+        preprocessorResolve = resolve;
+      }),
+    );
+    const { executeTurn } = answerTurn();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn, attachmentPreprocessor: preprocessor, heartbeatIntervalMs: 100 });
+    const update = makeUpdate({ rawUpdate: docUpdate("test.pdf", "application/pdf", 100) });
+
+    const resultPromise = processUpdate(config, update);
+    // Wait a microtick for async flow to start
+    await vi.waitFor(() => expect(preprocessorStarted).toBe(true), { timeout: 1000 });
+
+    // typing should have been called before preprocessor resolved
+    expect(botApi.sendChatAction).toHaveBeenCalled();
+
+    // resolve preprocessor so the turn can complete
+    preprocessorResolve({
+      upstreamQuery: "Frage\n\n--- context ---",
+      metadata: fakeAttachmentMeta,
+    });
+    const result = await resultPromise;
+
+    expect(result.status).toBe("completed");
+  });
+
+  it("runs a heartbeat before the attachment preprocessor begins", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    let preprocessorStarted = false;
+    let preprocessorResolve!: (value: AttachmentPreprocessResult) => void;
+    const preprocessor = vi.fn<AttachmentPreprocessor>().mockImplementation(
+      () => new Promise<AttachmentPreprocessResult>((resolve) => {
+        preprocessorStarted = true;
+        preprocessorResolve = resolve;
+      }),
+    );
+    const { executeTurn } = answerTurn();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn, attachmentPreprocessor: preprocessor, heartbeatIntervalMs: 100 });
+    const update = makeUpdate({ rawUpdate: docUpdate("test.pdf", "application/pdf", 100) });
+
+    const resultPromise = processUpdate(config, update);
+    await vi.waitFor(() => expect(preprocessorStarted).toBe(true), { timeout: 1000 });
+
+    // heartbeat should have been called before preprocessor resolved
+    expect(rpc.heartbeat).toHaveBeenCalled();
+
+    preprocessorResolve({
+      upstreamQuery: "Frage\n\n--- context ---",
+      metadata: fakeAttachmentMeta,
+    });
+    await resultPromise;
+  });
+
+  it("shares cancellation state through Fred generation and stops all lifecycle work", async () => {
+    vi.useFakeTimers();
+    const rpc = fakeRpc({
+      checkCancelled: vi.fn()
+        .mockResolvedValueOnce({ data: false, error: null })
+        .mockResolvedValueOnce({ data: true, error: null }),
+    });
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const preprocessor = fakePreprocessor({ upstreamQuery: "Frage\n\n--- context ---", metadata: fakeAttachmentMeta });
+    let fredSignal: AbortSignal | undefined;
+    const { executeTurn } = capturingTurn(async function* (request) {
+      fredSignal = request.signal;
+      await new Promise<void>((resolve) => {
+        if (request.signal?.aborted) resolve();
+        else request.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return { answer: "Darf nicht zugestellt werden", rawAnswer: "Darf nicht zugestellt werden", conversation: fakeConversation, researchTrace: [], sourceReferences: [], stopped: false };
+    });
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn, attachmentPreprocessor: preprocessor, heartbeatIntervalMs: 50 });
+
+    const resultPromise = processUpdate(config, makeUpdate({ rawUpdate: docUpdate() }));
+    await vi.waitFor(() => expect(fredSignal).toBeDefined());
+    await vi.advanceTimersByTimeAsync(50);
+    const result = await resultPromise;
+
+    expect(fredSignal?.aborted).toBe(true);
+    expect(result.status).toBe("cancelled");
+    expect(rpc.cancel).toHaveBeenCalledTimes(1);
+    expect(rpc.complete).not.toHaveBeenCalled();
+    expect(rpc.retry).not.toHaveBeenCalled();
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+    const heartbeatCalls = vi.mocked(rpc.heartbeat).mock.calls.length;
+    const typingCalls = vi.mocked(botApi.sendChatAction).mock.calls.length;
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(rpc.heartbeat).toHaveBeenCalledTimes(heartbeatCalls);
+    expect(botApi.sendChatAction).toHaveBeenCalledTimes(typingCalls);
+  });
+
+  it("shares shutdown state through Fred generation, requeues, and stops all lifecycle work", async () => {
+    vi.useFakeTimers();
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const preprocessor = fakePreprocessor({ upstreamQuery: "Frage\n\n--- context ---", metadata: fakeAttachmentMeta });
+    const shutdownController = new AbortController();
+    const removeListener = vi.spyOn(shutdownController.signal, "removeEventListener");
+    let fredSignal: AbortSignal | undefined;
+    const { executeTurn } = capturingTurn(async function* (request) {
+      fredSignal = request.signal;
+      await new Promise<void>((resolve) => {
+        if (request.signal?.aborted) resolve();
+        else request.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return { answer: "Darf nicht zugestellt werden", rawAnswer: "Darf nicht zugestellt werden", conversation: fakeConversation, researchTrace: [], sourceReferences: [], stopped: false };
+    });
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn, attachmentPreprocessor: preprocessor, heartbeatIntervalMs: 50 });
+
+    const resultPromise = processUpdate(config, makeUpdate({ rawUpdate: docUpdate() }), { shutdownSignal: shutdownController.signal });
+    await vi.waitFor(() => expect(fredSignal).toBeDefined());
+    shutdownController.abort();
+    const result = await resultPromise;
+
+    expect(fredSignal?.aborted).toBe(true);
+    expect(result.status).toBe("retry");
+    expect(rpc.retry).toHaveBeenCalledWith(expect.objectContaining({ p_last_error_code: "WORKER_SHUTDOWN", p_retry_delay_seconds: 0 }));
+    expect(rpc.complete).not.toHaveBeenCalled();
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+    expect(removeListener).toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cleans attachment timers after successful delivery", async () => {
+    vi.useFakeTimers();
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const preprocessor = fakePreprocessor({ upstreamQuery: "Frage\n\n--- context ---", metadata: fakeAttachmentMeta });
+    const { executeTurn } = answerTurn("Einmalige Antwort");
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn, attachmentPreprocessor: preprocessor, heartbeatIntervalMs: 50 });
+
+    const result = await processUpdate(config, makeUpdate({ rawUpdate: docUpdate() }));
+    const heartbeatCalls = vi.mocked(rpc.heartbeat).mock.calls.length;
+    const typingCalls = vi.mocked(botApi.sendChatAction).mock.calls.length;
+
+    expect(result.status).toBe("completed");
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(rpc.heartbeat).toHaveBeenCalledTimes(heartbeatCalls);
+    expect(botApi.sendChatAction).toHaveBeenCalledTimes(typingCalls);
+  });
+
+  it("cleans attachment timers and shutdown listener when Fred throws before retrying", async () => {
+    vi.useFakeTimers();
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const preprocessor = fakePreprocessor({ upstreamQuery: "Frage\n\n--- context ---", metadata: fakeAttachmentMeta });
+    const shutdownController = new AbortController();
+    const removeListener = vi.spyOn(shutdownController.signal, "removeEventListener");
+    const { executeTurn } = erroringTurn("Fred kaputt");
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn, attachmentPreprocessor: preprocessor, heartbeatIntervalMs: 50 });
+
+    const result = await processUpdate(config, makeUpdate({ rawUpdate: docUpdate() }), { shutdownSignal: shutdownController.signal });
+
+    expect(result.status).toBe("failed");
+    expect(rpc.retry).toHaveBeenCalledTimes(1);
+    expect(removeListener).toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+// ── /stop cancellation during preprocessing ─────────────────────────────────
+
+describe("processUpdate: /stop cancels preprocessing", () => {
+  it("aborts the preprocessor signal when /stop cancellation is detected during preprocessing, cancels update without error message or Fred call", async () => {
+    vi.useFakeTimers();
+    const rpc = fakeRpc({
+      // First heartbeat returns ok, then cancellation is detected
+      heartbeat: vi.fn()
+        .mockResolvedValueOnce({ data: true, error: null })
+        .mockResolvedValueOnce({ data: true, error: null }),
+      checkCancelled: vi.fn()
+        .mockResolvedValueOnce({ data: false, error: null })
+        .mockResolvedValueOnce({ data: true, error: null }),
+    });
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    let capturedSignal: AbortSignal | undefined;
+    let preprocessorResolve!: (value: AttachmentPreprocessResult) => void;
+    const preprocessor = vi.fn<AttachmentPreprocessor>().mockImplementation(
+      (_botApi, _fileId, _fileName, _mimeType, _fileSize, _caption, signal) => {
+        capturedSignal = signal;
+        return new Promise<AttachmentPreprocessResult>((resolve) => {
+          preprocessorResolve = resolve;
+        });
+      },
+    );
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn, attachmentPreprocessor: preprocessor, heartbeatIntervalMs: 50 });
+    const update = makeUpdate({ rawUpdate: docUpdate("test.pdf", "application/pdf", 100) });
+
+    const resultPromise = processUpdate(config, update);
+    // Let typing + first heartbeat run
+    await vi.advanceTimersByTimeAsync(60);
+    // Now advance to second heartbeat which detects cancellation
+    await vi.advanceTimersByTimeAsync(60);
+
+    // The controller should have been aborted, which aborts the signal
+    expect(capturedSignal?.aborted).toBe(true);
+
+    // Resolve preprocessor (it was already aborted though, so this may not matter)
+    preprocessorResolve({
+      upstreamQuery: "Frage\n\n--- context ---",
+      metadata: fakeAttachmentMeta,
+    });
+    const result = await resultPromise;
+
+    expect(result.status).toBe("cancelled");
+    expect(calls).toHaveLength(0);
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+    expect(rpc.cancel).toHaveBeenCalledWith(expect.objectContaining({ p_update_id: updateRowId }));
+    vi.useRealTimers();
+  });
+});
+
+// ── Shutdown during preprocessing ───────────────────────────────────────────
+
+describe("processUpdate: shutdown during preprocessing", () => {
+  it("aborts preprocessing and requeues when shutdown signal fires during preprocessing", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    let capturedSignal: AbortSignal | undefined;
+    let preprocessorResolve!: (value: AttachmentPreprocessResult) => void;
+    const preprocessor = vi.fn<AttachmentPreprocessor>().mockImplementation(
+      (_botApi, _fileId, _fileName, _mimeType, _fileSize, _caption, signal) => {
+        capturedSignal = signal;
+        return new Promise<AttachmentPreprocessResult>((resolve) => {
+          preprocessorResolve = resolve;
+        });
+      },
+    );
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn, attachmentPreprocessor: preprocessor });
+    const update = makeUpdate({ rawUpdate: docUpdate("test.pdf", "application/pdf", 100) });
+    const shutdownController = new AbortController();
+
+    const resultPromise = processUpdate(config, update, { shutdownSignal: shutdownController.signal });
+    // Wait a tick for preprocessor to be called
+    await vi.waitFor(() => expect(capturedSignal).toBeDefined(), { timeout: 1000 });
+
+    // Fire shutdown
+    shutdownController.abort();
+
+    // Preprocessor signal should be aborted
+    expect(capturedSignal?.aborted).toBe(true);
+
+    // Resolve preprocessor
+    preprocessorResolve({
+      upstreamQuery: "Frage\n\n--- context ---",
+      metadata: fakeAttachmentMeta,
+    });
+    const result = await resultPromise;
+
+    expect(result.status).toBe("retry");
+    expect(calls).toHaveLength(0);
+    expect(rpc.retry).toHaveBeenCalled();
+    expect(rpc.complete).not.toHaveBeenCalled();
+  });
+});
+
+// ── Provider signal contract ─────────────────────────────────────────────────
+
+describe("processUpdate: provider signal contract", () => {
+  it("passes the per-turn AbortSignal to the preprocessor, not the shutdown signal", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    let capturedSignal: AbortSignal | undefined;
+    const preprocessor = vi.fn<AttachmentPreprocessor>().mockImplementation(
+      (_botApi, _fileId, _fileName, _mimeType, _fileSize, _caption, signal) => {
+        capturedSignal = signal;
+        return Promise.resolve({
+          upstreamQuery: "Frage\n\n--- context ---",
+          metadata: fakeAttachmentMeta,
+        });
+      },
+    );
+    const { executeTurn } = answerTurn();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn, attachmentPreprocessor: preprocessor });
+    const update = makeUpdate({ rawUpdate: docUpdate("test.pdf", "application/pdf", 100) });
+    const shutdownController = new AbortController();
+
+    await processUpdate(config, update, { shutdownSignal: shutdownController.signal });
+
+    // The signal passed to the preprocessor should be the per-turn controller's signal,
+    // not the shutdown signal
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal).not.toBe(shutdownController.signal);
+    // The per-turn signal should not be aborted yet (it should only abort on shutdown, cancellation, etc.)
+    expect(capturedSignal?.aborted).toBe(false);
+  });
+});
+
+// ── Message-level file_size preflight ─────────────────────────────────────────
+
+describe("processUpdate: message file_size oversize", () => {
+  it("rejects a document with file_size > 20 MiB before any getFile call, sends one user-visible message, and completes without retry", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const preprocessor = vi.fn<AttachmentPreprocessor>();
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn, attachmentPreprocessor: preprocessor });
+    const oversizedBytes = 21 * 1024 * 1024; // 21 MiB
+    const update = makeUpdate({ rawUpdate: docUpdate("big.pdf", "application/pdf", oversizedBytes, "Frage") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    // Zero getFile calls
+    expect(botApi.getFile).not.toHaveBeenCalled();
+    // Zero download calls
+    expect(botApi.downloadFile).not.toHaveBeenCalled();
+    // Zero preprocessor calls
+    expect(preprocessor).not.toHaveBeenCalled();
+    // Zero Fred calls
+    expect(calls).toHaveLength(0);
+    // One user-visible message about size limit
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toContain("20 MB");
+    // No retry
+    expect(rpc.retry).not.toHaveBeenCalled();
+    // Completed (not failed)
+    expect(rpc.complete).toHaveBeenCalled();
+  });
+
+  it("rejects a photo with file_size > 10 MiB before any getFile call", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const preprocessor = vi.fn<AttachmentPreprocessor>();
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn, attachmentPreprocessor: preprocessor });
+    const oversizedBytes = 11 * 1024 * 1024; // 11 MiB
+    const update = makeUpdate({ rawUpdate: photoUpdate([oversizedBytes], "Frage") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(botApi.getFile).not.toHaveBeenCalled();
+    expect(botApi.downloadFile).not.toHaveBeenCalled();
+    expect(preprocessor).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toContain("10 MB");
+    expect(rpc.complete).toHaveBeenCalled();
+  });
+});
+
+// ── getFile-reported file_size oversize ──────────────────────────────────────
+
+describe("processUpdate: getFile file_size oversize", () => {
+  it("rejects when getFile reports file_size above limit, makes zero download/provider/Fred calls", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    // The real preprocessor calls getFile, discovers oversize, and throws UserVisibleError.
+    // This test validates the worker handles that by completing without retry.
+    const preprocessor = vi.fn<AttachmentPreprocessor>().mockRejectedValue(
+      new UserVisibleError("Eine Datei darf maximal 20 MB groß sein.", 413),
+    );
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn, attachmentPreprocessor: preprocessor });
+    const update = makeUpdate({ rawUpdate: docUpdate("report.pdf", "application/pdf", 1 * 1024 * 1024, "Frage") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    // preprocessor was called (and threw UserVisibleError after internal getFile check)
+    expect(preprocessor).toHaveBeenCalledTimes(1);
+    // Zero Fred calls
+    expect(calls).toHaveLength(0);
+    // One user-visible message
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toContain("20 MB");
+    expect(rpc.complete).toHaveBeenCalled();
+    expect(rpc.retry).not.toHaveBeenCalled();
+  });
+});
+
+// ── Streamed oversize by BotApi ─────────────────────────────────────────────
+
+describe("processUpdate: download streamed oversize", () => {
+  it("completes with one user-visible size message and does not retry when BotApi reports oversize during download", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    // The real preprocessor catches SanitizedTelegramError with "größer"
+    // and rethrows as UserVisibleError. This test validates the worker
+    // handles that UserVisibleError by completing without retry.
+    const preprocessor = vi.fn<AttachmentPreprocessor>().mockRejectedValue(
+      new UserVisibleError("Eine Datei darf maximal 20 MB groß sein.", 413),
+    );
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn, attachmentPreprocessor: preprocessor });
+    const update = makeUpdate({ rawUpdate: docUpdate("test.pdf", "application/pdf", 50, "Frage") });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(calls).toHaveLength(0);
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+    expect(sentText).toContain("20 MB");
+    expect(rpc.retry).not.toHaveBeenCalled();
     expect(rpc.complete).toHaveBeenCalled();
   });
 });

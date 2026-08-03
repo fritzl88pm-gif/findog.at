@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { fileURLToPath } from "node:url";
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { getScanningSettings } from "@/lib/scanning/settings";
 
 import type { JobQueueRpc } from "@/lib/telegram/jobs";
 import {
@@ -13,6 +14,13 @@ import {
   type WorkerStorage,
 } from "@/lib/telegram/worker";
 import { decryptTelegramToken } from "@/lib/telegram/credentials";
+import {
+  createAttachmentPreprocessor,
+  type AttachmentPreprocessorProviders,
+} from "@/lib/telegram/attachment-preprocessor";
+import { processMineruBatch } from "@/lib/attachments/mineru-cloud";
+import { describeImage } from "@/lib/attachments/gemini-image-context";
+import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-fallback";
 import {
   mintFredEmbedSession,
   readFredEmbedServerConfig,
@@ -490,12 +498,25 @@ async function main(): Promise<void> {
     throw dbError("TELEGRAM_DB_PROBE_FAILED");
   }
 
+  const preprocessorProviders: AttachmentPreprocessorProviders = {
+    mineru: (files, opts) => processMineruBatch(files, opts ?? {}),
+    gemini: (uri, opts) => describeImage(uri, opts ?? {}),
+    documentFallback: async (files, opts) => {
+      const settings = await getScanningSettings(supabase);
+      return extractDocumentsWithConfiguredModel(files, {
+        model: settings.modelId,
+        ...(opts ?? {}),
+      });
+    },
+  };
+
   const config: WorkerConfig = {
     rpc: buildRpc(supabase),
     storage: buildStorage(supabase),
     turnUpstream: buildTurnUpstream(fetch),
     turnPersistence: buildTurnPersistence(supabase),
     turnConfig: buildTurnConfig(),
+    attachmentPreprocessor: createAttachmentPreprocessor(preprocessorProviders),
     decryptToken: decryptTelegramToken,
     encryptionKey: credentialKey,
     concurrency,

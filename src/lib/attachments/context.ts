@@ -12,9 +12,9 @@ export type AttachmentInput = {
   readonly bytes: Uint8Array;
 };
 
-export type MineruProvider = (files: MineruFileInput[]) => Promise<string[]>;
-export type GeminiProvider = (imageDataUri: string) => Promise<string>;
-export type DocumentFallbackProvider = (files: MineruFileInput[]) => Promise<string[]>;
+export type MineruProvider = (files: MineruFileInput[], opts?: { signal?: AbortSignal }) => Promise<string[]>;
+export type GeminiProvider = (imageDataUri: string, opts?: { signal?: AbortSignal }) => Promise<string>;
+export type DocumentFallbackProvider = (files: MineruFileInput[], opts?: { signal?: AbortSignal }) => Promise<string[]>;
 
 export type BuildAttachmentOptions = {
   mineruProvider?: MineruProvider;

@@ -20,7 +20,8 @@ import {
 import { chunkTelegramMessage, hasGfmTable, normalizeFredMarkdown } from "./text";
 import type { EncryptionAad } from "./credentials";
 import type { TelegramUpdate } from "./types";
-import type { FredTurnEvent, FredTurnRequest, FredTurnResult } from "../fred/turn-types";
+import type { FredTurnAttachmentMeta, FredTurnEvent, FredTurnRequest, FredTurnResult } from "../fred/turn-types";
+import { UserVisibleError } from "../errors";
 import {
   executeFredTurn,
   type TurnServiceConfigDeps,
@@ -59,6 +60,21 @@ export interface WorkerStorage {
   setMode(integrationId: string, mode: "pro" | "web", enabled: boolean): Promise<Pick<WorkerIntegration, "proModeEnabled" | "webSearchEnabled">>;
 }
 
+export interface AttachmentPreprocessResult {
+  upstreamQuery: string;
+  metadata: FredTurnAttachmentMeta;
+}
+
+export type AttachmentPreprocessor = (
+  botApi: BotApi,
+  fileId: string,
+  fileName: string | undefined,
+  mimeType: string | undefined,
+  fileSize: number | undefined,
+  caption: string | undefined,
+  signal?: AbortSignal,
+) => Promise<AttachmentPreprocessResult>;
+
 export interface WorkerConfig {
   rpc: JobQueueRpc;
   storage: WorkerStorage;
@@ -67,6 +83,8 @@ export interface WorkerConfig {
   turnConfig: TurnServiceConfigDeps;
   /** Defaults to `executeFredTurn`; injectable for tests. */
   executeTurn?: typeof executeFredTurn;
+  /** Preprocess a Telegram attachment (download + validate + build context). */
+  attachmentPreprocessor?: AttachmentPreprocessor;
   /** Defaults to `createBotApi`; injectable for tests. */
   createBotApiForToken?: (token: string) => BotApi;
   decryptToken: (ciphertext: string, aad: EncryptionAad) => string;
@@ -100,6 +118,8 @@ export interface WorkerLoopOptions {
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const MAX_ATTEMPTS = 5;
+const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 const RICH_MESSAGE_MAX_LENGTH = 32_768;
 
 const START_TEXT =
@@ -127,6 +147,7 @@ function buildWebStatusText(enabled: boolean): string {
 const NEW_CONVERSATION_TEXT = "Neue Unterhaltung gestartet. Stelle deine nächste Frage!";
 const STOP_STOPPED_TEXT = "⏹️ Die laufende Antwort wurde abgebrochen.";
 const STOP_NOTHING_TEXT = "Es läuft gerade keine Antwort, die abgebrochen werden könnte.";
+const DEFAULT_ATTACHMENT_QUESTION = "Bitte analysiere diesen Anhang.";
 const UNSUPPORTED_MEDIA_TEXT = "Dieser Nachrichtentyp wird nicht unterstützt. Bitte sende deine Frage als Text.";
 const UNKNOWN_COMMAND_TEXT = "Unbekannter Befehl. Nutze /help für eine Übersicht aller Befehle.";
 const GENERIC_FAILURE_TEXT =
@@ -197,6 +218,19 @@ export async function processUpdate(
   const botApi = createBotApiForToken(token);
 
   try {
+    if (message.document && config.attachmentPreprocessor) {
+      return await handleAttachmentTurn(
+        config, botApi, executeTurn, integration, update, handle, chatId,
+        message.document, undefined, message.caption, options.shutdownSignal,
+      );
+    }
+    if (message.photo && message.photo.length > 0 && config.attachmentPreprocessor) {
+      return await handleAttachmentTurn(
+        config, botApi, executeTurn, integration, update, handle, chatId,
+        undefined, message.photo, message.caption, options.shutdownSignal,
+      );
+    }
+
     if (!message.text) {
       await botApi.sendMessage({ chat_id: chatId, text: UNSUPPORTED_MEDIA_TEXT });
       await completeUpdate(rpc, handle);
@@ -214,16 +248,16 @@ export async function processUpdate(
       return { updateId: update.updateId, status: "completed" };
     }
 
-    return await handleFredTurn(
+    return await runWithTurnLifecycle(
       config,
       botApi,
-      executeTurn,
-      integration,
-      update,
       handle,
       chatId,
-      text,
       options.shutdownSignal,
+      false,
+      (lifecycle) => handleFredTurn(
+        config, botApi, executeTurn, integration, update, handle, chatId, text, lifecycle,
+      ),
     );
   } catch (error) {
     if (options.shutdownSignal?.aborted) {
@@ -347,54 +381,53 @@ async function handleSlashCommand(
 
 // ── Fred turn handling ──────────────────────────────────────────────────────
 
-async function handleFredTurn(
+interface TurnLifecycleState {
+  cancellationRequested: boolean;
+  shutdownRequested: boolean;
+  controlPlaneError: unknown;
+}
+
+interface TurnLifecycle {
+  controller: AbortController;
+  typingController: AbortController;
+  typingTimer: ReturnType<typeof setInterval>;
+  heartbeatTimer?: ReturnType<typeof setInterval>;
+  shutdownSignal?: AbortSignal;
+  shutdownListener: () => void;
+  state: TurnLifecycleState;
+  cleanup(): void;
+}
+
+async function createTurnLifecycle(
   config: WorkerConfig,
   botApi: BotApi,
-  executeTurn: typeof executeFredTurn,
-  integration: WorkerIntegration,
-  update: ClaimedUpdate,
   handle: UpdateHandle,
   chatId: number,
-  text: string,
-  shutdownSignal?: AbortSignal,
-): Promise<ProcessedUpdateResult> {
-  const { rpc, storage } = config;
+  shutdownSignal: AbortSignal | undefined,
+  immediateHeartbeat: boolean,
+): Promise<TurnLifecycle> {
   const controller = new AbortController();
-  let shutdownRequested = shutdownSignal?.aborted === true;
-  let cancellationRequested = false;
-  let controlPlaneError: unknown;
-  const handleShutdown = (): void => {
-    shutdownRequested = true;
+  const typingController = new AbortController();
+  const state: TurnLifecycleState = {
+    cancellationRequested: false,
+    shutdownRequested: shutdownSignal?.aborted === true,
+    controlPlaneError: undefined,
+  };
+  let cleaned = false;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+
+  const shutdownListener = (): void => {
+    state.shutdownRequested = true;
     controller.abort();
   };
   if (shutdownSignal && !shutdownSignal.aborted) {
-    shutdownSignal.addEventListener("abort", handleShutdown, { once: true });
-  } else if (shutdownRequested) {
+    shutdownSignal.addEventListener("abort", shutdownListener, { once: true });
+  } else if (state.shutdownRequested) {
     controller.abort();
   }
-  const conversationId = await storage.getActiveConversation(integration.id, chatId);
 
-  const request: FredTurnRequest = {
-    clientId: integration.clientId,
-    ...(conversationId ? { conversationId } : {}),
-    query: text,
-    origin: "telegram",
-    telegramIntegrationId: integration.id,
-    agentKey: "fred",
-    webSearchEnabled: integration.webSearchEnabled,
-    proModeEnabled: integration.proModeEnabled,
-    userEventId: deriveEventId(`${integration.id}:${update.updateId}:user`),
-    assistantEventId: deriveEventId(`${integration.id}:${update.updateId}:assistant`),
-    onConversationEvent: async (conversation) => {
-      await storage.markTelegramOrigin(integration.clientId, conversation.id, integration.id);
-      await storage.bindConversation(integration.id, chatId, conversation.id);
-    },
-    signal: controller.signal,
-  };
-
-  const typingController = new AbortController();
   const sendTypingAction = (): void => {
-    if (typingController.signal.aborted) return;
+    if (cleaned || typingController.signal.aborted) return;
     try {
       void botApi.sendChatAction(
         { chat_id: chatId, action: "typing" },
@@ -406,26 +439,256 @@ async function handleFredTurn(
   };
   sendTypingAction();
   const typingTimer = setInterval(sendTypingAction, 4_000);
-  const heartbeatTimer = setInterval(() => {
-    void (async () => {
-      try {
-        const leaseOk = await heartbeatUpdate(rpc, handle);
-        if (!leaseOk) {
-          controller.abort();
-          return;
-        }
-        const cancelled = await checkUpdateCancelled(rpc, handle);
-        if (cancelled) {
-          cancellationRequested = true;
-          controller.abort();
-        }
-      } catch (error) {
-        controlPlaneError = error;
+
+  const runHeartbeat = async (): Promise<void> => {
+    if (cleaned || controller.signal.aborted) return;
+    try {
+      const leaseOk = await heartbeatUpdate(config.rpc, handle);
+      if (cleaned) return;
+      if (!leaseOk) {
+        state.controlPlaneError = new Error("Telegram update lease lost");
+        controller.abort();
+        return;
+      }
+      const cancelled = await checkUpdateCancelled(config.rpc, handle);
+      if (cleaned) return;
+      if (cancelled) {
+        state.cancellationRequested = true;
         controller.abort();
       }
-    })();
-  }, config.heartbeatIntervalMs);
+    } catch (error) {
+      if (cleaned) return;
+      state.controlPlaneError = error;
+      controller.abort();
+    }
+  };
+
+  if (immediateHeartbeat && !controller.signal.aborted) {
+    await runHeartbeat();
+  }
+  if (!controller.signal.aborted) {
+    heartbeatTimer = setInterval(() => {
+      void runHeartbeat();
+    }, config.heartbeatIntervalMs);
+  }
+
+  return {
+    controller,
+    typingController,
+    typingTimer,
+    heartbeatTimer,
+    shutdownSignal,
+    shutdownListener,
+    state,
+    cleanup: () => {
+      if (cleaned) return;
+      cleaned = true;
+      clearInterval(typingTimer);
+      typingController.abort();
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      shutdownSignal?.removeEventListener("abort", shutdownListener);
+    },
+  };
+}
+
+async function runWithTurnLifecycle(
+  config: WorkerConfig,
+  botApi: BotApi,
+  handle: UpdateHandle,
+  chatId: number,
+  shutdownSignal: AbortSignal | undefined,
+  immediateHeartbeat: boolean,
+  work: (lifecycle: TurnLifecycle) => Promise<ProcessedUpdateResult>,
+): Promise<ProcessedUpdateResult> {
+  const lifecycle = await createTurnLifecycle(
+    config,
+    botApi,
+    handle,
+    chatId,
+    shutdownSignal,
+    immediateHeartbeat,
+  );
+  try {
+    return await work(lifecycle);
+  } finally {
+    lifecycle.cleanup();
+  }
+}
+
+async function lifecycleInterruptionResult(
+  config: WorkerConfig,
+  update: ClaimedUpdate,
+  handle: UpdateHandle,
+  lifecycle: TurnLifecycle,
+): Promise<ProcessedUpdateResult | undefined> {
+  if (lifecycle.state.cancellationRequested) {
+    await cancelUpdate(config.rpc, handle);
+    return { updateId: update.updateId, status: "cancelled" };
+  }
+  if (lifecycle.state.shutdownRequested) {
+    return requeueForShutdown(config.rpc, update);
+  }
+  if (lifecycle.state.controlPlaneError) {
+    throw lifecycle.state.controlPlaneError;
+  }
+  return undefined;
+}
+
+async function handleAttachmentTurn(
+  config: WorkerConfig,
+  botApi: BotApi,
+  executeTurn: typeof executeFredTurn,
+  integration: WorkerIntegration,
+  update: ClaimedUpdate,
+  handle: UpdateHandle,
+  chatId: number,
+  document: import("./types").TelegramDocument | undefined,
+  photo: import("./types").TelegramPhotoSize[] | undefined,
+  caption: string | undefined,
+  shutdownSignal?: AbortSignal,
+): Promise<ProcessedUpdateResult> {
+  const { rpc } = config;
+  let fileId: string;
+  let fileName: string | undefined;
+  let mimeType: string | undefined;
+  let fileSize: number | undefined;
+
+  if (document) {
+    fileId = document.file_id;
+    fileName = document.file_name;
+    mimeType = document.mime_type;
+    fileSize = document.file_size;
+  } else if (photo && photo.length > 0) {
+    let largest = photo[0];
+    for (let i = 1; i < photo.length; i++) {
+      const current = photo[i];
+      const largestMetric = largest.file_size ?? largest.width * largest.height;
+      const currentMetric = current.file_size ?? current.width * current.height;
+      if (currentMetric > largestMetric) largest = current;
+    }
+    fileId = largest.file_id;
+    fileName = "photo.jpg";
+    mimeType = "image/jpeg";
+    fileSize = largest.file_size;
+  } else {
+    return handleProcessingError(config, botApi, update, chatId, new Error("No attachment found"));
+  }
+
+  const originalQuestion = caption?.trim() || DEFAULT_ATTACHMENT_QUESTION;
+  const isPhoto = photo !== undefined && photo.length > 0;
+  const limit = isPhoto ? MAX_PHOTO_BYTES : MAX_DOCUMENT_BYTES;
+  if (fileSize !== undefined && fileSize > limit) {
+    const message = isPhoto
+      ? "Ein Bild darf maximal 10 MB groß sein."
+      : "Eine Datei darf maximal 20 MB groß sein.";
+    try {
+      await botApi.sendMessage({ chat_id: chatId, text: message });
+    } catch {
+      // Best-effort
+    }
+    await completeUpdate(rpc, handle);
+    return { updateId: update.updateId, status: "completed" };
+  }
+
+  return runWithTurnLifecycle(
+    config,
+    botApi,
+    handle,
+    chatId,
+    shutdownSignal,
+    true,
+    async (lifecycle) => {
+      const initialInterruption = await lifecycleInterruptionResult(config, update, handle, lifecycle);
+      if (initialInterruption) return initialInterruption;
+
+      let preprocessResult: AttachmentPreprocessResult | undefined;
+      let preprocessError: unknown;
+      try {
+        preprocessResult = await config.attachmentPreprocessor!(
+          botApi,
+          fileId,
+          fileName,
+          mimeType,
+          fileSize,
+          caption,
+          lifecycle.controller.signal,
+        );
+      } catch (error) {
+        preprocessError = error;
+      }
+
+      const preprocessInterruption = await lifecycleInterruptionResult(config, update, handle, lifecycle);
+      if (preprocessInterruption) return preprocessInterruption;
+      if (preprocessError) {
+        if (preprocessError instanceof UserVisibleError) {
+          try {
+            await botApi.sendMessage({ chat_id: chatId, text: preprocessError.message });
+          } catch {
+            // Best-effort
+          }
+          await completeUpdate(rpc, handle);
+          return { updateId: update.updateId, status: "completed" };
+        }
+        throw preprocessError;
+      }
+      if (!preprocessResult) {
+        throw new Error("Attachment preprocessing returned no result");
+      }
+
+      return handleFredTurn(
+        config,
+        botApi,
+        executeTurn,
+        integration,
+        update,
+        handle,
+        chatId,
+        originalQuestion,
+        lifecycle,
+        preprocessResult.upstreamQuery,
+        [preprocessResult.metadata],
+      );
+    },
+  );
+}
+
+async function handleFredTurn(
+  config: WorkerConfig,
+  botApi: BotApi,
+  executeTurn: typeof executeFredTurn,
+  integration: WorkerIntegration,
+  update: ClaimedUpdate,
+  handle: UpdateHandle,
+  chatId: number,
+  text: string,
+  lifecycle: TurnLifecycle,
+  upstreamQuery?: string,
+  attachments?: FredTurnAttachmentMeta[],
+): Promise<ProcessedUpdateResult> {
+  const { rpc, storage } = config;
+  const conversationId = await storage.getActiveConversation(integration.id, chatId);
+  const request: FredTurnRequest = {
+    clientId: integration.clientId,
+    ...(conversationId ? { conversationId } : {}),
+    query: text,
+    ...(upstreamQuery ? { upstreamQuery } : {}),
+    ...(attachments ? { attachments } : {}),
+    origin: "telegram",
+    telegramIntegrationId: integration.id,
+    agentKey: "fred",
+    webSearchEnabled: integration.webSearchEnabled,
+    proModeEnabled: integration.proModeEnabled,
+    userEventId: deriveEventId(`${integration.id}:${update.updateId}:user`),
+    assistantEventId: deriveEventId(`${integration.id}:${update.updateId}:assistant`),
+    onConversationEvent: async (conversation) => {
+      await storage.markTelegramOrigin(integration.clientId, conversation.id, integration.id);
+      await storage.bindConversation(integration.id, chatId, conversation.id);
+    },
+    signal: lifecycle.controller.signal,
+  };
+
   let finalResult: FredTurnResult | undefined;
+  let turnError: unknown;
   try {
     const gen = executeTurn(request, config.turnUpstream, config.turnPersistence, config.turnConfig);
     while (true) {
@@ -435,35 +698,22 @@ async function handleFredTurn(
         break;
       }
       const event = value as FredTurnEvent;
-      if (event.type === "error") {
-        throw new Error(event.error);
-      }
+      if (event.type === "error") throw new Error(event.error);
     }
-  } finally {
-    clearInterval(typingTimer);
-    typingController.abort();
-    clearInterval(heartbeatTimer);
-    shutdownSignal?.removeEventListener("abort", handleShutdown);
+  } catch (error) {
+    turnError = error;
   }
-  const result = finalResult as FredTurnResult;
 
-  if (cancellationRequested) {
-    await cancelUpdate(rpc, handle);
-    return { updateId: update.updateId, status: "cancelled" };
-  }
-  if (shutdownRequested) {
-    return requeueForShutdown(rpc, update);
-  }
-  if (controlPlaneError) {
-    throw controlPlaneError;
-  }
-  if (result.stopped) {
+  const interruption = await lifecycleInterruptionResult(config, update, handle, lifecycle);
+  if (interruption) return interruption;
+  if (turnError) throw turnError;
+  if (!finalResult) throw new Error("Fred turn returned no final result");
+  if (finalResult.stopped) {
     await cancelUpdate(rpc, handle);
     return { updateId: update.updateId, status: "cancelled" };
   }
 
-  await deliverAnswer(config, botApi, chatId, update.id, result.answer);
-
+  await deliverAnswer(config, botApi, chatId, update.id, finalResult.answer);
   await completeUpdate(rpc, handle);
   return { updateId: update.updateId, status: "completed" };
 }

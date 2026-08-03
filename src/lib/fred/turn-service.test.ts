@@ -357,3 +357,61 @@ describe("executeFredTurn", () => {
     expect(persistence.recordEvent).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("upstreamQuery", () => {
+  it("passes upstreamQuery to openStream when provided, but persists query unchanged", async () => {
+    const upstream = makeUpstreamDeps();
+    const persistence = makePersistenceDeps();
+    const config = makeConfigDeps();
+
+    const gen = executeFredTurn(
+      baseRequest({
+        query: "Originale Frage",
+        upstreamQuery: "Erweiterte Frage mit Anhangsinhalt",
+      }),
+      upstream,
+      persistence,
+      config,
+    );
+    await collectEvents(gen);
+
+    // openStream should receive upstreamQuery
+    expect(upstream.openStream).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "Erweiterte Frage mit Anhangsinhalt" }),
+    );
+
+    // recordEvent (message_sent) should receive the original query
+    expect(persistence.recordEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      content: "Originale Frage",
+      eventType: "message_sent",
+    }));
+
+    // relayEvent (message_sent) should receive the original query
+    expect(upstream.relayEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      content: "Originale Frage",
+    }));
+
+    // recordAdminRequest should receive the original query
+    expect(persistence.recordAdminRequest).toHaveBeenCalledWith(expect.objectContaining({
+      content: "Originale Frage",
+    }));
+  });
+
+  it("falls back to query when upstreamQuery is absent", async () => {
+    const upstream = makeUpstreamDeps();
+    const persistence = makePersistenceDeps();
+    const config = makeConfigDeps();
+
+    const gen = executeFredTurn(
+      baseRequest({ query: "Nur eine Frage" }),
+      upstream,
+      persistence,
+      config,
+    );
+    await collectEvents(gen);
+
+    expect(upstream.openStream).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "Nur eine Frage" }),
+    );
+  });
+});

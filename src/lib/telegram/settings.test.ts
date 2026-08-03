@@ -55,6 +55,8 @@ function mockBotApi(overrides: Partial<BotApi> = {}): BotApi {
     sendRichMessage: vi.fn().mockResolvedValue({ message_id: 1, date: 1, chat: { id: 1, type: "private" } }),
     sendMessageDraft: vi.fn().mockResolvedValue({ message_id: 1, date: 1, chat: { id: 1, type: "private" } }),
     sendChatAction: vi.fn().mockResolvedValue(true),
+    getFile: vi.fn().mockResolvedValue({ file_id: "f", file_unique_id: "u", file_path: "p" }),
+    downloadFile: vi.fn().mockResolvedValue(new Uint8Array(10)),
     ...overrides,
   };
 }
@@ -869,9 +871,9 @@ describe("TELEGRAM_BOT_COMMANDS includes pro and web", () => {
     }), { oldBotApi });
 
     // Both command lists should be identical
-    const cmds1 = setMyCommands1.mock.calls[0][0] as Array<{ command: string }>;
-    const cmds2 = setMyCommands2.mock.calls[0][0] as Array<{ command: string }>;
-    expect(cmds1.map((c: { command: string }) => c.command)).toEqual(cmds2.map((c: { command: string }) => c.command));
-    expect(cmds1.map((c: { command: string; description: string }) => c.description)).toEqual(cmds2.map((c: { command: string; description: string }) => c.description));
+    const cmds1 = setMyCommands1.mock.calls[0][0] as Array<{ command: string; description: string }>;
+    const cmds2 = setMyCommands2.mock.calls[0][0] as Array<{ command: string; description: string }>;
+    expect(cmds1.map((c) => c.command)).toEqual(cmds2.map((c) => c.command));
+    expect(cmds1.map((c) => c.description)).toEqual(cmds2.map((c) => c.description));
   });
 });

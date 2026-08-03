@@ -423,7 +423,7 @@ export async function* executeFredTurn(
       sessionId: upstreamSession.id,
       sessionSignature: upstreamSession.signature,
       visitorId,
-      query: request.query,
+      query: request.upstreamQuery ?? request.query,
       agentId: upstreamConfig.agentId,
       knowledgeBaseIds: upstreamConfig.knowledgeBaseIds,
       webSearchEnabled: request.webSearchEnabled,

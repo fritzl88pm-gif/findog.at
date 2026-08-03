@@ -22,6 +22,13 @@ export interface FredTurnRequest {
   conversationId?: string;
   /** The user's question text (may include pre-processed attachment content). */
   query: string;
+  /**
+   * Server-only upstream query. When set, this is sent to the streaming
+   * LLM upstream instead of `query`. Persistence, audit, and webhook
+   * always use `query` unchanged. Used by Telegram workers to inject
+   * attachment content without persisting raw bytes.
+   */
+  upstreamQuery?: string;
   /** Origin of the request. */
   origin: "web" | "telegram";
   /** For telegram-origin turns, the integration row ID. */

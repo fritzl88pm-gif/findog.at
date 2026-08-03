@@ -47,6 +47,8 @@ function fakeBotApi(
     sendRichMessage: overrides.sendRichMessage
       ? vi.fn(overrides.sendRichMessage)
       : vi.fn().mockResolvedValue({ message_id: 3, date: 1, chat: { id: 123, type: "private" } }),
+    getFile: vi.fn().mockResolvedValue({ file_id: "f", file_unique_id: "u", file_path: "p" }),
+    downloadFile: vi.fn().mockResolvedValue(new Uint8Array(10)),
   };
 }
 

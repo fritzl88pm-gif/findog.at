@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
@@ -7,6 +7,15 @@ import {
   buildAttachmentContext,
   type AttachmentInput,
 } from "@/lib/attachments/context";
+import {
+  validateAttachmentBytes,
+  attachmentMetadata as buildAttachmentMeta,
+  attachmentKindFromMime,
+  MAX_FILE_BYTES,
+  MAX_IMAGE_BYTES,
+  MAX_FILE_UPLOADS,
+  MAX_IMAGE_UPLOADS,
+} from "@/lib/attachments/validation";
 import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-fallback";
 import { processMineruBatch } from "@/lib/attachments/mineru-cloud";
 import { describeImage } from "@/lib/attachments/gemini-image-context";
@@ -73,13 +82,9 @@ export const runtime = "nodejs";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_REQUEST_BYTES = 64 * 1_024;
 const MAX_QUERY_LENGTH = 50_000;
-const MAX_IMAGE_UPLOADS = 5;
-const MAX_FILE_UPLOADS = 5;
-const MAX_IMAGE_UPLOAD_BYTES = 10 * 1_024 * 1_024;
-const MAX_FILE_UPLOAD_BYTES = 20 * 1_024 * 1_024;
 const MAX_MULTIPART_REQUEST_BYTES = MAX_REQUEST_BYTES
-  + MAX_IMAGE_UPLOADS * MAX_IMAGE_UPLOAD_BYTES
-  + MAX_FILE_UPLOADS * MAX_FILE_UPLOAD_BYTES
+  + MAX_IMAGE_UPLOADS * MAX_IMAGE_BYTES
+  + MAX_FILE_UPLOADS * MAX_FILE_BYTES
   + 1_024 * 1_024; // Multipart boundaries and per-part headers.
 const MAX_REQUESTS_PER_WINDOW = 30;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1_000;
@@ -120,36 +125,7 @@ type FindogAttachment = {
 };
 
 const rateLimit = new Map<string, RateLimitEntry>();
-const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
-const FILE_MIME_BY_EXTENSION: Record<string, string> = {
-  ".pdf": "application/pdf",
-  ".doc": "application/msword",
-  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  ".txt": "text/plain",
-  ".md": "text/markdown",
-  ".csv": "text/csv",
-  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  ".xls": "application/vnd.ms-excel",
-  ".ppt": "application/vnd.ms-powerpoint",
-  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-};
 
-const MIME_TO_ATTACHMENT_KIND: Record<string, AttachmentInput["kind"]> = {
-  "application/pdf": "pdf",
-  "application/msword": "doc",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-  "application/vnd.ms-excel": "xls",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
-  "application/vnd.ms-powerpoint": "ppt",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
-  "text/plain": "txt",
-  "text/markdown": "md",
-  "text/csv": "csv",
-  "image/jpeg": "jpeg",
-  "image/png": "png",
-  "image/gif": "gif",
-  "image/webp": "webp",
-};
 
 function json(payload: unknown, status = 200): NextResponse {
   return NextResponse.json(payload, {
@@ -222,132 +198,35 @@ function validatedRequestFields(value: unknown): Omit<ParsedFredChatRequest, "at
   };
 }
 
-function sanitizedFilename(value: string): string {
-  const normalized = value
-    .normalize("NFKC")
-    .replace(/[\u0000-\u001f\u007f]/gu, "")
-    .replace(/[\\/]/gu, "_")
-    .trim()
-    .slice(0, 255);
-  return normalized || "datei";
-}
 
 function uploadedFile(value: FormDataEntryValue): value is File {
   return typeof File !== "undefined" && value instanceof File;
 }
 
-function startsWithBytes(bytes: Uint8Array, signature: readonly number[], offset = 0): boolean {
-  return signature.every((value, index) => bytes[offset + index] === value);
-}
 
-function attachmentTypeCategory(mimeType: string): string {
-  const categories: Record<string, string> = {
-    "application/pdf": "PDF",
-    "application/msword": "DOC",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX",
-    "application/vnd.ms-excel": "XLS",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "XLSX",
-    "application/vnd.ms-powerpoint": "PPT",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PPTX",
-    "text/plain": "TXT",
-    "text/markdown": "Markdown",
-    "text/csv": "CSV",
-    "image/jpeg": "JPEG",
-    "image/png": "PNG",
-    "image/gif": "GIF",
-    "image/webp": "WebP",
-  };
-  return categories[mimeType] ?? "Datei";
-}
 
-function hasExpectedAttachmentSignature(bytes: Uint8Array, mimeType: string): boolean {
-  if (mimeType === "application/pdf") {
-    return startsWithBytes(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d]);
-  }
-  if (mimeType === "image/png") {
-    return startsWithBytes(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  }
-  if (mimeType === "image/jpeg") {
-    return startsWithBytes(bytes, [0xff, 0xd8, 0xff]);
-  }
-  if (mimeType === "image/gif") {
-    return startsWithBytes(bytes, [0x47, 0x49, 0x46, 0x38, 0x37, 0x61])
-      || startsWithBytes(bytes, [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
-  }
-  if (mimeType === "image/webp") {
-    return startsWithBytes(bytes, [0x52, 0x49, 0x46, 0x46])
-      && startsWithBytes(bytes, [0x57, 0x45, 0x42, 0x50], 8);
-  }
-  if (
-    mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    || mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    || mimeType === "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-  ) {
-    return startsWithBytes(bytes, [0x50, 0x4b, 0x03, 0x04]);
-  }
-  if (
-    mimeType === "application/msword"
-    || mimeType === "application/vnd.ms-excel"
-    || mimeType === "application/vnd.ms-powerpoint"
-  ) {
-    return startsWithBytes(bytes, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
-  }
-  if (mimeType === "text/plain" || mimeType === "text/markdown" || mimeType === "text/csv") {
-    return !bytes.includes(0);
-  }
-  return false;
-}
 
 async function validatedAttachment(file: File, kind: "image" | "file"): Promise<FindogAttachment> {
-  const name = sanitizedFilename(file.name);
-  let mimeType: string;
-  if (kind === "image") {
-    mimeType = file.type.toLowerCase();
-    if (!IMAGE_MIME_TYPES.has(mimeType)) {
-      throw new UserVisibleError("Erlaubt sind JPEG-, PNG-, GIF- und WebP-Bilder.", 400);
-    }
-    if (file.size > MAX_IMAGE_UPLOAD_BYTES) {
-      throw new UserVisibleError("Ein Bild darf maximal 10 MB groß sein.", 413);
-    }
-  } else {
-    const extension = /\.[^.]+$/u.exec(name.toLowerCase())?.[0] ?? "";
-    mimeType = FILE_MIME_BY_EXTENSION[extension] ?? "";
-    if (!mimeType) {
-      throw new UserVisibleError(
-        "Erlaubt sind PDF-, Word-, Text-, Markdown-, CSV-, Excel- und PowerPoint-Dateien.",
-        400,
-      );
-    }
-    if (file.size > MAX_FILE_UPLOAD_BYTES) {
-      throw new UserVisibleError("Eine Datei darf maximal 20 MB groß sein.", 413);
-    }
-  }
-  if (file.size < 1) {
-    throw new UserVisibleError("Leere Dateien können nicht hochgeladen werden.", 400);
-  }
   const bytes = new Uint8Array(await file.arrayBuffer());
-  if (!hasExpectedAttachmentSignature(bytes, mimeType)) {
-    const category = attachmentTypeCategory(mimeType);
-    throw new UserVisibleError(`${name}: Inhalt entspricht nicht dem erwarteten ${category}-Dateityp.`, 400);
-  }
-  return {
+  const validated = validateAttachmentBytes({
     kind,
-    name,
-    mimeType,
-    sizeBytes: bytes.byteLength,
-    sha256: createHash("sha256").update(bytes).digest("hex"),
+    name: file.name,
+    mimeType: file.type,
+    sizeBytes: file.size,
     bytes,
+  });
+  return {
+    kind: validated.kind,
+    name: validated.name,
+    mimeType: validated.mimeType,
+    sizeBytes: validated.sizeBytes,
+    sha256: validated.sha256,
+    bytes: validated.bytes,
   };
 }
 
 function attachmentToInput(a: FindogAttachment): AttachmentInput {
-  const mappedKind = MIME_TO_ATTACHMENT_KIND[a.mimeType];
-  if (!mappedKind) {
-    throw new UserVisibleError(
-      `${sanitizedFilename(a.name)}: nicht unterstützter Anhangstyp.`,
-      400,
-    );
-  }
+  const mappedKind = attachmentKindFromMime(a.mimeType);
   return {
     kind: mappedKind,
     name: a.name,
@@ -358,15 +237,6 @@ function attachmentToInput(a: FindogAttachment): AttachmentInput {
   };
 }
 
-function attachmentMetadata(a: FindogAttachment) {
-  return {
-    kind: a.kind,
-    name: a.name,
-    mime_type: a.mimeType,
-    size_bytes: a.sizeBytes,
-    sha256: a.sha256,
-  };
-}
 
 async function readJsonRequestBody(request: Request): Promise<ParsedFredChatRequest> {
   const declaredLength = Number(request.headers.get("content-length"));
@@ -505,7 +375,7 @@ async function recordEvent(options: {
     event_type: options.eventType,
     content: options.content,
     occurred_at: options.occurredAt,
-    attachments: (options.attachments ?? []).map(attachmentMetadata),
+    attachments: (options.attachments ?? []).map(buildAttachmentMeta),
     web_search_enabled: options.webSearchEnabled ?? false,
     pro_mode_enabled: options.proModeEnabled ?? false,
     agent_key: options.agentKey,

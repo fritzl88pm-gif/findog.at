@@ -84,6 +84,9 @@ export interface TelegramMessage {
   chat: TelegramChat;
   date: number;
   text?: string;
+  document?: TelegramDocument;
+  photo?: TelegramPhotoSize[];
+  caption?: string;
   entities?: TelegramMessageEntity[];
 }
 
@@ -130,4 +133,22 @@ export interface SanitizedTelegramError {
   error_code?: number;
   description?: string;
   retry_after?: number;
+}
+
+/** Telegram Document object */
+export interface TelegramDocument {
+  file_id: string;
+  file_unique_id: string;
+  file_name?: string;
+  mime_type?: string;
+  file_size?: number;
+}
+
+/** Telegram PhotoSize object */
+export interface TelegramPhotoSize {
+  file_id: string;
+  file_unique_id: string;
+  width: number;
+  height: number;
+  file_size?: number;
 }

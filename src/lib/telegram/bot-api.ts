@@ -55,6 +55,13 @@ export class SanitizedTelegramError extends Error {
   }
 }
 
+export class TelegramFileTooLargeError extends Error {
+  constructor(message = "Telegram file exceeds configured size limit") {
+    super(message);
+    this.name = "TelegramFileTooLargeError";
+  }
+}
+
 type FetchFn = (url: string | URL, init?: RequestInit) => Promise<Response>;
 
 export interface SendMessageParams {
@@ -101,6 +108,8 @@ export interface BotApi {
   sendRichMessage(params: SendRichMessageParams, options?: BotApiOptions): Promise<TelegramMessageResult>;
   sendMessageDraft(params: SendMessageDraftParams, options?: BotApiOptions): Promise<TelegramMessageResult>;
   sendChatAction(params: SendChatActionParams, options?: BotApiOptions): Promise<boolean>;
+  getFile(params: GetFileParams, options?: BotApiOptions): Promise<TelegramFileInfo>;
+  downloadFile(filePath: string, params: DownloadFileParams): Promise<Uint8Array>;
 }
 
 class BotApiImpl implements BotApi {
@@ -161,6 +170,73 @@ class BotApiImpl implements BotApi {
     return this.post<boolean>("sendChatAction", params as unknown as Record<string, unknown>, options);
   }
 
+  async getFile(params: GetFileParams, options?: BotApiOptions): Promise<TelegramFileInfo> {
+    return this.post<TelegramFileInfo>("getFile", params as unknown as Record<string, unknown>, options);
+  }
+
+  async downloadFile(filePath: string, params: DownloadFileParams): Promise<Uint8Array> {
+    const url = `https://api.telegram.org/file/bot${this.token}/${filePath}`;
+    let response: Response;
+    try {
+      response = await this.fetchFn(url, { signal: params.signal });
+    } catch (err) {
+      throw sanitizeTelegramError(this.token, err);
+    }
+
+    // ── reject non-2xx responses before consuming the body ────────────
+    if (!response.ok) {
+      throw new SanitizedTelegramError({
+        message: `Telegram file download failed with status ${response.status}`,
+        errorCode: response.status,
+        description: response.statusText,
+      });
+    }
+
+    const contentLength = response.headers.get("content-length");
+    if (contentLength) {
+      const declared = Number(contentLength);
+      if (Number.isFinite(declared) && declared > params.maxBytes) {
+        throw new TelegramFileTooLargeError();
+      }
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new SanitizedTelegramError({
+        message: "Telegram API returned no body",
+        deliveryUncertain: true,
+      });
+    }
+
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        if (totalBytes > params.maxBytes) {
+          await reader.cancel();
+          throw new TelegramFileTooLargeError();
+        }
+        chunks.push(value);
+      }
+    } catch (error) {
+      if (error instanceof TelegramFileTooLargeError) throw error;
+      throw sanitizeTelegramError(this.token, error);
+    } finally {
+      reader.releaseLock();
+    }
+
+    const result = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return result;
+  }
+
   private async post<T>(method: string, body: Record<string, unknown>, options?: BotApiOptions): Promise<T> {
     const url = `${this.baseUrl}/${method}`;
     let response: Response;
@@ -203,17 +279,35 @@ export function createBotApi(token: string, fetchFn?: FetchFn): BotApi {
   return new BotApiImpl(token, fetchFn);
 }
 
+
+/** getFile result */
+export interface TelegramFileInfo {
+  file_id: string;
+  file_unique_id: string;
+  file_size?: number;
+  file_path?: string;
+}
+
+/** getFile params */
+export interface GetFileParams {
+  file_id: string;
+}
+
+/** downloadFile params */
+export interface DownloadFileParams {
+  maxBytes: number;
+  signal?: AbortSignal;
+}
+
 /**
  * Sanitize any error so the Telegram bot token and full Bot API URL
  * can never escape in error messages.
  */
 export function sanitizeTelegramError(token: string, error: unknown): SanitizedTelegramError {
-  // Build a redaction pattern: anything that contains the token
-  const tokenPattern = new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
-  const baseUrlPattern = new RegExp(
-    `https://api\\.telegram\\.org/bot${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
-    "g",
-  );
+  const escapedToken = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const tokenPattern = new RegExp(escapedToken, "g");
+  const baseUrlPattern = new RegExp(`https://api\\.telegram\\.org/bot${escapedToken}`, "g");
+  const fileUrlPattern = new RegExp(`https://api\\.telegram\\.org/file/bot${escapedToken}`, "g");
 
   let message = "Telegram API error";
   if (error instanceof Error) {
@@ -222,11 +316,10 @@ export function sanitizeTelegramError(token: string, error: unknown): SanitizedT
     message = error;
   }
 
-  // Redact token and URL
+  message = message.replace(fileUrlPattern, "[redacted-telegram-file-url]");
   message = message.replace(baseUrlPattern, "[redacted-telegram-url]");
   message = message.replace(tokenPattern, "[redacted]");
 
-  // Try to extract structured error details from a JSON body embedded in the message
   let error_code: number | undefined;
   let description: string | undefined;
   let retry_after: number | undefined;
@@ -242,15 +335,16 @@ export function sanitizeTelegramError(token: string, error: unknown): SanitizedT
   }
 
   try {
-    // Check if the message contains a JSON blob with Telegram error info
     const jsonMatch = message.match(/\{[\s\S]*"ok"\s*:\s*false[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]) as TelegramApiResponse;
       error_code = parsed.error_code;
       description = parsed.description;
       retry_after = parsed.parameters?.retry_after;
-      // Replace the JSON blob in the message
-      message = message.replace(jsonMatch[0], `Telegram error ${error_code ?? ""}: ${description ?? ""}`.trim());
+      message = message.replace(
+        jsonMatch[0],
+        `Telegram error ${error_code ?? ""}: ${description ?? ""}`.trim(),
+      );
     }
   } catch {
     // Not JSON, keep the message as-is

@@ -26,6 +26,10 @@ const routeSource = readFileSync(
   fileURLToPath(new URL("../app/api/fred/chat/route.ts", import.meta.url)),
   "utf8",
 );
+const attachmentValidationSource = readFileSync(
+  fileURLToPath(new URL("./attachments/validation.ts", import.meta.url)),
+  "utf8",
+);
 const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 const nextConfigSource = readFileSync(fileURLToPath(new URL("../../next.config.ts", import.meta.url)), "utf8");
 
@@ -260,8 +264,8 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).toContain('formData.append("image"');
     expect(viewSource).toContain('formData.append("attachment"');
     expect(viewSource).toContain("webSearchEnabled");
-    expect(routeSource).toContain("MAX_IMAGE_UPLOADS = 5");
-    expect(routeSource).toContain("MAX_FILE_UPLOADS = 5");
+    expect(attachmentValidationSource).toContain("MAX_IMAGE_UPLOADS = 5");
+    expect(attachmentValidationSource).toContain("MAX_FILE_UPLOADS = 5");
     expect(routeSource).toContain('rpc("record_fred_native_event"');
     expect(pageSource).toContain("normalizeFredAttachments");
   });

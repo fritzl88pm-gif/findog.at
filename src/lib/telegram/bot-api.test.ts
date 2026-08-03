@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createBotApi, sanitizeTelegramError } from "./bot-api";
+import { createBotApi, sanitizeTelegramError, TelegramFileTooLargeError } from "./bot-api";
 import type { TelegramApiResponse } from "./types";
 
 function mockFetch(responseInit: ResponseInit & { payload?: unknown }): ReturnType<typeof vi.fn> {
@@ -302,5 +302,220 @@ describe("sanitizeTelegramError", () => {
     expect(err.error_code).toBe(429);
     expect(err.description).toBe("Too Many Requests");
     expect(err.retry_after).toBe(30);
+  });
+});
+
+describe("getFile", () => {
+  it("returns file path on success", async () => {
+    const fetchMock = vi.fn<(_url: string | URL, _init?: RequestInit) => Promise<Response>>();
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          result: {
+            file_id: "file-abc",
+            file_unique_id: "unq",
+            file_size: 1024,
+            file_path: "documents/file_123.pdf",
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    const api = createBotApi(TOKEN, fetchMock as never);
+
+    const result = await api.getFile({ file_id: "file-abc" });
+
+    expect(result.file_path).toBe("documents/file_123.pdf");
+    expect(result.file_size).toBe(1024);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_URL}/getFile`,
+      expect.objectContaining({ method: "POST" }),
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    expect(body.file_id).toBe("file-abc");
+  });
+
+  it("supports AbortSignal", async () => {
+    const fetchMock = vi.fn<(_url: string | URL, _init?: RequestInit) => Promise<Response>>();
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, result: { file_id: "f", file_unique_id: "u", file_path: "p" } }),
+        { status: 200 },
+      ),
+    );
+    const api = createBotApi(TOKEN, fetchMock as never);
+    const controller = new AbortController();
+
+    await api.getFile({ file_id: "f" }, { signal: controller.signal });
+
+    expect((fetchMock.mock.calls[0] as [string, RequestInit])[1].signal).toBe(controller.signal);
+  });
+});
+
+describe("downloadFile", () => {
+  it("sanitizes stream read failures that contain the bot token", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(new Error(`socket failed for https://api.telegram.org/file/bot${TOKEN}/documents/file.pdf`));
+      },
+    });
+    const fetchMock = vi.fn<(_url: string | URL, _init?: RequestInit) => Promise<Response>>();
+    fetchMock.mockResolvedValue(new Response(stream, { status: 200 }));
+    const api = createBotApi(TOKEN, fetchMock as never);
+
+    const error = await api.downloadFile("documents/file.pdf", { maxBytes: 100 })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).not.toContain(TOKEN);
+    expect(JSON.stringify(error)).not.toContain(TOKEN);
+  });
+
+  it("streams response body bytes up to the cap", async () => {
+    const fileBytes = new Uint8Array(100).fill(0x41);
+    const fetchMock = vi.fn<(_url: string | URL, _init?: RequestInit) => Promise<Response>>();
+    fetchMock.mockResolvedValue(
+      new Response(fileBytes, {
+        status: 200,
+        headers: { "Content-Length": "100" },
+      }),
+    );
+    const api = createBotApi(TOKEN, fetchMock as never);
+
+    const result = await api.downloadFile("documents/file.pdf", { maxBytes: 100 });
+
+    expect(result.length).toBe(100);
+    expect(result[0]).toBe(0x41);
+  });
+
+  it("enforces Content-Length cap before streaming", async () => {
+    const fetchMock = vi.fn<(_url: string | URL, _init?: RequestInit) => Promise<Response>>();
+    fetchMock.mockResolvedValue(
+      new Response(new Uint8Array(10), {
+        status: 200,
+        headers: { "Content-Length": "999999999" },
+      }),
+    );
+    const api = createBotApi(TOKEN, fetchMock as never);
+
+    await expect(api.downloadFile("file", { maxBytes: 100 })).rejects.toBeInstanceOf(TelegramFileTooLargeError);
+  });
+
+  it("enforces streaming cap mid-download", async () => {
+    const overflow = new Uint8Array(200).fill(0x42);
+    const fetchMock = vi.fn<(_url: string | URL, _init?: RequestInit) => Promise<Response>>();
+    fetchMock.mockResolvedValue(
+      new Response(overflow, { status: 200 }),
+    );
+    const api = createBotApi(TOKEN, fetchMock as never);
+
+    await expect(api.downloadFile("file", { maxBytes: 100 })).rejects.toBeInstanceOf(TelegramFileTooLargeError);
+  });
+
+  it("propagates AbortSignal to fetch", async () => {
+    const fetchMock = vi.fn<(_url: string | URL, _init?: RequestInit) => Promise<Response>>();
+    fetchMock.mockResolvedValue(
+      new Response(new Uint8Array(5).fill(0x41), {
+        status: 200,
+        headers: { "Content-Length": "5" },
+      }),
+    );
+    const api = createBotApi(TOKEN, fetchMock as never);
+    const controller = new AbortController();
+
+    await api.downloadFile("file", { maxBytes: 100, signal: controller.signal });
+
+    expect((fetchMock.mock.calls[0] as [string, RequestInit])[1].signal).toBe(controller.signal);
+  });
+
+  it("sanitizes errors so the file URL and token are never exposed", async () => {
+    const fetchMock = vi.fn<(_url: string | URL, _init?: RequestInit) => Promise<Response>>();
+    fetchMock.mockRejectedValue(
+      new Error(`Network error for https://api.telegram.org/file/bot${TOKEN}/documents/file.pdf`),
+    );
+    const api = createBotApi(TOKEN, fetchMock as never);
+
+    const error = await api.downloadFile("documents/file.pdf", { maxBytes: 100 }).catch((e: unknown) => e);
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).not.toContain(TOKEN);
+    expect(message).not.toContain("api.telegram.org/file/bot");
+  });
+
+  it("uses the correct file download URL", async () => {
+    const fetchMock = vi.fn<(_url: string | URL, _init?: RequestInit) => Promise<Response>>();
+    fetchMock.mockResolvedValue(
+      new Response(new Uint8Array(3).fill(0x41), {
+        status: 200,
+        headers: { "Content-Length": "3" },
+      }),
+    );
+    const api = createBotApi(TOKEN, fetchMock as never);
+
+    await api.downloadFile("documents/file_1.pdf", { maxBytes: 10 });
+
+    const url = (fetchMock.mock.calls[0] as [string])[0];
+    expect(url).toBe(`https://api.telegram.org/file/bot${TOKEN}/documents/file_1.pdf`);
+  });
+});
+
+// ── downloadFile non-2xx ─────────────────────────────────────────────────────
+
+describe("downloadFile non-2xx responses", () => {
+  it("rejects non-2xx responses without returning bytes and sanitizes the error", async () => {
+    const fetchMock = vi.fn<(_url: string | URL, _init?: RequestInit) => Promise<Response>>();
+    fetchMock.mockResolvedValue(
+      new Response("Internal Server Error", {
+        status: 500,
+        statusText: "Internal Server Error",
+      }),
+    );
+    const api = createBotApi(TOKEN, fetchMock as never);
+
+    const error = await api.downloadFile("documents/file.pdf", { maxBytes: 100 }).catch((e: unknown) => e);
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).not.toContain(TOKEN);
+    expect(message).not.toContain("file/bot");
+    expect(error).toBeInstanceOf(Error);
+  });
+
+  it("rejects 404 responses without buffering an unbounded error body", async () => {
+    // Simulate a response with a huge body that would consume memory if buffered
+    const fetchMock = vi.fn<(_url: string | URL, _init?: RequestInit) => Promise<Response>>();
+    // Create a response with a large body but non-2xx status
+    const largeBody = new Uint8Array(10 * 1024 * 1024).fill(0x42); // 10 MB error body
+    fetchMock.mockResolvedValue(
+      new Response(largeBody, { status: 404, statusText: "Not Found" }),
+    );
+    const api = createBotApi(TOKEN, fetchMock as never);
+
+    // Should reject without streaming the entire error body
+    const error = await api.downloadFile("documents/missing.pdf", { maxBytes: 100 }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).not.toContain(TOKEN);
+  });
+
+  it("does not expose the full file URL in non-2xx error messages", async () => {
+    const fetchMock = vi.fn<(_url: string | URL, _init?: RequestInit) => Promise<Response>>();
+    fetchMock.mockResolvedValue(
+      new Response("Not found", { status: 404, statusText: "Not Found" }),
+    );
+    const api = createBotApi(TOKEN, fetchMock as never);
+
+    const error = await api.downloadFile("documents/$ecret.pdf", { maxBytes: 100 }).catch((e: unknown) => e);
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).not.toContain("$ecret.pdf");
+    expect(message).not.toContain(TOKEN);
+    expect(message).not.toContain("file/bot");
+  });
+});
+
+describe("TelegramFileTooLargeError", () => {
+  it("is classified by type rather than message text", () => {
+    const error = new TelegramFileTooLargeError("unrelated wording");
+
+    expect(error).toBeInstanceOf(TelegramFileTooLargeError);
+    expect(error.message).not.toContain("größer");
   });
 });
