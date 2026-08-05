@@ -1488,6 +1488,14 @@ export default function FredNativeChatView({
                       </div>
                     ))
                   : renderUserContent(message.content)}
+                {message.role === "assistant" && message.content ? (
+                  <ResearchTrace
+                    steps={message.researchTrace ?? []}
+                    sources={message.sourceReferences ?? []}
+                    active={false}
+                    agentName={fredAgentName(message.agentKey)}
+                  />
+                ) : null}
                 {message.role === "assistant"
                   && message.content
                   && !(isSending && index === messages.length - 1) ? (
@@ -1620,16 +1628,16 @@ export default function FredNativeChatView({
                     <time dateTime={activeAssistant.createdAt}>{formatTime(activeAssistant.createdAt)}</time>
                   </div>
                 </div>
+                <StreamingAssistantPreview
+                  ref={streamingPreviewRef}
+                  agentName={fredAgentName(activeAssistant.agentKey)}
+                  onGrowth={scrollWithStreamGrowth}
+                />
                 <ResearchTrace
                   steps={activeAssistant.researchTrace ?? []}
                   sources={activeAssistant.sourceReferences ?? []}
                   active
                   agentName={fredAgentName(activeAssistant.agentKey)}
-                />
-                <StreamingAssistantPreview
-                  ref={streamingPreviewRef}
-                  agentName={fredAgentName(activeAssistant.agentKey)}
-                  onGrowth={scrollWithStreamGrowth}
                 />
               </article>
             ) : null}

@@ -583,15 +583,25 @@ describe("Fred public answer sharing", () => {
 });
 
 describe("Fred ResearchTrace rendering", () => {
-  it("renders ResearchTrace only for active assistant, never for committed/history messages", () => {
-    // ResearchTrace with `active` prop should only appear in the activeAssistant block
-    const activeTrace = /<ResearchTrace\s+steps=\{activeAssistant\.researchTrace[\s\S]*?active\s+agentName=\{fredAgentName\(activeAssistant\.agentKey\)\}[\s\S]*?\/>([\s\S]*?)<StreamingAssistantPreview/u;
-    expect(activeTrace.test(viewSource)).toBe(true);
-    // Committed messages must not render ResearchTrace.
-    // Verify renderAssistantContent(message.content) is present for committed messages
-    expect(viewSource).toContain("renderAssistantContent(message.content)");
-    // Exactly one JSX <ResearchTrace usage — only in the active assistant pending block
-    const researchTraceUsages = (viewSource.match(/<ResearchTrace/g) || []).length;
-    expect(researchTraceUsages).toBe(1);
+  it("renders the research trace below active streaming and completed answers", () => {
+    const committedAnswerIndex = viewSource.indexOf("renderAssistantContent(message.content)");
+    const committedTraceIndex = viewSource.indexOf("<ResearchTrace", committedAnswerIndex);
+    const feedbackIndex = viewSource.indexOf('className="fred-feedback"', committedAnswerIndex);
+    expect(committedAnswerIndex).toBeGreaterThan(0);
+    expect(committedTraceIndex).toBeGreaterThan(committedAnswerIndex);
+    expect(committedTraceIndex).toBeLessThan(feedbackIndex);
+
+    const activeAssistantIndex = viewSource.indexOf("{activeAssistant ? (");
+    const streamingPreviewIndex = viewSource.indexOf("<StreamingAssistantPreview", activeAssistantIndex);
+    const activeTraceIndex = viewSource.indexOf("<ResearchTrace", activeAssistantIndex);
+    expect(streamingPreviewIndex).toBeGreaterThan(activeAssistantIndex);
+    expect(activeTraceIndex).toBeGreaterThan(streamingPreviewIndex);
+    expect((viewSource.match(/<ResearchTrace/g) || []).length).toBe(2);
+  });
+
+  it("keeps the active trace open and collapses the completed trace", () => {
+    expect(viewSource).toContain("<details className=\"fred-research-trace\" open={active}>");
+    expect(viewSource).toMatch(/steps=\{message\.researchTrace \?\? \[\]\}[\s\S]*?active=\{false\}/u);
+    expect(viewSource).toMatch(/steps=\{activeAssistant\.researchTrace \?\? \[\]\}[\s\S]*?\n\s+active\n/u);
   });
 });
