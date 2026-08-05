@@ -186,8 +186,17 @@ function ResearchTrace({
   if (steps.length === 0 && sources.length === 0) return null;
   const completed = steps.filter((step) => step.status === "completed").length;
   const summary = active
-    ? `${agentName} recherchiert …`
-    : `Rechercheverlauf${completed > 0 ? ` · ${completed} Schritte` : ""}`;
+    ? `${agentName}: Recherche & Überlegungen …`
+    : `Recherche & Überlegungen${completed > 0 ? ` · ${completed} Schritte` : ""}`;
+
+  // In active traces, only the latest reasoning entry is open.
+  // Find the last reasoning step with content (text may be empty for done markers).
+  const lastReasoningIndex = active
+    ? steps.reduce<number>((last, step, index) => (
+      step.kind === "reasoning" && step.detail ? index : last
+    ), -1)
+    : -1;
+
   return (
     <details className="fred-research-trace" open={active}>
       <summary>
@@ -195,17 +204,38 @@ function ResearchTrace({
         {summary}
       </summary>
       <ol className="fred-research-steps">
-        {steps.map((step) => (
-          <li className={`is-${step.status}`} key={step.id}>
-            <span className="fred-research-status" aria-hidden="true" />
-            <span>
-              {step.label}
-              {step.durationMs !== undefined ? (
-                <small>{(step.durationMs / 1_000).toLocaleString("de-AT", { maximumFractionDigits: 1 })} s</small>
-              ) : null}
-            </span>
-          </li>
-        ))}
+        {steps.map((step, index) => {
+          if (step.kind === "reasoning") {
+            if (!step.detail) return null;
+            const isLastReasoning = active && index === lastReasoningIndex;
+            return (
+              <li className={`is-${step.status}`} key={step.id}>
+                <span className="fred-research-status" aria-hidden="true" />
+                <details className="fred-reasoning-detail" open={isLastReasoning}>
+                  <summary>
+                    <span className="fred-reasoning-label">{step.label}</span>
+                    <span className="fred-reasoning-preview">{step.detail}</span>
+                  </summary>
+                  <pre>{step.detail}</pre>
+                </details>
+              </li>
+            );
+          }
+          return (
+            <li className={`is-${step.status}`} key={step.id}>
+              <span className="fred-research-status" aria-hidden="true" />
+              <span>
+                {step.label}
+                {step.durationMs !== undefined ? (
+                  <small>{(step.durationMs / 1_000).toLocaleString("de-AT", { maximumFractionDigits: 1 })} s</small>
+                ) : null}
+                {step.detail ? (
+                  <small className="fred-research-tool-query">{step.detail}</small>
+                ) : null}
+              </span>
+            </li>
+          );
+        })}
       </ol>
       {sources.length > 0 ? (
         <div className="fred-research-sources">

@@ -604,4 +604,41 @@ describe("Fred ResearchTrace rendering", () => {
     expect(viewSource).toMatch(/steps=\{message\.researchTrace \?\? \[\]\}[\s\S]*?active=\{false\}/u);
     expect(viewSource).toMatch(/steps=\{activeAssistant\.researchTrace \?\? \[\]\}[\s\S]*?\n\s+active\n/u);
   });
+
+  it("renames the outer block heading to Recherche & Überlegungen", () => {
+    expect(viewSource).toContain("Recherche & Überlegungen");
+    expect(viewSource).toContain("${agentName}: Recherche & Überlegungen …");
+    expect(viewSource).toContain("Schritte");
+  });
+
+  it("renders reasoning entries as nested compact details using plain text", () => {
+    expect(viewSource).toContain('step.kind === "reasoning"');
+    expect(viewSource).toContain('className="fred-reasoning-detail"');
+    // The nested summary contains a label and the actual step.detail preview
+    expect(viewSource).toContain('className="fred-reasoning-label"');
+    expect(viewSource).toContain('className="fred-reasoning-preview"');
+    expect(viewSource).toContain("{step.detail}");
+    expect(viewSource).not.toContain("dangerouslySetInnerHTML");
+    // The expanded body still renders the complete step.detail in a <pre>
+    expect(viewSource).toContain("<pre>{step.detail}</pre>");
+    const reasoningDetailIndex = viewSource.indexOf("fred-reasoning-detail");
+    const stepsIndex = viewSource.indexOf("fred-research-steps");
+    expect(reasoningDetailIndex).toBeGreaterThan(stepsIndex);
+  });
+
+  it("keeps tool/status entries compact and visible around reasoning entries in chronological order", () => {
+    expect(viewSource).toContain("steps.map((step");
+    expect(viewSource).not.toContain('.filter((step) => step.kind !== "reasoning")');
+  });
+
+  it("uses CSS-clamped preview for collapsed reasoning without truncating persisted text", () => {
+    expect(cssSource).toContain(".fred-reasoning-detail");
+    expect(cssSource).toContain(".fred-reasoning-preview");
+    expect(cssSource).toContain("-webkit-line-clamp");
+    expect(cssSource).toContain("overflow: hidden");
+    // The open state hides the preview, showing the full <pre> instead
+    expect(cssSource).toContain('.fred-reasoning-detail[open] .fred-reasoning-preview');
+    expect(cssSource).toContain("display: none");
+    expect(viewSource).not.toContain("step.detail?.slice(0,");
+  });
 });
