@@ -10,7 +10,6 @@ import type {
 } from "react";
 import {
   forwardRef,
-  memo,
   useEffect,
   useImperativeHandle,
   useRef,
@@ -23,12 +22,6 @@ import {
   MAX_AGENT_FEEDBACK_CHARS,
 } from "@/lib/agent-feedback";
 import { createStreamingTextBuffer } from "@/lib/chat/streaming-text-buffer";
-import {
-  appendStreamingMarkdown,
-  emptyStreamingMarkdown,
-  replaceStreamingMarkdown,
-  type StreamingMarkdown,
-} from "@/lib/chat/streaming-markdown-segments";
 import {
   parseFredNativeStreamLine,
   type FredNativeConversation,
@@ -242,28 +235,17 @@ type StreamingAssistantPreviewHandle = {
   cancel: () => void;
 };
 
-const StreamingMarkdownSegment = memo(function StreamingMarkdownSegment({
-  segment,
-  renderAssistantContent,
-}: {
-  segment: string;
-  renderAssistantContent: (content: string) => ReactNode;
-}) {
-  return renderAssistantContent(segment);
-});
-
 const StreamingAssistantPreview = forwardRef<
   StreamingAssistantPreviewHandle,
   {
     agentName: "Fred" | "QuickFred";
     onGrowth: () => void;
-    renderAssistantContent: (content: string) => ReactNode;
   }
->(function StreamingAssistantPreview({ agentName, onGrowth, renderAssistantContent }, ref) {
-  const [markdown, setMarkdown] = useState<StreamingMarkdown>(emptyStreamingMarkdown);
-  const [statusText, setStatusText] = useState("");
+>(function StreamingAssistantPreview({ agentName, onGrowth }, ref) {
+  const textContainerRef = useRef<HTMLSpanElement>(null);
+  const textNodeRef = useRef<Text | null>(null);
   const bufferRef = useRef<ReturnType<typeof createStreamingTextBuffer> | null>(null);
-  const replacementKindRef = useRef<"markdown" | "status">("markdown");
+  const showingStatusRef = useRef(false);
   const onGrowthRef = useRef(onGrowth);
 
   useEffect(() => {
@@ -271,21 +253,19 @@ const StreamingAssistantPreview = forwardRef<
   }, [onGrowth]);
 
   useEffect(() => {
+    const textContainer = textContainerRef.current;
+    if (!textContainer) return;
+    const textNode = document.createTextNode("");
+    textContainer.replaceChildren(textNode);
+    textNodeRef.current = textNode;
     bufferRef.current = createStreamingTextBuffer({
       appendText: (text) => {
-        setStatusText("");
-        setMarkdown((current) => appendStreamingMarkdown(current, text));
+        textNode.appendData(text);
+        onGrowthRef.current();
       },
       replaceText: (text) => {
-        const replacementKind = replacementKindRef.current;
-        replacementKindRef.current = "markdown";
-        if (replacementKind === "status") {
-          setStatusText(text);
-          setMarkdown(emptyStreamingMarkdown());
-          return;
-        }
-        setStatusText("");
-        setMarkdown((current) => replaceStreamingMarkdown(current, text));
+        textNode.data = text;
+        onGrowthRef.current();
       },
       requestFrame: (callback) => window.requestAnimationFrame(callback),
       cancelFrame: (frame) => window.cancelAnimationFrame(frame),
@@ -293,21 +273,25 @@ const StreamingAssistantPreview = forwardRef<
     return () => {
       bufferRef.current?.cancel();
       bufferRef.current = null;
+      textNodeRef.current = null;
     };
   }, []);
 
-  useEffect(() => {
-    onGrowthRef.current();
-  }, [markdown]);
-
   useImperativeHandle(ref, () => ({
-    append: (text) => bufferRef.current?.append(text),
+    append: (text) => {
+      if (showingStatusRef.current) {
+        showingStatusRef.current = false;
+        bufferRef.current?.replace(text);
+        return;
+      }
+      bufferRef.current?.append(text);
+    },
     replace: (text) => {
-      replacementKindRef.current = "markdown";
+      showingStatusRef.current = false;
       bufferRef.current?.replace(text);
     },
     setStatus: (text) => {
-      replacementKindRef.current = "status";
+      showingStatusRef.current = true;
       bufferRef.current?.replace(text);
     },
     flush: () => bufferRef.current?.flush(),
@@ -316,20 +300,7 @@ const StreamingAssistantPreview = forwardRef<
 
   return (
     <div className="fred-streaming-preview">
-      <div className="message-body fred-streaming-preview-text">
-        {statusText ? <span>{statusText}</span> : (
-          <>
-            {markdown.completed.map((segment, index) => (
-              <StreamingMarkdownSegment
-                key={index}
-                segment={segment}
-                renderAssistantContent={renderAssistantContent}
-              />
-            ))}
-            {markdown.tail ? renderAssistantContent(markdown.tail) : null}
-          </>
-        )}
-      </div>
+      <span className="message-body fred-streaming-preview-text" ref={textContainerRef} />
       <div
         className="fred-thinking-indicator"
         role="status"
@@ -1496,14 +1467,6 @@ export default function FredNativeChatView({
                       ) : null}
                   </div>
                 </div>
-                {message.role === "assistant" ? (
-                  <ResearchTrace
-                    steps={message.researchTrace ?? []}
-                    sources={message.sourceReferences ?? []}
-                    active={isSending && index === messages.length - 1}
-                    agentName={fredAgentName(message.agentKey)}
-                  />
-                ) : null}
                 {message.role === "assistant"
                   ? (message.content
                     ? (
@@ -1667,7 +1630,6 @@ export default function FredNativeChatView({
                   ref={streamingPreviewRef}
                   agentName={fredAgentName(activeAssistant.agentKey)}
                   onGrowth={scrollWithStreamGrowth}
-                  renderAssistantContent={renderAssistantContent}
                 />
               </article>
             ) : null}

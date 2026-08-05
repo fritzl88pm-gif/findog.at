@@ -88,7 +88,7 @@ const MAX_MULTIPART_REQUEST_BYTES = MAX_REQUEST_BYTES
   + 1_024 * 1_024; // Multipart boundaries and per-part headers.
 const MAX_REQUESTS_PER_WINDOW = 30;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1_000;
-const TOTAL_TIMEOUT_MS = 600_000;
+const TOTAL_TIMEOUT_MS = 720_000;
 const PREPROCESSING_TIMEOUT_MS = 300_000;
 const FRED_RESERVE_MS = 300_000;
 const ATTACHMENT_HEARTBEAT_INTERVAL_MS = 15_000;
@@ -1176,11 +1176,14 @@ export async function POST(request: Request) {
         } catch (error) {
           acceptingCitationUpdates = false;
           await stopAndCancelUpstream(error);
-          if (!deadline.signal.aborted && !lifetimeAbort!.signal.aborted) {
+          if (!lifetimeAbort!.signal.aborted) {
+            const visibleError = deadline.signal.aborted
+              ? deadline.signal.reason
+              : error;
             send(controller, {
               type: "error",
-              error: error instanceof UserVisibleError
-                ? error.message
+              error: visibleError instanceof UserVisibleError
+                ? visibleError.message
                 : `${selectedAgentName} konnte die Anfrage nicht abschließen.`,
             });
           }

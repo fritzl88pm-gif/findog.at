@@ -109,6 +109,7 @@ function multipartRequest(options: {
   webSearchEnabled?: boolean;
   image?: File;
   attachment?: File;
+  signal?: AbortSignal;
 }): Request {
   const formData = new FormData();
   formData.append("payload", JSON.stringify({
@@ -124,6 +125,7 @@ function multipartRequest(options: {
       "Sec-Fetch-Site": "same-origin",
     },
     body: formData,
+    signal: options.signal,
   });
 }
 
@@ -147,6 +149,16 @@ function responseFromReader(reader: {
   cancel: (reason?: unknown) => Promise<void>;
 }): Response {
   return { body: { getReader: () => reader } } as unknown as Response;
+}
+
+function rejectReadOnAbort(signal: AbortSignal): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const pendingRead = new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => {
+    const rejectForAbort = () => reject(signal.reason);
+    if (signal.aborted) rejectForAbort();
+    else signal.addEventListener("abort", rejectForAbort, { once: true });
+  });
+  void pendingRead.catch(() => undefined);
+  return pendingRead;
 }
 
 async function nextEvent(reader: ReadableStreamDefaultReader<Uint8Array>) {
@@ -504,6 +516,126 @@ describe("POST /api/fred/chat", () => {
       messageId: "answer-error",
     }));
     expect(cancel).toHaveBeenCalledWith(expect.any(Error));
+  });
+
+  it("emits the route timeout error at exactly 720 seconds and cleans up upstream", async () => {
+    vi.useFakeTimers();
+    try {
+      const rpc = rpcForTurn();
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+        id: "44444444-4444-4444-8444-444444444444",
+      });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+      let upstreamSignal!: AbortSignal;
+      const cancel = vi.fn().mockResolvedValue(undefined);
+      vi.mocked(openFredUpstreamStream).mockImplementation(async (options) => {
+        upstreamSignal = options.signal;
+        const read = vi.fn()
+          .mockResolvedValueOnce({
+            done: false,
+            value: new TextEncoder().encode(
+              'data: {"response_type":"agent_query","assistant_message_id":"answer-timeout"}\n\n',
+            ),
+          })
+          .mockResolvedValueOnce({
+            done: false,
+            value: new TextEncoder().encode(
+              'data: {"response_type":"answer","content":"Anfang","done":false}\n\n',
+            ),
+          })
+          .mockImplementationOnce(() => rejectReadOnAbort(upstreamSignal));
+        return responseFromReader({ read, cancel });
+      });
+
+      const response = await POST(multipartRequest({ query: "Timeout", attachment: pdfFile() }));
+      const reader = response.body!.getReader();
+      const events: Array<Awaited<ReturnType<typeof nextEvent>>> = [];
+      while (!events.some((event) => event?.type === "delta")) {
+        events.push(await nextEvent(reader));
+      }
+
+      await vi.advanceTimersByTimeAsync(719_999);
+      expect(upstreamSignal.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(upstreamSignal.aborted).toBe(true);
+      while (true) {
+        const event = await nextEvent(reader);
+        if (!event) break;
+        events.push(event);
+      }
+
+      expect(events.filter((event) => event?.type === "error")).toEqual([{
+        type: "error",
+        error: "Die Verarbeitung der Anfrage hat zu lange gedauert.",
+      }]);
+      expect(events.some((event) => event?.type === "final")).toBe(false);
+      expect(stopFredUpstreamSession).toHaveBeenCalledOnce();
+      expect(stopFredUpstreamSession).toHaveBeenCalledWith(expect.objectContaining({
+        messageId: "answer-timeout",
+      }));
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps request cancellation silent while cleaning up upstream", async () => {
+    const rpc = rpcForTurn();
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "55555555-5555-4555-8555-555555555555",
+    });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    const requestAbort = new AbortController();
+    let upstreamSignal!: AbortSignal;
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(openFredUpstreamStream).mockImplementation(async (options) => {
+      upstreamSignal = options.signal;
+      const read = vi.fn()
+        .mockResolvedValueOnce({
+          done: false,
+          value: new TextEncoder().encode(
+            'data: {"response_type":"agent_query","assistant_message_id":"answer-request-cancel"}\n\n',
+          ),
+        })
+        .mockResolvedValueOnce({
+          done: false,
+          value: new TextEncoder().encode(
+            'data: {"response_type":"answer","content":"Anfang","done":false}\n\n',
+          ),
+        })
+        .mockImplementationOnce(() => rejectReadOnAbort(upstreamSignal));
+      return responseFromReader({ read, cancel });
+    });
+
+    const response = await POST(multipartRequest({
+      query: "Abbruch",
+      attachment: pdfFile(),
+      signal: requestAbort.signal,
+    }));
+    const reader = response.body!.getReader();
+    const events: Array<Awaited<ReturnType<typeof nextEvent>>> = [];
+    while (!events.some((event) => event?.type === "delta")) {
+      events.push(await nextEvent(reader));
+    }
+
+    requestAbort.abort("browser-request-cancel");
+    while (true) {
+      const event = await nextEvent(reader);
+      if (!event) break;
+      events.push(event);
+    }
+
+    expect(events.some((event) => event?.type === "error")).toBe(false);
+    expect(events.some((event) => event?.type === "final")).toBe(false);
+    expect(stopFredUpstreamSession).toHaveBeenCalledOnce();
+    expect(stopFredUpstreamSession).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: "answer-request-cancel",
+    }));
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledWith("browser-request-cancel");
   });
 
   it("cleans deadline timers and the request abort listener after early provider failure", async () => {

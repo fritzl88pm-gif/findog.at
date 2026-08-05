@@ -114,7 +114,7 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).not.toContain("postMessage");
   });
 
-  it("keeps live deltas out of committed messages and progressively renders rich answers", () => {
+  it("renders live streaming deltas as plain text in a single DOM Text node with pre-wrap and no rich rendering", () => {
     const deltaBranch = /if \(streamEvent\.type === "delta"\) \{([\s\S]*?)\n        \}/u
       .exec(viewSource)?.[1] ?? "";
     expect(deltaBranch).toContain("streamingPreviewRef.current?.append(streamEvent.content)");
@@ -123,18 +123,21 @@ describe("Fred native Findog UI", () => {
     expect(deltaBranch).not.toContain("setMessages");
     expect(deltaBranch).not.toContain("renderAssistantContent");
     expect(viewSource).toContain("<StreamingAssistantPreview");
-    expect(viewSource).toContain("renderAssistantContent={renderAssistantContent}");
-    expect(viewSource).toContain("memo(function StreamingMarkdownSegment");
-    expect(viewSource).toContain("renderAssistantContent(segment)");
-    expect(viewSource).toContain("statusText ? <span>{statusText}</span>");
-    expect(viewSource).toContain('replacementKindRef.current = "status"');
-    expect(viewSource).not.toContain("renderAssistantContent(statusText)");
-    expect(viewSource).not.toContain("Text.appendData");
-    expect(viewSource).not.toContain("textNode.appendData");
+    expect(viewSource).not.toContain("renderAssistantContent={renderAssistantContent}");
+    expect(viewSource).not.toContain("memo(function StreamingMarkdownSegment");
+    expect(viewSource).not.toContain("renderAssistantContent(segment)");
+    expect(viewSource).toContain("document.createTextNode");
+    expect(viewSource).toContain("textContainer.replaceChildren(textNode)");
+    expect(viewSource).toContain("textNode.appendData(text)");
+    expect(viewSource).toContain("textNode.data = text");
+    expect(viewSource).toContain("showingStatusRef.current = true");
+    expect(viewSource).toContain("showingStatusRef.current = false");
+    expect(viewSource).not.toContain("statusText");
     expect(viewSource).not.toContain("dangerouslySetInnerHTML");
     expect(viewSource).toContain("setMessages(baseMessages)");
+    // pre-wrap CSS for streaming preview text
     expect(cssSource).toMatch(
-      /\.fred-streaming-preview-text \{[\s\S]*?display: grid;[\s\S]*?gap: 10px;[\s\S]*?white-space: normal;/u,
+      /\.fred-streaming-preview-text \{[\s\S]*?display: block;[\s\S]*?white-space: pre-wrap;/u,
     );
   });
 
@@ -576,5 +579,19 @@ describe("Fred public answer sharing", () => {
     expect(viewSource).toMatch(
       /catch\s*\(err:\s*unknown\)\s*\{[\s\S]*?if\s*\(controller\.signal\.aborted\s*\|\|\s*\(err\s+instanceof\s+DOMException\s+&&\s+err\.name\s*===\s*"AbortError"\)\)\s*return/u,
     );
+  });
+});
+
+describe("Fred ResearchTrace rendering", () => {
+  it("renders ResearchTrace only for active assistant, never for committed/history messages", () => {
+    // ResearchTrace with `active` prop should only appear in the activeAssistant block
+    const activeTrace = /<ResearchTrace\s+steps=\{activeAssistant\.researchTrace[\s\S]*?active\s+agentName=\{fredAgentName\(activeAssistant\.agentKey\)\}[\s\S]*?\/>([\s\S]*?)<StreamingAssistantPreview/u;
+    expect(activeTrace.test(viewSource)).toBe(true);
+    // Committed messages must not render ResearchTrace.
+    // Verify renderAssistantContent(message.content) is present for committed messages
+    expect(viewSource).toContain("renderAssistantContent(message.content)");
+    // Exactly one JSX <ResearchTrace usage — only in the active assistant pending block
+    const researchTraceUsages = (viewSource.match(/<ResearchTrace/g) || []).length;
+    expect(researchTraceUsages).toBe(1);
   });
 });
