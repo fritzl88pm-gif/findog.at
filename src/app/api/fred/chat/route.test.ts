@@ -297,7 +297,6 @@ describe("POST /api/fred/chat", () => {
       .map(parseFredNativeStreamLine)
       .filter(Boolean);
 
-    // The completed tool step includes the tool_call query detail
     expect(events).toContainEqual({
       type: "research",
       step: {
@@ -305,7 +304,6 @@ describe("POST /api/fred/chat", () => {
         kind: "knowledge",
         status: "completed",
         label: "Wissensbasis durchsucht",
-        detail: "hidden",
         durationMs: 120,
       },
     });
@@ -323,40 +321,14 @@ describe("POST /api/fred/chat", () => {
         knowledgeBaseId: "kb-1",
       }],
     });
-    // Reasoning content reaches the browser as research events
-    expect(events).toContainEqual({
-      type: "research",
-      step: {
-        id: "think-1",
-        kind: "reasoning",
-        status: "running",
-        label: "Überlegung",
-        detail: "hidden reasoning",
-      },
-    });
-    // Reasoning content must never appear in answer delta/replace events
-    const deltaText = events
-      .filter((event) => event?.type === "delta")
-      .map((event) => (event?.type === "delta" ? event.content : ""))
-      .join("");
-    expect(deltaText).not.toContain("hidden reasoning");
-    // The tool_call query is included as a bounded detail
-    expect(events).toContainEqual({
-      type: "research",
-      step: expect.objectContaining({
-        id: "call-1",
-        kind: "knowledge",
-        status: "running",
-        detail: "hidden",
-      }),
-    });
+    expect(JSON.stringify(events)).not.toContain("hidden reasoning");
+    expect(JSON.stringify(events)).not.toContain("hidden\"");
     expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
       payload: expect.objectContaining({
         content: "Nachweis erbracht.",
         display_content: "Nachweis erbracht.",
         content_transformation: "weknora-research-de-v1",
         research_trace: expect.arrayContaining([
-          expect.objectContaining({ id: "think-1", kind: "reasoning", detail: "hidden reasoning" }),
           expect.objectContaining({ id: "call-1", label: "Wissensbasis durchsucht" }),
         ]),
         source_references: [{

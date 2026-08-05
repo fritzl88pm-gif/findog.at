@@ -1,6 +1,6 @@
 export const FRED_CONTENT_TRANSFORMATION = "weknora-research-de-v1";
 
-export type FredResearchStepKind = "analysis" | "reasoning" | "knowledge" | "web" | "tool" | "evaluation" | "sources";
+export type FredResearchStepKind = "analysis" | "knowledge" | "web" | "tool" | "evaluation" | "sources";
 export type FredResearchStepStatus = "running" | "completed" | "failed";
 
 export type FredKnowledgeSource = {
@@ -51,10 +51,6 @@ const TOOL_HINTS: Array<{ pattern: RegExp; kind: FredResearchStepKind; running: 
   },
 ];
 
-const REASONING_MAX_CHARS = 100_000;
-const TOOL_QUERY_MAX_CHARS = 500;
-const DETAIL_MAX_CHARS = 500;
-
 function recordOf(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -63,11 +59,6 @@ function recordOf(value: unknown): Record<string, unknown> | null {
 
 function boundedText(value: unknown, maximum: number): string {
   return typeof value === "string" ? value.trim().slice(0, maximum) : "";
-}
-
-function rawBoundedText(value: unknown, maximum: number): string {
-  // Like boundedText but does NOT trim — used for reasoning accumulation
-  return typeof value === "string" ? value.slice(0, maximum) : "";
 }
 
 function decodeAttribute(value: string): string {
@@ -213,18 +204,6 @@ function durationMs(value: unknown): number | undefined {
   return Math.min(Math.round(duration), 3_600_000);
 }
 
-function reasoningContent(event: Record<string, unknown>, data: Record<string, unknown>): string {
-  // Use rawBoundedText so inter-chunk spacing is preserved for accumulation
-  return rawBoundedText(data.content ?? event.content, REASONING_MAX_CHARS);
-}
-
-function toolQueryDetail(data: Record<string, unknown>): string | undefined {
-  const args = recordOf(data.arguments);
-  if (!args) return undefined;
-  const query = boundedText(args.query, TOOL_QUERY_MAX_CHARS);
-  return query || undefined;
-}
-
 export function parseWeKnoraResearchEvent(value: unknown): FredResearchUpdate {
   const event = recordOf(value);
   if (!event) return { sources: [], fatalError: false, unsupported: false };
@@ -242,19 +221,15 @@ export function parseWeKnoraResearchEvent(value: unknown): FredResearchUpdate {
   }
   if (responseType === "thinking") {
     const done = data.done === true || event.done === true;
-    const content = reasoningContent(event, data);
-    // Produce step even without content when done=true (marks completion)
-    if (!content && !done) return { sources, fatalError: false, unsupported: false };
     return {
       sources,
       fatalError: false,
       unsupported: false,
       step: {
-        id: eventId(event, data, "reasoning"),
-        kind: "reasoning",
+        id: eventId(event, data, "analysis"),
+        kind: "analysis",
         status: done ? "completed" : "running",
-        label: "Überlegung",
-        ...(content ? { detail: content } : {}),
+        label: done ? "Anfrage analysiert" : "Anfrage wird analysiert",
       },
     };
   }
@@ -290,7 +265,6 @@ export function parseWeKnoraResearchEvent(value: unknown): FredResearchUpdate {
     const presentation = toolPresentation(toolName);
     const successful = responseType !== "error" && data.success !== false && event.success !== false;
     const finished = responseType !== "tool_call";
-    const queryDetail = responseType === "tool_call" ? toolQueryDetail(data) : undefined;
     return {
       sources,
       fatalError: false,
@@ -302,7 +276,6 @@ export function parseWeKnoraResearchEvent(value: unknown): FredResearchUpdate {
         label: finished
           ? (successful ? presentation.completed : "Recherchewerkzeug fehlgeschlagen")
           : presentation.running,
-        ...(queryDetail ? { detail: queryDetail } : {}),
         ...(durationMs(data.duration_ms ?? data.duration) !== undefined
           ? { durationMs: durationMs(data.duration_ms ?? data.duration) }
           : {}),
@@ -318,23 +291,8 @@ export function mergeFredResearchStep(
 ): FredResearchStep[] {
   const existingIndex = steps.findIndex((step) => step.id === update.id);
   if (existingIndex < 0) return [...steps, update].slice(-200);
-  const existing = steps[existingIndex];
   const next = [...steps];
-
-  // For reasoning steps, append detail text instead of replacing
-  if (update.kind === "reasoning" && existing.kind === "reasoning") {
-    const raw = (existing.detail ?? "") + (update.detail ?? "");
-    const accumulated = raw.length > REASONING_MAX_CHARS
-      ? raw.slice(0, REASONING_MAX_CHARS)
-      : raw;
-    next[existingIndex] = {
-      ...existing,
-      status: update.status === "completed" ? "completed" : existing.status,
-      detail: accumulated || undefined,
-    };
-  } else {
-    next[existingIndex] = { ...existing, ...update };
-  }
+  next[existingIndex] = { ...next[existingIndex], ...update };
   return next;
 }
 
@@ -347,18 +305,13 @@ export function parseStoredFredResearchTrace(value: unknown): FredResearchStep[]
     const kind = boundedText(item.kind, 20) as FredResearchStepKind;
     const status = boundedText(item.status, 20) as FredResearchStepStatus;
     const label = boundedText(item.label, 200);
-    const VALID_KINDS = new Set<string>([
-      "analysis", "reasoning", "knowledge", "web", "tool", "evaluation", "sources",
-    ]);
     if (
       !id
-      || !VALID_KINDS.has(kind)
+      || !["analysis", "knowledge", "web", "tool", "evaluation", "sources"].includes(kind)
       || !["running", "completed", "failed"].includes(status)
       || !label
     ) return [];
-    const isReasoning = kind === "reasoning";
-    const detailMax = isReasoning ? REASONING_MAX_CHARS : DETAIL_MAX_CHARS;
-    const detail = boundedText(item.detail, detailMax);
+    const detail = boundedText(item.detail, 500);
     const duration = durationMs(item.durationMs);
     return [{
       id,
