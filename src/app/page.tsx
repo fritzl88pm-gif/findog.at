@@ -74,7 +74,6 @@ import {
   type FredAgentKey,
 } from "@/lib/weknora/fred-agent";
 import FredRunView from "@/components/fredrun-view";
-import WoBeschlussView from "@/components/wo-beschluss-view";
 import L17bCountrySelect from "@/components/l17b-country-select";
 import ScanningView from "@/components/scanning-view";
 import KnowledgeLandscapeView from "@/components/knowledge-landscape-view";
@@ -105,7 +104,7 @@ type ConversationSummary = {
   telegramIntegrationId?: string | null;
 };
 
-type AppView = "chat" | "scanning" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "wo-beschluss" | "quiz" | "administration" | "data" | "reasonings";
+type AppView = "chat" | "scanning" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data" | "reasonings";
 
 const TELEGRAM_BOT_USERNAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{4,31}$/u;
 
@@ -2571,13 +2570,6 @@ export default function Home() {
     }
   }
 
-  function openWoBeschlussView() {
-    setAppView("wo-beschluss");
-    setError("");
-    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
-      setSettingsOpen(false);
-    }
-  }
 
   async function deleteFredConversations(ids: string[], useBulkEndpoint = false) {
     if (
@@ -3086,15 +3078,6 @@ export default function Home() {
                 </button>
               ) : null}
               <button
-                className={`sidebar-view-button ${appView === "wo-beschluss" ? "active" : ""}`}
-                type="button"
-                onClick={openWoBeschlussView}
-                aria-current={appView === "wo-beschluss" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h5M14 12h5"></path><path d="m8 9 3 3-3 3M16 9l-3 3 3 3"></path><path d="M4 5h16v14H4z"></path></svg>
-                Wo Beschluss?
-              </button>
-              <button
                 className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
                 type="button"
                 onClick={openFormsView}
@@ -3229,16 +3212,6 @@ export default function Home() {
               aria-current={appView === "fredrun" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17h3l2-4 3 2 2-5 2 4h4"></path><path d="M5 7h.01M9 5h.01M13 7h.01"></path></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "wo-beschluss" ? "active" : ""}`}
-              type="button"
-              onClick={openWoBeschlussView}
-              title="Wo Beschluss?"
-              aria-label="Wo Beschluss?"
-              aria-current={appView === "wo-beschluss" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h5M14 12h5"></path><path d="m8 9 3 3-3 3M16 9l-3 3 3 3"></path><path d="M4 5h16v14H4z"></path></svg>
             </button>
             {isAdmin ? (
               <button
@@ -3854,8 +3827,6 @@ export default function Home() {
         <L17bCurrencyView />
       ) : appView === "fredrun" ? (
         <FredRunView key={user?.id ?? "fredrun"} accessToken={session?.access_token ?? ""} />
-      ) : appView === "wo-beschluss" ? (
-        <WoBeschlussView />
       ) : appView === "quiz" && isAdmin ? (
         <QuizView accessToken={session?.access_token ?? ""} />
       ) : appView === "scanning" ? (
