@@ -68,6 +68,7 @@ import {
   stopFredUpstreamSession,
   type FredUpstreamSession,
 } from "@/lib/weknora/fred-native";
+import { buildUserPersonalizationBlock } from "@/lib/fred/user-personalization";
 import {
   FRED_CONTENT_TRANSFORMATION,
   mergeFredResearchStep,
@@ -650,12 +651,33 @@ function buildWebTurnConfig(
   };
 }
 
+async function loadUserPersonalizationBlock(
+  supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
+  userId: string,
+): Promise<string> {
+  try {
+    const { data, error } = await supabase
+      .from("fred_user_preferences")
+      .select("preferred_name,personality")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (error || !data) return "";
+    return buildUserPersonalizationBlock({
+      personality: (data.personality as "standard" | "friendly" | "efficient" | "cynical") ?? "standard",
+      preferredName: (data.preferred_name as string | null) ?? null,
+    });
+  } catch {
+    return "";
+  }
+}
+
 function streamTextOnlyTurn(options: {
   request: Request;
   supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>;
   userId: string;
   body: ParsedFredChatRequest;
   agentKey: FredAgentKey;
+  personalizationBlock: string;
 }): Response {
   const encoder = new TextEncoder();
   const registeredConfigs = new Map<string, FredServerConfig>();
@@ -685,6 +707,9 @@ function streamTextOnlyTurn(options: {
               ? { conversationId: options.body.conversationId }
               : {}),
             query: options.body.query,
+            ...(options.personalizationBlock
+              ? { upstreamQuery: options.personalizationBlock + "\n\n" + options.body.query }
+              : {}),
             origin: "web",
             agentKey: options.agentKey,
             webSearchEnabled: options.body.webSearchEnabled,
@@ -747,6 +772,7 @@ export async function POST(request: Request) {
     requireSameSiteRequest(request);
     enforceRateLimit(user.id);
     const body = await readRequestBody(request);
+    const personalizationBlock = await loadUserPersonalizationBlock(supabase, user.id);
     const storedConversation = await loadOwnedConversation({
       supabase,
       userId: user.id,
@@ -780,6 +806,7 @@ export async function POST(request: Request) {
         userId: user.id,
         body,
         agentKey,
+        personalizationBlock,
       });
     }
     let config: ReturnType<typeof readFredEmbedServerConfig>;
@@ -858,6 +885,9 @@ export async function POST(request: Request) {
         let acceptingCitationUpdates = true;
         try {
           let upstreamQuery = body.query;
+          if (personalizationBlock) {
+            upstreamQuery = personalizationBlock + "\n\n" + upstreamQuery;
+          }
 
           if (body.attachments.length > 0) {
             send(controller, { type: "status", label: "Anhänge werden analysiert …" });
@@ -886,6 +916,9 @@ export async function POST(request: Request) {
                 },
               );
               upstreamQuery = combined;
+              if (personalizationBlock) {
+                upstreamQuery = personalizationBlock + "\n\n" + combined;
+              }
             } catch (error) {
               if (!lifetimeAbort!.signal.aborted) {
                 send(controller, {

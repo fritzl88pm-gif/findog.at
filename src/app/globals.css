@@ -7533,3 +7533,52 @@ textarea:focus {
     flex-direction: column;
   }
 }
+
+/* ── Fred Personalization Settings ── */
+.fred-personality-fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.fred-personality-fieldset legend {
+  color: var(--bmf-blue-deep);
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.fred-personality-radio-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 40px;
+  padding: 8px 0;
+  cursor: pointer;
+}
+
+.fred-personality-radio-label input[type="radio"] {
+  width: auto;
+  min-width: 0;
+  flex-shrink: 0;
+  margin-top: 2px;
+  accent-color: var(--bmf-blue);
+}
+
+.fred-personality-radio-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fred-personality-radio-text strong {
+  font-size: 0.88rem;
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.fred-personality-radio-desc {
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.4;
+}

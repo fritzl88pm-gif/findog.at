@@ -83,6 +83,7 @@ import AdminFeedbackView from "@/components/admin-feedback-view";
 import TelegramSettings, {
   type TelegramIntegrationPublicState,
 } from "@/components/telegram-settings";
+import FredPersonalizationSettings from "@/components/fred-personalization-settings";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -3328,6 +3329,9 @@ export default function Home() {
               </button>
             </div>
             <div className="account-settings-content">
+              <FredPersonalizationSettings
+                accessToken={session?.access_token ?? ""}
+              />
               <section className="account-settings-section" aria-labelledby="password-settings-title">
                 <h3 id="password-settings-title">Passwort ändern</h3>
               <form

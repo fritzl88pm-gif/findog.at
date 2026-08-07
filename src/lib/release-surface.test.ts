@@ -352,4 +352,26 @@ describe("approved release surface", () => {
     expect(l17bCountrySelectSource).toContain("<CountryFlag");
     expect(globalsSource).toContain(".l17b-country-flag");
   });
+  it("renders FredPersonalizationSettings before password and Telegram settings", () => {
+    expect(pageSource).toContain("import FredPersonalizationSettings from");
+
+    const settingsDialog = pageSource.slice(
+      pageSource.indexOf("{isSettingsDialogOpen ? ("),
+      pageSource.indexOf("{appView === \"chat\" ? ("),
+    );
+
+    expect(settingsDialog).toContain("<FredPersonalizationSettings");
+    expect(settingsDialog).toContain("accessToken={session?.access_token ?? \"\"}");
+
+    const fredPos = settingsDialog.indexOf("<FredPersonalizationSettings");
+    const telegramPos = settingsDialog.indexOf("<TelegramSettings");
+    const deletionPos = settingsDialog.indexOf("account-deletion-section");
+    expect(fredPos).toBeGreaterThan(-1);
+    expect(telegramPos).toBeGreaterThan(fredPos);
+    expect(deletionPos).toBeGreaterThan(telegramPos);
+
+    const passwordPos = settingsDialog.indexOf("id=\"password-settings-title\"");
+    expect(fredPos).toBeLessThan(passwordPos);
+    expect(passwordPos).toBeLessThan(telegramPos);
+  });
 });

@@ -1302,4 +1302,151 @@ describe("POST /api/fred/chat", () => {
   });
 
   });
+  describe("Fred user personalization", () => {
+    const PERS_USER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+    beforeEach(() => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: PERS_USER_ID });
+    });
+
+    const prefRow = { preferred_name: "Alina", personality: "friendly" };
+
+    function supabaseWithPreferences(row: { preferred_name: string | null; personality: string } | null) {
+      const rpc = rpcForTurn();
+      const maybeSingle = vi.fn().mockResolvedValue({ data: row, error: null });
+      const chain = {
+        select: vi.fn(),
+        eq: vi.fn(),
+        maybeSingle,
+      };
+      chain.select.mockReturnValue(chain);
+      chain.eq.mockReturnValue(chain);
+      const from = vi.fn().mockReturnValue(chain);
+      return { rpc, from } as never;
+    }
+
+    it("injects the user personalization block into the upstream query only", async () => {
+      const mock = supabaseWithPreferences(prefRow);
+      vi.mocked(getSupabaseServerClient).mockReturnValue(mock);
+
+      const response = await POST(request({ query: "Wie ist die Rechtslage?" }));
+      await response.text();
+
+      expect(openFredUpstreamStream).toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: expect.stringContaining("<user_personalization>"),
+        }),
+      );
+      const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
+      expect(callQuery).toContain("<user_personalization>");
+      expect(callQuery).toContain('Der Benutzer möchte mit dem Namen „Alina“');
+      expect(callQuery).toContain("Wie ist die Rechtslage?");
+      // The persisted query is the original, unpolluted
+      const rpcCalls = (mock as { rpc: ReturnType<typeof vi.fn> }).rpc;
+      expect(rpcCalls).toHaveBeenCalledWith("record_fred_native_event", {
+        payload: expect.objectContaining({
+          content: "Wie ist die Rechtslage?",
+          event_type: "message_sent",
+        }),
+      });
+    });
+
+    it("leaves the upstream query unchanged when preferences are standard + empty name", async () => {
+      const mock = supabaseWithPreferences({ preferred_name: null, personality: "standard" });
+      vi.mocked(getSupabaseServerClient).mockReturnValue(mock);
+
+      const response = await POST(request({ query: "Test" }));
+      await response.text();
+
+      expect(openFredUpstreamStream).toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: "Test",
+        }),
+      );
+    });
+
+    it("preserves Fred availability when preference read fails", async () => {
+      const rpc = rpcForTurn();
+      const maybeSingle = vi.fn().mockResolvedValue({ data: null, error: new Error("db-down") });
+      const chain = {
+        select: vi.fn(),
+        eq: vi.fn(),
+        maybeSingle,
+      };
+      chain.select.mockReturnValue(chain);
+      chain.eq.mockReturnValue(chain);
+      const from = vi.fn().mockReturnValue(chain);
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+
+      const response = await POST(request({ query: "Ist Fred noch da?" }));
+      await response.text();
+
+      // The request succeeds
+      expect(openFredUpstreamStream).toHaveBeenCalled();
+      // The upstream query is clean (no personalization)
+      const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
+      expect(callQuery).not.toContain("<user_personalization>");
+    });
+
+    it("preserves Fred availability when preference load throws entirely", async () => {
+      const rpc = rpcForTurn();
+      const from = vi.fn().mockImplementation(() => {
+        throw new Error("connection refused");
+      });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+
+      const response = await POST(request({ query: "Test" }));
+      await response.text();
+
+      expect(openFredUpstreamStream).toHaveBeenCalled();
+      const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
+      expect(callQuery).not.toContain("<user_personalization>");
+    });
+
+    it("does not expose internal errors to the client when preference load fails", async () => {
+      const rpc = rpcForTurn();
+      const from = vi.fn().mockImplementation(() => {
+        throw new Error("secret stack trace with db password");
+      });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+
+      const response = await POST(request({ query: "Sicher?" }));
+      const text = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(text).not.toContain("secret");
+      expect(text).not.toContain("password");
+      expect(text).not.toContain("stack");
+    });
+
+    it("sends the personalization block to upstream for attachment requests too", async () => {
+      const mock = supabaseWithPreferences(prefRow);
+      vi.mocked(getSupabaseServerClient).mockReturnValue(mock);
+      vi.mocked(buildAttachmentContext).mockImplementation(async (question) => `${question}\n\nEXTRACTED`);
+
+      const response = await POST(multipartRequest({
+        query: "Was steht im Beleg?",
+        attachment: pdfFile(),
+      }));
+      await response.text();
+
+      expect(openFredUpstreamStream).toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: expect.stringContaining("<user_personalization>"),
+        }),
+      );
+      const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
+      expect(callQuery).toContain("<user_personalization>");
+      expect(callQuery).toContain("EXTRACTED");
+      // Persisted content is original
+      const rpcCalls = (mock as { rpc: ReturnType<typeof vi.fn> }).rpc;
+      expect(rpcCalls).toHaveBeenCalledWith("record_fred_native_event", {
+        payload: expect.objectContaining({
+          content: "Was steht im Beleg?",
+          event_type: "message_sent",
+        }),
+      });
+    });
+  });
+
 });
