@@ -2,14 +2,38 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-type Personality = "standard" | "friendly" | "efficient" | "cynical";
-
-type FredPersonalization = {
-  preferredName: string;
-  personality: Personality;
+type PersonalityOption = {
+  id: string;
+  title: string;
 };
 
-const VALID_PERSONALITIES: Personality[] = ["standard", "friendly", "efficient", "cynical"];
+function normalizePersonalityOption(item: unknown): PersonalityOption | null {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+  const entry = item as Record<string, unknown>;
+  if (typeof entry.id !== "string" || typeof entry.title !== "string") return null;
+  return { id: entry.id, title: entry.title };
+}
+
+function normalizePersonalityOptions(value: unknown): PersonalityOption[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item: unknown) => {
+    const p = normalizePersonalityOption(item);
+    return p ? [p] : [];
+  });
+}
+
+function resolvePersonality(
+  serverId: unknown,
+  options: PersonalityOption[],
+): string {
+  if (typeof serverId === "string" && options.some((o) => o.id === serverId)) {
+    return serverId;
+  }
+  if (options.some((o) => o.id === "standard")) {
+    return "standard";
+  }
+  return options.length > 0 ? (options[0]?.id ?? "") : "";
+}
 
 export default function FredPersonalizationSettings({
   accessToken,
@@ -17,7 +41,8 @@ export default function FredPersonalizationSettings({
   accessToken: string;
 }) {
   const [preferredName, setPreferredName] = useState("");
-  const [personality, setPersonality] = useState<Personality>("standard");
+  const [personality, setPersonality] = useState<string>("");
+  const [personalities, setPersonalities] = useState<PersonalityOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
@@ -27,10 +52,10 @@ export default function FredPersonalizationSettings({
   const requestSequenceRef = useRef(0);
   const controllersRef = useRef(new Set<AbortController>());
 
-  const fetchSettings = useCallback(async (showLoading = true): Promise<FredPersonalization | null> => {
+  const fetchSettings = useCallback(async (showLoading = true) => {
     if (!accessToken) {
       setIsLoading(false);
-      return null;
+      return;
     }
 
     const sequence = ++requestSequenceRef.current;
@@ -51,28 +76,24 @@ export default function FredPersonalizationSettings({
       const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
 
       if (!mountedRef.current || controller.signal.aborted || sequence !== requestSequenceRef.current) {
-        return null;
+        return;
       }
 
       if (!response.ok) {
         setError(typeof payload.error === "string" ? payload.error : "Einstellungen konnten nicht geladen werden.");
-        return null;
+        return;
       }
 
       const name = typeof payload.preferredName === "string" ? payload.preferredName : "";
-      const pers = VALID_PERSONALITIES.includes(payload.personality as Personality)
-        ? (payload.personality as Personality)
-        : "standard";
+      const options = normalizePersonalityOptions(payload.personalities);
 
       setPreferredName(name);
-      setPersonality(pers);
-
-      return { preferredName: name, personality: pers };
+      setPersonalities(options);
+      setPersonality(resolvePersonality(payload.personality, options));
     } catch {
       if (mountedRef.current && !controller.signal.aborted && sequence === requestSequenceRef.current) {
         setError("Fred-Personalisierung konnte nicht geladen werden.");
       }
-      return null;
     } finally {
       controllersRef.current.delete(controller);
       if (mountedRef.current && sequence === requestSequenceRef.current && showLoading) {
@@ -97,8 +118,10 @@ export default function FredPersonalizationSettings({
     return () => window.clearTimeout(timeout);
   }, [fetchSettings]);
 
+  const canSave = personality.length > 0 && personalities.some((o) => o.id === personality);
+
   const save = useCallback(async () => {
-    if (!accessToken) return;
+    if (!accessToken || !canSave) return;
 
     const controller = new AbortController();
     controllersRef.current.add(controller);
@@ -126,11 +149,11 @@ export default function FredPersonalizationSettings({
       }
 
       const name = typeof payload.preferredName === "string" ? payload.preferredName : preferredName;
-      const pers = VALID_PERSONALITIES.includes(payload.personality as Personality)
-        ? (payload.personality as Personality)
-        : personality;
+      const options = normalizePersonalityOptions(payload.personalities);
+      const pers = resolvePersonality(payload.personality, options);
 
       setPreferredName(name);
+      setPersonalities(options);
       setPersonality(pers);
       setNotice("Personalisierung gespeichert.");
     } catch {
@@ -141,7 +164,7 @@ export default function FredPersonalizationSettings({
       controllersRef.current.delete(controller);
       if (mountedRef.current) setIsSaving(false);
     }
-  }, [accessToken, preferredName, personality]);
+  }, [accessToken, preferredName, personality, canSave]);
 
   if (isLoading) {
     return (
@@ -185,32 +208,21 @@ export default function FredPersonalizationSettings({
 
       <fieldset className="fred-personality-fieldset" disabled={isSaving || !accessToken}>
         <legend>Persönlichkeit</legend>
-        {VALID_PERSONALITIES.map((value) => (
-          <label key={value} className="fred-personality-radio-label">
+        {personalities.map((option) => (
+          <label key={option.id} className="fred-personality-radio-label">
             <input
               type="radio"
               name="fred-personality"
-              value={value}
-              checked={personality === value}
+              value={option.id}
+              checked={personality === option.id}
               onChange={() => {
-                setPersonality(value);
+                setPersonality(option.id);
                 setError("");
                 setNotice("");
               }}
             />
             <span className="fred-personality-radio-text">
-              <strong>
-                {value === "standard" ? "Standard" : value === "friendly" ? "Freundlich" : value === "efficient" ? "Effizient" : "Zynisch"}
-              </strong>
-              <span className="fred-personality-radio-desc">
-                {value === "standard"
-                  ? "Keine Stilvorgabe. Nur der Name wird berücksichtigt, wenn du ihn eingetragen hast."
-                  : value === "friendly"
-                  ? "Herzlich und gesprächig, mit mehr passenden Emojis."
-                  : value === "efficient"
-                  ? "Prägnant und klar."
-                  : "Kritisch und sarkastisch."}
-              </span>
+              <strong>{option.title}</strong>
             </span>
           </label>
         ))}
@@ -220,7 +232,7 @@ export default function FredPersonalizationSettings({
         className="primary-button"
         type="button"
         onClick={() => void save()}
-        disabled={isSaving || isLoading || !accessToken}
+        disabled={isSaving || isLoading || !accessToken || !canSave}
       >
         {isSaving ? "Wird gespeichert…" : "Personalisierung speichern"}
       </button>

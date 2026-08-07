@@ -1313,15 +1313,31 @@ describe("POST /api/fred/chat", () => {
 
     function supabaseWithPreferences(row: { preferred_name: string | null; personality: string } | null) {
       const rpc = rpcForTurn();
-      const maybeSingle = vi.fn().mockResolvedValue({ data: row, error: null });
-      const chain = {
-        select: vi.fn(),
-        eq: vi.fn(),
-        maybeSingle,
-      };
-      chain.select.mockReturnValue(chain);
-      chain.eq.mockReturnValue(chain);
-      const from = vi.fn().mockReturnValue(chain);
+
+      // Preferences query: .select().eq().maybeSingle()
+      const prefMaybeSingle = vi.fn().mockResolvedValue({ data: row, error: null });
+      const prefChain = { select: vi.fn(), eq: vi.fn(), maybeSingle: prefMaybeSingle };
+      prefChain.select.mockReturnValue(prefChain);
+      prefChain.eq.mockReturnValue(prefChain);
+
+      // Profile query: .select().eq().maybeSingle()
+      const profilePromptText = row?.personality === "friendly"
+        ? "Antworte herzlich, zugewandt und gesprächig. Verwende häufiger passende Emojis, ohne fachliche Präzision, Professionalität oder Verständlichkeit zu beeinträchtigen."
+        : row?.personality === "efficient"
+        ? "Antworte prägnant, direkt und klar. Konzentriere dich auf die wesentlichen Informationen und vermeide unnötige Einleitungen, Wiederholungen und Ausschmückungen."
+        : row?.personality === "cynical"
+        ? "Antworte kritisch, trocken und sarkastisch. Der Sarkasmus darf pointiert sein, aber nicht beleidigend, abwertend oder respektlos gegenüber dem Benutzer oder Dritten. Fachliche Präzision und Verlässlichkeit bleiben vollständig erhalten."
+        : "";
+      const profileMaybeSingle = vi.fn().mockResolvedValue({ data: { prompt_text: profilePromptText }, error: null });
+      const profileChain = { select: vi.fn(), eq: vi.fn(), maybeSingle: profileMaybeSingle };
+      profileChain.select.mockReturnValue(profileChain);
+      profileChain.eq.mockReturnValue(profileChain);
+
+      const from = vi.fn((table: string) => {
+        if (table === "fred_user_preferences") return prefChain;
+        if (table === "fred_personality_profiles") return profileChain;
+        return prefChain;
+      }) as never;
       return { rpc, from } as never;
     }
 
@@ -1446,6 +1462,39 @@ describe("POST /api/fred/chat", () => {
           event_type: "message_sent",
         }),
       });
+    });
+
+    it("returns no personalization when profile definition is missing (null data, null error)", async () => {
+      const rpc = rpcForTurn();
+
+      // Preferences: user has name and a personality ID
+      const prefMaybeSingle = vi.fn().mockResolvedValue({ data: { preferred_name: "Heinz", personality: "deleted-profile" }, error: null });
+      const prefChain = { select: vi.fn(), eq: vi.fn(), maybeSingle: prefMaybeSingle };
+      prefChain.select.mockReturnValue(prefChain);
+      prefChain.eq.mockReturnValue(prefChain);
+
+      // Profile lookup returns {data: null, error: null} — missing definition
+      const profileMaybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
+      const profileChain = { select: vi.fn(), eq: vi.fn(), maybeSingle: profileMaybeSingle };
+      profileChain.select.mockReturnValue(profileChain);
+      profileChain.eq.mockReturnValue(profileChain);
+
+      const from = vi.fn((table: string) => {
+        if (table === "fred_user_preferences") return prefChain;
+        if (table === "fred_personality_profiles") return profileChain;
+        return prefChain;
+      }) as never;
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+
+      const response = await POST(request({ query: "Test" }));
+      await response.text();
+
+      // Still succeeds (Fred available)
+      expect(openFredUpstreamStream).toHaveBeenCalled();
+      // The upstream query is clean — no personalization block at all
+      const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
+      expect(callQuery).not.toContain("<user_personalization>");
+      expect(callQuery).not.toContain("Heinz");
     });
   });
 

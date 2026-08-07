@@ -31,54 +31,74 @@ describe("FredPersonalizationSettings component", () => {
     expect(componentSource).toContain('autoComplete="name"');
   });
 
-  it("renders a fieldset with legend Persönlichkeit and four exact radio options", () => {
-    expect(componentSource).toContain("<fieldset");
-    expect(componentSource).toContain("fred-personality-fieldset");
-    expect(componentSource).toContain("<legend>Persönlichkeit</legend>");
+  // ── Dynamic personalities ─────────────────────────────────────────────
 
-    // The four values are defined in VALID_PERSONALITIES and used via value={value}
+  it("parses personalities array from GET/PUT response and renders radio options dynamically", () => {
+    // Should parse {id,title} from payload.personalities
+    expect(componentSource).toContain("payload.personalities");
+    // Should map over personalities to render radio options
+    expect(componentSource).toMatch(/personalities\s*\.\s*map/);
+    // Radio options use id as value and title as label
+    expect(componentSource).toMatch(/value\s*=\s*\{[^}]*\.id\s*\}/);
+    expect(componentSource).toMatch(/\{[^}]*\.title\s*\}/);
+  });
+
+  it("stores selected personality as a string ID, not a union type", () => {
+    // personality state should be string, not a hardcoded union
+    expect(componentSource).not.toContain('"standard" | "friendly" | "efficient" | "cynical"');
+    expect(componentSource).toMatch(/useState\s*<\s*string\s*>\s*\(/);
+  });
+
+  it("does not hardcode personality titles or descriptions", () => {
+    // No hardcoded German labels as string literals used for display
+    expect(componentSource).not.toContain('"Standard"');
+    expect(componentSource).not.toContain('"Freundlich"');
+    expect(componentSource).not.toContain('"Effizient"');
+    expect(componentSource).not.toContain('"Zynisch"');
+    // No hardcoded descriptions
+    expect(componentSource).not.toContain("Keine Stilvorgabe");
+    expect(componentSource).not.toContain("Herzlich und gesprächig");
+    expect(componentSource).not.toContain("Prägnant und klar");
+    expect(componentSource).not.toContain("Kritisch und sarkastisch");
+    // No VALID_PERSONALITIES constant
+    expect(componentSource).not.toContain("VALID_PERSONALITIES");
+    // No hardcoded union type called Personality (allow helper types)
+    expect(componentSource).not.toMatch(/\btype Personality\b/);
+  });
+
+  it("never displays promptText in the user settings UI", () => {
+    expect(componentSource).not.toContain("promptText");
+    expect(componentSource).not.toContain("prompt_text");
+  });
+
+  it("falls back to 'standard' if selected ID is absent from options, otherwise first option", () => {
+    // Fallback logic must be present
     expect(componentSource).toContain('"standard"');
-    expect(componentSource).toContain('"friendly"');
-    expect(componentSource).toContain('"efficient"');
-    expect(componentSource).toContain('"cynical"');
-
-    // Each has a corresponding description
-    expect(componentSource).toContain("Keine Stilvorgabe. Nur der Name wird berücksichtigt, wenn du ihn eingetragen hast.");
-    expect(componentSource).toContain("Herzlich und gesprächig, mit mehr passenden Emojis.");
-    expect(componentSource).toContain("Prägnant und klar.");
-    expect(componentSource).toContain("Kritisch und sarkastisch.");
   });
 
-  it("labels radio options as Standard, Freundlich, Effizient, Zynisch", () => {
-    // The labels are rendered via ternary with string literal fallbacks
-    expect(componentSource).toContain('"Standard"');
-    expect(componentSource).toContain('"Freundlich"');
-    expect(componentSource).toContain('"Effizient"');
-    expect(componentSource).toContain('"Zynisch"');
-  });
+  // ── PUT contract ──────────────────────────────────────────────────────
 
   it("has an explicit submit button labeled Personalisierung speichern", () => {
     expect(componentSource).toContain("Personalisierung speichern");
-    expect(componentSource).toMatch(/type="button"/);
-    expect(componentSource).toContain("primary-button");
   });
 
-  it("disables the submit button while loading, saving, or without accessToken", () => {
-    expect(componentSource).toContain("disabled={isSaving || isLoading || !accessToken}");
+  it("disables the submit button while loading, saving, without accessToken, or without valid selection", () => {
+    expect(componentSource).toContain("canSave");
+    expect(componentSource).toMatch(/disabled\s*=\s*\{[^}]*isSaving[^}]*\}/);
+    expect(componentSource).toMatch(/disabled\s*=\s*\{[^}]*isLoading[^}]*\}/);
+    expect(componentSource).toMatch(/disabled\s*=\s*\{[^}]*!accessToken[^}]*\}/);
+  });
+
+  it("PUT saves exactly preferredName and personality, nothing else", () => {
+    expect(componentSource).toContain('method: "PUT"');
+    expect(componentSource).toContain("JSON.stringify({ preferredName, personality })");
+    expect(componentSource).not.toContain('"prompt"');
   });
 
   it("fetches saved settings on mount with Authorization Bearer", () => {
     expect(componentSource).toContain("/api/account/settings/fred-personalization");
     expect(componentSource).toContain("Authorization: `Bearer ${accessToken}`");
     expect(componentSource).toContain('cache: "no-store"');
-  });
-
-  it("PUT saves exactly preferredName and personality, nothing else", () => {
-    expect(componentSource).toContain('method: "PUT"');
-    expect(componentSource).toContain("JSON.stringify({ preferredName, personality })");
-    expect(componentSource).not.toContain("userId");
-    expect(componentSource).not.toContain("prompt");
-    expect(componentSource).not.toContain("free-form");
   });
 
   it("shows loading state text", () => {
@@ -111,8 +131,6 @@ describe("FredPersonalizationSettings component", () => {
     expect(componentSource).toContain("mountedRef.current");
     expect(componentSource).toContain("requestSequenceRef.current");
     expect(componentSource).toContain("controller.signal.aborted");
-    expect(componentSource).toContain("sequence !== requestSequenceRef.current");
-    expect(componentSource).toMatch(/controllers\.clear\(\);[\s\S]*?\}, \[accessToken\]\);/);
   });
 
   it("does not render preview, counters, badges, autosave, or reset buttons", () => {

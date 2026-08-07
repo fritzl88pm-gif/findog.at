@@ -656,15 +656,40 @@ async function loadUserPersonalizationBlock(
   userId: string,
 ): Promise<string> {
   try {
-    const { data, error } = await supabase
+    const { data: prefData, error: prefError } = await supabase
       .from("fred_user_preferences")
       .select("preferred_name,personality")
       .eq("user_id", userId)
       .maybeSingle();
-    if (error || !data) return "";
+
+    if (prefError) return "";
+
+    const personalityId: string = prefData?.personality ?? "standard";
+    const preferredName: string | null = prefData?.preferred_name ?? null;
+
+    // Look up the admin-managed prompt text for this personality.
+    const { data: profileData, error: profileError } = await supabase
+      .from("fred_personality_profiles")
+      .select("prompt_text")
+      .eq("id", personalityId)
+      .maybeSingle();
+
+    if (profileError) {
+      // Log a bounded diagnostic — do not leak internal details.
+      console.error("fred personalization: failed to load profile prompt_text", personalityId);
+      return "";
+    }
+
+    if (!profileData) {
+      console.error("fred personalization: profile definition missing", personalityId);
+      return "";
+    }
+
+    const promptText: string = profileData.prompt_text ?? "";
+
     return buildUserPersonalizationBlock({
-      personality: (data.personality as "standard" | "friendly" | "efficient" | "cynical") ?? "standard",
-      preferredName: (data.preferred_name as string | null) ?? null,
+      promptText,
+      preferredName,
     });
   } catch {
     return "";

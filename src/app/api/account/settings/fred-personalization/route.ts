@@ -6,19 +6,12 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
-// ── Constants ──────────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────
 
-const VALID_PERSONALITIES = new Set(["standard", "friendly", "efficient", "cynical"]);
 const MAX_NAME_CODEPOINTS = 80;
-// Permits Unicode letters, marks, spaces, apostrophes, periods, hyphens.
-// Must NOT contain line breaks, control characters, or angle brackets.
 const NAME_VALID_RE = /^[\p{L}\p{M}\p{Zs}'.\-]*$/u;
 const NAME_INVALID_RE = /[\r\n\u0000-\u001F\u007F-\u009F<>]/u;
 
-/**
- * Returns the number of Unicode code points in a string (not UTF-16 code
- * units), so astral-plane characters count as 1.
- */
 function codePointLength(s: string): number {
   return [...s].length;
 }
@@ -27,7 +20,6 @@ function normalizeName(raw: unknown): { value: string; codePoints: number } | nu
   if (typeof raw !== "string") return null;
   const trimmed = raw.trim();
   if (trimmed.length === 0) return null;
-  // Check for invalid characters BEFORE collapsing whitespace
   if (NAME_INVALID_RE.test(trimmed)) return null;
   if (!NAME_VALID_RE.test(trimmed)) return null;
   const collapsed = trimmed.replace(/\s+/gu, " ");
@@ -44,7 +36,52 @@ function json(payload: unknown, status = 200): NextResponse {
   });
 }
 
-// ── GET ────────────────────────────────────────────────────────────────────
+type PersonalityOption = { id: string; title: string };
+
+async function loadPersonalityOptions(
+  supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
+): Promise<PersonalityOption[]> {
+  const { data, error } = await supabase
+    .from("fred_personality_profiles")
+    .select("id,title")
+    .order("is_builtin", { ascending: false })
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
+
+  if (error || !data) {
+    throw new UserVisibleError(
+      "Persönliche Fred-Einstellungen sind derzeit nicht verfügbar.",
+      503,
+    );
+  }
+
+  return (data as { id: string; title: string }[]).map((row) => ({
+    id: row.id,
+    title: row.title,
+  }));
+}
+
+async function verifyPersonalityExists(
+  supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
+  personalityId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("fred_personality_profiles")
+    .select("id")
+    .eq("id", personalityId)
+    .maybeSingle();
+
+  if (error) {
+    throw new UserVisibleError(
+      "Persönliche Fred-Einstellungen sind derzeit nicht verfügbar.",
+      503,
+    );
+  }
+
+  return data !== null;
+}
+
+// ── GET ──────────────────────────────────────────────────────────────────
 
 export async function GET(request: Request) {
   try {
@@ -57,13 +94,16 @@ export async function GET(request: Request) {
     }
     const user = await authenticateSupabaseRequest(request, supabase);
 
-    const { data, error } = await supabase
-      .from("fred_user_preferences")
-      .select("preferred_name,personality")
-      .eq("user_id", user.id)
-      .maybeSingle();
+    const [{ data: prefData, error: prefError }, personalities] = await Promise.all([
+      supabase
+        .from("fred_user_preferences")
+        .select("preferred_name,personality")
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      loadPersonalityOptions(supabase),
+    ]);
 
-    if (error) {
+    if (prefError) {
       throw new UserVisibleError(
         "Persönliche Fred-Einstellungen sind derzeit nicht verfügbar.",
         503,
@@ -71,8 +111,9 @@ export async function GET(request: Request) {
     }
 
     return json({
-      preferredName: data?.preferred_name ?? "",
-      personality: data?.personality ?? "standard",
+      preferredName: prefData?.preferred_name ?? "",
+      personality: prefData?.personality ?? "standard",
+      personalities,
     });
   } catch (error) {
     if (error instanceof UserVisibleError) {
@@ -85,7 +126,7 @@ export async function GET(request: Request) {
   }
 }
 
-// ── PUT ────────────────────────────────────────────────────────────────────
+// ── PUT ──────────────────────────────────────────────────────────────────
 
 const EXPECTED_PUT_KEYS = new Set(["preferredName", "personality"]);
 
@@ -124,7 +165,7 @@ export async function PUT(request: Request) {
       }
     }
 
-    // Validate preferredName — must be a string.
+    // Validate preferredName
     const rawName: unknown = record.preferredName;
     if (typeof rawName !== "string") {
       throw new UserVisibleError("Der Anzeigename ist ungültig.", 400);
@@ -133,12 +174,10 @@ export async function PUT(request: Request) {
     let storageName: string | null = null;
     let responseName = "";
     if (normalized === null) {
-      // Empty or whitespace-only — allowed, stored as null
       if (rawName.trim().length === 0) {
         storageName = null;
         responseName = "";
       } else {
-        // Non-empty but invalid after trim
         const trimmed = rawName.trim();
         if (NAME_INVALID_RE.test(trimmed) || !NAME_VALID_RE.test(trimmed)) {
           throw new UserVisibleError("Der Anzeigename enthält ungültige Zeichen.", 400);
@@ -152,12 +191,22 @@ export async function PUT(request: Request) {
       responseName = normalized.value;
     }
 
-    // Validate personality — must be present and one of the four values.
+    // Validate personality — must be a string
     const rawPersonality: unknown = record.personality;
-    if (typeof rawPersonality !== "string" || !VALID_PERSONALITIES.has(rawPersonality)) {
+    if (typeof rawPersonality !== "string") {
       throw new UserVisibleError("Ungültige Persönlichkeit.", 400);
     }
     const personality = rawPersonality;
+
+    // Verify the requested profile exists AND load the option list
+    const [exists, personalities] = await Promise.all([
+      verifyPersonalityExists(supabase, personality),
+      loadPersonalityOptions(supabase),
+    ]);
+
+    if (!exists) {
+      throw new UserVisibleError("Ungültige Persönlichkeit.", 400);
+    }
 
     const { error } = await supabase
       .from("fred_user_preferences")
@@ -181,6 +230,7 @@ export async function PUT(request: Request) {
     return json({
       preferredName: responseName,
       personality,
+      personalities,
     });
   } catch (error) {
     if (error instanceof UserVisibleError) {

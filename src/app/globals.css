@@ -4501,6 +4501,67 @@ textarea:focus {
   }
 }
 
+/* ── Admin Personality Editor ─────────────────────────────────────────── */
+
+.admin-personality-section {
+  display: grid;
+  gap: 18px;
+}
+
+.admin-personality-create-button {
+  justify-self: start;
+}
+
+.admin-personality-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-personality-list > li > button {
+  min-height: 38px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  background: var(--bg-surface);
+  color: var(--ink);
+  font-size: 0.88rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.admin-personality-list > li > button:hover:not(:disabled),
+.admin-personality-list > li > button:focus-visible,
+.admin-personality-list > li > button.active {
+  border-color: var(--bmf-blue);
+  background: rgba(40, 111, 156, 0.08);
+  color: var(--bmf-blue-deep);
+}
+
+.admin-personality-form {
+  max-width: 680px;
+  padding: 22px;
+}
+
+@media (max-width: 760px) {
+  .admin-personality-list {
+    flex-direction: column;
+  }
+
+  .admin-personality-list > li > button {
+    width: 100%;
+    text-align: left;
+  }
+
+  .admin-personality-form {
+    padding: 16px;
+  }
+}
+
 .form-back-button {
   justify-self: start;
   border-radius: 6px;

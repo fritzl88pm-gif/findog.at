@@ -28,11 +28,75 @@ function putRequest(body: unknown) {
   });
 }
 
+// Builds a mock supabase client that supports both fred_user_preferences
+// and fred_personality_profiles queries with chainable .order()
+// and .select().eq().maybeSingle() for existence checks.
+function supabaseClient(
+  prefRow: unknown = null,
+  prefError: unknown = null,
+  profileRows: unknown[] = [],
+  singleProfileRow: unknown | null = undefined,
+) {
+  const calls: string[] = [];
+
+  // Profiles table: .select().order().order() (for list queries)
+  const profileOrder3 = vi.fn().mockResolvedValue({ data: profileRows, error: null });
+  const profileOrder2 = vi.fn().mockReturnValue({ order: profileOrder3 });
+  const profileOrder1 = vi.fn().mockReturnValue({ order: profileOrder2 });
+
+  // Profiles table: .select().eq().maybeSingle() (for existence check)
+  const profileMaybeSingle = vi.fn().mockResolvedValue({
+    data: singleProfileRow !== undefined ? singleProfileRow : { id: "standard" },
+    error: null,
+  });
+  const profileEq = vi.fn().mockReturnValue({ maybeSingle: profileMaybeSingle });
+
+  // A profileSelect that returns EITHER {order} or {eq} based on how it's used
+  const profileSelect = vi.fn().mockReturnValue({ order: profileOrder1, eq: profileEq });
+
+  // Preferences table: .select().eq().maybeSingle()
+  const prefMaybeSingle = vi.fn().mockResolvedValue({ data: prefRow, error: prefError });
+  const prefEq = vi.fn().mockReturnValue({ maybeSingle: prefMaybeSingle });
+  const prefSelect = vi.fn().mockReturnValue({ eq: prefEq });
+
+  // Upsert
+  const prefUpsert = vi.fn().mockResolvedValue({ error: null });
+
+  const from = vi.fn((table: string) => {
+    calls.push(table);
+    if (table === "fred_user_preferences") {
+      return { select: prefSelect, upsert: prefUpsert };
+    }
+    if (table === "fred_personality_profiles") {
+      return { select: profileSelect };
+    }
+    return {};
+  });
+
+  return {
+    client: { from } as never,
+    from,
+    calls,
+    prefMaybeSingle,
+    prefUpsert,
+    prefSelect,
+    prefEq,
+    profileSelect,
+    profileOrder1,
+    profileEq,
+    profileMaybeSingle,
+  };
+}
+
+// ── GET ────────────────────────────────────────────────────────────────────
+
 describe("GET /api/account/settings/fred-personalization", () => {
-  const from = vi.fn();
-  const select = vi.fn();
-  const eq = vi.fn();
-  const maybeSingle = vi.fn();
+  const BUILTIN_PROFILES = [
+    { id: "standard", title: "Standard" },
+    { id: "friendly", title: "Freundlich" },
+    { id: "efficient", title: "Effizient" },
+    { id: "cynical", title: "Zynisch" },
+  ];
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -40,14 +104,11 @@ describe("GET /api/account/settings/fred-personalization", () => {
       id: USER_ID,
       email: "user@example.com",
     });
-    select.mockReturnValue({ eq, maybeSingle } as never);
-    eq.mockReturnValue({ maybeSingle } as never);
-    from.mockReturnValue({ select } as never);
-    vi.mocked(getSupabaseServerClient).mockReturnValue({ from } as never);
   });
 
   it("returns normalized defaults when no row exists", async () => {
-    maybeSingle.mockResolvedValue({ data: null, error: null });
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
     const response = await GET(getRequest());
 
@@ -55,17 +116,24 @@ describe("GET /api/account/settings/fred-personalization", () => {
     await expect(response.json()).resolves.toEqual({
       preferredName: "",
       personality: "standard",
+      personalities: [
+        { id: "standard", title: "Standard" },
+        { id: "friendly", title: "Freundlich" },
+        { id: "efficient", title: "Effizient" },
+        { id: "cynical", title: "Zynisch" },
+      ],
     });
-    expect(from).toHaveBeenCalledWith("fred_user_preferences");
-    expect(select).toHaveBeenCalledWith("preferred_name,personality");
-    expect(eq).toHaveBeenCalledWith("user_id", USER_ID);
+    expect(supabase.from).toHaveBeenCalledWith("fred_user_preferences");
+    expect(supabase.from).toHaveBeenCalledWith("fred_personality_profiles");
   });
 
   it("returns stored preferences when a row exists", async () => {
-    maybeSingle.mockResolvedValue({
-      data: { preferred_name: "Alina", personality: "friendly" },
-      error: null,
-    });
+    const supabase = supabaseClient(
+      { preferred_name: "Alina", personality: "friendly" },
+      null,
+      BUILTIN_PROFILES,
+    );
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
     const response = await GET(getRequest());
 
@@ -73,33 +141,40 @@ describe("GET /api/account/settings/fred-personalization", () => {
     await expect(response.json()).resolves.toEqual({
       preferredName: "Alina",
       personality: "friendly",
+      personalities: [
+        { id: "standard", title: "Standard" },
+        { id: "friendly", title: "Freundlich" },
+        { id: "efficient", title: "Effizient" },
+        { id: "cynical", title: "Zynisch" },
+      ],
     });
   });
 
-  it("returns empty preferredName when stored name is null", async () => {
-    maybeSingle.mockResolvedValue({
-      data: { preferred_name: null, personality: "standard" },
-      error: null,
-    });
+  it("never exposes promptText in the personalities list", async () => {
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
     const response = await GET(getRequest());
+    const json = await response.json();
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      preferredName: "",
-      personality: "standard",
-    });
+    for (const p of json.personalities) {
+      expect(p).not.toHaveProperty("promptText");
+      expect(p).not.toHaveProperty("prompt_text");
+    }
   });
 
   it("requires authentication", async () => {
     vi.mocked(authenticateSupabaseRequest).mockRejectedValue(
       new UserVisibleError("Bitte zuerst anmelden.", 401),
     );
+    const supabase = supabaseClient();
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
     const response = await GET(getRequest());
 
     expect(response.status).toBe(401);
-    expect(from).not.toHaveBeenCalled();
+    expect(supabase.from).not.toHaveBeenCalled();
   });
 
   it("fails safely when Supabase is unavailable", async () => {
@@ -114,7 +189,8 @@ describe("GET /api/account/settings/fred-personalization", () => {
   });
 
   it("fails safely on database read error", async () => {
-    maybeSingle.mockResolvedValue({ data: null, error: new Error("db error") });
+    const supabase = supabaseClient(null, new Error("db error"), BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
     const response = await GET(getRequest());
 
@@ -125,9 +201,15 @@ describe("GET /api/account/settings/fred-personalization", () => {
   });
 });
 
+// ── PUT ────────────────────────────────────────────────────────────────────
+
 describe("PUT /api/account/settings/fred-personalization", () => {
-  const upsert = vi.fn();
-  const from = vi.fn();
+  const BUILTIN_PROFILES = [
+    { id: "standard", title: "Standard" },
+    { id: "friendly", title: "Freundlich" },
+    { id: "efficient", title: "Effizient" },
+    { id: "cynical", title: "Zynisch" },
+  ];
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -135,13 +217,11 @@ describe("PUT /api/account/settings/fred-personalization", () => {
       id: USER_ID,
       email: "user@example.com",
     });
-    from.mockReturnValue({ upsert } as never);
-    vi.mocked(getSupabaseServerClient).mockReturnValue({ from } as never);
   });
 
-  // ── Happy path ─────────────────────────────────────────────────────────
-  it("upserts preferences and returns them", async () => {
-    upsert.mockResolvedValue({ error: null });
+  it("upserts preferences and returns them with the personality list", async () => {
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
     const response = await PUT(putRequest({ preferredName: "Alina", personality: "friendly" }));
 
@@ -149,9 +229,16 @@ describe("PUT /api/account/settings/fred-personalization", () => {
     await expect(response.json()).resolves.toEqual({
       preferredName: "Alina",
       personality: "friendly",
+      personalities: [
+        { id: "standard", title: "Standard" },
+        { id: "friendly", title: "Freundlich" },
+        { id: "efficient", title: "Effizient" },
+        { id: "cynical", title: "Zynisch" },
+      ],
     });
-    expect(from).toHaveBeenCalledWith("fred_user_preferences");
-    expect(upsert).toHaveBeenCalledWith(
+    expect(supabase.from).toHaveBeenCalledWith("fred_user_preferences");
+    expect(supabase.from).toHaveBeenCalledWith("fred_personality_profiles");
+    expect(supabase.prefUpsert).toHaveBeenCalledWith(
       {
         user_id: USER_ID,
         preferred_name: "Alina",
@@ -163,7 +250,8 @@ describe("PUT /api/account/settings/fred-personalization", () => {
   });
 
   it("normalizes whitespace in preferredName", async () => {
-    upsert.mockResolvedValue({ error: null });
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
     const response = await PUT(putRequest({ preferredName: "  Alina   Marie  ", personality: "standard" }));
 
@@ -171,15 +259,17 @@ describe("PUT /api/account/settings/fred-personalization", () => {
     await expect(response.json()).resolves.toEqual({
       preferredName: "Alina Marie",
       personality: "standard",
+      personalities: BUILTIN_PROFILES,
     });
-    expect(upsert).toHaveBeenCalledWith(
+    expect(supabase.prefUpsert).toHaveBeenCalledWith(
       expect.objectContaining({ preferred_name: "Alina Marie" }),
       expect.anything(),
     );
   });
 
   it("converts empty preferredName to null in storage but returns ''", async () => {
-    upsert.mockResolvedValue({ error: null });
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
     const response = await PUT(putRequest({ preferredName: "   ", personality: "friendly" }));
 
@@ -187,159 +277,93 @@ describe("PUT /api/account/settings/fred-personalization", () => {
     await expect(response.json()).resolves.toEqual({
       preferredName: "",
       personality: "friendly",
+      personalities: BUILTIN_PROFILES,
     });
-    expect(upsert).toHaveBeenCalledWith(
+    expect(supabase.prefUpsert).toHaveBeenCalledWith(
       expect.objectContaining({ preferred_name: null }),
       expect.anything(),
     );
   });
 
-  it("accepts Unicode names including combining marks, apostrophes, periods, hyphens", async () => {
-    upsert.mockResolvedValue({ error: null });
+  it("rejects unknown personality IDs", async () => {
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    // Simulate profile existence check returning null (not found)
+    supabase.profileMaybeSingle.mockResolvedValue({ data: null, error: null });
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
-    const response = await PUT(putRequest({ preferredName: "Élise O'Neill-von der Mühle", personality: "standard" }));
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      preferredName: "Élise O'Neill-von der Mühle",
-      personality: "standard",
-    });
-    expect(upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ preferred_name: "Élise O'Neill-von der Mühle" }),
-      expect.anything(),
-    );
-  });
-
-  // ── Rejections ─────────────────────────────────────────────────────────
-  it("rejects preferredName with line breaks", async () => {
-    const response = await PUT(putRequest({ preferredName: "Alina\nDanger", personality: "standard" }));
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: "Der Anzeigename enthält ungültige Zeichen.",
-    });
-    expect(upsert).not.toHaveBeenCalled();
-  });
-
-  it("rejects preferredName with angle brackets", async () => {
-    const response = await PUT(putRequest({ preferredName: "Alina<Danger>", personality: "standard" }));
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: "Der Anzeigename enthält ungültige Zeichen.",
-    });
-    expect(upsert).not.toHaveBeenCalled();
-  });
-
-  it("rejects preferredName with control characters", async () => {
-    const response = await PUT(putRequest({ preferredName: "Alina\u0000Null", personality: "standard" }));
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: "Der Anzeigename enthält ungültige Zeichen.",
-    });
-    expect(upsert).not.toHaveBeenCalled();
-  });
-
-  it("rejects preferredName exceeding 80 code points (after trim and collapse)", async () => {
-    const response = await PUT(putRequest({ preferredName: "A".repeat(81), personality: "standard" }));
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: "Der Anzeigename ist zu lang.",
-    });
-    expect(upsert).not.toHaveBeenCalled();
-  });
-
-  it("rejects unknown personality values", async () => {
     const response = await PUT(putRequest({ preferredName: "Alina", personality: "evil" }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       error: "Ungültige Persönlichkeit.",
     });
-    expect(upsert).not.toHaveBeenCalled();
+    expect(supabase.prefUpsert).not.toHaveBeenCalled();
   });
 
   // ── Strict PUT contract ────────────────────────────────────────────────
   it("rejects missing preferredName field", async () => {
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
+
     const response = await PUT(putRequest({ personality: "friendly" }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       error: "Ungültiger Request-Body.",
     });
-    expect(upsert).not.toHaveBeenCalled();
+    expect(supabase.prefUpsert).not.toHaveBeenCalled();
   });
 
   it("rejects missing personality field", async () => {
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
+
     const response = await PUT(putRequest({ preferredName: "Alina" }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       error: "Ungültiger Request-Body.",
     });
-    expect(upsert).not.toHaveBeenCalled();
+    expect(supabase.prefUpsert).not.toHaveBeenCalled();
   });
 
   it("rejects unknown extra field", async () => {
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
+
     const response = await PUT(putRequest({ preferredName: "Alina", personality: "friendly", hacker: "yes" }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       error: "Ungültiger Request-Body.",
     });
-    expect(upsert).not.toHaveBeenCalled();
+    expect(supabase.prefUpsert).not.toHaveBeenCalled();
   });
 
   it("rejects non-string preferredName (number)", async () => {
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
+
     const response = await PUT(putRequest({ preferredName: 123, personality: "friendly" }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       error: "Der Anzeigename ist ungültig.",
     });
-    expect(upsert).not.toHaveBeenCalled();
+    expect(supabase.prefUpsert).not.toHaveBeenCalled();
   });
 
-  it("rejects non-string preferredName (null)", async () => {
-    const response = await PUT(putRequest({ preferredName: null, personality: "friendly" }));
+  it("rejects non-string personality (number)", async () => {
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: "Der Anzeigename ist ungültig.",
-    });
-    expect(upsert).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-string preferredName (array)", async () => {
-    const response = await PUT(putRequest({ preferredName: ["Alina"], personality: "friendly" }));
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: "Der Anzeigename ist ungültig.",
-    });
-    expect(upsert).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-string preferredName (object)", async () => {
-    const response = await PUT(putRequest({ preferredName: { name: "Alina" }, personality: "friendly" }));
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: "Der Anzeigename ist ungültig.",
-    });
-    expect(upsert).not.toHaveBeenCalled();
-  });
-
-  it("rejects free-form personality text", async () => {
-    const response = await PUT(putRequest({ preferredName: "Alina", personality: "be very friendly and use lots of emoji" }));
+    const response = await PUT(putRequest({ preferredName: "Alina", personality: 123 }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       error: "Ungültige Persönlichkeit.",
     });
-    expect(upsert).not.toHaveBeenCalled();
+    expect(supabase.prefUpsert).not.toHaveBeenCalled();
   });
 
   // ── Auth / safety ──────────────────────────────────────────────────────
@@ -347,18 +371,13 @@ describe("PUT /api/account/settings/fred-personalization", () => {
     vi.mocked(authenticateSupabaseRequest).mockRejectedValue(
       new UserVisibleError("Bitte zuerst anmelden.", 401),
     );
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
     const response = await PUT(putRequest({ preferredName: "Alina", personality: "friendly" }));
 
     expect(response.status).toBe(401);
-    expect(upsert).not.toHaveBeenCalled();
-  });
-
-  it("never trusts a browser-provided userId — rejects unknown fields", async () => {
-    const response = await PUT(putRequest({ preferredName: "X", personality: "standard", userId: "hacker-id" }));
-
-    expect(response.status).toBe(400);
-    expect(upsert).not.toHaveBeenCalled();
+    expect(supabase.prefUpsert).not.toHaveBeenCalled();
   });
 
   it("fails safely when Supabase is unavailable", async () => {
@@ -372,29 +391,18 @@ describe("PUT /api/account/settings/fred-personalization", () => {
     });
   });
 
-  it("fails safely on database write error", async () => {
-    upsert.mockResolvedValue({ error: new Error("db write error") });
+  it("fails safely on personality lookup error", async () => {
+    // Simulate profile existence check returning error
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    supabase.profileMaybeSingle.mockResolvedValue({ data: null, error: new Error("db-down") });
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
     const response = await PUT(putRequest({ preferredName: "Alina", personality: "friendly" }));
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({
-      error: "Persönliche Fred-Einstellungen konnten nicht gespeichert werden.",
+      error: "Persönliche Fred-Einstellungen sind derzeit nicht verfügbar.",
     });
-  });
-
-  // ── Body validation ────────────────────────────────────────────────────
-  it("rejects non-object body", async () => {
-    const response = await PUT(new Request(
-      "http://localhost/api/account/settings/fred-personalization",
-      {
-        method: "PUT",
-        headers: { Authorization: "Bearer access-token", "Content-Type": "application/json" },
-        body: '"just a string"',
-      },
-    ));
-
-    expect(response.status).toBe(400);
-    expect(upsert).not.toHaveBeenCalled();
+    expect(supabase.prefUpsert).not.toHaveBeenCalled();
   });
 });

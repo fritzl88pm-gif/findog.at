@@ -80,6 +80,7 @@ import KnowledgeLandscapeView from "@/components/knowledge-landscape-view";
 import QuizView from "@/components/quiz-view";
 import ReasoningsView from "@/components/reasonings-view";
 import AdminFeedbackView from "@/components/admin-feedback-view";
+import AdminFredPersonalities from "@/components/admin-fred-personalities";
 import TelegramSettings, {
   type TelegramIntegrationPublicState,
 } from "@/components/telegram-settings";
@@ -1160,7 +1161,7 @@ function GermanPensionOptionView() {
 
 
 
-const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback"] as const;
+const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback", "personalities"] as const;
 function handleAdminTabKeyDown(event: React.KeyboardEvent, currentTab: string): void {
   const currentIndex = ADMIN_TAB_IDS.indexOf(currentTab as typeof ADMIN_TAB_IDS[number]);
   let nextIndex: number | undefined;
@@ -1212,7 +1213,7 @@ export default function Home() {
   const [isAdminUsersLoading, setIsAdminUsersLoading] = useState(false);
   const [isAdminUserCreating, setIsAdminUserCreating] = useState(false);
   const [isAdminUserMutationRunning, setIsAdminUserMutationRunning] = useState(false);
-  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "feedback">("scanning");
+  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "feedback" | "personalities">("scanning");
   const [scanningModelId, setScanningModelId] = useState("");
   const [scanningPrompt, setScanningPrompt] = useState("");
   const [isScanningSettingsLoading, setIsScanningSettingsLoading] = useState(false);
@@ -4005,6 +4006,17 @@ export default function Home() {
               >
                 Rückmeldungen
               </button>
+              <button
+                id="admin-tab-personalities"
+                className={`admin-tab-button ${adminTab === "personalities" ? "active" : ""}`}
+                role="tab"
+                aria-selected={adminTab === "personalities"}
+                aria-controls="admin-panel-personalities"
+                onClick={() => setAdminTab("personalities")}
+                onKeyDown={(e) => handleAdminTabKeyDown(e, "personalities")}
+              >
+                Persönlichkeiten
+              </button>
             </div>
             {adminTab === "scanning" ? (
               <section className="form-generator-card admin-system-prompt-card" role="tabpanel" id="admin-panel-scanning" aria-labelledby="admin-tab-scanning">
@@ -4197,11 +4209,13 @@ export default function Home() {
                   )}
                 </div>
               </section>
-            ) : (
+            ) : adminTab === "feedback" ? (
               <AdminFeedbackView
                 accessToken={session?.access_token ?? ""}
                 users={adminUsers}
               />
+            ) : (
+              <AdminFredPersonalities accessToken={session?.access_token ?? ""} />
             )}
           </div>
         </section>
