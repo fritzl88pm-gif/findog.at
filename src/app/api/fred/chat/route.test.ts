@@ -1357,6 +1357,12 @@ describe("POST /api/fred/chat", () => {
       expect(callQuery).toContain("<user_personalization>");
       expect(callQuery).toContain('Der Benutzer möchte mit dem Namen „Alina“');
       expect(callQuery).toContain("Wie ist die Rechtslage?");
+      // Block must be appended after the original query
+      expect(callQuery.indexOf("Wie ist die Rechtslage?")).toBeLessThan(
+        callQuery.indexOf("<user_personalization>"),
+      );
+      // Block must be the final content
+      expect(callQuery.trimEnd()).toMatch(/<\/user_personalization>$/);
       // The persisted query is the original, unpolluted
       const rpcCalls = (mock as { rpc: ReturnType<typeof vi.fn> }).rpc;
       expect(rpcCalls).toHaveBeenCalledWith("record_fred_native_event", {
@@ -1454,6 +1460,12 @@ describe("POST /api/fred/chat", () => {
       const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
       expect(callQuery).toContain("<user_personalization>");
       expect(callQuery).toContain("EXTRACTED");
+      // Attachment context must come before the personalization block
+      expect(callQuery.indexOf("EXTRACTED")).toBeLessThan(
+        callQuery.indexOf("<user_personalization>"),
+      );
+      // Block must be the final content
+      expect(callQuery.trimEnd()).toMatch(/<\/user_personalization>$/);
       // Persisted content is original
       const rpcCalls = (mock as { rpc: ReturnType<typeof vi.fn> }).rpc;
       expect(rpcCalls).toHaveBeenCalledWith("record_fred_native_event", {

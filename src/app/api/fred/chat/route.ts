@@ -733,7 +733,7 @@ function streamTextOnlyTurn(options: {
               : {}),
             query: options.body.query,
             ...(options.personalizationBlock
-              ? { upstreamQuery: options.personalizationBlock + "\n\n" + options.body.query }
+              ? { upstreamQuery: options.body.query + "\n\n" + options.personalizationBlock }
               : {}),
             origin: "web",
             agentKey: options.agentKey,
@@ -911,7 +911,7 @@ export async function POST(request: Request) {
         try {
           let upstreamQuery = body.query;
           if (personalizationBlock) {
-            upstreamQuery = personalizationBlock + "\n\n" + upstreamQuery;
+            upstreamQuery = upstreamQuery + "\n\n" + personalizationBlock;
           }
 
           if (body.attachments.length > 0) {
@@ -942,7 +942,7 @@ export async function POST(request: Request) {
               );
               upstreamQuery = combined;
               if (personalizationBlock) {
-                upstreamQuery = personalizationBlock + "\n\n" + combined;
+                upstreamQuery = combined + "\n\n" + personalizationBlock;
               }
             } catch (error) {
               if (!lifetimeAbort!.signal.aborted) {
