@@ -50,6 +50,8 @@ Scanning is a one-shot batch evaluation and does not create a chat history. An a
 
 Begründungen is a private, user-scoped card library for reusable reasoning text. Users can create, edit and delete their own cards, copy the reasoning body without its title or categories, create, rename and delete their own categories, assign each card to multiple categories and filter the library by category. Categories are organizational metadata only; deleting one removes its assignments but preserves the cards. Authenticated browsers use server routes rather than direct table access. The atomic save RPC validates category ownership before replacing a card's category assignments.
 
+Downloads is an authenticated document library with category counts, file metadata, incremental loading and direct downloads. Administrators manage categories, display names, descriptions, ordering and document assignments in a dedicated administration tab. Uploads accept the same validated PDF, Office, text, Markdown and CSV formats as Fred attachments up to 20 MiB. Binary files stay in the private `downloads` Supabase Storage bucket and are streamed only through an authenticated server route; browser clients never receive the service-role key or a permanent Storage URL. Category and document rows use soft deletion, retain creator/updater identity and timestamps, and write every mutation to an append-only audit table with before/after state.
+
 ## Authentication
 
 Harald provisions authorized accounts manually. Findog supports only email/password sign-in and has no public registration. The Einstellungen dialog contains only password change and confirmed permanent account deletion. Fred has no client-side model selection.
@@ -82,7 +84,13 @@ Apply all migrations in order through the Supabase SQL editor or your migration 
 22. `supabase/migrations/20260723170000_quickfred_conversation_agent.sql`
 23. `supabase/migrations/20260727182232_user_reasonings.sql`
 24. `supabase/migrations/20260727183824_user_reasoning_owner_fk_indexes.sql`
-25. `supabase/migrations/20260731110000_telegram_bot_integration.sql`
+25. `supabase/migrations/20260730150000_fred_public_answer_shares.sql`
+26. `supabase/migrations/20260730192000_user_reasoning_subcategories.sql`
+27. `supabase/migrations/20260731110000_telegram_bot_integration.sql`
+28. `supabase/migrations/20260801051911_telegram_pro_web_modes.sql`
+29. `supabase/migrations/20260807051732_fred_user_preferences.sql`
+30. `supabase/migrations/20260807064643_fred_personality_profiles.sql`
+31. `supabase/migrations/20260808094800_download_library.sql`
 
 Supabase Auth must be enabled for email/password login. Authorized accounts are manually provisioned; the app does not expose self-service registration. Server persistence stores the authenticated Supabase `user.id` as `conversations.client_id`, `messages.client_id`, and `agent_runs.client_id`. Fred sessions and messages use separate `fred_*` tables and retain their bridge/webhook provenance. For assistant messages, `content` remains the original provider answer; `display_content`, `research_trace`, `source_references`, and `content_transformation` record the bounded native presentation separately. Deleting an owned conversation cascades to its messages, agent runs, and agent steps; deleting a Fred conversation cascades to its Fred messages and processed webhook events. The admin request audit records only submitted user prompts and is deliberately independent of conversation deletion; deleting the audit history does not remove a user's conversations.
 

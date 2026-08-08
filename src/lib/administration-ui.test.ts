@@ -11,17 +11,18 @@ const componentSource = readFileSync(
 const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
 describe("Administration UI tabs and scanning settings", () => {
-  it("has exactly four ARIA tabs for Scanning, Benutzer, Rückmeldungen, and Persönlichkeiten", () => {
+  it("has exactly five ARIA tabs including the download administration", () => {
     const tabMatches = pageSource.match(/role="tab"/gu);
-    expect(tabMatches).toHaveLength(4);
+    expect(tabMatches).toHaveLength(5);
+    expect(pageSource).toContain('id="admin-tab-downloads"');
     expect(pageSource).toContain('id="admin-tab-personalities"');
     expect(pageSource).not.toContain('id="admin-tab-bfg-pro"');
   });
 
-  it("includes Persönlichkeiten in ADMIN_TAB_IDS for keyboard navigation", () => {
+  it("includes Downloads and Persönlichkeiten in ADMIN_TAB_IDS for keyboard navigation", () => {
+    expect(pageSource).toContain('"downloads"');
     expect(pageSource).toContain('"personalities"');
-    // The ADMIN_TAB_IDS const must contain four entries
-    expect(pageSource).toMatch(/ADMIN_TAB_IDS\s*=\s*\[[^\]]*"scanning"[^\]]*"benutzer"[^\]]*"feedback"[^\]]*"personalities"[^\]]*\]/);
+    expect(pageSource).toMatch(/ADMIN_TAB_IDS\s*=\s*\[[^\]]*"scanning"[^\]]*"benutzer"[^\]]*"feedback"[^\]]*"downloads"[^\]]*"personalities"[^\]]*\]/);
   });
 
   it("renders the admin personalities component inside the Persönlichkeiten tabpanel", () => {

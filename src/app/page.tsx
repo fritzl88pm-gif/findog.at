@@ -81,6 +81,8 @@ import QuizView from "@/components/quiz-view";
 import ReasoningsView from "@/components/reasonings-view";
 import AdminFeedbackView from "@/components/admin-feedback-view";
 import AdminFredPersonalities from "@/components/admin-fred-personalities";
+import AdminDownloads from "@/components/admin-downloads";
+import DownloadsView from "@/components/downloads-view";
 import TelegramSettings, {
   type TelegramIntegrationPublicState,
 } from "@/components/telegram-settings";
@@ -106,7 +108,7 @@ type ConversationSummary = {
   telegramIntegrationId?: string | null;
 };
 
-type AppView = "chat" | "scanning" | "forms" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data" | "reasonings";
+type AppView = "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data" | "reasonings";
 
 const TELEGRAM_BOT_USERNAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{4,31}$/u;
 
@@ -1161,7 +1163,7 @@ function GermanPensionOptionView() {
 
 
 
-const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback", "personalities"] as const;
+const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback", "downloads", "personalities"] as const;
 function handleAdminTabKeyDown(event: React.KeyboardEvent, currentTab: string): void {
   const currentIndex = ADMIN_TAB_IDS.indexOf(currentTab as typeof ADMIN_TAB_IDS[number]);
   let nextIndex: number | undefined;
@@ -1213,7 +1215,7 @@ export default function Home() {
   const [isAdminUsersLoading, setIsAdminUsersLoading] = useState(false);
   const [isAdminUserCreating, setIsAdminUserCreating] = useState(false);
   const [isAdminUserMutationRunning, setIsAdminUserMutationRunning] = useState(false);
-  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "feedback" | "personalities">("scanning");
+  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "personalities">("scanning");
   const [scanningModelId, setScanningModelId] = useState("");
   const [scanningPrompt, setScanningPrompt] = useState("");
   const [isScanningSettingsLoading, setIsScanningSettingsLoading] = useState(false);
@@ -1830,6 +1832,14 @@ export default function Home() {
 
   function openDataView() {
     setAppView("data");
+    setError("");
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
+  function openDownloadsView() {
+    setAppView("downloads");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
@@ -3089,6 +3099,15 @@ export default function Home() {
                 Formulare
               </button>
               <button
+                className={`sidebar-view-button ${appView === "downloads" ? "active" : ""}`}
+                type="button"
+                onClick={openDownloadsView}
+                aria-current={appView === "downloads" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12"></path><polyline points="7 10 12 15 17 10"></polyline><path d="M5 21h14a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2"></path></svg>
+                Downloads
+              </button>
+              <button
                 className={`sidebar-view-button ${appView === "data" ? "active" : ""}`}
                 type="button"
                 onClick={openDataView}
@@ -3134,6 +3153,16 @@ export default function Home() {
               aria-current={appView === "forms" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
+            </button>
+            <button
+              className={`icon-button rail-icon-btn ${appView === "downloads" ? "active" : ""}`}
+              type="button"
+              onClick={openDownloadsView}
+              title="Downloads"
+              aria-label="Downloads"
+              aria-current={appView === "downloads" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12"></path><polyline points="7 10 12 15 17 10"></polyline><path d="M5 21h14a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2"></path></svg>
             </button>
             <button
               className={`icon-button rail-icon-btn ${appView === "data" ? "active" : ""}`}
@@ -3451,6 +3480,8 @@ export default function Home() {
         />
       ) : appView === "data" ? (
         <KnowledgeLandscapeView accessToken={session?.access_token ?? ""} />
+      ) : appView === "downloads" ? (
+        <DownloadsView accessToken={session?.access_token ?? ""} />
       ) : appView === "reasonings" ? (
         <ReasoningsView accessToken={session?.access_token ?? ""} />
       ) : appView === "bfg-pro" ? (
@@ -4007,6 +4038,17 @@ export default function Home() {
                 Rückmeldungen
               </button>
               <button
+                id="admin-tab-downloads"
+                className={`admin-tab-button ${adminTab === "downloads" ? "active" : ""}`}
+                role="tab"
+                aria-selected={adminTab === "downloads"}
+                aria-controls="admin-panel-downloads"
+                onClick={() => setAdminTab("downloads")}
+                onKeyDown={(e) => handleAdminTabKeyDown(e, "downloads")}
+              >
+                Downloads
+              </button>
+              <button
                 id="admin-tab-personalities"
                 className={`admin-tab-button ${adminTab === "personalities" ? "active" : ""}`}
                 role="tab"
@@ -4214,6 +4256,8 @@ export default function Home() {
                 accessToken={session?.access_token ?? ""}
                 users={adminUsers}
               />
+            ) : adminTab === "downloads" ? (
+              <AdminDownloads accessToken={session?.access_token ?? ""} />
             ) : (
               <AdminFredPersonalities accessToken={session?.access_token ?? ""} />
             )}
