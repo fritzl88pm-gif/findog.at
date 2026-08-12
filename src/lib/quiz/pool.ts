@@ -21,10 +21,10 @@ const BAO_QUESTIONS: QuizQuestion[] = [
     explanation: "Gegen eine Beschwerdevorentscheidung kann gemäß § 264 BAO ein Vorlageantrag an das Bundesfinanzgericht gestellt werden.",
   },
   {
-    question: "Wer trägt im Abgabenverfahren nach der BAO grundsätzlich die Beweislast?",
-    options: ["Immer die Abgabenbehörde", "Immer der Abgabepflichtige", "Die Behörde für belastende, der Abgabepflichtige für begünstigende Tatsachen", "Ein unabhängiger Sachverständiger"],
-    correctIndex: 2,
-    explanation: "Nach der BAO trifft die Beweislast für abgabenerhöhende Tatsachen die Behörde, für abgabenmindernde Tatsachen den Abgabepflichtigen.",
+    question: "Welche Offenlegungs- und Mitwirkungspflicht trifft Abgabepflichtige nach der BAO?",
+    options: ["Keine, die Behörde muss sämtliche Tatsachen allein ermitteln", "Sie müssen die für Bestand und Umfang der Abgabepflicht bedeutsamen Umstände vollständig und wahrheitsgemäß offenlegen", "Nur ausländische Einkünfte müssen offengelegt werden", "Eine Mitwirkungspflicht besteht erst vor dem Bundesfinanzgericht"],
+    correctIndex: 1,
+    explanation: "Nach §§ 119 ff BAO müssen Abgabepflichtige die für Bestand und Umfang der Abgabepflicht bedeutsamen Umstände vollständig und wahrheitsgemäß offenlegen und an der Ermittlung mitwirken.",
   },
   {
     question: "Was ist eine Beschwerdevorentscheidung nach der BAO?",
@@ -45,10 +45,10 @@ const BAO_QUESTIONS: QuizQuestion[] = [
     explanation: "§ 303 BAO verlangt bei diesem Wiederaufnahmegrund neu hervorgekommene Tatsachen oder Beweismittel und eine mögliche Auswirkung auf den Spruch. Ein fehlendes Verschulden der Partei ist keine Tatbestandsvoraussetzung.",
   },
   {
-    question: "Wie erfolgt eine rechtswirksame Zustellung nach der BAO, wenn der Empfänger an der Abgabestelle nicht angetroffen wird?",
-    options: ["Der Bescheid gilt automatisch als zugestellt", "Durch Hinterlegung beim zuständigen Postamt (oder Gemeinde) mit Verständigung", "Durch öffentliche Bekanntmachung im Amtsblatt", "Durch Zustellung an irgendeine im Haushalt lebende Person"],
-    correctIndex: 1,
-    explanation: "Gemäß § 17 ZustellG (iVm BAO) erfolgt die Zustellung durch Hinterlegung mit schriftlicher Verständigung, wenn der Empfänger nicht angetroffen wird.",
+    question: "Wann ist eine Hinterlegung nach § 17 ZustellG bei Zustellungen im BAO-Verfahren wirksam?",
+    options: ["Wenn der Zusteller Grund zur Annahme hat, dass sich der Empfänger regelmäßig an der Abgabestelle aufhält, und eine Verständigung über die Hinterlegung erfolgt", "Immer schon dann, wenn der Empfänger beim ersten Zustellversuch nicht angetroffen wird", "Nur wenn der Empfänger der Hinterlegung vorher zugestimmt hat", "Nur durch öffentliche Bekanntmachung im Amtsblatt"],
+    correctIndex: 0,
+    explanation: "Eine Hinterlegung setzt insbesondere voraus, dass der Empfänger sich regelmäßig an der Abgabestelle aufhält. Bei relevanter Abwesenheit tritt die Zustellwirkung erst nach Maßgabe des § 17 Abs 3 ZustellG ein.",
   },
   {
     question: "Welche Wirkung hat ein rechtzeitig eingebrachter Vorlageantrag?",
@@ -58,9 +58,9 @@ const BAO_QUESTIONS: QuizQuestion[] = [
   },
   {
     question: "Kann die Abgabenbehörde einen rechtskräftigen Bescheid von Amts wegen aufheben?",
-    options: ["Nein, rechtskräftige Bescheide sind unveränderlich", "Ja, bei Vorliegen bestimmter Wiederaufnahmegründe oder gemäß § 299 BAO", "Ja, jederzeit ohne Begründung", "Nur mit Zustimmung des Bundesfinanzgerichts"],
+    options: ["Nein, rechtskräftige Bescheide sind ausnahmslos unveränderlich", "Ja, etwa nach § 299 BAO bei inhaltlicher Rechtswidrigkeit, jedoch nur innerhalb der gesetzlichen Grenzen, insbesondere § 302 BAO", "Ja, jederzeit und ohne Begründung", "Nur mit Zustimmung des Bundesfinanzgerichts"],
     correctIndex: 1,
-    explanation: "Gemäß § 299 BAO kann die Behörde Bescheide von Amts wegen aufheben, wenn sich diese als nicht richtig erweisen, sowie bei Wiederaufnahmegründen (§ 303 BAO).",
+    explanation: "§ 299 BAO ermöglicht die Aufhebung eines rechtswidrigen Bescheids. Solche Maßnahmen sind nicht schrankenlos, sondern unterliegen insbesondere den zeitlichen Grenzen des § 302 BAO.",
   },
   {
     question: "Was ist ein Mängelbehebungsauftrag nach der BAO?",
@@ -353,10 +353,10 @@ const FBH_QUESTIONS: QuizQuestion[] = [
     explanation: "Der Anspruch wird monatsbezogen beurteilt und endet nicht untertägig mit einer Prüfung. Ob er nach Abschluss weiterbesteht, hängt von den gesetzlichen Anschluss- und Übergangstatbeständen ab.",
   },
   {
-    question: "Besteht bei erheblicher Behinderung eines Kindes Anspruch auf eine erhöhte Familienbeihilfe?",
-    options: ["Nein, es gilt immer der gleiche Betrag", "Ja, bei mindestens 50% Behinderung oder voraussichtlich dauerndem Erwerbsunfähigkeitszustand", "Nur bei 100% Behinderung", "Nur auf Antrag des Sozialministeriums"],
+    question: "Wann steht die erhöhte Familienbeihilfe wegen erheblicher Behinderung zu?",
+    options: ["Nie, es gilt immer derselbe Betrag", "Wenn für das Kind Familienbeihilfe zusteht und eine erhebliche Behinderung nachgewiesen ist", "Schon bei jeder Erkrankung", "Nur wenn das Kind minderjährig ist"],
     correctIndex: 1,
-    explanation: "Der Erhöhungsbetrag setzt grundsätzlich einen Grad der Behinderung von mindestens 50 % voraus; bei voraussichtlich dauernder Unfähigkeit, sich selbst den Unterhalt zu verschaffen, gelten besondere Regeln. Die allgemeinen Anspruchsvoraussetzungen und Altersregeln dürfen nicht pauschal ausgeblendet werden.",
+    explanation: "Die erhöhte Familienbeihilfe ist ein Zuschlag zur Familienbeihilfe. Sie setzt einen Familienbeihilfenanspruch und eine erhebliche Behinderung voraus; die allgemeinen Anspruchs- und Altersregeln werden dadurch nicht aufgehoben.",
   },
   {
     question: "Was versteht man unter dem Mehrkindzuschlag?",
