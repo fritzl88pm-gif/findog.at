@@ -5,6 +5,7 @@ import {
   FREDRUN_MILESTONE_DURATION,
   advanceFredRun,
   createFredRunState,
+  fredRunSpeedForLevel,
   jumpFredRun,
   pauseFredRun,
   readFredRunHighScore,
@@ -23,6 +24,11 @@ function advanceFor(seconds: number, initial = startFredRun(createFredRunState()
 }
 
 describe("Fredrun simulation", () => {
+  it("uses the explicit 90-per-level speed curve and caps at 750", () => {
+    expect(Array.from({ length: 7 }, (_, index) => fredRunSpeedForLevel(index + 1)))
+      .toEqual([300, 390, 480, 570, 660, 750, 750]);
+  });
+
   it("starts in a ready state and resets all round state", () => {
     const started = startFredRun(createFredRunState());
     expect(started.phase).toBe("running");
@@ -62,6 +68,17 @@ describe("Fredrun simulation", () => {
     expect(state.nextObstacleId).toBeGreaterThan(2);
     expect(state.spawnDistance).toBeGreaterThan(0);
     expect(state.spawnDistance).toBeLessThanOrEqual(470);
+  });
+
+  it("keeps at least 1.2 seconds between spawns at the top speed", () => {
+    const topSpeed = fredRunSpeedForLevel(6);
+    const state = startFredRun({
+      ...createFredRunState(),
+      speed: topSpeed,
+      spawnDistance: 0,
+    });
+    const advanced = advanceFredRun(state, 1 / 120, () => 0);
+    expect(advanced.spawnDistance / topSpeed).toBeCloseTo(1.2, 5);
   });
 
   it("spawns Odo occasionally and keeps all collision boxes jumpable", () => {
@@ -123,7 +140,7 @@ describe("Fredrun simulation", () => {
     const resumed = advanceFor(FREDRUN_MILESTONE_DURATION + 0.1, milestone);
     expect(resumed.phase).toBe("running");
     expect(resumed.level).toBe(2);
-    expect(resumed.speed).toBe(336);
+    expect(resumed.speed).toBe(390);
     expect(resumed.spawnDistance).toBeGreaterThan(450);
   });
 

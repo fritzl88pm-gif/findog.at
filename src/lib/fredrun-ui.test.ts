@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { fredRunEnvironmentForLevel } from "./fredrun";
+
 const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.meta.url)), "utf8");
 const viewSource = readFileSync(fileURLToPath(new URL("../components/fredrun-view.tsx", import.meta.url)), "utf8");
 const manifest = JSON.parse(readFileSync(fileURLToPath(new URL("../../public/fredrun/manifest.json", import.meta.url)), "utf8")) as {
@@ -62,6 +64,27 @@ const backgroundManifest = JSON.parse(readFileSync(
   generation: { mode: string; sha256: string; size: { width: number; height: number } };
   output: { file: string; format: string; sha256: string; crop: { width: number; height: number }; bytes: number };
   runtime: { drawHeight: number; scrollFactor: number; loop: string };
+};
+const stagedBackgroundManifest = JSON.parse(readFileSync(
+  fileURLToPath(new URL("../../public/fredrun/backgrounds/manifest.json", import.meta.url)),
+  "utf8",
+)) as {
+  generation: { mode: string; reference: string; rawDirectory: string };
+  runtime: {
+    format: string;
+    size: { width: number; height: number };
+    quality: number;
+    stageLevels: number[];
+    darknessPerLevel: number;
+    darknessCap: number;
+    loop: string;
+  };
+  stages: Array<{
+    level: number;
+    state: string;
+    raw: { file: string; width: number; height: number; bytes: number; sha256: string };
+    output: { file: string; width: number; height: number; bytes: number; sha256: string };
+  }>;
 };
 
 describe("Fredrun UI surface", () => {
@@ -218,7 +241,7 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain('context.fillText("Beschluss?"');
   });
 
-  it("uses the bright Vienna panorama as a long seamless mirrored loop", () => {
+  it("retains the bright Vienna panorama as the controlled mirrored fallback", () => {
     expect(backgroundManifest).toMatchObject({
       generation: {
         mode: "built-in image generation",
@@ -240,8 +263,63 @@ describe("Fredrun UI surface", () => {
     });
     expect(statSync(fileURLToPath(new URL("../../public/fredrun/vienna-panorama.webp", import.meta.url))).size)
       .toBe(backgroundManifest.output.bytes);
-    expect(viewSource).toContain('const BACKGROUND_SOURCE = "/fredrun/vienna-panorama.webp"');
+    expect(viewSource).toContain('const BACKGROUND_FALLBACK_SOURCE = "/fredrun/vienna-panorama.webp"');
     expect(viewSource).toContain("drawViennaBackground");
     expect(viewSource).toContain("context.scale(-1, 1)");
+  });
+
+  it("preloads four escalating city stages, falls back safely, and darkens every level", () => {
+    expect(viewSource).toContain('"/fredrun/backgrounds/vienna-ominous.webp"');
+    expect(viewSource).toContain('"/fredrun/backgrounds/vienna-storm-damage.webp"');
+    expect(viewSource).toContain('"/fredrun/backgrounds/vienna-burning-collapse.webp"');
+    expect(viewSource).toContain('"/fredrun/backgrounds/vienna-rubble-ashes.webp"');
+    expect(viewSource).toContain("Promise.all(FREDRUN_BACKGROUND_SOURCES.map(loadImage))");
+    expect(viewSource).toContain("loadImage(BACKGROUND_FALLBACK_SOURCE)");
+    expect(viewSource).toContain("fredRunEnvironmentForLevel(state.level)");
+    expect(viewSource).toContain("environment.darkness");
+
+    expect(stagedBackgroundManifest).toMatchObject({
+      generation: {
+        mode: "built-in image generation",
+        reference: "/fredrun/vienna-panorama.webp",
+        rawDirectory: "/opt/data/cache/fredrun-generated",
+      },
+      runtime: {
+        format: "webp",
+        size: { width: 2172, height: 665 },
+        quality: 78,
+        stageLevels: [1, 3, 5, 6],
+        darknessPerLevel: 0.025,
+        darknessCap: 0.125,
+        loop: "alternating mirrored tiles",
+      },
+    });
+    expect(stagedBackgroundManifest.stages.map(({ level, state }) => ({ level, state }))).toEqual([
+      { level: 1, state: "ominous intact city" },
+      { level: 3, state: "storm smoke and first damage" },
+      { level: 5, state: "burning partly collapsed city" },
+      { level: 6, state: "post-destruction rubble and ashes" },
+    ]);
+    for (const stage of stagedBackgroundManifest.stages) {
+      expect(stage.output).toMatchObject({ width: 2172, height: 665 });
+      expect(statSync(fileURLToPath(new URL(
+        `../../public/fredrun/backgrounds/${stage.output.file}`,
+        import.meta.url,
+      ))).size).toBe(stage.output.bytes);
+      expect(viewSource).toContain(`/fredrun/backgrounds/${stage.output.file}`);
+    }
+    expect(stagedBackgroundManifest.stages.reduce((total, stage) => total + stage.output.bytes, 0))
+      .toBeLessThanOrEqual(400 * 1024);
+
+    expect(Array.from({ length: 7 }, (_, index) => fredRunEnvironmentForLevel(index + 1)))
+      .toEqual([
+        { fromStage: 0, toStage: 1, blend: 0, darkness: 0 },
+        { fromStage: 0, toStage: 1, blend: 0.5, darkness: 0.025 },
+        { fromStage: 1, toStage: 2, blend: 0, darkness: 0.05 },
+        { fromStage: 1, toStage: 2, blend: 0.5, darkness: 0.075 },
+        { fromStage: 2, toStage: 3, blend: 0, darkness: 0.1 },
+        { fromStage: 3, toStage: 3, blend: 0, darkness: 0.125 },
+        { fromStage: 3, toStage: 3, blend: 0, darkness: 0.125 },
+      ]);
   });
 });

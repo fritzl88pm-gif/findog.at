@@ -12,6 +12,7 @@ import {
   FREDRUN_WORLD_WIDTH,
   advanceFredRun,
   createFredRunState,
+  fredRunEnvironmentForLevel,
   jumpFredRun,
   pauseFredRun,
   readFredRunHighScore,
@@ -36,7 +37,13 @@ const SPRITE_DRAW_SIZE = 166;
 const JUMP_ANIMATION_DURATION = 0.82;
 const FIXED_STEP = 1 / 120;
 const INTRO_SOURCE = "/fredrun/intro.webp";
-const BACKGROUND_SOURCE = "/fredrun/vienna-panorama.webp";
+const BACKGROUND_FALLBACK_SOURCE = "/fredrun/vienna-panorama.webp";
+const FREDRUN_BACKGROUND_SOURCES = [
+  "/fredrun/backgrounds/vienna-ominous.webp",
+  "/fredrun/backgrounds/vienna-storm-damage.webp",
+  "/fredrun/backgrounds/vienna-burning-collapse.webp",
+  "/fredrun/backgrounds/vienna-rubble-ashes.webp",
+] as const;
 const BACKGROUND_DRAW_HEIGHT = 450;
 const BACKGROUND_SCROLL_FACTOR = 0.12;
 
@@ -86,7 +93,7 @@ const obstacleLayouts: Record<
 type SpriteKey = keyof typeof spriteLayouts;
 type SpriteImages = Record<SpriteKey, HTMLImageElement>;
 type ObstacleImages = Record<FredRunObstacleKind, HTMLImageElement>;
-type FredRunImages = { sprites: SpriteImages; obstacles: ObstacleImages; background: HTMLImageElement };
+type FredRunImages = { sprites: SpriteImages; obstacles: ObstacleImages; backgrounds: HTMLImageElement[] };
 
 type FredRunSnapshot = {
   phase: FredRunPhase;
@@ -106,6 +113,14 @@ function loadImage(source: string): Promise<HTMLImageElement> {
     image.onerror = () => reject(new Error(`Sprite konnte nicht geladen werden: ${source}`));
     image.src = source;
   });
+}
+
+async function loadBackgrounds(): Promise<HTMLImageElement[]> {
+  try {
+    return await Promise.all(FREDRUN_BACKGROUND_SOURCES.map(loadImage));
+  } catch {
+    return [await loadImage(BACKGROUND_FALLBACK_SOURCE)];
+  }
 }
 
 function drawFallbackBackground(
@@ -176,20 +191,31 @@ function drawViennaBackground(
 function drawBackground(
   context: CanvasRenderingContext2D,
   state: FredRunState,
-  background: HTMLImageElement | null,
+  backgrounds: HTMLImageElement[],
   reducedMotion: boolean,
 ) {
-  if (background) {
-    drawViennaBackground(context, state, background, reducedMotion);
+  const environment = fredRunEnvironmentForLevel(state.level);
+  const fromBackground = backgrounds[Math.min(environment.fromStage, backgrounds.length - 1)] ?? null;
+  const toBackground = backgrounds[Math.min(environment.toStage, backgrounds.length - 1)] ?? null;
+
+  if (fromBackground) {
+    drawViennaBackground(context, state, fromBackground, reducedMotion);
+    if (toBackground && toBackground !== fromBackground && environment.blend > 0) {
+      context.save();
+      context.globalAlpha = environment.blend;
+      drawViennaBackground(context, state, toBackground, reducedMotion);
+      context.restore();
+    }
   } else {
     drawFallbackBackground(context, state, reducedMotion);
   }
 
-  context.fillStyle = "#d8e7dc";
+  const devastation = Math.min(1, (state.level - 1) / 5);
+  context.fillStyle = `rgb(${Math.round(184 - 111 * devastation)}, ${Math.round(192 - 121 * devastation)}, ${Math.round(182 - 114 * devastation)})`;
   context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT - FREDRUN_GROUND_Y);
-  context.fillStyle = "#8eb59b";
+  context.fillStyle = `rgb(${Math.round(115 - 67 * devastation)}, ${Math.round(140 - 94 * devastation)}, ${Math.round(121 - 77 * devastation)})`;
   context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, 6);
-  context.strokeStyle = "rgba(30, 82, 116, 0.2)";
+  context.strokeStyle = `rgba(32, 29, 27, ${0.2 + 0.22 * devastation})`;
   context.lineWidth = 2;
   const groundOffset = reducedMotion ? 0 : state.distance % 76;
   for (let x = -groundOffset; x < FREDRUN_WORLD_WIDTH; x += 76) {
@@ -197,6 +223,11 @@ function drawBackground(
     context.moveTo(x, FREDRUN_GROUND_Y + 35);
     context.lineTo(x + 28, FREDRUN_GROUND_Y + 35);
     context.stroke();
+  }
+
+  if (environment.darkness > 0) {
+    context.fillStyle = `rgba(9, 12, 18, ${environment.darkness})`;
+    context.fillRect(0, 0, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT);
   }
 }
 
@@ -304,7 +335,7 @@ function renderFredRun(
   }
   context.setTransform(canvas.width / FREDRUN_WORLD_WIDTH, 0, 0, canvas.height / FREDRUN_WORLD_HEIGHT, 0, 0);
   context.imageSmoothingEnabled = true;
-  drawBackground(context, state, images?.background ?? null, reducedMotion);
+  drawBackground(context, state, images?.backgrounds ?? [], reducedMotion);
   if (images) {
     state.obstacles.forEach((obstacle) => drawObstacle(
       context,
@@ -492,14 +523,14 @@ export default function FredRunView({ accessToken }: { accessToken: string }) {
         [key, await loadImage(obstacleLayouts[key].source)] as const
       ))),
       loadImage(INTRO_SOURCE),
-      loadImage(BACKGROUND_SOURCE),
+      loadBackgrounds(),
     ])
-      .then(([spriteEntries, obstacleEntries, , background]) => {
+      .then(([spriteEntries, obstacleEntries, , backgrounds]) => {
         if (cancelled) return;
         imagesRef.current = {
           sprites: Object.fromEntries(spriteEntries) as SpriteImages,
           obstacles: Object.fromEntries(obstacleEntries) as ObstacleImages,
-          background,
+          backgrounds,
         };
         setAssetState("ready");
       })
