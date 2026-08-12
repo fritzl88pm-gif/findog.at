@@ -77,6 +77,15 @@ import {
   type FredResearchStep,
   type FredSourceReference,
 } from "@/lib/weknora/fred-research";
+import {
+  createGenerationRun,
+  updateGenerationRun,
+  formatExactModelRoute,
+  EOF_WITHOUT_FINAL_CLIENT_MESSAGE,
+  isUpstreamCompleteEvent,
+  isAnswerDelta,
+  ERROR_CODES,
+} from "@/lib/fred/run-diagnostics";
 
 export const runtime = "nodejs";
 
@@ -867,6 +876,9 @@ export async function POST(request: Request) {
     let requestUpstreamStop: (() => Promise<void>) | undefined;
     let upstreamCancelRequested = false;
     let cleanedUp = false;
+    let runId: string | null = null;
+    let streamStarted = false;
+    let lastTerminalStatus: string | null = null;
     const clearAttachmentHeartbeat = () => {
       if (attachmentHeartbeat !== undefined) {
         clearInterval(attachmentHeartbeat);
@@ -908,11 +920,25 @@ export async function POST(request: Request) {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         let acceptingCitationUpdates = true;
+        let sawCompleteEvent = false;
+        let firstDeltaRecorded = false;
+        let errorAlreadyEmitted = false;
         try {
           let upstreamQuery = body.query;
           if (personalizationBlock) {
             upstreamQuery = upstreamQuery + "\n\n" + personalizationBlock;
           }
+
+          // Create generation run before preprocessing
+          const totalAttachmentBytes = body.attachments.reduce((sum, a) => sum + a.sizeBytes, 0);
+          const modelRoute = "weknora:pending";
+          runId = await createGenerationRun({
+            supabase,
+            clientId: user.id,
+            attachmentCount: body.attachments.length,
+            attachmentTotalBytes: totalAttachmentBytes,
+            modelRoute,
+          });
 
           if (body.attachments.length > 0) {
             send(controller, { type: "status", label: "Anhänge werden analysiert …" });
@@ -945,6 +971,16 @@ export async function POST(request: Request) {
                 upstreamQuery = combined + "\n\n" + personalizationBlock;
               }
             } catch (error) {
+              if (runId) {
+                lastTerminalStatus = "failed";
+                await updateGenerationRun({
+                  supabase,
+                  runId,
+                  status: "failed",
+                  failurePhase: "preprocessing",
+                  errorCode: ERROR_CODES.PREPROCESSING_FAILED,
+                });
+              }
               if (!lifetimeAbort!.signal.aborted) {
                 send(controller, {
                   type: "error",
@@ -963,6 +999,11 @@ export async function POST(request: Request) {
               type: "status",
               label: `${selectedAgentName} bearbeitet die Frage …`,
             });
+          }
+
+          // Transition to connecting before upstream setup
+          if (runId) {
+            await updateGenerationRun({ supabase, runId, status: "connecting" });
           }
 
           const embedSession = await mintFredEmbedSession({
@@ -1008,6 +1049,16 @@ export async function POST(request: Request) {
             ? readFredProModelId()
             : "";
 
+          // Update model route to exact known route after upstream config is fetched
+          if (runId) {
+            const exactRoute = formatExactModelRoute({
+              agentKey,
+              agentId: upstreamConfig.agentId,
+              proModelId: body.proModeEnabled ? summaryModelId : undefined,
+            });
+            await updateGenerationRun({ supabase, runId, modelRoute: exactRoute });
+          }
+
           const userOccurredAt = new Date().toISOString();
           const { conversation } = await recordEvent({
             supabase,
@@ -1031,6 +1082,10 @@ export async function POST(request: Request) {
             content: body.query,
           });
           send(controller, { type: "conversation", conversation });
+          // Best-effort update run with conversation_id immediately
+          if (runId && conversation?.id) {
+            await updateGenerationRun({ supabase, runId, conversationId: conversation.id });
+          }
           void relayFredWebhookEvent({
             session: embedSession,
             config,
@@ -1053,6 +1108,10 @@ export async function POST(request: Request) {
           });
           const upstreamReader = upstream.body!.getReader();
           activeUpstreamReader = upstreamReader;
+          streamStarted = true;
+          if (runId) {
+            await updateGenerationRun({ supabase, runId, status: "streaming" });
+          }
           const decoder = new TextDecoder();
           let upstreamMsgId = "";
           let stopRequested = false;
@@ -1161,10 +1220,20 @@ export async function POST(request: Request) {
               researchTrace = mergeFredResearchStep(researchTrace, research.step);
               send(controller, { type: "research", step: research.step });
             }
+            // Track upstream complete event for EOF detection
+            if (isUpstreamCompleteEvent(parsed)) {
+              sawCompleteEvent = true;
+            }
+
             const event = upstreamDelta(parsed);
             if (event.content) {
               answerChunks.push(event.content);
               send(controller, { type: "delta", content: event.content });
+              // Record first real answer delta
+              if (!firstDeltaRecorded && isAnswerDelta(parsed) && runId) {
+                firstDeltaRecorded = true;
+                void updateGenerationRun({ supabase, runId, firstDelta: true });
+              }
             }
           };
 
@@ -1178,6 +1247,29 @@ export async function POST(request: Request) {
           }
           buffer += decoder.decode();
           if (buffer.trim()) processFrame(buffer);
+
+          // EOF detection: stream ended without a complete/final answer
+          if (!sawCompleteEvent && !errorAlreadyEmitted) {
+            if (runId) {
+              lastTerminalStatus = "failed";
+              await updateGenerationRun({
+                supabase,
+                runId,
+                status: "failed",
+                failurePhase: "streaming",
+                errorCode: ERROR_CODES.UPSTREAM_EOF_WITHOUT_FINAL,
+              });
+            }
+            errorAlreadyEmitted = true;
+            send(controller, {
+              type: "error",
+              error: EOF_WITHOUT_FINAL_CLIENT_MESSAGE,
+            });
+            try { controller.close(); } catch { /* already closed */ }
+            cleanup();
+            return;
+          }
+
           const rawAnswer = answerChunks.join("");
           const plainFinalAnswer = rawAnswer.trim();
           if (!plainFinalAnswer) {
@@ -1209,6 +1301,18 @@ export async function POST(request: Request) {
             agentKey,
             weknoraAgentId: upstreamConfig.agentId,
           });
+          // Mark run completed
+          if (runId) {
+            lastTerminalStatus = "completed";
+            const convId = finalConversation?.id;
+            await updateGenerationRun({
+              supabase,
+              runId,
+              status: "completed",
+              completed: true,
+              ...(convId ? { conversationId: convId } : {}),
+            });
+          }
           void relayFredWebhookEvent({
             session: embedSession,
             config,
@@ -1233,8 +1337,23 @@ export async function POST(request: Request) {
           }
         } catch (error) {
           acceptingCitationUpdates = false;
+          const cancelled = lifetimeAbort!.signal.aborted;
+          if (runId && lastTerminalStatus === null) {
+            lastTerminalStatus = cancelled ? "cancelled" : "failed";
+            const isTimeout = deadline.signal.aborted;
+            await updateGenerationRun({
+              supabase,
+              runId,
+              status: cancelled ? "cancelled" : "failed",
+              ...(!cancelled ? {
+                failurePhase: streamStarted ? "streaming" : "connecting",
+                errorCode: isTimeout ? ERROR_CODES.TIMEOUT : ERROR_CODES.UNEXPECTED_ERROR,
+              } : {}),
+            });
+          }
           await stopAndCancelUpstream(error);
-          if (!lifetimeAbort!.signal.aborted) {
+          if (!lifetimeAbort!.signal.aborted && !errorAlreadyEmitted) {
+            errorAlreadyEmitted = true;
             const visibleError = deadline.signal.aborted
               ? deadline.signal.reason
               : error;
@@ -1255,6 +1374,15 @@ export async function POST(request: Request) {
         lifetimeAbort?.abort(reason);
         const upstreamCleanup = stopAndCancelUpstream(reason);
         cleanup();
+        // Mark run cancelled — exactly one terminal state, no later failed
+        if (runId && lastTerminalStatus === null) {
+          lastTerminalStatus = "cancelled";
+          await updateGenerationRun({
+            supabase,
+            runId,
+            status: "cancelled",
+          });
+        }
         await upstreamCleanup;
       },
     });

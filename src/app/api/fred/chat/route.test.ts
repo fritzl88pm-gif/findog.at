@@ -107,6 +107,7 @@ function request(body: Record<string, unknown>): Request {
 function multipartRequest(options: {
   query: string;
   webSearchEnabled?: boolean;
+  proModeEnabled?: boolean;
   image?: File;
   attachment?: File;
   signal?: AbortSignal;
@@ -115,6 +116,7 @@ function multipartRequest(options: {
   formData.append("payload", JSON.stringify({
     query: options.query,
     webSearchEnabled: options.webSearchEnabled ?? false,
+    ...(options.proModeEnabled !== undefined ? { proModeEnabled: options.proModeEnabled } : {}),
   }));
   if (options.image) formData.append("image", options.image, options.image.name);
   if (options.attachment) formData.append("attachment", options.attachment, options.attachment.name);
@@ -1510,4 +1512,410 @@ describe("POST /api/fred/chat", () => {
     });
   });
 
+
+  describe("generation run diagnostics", () => {
+    const diagUserId = "99999999-9999-4999-8999-999999999999";
+
+    beforeEach(() => {
+      vi.mocked(getSupabaseServerClient).mockReset();
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: diagUserId });
+    });
+
+    function makeGenRunSupabase(
+      overrides: {
+        insertError?: unknown;
+        updateError?: unknown;
+        selectError?: unknown;
+        existingFirstDelta?: string | null;
+      } = {},
+    ) {
+      const { insertError = null, updateError = null, selectError = null, existingFirstDelta = null } = overrides;
+
+      // insert chain: .from("fred_generation_runs").insert({...}).select("id").single()
+      const insertSingle = vi.fn(() => {
+        return Promise.resolve(
+          insertError
+            ? { data: null, error: insertError }
+            : { data: { id: "run-00000000-0000-4000-8000-000000000001" }, error: null },
+        );
+      });
+      const insertSelectChain = vi.fn().mockReturnValue({ single: insertSingle });
+      const insertChain = vi.fn().mockReturnValue({ select: insertSelectChain });
+
+      // update chain: .from("fred_generation_runs").update({...}).eq("id", runId)
+      const updateEq = vi.fn().mockResolvedValue(
+        updateError ? { error: updateError } : { error: null },
+      );
+      const updateChain = vi.fn().mockReturnValue({ eq: updateEq });
+
+      // select chain (for first_delta_at check): .from("fred_generation_runs").select("first_delta_at").eq("id", runId).maybeSingle()
+      const selectMaybeSingle = vi.fn().mockResolvedValue(
+        selectError
+          ? { data: null, error: selectError }
+          : { data: { first_delta_at: existingFirstDelta ?? null }, error: null },
+      );
+      const selectEq = vi.fn().mockReturnValue({ maybeSingle: selectMaybeSingle });
+      const selectChain = vi.fn().mockReturnValue({ eq: selectEq });
+
+      const from = vi.fn((table: string) => {
+        if (table === "fred_generation_runs") {
+          // We need to differentiate insert vs update vs select
+          // Insert: .insert(...) -> insertChain
+          // Update: .update(...) -> updateChain
+          // Select: .select(...) -> selectChain
+          return {
+            insert: insertChain,
+            update: updateChain,
+            select: selectChain,
+          };
+        }
+        // fallback for other tables
+        return {
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+            }),
+          }),
+        };
+      }) as never;
+
+      return { from, insertSingle, insertChain, updateEq, updateChain, selectMaybeSingle };
+    }
+
+    it("creates a run in preprocessing status before attachment preprocessing and advances to completed", async () => {
+      const { from, insertSingle, updateChain } = makeGenRunSupabase();
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+
+      const response = await POST(multipartRequest({
+        query: "Was steht im Beleg?",
+        attachment: pdfFile(),
+        webSearchEnabled: false,
+      }));
+      await response.text();
+
+      // Run was created
+      expect(insertSingle).toHaveBeenCalled();
+      // Status advanced at least to completed
+      const updateCalls = updateChain.mock.calls.map((call: unknown[]) => (call[0] as Record<string, unknown>)?.status);
+      expect(updateCalls).toContain("completed");
+    });
+
+    it("marks the run failed when attachment preprocessing throws", async () => {
+      const { from, insertSingle, updateChain } = makeGenRunSupabase();
+      const rpc = vi.fn().mockResolvedValueOnce({ data: summaryRow, error: null });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+      vi.mocked(buildAttachmentContext).mockRejectedValueOnce(
+        new UserVisibleError("Die Anhänge konnten nicht analysiert werden.", 400),
+      );
+
+      const response = await POST(multipartRequest({
+        query: "Was steht im Beleg?",
+        attachment: pdfFile(),
+      }));
+      const events = (await response.text())
+        .split("\n")
+        .map(parseFredNativeStreamLine)
+        .filter(Boolean);
+
+      expect(events).toContainEqual({
+        type: "error",
+        error: "Die Anhänge konnten nicht analysiert werden.",
+      });
+      // Run was created
+      expect(insertSingle).toHaveBeenCalled();
+      // Run was marked failed with preprocessing phase
+      const updateCalls = updateChain.mock.calls.map((call: unknown[]) => call[0] as Record<string, unknown>);
+      const failedUpdate = updateCalls.find((c) => c?.status === "failed");
+      expect(failedUpdate).toBeDefined();
+      expect((failedUpdate as Record<string, unknown>)?.failure_phase).toBe("preprocessing");
+      expect((failedUpdate as Record<string, unknown>)?.error_code).toBe("preprocessing_failed");
+    });
+
+    it("marks failed on upstream EOF without a complete/final answer and emits exactly one EOF error", async () => {
+      const { from, insertSingle, updateChain } = makeGenRunSupabase();
+      const rpc = vi.fn()
+        .mockResolvedValueOnce({ data: summaryRow, error: null });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+
+      // Stream ends with answer delta but no "complete" event
+      vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+        'data: {"response_type":"agent_query","assistant_message_id":"answer-eof"}\n\n',
+        'data: {"response_type":"answer","content":"Teilantwort","done":true}\n\n',
+        // No "complete" event — EOF happens here
+      ].join(""), { headers: { "Content-Type": "text/event-stream" } }));
+
+      const response = await POST(multipartRequest({
+        query: "Frage",
+        attachment: pdfFile(),
+      }));
+      const events = (await response.text())
+        .split("\n")
+        .map(parseFredNativeStreamLine)
+        .filter(Boolean);
+
+      // Should contain exactly one error event with the EOF message
+      const errorEvents = events.filter((e) => e?.type === "error");
+      expect(errorEvents).toHaveLength(1);
+      expect(errorEvents[0]).toEqual({
+        type: "error",
+        error: "Fred konnte die Antwort nicht abschließen. Die Frage wurde gespeichert; bitte erneut senden.",
+      });
+
+      // Run was marked failed with streaming phase
+      const updateCalls = updateChain.mock.calls.map((call: unknown[]) => call[0] as Record<string, unknown>);
+      const failedUpdate = updateCalls.find((c) => c?.status === "failed");
+      expect(failedUpdate).toBeDefined();
+      expect((failedUpdate as Record<string, unknown>)?.failure_phase).toBe("streaming");
+      expect((failedUpdate as Record<string, unknown>)?.error_code).toBe("upstream_eof_without_final");
+    });
+
+    it("marks completed when the normal final stream completes and does not emit the EOF error", async () => {
+      const { from, insertSingle, updateChain } = makeGenRunSupabase();
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+      // Use the default upstreamStream() which includes "complete"
+      vi.mocked(openFredUpstreamStream).mockImplementation(async () => upstreamStream());
+
+      const response = await POST(multipartRequest({
+        query: "Frage",
+        attachment: pdfFile(),
+      }));
+      const events = (await response.text())
+        .split("\n")
+        .map(parseFredNativeStreamLine)
+        .filter(Boolean);
+
+      // No EOF error
+      const errorEvents = events.filter((e) => e?.type === "error");
+      expect(errorEvents).toHaveLength(0);
+
+      // Contains final event
+      expect(events.some((e) => e?.type === "final")).toBe(true);
+
+      // Run was marked completed
+      const updateCalls = updateChain.mock.calls.map((call: unknown[]) => call[0] as Record<string, unknown>);
+      const completedUpdate = updateCalls.find((c) => c?.status === "completed");
+      expect(completedUpdate).toBeDefined();
+    });
+
+    it("marks cancelled on explicit browser abort", async () => {
+      const { from, insertSingle, updateChain } = makeGenRunSupabase();
+      const rpc = vi.fn()
+        .mockResolvedValueOnce({ data: summaryRow, error: null });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+
+      const abortController = new AbortController();
+
+      // Stream that never completes
+      vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response(
+        new ReadableStream({
+          start(ctrl) {
+            ctrl.enqueue(new TextEncoder().encode(
+              'data: {"response_type":"agent_query","assistant_message_id":"answer-cancel"}\n\n',
+            ));
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      ));
+
+      const response = await POST(multipartRequest({
+        query: "Frage",
+        attachment: pdfFile(),
+        signal: abortController.signal,
+      }));
+
+      // Read the first event then abort
+      const reader = response.body!.getReader();
+      await reader.read();
+      abortController.abort();
+      await reader.cancel();
+
+      // Allow async cleanup
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Run was marked cancelled
+      const updateCalls = updateChain.mock.calls.map((call: unknown[]) => call[0] as Record<string, unknown>);
+      const cancelledUpdate = updateCalls.find((c) => c?.status === "cancelled");
+      expect(cancelledUpdate).toBeDefined();
+    });
+
+    it("does not break the successful answer when diagnostics persistence fails", async () => {
+      const { from, insertSingle, updateChain } = makeGenRunSupabase({ insertError: new Error("DB down") });
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+      vi.mocked(openFredUpstreamStream).mockImplementation(async () => upstreamStream());
+
+      const response = await POST(multipartRequest({
+        query: "Frage",
+        attachment: pdfFile(),
+      }));
+      const events = (await response.text())
+        .split("\n")
+        .map(parseFredNativeStreamLine)
+        .filter(Boolean);
+
+      // The answer should still succeed
+      expect(response.status).toBe(200);
+      expect(events.some((e) => e?.type === "final")).toBe(true);
+      expect(events.some((e) => e?.type === "error")).toBe(false);
+    });
+
+
+    it('updates run with conversation_id immediately after user recordEvent returns', async () => {
+      const { from, updateChain } = makeGenRunSupabase();
+      const rpc = vi.fn()
+        .mockResolvedValueOnce({ data: summaryRow, error: null })
+        .mockResolvedValueOnce({
+          data: { ...summaryRow, updated_at: '2026-07-19T10:00:02.000Z', message_id: 2 },
+          error: null,
+        });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+      vi.mocked(openFredUpstreamStream).mockImplementation(async () => upstreamStream());
+
+      const response = await POST(multipartRequest({
+        query: 'Frage',
+        attachment: pdfFile(),
+      }));
+      await response.text();
+
+      // The run should have conversation_id set before completion
+      const updateCalls = updateChain.mock.calls.map((call) => call[0] as Record<string, unknown>);
+      const convUpdates = updateCalls.filter((c) => c?.conversation_id !== undefined);
+      expect(convUpdates.length).toBeGreaterThanOrEqual(1);
+      // At least one conversation_id update should happen before the completed status
+      const completedIdx = updateCalls.findIndex((c) => c?.status === 'completed');
+      const convIdx = updateCalls.findIndex((c) => c?.conversation_id !== undefined);
+      expect(convIdx).toBeLessThan(completedIdx);
+    });
+
+    it('starts with model_route weknora:pending and updates to exact route after upstream config', async () => {
+      const { from, insertChain, updateChain } = makeGenRunSupabase();
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+      vi.mocked(openFredUpstreamStream).mockImplementation(async () => upstreamStream());
+
+      const response = await POST(multipartRequest({
+        query: 'Frage',
+        attachment: pdfFile(),
+      }));
+      await response.text();
+
+      // Check insert contained "weknora:pending"
+      const insertCalls = insertChain.mock.calls.map((call) => call[0] as Record<string, unknown>);
+      const insertCall = insertCalls.find((c) => c?.model_route !== undefined);
+      expect(insertCall?.model_route).toBe('weknora:pending');
+
+      // Check that an update call set the exact model route
+      const updateCalls = updateChain.mock.calls.map((call) => call[0] as Record<string, unknown>);
+      const routeUpdates = updateCalls.filter((c) => c?.model_route !== undefined && c?.model_route !== 'weknora:pending');
+      expect(routeUpdates.length).toBeGreaterThanOrEqual(1);
+      const exactRoute = routeUpdates[0]?.model_route as string;
+      expect(exactRoute).toMatch(/^weknora:fred:agent-1$/);
+    });
+
+    it('includes pro model id in exact route when pro mode is enabled', async () => {
+      const { from, insertChain, updateChain } = makeGenRunSupabase();
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+      vi.mocked(openFredUpstreamStream).mockImplementation(async () => upstreamStream());
+
+      const response = await POST(multipartRequest({
+        query: 'Pro Frage',
+        attachment: pdfFile(),
+        proModeEnabled: true,
+      }));
+      await response.text();
+
+      // Initial route is pending
+      const insertCalls = insertChain.mock.calls.map((call) => call[0] as Record<string, unknown>);
+      const insertCall = insertCalls.find((c) => c?.model_route !== undefined);
+      expect(insertCall?.model_route).toBe('weknora:pending');
+
+      // Exact route includes pro model id
+      const updateCalls = updateChain.mock.calls.map((call) => call[0] as Record<string, unknown>);
+      const routeUpdates = updateCalls.filter((c) => c?.model_route !== undefined && c?.model_route !== 'weknora:pending');
+      expect(routeUpdates.length).toBeGreaterThanOrEqual(1);
+      const exactRoute = routeUpdates[0]?.model_route as string;
+      // readFredProModelId returns "a1b2c3d4-e5f6-4789-abcd-ef0123456789" in the mock
+      expect(exactRoute).toContain(':pro=');
+    });
+
+    it('tracks failure phase as streaming for parser errors even without answer deltas', async () => {
+      const { from, updateChain } = makeGenRunSupabase();
+      const rpc = vi.fn()
+        .mockResolvedValueOnce({ data: summaryRow, error: null });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+
+      // Stream with unparseable frame after successful open — triggers parser error
+      vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+        'data: {"response_type":"agent_query","assistant_message_id":"answer-bad"}\n\n',
+        'data: {not-json}\n\n',
+      ].join(''), { headers: { 'Content-Type': 'text/event-stream' } }));
+
+      const response = await POST(multipartRequest({
+        query: 'Frage',
+        attachment: pdfFile(),
+      }));
+      await response.text();
+
+      // Should be marked failed with streaming phase (not connecting)
+      const updateCalls = updateChain.mock.calls.map((call) => call[0] as Record<string, unknown>);
+      const failedUpdate = updateCalls.find((c) => c?.status === 'failed');
+      expect(failedUpdate).toBeDefined();
+      expect((failedUpdate as Record<string, unknown>)?.failure_phase).toBe('streaming');
+    });
+
+    it('cancelled is the last terminal status and no failed update follows after abort', async () => {
+      const { from, updateChain } = makeGenRunSupabase();
+      const rpc = vi.fn()
+        .mockResolvedValueOnce({ data: summaryRow, error: null });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+
+      const abortController = new AbortController();
+
+      // Stream that never completes — reader.read() hangs
+      vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response(
+        new ReadableStream({
+          start(ctrl) {
+            ctrl.enqueue(new TextEncoder().encode(
+              'data: {"response_type":"agent_query","assistant_message_id":"answer-cancel"}\n\n',
+            ));
+          },
+        }),
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      ));
+
+      const response = await POST(multipartRequest({
+        query: 'Frage',
+        attachment: pdfFile(),
+        signal: abortController.signal,
+      }));
+
+      // Read first event then abort
+      const reader = response.body!.getReader();
+      await reader.read();
+      abortController.abort();
+      await reader.cancel();
+
+      // Allow async cleanup to settle
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Get all status updates in order
+      const updateCalls = updateChain.mock.calls.map((call) => call[0] as Record<string, unknown>);
+      const statusUpdates = updateCalls
+        .filter((c) => c?.status !== undefined)
+        .map((c) => c?.status);
+
+      // There must be exactly one cancelled update
+      const cancelledCount = statusUpdates.filter((s) => s === 'cancelled').length;
+      expect(cancelledCount).toBe(1);
+
+      // The last terminal status must be cancelled, not failed
+      const terminalStatuses = statusUpdates.filter(
+        (s) => s === 'cancelled' || s === 'failed' || s === 'completed'
+      );
+      expect(terminalStatuses[terminalStatuses.length - 1]).toBe('cancelled');
+    });
+  });
 });
