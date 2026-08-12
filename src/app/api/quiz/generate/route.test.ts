@@ -17,7 +17,11 @@ vi.mock("@/lib/admin-auth", () => ({
 
 vi.mock("@/lib/quiz/generate", () => ({
   generateQuiz: vi.fn(),
-  CATEGORIES: ["Arbeitnehmerveranlagung", "Verfahrensrecht"],
+  CATEGORIES: [
+    "Bundesabgabenordnung (Verfahrensrecht)",
+    "Arbeitnehmerveranlagung",
+    "Familienbeihilfe",
+  ],
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -55,7 +59,15 @@ function mockRequest(body: unknown, options?: MockRequestOptions): Request {
   return mockRawRequest(JSON.stringify(body), options);
 }
 
-function quizResponse(category: "Arbeitnehmerveranlagung" | "Verfahrensrecht" = "Arbeitnehmerveranlagung") {
+const VALID_CATEGORIES = [
+  "Bundesabgabenordnung (Verfahrensrecht)",
+  "Arbeitnehmerveranlagung",
+  "Familienbeihilfe",
+] as const;
+
+type QuizCategory = "Bundesabgabenordnung (Verfahrensrecht)" | "Arbeitnehmerveranlagung" | "Familienbeihilfe";
+
+function quizResponse(category: QuizCategory = "Arbeitnehmerveranlagung") {
   return {
     id: "test-quiz-id",
     category,
@@ -143,7 +155,7 @@ describe("POST /api/quiz/generate", () => {
     const invalid = await POST(mockRequest({ category: "InvalidCategory" }));
     expect(invalid.status).toBe(400);
     await expect(invalid.json()).resolves.toEqual({
-      error: "Ungültige Kategorie. Erlaubt: Arbeitnehmerveranlagung, Verfahrensrecht.",
+      error: "Ungültige Kategorie. Erlaubt: Bundesabgabenordnung (Verfahrensrecht), Arbeitnehmerveranlagung, Familienbeihilfe.",
     });
 
     const extra = await POST(mockRequest({ category: "Arbeitnehmerveranlagung", extra: "field" }));
@@ -152,9 +164,18 @@ describe("POST /api/quiz/generate", () => {
     expect(generateQuiz).not.toHaveBeenCalled();
   });
 
+  it("rejects the legacy Verfahrensrecht category", async () => {
+    const legacy = await POST(mockRequest({ category: "Verfahrensrecht" }));
+    expect(legacy.status).toBe(400);
+    await expect(legacy.json()).resolves.toEqual({
+      error: "Ungültige Kategorie. Erlaubt: Bundesabgabenordnung (Verfahrensrecht), Arbeitnehmerveranlagung, Familienbeihilfe.",
+    });
+    expect(generateQuiz).not.toHaveBeenCalled();
+  });
+
   it("validates the body before consuming rate-limit quota", async () => {
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "body-before-rate-user" });
-    vi.mocked(generateQuiz).mockResolvedValue(quizResponse());
+    vi.mocked(generateQuiz).mockReturnValue(quizResponse());
 
     for (let index = 0; index < 6; index += 1) {
       const invalid = await POST(mockRequest({ category: "InvalidCategory" }));
@@ -168,7 +189,7 @@ describe("POST /api/quiz/generate", () => {
 
   it("returns concise errors from quiz generation", async () => {
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "error-test-user" });
-    vi.mocked(generateQuiz).mockRejectedValueOnce(new Error("Unexpected"));
+    vi.mocked(generateQuiz).mockImplementation(() => { throw new Error("Unexpected"); });
 
     const unexpected = await POST(mockRequest({ category: "Arbeitnehmerveranlagung" }));
     expect(unexpected.status).toBe(500);
@@ -177,19 +198,19 @@ describe("POST /api/quiz/generate", () => {
     });
 
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "visible-error-test-user" });
-    vi.mocked(generateQuiz).mockRejectedValueOnce(
-      new UserVisibleError("Für diese Kategorie konnte kein Lernmaterial gefunden werden.", 502),
-    );
+    vi.mocked(generateQuiz).mockImplementation(() => {
+      throw new UserVisibleError("Ungültige Kategorie.", 400);
+    });
     const visible = await POST(mockRequest({ category: "Arbeitnehmerveranlagung" }));
-    expect(visible.status).toBe(502);
+    expect(visible.status).toBe(400);
     await expect(visible.json()).resolves.toEqual({
-      error: "Für diese Kategorie konnte kein Lernmaterial gefunden werden.",
+      error: "Ungültige Kategorie.",
     });
   });
 
   it("returns a private no-store quiz response for each valid category", async () => {
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "success-test-anv" });
-    vi.mocked(generateQuiz).mockResolvedValueOnce(quizResponse());
+    vi.mocked(generateQuiz).mockReturnValueOnce(quizResponse());
 
     const anv = await POST(mockRequest({ category: "Arbeitnehmerveranlagung" }));
     expect(anv.status).toBe(200);
@@ -199,16 +220,18 @@ describe("POST /api/quiz/generate", () => {
       category: "Arbeitnehmerveranlagung",
     });
 
-    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "success-test-vr" });
-    vi.mocked(generateQuiz).mockResolvedValueOnce(quizResponse("Verfahrensrecht"));
-    const verfahrensrecht = await POST(mockRequest({ category: "Verfahrensrecht" }));
-    expect(verfahrensrecht.status).toBe(200);
-    await expect(verfahrensrecht.json()).resolves.toMatchObject({ category: "Verfahrensrecht" });
+    for (const cat of VALID_CATEGORIES) {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: `success-test-${cat}` });
+      vi.mocked(generateQuiz).mockReturnValueOnce(quizResponse(cat));
+      const res = await POST(mockRequest({ category: cat }));
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toMatchObject({ category: cat });
+    }
   });
 
   it("enforces the per-user rate limit", async () => {
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "rate-limit-test-user" });
-    vi.mocked(generateQuiz).mockResolvedValue(quizResponse());
+    vi.mocked(generateQuiz).mockReturnValue(quizResponse());
 
     for (let index = 0; index < 5; index += 1) {
       const response = await POST(mockRequest({ category: "Arbeitnehmerveranlagung" }));

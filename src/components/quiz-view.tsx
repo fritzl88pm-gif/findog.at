@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { QuizCategory, QuizQuestion } from "@/lib/quiz/generate";
+import type { QuizCategory, QuizQuestion } from "@/lib/quiz/types";
 import { normalizeQuizResponse } from "@/lib/quiz/client";
 
 type QuizState =
@@ -13,14 +13,19 @@ type QuizState =
 
 const CATEGORIES: Array<{ id: QuizCategory; label: string; description: string }> = [
   {
+    id: "Bundesabgabenordnung (Verfahrensrecht)",
+    label: "Bundesabgabenordnung (Verfahrensrecht)",
+    description: "BAO, Fristen und Zustellung, Beschwerden und Vorlageanträge, Wiederaufnahme, Rechtsmittel und Bescheidänderungen, Beweislast und Nachweise, Zurückweisung oder Abweisung",
+  },
+  {
     id: "Arbeitnehmerveranlagung",
     label: "Arbeitnehmerveranlagung",
     description: "Werbungskosten, außergewöhnliche Belastungen, Absetzbeträge",
   },
   {
-    id: "Verfahrensrecht",
-    label: "Verfahrensrecht",
-    description: "BAO, Fristen und Zustellung, Beschwerden und Vorlageanträge, Wiederaufnahme, Rechtsmittel und Bescheidänderungen, Beweislast und Nachweise, Zurückweisung oder Abweisung",
+    id: "Familienbeihilfe",
+    label: "Familienbeihilfe",
+    description: "Anspruchsvoraussetzungen, Bezugsdauer, Berufsausbildung, Altersgrenzen, erhöhte Familienbeihilfe",
   },
 ];
 
@@ -166,11 +171,11 @@ export default function QuizView({ accessToken }: QuizViewProps) {
         <div className="forms-view quiz-view">
           <header className="forms-view-header">
             <p className="eyebrow">Wissenstest</p>
-            <h1 id="quiz-view-title">Quiz wird erstellt…</h1>
+            <h1 id="quiz-view-title">Quiz wird geladen…</h1>
           </header>
           <div className="quiz-loading" role="status" aria-live="polite">
             <span className="spinner" aria-hidden="true"></span>
-            <p>Fragen werden generiert…</p>
+            <p>Fragen werden ausgewählt…</p>
           </div>
         </div>
       </section>

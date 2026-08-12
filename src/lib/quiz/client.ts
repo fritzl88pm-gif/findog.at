@@ -1,4 +1,5 @@
-import type { Quiz, QuizCategory, QuizQuestion } from "./generate";
+import type { Quiz, QuizCategory, QuizQuestion } from "./types";
+import { CATEGORIES } from "./types";
 
 const QUESTION_KEYS = new Set(["question", "options", "correctIndex", "explanation"]);
 
@@ -7,7 +8,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isCategory(value: unknown): value is QuizCategory {
-  return value === "Arbeitnehmerveranlagung" || value === "Verfahrensrecht";
+  if (typeof value !== "string") return false;
+  return CATEGORIES.includes(value as QuizCategory);
 }
 
 function normalizeQuestion(value: unknown): QuizQuestion | null {

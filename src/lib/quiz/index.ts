@@ -1,10 +1,10 @@
 export {
   generateQuiz,
   shuffleQuestionOptions,
-  CATEGORIES,
 } from "./generate";
+export { CATEGORIES } from "./types";
 export type {
   QuizCategory,
   QuizQuestion,
   Quiz,
-} from "./generate";
+} from "./types";

@@ -4,7 +4,8 @@ import { isAdminUser } from "@/lib/admin-auth";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { generateQuiz, CATEGORIES } from "@/lib/quiz/generate";
+import { generateQuiz } from "@/lib/quiz/generate";
+import { CATEGORIES } from "@/lib/quiz/types";
 
 export const runtime = "nodejs";
 
@@ -154,7 +155,7 @@ export async function POST(request: Request) {
 
     checkRateLimit(user.id);
 
-    const quiz = await generateQuiz(category);
+    const quiz = generateQuiz(category);
 
     return NextResponse.json(quiz, {
       status: 200,
