@@ -3,10 +3,11 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { fredRunEnvironmentForLevel } from "./fredrun";
+import { fredRunEnvironmentForDistance } from "./fredrun";
 
 const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.meta.url)), "utf8");
 const viewSource = readFileSync(fileURLToPath(new URL("../components/fredrun-view.tsx", import.meta.url)), "utf8");
+const stylesSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 const manifest = JSON.parse(readFileSync(fileURLToPath(new URL("../../public/fredrun/manifest.json", import.meta.url)), "utf8")) as {
   source: {
     archive: { sha256: string; includedAnimations: string[] };
@@ -57,6 +58,46 @@ const odoManifest = JSON.parse(readFileSync(
     bytes: number;
   };
 };
+const madingerManifest = JSON.parse(readFileSync(
+  fileURLToPath(new URL("../../public/fredrun/madinger-manifest.json", import.meta.url)),
+  "utf8",
+)) as {
+  source: { file: string; sha256: string; grid: string; frameCount: number };
+  atlas: {
+    file: string;
+    format: string;
+    sha256: string;
+    columns: number;
+    rows: number;
+    cellSize: number;
+    frameCount: number;
+    anchor: string;
+    sharedScale: number;
+    flippedHorizontally: boolean;
+    direction: string;
+    bytes: number;
+  };
+};
+const jqaManifest = JSON.parse(readFileSync(
+  fileURLToPath(new URL("../../public/fredrun/jqa-dance-gangnam-manifest.json", import.meta.url)),
+  "utf8",
+)) as {
+  source: { file: string; sha256: string; grid: string; frameCount: number };
+  atlas: {
+    file: string;
+    format: string;
+    sha256: string;
+    columns: number;
+    rows: number;
+    cellSize: number;
+    frameCount: number;
+    anchor: string;
+    sharedScale: number;
+    flippedHorizontally: boolean;
+    movement: string;
+    bytes: number;
+  };
+};
 const backgroundManifest = JSON.parse(readFileSync(
   fileURLToPath(new URL("../../public/fredrun/background-manifest.json", import.meta.url)),
   "utf8",
@@ -74,13 +115,16 @@ const stagedBackgroundManifest = JSON.parse(readFileSync(
     format: string;
     size: { width: number; height: number };
     quality: number;
-    stageLevels: number[];
-    darknessPerLevel: number;
+    scoreAnchors: number[];
+    crossfade: string;
+    finalState: string;
+    darknessPerStage: number;
     darknessCap: number;
     loop: string;
+    effects: { renderer: string; deterministic: boolean; reducedMotion: string };
   };
   stages: Array<{
-    level: number;
+    anchorScore: number;
     state: string;
     raw: { file: string; width: number; height: number; bytes: number; sha256: string };
     output: { file: string; width: number; height: number; bytes: number; sha256: string };
@@ -159,7 +203,7 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain('input, textarea, button, [contenteditable=\'true\']');
   });
 
-  it("ships only the three approved normalized atlases below the size budget", () => {
+  it("ships the three runtime atlases while preserving source provenance", () => {
     expect(manifest.source.archive.sha256).toBe("DCD8D61B48B88FE525DA2D151544B8B8C859C9E3E222DEE18732E160E1A9F735");
     expect(manifest.source.archive.includedAnimations).toEqual(["walk_right", "Victory"]);
     expect(manifest.source.jumpSheet).toMatchObject({
@@ -180,14 +224,25 @@ describe("Fredrun UI surface", () => {
       },
     });
     expect(viewSource).toContain('jump: { source: "/fredrun/jump.png", columns: 6, frameCount: 24 }');
+    expect(viewSource).toContain('victory: { source: "/fredrun/victory.png", columns: 8, frameCount: 64 }');
 
     const totalBytes = ["walk.png", "jump.png", "victory.png"].reduce((total, name) => (
       total + statSync(fileURLToPath(new URL(`../../public/fredrun/${name}`, import.meta.url))).size
     ), 0);
-    expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
+    expect(totalBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
   });
 
-  it("loads only the three remaining obstacle assets with recorded provenance and a small payload", () => {
+  it("lays out the game-over score on the left and dancing Fred on the right", () => {
+    expect(viewSource).toContain('className="fredrun-game-over-summary"');
+    expect(viewSource).toContain("<h2>{snapshot.score} Punkte</h2>");
+    expect(viewSource).toContain(">Noch einmal</button>");
+    expect(viewSource).toContain("<FredRunVictoryDance />");
+    expect(viewSource).toContain('aria-label="Fred tanzt"');
+    expect(stylesSource).toContain('"summary dance"');
+    expect(stylesSource).toContain("grid-area: dance");
+  });
+
+  it("loads the three static obstacle assets with recorded provenance and a small payload", () => {
     expect(obstacleManifest).toMatchObject({
       format: "webp",
       alpha: true,
@@ -220,10 +275,12 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).not.toContain("Spring mit Fred über Odo");
   });
 
-  it("shows the milestone message without the former tinted overlay", () => {
-    expect(viewSource).toContain('className="fredrun-milestone-message"');
-    expect(viewSource).not.toContain("fredrun-milestone-overlay");
-    expect(viewSource).toContain("Nächste Stufe");
+  it("keeps running through score pulses without level or milestone UI", () => {
+    expect(viewSource).toContain("FREDRUN_SCORE_PULSE_POINTS");
+    expect(viewSource).toContain('className={scorePulseToken > 0 ? "fredrun-score--pulse" : undefined}');
+    expect(viewSource).not.toContain('snapshot.phase === "milestone"');
+    expect(viewSource).not.toContain("Nächste Stufe");
+    expect(viewSource).not.toContain("<span>Stufe</span>");
   });
 
   it("uses the supplied intro artwork as the responsive title screen", () => {
@@ -281,6 +338,68 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain('context.fillText("Beschluss?"');
   });
 
+  it("ships Madinger as a normalized right-to-left animated opponent", () => {
+    expect(madingerManifest).toEqual({
+      source: {
+        file: "Madinger-walk.png",
+        sha256: "F786C97C128EB92D6B164FF68A8CF7C35881FB5716E0357D3D3D00281A6C207E",
+        grid: "7x7",
+        frameCount: 49,
+      },
+      atlas: {
+        file: "madinger-walk.webp",
+        format: "webp",
+        sha256: "B6A0B005821EE6BD381492EBFA6FA56B116D1D5F6FE2066B39212027F116335F",
+        columns: 7,
+        rows: 7,
+        cellSize: 192,
+        frameCount: 49,
+        anchor: "bottom-center",
+        sharedScale: 1.148387,
+        flippedHorizontally: true,
+        direction: "right-to-left",
+        bytes: 195062,
+      },
+    });
+    expect(statSync(fileURLToPath(new URL("../../public/fredrun/madinger-walk.webp", import.meta.url))).size)
+      .toBe(madingerManifest.atlas.bytes);
+    expect(madingerManifest.atlas.bytes).toBeLessThanOrEqual(256 * 1024);
+    expect(viewSource).toContain('source: "/fredrun/madinger-walk.webp"');
+    expect(viewSource).toContain("animation: { columns: 7, cellSize: 192, frameCount: 49, fps: 18 }");
+  });
+
+  it("ships JQA as a normalized stationary dancing obstacle", () => {
+    expect(jqaManifest).toEqual({
+      source: {
+        file: "jqa-dance_gangnam.png",
+        sha256: "8D2E3FB26AD4E7E28DF590C92E8679F60CF9EA8CA7B38D7931863163973F502F",
+        grid: "8x8",
+        frameCount: 64,
+      },
+      atlas: {
+        file: "jqa-dance-gangnam.webp",
+        format: "webp",
+        sha256: "65C1555C71D957010F4EB97971A285324079974BE8719D59307ECB68EA5B7A22",
+        columns: 8,
+        rows: 8,
+        cellSize: 192,
+        frameCount: 64,
+        anchor: "bottom-center",
+        sharedScale: 0.422803,
+        flippedHorizontally: false,
+        movement: "stationary dance; world scroll only",
+        bytes: 403038,
+      },
+    });
+    expect(statSync(fileURLToPath(new URL(
+      "../../public/fredrun/jqa-dance-gangnam.webp",
+      import.meta.url,
+    ))).size).toBe(jqaManifest.atlas.bytes);
+    expect(jqaManifest.atlas.bytes).toBeLessThanOrEqual(512 * 1024);
+    expect(viewSource).toContain('source: "/fredrun/jqa-dance-gangnam.webp"');
+    expect(viewSource).toContain("animation: { columns: 8, cellSize: 192, frameCount: 64, fps: 18 }");
+  });
+
   it("retains the bright Vienna panorama as the controlled mirrored fallback", () => {
     expect(backgroundManifest).toMatchObject({
       generation: {
@@ -308,8 +427,8 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain("context.scale(-1, 1)");
   });
 
-  it("declares eight ordered per-level background assets in the view and manifest", () => {
-    const stageLevels = Array.from({ length: 8 }, (_, index) => index + 1);
+  it("declares eight ordered score-anchored background assets in the view and manifest", () => {
+    const scoreAnchors = Array.from({ length: 8 }, (_, index) => index * 500);
     expect(stagedBackgroundManifest).toMatchObject({
       generation: {
         mode: "built-in image generation",
@@ -320,14 +439,21 @@ describe("Fredrun UI surface", () => {
         format: "webp",
         size: { width: 2172, height: 665 },
         quality: 78,
-        stageLevels,
-        darknessPerLevel: 0.025,
+        scoreAnchors,
+        crossfade: "smoothstep over the final 40 points before each anchor",
+        finalState: "hold last stage from 3500 points",
+        darknessPerStage: 0.025,
         darknessCap: 0.125,
         loop: "alternating mirrored tiles",
+        effects: {
+          renderer: "canvas-2d",
+          deterministic: true,
+          reducedMotion: "static background without scrolling, lightning or particle motion",
+        },
       },
     });
     expect(stagedBackgroundManifest.stages).toHaveLength(8);
-    expect(stagedBackgroundManifest.stages.map(({ level }) => level)).toEqual(stageLevels);
+    expect(stagedBackgroundManifest.stages.map(({ anchorScore }) => anchorScore)).toEqual(scoreAnchors);
 
     const manifestSources = stagedBackgroundManifest.stages.map(
       ({ output }) => `/fredrun/backgrounds/${output.file}`,
@@ -345,26 +471,65 @@ describe("Fredrun UI surface", () => {
     }
   });
 
-  it("selects exactly one ordered background stage per level without crossfading", () => {
-    expect(Array.from({ length: 8 }, (_, index) => fredRunEnvironmentForLevel(index + 1)))
-      .toEqual(Array.from({ length: 8 }, (_, stage) => ({
-        stage,
-        darkness: Math.min(0.125, Number((stage * 0.025).toFixed(3))),
-      })));
-    expect(fredRunEnvironmentForLevel(12)).toEqual({ stage: 7, darkness: 0.125 });
+  it("smoothly crossfades at matching scroll offsets and clamps the final stage", () => {
+    expect(fredRunEnvironmentForDistance(250 * 34)).toMatchObject({
+      fromStage: 0,
+      toStage: 1,
+      blend: 0,
+    });
+    expect(fredRunEnvironmentForDistance(450 * 34).blend).toBe(0);
+    expect(fredRunEnvironmentForDistance(480 * 34).blend).toBeCloseTo(0.5, 8);
+    expect(fredRunEnvironmentForDistance(3_500 * 34)).toMatchObject({
+      fromStage: 7,
+      toStage: 7,
+      blend: 0,
+      darkness: 0.125,
+    });
+    expect(fredRunEnvironmentForDistance(10_000 * 34)).toMatchObject({
+      fromStage: 7,
+      toStage: 7,
+      blend: 0,
+    });
 
     const drawBackgroundSource = viewImplementationBetween(
       "function drawBackground",
       "function drawObstacle",
     );
-    expect(drawBackgroundSource).toContain("fredRunEnvironmentForLevel(state.level)");
-    expect(drawBackgroundSource).toContain("environment.stage");
+    expect(drawBackgroundSource).toContain("fredRunEnvironmentForDistance(state.distance)");
+    expect(drawBackgroundSource).toContain("environment.fromStage");
+    expect(drawBackgroundSource).toContain("environment.toStage");
+    expect(drawBackgroundSource).toContain("environment.blend");
     expect(drawBackgroundSource).toContain("environment.darkness");
-    expect(drawBackgroundSource).not.toContain("environment.fromStage");
-    expect(drawBackgroundSource).not.toContain("environment.toStage");
-    expect(drawBackgroundSource).not.toContain("environment.blend");
-    expect(drawBackgroundSource).not.toContain("globalAlpha");
-    expect(drawBackgroundSource.match(/drawViennaBackground\(/gu)).toHaveLength(1);
+    expect(drawBackgroundSource).toContain("drawStormAtmosphere");
+    expect(drawBackgroundSource).toContain("drawRainAtmosphere");
+    expect(drawBackgroundSource).toContain("drawSmokeAtmosphere");
+    expect(drawBackgroundSource).toContain("drawAtmosphericParticles");
+    expect(viewSource).not.toContain("drawFlame");
+    expect(viewSource).not.toContain("FLAME_ANCHORS");
+    expect(viewSource).not.toContain("environment.fire");
+    expect(drawBackgroundSource.match(/drawViennaBackground\(/gu)?.length).toBeGreaterThanOrEqual(3);
+    const drawViennaSource = viewImplementationBetween(
+      "function drawViennaBackground",
+      "function seededUnit",
+    );
+    expect(drawViennaSource).toContain("Math.floor(drawX)");
+    expect(drawViennaSource).toContain("Math.ceil(drawX + tileWidth)");
+    expect(drawViennaSource).toContain("tileRight - tileLeft + 1");
+  });
+
+  it("disables scrolling and animated atmosphere for reduced motion", () => {
+    const backgroundSource = viewImplementationBetween(
+      "function drawFallbackBackground",
+      "function drawObstacle",
+    );
+    expect(backgroundSource).toContain("reducedMotion ? 0 : (state.distance * BACKGROUND_SCROLL_FACTOR)");
+    expect(backgroundSource).toContain("if (environment.storm <= 0.01 || reducedMotion) return");
+    expect(backgroundSource).toContain("if (environment.rain <= 0.01 || reducedMotion) return");
+    expect(backgroundSource).toContain("if (environment.smoke <= 0.01 || reducedMotion) return");
+    expect(backgroundSource).toContain("if (reducedMotion) return");
+    expect(stylesSource).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.fredrun-score--pulse\s*\{\s*animation: none !important;/u,
+    );
   });
 
   it("keeps successfully loaded stages when one background image fails", async () => {

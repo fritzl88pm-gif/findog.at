@@ -15,14 +15,22 @@
     "size": { "width": 2172, "height": 665 },
     "quality": 78,
     "normalization": "ffmpeg Lanczos scale/center-crop to 2172x665; libwebp picture preset quality 78",
-    "stageLevels": [1, 2, 3, 4, 5, 6, 7, 8],
-    "darknessPerLevel": 0.025,
+    "scoreAnchors": [0, 500, 1000, 1500, 2000, 2500, 3000, 3500],
+    "crossfade": "smoothstep over the final 40 points before each anchor",
+    "finalState": "hold last stage from 3500 points",
+    "darknessPerStage": 0.025,
     "darknessCap": 0.125,
-    "loop": "alternating mirrored tiles"
+    "loop": "alternating mirrored tiles",
+    "effects": {
+      "renderer": "canvas-2d",
+      "deterministic": true,
+      "weather": ["moving storm fronts", "rain", "multi-pattern lightning"],
+      "reducedMotion": "static background without scrolling, lightning or particle motion"
+    }
   },
   "stages": [
     {
-      "level": 1,
+      "anchorScore": 0,
       "state": "ominous intact city",
       "provenance": {
         "assetStatus": "preserved existing stage",
@@ -46,7 +54,7 @@
       }
     },
     {
-      "level": 2,
+      "anchorScore": 500,
       "state": "gathering storm over the intact city",
       "provenance": {
         "assetStatus": "new interleaved stage",
@@ -73,7 +81,7 @@
       }
     },
     {
-      "level": 3,
+      "anchorScore": 1000,
       "state": "storm smoke and first damage",
       "provenance": {
         "assetStatus": "preserved existing stage",
@@ -97,7 +105,7 @@
       }
     },
     {
-      "level": 4,
+      "anchorScore": 1500,
       "state": "heavy smoke emergency",
       "provenance": {
         "assetStatus": "new interleaved stage",
@@ -124,7 +132,7 @@
       }
     },
     {
-      "level": 5,
+      "anchorScore": 2000,
       "state": "burning partly collapsed city",
       "provenance": {
         "assetStatus": "preserved existing stage",
@@ -148,7 +156,7 @@
       }
     },
     {
-      "level": 6,
+      "anchorScore": 2500,
       "state": "widespread fire and collapse",
       "provenance": {
         "assetStatus": "new interleaved stage",
@@ -175,7 +183,7 @@
       }
     },
     {
-      "level": 7,
+      "anchorScore": 3000,
       "state": "post-destruction rubble and ashes",
       "provenance": {
         "assetStatus": "preserved existing stage",
@@ -199,7 +207,7 @@
       }
     },
     {
-      "level": 8,
+      "anchorScore": 3500,
       "state": "cold ash aftermath",
       "provenance": {
         "assetStatus": "new interleaved stage",

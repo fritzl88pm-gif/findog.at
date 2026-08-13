@@ -80,17 +80,22 @@ Apply all migrations in order through the Supabase SQL editor or your migration 
 18. `supabase/migrations/20260719012331_fred_chat_history_fk_indexes.sql`
 19. `supabase/migrations/20260719072643_fred_native_attachment_metadata.sql`
 20. `supabase/migrations/20260719084653_fred_research_trace_and_citations.sql`
-21. `supabase/migrations/20260723123000_fred_pro_mode.sql`
-22. `supabase/migrations/20260723170000_quickfred_conversation_agent.sql`
-23. `supabase/migrations/20260727182232_user_reasonings.sql`
-24. `supabase/migrations/20260727183824_user_reasoning_owner_fk_indexes.sql`
-25. `supabase/migrations/20260730150000_fred_public_answer_shares.sql`
-26. `supabase/migrations/20260730192000_user_reasoning_subcategories.sql`
-27. `supabase/migrations/20260731110000_telegram_bot_integration.sql`
-28. `supabase/migrations/20260801051911_telegram_pro_web_modes.sql`
-29. `supabase/migrations/20260807051732_fred_user_preferences.sql`
-30. `supabase/migrations/20260807064643_fred_personality_profiles.sql`
-31. `supabase/migrations/20260808094800_download_library.sql`
+21. `supabase/migrations/20260719171431_fredrun_highscores.sql`
+22. `supabase/migrations/20260719190000_scanning_settings.sql`
+23. `supabase/migrations/20260723123000_fred_pro_mode.sql`
+24. `supabase/migrations/20260723170000_quickfred_conversation_agent.sql`
+25. `supabase/migrations/20260727182232_user_reasonings.sql`
+26. `supabase/migrations/20260727183824_user_reasoning_owner_fk_indexes.sql`
+27. `supabase/migrations/20260730150000_fred_public_answer_shares.sql`
+28. `supabase/migrations/20260730192000_user_reasoning_subcategories.sql`
+29. `supabase/migrations/20260731110000_telegram_bot_integration.sql`
+30. `supabase/migrations/20260801051911_telegram_pro_web_modes.sql`
+31. `supabase/migrations/20260807051732_fred_user_preferences.sql`
+32. `supabase/migrations/20260807064643_fred_personality_profiles.sql`
+33. `supabase/migrations/20260808094800_download_library.sql`
+34. `supabase/migrations/20260808121758_harden_download_audit.sql`
+35. `supabase/migrations/20260812120000_fred_generation_runs.sql`
+36. `supabase/migrations/20260813133900_reset_fredrun_leaderboard_for_endless_mode.sql`
 
 Supabase Auth must be enabled for email/password login. Authorized accounts are manually provisioned; the app does not expose self-service registration. Server persistence stores the authenticated Supabase `user.id` as `conversations.client_id`, `messages.client_id`, and `agent_runs.client_id`. Fred sessions and messages use separate `fred_*` tables and retain their bridge/webhook provenance. For assistant messages, `content` remains the original provider answer; `display_content`, `research_trace`, `source_references`, and `content_transformation` record the bounded native presentation separately. Deleting an owned conversation cascades to its messages, agent runs, and agent steps; deleting a Fred conversation cascades to its Fred messages and processed webhook events. The admin request audit records only submitted user prompts and is deliberately independent of conversation deletion; deleting the audit history does not remove a user's conversations.
 

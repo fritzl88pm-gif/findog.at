@@ -1,0 +1,22 @@
+{
+  "source": {
+    "file": "jqa-dance_gangnam.png",
+    "sha256": "8D2E3FB26AD4E7E28DF590C92E8679F60CF9EA8CA7B38D7931863163973F502F",
+    "grid": "8x8",
+    "frameCount": 64
+  },
+  "atlas": {
+    "file": "jqa-dance-gangnam.webp",
+    "format": "webp",
+    "sha256": "65C1555C71D957010F4EB97971A285324079974BE8719D59307ECB68EA5B7A22",
+    "columns": 8,
+    "rows": 8,
+    "cellSize": 192,
+    "frameCount": 64,
+    "anchor": "bottom-center",
+    "sharedScale": 0.422803,
+    "flippedHorizontally": false,
+    "movement": "stationary dance; world scroll only",
+    "bytes": 403038
+  }
+}

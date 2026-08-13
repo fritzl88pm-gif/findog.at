@@ -32,6 +32,7 @@ if (configuredSupabaseOrigin?.startsWith("https://")) {
 const supabaseImageSources = supabaseConnectSources.filter((source) => (
   source.startsWith("https://") || source.startsWith("http://")
 ));
+const developmentScriptSources = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
@@ -46,7 +47,7 @@ const nextConfig: NextConfig = {
           {
             key: "Content-Security-Policy",
             value:
-              `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: ${supabaseImageSources.join(" ")}; connect-src 'self' ${supabaseConnectSources.join(" ")}; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`,
+              `default-src 'self'; script-src 'self' 'unsafe-inline'${developmentScriptSources}; style-src 'self' 'unsafe-inline'; img-src 'self' data: ${supabaseImageSources.join(" ")}; connect-src 'self' ${supabaseConnectSources.join(" ")}; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`,
           },
           { key: "Referrer-Policy", value: "same-origin" },
           { key: "X-Content-Type-Options", value: "nosniff" },

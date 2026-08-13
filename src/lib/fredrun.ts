@@ -2,21 +2,25 @@ export const FREDRUN_WORLD_WIDTH = 960;
 export const FREDRUN_WORLD_HEIGHT = 360;
 export const FREDRUN_GROUND_Y = 300;
 export const FREDRUN_PLAYER_X = 132;
-export const FREDRUN_MILESTONE_POINTS = 250;
-export const FREDRUN_MILESTONE_DURATION = 1.6;
-export const FREDRUN_HIGH_SCORE_KEY = "findog.fredrun.highscore.v1";
+export const FREDRUN_SCORE_PULSE_POINTS = 250;
+export const FREDRUN_BACKGROUND_SCORE_STEP = 500;
+export const FREDRUN_HIGH_SCORE_KEY = "findog.fredrun.highscore.v2";
 
 const BASE_SPEED = 300;
+const SPEED_INCREASE_PER_SCORE_STEP = 120;
+const BACKGROUND_CROSSFADE_FRACTION = 40 / FREDRUN_BACKGROUND_SCORE_STEP;
 const GRAVITY = 1600;
 const JUMP_VELOCITY = 660;
 const SCORE_DISTANCE = 34;
 const INITIAL_SPAWN_DISTANCE = 650;
-const RESUME_SPAWN_DISTANCE = 520;
 const ODO_SPAWN_RATE = 0.125;
+const MADINGER_SPAWN_RATE = 0.125;
+const JQA_SPAWN_RATE = 0.125;
 const ODO_SPEED_MULTIPLIER = 1.18;
+const MADINGER_SPEED_MULTIPLIER = 1.12;
 
-export type FredRunPhase = "ready" | "running" | "milestone" | "paused" | "game-over";
-export type FredRunObstacleKind = "odo" | "reihe100" | "steuerkodex" | "paragraph";
+export type FredRunPhase = "ready" | "running" | "paused" | "game-over";
+export type FredRunObstacleKind = "odo" | "madinger" | "jqa" | "reihe100" | "steuerkodex" | "paragraph";
 
 export type FredRunObstacle = {
   id: number;
@@ -27,6 +31,8 @@ export type FredRunObstacle = {
 };
 
 const FREDRUN_ODO_SPEC = { kind: "odo", width: 38, height: 78 } as const;
+const FREDRUN_MADINGER_SPEC = { kind: "madinger", width: 42, height: 82 } as const;
+const FREDRUN_JQA_SPEC = { kind: "jqa", width: 42, height: 84 } as const;
 const FREDRUN_STATIC_OBSTACLE_SPECS = [
   { kind: "reihe100", width: 56, height: 60 },
   { kind: "steuerkodex", width: 45, height: 70 },
@@ -35,14 +41,10 @@ const FREDRUN_STATIC_OBSTACLE_SPECS = [
 
 export type FredRunState = {
   phase: FredRunPhase;
-  pausedFrom: "running" | "milestone" | null;
   elapsed: number;
   distance: number;
   score: number;
-  level: number;
   speed: number;
-  nextMilestone: number;
-  milestoneRemaining: number;
   spawnDistance: number;
   nextObstacleId: number;
   playerHeight: number;
@@ -57,14 +59,10 @@ export type FredRunStorage = Pick<Storage, "getItem" | "setItem">;
 export function createFredRunState(): FredRunState {
   return {
     phase: "ready",
-    pausedFrom: null,
     elapsed: 0,
     distance: 0,
     score: 0,
-    level: 1,
     speed: BASE_SPEED,
-    nextMilestone: FREDRUN_MILESTONE_POINTS,
-    milestoneRemaining: 0,
     spawnDistance: INITIAL_SPAWN_DISTANCE,
     nextObstacleId: 1,
     playerHeight: 0,
@@ -99,32 +97,76 @@ export function jumpFredRun(state: FredRunState): FredRunState {
 }
 
 export function pauseFredRun(state: FredRunState): FredRunState {
-  if (state.phase !== "running" && state.phase !== "milestone") {
+  if (state.phase !== "running") {
     return state;
   }
-  return { ...state, pausedFrom: state.phase, phase: "paused" };
+  return { ...state, phase: "paused" };
 }
 
 export function resumeFredRun(state: FredRunState): FredRunState {
-  if (state.phase !== "paused" || !state.pausedFrom) {
+  if (state.phase !== "paused") {
     return state;
   }
-  return { ...state, phase: state.pausedFrom, pausedFrom: null };
+  return { ...state, phase: "running" };
 }
 
-export function fredRunSpeedForLevel(level: number): number {
-  return BASE_SPEED + (level - 1) * 120;
+function normalizedPositive(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function smoothstep(value: number): number {
+  const normalized = Math.min(1, Math.max(0, value));
+  return normalized * normalized * (3 - 2 * normalized);
+}
+
+function ramp(value: number, start: number, end: number): number {
+  if (end <= start) return value >= end ? 1 : 0;
+  return smoothstep((value - start) / (end - start));
+}
+
+export function fredRunContinuousScoreForDistance(distance: number): number {
+  return normalizedPositive(distance) / SCORE_DISTANCE;
+}
+
+export function fredRunSpeedForScore(score: number): number {
+  return BASE_SPEED
+    + normalizedPositive(score) / FREDRUN_SCORE_PULSE_POINTS * SPEED_INCREASE_PER_SCORE_STEP;
+}
+
+export function fredRunSpeedForDistance(distance: number): number {
+  return fredRunSpeedForScore(fredRunContinuousScoreForDistance(distance));
 }
 
 export type FredRunEnvironment = {
-  stage: number;
+  fromStage: number;
+  toStage: number;
+  blend: number;
+  progress: number;
   darkness: number;
+  storm: number;
+  rain: number;
+  smoke: number;
+  embers: number;
+  ash: number;
 };
 
-export function fredRunEnvironmentForLevel(level: number): FredRunEnvironment {
-  const normalizedLevel = Math.max(1, Math.floor(level));
-  const darkness = Math.min(0.125, Number(((normalizedLevel - 1) * 0.025).toFixed(3)));
-  return { stage: Math.min(7, normalizedLevel - 1), darkness };
+export function fredRunEnvironmentForDistance(distance: number): FredRunEnvironment {
+  const score = fredRunContinuousScoreForDistance(distance);
+  const progress = Math.min(7, score / FREDRUN_BACKGROUND_SCORE_STEP);
+  const fromStage = Math.floor(progress);
+  const toStage = Math.min(7, fromStage + 1);
+  const segmentProgress = progress - fromStage;
+  const crossfadeStart = 1 - BACKGROUND_CROSSFADE_FRACTION;
+  const blend = fromStage === toStage
+    ? 0
+    : smoothstep((segmentProgress - crossfadeStart) / BACKGROUND_CROSSFADE_FRACTION);
+  const darkness = Math.min(0.125, Number((progress * 0.025).toFixed(4)));
+  const storm = ramp(progress, 0.1, 1.1) * (1 - ramp(progress, 4.8, 6.4));
+  const rain = ramp(progress, 0.35, 1.35) * (1 - ramp(progress, 4.6, 6.2));
+  const smoke = ramp(progress, 1, 3) * (1 - 0.45 * ramp(progress, 6, 7));
+  const embers = ramp(progress, 3.2, 4.8) * (1 - 0.75 * ramp(progress, 6, 7));
+  const ash = ramp(progress, 5.2, 7);
+  return { fromStage, toStage, blend, progress, darkness, storm, rain, smoke, embers, ash };
 }
 
 function obstacleFor(random: () => number, id: number): FredRunObstacle {
@@ -132,7 +174,14 @@ function obstacleFor(random: () => number, id: number): FredRunObstacle {
   if (roll < ODO_SPAWN_RATE) {
     return { id, ...FREDRUN_ODO_SPEC, x: FREDRUN_WORLD_WIDTH + 40 };
   }
-  const regularRoll = (roll - ODO_SPAWN_RATE) / (1 - ODO_SPAWN_RATE);
+  if (roll < ODO_SPAWN_RATE + MADINGER_SPAWN_RATE) {
+    return { id, ...FREDRUN_MADINGER_SPEC, x: FREDRUN_WORLD_WIDTH + 40 };
+  }
+  if (roll < ODO_SPAWN_RATE + MADINGER_SPAWN_RATE + JQA_SPAWN_RATE) {
+    return { id, ...FREDRUN_JQA_SPEC, x: FREDRUN_WORLD_WIDTH + 40 };
+  }
+  const animatedSpawnRate = ODO_SPAWN_RATE + MADINGER_SPAWN_RATE + JQA_SPAWN_RATE;
+  const regularRoll = (roll - animatedSpawnRate) / (1 - animatedSpawnRate);
   const regularIndex = Math.min(
     FREDRUN_STATIC_OBSTACLE_SPECS.length - 1,
     Math.floor(regularRoll * FREDRUN_STATIC_OBSTACLE_SPECS.length),
@@ -146,6 +195,12 @@ function nextGap(speed: number, random: () => number): number {
   return safeMinimum + Math.min(1, Math.max(0, random())) * 190;
 }
 
+function obstacleSpeedMultiplier(kind: FredRunObstacleKind): number {
+  if (kind === "odo") return ODO_SPEED_MULTIPLIER;
+  if (kind === "madinger") return MADINGER_SPEED_MULTIPLIER;
+  return 1;
+}
+
 function rectanglesOverlap(
   first: { x: number; y: number; width: number; height: number },
   second: { x: number; y: number; width: number; height: number },
@@ -156,19 +211,27 @@ function rectanglesOverlap(
     && first.y + first.height > second.y;
 }
 
-function collidesWithPlayer(state: FredRunState): boolean {
+function collidesWithPlayer(
+  state: FredRunState,
+  previousObstaclePositions: ReadonlyMap<number, number> = new Map(),
+): boolean {
   const player = {
     x: FREDRUN_PLAYER_X - 24,
     y: FREDRUN_GROUND_Y - state.playerHeight - 76,
     width: 48,
     height: 72,
   };
-  return state.obstacles.some((obstacle) => rectanglesOverlap(player, {
-    x: obstacle.x + 4,
-    y: FREDRUN_GROUND_Y - obstacle.height + 3,
-    width: obstacle.width - 8,
-    height: obstacle.height - 3,
-  }));
+  return state.obstacles.some((obstacle) => {
+    const previousX = previousObstaclePositions.get(obstacle.id) ?? obstacle.x;
+    const sweptX = Math.min(obstacle.x, previousX) + 4;
+    const sweptWidth = Math.abs(previousX - obstacle.x) + obstacle.width - 8;
+    return rectanglesOverlap(player, {
+      x: sweptX,
+      y: FREDRUN_GROUND_Y - obstacle.height + 3,
+      width: sweptWidth,
+      height: obstacle.height - 3,
+    });
+  });
 }
 
 export function advanceFredRun(
@@ -177,25 +240,8 @@ export function advanceFredRun(
   random: () => number = Math.random,
 ): FredRunState {
   const delta = Math.min(0.05, Math.max(0, deltaSeconds));
-  if (delta === 0 || (state.phase !== "running" && state.phase !== "milestone")) {
+  if (delta === 0 || state.phase !== "running") {
     return state;
-  }
-
-  if (state.phase === "milestone") {
-    const milestoneRemaining = Math.max(0, state.milestoneRemaining - delta);
-    if (milestoneRemaining > 0) {
-      return { ...state, milestoneRemaining, elapsed: state.elapsed + delta };
-    }
-    const level = state.level + 1;
-    return {
-      ...state,
-      phase: "running",
-      level,
-      speed: fredRunSpeedForLevel(level),
-      milestoneRemaining: 0,
-      spawnDistance: RESUME_SPAWN_DISTANCE,
-      elapsed: state.elapsed + delta,
-    };
   }
 
   let playerHeight = state.playerHeight;
@@ -213,21 +259,28 @@ export function advanceFredRun(
     }
   }
 
-  const distance = state.distance + state.speed * delta;
+  const currentSpeed = fredRunSpeedForDistance(state.distance);
+  const distance = state.distance + currentSpeed * delta;
   const score = Math.floor(distance / SCORE_DISTANCE);
-  let spawnDistance = state.spawnDistance - state.speed * delta;
+  const speed = fredRunSpeedForDistance(distance);
+  let spawnDistance = state.spawnDistance - currentSpeed * delta;
   let nextObstacleId = state.nextObstacleId;
-  const obstacles = state.obstacles
-    .map((obstacle) => ({
-      ...obstacle,
-      x: obstacle.x - state.speed * (obstacle.kind === "odo" ? ODO_SPEED_MULTIPLIER : 1) * delta,
-    }))
-    .filter((obstacle) => obstacle.x + obstacle.width > -20);
+  const previousObstaclePositions = new Map(
+    state.obstacles.map((obstacle) => [obstacle.id, obstacle.x]),
+  );
+  const movedObstacles = state.obstacles.map((obstacle) => ({
+    ...obstacle,
+    x: obstacle.x - currentSpeed * obstacleSpeedMultiplier(obstacle.kind) * delta,
+  }));
+  const obstacles = movedObstacles.filter((obstacle) => obstacle.x + obstacle.width > -20);
+  const collisionObstacles = [...movedObstacles];
 
   if (spawnDistance <= 0) {
-    obstacles.push(obstacleFor(random, nextObstacleId));
+    const obstacle = obstacleFor(random, nextObstacleId);
+    obstacles.push(obstacle);
+    collisionObstacles.push(obstacle);
     nextObstacleId += 1;
-    spawnDistance = nextGap(state.speed, random);
+    spawnDistance = nextGap(speed, random);
   }
 
   const advanced: FredRunState = {
@@ -235,6 +288,7 @@ export function advanceFredRun(
     elapsed: state.elapsed + delta,
     distance,
     score,
+    speed,
     playerHeight,
     playerVelocity,
     jumpElapsed,
@@ -244,22 +298,11 @@ export function advanceFredRun(
     obstacles,
   };
 
-  if (collidesWithPlayer(advanced)) {
+  if (collidesWithPlayer(
+    { ...advanced, obstacles: collisionObstacles },
+    previousObstaclePositions,
+  )) {
     return { ...advanced, phase: "game-over" };
-  }
-
-  if (score >= state.nextMilestone) {
-    return {
-      ...advanced,
-      phase: "milestone",
-      milestoneRemaining: FREDRUN_MILESTONE_DURATION,
-      nextMilestone: state.nextMilestone + FREDRUN_MILESTONE_POINTS,
-      playerHeight: 0,
-      playerVelocity: 0,
-      jumpElapsed: 0,
-      grounded: true,
-      obstacles: [],
-    };
   }
 
   return advanced;

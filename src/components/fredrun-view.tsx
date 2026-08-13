@@ -5,14 +5,13 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 
 import {
   FREDRUN_GROUND_Y,
-  FREDRUN_MILESTONE_DURATION,
-  FREDRUN_MILESTONE_POINTS,
   FREDRUN_PLAYER_X,
+  FREDRUN_SCORE_PULSE_POINTS,
   FREDRUN_WORLD_HEIGHT,
   FREDRUN_WORLD_WIDTH,
   advanceFredRun,
   createFredRunState,
-  fredRunEnvironmentForLevel,
+  fredRunEnvironmentForDistance,
   jumpFredRun,
   pauseFredRun,
   readFredRunHighScore,
@@ -22,6 +21,7 @@ import {
   writeFredRunHighScore,
   type FredRunObstacle,
   type FredRunObstacleKind,
+  type FredRunEnvironment,
   type FredRunPhase,
   type FredRunState,
 } from "@/lib/fredrun";
@@ -74,6 +74,20 @@ const obstacleLayouts: Record<
     offsetX: -40,
     animation: { columns: 8, cellSize: 192, frameCount: 64, fps: 22 },
   },
+  madinger: {
+    source: "/fredrun/madinger-walk.webp",
+    drawWidth: 104,
+    drawHeight: 104,
+    offsetX: -31,
+    animation: { columns: 7, cellSize: 192, frameCount: 49, fps: 18 },
+  },
+  jqa: {
+    source: "/fredrun/jqa-dance-gangnam.webp",
+    drawWidth: 108,
+    drawHeight: 108,
+    offsetX: -33,
+    animation: { columns: 8, cellSize: 192, frameCount: 64, fps: 18 },
+  },
   reihe100: {
     source: "/fredrun/obstacles/reihe100.webp",
     drawWidth: 72,
@@ -102,11 +116,10 @@ type FredRunImages = { sprites: SpriteImages; obstacles: ObstacleImages; backgro
 type FredRunSnapshot = {
   phase: FredRunPhase;
   score: number;
-  level: number;
 };
 
 function snapshotFrom(state: FredRunState): FredRunSnapshot {
-  return { phase: state.phase, score: state.score, level: state.level };
+  return { phase: state.phase, score: state.score };
 }
 
 function loadImage(source: string): Promise<HTMLImageElement> {
@@ -171,6 +184,7 @@ function drawViennaBackground(
   state: FredRunState,
   image: HTMLImageElement,
   reducedMotion: boolean,
+  opacity = 1,
 ) {
   const tileWidth = BACKGROUND_DRAW_HEIGHT * image.naturalWidth / image.naturalHeight;
   const period = tileWidth * 2;
@@ -179,18 +193,190 @@ function drawViennaBackground(
   let drawX = -(scroll % tileWidth);
   const drawY = FREDRUN_GROUND_Y - BACKGROUND_DRAW_HEIGHT;
 
+  context.save();
+  context.globalAlpha *= Math.min(1, Math.max(0, opacity));
   while (drawX < FREDRUN_WORLD_WIDTH) {
+    const tileLeft = Math.floor(drawX);
+    const tileRight = Math.ceil(drawX + tileWidth);
+    const seamSafeWidth = tileRight - tileLeft + 1;
     context.save();
     if (tileIndex % 2 === 1) {
-      context.translate(drawX + tileWidth, 0);
+      context.translate(tileLeft + seamSafeWidth, 0);
       context.scale(-1, 1);
-      context.drawImage(image, 0, drawY, tileWidth, BACKGROUND_DRAW_HEIGHT);
+      context.drawImage(image, 0, drawY, seamSafeWidth, BACKGROUND_DRAW_HEIGHT);
     } else {
-      context.drawImage(image, drawX, drawY, tileWidth, BACKGROUND_DRAW_HEIGHT);
+      context.drawImage(image, tileLeft, drawY, seamSafeWidth, BACKGROUND_DRAW_HEIGHT);
     }
     context.restore();
     drawX += tileWidth;
     tileIndex += 1;
+  }
+  context.restore();
+}
+
+function seededUnit(index: number): number {
+  const value = Math.sin(index * 91.733 + 17.17) * 43_758.5453;
+  return value - Math.floor(value);
+}
+
+const LIGHTNING_SCHEDULES = [
+  { cycleLength: 6.2, offset: 1.4, duration: 0.16, seed: 211 },
+  { cycleLength: 9.1, offset: 4.7, duration: 0.13, seed: 367 },
+] as const;
+
+function drawLightningBolt(
+  context: CanvasRenderingContext2D,
+  x: number,
+  flash: number,
+  seed: number,
+) {
+  const direction = seededUnit(seed + 1) > 0.5 ? 1 : -1;
+  const points = [
+    { x, y: -4 },
+    { x: x + direction * (10 + seededUnit(seed + 2) * 13), y: 34 },
+    { x: x - direction * (5 + seededUnit(seed + 3) * 9), y: 69 },
+    { x: x + direction * (12 + seededUnit(seed + 4) * 16), y: 105 },
+    { x: x + direction * (4 + seededUnit(seed + 5) * 12), y: 148 },
+  ];
+
+  context.strokeStyle = `rgba(226, 240, 255, ${0.78 * flash})`;
+  context.lineWidth = 1.5;
+  context.shadowColor = `rgba(188, 217, 255, ${0.65 * flash})`;
+  context.shadowBlur = 9;
+  context.beginPath();
+  context.moveTo(points[0].x, points[0].y);
+  for (const point of points.slice(1)) context.lineTo(point.x, point.y);
+  context.stroke();
+
+  context.lineWidth = 0.8;
+  context.beginPath();
+  context.moveTo(points[2].x, points[2].y);
+  context.lineTo(points[2].x - direction * 18, points[2].y + 18);
+  context.lineTo(points[2].x - direction * 27, points[2].y + 39);
+  context.stroke();
+}
+
+function drawStormAtmosphere(
+  context: CanvasRenderingContext2D,
+  state: FredRunState,
+  environment: FredRunEnvironment,
+  reducedMotion: boolean,
+) {
+  if (environment.storm <= 0.01 || reducedMotion) return;
+  context.save();
+  for (let index = 0; index < 7; index += 1) {
+    const width = 250 + seededUnit(index + 10) * 205;
+    const x = ((index * 218 - state.elapsed * (9 + index * 1.4) + 1_450) % 1_450) - 250;
+    const opacity = (0.024 + seededUnit(index + 20) * 0.027) * environment.storm;
+    context.fillStyle = `rgba(10, 18, 29, ${opacity})`;
+    context.beginPath();
+    context.ellipse(x, 42 + index * 15, width, 50 + index * 7, -0.08, 0, Math.PI * 2);
+    context.fill();
+  }
+
+  for (const [index, schedule] of LIGHTNING_SCHEDULES.entries()) {
+    const cycleTime = (state.elapsed + schedule.offset) % schedule.cycleLength;
+    if (cycleTime >= schedule.duration) continue;
+    const pulse = Math.sin(cycleTime / schedule.duration * Math.PI);
+    const flash = pulse * environment.storm;
+    const cycle = Math.floor((state.elapsed + schedule.offset) / schedule.cycleLength);
+    const strikeSeed = schedule.seed + cycle * 17 + index * 101;
+    const lightningX = 105 + seededUnit(strikeSeed) * 750;
+    context.fillStyle = `rgba(214, 231, 255, ${0.095 * flash})`;
+    context.fillRect(0, 0, FREDRUN_WORLD_WIDTH, FREDRUN_GROUND_Y);
+    drawLightningBolt(context, lightningX, flash, strikeSeed);
+  }
+  context.restore();
+}
+
+function drawRainAtmosphere(
+  context: CanvasRenderingContext2D,
+  state: FredRunState,
+  environment: FredRunEnvironment,
+  reducedMotion: boolean,
+) {
+  if (environment.rain <= 0.01 || reducedMotion) return;
+  context.save();
+  const rainVeil = context.createLinearGradient(0, 0, 0, FREDRUN_GROUND_Y);
+  rainVeil.addColorStop(0, `rgba(94, 120, 145, ${0.018 * environment.rain})`);
+  rainVeil.addColorStop(1, `rgba(25, 43, 59, ${0.065 * environment.rain})`);
+  context.fillStyle = rainVeil;
+  context.fillRect(0, 0, FREDRUN_WORLD_WIDTH, FREDRUN_GROUND_Y);
+
+  context.strokeStyle = `rgba(190, 216, 236, ${0.09 + 0.12 * environment.rain})`;
+  context.lineWidth = 1;
+  context.beginPath();
+  for (let index = 0; index < 68; index += 1) {
+    const speed = 235 + seededUnit(index + 410) * 190;
+    const travel = (state.elapsed * speed + seededUnit(index + 430) * 530) % 530;
+    const x = (seededUnit(index + 450) * (FREDRUN_WORLD_WIDTH + 120) - travel * 0.19
+      + FREDRUN_WORLD_WIDTH + 120) % (FREDRUN_WORLD_WIDTH + 120) - 60;
+    const y = travel - 54;
+    const length = 9 + seededUnit(index + 470) * 16;
+    context.moveTo(x, y);
+    context.lineTo(x - 5 - environment.rain * 3, y + length);
+  }
+  context.stroke();
+  context.restore();
+}
+
+function drawSmokeAtmosphere(
+  context: CanvasRenderingContext2D,
+  state: FredRunState,
+  environment: FredRunEnvironment,
+  reducedMotion: boolean,
+) {
+  if (environment.smoke <= 0.01 || reducedMotion) return;
+  context.save();
+  for (let index = 0; index < 9; index += 1) {
+    const life = (state.elapsed * (0.025 + index * 0.0015) + index / 9) % 1;
+    const baseX = 45 + seededUnit(index + 20) * 870;
+    const drift = Math.sin(state.elapsed * 0.3 + index) * 22;
+    const y = FREDRUN_GROUND_Y - 42 - life * 205;
+    const radiusX = 23 + life * 38 + seededUnit(index + 40) * 12;
+    const radiusY = radiusX * 0.55;
+    const opacity = Math.sin(life * Math.PI) * 0.065 * environment.smoke;
+    context.fillStyle = `rgba(36, 39, 43, ${opacity})`;
+    context.beginPath();
+    context.ellipse(baseX + drift, y, radiusX, radiusY, 0, 0, Math.PI * 2);
+    context.fill();
+  }
+  context.restore();
+}
+
+function drawAtmosphericParticles(
+  context: CanvasRenderingContext2D,
+  state: FredRunState,
+  environment: FredRunEnvironment,
+  reducedMotion: boolean,
+) {
+  if (reducedMotion) return;
+  if (environment.embers > 0.01) {
+    context.save();
+    for (let index = 0; index < 22; index += 1) {
+      const life = (state.elapsed * (0.12 + index * 0.0018) + seededUnit(index + 100)) % 1;
+      const x = seededUnit(index + 120) * FREDRUN_WORLD_WIDTH
+        + Math.sin(state.elapsed * 1.4 + index) * 12;
+      const y = FREDRUN_GROUND_Y - 16 - life * 155;
+      const opacity = Math.sin(life * Math.PI) * 0.72 * environment.embers;
+      context.fillStyle = `rgba(255, ${125 + index % 3 * 36}, 38, ${opacity})`;
+      context.fillRect(x, y, 1.4 + index % 2, 1.4 + index % 2);
+    }
+    context.restore();
+  }
+
+  if (environment.ash > 0.01) {
+    context.save();
+    for (let index = 0; index < 30; index += 1) {
+      const life = (state.elapsed * (0.035 + index * 0.0007) + seededUnit(index + 150)) % 1;
+      const x = (seededUnit(index + 180) * FREDRUN_WORLD_WIDTH
+        + life * (35 + index % 5 * 8)) % FREDRUN_WORLD_WIDTH;
+      const y = -12 + life * (FREDRUN_GROUND_Y + 28);
+      const opacity = (0.18 + seededUnit(index + 210) * 0.28) * environment.ash;
+      context.fillStyle = `rgba(214, 218, 220, ${opacity})`;
+      context.fillRect(x, y, 1 + index % 2, 2 + index % 3);
+    }
+    context.restore();
   }
 }
 
@@ -200,16 +386,27 @@ function drawBackground(
   backgrounds: HTMLImageElement[],
   reducedMotion: boolean,
 ) {
-  const environment = fredRunEnvironmentForLevel(state.level);
-  const background = backgrounds[environment.stage] ?? null;
+  const environment = fredRunEnvironmentForDistance(state.distance);
+  const fromBackground = backgrounds[environment.fromStage] ?? null;
+  const toBackground = backgrounds[environment.toStage] ?? null;
 
-  if (background) {
-    drawViennaBackground(context, state, background, reducedMotion);
+  if (fromBackground) {
+    drawViennaBackground(context, state, fromBackground, reducedMotion);
+    if (toBackground && environment.toStage !== environment.fromStage && environment.blend > 0) {
+      drawViennaBackground(context, state, toBackground, reducedMotion, environment.blend);
+    }
+  } else if (toBackground) {
+    drawViennaBackground(context, state, toBackground, reducedMotion);
   } else {
     drawFallbackBackground(context, state, reducedMotion);
   }
 
-  const devastation = Math.min(1, (state.level - 1) / 5);
+  drawStormAtmosphere(context, state, environment, reducedMotion);
+  drawRainAtmosphere(context, state, environment, reducedMotion);
+  drawSmokeAtmosphere(context, state, environment, reducedMotion);
+  drawAtmosphericParticles(context, state, environment, reducedMotion);
+
+  const devastation = Math.min(1, environment.progress / 5);
   context.fillStyle = `rgb(${Math.round(184 - 111 * devastation)}, ${Math.round(192 - 121 * devastation)}, ${Math.round(182 - 114 * devastation)})`;
   context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT - FREDRUN_GROUND_Y);
   context.fillStyle = `rgb(${Math.round(115 - 67 * devastation)}, ${Math.round(140 - 94 * devastation)}, ${Math.round(121 - 77 * devastation)})`;
@@ -295,17 +492,6 @@ function drawObstacle(
 }
 
 function activeSprite(state: FredRunState): { key: SpriteKey; frame: number } {
-  const effectivePhase = state.phase === "paused" ? state.pausedFrom : state.phase;
-  if (effectivePhase === "milestone") {
-    const progress = 1 - state.milestoneRemaining / FREDRUN_MILESTONE_DURATION;
-    return {
-      key: "victory",
-      frame: Math.min(
-        spriteLayouts.victory.frameCount - 1,
-        Math.max(0, Math.floor(progress * spriteLayouts.victory.frameCount)),
-      ),
-    };
-  }
   if (!state.grounded) {
     const progress = state.jumpElapsed / JUMP_ANIMATION_DURATION;
     return {
@@ -316,7 +502,7 @@ function activeSprite(state: FredRunState): { key: SpriteKey; frame: number } {
       ),
     };
   }
-  if (effectivePhase === "running") {
+  if (state.phase === "running") {
     return { key: "walk", frame: Math.floor(state.elapsed * 18) % spriteLayouts.walk.frameCount };
   }
   return { key: "walk", frame: 0 };
@@ -366,10 +552,73 @@ function renderFredRun(
   }
 }
 
+function FredRunVictoryDance() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [image, setImage] = useState<HTMLImageElement | null>(null);
+  const [reducedMotion, setReducedMotion] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadImage(spriteLayouts.victory.source).then((loadedImage) => {
+      if (!cancelled) setImage(loadedImage);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updatePreference = () => setReducedMotion(media.matches);
+    updatePreference();
+    media.addEventListener("change", updatePreference);
+    return () => media.removeEventListener("change", updatePreference);
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context || !image) return;
+    let animationFrame: number | null = null;
+    const draw = (timestamp: number) => {
+      const frame = reducedMotion
+        ? 48
+        : Math.floor(timestamp / 1_000 * 18) % spriteLayouts.victory.frameCount;
+      const sourceX = (frame % spriteLayouts.victory.columns) * SPRITE_CELL_SIZE;
+      const sourceY = Math.floor(frame / spriteLayouts.victory.columns) * SPRITE_CELL_SIZE;
+      context.clearRect(0, 0, SPRITE_CELL_SIZE, SPRITE_CELL_SIZE);
+      context.drawImage(
+        image,
+        sourceX,
+        sourceY,
+        SPRITE_CELL_SIZE,
+        SPRITE_CELL_SIZE,
+        0,
+        0,
+        SPRITE_CELL_SIZE,
+        SPRITE_CELL_SIZE,
+      );
+      if (!reducedMotion) animationFrame = window.requestAnimationFrame(draw);
+    };
+    draw(performance.now());
+    return () => {
+      if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
+    };
+  }, [image, reducedMotion]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="fredrun-game-over-dance"
+      width={SPRITE_CELL_SIZE}
+      height={SPRITE_CELL_SIZE}
+      role="img"
+      aria-label="Fred tanzt"
+    />
+  );
+}
+
 function phaseStatus(snapshot: FredRunSnapshot): string {
   if (snapshot.phase === "ready") return "Fredrun ist bereit.";
-  if (snapshot.phase === "running") return `Runde läuft. ${snapshot.score} Punkte, Stufe ${snapshot.level}.`;
-  if (snapshot.phase === "milestone") return `${snapshot.score} Punkte erreicht. Fred feiert.`;
+  if (snapshot.phase === "running") return `Runde läuft. ${snapshot.score} Punkte.`;
   if (snapshot.phase === "paused") return "Fredrun ist pausiert.";
   return `Runde beendet mit ${snapshot.score} Punkten.`;
 }
@@ -392,7 +641,13 @@ function createRunId(): string {
   return crypto.randomUUID();
 }
 
-export default function FredRunView({ accessToken }: { accessToken: string }) {
+export default function FredRunView({
+  accessToken,
+  standalone = false,
+}: {
+  accessToken: string;
+  standalone?: boolean;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<number | null>(null);
   const gameRef = useRef<FredRunState>(createFredRunState());
@@ -401,6 +656,7 @@ export default function FredRunView({ accessToken }: { accessToken: string }) {
   const reducedMotionRef = useRef(false);
   const scoreSubmissionAbortRef = useRef<AbortController | null>(null);
   const [snapshot, setSnapshot] = useState<FredRunSnapshot>(() => snapshotFrom(createFredRunState()));
+  const [scorePulseToken, setScorePulseToken] = useState(0);
   const [bestScore, setBestScore] = useState(0);
   const [assetState, setAssetState] = useState<"loading" | "ready" | "error">("loading");
   const [assetAttempt, setAssetAttempt] = useState(0);
@@ -421,7 +677,7 @@ export default function FredRunView({ accessToken }: { accessToken: string }) {
 
   const publish = useCallback((state: FredRunState) => {
     setSnapshot((current) => {
-      if (current.phase === state.phase && current.score === state.score && current.level === state.level) {
+      if (current.phase === state.phase && current.score === state.score) {
         return current;
       }
       return snapshotFrom(state);
@@ -437,6 +693,7 @@ export default function FredRunView({ accessToken }: { accessToken: string }) {
   }, [publish]);
 
   const prepareNewRun = useCallback(() => {
+    setScorePulseToken(0);
     setCurrentRunId(createRunId());
     setSubmittedRunId(null);
     setScoreSubmissionMessage("");
@@ -465,6 +722,7 @@ export default function FredRunView({ accessToken }: { accessToken: string }) {
   }, [assetState, prepareNewRun, replaceGame]);
 
   const restartRound = useCallback(() => {
+    setScorePulseToken(0);
     setCurrentRunId(null);
     setSubmittedRunId(null);
     setScoreSubmissionMessage("");
@@ -583,7 +841,13 @@ export default function FredRunView({ accessToken }: { accessToken: string }) {
         accumulator -= FIXED_STEP;
       }
       if (state !== gameRef.current) {
-        const previousPhase = gameRef.current.phase;
+        const previousState = gameRef.current;
+        const previousPhase = previousState.phase;
+        const previousPulse = Math.floor(previousState.score / FREDRUN_SCORE_PULSE_POINTS);
+        const nextPulse = Math.floor(state.score / FREDRUN_SCORE_PULSE_POINTS);
+        if (state.phase === "running" && nextPulse > previousPulse) {
+          setScorePulseToken(nextPulse);
+        }
         gameRef.current = state;
         publish(state);
         if (state.phase === "game-over" && previousPhase !== "game-over") {
@@ -684,7 +948,7 @@ export default function FredRunView({ accessToken }: { accessToken: string }) {
   }
 
   const isPaused = snapshot.phase === "paused";
-  const showPauseButton = snapshot.phase === "running" || snapshot.phase === "milestone" || isPaused;
+  const showPauseButton = snapshot.phase === "running" || isPaused;
   const showIntro = assetState !== "error" && snapshot.phase === "ready";
   const normalizedPlayerName = normalizeFredRunPlayerName(playerName);
   const scoreWasSubmitted = Boolean(currentRunId && submittedRunId === currentRunId);
@@ -692,23 +956,32 @@ export default function FredRunView({ accessToken }: { accessToken: string }) {
   return (
     <section className="forms-panel fredrun-panel" aria-labelledby="fredrun-view-title">
       <div className="forms-view fredrun-view">
-        <header className="forms-view-header fredrun-header">
-          <div>
-            <p className="eyebrow">Findog Spielpause</p>
-            <h1 id="fredrun-view-title">Fredrun</h1>
-            <p>Spring mit Fred über REIH 100, Steuerkodex, Paragraphen und unerwartete Hindernisse.</p>
-          </div>
-          <div className="fredrun-controls-copy" aria-label="Steuerung">
-            <span><kbd>Leertaste</kbd> oder <kbd>↑</kbd></span>
-            <small>Alternativ Spielfeld antippen</small>
-          </div>
-        </header>
+        {standalone ? null : (
+          <header className="forms-view-header fredrun-header">
+            <div>
+              <p className="eyebrow">Findog Spielpause</p>
+              <h1 id="fredrun-view-title">Fredrun</h1>
+              <p>Spring mit Fred über REIH 100, Steuerkodex, Paragraphen und unerwartete Hindernisse.</p>
+            </div>
+            <div className="fredrun-controls-copy" aria-label="Steuerung">
+              <span><kbd>Leertaste</kbd> oder <kbd>↑</kbd></span>
+              <small>Alternativ Spielfeld antippen</small>
+            </div>
+          </header>
+        )}
 
         <div className={`fredrun-game-shell${showIntro ? " fredrun-game-shell--intro" : ""}`}>
           {!showIntro ? (
             <div className="fredrun-hud" aria-label="Spielstand">
-              <div><span>Punkte</span><strong>{snapshot.score}</strong></div>
-              <div><span>Stufe</span><strong>{snapshot.level}</strong></div>
+              <div>
+                <span>Punkte</span>
+                <strong
+                  key={scorePulseToken}
+                  className={scorePulseToken > 0 ? "fredrun-score--pulse" : undefined}
+                >
+                  {snapshot.score}
+                </strong>
+              </div>
               <div><span>Bestwert</span><strong>{bestScore}</strong></div>
               {showPauseButton ? (
                 <button type="button" onClick={togglePause}>{isPaused ? "Weiter" : "Pause"}</button>
@@ -766,12 +1039,6 @@ export default function FredRunView({ accessToken }: { accessToken: string }) {
                 ) : null}
               </div>
             ) : null}
-            {snapshot.phase === "milestone" ? (
-              <div className="fredrun-milestone-message">
-                <p className="fredrun-overlay-kicker">Nächste Stufe</p>
-                <h2>{snapshot.score} Punkte!</h2>
-              </div>
-            ) : null}
             {snapshot.phase === "paused" ? (
               <div className="fredrun-overlay">
                 <p className="fredrun-overlay-kicker">Kurze Pause</p>
@@ -781,10 +1048,13 @@ export default function FredRunView({ accessToken }: { accessToken: string }) {
             ) : null}
             {snapshot.phase === "game-over" ? (
               <div className="fredrun-overlay fredrun-game-over-overlay">
-                <p className="fredrun-overlay-kicker">Runde beendet</p>
-                <h2>{snapshot.score} Punkte</h2>
-                <p>Bestwert: {bestScore}</p>
-                <button className="primary-button" type="button" onClick={restartRound}>Noch einmal</button>
+                <div className="fredrun-game-over-summary">
+                  <p className="fredrun-overlay-kicker">Runde beendet</p>
+                  <h2>{snapshot.score} Punkte</h2>
+                  <p>Bestwert: {bestScore}</p>
+                  <button className="primary-button" type="button" onClick={restartRound}>Noch einmal</button>
+                </div>
+                <FredRunVictoryDance />
                 <form className="fredrun-score-form" onSubmit={(event) => void submitScore(event)}>
                   <label htmlFor="fredrun-player-name">
                     Name für die Topliste
@@ -836,12 +1106,13 @@ export default function FredRunView({ accessToken }: { accessToken: string }) {
                 </div>
               ) : null}
               <p className="fredrun-status" role="status" aria-live="polite">{phaseStatus(snapshot)}</p>
-              <p className="fredrun-milestone-note">Alle {FREDRUN_MILESTONE_POINTS} Punkte feiert Fred – danach wird es schneller.</p>
+              <p className="fredrun-endless-note">Das Tempo steigt kontinuierlich – wie weit kommst du?</p>
             </>
           ) : null}
         </div>
 
-        <section className="fredrun-leaderboard" aria-labelledby="fredrun-leaderboard-title">
+        {standalone ? null : (
+          <section className="fredrun-leaderboard" aria-labelledby="fredrun-leaderboard-title">
           <div className="fredrun-leaderboard-header">
             <div>
               <p className="eyebrow">Beste Runden</p>
@@ -883,7 +1154,8 @@ export default function FredRunView({ accessToken }: { accessToken: string }) {
               ))}
             </ol>
           )}
-        </section>
+          </section>
+        )}
       </div>
     </section>
   );

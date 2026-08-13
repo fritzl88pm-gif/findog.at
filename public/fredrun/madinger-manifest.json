@@ -1,0 +1,22 @@
+{
+  "source": {
+    "file": "Madinger-walk.png",
+    "sha256": "F786C97C128EB92D6B164FF68A8CF7C35881FB5716E0357D3D3D00281A6C207E",
+    "grid": "7x7",
+    "frameCount": 49
+  },
+  "atlas": {
+    "file": "madinger-walk.webp",
+    "format": "webp",
+    "sha256": "B6A0B005821EE6BD381492EBFA6FA56B116D1D5F6FE2066B39212027F116335F",
+    "columns": 7,
+    "rows": 7,
+    "cellSize": 192,
+    "frameCount": 49,
+    "anchor": "bottom-center",
+    "sharedScale": 1.148387,
+    "flippedHorizontally": true,
+    "direction": "right-to-left",
+    "bytes": 195062
+  }
+}
