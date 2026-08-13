@@ -40,9 +40,13 @@ const INTRO_SOURCE = "/fredrun/intro.webp";
 const BACKGROUND_FALLBACK_SOURCE = "/fredrun/vienna-panorama.webp";
 const FREDRUN_BACKGROUND_SOURCES = [
   "/fredrun/backgrounds/vienna-ominous.webp",
+  "/fredrun/backgrounds/vienna-gathering-storm.webp",
   "/fredrun/backgrounds/vienna-storm-damage.webp",
+  "/fredrun/backgrounds/vienna-heavy-smoke-emergency.webp",
   "/fredrun/backgrounds/vienna-burning-collapse.webp",
+  "/fredrun/backgrounds/vienna-widespread-fire-collapse.webp",
   "/fredrun/backgrounds/vienna-rubble-ashes.webp",
+  "/fredrun/backgrounds/vienna-cold-ash-aftermath.webp",
 ] as const;
 const BACKGROUND_DRAW_HEIGHT = 450;
 const BACKGROUND_SCROLL_FACTOR = 0.12;
@@ -116,11 +120,13 @@ function loadImage(source: string): Promise<HTMLImageElement> {
 }
 
 async function loadBackgrounds(): Promise<HTMLImageElement[]> {
-  try {
-    return await Promise.all(FREDRUN_BACKGROUND_SOURCES.map(loadImage));
-  } catch {
-    return [await loadImage(BACKGROUND_FALLBACK_SOURCE)];
-  }
+  return Promise.all(FREDRUN_BACKGROUND_SOURCES.map(async (source) => {
+    try {
+      return await loadImage(source);
+    } catch {
+      return loadImage(BACKGROUND_FALLBACK_SOURCE);
+    }
+  }));
 }
 
 function drawFallbackBackground(
@@ -195,17 +201,10 @@ function drawBackground(
   reducedMotion: boolean,
 ) {
   const environment = fredRunEnvironmentForLevel(state.level);
-  const fromBackground = backgrounds[Math.min(environment.fromStage, backgrounds.length - 1)] ?? null;
-  const toBackground = backgrounds[Math.min(environment.toStage, backgrounds.length - 1)] ?? null;
+  const background = backgrounds[environment.stage] ?? null;
 
-  if (fromBackground) {
-    drawViennaBackground(context, state, fromBackground, reducedMotion);
-    if (toBackground && toBackground !== fromBackground && environment.blend > 0) {
-      context.save();
-      context.globalAlpha = environment.blend;
-      drawViennaBackground(context, state, toBackground, reducedMotion);
-      context.restore();
-    }
+  if (background) {
+    drawViennaBackground(context, state, background, reducedMotion);
   } else {
     drawFallbackBackground(context, state, reducedMotion);
   }
@@ -334,6 +333,7 @@ function renderFredRun(
     return;
   }
   context.setTransform(canvas.width / FREDRUN_WORLD_WIDTH, 0, 0, canvas.height / FREDRUN_WORLD_HEIGHT, 0, 0);
+  context.clearRect(0, 0, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT);
   context.imageSmoothingEnabled = true;
   drawBackground(context, state, images?.backgrounds ?? [], reducedMotion);
   if (images) {

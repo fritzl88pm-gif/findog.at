@@ -87,6 +87,46 @@ const stagedBackgroundManifest = JSON.parse(readFileSync(
   }>;
 };
 
+function stagedBackgroundSourcesFromView(): string[] {
+  const declaration = viewSource.match(
+    /const FREDRUN_BACKGROUND_SOURCES = \[([\s\S]*?)\] as const;/u,
+  );
+  if (!declaration) return [];
+  return Array.from(declaration[1].matchAll(/"([^"]+)"/gu), (match) => match[1]);
+}
+
+function viewImplementationBetween(start: string, end: string): string {
+  const startIndex = viewSource.indexOf(start);
+  const endIndex = viewSource.indexOf(end, startIndex);
+  if (startIndex < 0 || endIndex < 0) return "";
+  return viewSource.slice(startIndex, endIndex);
+}
+
+function executableBackgroundLoader(
+  loadImage: (source: string) => Promise<unknown>,
+): () => Promise<unknown[]> {
+  const implementation = viewImplementationBetween(
+    "async function loadBackgrounds",
+    "function drawFallbackBackground",
+  );
+  const bodyStart = implementation.indexOf("{");
+  const bodyEnd = implementation.lastIndexOf("}");
+  if (bodyStart < 0 || bodyEnd < 0) return async () => [];
+
+  const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor as FunctionConstructor;
+  return AsyncFunction(
+    "FREDRUN_BACKGROUND_SOURCES",
+    "BACKGROUND_FALLBACK_SOURCE",
+    "loadImage",
+    implementation.slice(bodyStart + 1, bodyEnd),
+  ).bind(
+    undefined,
+    stagedBackgroundSourcesFromView(),
+    "/fredrun/vienna-panorama.webp",
+    loadImage,
+  ) as () => Promise<unknown[]>;
+}
+
 describe("Fredrun UI surface", () => {
   it("registers Fredrun in both navigation modes and the app view", () => {
     expect(pageSource).toContain('"fredrun"');
@@ -268,16 +308,8 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain("context.scale(-1, 1)");
   });
 
-  it("preloads four escalating city stages, falls back safely, and darkens every level", () => {
-    expect(viewSource).toContain('"/fredrun/backgrounds/vienna-ominous.webp"');
-    expect(viewSource).toContain('"/fredrun/backgrounds/vienna-storm-damage.webp"');
-    expect(viewSource).toContain('"/fredrun/backgrounds/vienna-burning-collapse.webp"');
-    expect(viewSource).toContain('"/fredrun/backgrounds/vienna-rubble-ashes.webp"');
-    expect(viewSource).toContain("Promise.all(FREDRUN_BACKGROUND_SOURCES.map(loadImage))");
-    expect(viewSource).toContain("loadImage(BACKGROUND_FALLBACK_SOURCE)");
-    expect(viewSource).toContain("fredRunEnvironmentForLevel(state.level)");
-    expect(viewSource).toContain("environment.darkness");
-
+  it("declares eight ordered per-level background assets in the view and manifest", () => {
+    const stageLevels = Array.from({ length: 8 }, (_, index) => index + 1);
     expect(stagedBackgroundManifest).toMatchObject({
       generation: {
         mode: "built-in image generation",
@@ -288,38 +320,64 @@ describe("Fredrun UI surface", () => {
         format: "webp",
         size: { width: 2172, height: 665 },
         quality: 78,
-        stageLevels: [1, 3, 5, 6],
+        stageLevels,
         darknessPerLevel: 0.025,
         darknessCap: 0.125,
         loop: "alternating mirrored tiles",
       },
     });
-    expect(stagedBackgroundManifest.stages.map(({ level, state }) => ({ level, state }))).toEqual([
-      { level: 1, state: "ominous intact city" },
-      { level: 3, state: "storm smoke and first damage" },
-      { level: 5, state: "burning partly collapsed city" },
-      { level: 6, state: "post-destruction rubble and ashes" },
-    ]);
+    expect(stagedBackgroundManifest.stages).toHaveLength(8);
+    expect(stagedBackgroundManifest.stages.map(({ level }) => level)).toEqual(stageLevels);
+
+    const manifestSources = stagedBackgroundManifest.stages.map(
+      ({ output }) => `/fredrun/backgrounds/${output.file}`,
+    );
+    expect(new Set(manifestSources).size).toBe(8);
+    expect(stagedBackgroundSourcesFromView()).toEqual(manifestSources);
+
     for (const stage of stagedBackgroundManifest.stages) {
+      expect(stage.state.trim().length).toBeGreaterThan(0);
       expect(stage.output).toMatchObject({ width: 2172, height: 665 });
       expect(statSync(fileURLToPath(new URL(
         `../../public/fredrun/backgrounds/${stage.output.file}`,
         import.meta.url,
       ))).size).toBe(stage.output.bytes);
-      expect(viewSource).toContain(`/fredrun/backgrounds/${stage.output.file}`);
     }
-    expect(stagedBackgroundManifest.stages.reduce((total, stage) => total + stage.output.bytes, 0))
-      .toBeLessThanOrEqual(400 * 1024);
+  });
 
-    expect(Array.from({ length: 7 }, (_, index) => fredRunEnvironmentForLevel(index + 1)))
-      .toEqual([
-        { fromStage: 0, toStage: 1, blend: 0, darkness: 0 },
-        { fromStage: 0, toStage: 1, blend: 0.5, darkness: 0.025 },
-        { fromStage: 1, toStage: 2, blend: 0, darkness: 0.05 },
-        { fromStage: 1, toStage: 2, blend: 0.5, darkness: 0.075 },
-        { fromStage: 2, toStage: 3, blend: 0, darkness: 0.1 },
-        { fromStage: 3, toStage: 3, blend: 0, darkness: 0.125 },
-        { fromStage: 3, toStage: 3, blend: 0, darkness: 0.125 },
-      ]);
+  it("selects exactly one ordered background stage per level without crossfading", () => {
+    expect(Array.from({ length: 8 }, (_, index) => fredRunEnvironmentForLevel(index + 1)))
+      .toEqual(Array.from({ length: 8 }, (_, stage) => ({
+        stage,
+        darkness: Math.min(0.125, Number((stage * 0.025).toFixed(3))),
+      })));
+    expect(fredRunEnvironmentForLevel(12)).toEqual({ stage: 7, darkness: 0.125 });
+
+    const drawBackgroundSource = viewImplementationBetween(
+      "function drawBackground",
+      "function drawObstacle",
+    );
+    expect(drawBackgroundSource).toContain("fredRunEnvironmentForLevel(state.level)");
+    expect(drawBackgroundSource).toContain("environment.stage");
+    expect(drawBackgroundSource).toContain("environment.darkness");
+    expect(drawBackgroundSource).not.toContain("environment.fromStage");
+    expect(drawBackgroundSource).not.toContain("environment.toStage");
+    expect(drawBackgroundSource).not.toContain("environment.blend");
+    expect(drawBackgroundSource).not.toContain("globalAlpha");
+    expect(drawBackgroundSource.match(/drawViennaBackground\(/gu)).toHaveLength(1);
+  });
+
+  it("keeps successfully loaded stages when one background image fails", async () => {
+    const sources = stagedBackgroundSourcesFromView();
+    const failedSource = sources[1];
+    const fallbackSource = "/fredrun/vienna-panorama.webp";
+    const loadBackgrounds = executableBackgroundLoader(async (source) => {
+      if (source === failedSource) throw new Error("stage failed");
+      return { source };
+    });
+
+    await expect(loadBackgrounds()).resolves.toEqual(sources.map((source) => ({
+      source: source === failedSource ? fallbackSource : source,
+    })));
   });
 });

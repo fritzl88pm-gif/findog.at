@@ -7,8 +7,6 @@ export const FREDRUN_MILESTONE_DURATION = 1.6;
 export const FREDRUN_HIGH_SCORE_KEY = "findog.fredrun.highscore.v1";
 
 const BASE_SPEED = 300;
-const MAX_SPEED = 750;
-const SPEED_PER_LEVEL = 90;
 const GRAVITY = 1600;
 const JUMP_VELOCITY = 660;
 const SCORE_DISTANCE = 34;
@@ -115,38 +113,18 @@ export function resumeFredRun(state: FredRunState): FredRunState {
 }
 
 export function fredRunSpeedForLevel(level: number): number {
-  return Math.min(MAX_SPEED, BASE_SPEED + (level - 1) * SPEED_PER_LEVEL);
+  return BASE_SPEED + (level - 1) * 120;
 }
 
 export type FredRunEnvironment = {
-  fromStage: number;
-  toStage: number;
-  blend: number;
+  stage: number;
   darkness: number;
 };
-
-const FREDRUN_BACKGROUND_STAGE_LEVELS = [1, 3, 5, 6] as const;
 
 export function fredRunEnvironmentForLevel(level: number): FredRunEnvironment {
   const normalizedLevel = Math.max(1, Math.floor(level));
   const darkness = Math.min(0.125, Number(((normalizedLevel - 1) * 0.025).toFixed(3)));
-
-  for (let toStage = 1; toStage < FREDRUN_BACKGROUND_STAGE_LEVELS.length; toStage += 1) {
-    const toLevel = FREDRUN_BACKGROUND_STAGE_LEVELS[toStage];
-    if (normalizedLevel < toLevel) {
-      const fromStage = toStage - 1;
-      const fromLevel = FREDRUN_BACKGROUND_STAGE_LEVELS[fromStage];
-      return {
-        fromStage,
-        toStage,
-        blend: (normalizedLevel - fromLevel) / (toLevel - fromLevel),
-        darkness,
-      };
-    }
-  }
-
-  const finalStage = FREDRUN_BACKGROUND_STAGE_LEVELS.length - 1;
-  return { fromStage: finalStage, toStage: finalStage, blend: 0, darkness };
+  return { stage: Math.min(7, normalizedLevel - 1), darkness };
 }
 
 function obstacleFor(random: () => number, id: number): FredRunObstacle {

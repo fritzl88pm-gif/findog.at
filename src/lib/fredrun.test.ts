@@ -24,9 +24,20 @@ function advanceFor(seconds: number, initial = startFredRun(createFredRunState()
 }
 
 describe("Fredrun simulation", () => {
-  it("uses the explicit 90-per-level speed curve and caps at 750", () => {
-    expect(Array.from({ length: 7 }, (_, index) => fredRunSpeedForLevel(index + 1)))
-      .toEqual([300, 390, 480, 570, 660, 750, 750]);
+  it("uses the exact uncapped 120-per-level speed curve", () => {
+    const samples = [
+      { level: 1, speed: 300 },
+      { level: 2, speed: 420 },
+      { level: 3, speed: 540 },
+      { level: 5, speed: 780 },
+      { level: 8, speed: 1_140 },
+      { level: 12, speed: 1_620 },
+    ];
+
+    expect(samples.map(({ level }) => fredRunSpeedForLevel(level)))
+      .toEqual(samples.map(({ speed }) => speed));
+    expect(fredRunSpeedForLevel(12)).toBe(300 + (12 - 1) * 120);
+    expect(fredRunSpeedForLevel(12)).toBeGreaterThan(750);
   });
 
   it("starts in a ready state and resets all round state", () => {
@@ -70,15 +81,17 @@ describe("Fredrun simulation", () => {
     expect(state.spawnDistance).toBeLessThanOrEqual(470);
   });
 
-  it("keeps at least 1.2 seconds between spawns at the top speed", () => {
-    const topSpeed = fredRunSpeedForLevel(6);
+  it("keeps about 1.2 real-time seconds between spawns well beyond the old speed cap", () => {
+    const highLevel = 20;
+    const expectedHighLevelSpeed = 300 + (highLevel - 1) * 120;
     const state = startFredRun({
       ...createFredRunState(),
-      speed: topSpeed,
+      level: highLevel,
+      speed: fredRunSpeedForLevel(highLevel),
       spawnDistance: 0,
     });
     const advanced = advanceFredRun(state, 1 / 120, () => 0);
-    expect(advanced.spawnDistance / topSpeed).toBeCloseTo(1.2, 5);
+    expect(advanced.spawnDistance / expectedHighLevelSpeed).toBeCloseTo(1.2, 5);
   });
 
   it("spawns Odo occasionally and keeps all collision boxes jumpable", () => {
@@ -140,7 +153,7 @@ describe("Fredrun simulation", () => {
     const resumed = advanceFor(FREDRUN_MILESTONE_DURATION + 0.1, milestone);
     expect(resumed.phase).toBe("running");
     expect(resumed.level).toBe(2);
-    expect(resumed.speed).toBe(390);
+    expect(resumed.speed).toBe(420);
     expect(resumed.spawnDistance).toBeGreaterThan(450);
   });
 

@@ -2,13 +2,20 @@
   "generation": {
     "mode": "built-in image generation",
     "reference": "/fredrun/vienna-panorama.webp",
+    "referenceFiles": [
+      {
+        "file": "/fredrun/vienna-panorama.webp",
+        "sha256": "58C947B1B7000E0F019B445357A745444D77EF2B0949AB4B75859AAA0B21080A"
+      }
+    ],
     "rawDirectory": "/opt/data/cache/fredrun-generated"
   },
   "runtime": {
     "format": "webp",
     "size": { "width": 2172, "height": 665 },
     "quality": 78,
-    "stageLevels": [1, 3, 5, 6],
+    "normalization": "ffmpeg Lanczos scale/center-crop to 2172x665; libwebp picture preset quality 78",
+    "stageLevels": [1, 2, 3, 4, 5, 6, 7, 8],
     "darknessPerLevel": 0.025,
     "darknessCap": 0.125,
     "loop": "alternating mirrored tiles"
@@ -17,6 +24,12 @@
     {
       "level": 1,
       "state": "ominous intact city",
+      "provenance": {
+        "assetStatus": "preserved existing stage",
+        "generationMode": "built-in image generation",
+        "referenceFiles": ["/fredrun/vienna-panorama.webp"],
+        "outputSourceFile": "/opt/data/cache/fredrun-generated/vienna-stage-1-ominous-full.png"
+      },
       "raw": {
         "file": "vienna-stage-1-ominous-full.png",
         "width": 2132,
@@ -33,8 +46,41 @@
       }
     },
     {
+      "level": 2,
+      "state": "gathering storm over the intact city",
+      "provenance": {
+        "assetStatus": "new interleaved stage",
+        "generationMode": "built-in image generation",
+        "referenceFiles": [
+          "/opt/data/cache/fredrun-generated/vienna-stage-1-ominous-full.png",
+          "/opt/data/cache/fredrun-generated/vienna-stage-2-storm-damage-full.png"
+        ],
+        "outputSourceFile": "/opt/data/cache/fredrun-generated/vienna-stage-2-gathering-storm-full.png"
+      },
+      "raw": {
+        "file": "vienna-stage-2-gathering-storm-full.png",
+        "width": 2129,
+        "height": 739,
+        "bytes": 1904125,
+        "sha256": "A920E78FDA7C2CDAAF5EBF6C11A630040801BF792D9C39A09F0E3E2C7A91DDAC"
+      },
+      "output": {
+        "file": "vienna-gathering-storm.webp",
+        "width": 2172,
+        "height": 665,
+        "bytes": 80052,
+        "sha256": "A244916297E8108521CA832610895C74BEE4849F2E5B6CE87D5E746C49EE16EC"
+      }
+    },
+    {
       "level": 3,
       "state": "storm smoke and first damage",
+      "provenance": {
+        "assetStatus": "preserved existing stage",
+        "generationMode": "built-in image generation",
+        "referenceFiles": ["/fredrun/vienna-panorama.webp"],
+        "outputSourceFile": "/opt/data/cache/fredrun-generated/vienna-stage-2-storm-damage-full.png"
+      },
       "raw": {
         "file": "vienna-stage-2-storm-damage-full.png",
         "width": 2172,
@@ -51,8 +97,41 @@
       }
     },
     {
+      "level": 4,
+      "state": "heavy smoke emergency",
+      "provenance": {
+        "assetStatus": "new interleaved stage",
+        "generationMode": "built-in image generation",
+        "referenceFiles": [
+          "/opt/data/cache/fredrun-generated/vienna-stage-2-storm-damage-full.png",
+          "/opt/data/cache/fredrun-generated/vienna-stage-3-burning-collapse-full.png"
+        ],
+        "outputSourceFile": "/opt/data/cache/fredrun-generated/vienna-stage-4-heavy-smoke-emergency-full.png"
+      },
+      "raw": {
+        "file": "vienna-stage-4-heavy-smoke-emergency-full.png",
+        "width": 2172,
+        "height": 724,
+        "bytes": 1904579,
+        "sha256": "FDFE466FCB64AE7DDBE3082E9318B873EFE78189040C486B9BC423662CE74A8F"
+      },
+      "output": {
+        "file": "vienna-heavy-smoke-emergency.webp",
+        "width": 2172,
+        "height": 665,
+        "bytes": 81206,
+        "sha256": "6ED6313A04A7B1F0D84F1957E6AC585F9C9885A38F6DB990AEA3455FCAAE0DFB"
+      }
+    },
+    {
       "level": 5,
       "state": "burning partly collapsed city",
+      "provenance": {
+        "assetStatus": "preserved existing stage",
+        "generationMode": "built-in image generation",
+        "referenceFiles": ["/fredrun/vienna-panorama.webp"],
+        "outputSourceFile": "/opt/data/cache/fredrun-generated/vienna-stage-3-burning-collapse-full.png"
+      },
       "raw": {
         "file": "vienna-stage-3-burning-collapse-full.png",
         "width": 2172,
@@ -70,7 +149,40 @@
     },
     {
       "level": 6,
+      "state": "widespread fire and collapse",
+      "provenance": {
+        "assetStatus": "new interleaved stage",
+        "generationMode": "built-in image generation",
+        "referenceFiles": [
+          "/opt/data/cache/fredrun-generated/vienna-stage-3-burning-collapse-full.png",
+          "/opt/data/cache/fredrun-generated/vienna-stage-4-rubble-ashes-full.png"
+        ],
+        "outputSourceFile": "/opt/data/cache/fredrun-generated/vienna-stage-6-widespread-fire-collapse-full.png"
+      },
+      "raw": {
+        "file": "vienna-stage-6-widespread-fire-collapse-full.png",
+        "width": 2172,
+        "height": 724,
+        "bytes": 2026670,
+        "sha256": "28754F99104CDB7A7FEE7A3DE8F923BB84FEC6A8F05E027D94610AB6DBD1D2DF"
+      },
+      "output": {
+        "file": "vienna-widespread-fire-collapse.webp",
+        "width": 2172,
+        "height": 665,
+        "bytes": 95880,
+        "sha256": "CA00859B9EDD382FE8ECCE9DBDA6440D180701CBE4070394D91F7ABF06550BED"
+      }
+    },
+    {
+      "level": 7,
       "state": "post-destruction rubble and ashes",
+      "provenance": {
+        "assetStatus": "preserved existing stage",
+        "generationMode": "built-in image generation",
+        "referenceFiles": ["/fredrun/vienna-panorama.webp"],
+        "outputSourceFile": "/opt/data/cache/fredrun-generated/vienna-stage-4-rubble-ashes-full.png"
+      },
       "raw": {
         "file": "vienna-stage-4-rubble-ashes-full.png",
         "width": 2172,
@@ -84,6 +196,33 @@
         "height": 665,
         "bytes": 77086,
         "sha256": "5266519A37EDD9A17B103ACD97BC6248A34E8491F21235AEFF017E0D32FF7F19"
+      }
+    },
+    {
+      "level": 8,
+      "state": "cold ash aftermath",
+      "provenance": {
+        "assetStatus": "new interleaved stage",
+        "generationMode": "built-in image generation",
+        "referenceFiles": [
+          "/opt/data/cache/fredrun-generated/vienna-stage-4-rubble-ashes-full.png",
+          "/opt/data/cache/fredrun-generated/vienna-stage-3-burning-collapse-full.png"
+        ],
+        "outputSourceFile": "/opt/data/cache/fredrun-generated/vienna-stage-8-cold-ash-aftermath-full.png"
+      },
+      "raw": {
+        "file": "vienna-stage-8-cold-ash-aftermath-full.png",
+        "width": 2172,
+        "height": 724,
+        "bytes": 2306334,
+        "sha256": "D4FA207E703F19E2159D90A1F8F00A7EA40DADA409CF0F2E57FADD2440B10EC3"
+      },
+      "output": {
+        "file": "vienna-cold-ash-aftermath.webp",
+        "width": 2172,
+        "height": 665,
+        "bytes": 123934,
+        "sha256": "BCC87C9B3361B55E442170144886BFFF838BF5A87E4741921748158A4E322EFA"
       }
     }
   ]
