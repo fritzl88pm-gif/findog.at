@@ -4,6 +4,7 @@ import NextImage from "next/image";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
+  FREDRUN_COIN_SCORE,
   FREDRUN_GROUND_Y,
   FREDRUN_PLAYER_X,
   FREDRUN_SCORE_PULSE_POINTS,
@@ -19,6 +20,7 @@ import {
   resumeFredRun,
   startFredRun,
   writeFredRunHighScore,
+  type FredRunCoin,
   type FredRunObstacle,
   type FredRunObstacleKind,
   type FredRunEnvironment,
@@ -37,6 +39,7 @@ const SPRITE_DRAW_SIZE = 166;
 const JUMP_ANIMATION_DURATION = 0.82;
 const FIXED_STEP = 1 / 120;
 const INTRO_SOURCE = "/fredrun/intro.webp";
+const COIN_SOURCE = "/fredrun/coin-f.webp";
 const BACKGROUND_FALLBACK_SOURCE = "/fredrun/vienna-panorama.webp";
 const FREDRUN_BACKGROUND_SOURCES = [
   "/fredrun/backgrounds/vienna-ominous.webp",
@@ -88,6 +91,13 @@ const obstacleLayouts: Record<
     offsetX: -33,
     animation: { columns: 8, cellSize: 192, frameCount: 64, fps: 18 },
   },
+  luki: {
+    source: "/fredrun/luki-colombia-run.webp",
+    drawWidth: 122,
+    drawHeight: 122,
+    offsetX: -38,
+    animation: { columns: 7, cellSize: 192, frameCount: 49, fps: 20 },
+  },
   reihe100: {
     source: "/fredrun/obstacles/reihe100.webp",
     drawWidth: 72,
@@ -111,15 +121,27 @@ const obstacleLayouts: Record<
 type SpriteKey = keyof typeof spriteLayouts;
 type SpriteImages = Record<SpriteKey, HTMLImageElement>;
 type ObstacleImages = Record<FredRunObstacleKind, HTMLImageElement>;
-type FredRunImages = { sprites: SpriteImages; obstacles: ObstacleImages; backgrounds: HTMLImageElement[] };
+type FredRunImages = {
+  sprites: SpriteImages;
+  obstacles: ObstacleImages;
+  coin: HTMLImageElement;
+  backgrounds: HTMLImageElement[];
+};
 
 type FredRunSnapshot = {
   phase: FredRunPhase;
   score: number;
+  coinsCollected: number;
+  countdown: number;
 };
 
 function snapshotFrom(state: FredRunState): FredRunSnapshot {
-  return { phase: state.phase, score: state.score };
+  return {
+    phase: state.phase,
+    score: state.score,
+    coinsCollected: state.coinsCollected,
+    countdown: Math.ceil(state.countdownRemaining),
+  };
 }
 
 function loadImage(source: string): Promise<HTMLImageElement> {
@@ -491,6 +513,73 @@ function drawObstacle(
   context.restore();
 }
 
+function FredRunCoinIcon({ className = "" }: { className?: string }) {
+  return (
+    <NextImage
+      className={`fredrun-coin-icon${className ? ` ${className}` : ""}`}
+      src={COIN_SOURCE}
+      alt=""
+      width={32}
+      height={32}
+      aria-hidden="true"
+      unoptimized
+    />
+  );
+}
+
+function drawCoin(
+  context: CanvasRenderingContext2D,
+  coin: FredRunCoin,
+  image: HTMLImageElement | null,
+  elapsed: number,
+  reducedMotion: boolean,
+) {
+  const spin = reducedMotion ? 1 : 0.24 + Math.abs(Math.cos(elapsed * 6.5 + coin.id)) * 0.76;
+  context.save();
+  context.translate(coin.x, coin.y);
+  context.scale(spin, 1);
+  if (image) {
+    const diameter = coin.radius * 3;
+    context.shadowColor = "rgba(55, 42, 10, 0.38)";
+    context.shadowBlur = 6;
+    context.drawImage(image, -diameter / 2, -diameter / 2, diameter, diameter);
+  } else {
+    context.fillStyle = "#ffd438";
+    context.beginPath();
+    context.arc(0, 0, coin.radius, 0, Math.PI * 2);
+    context.fill();
+    context.fillStyle = "#704000";
+    context.font = "900 11px system-ui";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText("F", 0, 0.5);
+  }
+  context.restore();
+}
+
+function drawHitFeedback(
+  context: CanvasRenderingContext2D,
+  state: FredRunState,
+) {
+  if (state.phase !== "game-over") return;
+  const centerX = FREDRUN_PLAYER_X + 13;
+  const centerY = FREDRUN_GROUND_Y - state.playerHeight - 42;
+  context.save();
+  context.translate(centerX, centerY);
+  context.strokeStyle = "rgba(255, 242, 132, 0.94)";
+  context.lineWidth = 4;
+  context.shadowColor = "rgba(220, 55, 15, 0.72)";
+  context.shadowBlur = 10;
+  for (let index = 0; index < 10; index += 1) {
+    const angle = index / 10 * Math.PI * 2;
+    context.beginPath();
+    context.moveTo(Math.cos(angle) * 30, Math.sin(angle) * 30);
+    context.lineTo(Math.cos(angle) * (43 + index % 2 * 9), Math.sin(angle) * (43 + index % 2 * 9));
+    context.stroke();
+  }
+  context.restore();
+}
+
 function activeSprite(state: FredRunState): { key: SpriteKey; frame: number } {
   if (!state.grounded) {
     const progress = state.jumpElapsed / JUMP_ANIMATION_DURATION;
@@ -522,6 +611,7 @@ function renderFredRun(
   context.clearRect(0, 0, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT);
   context.imageSmoothingEnabled = true;
   drawBackground(context, state, images?.backgrounds ?? [], reducedMotion);
+  state.coins.forEach((coin) => drawCoin(context, coin, images?.coin ?? null, state.elapsed, reducedMotion));
   if (images) {
     state.obstacles.forEach((obstacle) => drawObstacle(
       context,
@@ -550,6 +640,7 @@ function renderFredRun(
       SPRITE_DRAW_SIZE,
     );
   }
+  drawHitFeedback(context, state);
 }
 
 function FredRunVictoryDance() {
@@ -620,6 +711,7 @@ function phaseStatus(snapshot: FredRunSnapshot): string {
   if (snapshot.phase === "ready") return "Fredrun ist bereit.";
   if (snapshot.phase === "running") return `Runde läuft. ${snapshot.score} Punkte.`;
   if (snapshot.phase === "paused") return "Fredrun ist pausiert.";
+  if (snapshot.phase === "countdown") return `Weiter in ${snapshot.countdown}.`;
   return `Runde beendet mit ${snapshot.score} Punkten.`;
 }
 
@@ -657,6 +749,7 @@ export default function FredRunView({
   const scoreSubmissionAbortRef = useRef<AbortController | null>(null);
   const [snapshot, setSnapshot] = useState<FredRunSnapshot>(() => snapshotFrom(createFredRunState()));
   const [scorePulseToken, setScorePulseToken] = useState(0);
+  const [coinPulseToken, setCoinPulseToken] = useState(0);
   const [bestScore, setBestScore] = useState(0);
   const [assetState, setAssetState] = useState<"loading" | "ready" | "error">("loading");
   const [assetAttempt, setAssetAttempt] = useState(0);
@@ -677,10 +770,16 @@ export default function FredRunView({
 
   const publish = useCallback((state: FredRunState) => {
     setSnapshot((current) => {
-      if (current.phase === state.phase && current.score === state.score) {
+      const next = snapshotFrom(state);
+      if (
+        current.phase === next.phase
+        && current.score === next.score
+        && current.coinsCollected === next.coinsCollected
+        && current.countdown === next.countdown
+      ) {
         return current;
       }
-      return snapshotFrom(state);
+      return next;
     });
   }, []);
 
@@ -694,6 +793,7 @@ export default function FredRunView({
 
   const prepareNewRun = useCallback(() => {
     setScorePulseToken(0);
+    setCoinPulseToken(0);
     setCurrentRunId(createRunId());
     setSubmittedRunId(null);
     setScoreSubmissionMessage("");
@@ -723,6 +823,7 @@ export default function FredRunView({
 
   const restartRound = useCallback(() => {
     setScorePulseToken(0);
+    setCoinPulseToken(0);
     setCurrentRunId(null);
     setSubmittedRunId(null);
     setScoreSubmissionMessage("");
@@ -780,14 +881,16 @@ export default function FredRunView({
       Promise.all((Object.keys(obstacleLayouts) as FredRunObstacleKind[]).map(async (key) => (
         [key, await loadImage(obstacleLayouts[key].source)] as const
       ))),
+      loadImage(COIN_SOURCE),
       loadImage(INTRO_SOURCE),
       loadBackgrounds(),
     ])
-      .then(([spriteEntries, obstacleEntries, , backgrounds]) => {
+      .then(([spriteEntries, obstacleEntries, coin, , backgrounds]) => {
         if (cancelled) return;
         imagesRef.current = {
           sprites: Object.fromEntries(spriteEntries) as SpriteImages,
           obstacles: Object.fromEntries(obstacleEntries) as ObstacleImages,
+          coin,
           backgrounds,
         };
         setAssetState("ready");
@@ -847,6 +950,9 @@ export default function FredRunView({
         const nextPulse = Math.floor(state.score / FREDRUN_SCORE_PULSE_POINTS);
         if (state.phase === "running" && nextPulse > previousPulse) {
           setScorePulseToken(nextPulse);
+        }
+        if (state.coinsCollected > previousState.coinsCollected) {
+          setCoinPulseToken(state.coinsCollected);
         }
         gameRef.current = state;
         publish(state);
@@ -983,13 +1089,23 @@ export default function FredRunView({
                 </strong>
               </div>
               <div><span>Bestwert</span><strong>{bestScore}</strong></div>
+              <div className="fredrun-coin-hud">
+                <span>Münzen</span>
+                <strong
+                  key={coinPulseToken}
+                  className={coinPulseToken > 0 ? "fredrun-coin--pulse" : undefined}
+                >
+                  <FredRunCoinIcon className="fredrun-coin-icon--hud" />
+                  {snapshot.coinsCollected}
+                </strong>
+              </div>
               {showPauseButton ? (
                 <button type="button" onClick={togglePause}>{isPaused ? "Weiter" : "Pause"}</button>
               ) : null}
             </div>
           ) : null}
 
-          <div className={`fredrun-stage${showIntro ? " fredrun-stage--intro" : ""}${snapshot.phase === "game-over" ? " fredrun-stage--game-over" : ""}`}>
+          <div className={`fredrun-stage${showIntro ? " fredrun-stage--intro" : ""}${snapshot.phase === "game-over" ? " fredrun-stage--game-over fredrun-stage--hit" : ""}`}>
             <canvas
               ref={canvasRef}
               className="fredrun-canvas"
@@ -1046,12 +1162,23 @@ export default function FredRunView({
                 <button className="primary-button" type="button" onClick={togglePause}>Weiterspielen</button>
               </div>
             ) : null}
+            {snapshot.phase === "countdown" ? (
+              <div className="fredrun-overlay fredrun-countdown-overlay" role="status" aria-live="assertive">
+                <p className="fredrun-overlay-kicker">Weiter in</p>
+                <strong key={snapshot.countdown}>{snapshot.countdown}</strong>
+                <small>Bereit zum Springen?</small>
+              </div>
+            ) : null}
             {snapshot.phase === "game-over" ? (
               <div className="fredrun-overlay fredrun-game-over-overlay">
                 <div className="fredrun-game-over-summary">
                   <p className="fredrun-overlay-kicker">Runde beendet</p>
                   <h2>{snapshot.score} Punkte</h2>
                   <p>Bestwert: {bestScore}</p>
+                  <p className="fredrun-game-over-coins">
+                    <FredRunCoinIcon className="fredrun-coin-icon--summary" />
+                    <span>{snapshot.coinsCollected} Münzen · +{snapshot.coinsCollected * FREDRUN_COIN_SCORE} Punkte</span>
+                  </p>
                   <button className="primary-button" type="button" onClick={restartRound}>Noch einmal</button>
                 </div>
                 <FredRunVictoryDance />

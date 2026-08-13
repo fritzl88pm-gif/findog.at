@@ -98,6 +98,40 @@ const jqaManifest = JSON.parse(readFileSync(
     bytes: number;
   };
 };
+const lukiManifest = JSON.parse(readFileSync(
+  fileURLToPath(new URL("../../public/fredrun/luki-manifest.json", import.meta.url)),
+  "utf8",
+)) as {
+  source: { file: string; sha256: string; grid: string; frameCount: number };
+  atlas: {
+    file: string;
+    format: string;
+    sha256: string;
+    columns: number;
+    rows: number;
+    cellSize: number;
+    frameCount: number;
+    anchor: string;
+    sharedScale: number;
+    flippedHorizontally: boolean;
+    direction: string;
+    bytes: number;
+  };
+};
+const coinManifest = JSON.parse(readFileSync(
+  fileURLToPath(new URL("../../public/fredrun/coin-f-manifest.json", import.meta.url)),
+  "utf8",
+)) as {
+  generation: { mode: string; sourceSha256: string; prompt: string };
+  output: {
+    file: string;
+    format: string;
+    sha256: string;
+    size: { width: number; height: number };
+    transparent: boolean;
+    bytes: number;
+  };
+};
 const backgroundManifest = JSON.parse(readFileSync(
   fileURLToPath(new URL("../../public/fredrun/background-manifest.json", import.meta.url)),
   "utf8",
@@ -191,6 +225,21 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain("pauseFredRun");
     expect(viewSource).toContain("restartRound");
     expect(viewSource).toContain('aria-live="polite"');
+    expect(viewSource).toContain('snapshot.phase === "countdown"');
+    expect(viewSource).toContain('className="fredrun-overlay fredrun-countdown-overlay"');
+    expect(viewSource).toContain('aria-live="assertive"');
+  });
+
+  it("renders collectible air coins, coin score feedback, and a collision impact", () => {
+    expect(viewSource).toContain("state.coins.forEach((coin) => drawCoin");
+    expect(viewSource).toContain('context.fillText("F", 0, 0.5)');
+    expect(viewSource).toContain("state.phase !== \"game-over\"");
+    expect(viewSource).toContain("drawHitFeedback(context, state)");
+    expect(viewSource).toContain('className="fredrun-coin-hud"');
+    expect(viewSource).toContain("snapshot.coinsCollected * FREDRUN_COIN_SCORE");
+    expect(viewSource).toContain("fredrun-stage--game-over fredrun-stage--hit");
+    expect(stylesSource).toContain("@keyframes fredrun-hit-shake");
+    expect(stylesSource).toContain("@keyframes fredrun-hit-flash");
   });
 
   it("offers authenticated score submission and a global top ten", () => {
@@ -400,6 +449,66 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain("animation: { columns: 8, cellSize: 192, frameCount: 64, fps: 18 }");
   });
 
+  it("ships Luki as a normalized animated flag runner", () => {
+    expect(lukiManifest).toEqual({
+      source: {
+        file: "luki-kolumbian_lauf.png",
+        sha256: "3D715AF687931CC29FAD5EC1B2FD5E08D0617ADA253B9D03F027128DFDF44F62",
+        grid: "7x7",
+        frameCount: 49,
+      },
+      atlas: {
+        file: "luki-colombia-run.webp",
+        format: "webp",
+        sha256: "735DA0B950B4D7A0BFEDC3EA5FCDECF5726610CCDC5E55BE754176E397309E57",
+        columns: 7,
+        rows: 7,
+        cellSize: 192,
+        frameCount: 49,
+        anchor: "bottom-center",
+        sharedScale: 0.407323,
+        flippedHorizontally: true,
+        direction: "right-to-left",
+        bytes: 435652,
+      },
+    });
+    expect(statSync(fileURLToPath(new URL(
+      "../../public/fredrun/luki-colombia-run.webp",
+      import.meta.url,
+    ))).size).toBe(lukiManifest.atlas.bytes);
+    expect(lukiManifest.atlas.bytes).toBeLessThanOrEqual(512 * 1024);
+    expect(viewSource).toContain('source: "/fredrun/luki-colombia-run.webp"');
+    expect(viewSource).toContain("animation: { columns: 7, cellSize: 192, frameCount: 49, fps: 20 }");
+  });
+
+  it("ships the modern transparent F coin as a compact game asset", () => {
+    expect(coinManifest).toEqual({
+      generation: {
+        mode: "built-in image generation",
+        sourceSha256: "86D18FBC5D98B90D8D91BF2692A98A6AE744F3A6E552BE6B76462B21D9AED62B",
+        prompt: "Modern premium gold game coin with a centered capital F and restrained teal inner rim.",
+      },
+      output: {
+        file: "coin-f.webp",
+        format: "webp",
+        sha256: "9B7188626B3E3C98D98498F9381455CD8197CBA0CDB68CD96079B7D06F2535DF",
+        size: { width: 256, height: 256 },
+        transparent: true,
+        bytes: 25220,
+      },
+    });
+    expect(statSync(fileURLToPath(new URL(
+      "../../public/fredrun/coin-f.webp",
+      import.meta.url,
+    ))).size).toBe(coinManifest.output.bytes);
+    expect(coinManifest.output.bytes).toBeLessThanOrEqual(32 * 1024);
+    expect(viewSource).toContain('const COIN_SOURCE = "/fredrun/coin-f.webp"');
+    expect(viewSource).toContain("context.drawImage(image, -diameter / 2, -diameter / 2, diameter, diameter)");
+    expect(viewSource).toContain('<FredRunCoinIcon className="fredrun-coin-icon--hud" />');
+    expect(viewSource).toContain('<FredRunCoinIcon className="fredrun-coin-icon--summary" />');
+    expect(stylesSource).not.toContain(".fredrun-coin-hud i");
+  });
+
   it("retains the bright Vienna panorama as the controlled mirrored fallback", () => {
     expect(backgroundManifest).toMatchObject({
       generation: {
@@ -529,6 +638,9 @@ describe("Fredrun UI surface", () => {
     expect(backgroundSource).toContain("if (reducedMotion) return");
     expect(stylesSource).toMatch(
       /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.fredrun-score--pulse\s*\{\s*animation: none !important;/u,
+    );
+    expect(stylesSource).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.fredrun-coin--pulse,[\s\S]*?\.fredrun-countdown-overlay > strong\s*\{\s*animation: none !important;/u,
     );
   });
 

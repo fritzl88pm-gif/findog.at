@@ -1,0 +1,18 @@
+{
+  "generation": {
+    "mode": "built-in image generation",
+    "sourceSha256": "86D18FBC5D98B90D8D91BF2692A98A6AE744F3A6E552BE6B76462B21D9AED62B",
+    "prompt": "Modern premium gold game coin with a centered capital F and restrained teal inner rim."
+  },
+  "output": {
+    "file": "coin-f.webp",
+    "format": "webp",
+    "sha256": "9B7188626B3E3C98D98498F9381455CD8197CBA0CDB68CD96079B7D06F2535DF",
+    "size": {
+      "width": 256,
+      "height": 256
+    },
+    "transparent": true,
+    "bytes": 25220
+  }
+}

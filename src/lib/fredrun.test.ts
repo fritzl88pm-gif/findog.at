@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  FREDRUN_COIN_SCORE,
   FREDRUN_HIGH_SCORE_KEY,
+  FREDRUN_JUMP_BUFFER_SECONDS,
+  FREDRUN_RESUME_COUNTDOWN_SECONDS,
   advanceFredRun,
   createFredRunState,
   fredRunEnvironmentForDistance,
@@ -40,11 +43,15 @@ describe("Fredrun simulation", () => {
     expect(restartFredRun()).toEqual(createFredRunState());
   });
 
-  it("jumps, rejects a double jump, and lands again", () => {
+  it("jumps without allowing an immediate double jump and lands again", () => {
     const running = startFredRun(createFredRunState());
     const jumping = jumpFredRun(running);
     expect(jumping.grounded).toBe(false);
-    expect(jumpFredRun(jumping)).toBe(jumping);
+    expect(jumpFredRun(jumping)).toMatchObject({
+      grounded: false,
+      playerVelocity: jumping.playerVelocity,
+      jumpBufferRemaining: FREDRUN_JUMP_BUFFER_SECONDS,
+    });
 
     let landed = jumping;
     let peakHeight = 0;
@@ -60,6 +67,27 @@ describe("Fredrun simulation", () => {
     expect(peakHeight).toBeLessThan(140);
     expect(airTime).toBeGreaterThan(0.8);
     expect(airTime).toBeLessThan(0.85);
+  });
+
+  it("buffers a jump shortly before landing and launches immediately on touchdown", () => {
+    let falling = jumpFredRun(startFredRun(createFredRunState()));
+    while (!(falling.playerVelocity < 0 && falling.playerHeight < 12)) {
+      falling = advanceFredRun(falling, 1 / 120, () => 0.5);
+    }
+    let buffered = jumpFredRun(falling);
+    expect(buffered.jumpBufferRemaining).toBe(FREDRUN_JUMP_BUFFER_SECONDS);
+
+    let reboundDetected = false;
+    for (let index = 0; index < 20; index += 1) {
+      buffered = advanceFredRun(buffered, 1 / 120, () => 0.5);
+      if (buffered.playerVelocity > 0) {
+        reboundDetected = true;
+        break;
+      }
+    }
+    expect(reboundDetected).toBe(true);
+    expect(buffered.grounded).toBe(false);
+    expect(buffered.jumpBufferRemaining).toBe(0);
   });
 
   it("spawns only ground obstacles with a positive following distance", () => {
@@ -93,9 +121,10 @@ describe("Fredrun simulation", () => {
       { roll: 0, kind: "odo", width: 38, height: 78 },
       { roll: 0.125, kind: "madinger", width: 42, height: 82 },
       { roll: 0.25, kind: "jqa", width: 42, height: 84 },
-      { roll: 0.375, kind: "reihe100", width: 56, height: 60 },
-      { roll: 0.6, kind: "steuerkodex", width: 45, height: 70 },
-      { roll: 0.85, kind: "paragraph", width: 42, height: 68 },
+      { roll: 0.375, kind: "luki", width: 46, height: 84 },
+      { roll: 0.5, kind: "reihe100", width: 56, height: 60 },
+      { roll: 0.7, kind: "steuerkodex", width: 45, height: 70 },
+      { roll: 0.9, kind: "paragraph", width: 42, height: 68 },
     ] as const;
 
     for (const expected of cases) {
@@ -172,6 +201,64 @@ describe("Fredrun simulation", () => {
     expect(800 - advanced.obstacles[0].x).toBeCloseTo(900 - advanced.obstacles[1].x, 8);
   });
 
+  it("runs Luki toward Fred faster than the scrolling world", () => {
+    const state = startFredRun({
+      ...createFredRunState(),
+      spawnDistance: 10_000,
+      coinSpawnDistance: 10_000,
+      obstacles: [
+        { id: 1, kind: "luki", x: 800, width: 46, height: 84 },
+        { id: 2, kind: "paragraph", x: 800, width: 42, height: 68 },
+      ],
+    });
+    const advanced = advanceFredRun(state, 0.1, () => 0.5);
+    expect(advanced.obstacles[0].x).toBeLessThan(advanced.obstacles[1].x);
+  });
+
+  it("spawns coins high enough to require a meaningful jump", () => {
+    const state = startFredRun({
+      ...createFredRunState(),
+      spawnDistance: 10_000,
+      coinSpawnDistance: 0,
+    });
+    const advanced = advanceFredRun(state, 1 / 120, () => 0);
+    expect(advanced.coins).toHaveLength(1);
+    expect(advanced.coins[0].y + advanced.coins[0].radius)
+      .toBeLessThanOrEqual(300 - 76 - 50);
+  });
+
+  it("collects airborne coins and adds 25 points without changing distance speed", () => {
+    const state = startFredRun({
+      ...createFredRunState(),
+      spawnDistance: 10_000,
+      coinSpawnDistance: 10_000,
+      playerHeight: 30,
+      playerVelocity: -20,
+      grounded: false,
+      coins: [{ id: 1, x: 136, y: 200, radius: 11 }],
+    });
+    const advanced = advanceFredRun(state, 0.01, () => 0.5);
+    expect(advanced.coins).toEqual([]);
+    expect(advanced.coinsCollected).toBe(1);
+    expect(advanced.score).toBe(FREDRUN_COIN_SCORE);
+    expect(advanced.speed).toBeCloseTo(fredRunSpeedForDistance(advanced.distance), 8);
+  });
+
+  it("keeps the raised coin height reachable near Fred's jump apex", () => {
+    const state = startFredRun({
+      ...createFredRunState(),
+      spawnDistance: 10_000,
+      coinSpawnDistance: 10_000,
+      playerHeight: 132,
+      playerVelocity: 0,
+      grounded: false,
+      coins: [{ id: 1, x: 136, y: 162, radius: 11 }],
+    });
+    const advanced = advanceFredRun(state, 1 / 120, () => 0.5);
+    expect(advanced.coinsCollected).toBe(1);
+    expect(advanced.coins).toEqual([]);
+  });
+
   it("crosses 250-point boundaries without pausing or clearing obstacles", () => {
     const nearBoundary = startFredRun({
       ...createFredRunState(),
@@ -189,12 +276,22 @@ describe("Fredrun simulation", () => {
     expect(advanced.speed).toBeGreaterThan(420);
   });
 
-  it("pauses and resumes the same continuous run", () => {
+  it("holds the world during a three-second resume countdown", () => {
     const running = advanceFredRun(startFredRun(createFredRunState()), 0.05);
     const paused = pauseFredRun(running);
     expect(paused.phase).toBe("paused");
     expect(advanceFredRun(paused, 1)).toBe(paused);
-    expect(resumeFredRun(paused)).toEqual({ ...paused, phase: "running" });
+    let countdown = resumeFredRun(paused);
+    expect(countdown).toMatchObject({
+      phase: "countdown",
+      countdownRemaining: FREDRUN_RESUME_COUNTDOWN_SECONDS,
+    });
+    const frozenDistance = countdown.distance;
+    for (let index = 0; index < FREDRUN_RESUME_COUNTDOWN_SECONDS * 20; index += 1) {
+      countdown = advanceFredRun(countdown, 0.05);
+    }
+    expect(countdown.phase).toBe("running");
+    expect(countdown.distance).toBe(frozenDistance);
   });
 });
 

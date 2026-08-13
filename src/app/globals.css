@@ -2594,11 +2594,42 @@ textarea:focus {
   animation: fredrun-score-pulse 420ms ease-out;
 }
 
+.fredrun-coin--pulse {
+  animation: fredrun-coin-pulse 460ms ease-out;
+}
+
 @keyframes fredrun-score-pulse {
   45% {
     color: #d25a00;
     transform: scale(1.18);
   }
+}
+
+@keyframes fredrun-coin-pulse {
+  45% {
+    color: #a95e00;
+    transform: translateY(-2px) scale(1.18);
+  }
+}
+
+.fredrun-coin-hud strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transform-origin: left center;
+}
+
+.fredrun-coin-icon {
+  display: block;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  filter: drop-shadow(0 2px 3px rgba(55, 42, 10, 0.24));
+}
+
+.fredrun-coin-icon--hud {
+  width: 22px;
+  height: 22px;
 }
 
 .fredrun-hud button {
@@ -2623,6 +2654,25 @@ textarea:focus {
   width: 100%;
   aspect-ratio: 8 / 3;
   background: #dff5ff;
+}
+
+.fredrun-stage--hit .fredrun-canvas {
+  animation: fredrun-hit-shake 380ms cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+
+.fredrun-stage--hit {
+  animation: fredrun-hit-flash 520ms ease-out;
+}
+
+@keyframes fredrun-hit-shake {
+  18%, 54% { transform: translateX(-7px); }
+  36%, 72% { transform: translateX(7px); }
+  88% { transform: translateX(-3px); }
+}
+
+@keyframes fredrun-hit-flash {
+  0%, 28% { box-shadow: inset 0 0 0 8px rgba(242, 70, 24, 0.82); }
+  100% { box-shadow: inset 0 0 0 0 rgba(242, 70, 24, 0); }
 }
 
 .fredrun-stage--intro {
@@ -2760,6 +2810,42 @@ textarea:focus {
   padding: 0 18px;
 }
 
+.fredrun-countdown-overlay {
+  background: rgba(13, 31, 45, 0.34);
+  color: #fff;
+  backdrop-filter: blur(1px);
+}
+
+.fredrun-countdown-overlay::before {
+  width: min(220px, 68%);
+  height: min(180px, 72%);
+  border-color: rgba(255, 255, 255, 0.4);
+  background: rgba(8, 31, 47, 0.88);
+}
+
+.fredrun-countdown-overlay .fredrun-overlay-kicker,
+.fredrun-countdown-overlay small {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.fredrun-countdown-overlay > strong {
+  color: #ffd23a;
+  font-size: clamp(4rem, 12vw, 6.5rem);
+  line-height: 0.9;
+  text-shadow: 0 5px 18px rgba(0, 0, 0, 0.34);
+  animation: fredrun-countdown-pop 300ms ease-out;
+}
+
+.fredrun-countdown-overlay small {
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+@keyframes fredrun-countdown-pop {
+  from { opacity: 0.3; transform: scale(0.72); }
+  to { opacity: 1; transform: scale(1); }
+}
+
 .fredrun-game-over-overlay {
   grid-template-areas:
     "summary dance"
@@ -2806,6 +2892,12 @@ textarea:focus {
 .fredrun-game-over-summary > p:not(.fredrun-overlay-kicker) {
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.fredrun-game-over-summary .fredrun-game-over-coins {
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
 
 .fredrun-game-over-summary .primary-button {
@@ -6777,6 +6869,13 @@ textarea:focus {
   }
 
   .fredrun-score--pulse {
+    animation: none !important;
+  }
+
+  .fredrun-coin--pulse,
+  .fredrun-stage--hit,
+  .fredrun-stage--hit .fredrun-canvas,
+  .fredrun-countdown-overlay > strong {
     animation: none !important;
   }
 }

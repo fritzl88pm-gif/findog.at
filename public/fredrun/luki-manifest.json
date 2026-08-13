@@ -1,0 +1,22 @@
+{
+  "source": {
+    "file": "luki-kolumbian_lauf.png",
+    "sha256": "3D715AF687931CC29FAD5EC1B2FD5E08D0617ADA253B9D03F027128DFDF44F62",
+    "grid": "7x7",
+    "frameCount": 49
+  },
+  "atlas": {
+    "file": "luki-colombia-run.webp",
+    "format": "webp",
+    "sha256": "735DA0B950B4D7A0BFEDC3EA5FCDECF5726610CCDC5E55BE754176E397309E57",
+    "columns": 7,
+    "rows": 7,
+    "cellSize": 192,
+    "frameCount": 49,
+    "anchor": "bottom-center",
+    "sharedScale": 0.407323,
+    "flippedHorizontally": true,
+    "direction": "right-to-left",
+    "bytes": 435652
+  }
+}
