@@ -8,6 +8,12 @@ export const FREDRUN_HIGH_SCORE_KEY = "findog.fredrun.highscore.v2";
 export const FREDRUN_COIN_SCORE = 25;
 export const FREDRUN_JUMP_BUFFER_SECONDS = 0.12;
 export const FREDRUN_RESUME_COUNTDOWN_SECONDS = 3;
+export const FREDRUN_NEAR_MISS_BASE_SCORE = 25;
+export const FREDRUN_NEAR_MISS_COMBO_SECONDS = 3;
+export const FREDRUN_MAX_COMBO_MULTIPLIER = 5;
+export const FREDRUN_MAGNET_SECONDS = 8;
+export const FREDRUN_SLOW_MOTION_SECONDS = 5;
+export const FREDRUN_SLOW_MOTION_MULTIPLIER = 0.68;
 
 const BASE_SPEED = 300;
 const SPEED_INCREASE_PER_SCORE_STEP = 120;
@@ -17,6 +23,9 @@ const JUMP_VELOCITY = 660;
 const SCORE_DISTANCE = 34;
 const INITIAL_SPAWN_DISTANCE = 650;
 const INITIAL_COIN_SPAWN_DISTANCE = 420;
+const INITIAL_POWER_UP_SPAWN_DISTANCE = 1_200;
+const NEAR_MISS_CLEARANCE = 28;
+const MAGNET_RADIUS = 280;
 const ODO_SPAWN_RATE = 0.125;
 const MADINGER_SPAWN_RATE = 0.125;
 const JQA_SPAWN_RATE = 0.125;
@@ -27,6 +36,7 @@ const LUKI_SPEED_MULTIPLIER = 1.15;
 
 export type FredRunPhase = "ready" | "running" | "paused" | "countdown" | "game-over";
 export type FredRunObstacleKind = "odo" | "madinger" | "jqa" | "luki" | "reihe100" | "steuerkodex" | "paragraph";
+export type FredRunPowerUpKind = "magnet" | "shield" | "slow-motion";
 
 export type FredRunObstacle = {
   id: number;
@@ -34,10 +44,19 @@ export type FredRunObstacle = {
   x: number;
   width: number;
   height: number;
+  nearMissChecked?: boolean;
 };
 
 export type FredRunCoin = {
   id: number;
+  x: number;
+  y: number;
+  radius: number;
+};
+
+export type FredRunPowerUp = {
+  id: number;
+  kind: FredRunPowerUpKind;
   x: number;
   y: number;
   radius: number;
@@ -62,16 +81,32 @@ export type FredRunState = {
   countdownRemaining: number;
   spawnDistance: number;
   coinSpawnDistance: number;
+  powerUpSpawnDistance: number;
   nextObstacleId: number;
   nextCoinId: number;
+  nextPowerUpId: number;
   playerHeight: number;
   playerVelocity: number;
   jumpElapsed: number;
   jumpBufferRemaining: number;
   grounded: boolean;
   coinsCollected: number;
+  powerUpsCollected: number;
+  nearMisses: number;
+  nearMissScore: number;
+  comboMultiplier: number;
+  comboRemaining: number;
+  nearMissFeedbackRemaining: number;
+  lastNearMissBonus: number;
+  magnetRemaining: number;
+  slowMotionRemaining: number;
+  shieldActive: boolean;
+  shieldImpactRemaining: number;
+  powerUpFeedbackRemaining: number;
+  lastPowerUpKind: FredRunPowerUpKind | null;
   obstacles: FredRunObstacle[];
   coins: FredRunCoin[];
+  powerUps: FredRunPowerUp[];
 };
 
 export type FredRunStorage = Pick<Storage, "getItem" | "setItem">;
@@ -86,16 +121,32 @@ export function createFredRunState(): FredRunState {
     countdownRemaining: 0,
     spawnDistance: INITIAL_SPAWN_DISTANCE,
     coinSpawnDistance: INITIAL_COIN_SPAWN_DISTANCE,
+    powerUpSpawnDistance: INITIAL_POWER_UP_SPAWN_DISTANCE,
     nextObstacleId: 1,
     nextCoinId: 1,
+    nextPowerUpId: 1,
     playerHeight: 0,
     playerVelocity: 0,
     jumpElapsed: 0,
     jumpBufferRemaining: 0,
     grounded: true,
     coinsCollected: 0,
+    powerUpsCollected: 0,
+    nearMisses: 0,
+    nearMissScore: 0,
+    comboMultiplier: 0,
+    comboRemaining: 0,
+    nearMissFeedbackRemaining: 0,
+    lastNearMissBonus: 0,
+    magnetRemaining: 0,
+    slowMotionRemaining: 0,
+    shieldActive: false,
+    shieldImpactRemaining: 0,
+    powerUpFeedbackRemaining: 0,
+    lastPowerUpKind: null,
     obstacles: [],
     coins: [],
+    powerUps: [],
   };
 }
 
@@ -238,6 +289,11 @@ function nextCoinGap(speed: number, random: () => number): number {
   return safeMinimum + Math.min(1, Math.max(0, random())) * 360;
 }
 
+function nextPowerUpGap(speed: number, random: () => number): number {
+  const safeMinimum = Math.max(3_600, speed * 10);
+  return safeMinimum + Math.min(1, Math.max(0, random())) * 1_800;
+}
+
 function coinFormation(random: () => number, firstId: number): FredRunCoin[] {
   const count = 1 + Math.floor(Math.min(0.999999, Math.max(0, random())) * 3);
   const height = 138 + Math.min(1, Math.max(0, random())) * 24;
@@ -247,6 +303,21 @@ function coinFormation(random: () => number, firstId: number): FredRunCoin[] {
     y: FREDRUN_GROUND_Y - height - Math.sin(index / Math.max(1, count - 1) * Math.PI) * 18,
     radius: 11,
   }));
+}
+
+function powerUpFor(random: () => number, id: number): FredRunPowerUp {
+  const roll = Math.min(0.999999, Math.max(0, random()));
+  const kind: FredRunPowerUpKind = roll < 1 / 3
+    ? "magnet"
+    : roll < 2 / 3 ? "shield" : "slow-motion";
+  const height = 128 + Math.min(1, Math.max(0, random())) * 24;
+  return {
+    id,
+    kind,
+    x: FREDRUN_WORLD_WIDTH + 48,
+    y: FREDRUN_GROUND_Y - height,
+    radius: 15,
+  };
 }
 
 function obstacleSpeedMultiplier(kind: FredRunObstacleKind): number {
@@ -266,31 +337,35 @@ function rectanglesOverlap(
     && first.y + first.height > second.y;
 }
 
-function collidesWithPlayer(
+function collidingObstacleIds(
   state: FredRunState,
   previousObstaclePositions: ReadonlyMap<number, number> = new Map(),
-): boolean {
+): Set<number> {
   const player = {
     x: FREDRUN_PLAYER_X - 24,
     y: FREDRUN_GROUND_Y - state.playerHeight - 76,
     width: 48,
     height: 72,
   };
-  return state.obstacles.some((obstacle) => {
+  const ids = new Set<number>();
+  for (const obstacle of state.obstacles) {
     const previousX = previousObstaclePositions.get(obstacle.id) ?? obstacle.x;
     const sweptX = Math.min(obstacle.x, previousX) + 4;
     const sweptWidth = Math.abs(previousX - obstacle.x) + obstacle.width - 8;
-    return rectanglesOverlap(player, {
+    if (rectanglesOverlap(player, {
       x: sweptX,
       y: FREDRUN_GROUND_Y - obstacle.height + 3,
       width: sweptWidth,
       height: obstacle.height - 3,
-    });
-  });
+    })) {
+      ids.add(obstacle.id);
+    }
+  }
+  return ids;
 }
 
-function coinTouchesPlayer(
-  coin: FredRunCoin,
+function collectibleTouchesPlayer(
+  collectible: { x: number; y: number; radius: number },
   playerHeight: number,
   previousX: number,
 ): boolean {
@@ -300,12 +375,12 @@ function coinTouchesPlayer(
     width: 48,
     height: 72,
   };
-  const sweptX = Math.min(coin.x, previousX) - coin.radius;
+  const sweptX = Math.min(collectible.x, previousX) - collectible.radius;
   return rectanglesOverlap(player, {
     x: sweptX,
-    y: coin.y - coin.radius,
-    width: Math.abs(previousX - coin.x) + coin.radius * 2,
-    height: coin.radius * 2,
+    y: collectible.y - collectible.radius,
+    width: Math.abs(previousX - collectible.x) + collectible.radius * 2,
+    height: collectible.radius * 2,
   });
 }
 
@@ -351,13 +426,27 @@ export function advanceFredRun(
     jumpBufferRemaining = 0;
   }
 
-  const currentSpeed = fredRunSpeedForDistance(state.distance);
+  let comboRemaining = Math.max(0, state.comboRemaining - delta);
+  let comboMultiplier = comboRemaining > 0 ? state.comboMultiplier : 0;
+  let nearMissFeedbackRemaining = Math.max(0, state.nearMissFeedbackRemaining - delta);
+  let magnetRemaining = Math.max(0, state.magnetRemaining - delta);
+  let slowMotionRemaining = Math.max(0, state.slowMotionRemaining - delta);
+  let shieldActive = state.shieldActive;
+  let shieldImpactRemaining = Math.max(0, state.shieldImpactRemaining - delta);
+  let powerUpFeedbackRemaining = Math.max(0, state.powerUpFeedbackRemaining - delta);
+  let lastPowerUpKind = state.lastPowerUpKind;
+
+  const baseCurrentSpeed = fredRunSpeedForDistance(state.distance);
+  const currentSpeed = baseCurrentSpeed
+    * (slowMotionRemaining > 0 ? FREDRUN_SLOW_MOTION_MULTIPLIER : 1);
   const distance = state.distance + currentSpeed * delta;
-  const speed = fredRunSpeedForDistance(distance);
+  const baseNextSpeed = fredRunSpeedForDistance(distance);
   let spawnDistance = state.spawnDistance - currentSpeed * delta;
   let coinSpawnDistance = state.coinSpawnDistance - currentSpeed * delta;
+  let powerUpSpawnDistance = state.powerUpSpawnDistance - currentSpeed * delta;
   let nextObstacleId = state.nextObstacleId;
   let nextCoinId = state.nextCoinId;
+  let nextPowerUpId = state.nextPowerUpId;
   const previousObstaclePositions = new Map(
     state.obstacles.map((obstacle) => [obstacle.id, obstacle.x]),
   );
@@ -365,19 +454,37 @@ export function advanceFredRun(
     ...obstacle,
     x: obstacle.x - currentSpeed * obstacleSpeedMultiplier(obstacle.kind) * delta,
   }));
-  const obstacles = movedObstacles.filter((obstacle) => obstacle.x + obstacle.width > -20);
+  let obstacles = movedObstacles.filter((obstacle) => obstacle.x + obstacle.width > -20);
   const collisionObstacles = [...movedObstacles];
   const previousCoinPositions = new Map(state.coins.map((coin) => [coin.id, coin.x]));
-  const movedCoins = state.coins.map((coin) => ({ ...coin, x: coin.x - currentSpeed * delta }));
+  const playerCenterY = FREDRUN_GROUND_Y - playerHeight - 40;
+  const movedCoins = state.coins.map((coin) => {
+    const moved = { ...coin, x: coin.x - currentSpeed * delta };
+    const distanceToPlayer = Math.hypot(moved.x - FREDRUN_PLAYER_X, moved.y - playerCenterY);
+    if (magnetRemaining <= 0 || distanceToPlayer > MAGNET_RADIUS) return moved;
+    const pull = Math.min(1, delta * 7);
+    return {
+      ...moved,
+      x: moved.x + (FREDRUN_PLAYER_X - moved.x) * pull,
+      y: moved.y + (playerCenterY - moved.y) * pull,
+    };
+  });
   let coins = movedCoins.filter((coin) => coin.x + coin.radius > -20);
   const collisionCoins = [...movedCoins];
+  const previousPowerUpPositions = new Map(state.powerUps.map((powerUp) => [powerUp.id, powerUp.x]));
+  const movedPowerUps = state.powerUps.map((powerUp) => ({
+    ...powerUp,
+    x: powerUp.x - currentSpeed * delta,
+  }));
+  let powerUps = movedPowerUps.filter((powerUp) => powerUp.x + powerUp.radius > -20);
+  const collisionPowerUps = [...movedPowerUps];
 
   if (spawnDistance <= 0) {
     const obstacle = obstacleFor(random, nextObstacleId);
     obstacles.push(obstacle);
     collisionObstacles.push(obstacle);
     nextObstacleId += 1;
-    spawnDistance = nextGap(speed, random);
+    spawnDistance = nextGap(baseNextSpeed, random);
   }
 
   if (coinSpawnDistance <= 0) {
@@ -385,12 +492,20 @@ export function advanceFredRun(
     coins.push(...formation);
     collisionCoins.push(...formation);
     nextCoinId += formation.length;
-    coinSpawnDistance = nextCoinGap(speed, random);
+    coinSpawnDistance = nextCoinGap(baseNextSpeed, random);
+  }
+
+  if (powerUpSpawnDistance <= 0) {
+    const powerUp = powerUpFor(random, nextPowerUpId);
+    powerUps.push(powerUp);
+    collisionPowerUps.push(powerUp);
+    nextPowerUpId += 1;
+    powerUpSpawnDistance = nextPowerUpGap(baseNextSpeed, random);
   }
 
   const collectedCoinIds = new Set<number>();
   for (const coin of collisionCoins) {
-    if (coinTouchesPlayer(
+    if (collectibleTouchesPlayer(
       coin,
       playerHeight,
       previousCoinPositions.get(coin.id) ?? coin.x,
@@ -402,7 +517,71 @@ export function advanceFredRun(
     coins = coins.filter((coin) => !collectedCoinIds.has(coin.id));
   }
   const coinsCollected = state.coinsCollected + collectedCoinIds.size;
-  const score = Math.floor(distance / SCORE_DISTANCE) + coinsCollected * FREDRUN_COIN_SCORE;
+
+  const collectedPowerUpIds = new Set<number>();
+  let powerUpsCollected = state.powerUpsCollected;
+  for (const powerUp of collisionPowerUps) {
+    if (!collectibleTouchesPlayer(
+      powerUp,
+      playerHeight,
+      previousPowerUpPositions.get(powerUp.id) ?? powerUp.x,
+    )) continue;
+    collectedPowerUpIds.add(powerUp.id);
+    powerUpsCollected += 1;
+    lastPowerUpKind = powerUp.kind;
+    powerUpFeedbackRemaining = 1.2;
+    if (powerUp.kind === "magnet") magnetRemaining = FREDRUN_MAGNET_SECONDS;
+    if (powerUp.kind === "shield") shieldActive = true;
+    if (powerUp.kind === "slow-motion") slowMotionRemaining = FREDRUN_SLOW_MOTION_SECONDS;
+  }
+  if (collectedPowerUpIds.size > 0) {
+    powerUps = powerUps.filter((powerUp) => !collectedPowerUpIds.has(powerUp.id));
+  }
+
+  const collisionIds = collidingObstacleIds(
+    { ...state, playerHeight, obstacles: collisionObstacles },
+    previousObstaclePositions,
+  );
+  let fatalCollision = collisionIds.size > 0;
+  if (fatalCollision && shieldActive) {
+    shieldActive = false;
+    shieldImpactRemaining = 0.5;
+    obstacles = obstacles.filter((obstacle) => !collisionIds.has(obstacle.id));
+    fatalCollision = false;
+  }
+
+  let nearMisses = state.nearMisses;
+  let nearMissScore = state.nearMissScore;
+  let lastNearMissBonus = state.lastNearMissBonus;
+  if (!fatalCollision) {
+    const playerLeft = FREDRUN_PLAYER_X - 24;
+    obstacles = obstacles.map((obstacle) => {
+      if (obstacle.nearMissChecked) return obstacle;
+      const previousX = previousObstaclePositions.get(obstacle.id) ?? obstacle.x;
+      const crossedPlayer = previousX + obstacle.width >= playerLeft
+        && obstacle.x + obstacle.width < playerLeft;
+      if (!crossedPlayer) return obstacle;
+      const clearance = playerHeight - obstacle.height + 7;
+      if (clearance > 0 && clearance <= NEAR_MISS_CLEARANCE) {
+        comboMultiplier = Math.min(
+          FREDRUN_MAX_COMBO_MULTIPLIER,
+          (comboRemaining > 0 ? Math.max(1, comboMultiplier) : 1) + 1,
+        );
+        comboRemaining = FREDRUN_NEAR_MISS_COMBO_SECONDS;
+        lastNearMissBonus = FREDRUN_NEAR_MISS_BASE_SCORE * comboMultiplier;
+        nearMissScore += lastNearMissBonus;
+        nearMisses += 1;
+        nearMissFeedbackRemaining = 1;
+      }
+      return { ...obstacle, nearMissChecked: true };
+    });
+  }
+
+  const score = Math.floor(distance / SCORE_DISTANCE)
+    + coinsCollected * FREDRUN_COIN_SCORE
+    + nearMissScore;
+  const speed = baseNextSpeed
+    * (slowMotionRemaining > 0 ? FREDRUN_SLOW_MOTION_MULTIPLIER : 1);
 
   const advanced: FredRunState = {
     ...state,
@@ -418,17 +597,30 @@ export function advanceFredRun(
     grounded,
     spawnDistance,
     coinSpawnDistance,
+    powerUpSpawnDistance,
     nextObstacleId,
     nextCoinId,
+    nextPowerUpId,
     coinsCollected,
+    powerUpsCollected,
+    nearMisses,
+    nearMissScore,
+    comboMultiplier,
+    comboRemaining,
+    nearMissFeedbackRemaining,
+    lastNearMissBonus,
+    magnetRemaining,
+    slowMotionRemaining,
+    shieldActive,
+    shieldImpactRemaining,
+    powerUpFeedbackRemaining,
+    lastPowerUpKind,
     obstacles,
     coins,
+    powerUps,
   };
 
-  if (collidesWithPlayer(
-    { ...advanced, obstacles: collisionObstacles },
-    previousObstaclePositions,
-  )) {
+  if (fatalCollision) {
     return { ...advanced, phase: "game-over" };
   }
 

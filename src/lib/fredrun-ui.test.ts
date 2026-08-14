@@ -259,6 +259,22 @@ describe("Fredrun UI surface", () => {
     expect(stylesSource).toContain("@keyframes fredrun-hit-flash");
   });
 
+  it("renders near-miss combos and all three collectible power-up states", () => {
+    expect(viewSource).toContain("state.powerUps?.forEach((powerUp) => drawPowerUp");
+    expect(viewSource).toContain("drawPlayerPowerEffects(context, state, reducedMotion)");
+    expect(viewSource).toContain('magnet: "Magnet"');
+    expect(viewSource).toContain('shield: "Schild"');
+    expect(viewSource).toContain('"slow-motion": "Zeitlupe"');
+    expect(viewSource).toContain('className="fredrun-effect-strip"');
+    expect(viewSource).toContain('className="fredrun-feedback-pop fredrun-feedback-pop--near-miss"');
+    expect(viewSource).toContain("snapshot.nearMissScore");
+    expect(stylesSource).toContain(".fredrun-effect-chip--magnet");
+    expect(stylesSource).toContain(".fredrun-effect-chip--shield");
+    expect(stylesSource).toContain(".fredrun-effect-chip--slow-motion");
+    expect(stylesSource).toContain("@keyframes fredrun-feedback-pop");
+    expect(stylesSource).toContain("@keyframes fredrun-shield-flash");
+  });
+
   it("offers authenticated score submission and a global top ten", () => {
     expect(viewSource).toContain('fetch("/api/fredrun/highscores"');
     expect(viewSource).toContain('Authorization: `Bearer ${accessToken}`');

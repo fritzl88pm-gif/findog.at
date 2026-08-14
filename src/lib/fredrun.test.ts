@@ -2,9 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   FREDRUN_COIN_SCORE,
+  FREDRUN_GROUND_Y,
   FREDRUN_HIGH_SCORE_KEY,
   FREDRUN_JUMP_BUFFER_SECONDS,
+  FREDRUN_MAGNET_SECONDS,
+  FREDRUN_NEAR_MISS_COMBO_SECONDS,
   FREDRUN_RESUME_COUNTDOWN_SECONDS,
+  FREDRUN_SLOW_MOTION_MULTIPLIER,
+  FREDRUN_SLOW_MOTION_SECONDS,
   advanceFredRun,
   createFredRunState,
   fredRunEnvironmentForDistance,
@@ -16,6 +21,7 @@ import {
   restartFredRun,
   resumeFredRun,
   startFredRun,
+  type FredRunState,
   writeFredRunHighScore,
 } from "./fredrun";
 
@@ -257,6 +263,135 @@ describe("Fredrun simulation", () => {
     const advanced = advanceFredRun(state, 1 / 120, () => 0.5);
     expect(advanced.coinsCollected).toBe(1);
     expect(advanced.coins).toEqual([]);
+  });
+
+  it("awards escalating near-miss bonuses and expires the combo window", () => {
+    const first = advanceFredRun(startFredRun({
+      ...createFredRunState(),
+      spawnDistance: 10_000,
+      coinSpawnDistance: 10_000,
+      powerUpSpawnDistance: 10_000,
+      playerHeight: 81,
+      playerVelocity: 0,
+      grounded: false,
+      obstacles: [{ id: 1, kind: "odo", x: 70, width: 38, height: 78 }],
+    }), 0.01, () => 0.5);
+    expect(first).toMatchObject({
+      phase: "running",
+      nearMisses: 1,
+      nearMissScore: 50,
+      lastNearMissBonus: 50,
+      comboMultiplier: 2,
+      comboRemaining: FREDRUN_NEAR_MISS_COMBO_SECONDS,
+    });
+
+    const second = advanceFredRun({
+      ...first,
+      obstacles: [{ id: 2, kind: "odo", x: 70, width: 38, height: 78 }],
+    }, 0.01, () => 0.5);
+    expect(second).toMatchObject({
+      nearMisses: 2,
+      nearMissScore: 125,
+      lastNearMissBonus: 75,
+      comboMultiplier: 3,
+    });
+
+    let expired: FredRunState = { ...second, obstacles: [], spawnDistance: 10_000 };
+    for (let index = 0; index < 61; index += 1) {
+      expired = advanceFredRun(expired, 0.05, () => 0.5);
+    }
+    expect(expired.comboMultiplier).toBe(0);
+    expect(expired.comboRemaining).toBe(0);
+  });
+
+  it("spawns each rare power-up at a jump-reachable height", () => {
+    const cases = [
+      { roll: 0, kind: "magnet" },
+      { roll: 0.4, kind: "shield" },
+      { roll: 0.8, kind: "slow-motion" },
+    ] as const;
+    for (const expected of cases) {
+      const values = [expected.roll, 0.5, 0.5];
+      const state = advanceFredRun(startFredRun({
+        ...createFredRunState(),
+        spawnDistance: 10_000,
+        coinSpawnDistance: 10_000,
+        powerUpSpawnDistance: 0,
+      }), 1 / 120, () => values.shift() ?? 0.5);
+      expect(state.powerUps).toHaveLength(1);
+      expect(state.powerUps[0].kind).toBe(expected.kind);
+      expect(state.powerUps[0].y).toBeLessThan(FREDRUN_GROUND_Y - 110);
+      expect(state.powerUpSpawnDistance / fredRunSpeedForDistance(state.distance)).toBeGreaterThanOrEqual(10);
+    }
+  });
+
+  it("activates magnet, shield, and slow motion when collected", () => {
+    const collect = (kind: "magnet" | "shield" | "slow-motion") => advanceFredRun(startFredRun({
+      ...createFredRunState(),
+      spawnDistance: 10_000,
+      coinSpawnDistance: 10_000,
+      powerUpSpawnDistance: 10_000,
+      playerHeight: 30,
+      playerVelocity: -20,
+      grounded: false,
+      powerUps: [{ id: 1, kind, x: 136, y: 200, radius: 15 }],
+    }), 0.01, () => 0.5);
+
+    expect(collect("magnet")).toMatchObject({
+      powerUpsCollected: 1,
+      magnetRemaining: FREDRUN_MAGNET_SECONDS,
+      lastPowerUpKind: "magnet",
+    });
+    expect(collect("shield")).toMatchObject({
+      powerUpsCollected: 1,
+      shieldActive: true,
+      lastPowerUpKind: "shield",
+    });
+    expect(collect("slow-motion")).toMatchObject({
+      powerUpsCollected: 1,
+      slowMotionRemaining: FREDRUN_SLOW_MOTION_SECONDS,
+      lastPowerUpKind: "slow-motion",
+    });
+  });
+
+  it("pulls coins with the magnet and slows the world without changing the speed curve", () => {
+    const normal = advanceFredRun(startFredRun({
+      ...createFredRunState(),
+      spawnDistance: 10_000,
+      coinSpawnDistance: 10_000,
+      powerUpSpawnDistance: 10_000,
+      coins: [{ id: 1, x: 300, y: 260, radius: 11 }],
+    }), 0.05, () => 0.5);
+    const powered = advanceFredRun(startFredRun({
+      ...createFredRunState(),
+      spawnDistance: 10_000,
+      coinSpawnDistance: 10_000,
+      powerUpSpawnDistance: 10_000,
+      magnetRemaining: FREDRUN_MAGNET_SECONDS,
+      slowMotionRemaining: FREDRUN_SLOW_MOTION_SECONDS,
+      coins: [{ id: 1, x: 300, y: 260, radius: 11 }],
+    }), 0.05, () => 0.5);
+    expect(powered.coins[0].x).toBeLessThan(normal.coins[0].x);
+    expect(powered.distance).toBeCloseTo(normal.distance * FREDRUN_SLOW_MOTION_MULTIPLIER, 8);
+    expect(powered.speed).toBeCloseTo(
+      fredRunSpeedForDistance(powered.distance) * FREDRUN_SLOW_MOTION_MULTIPLIER,
+      8,
+    );
+  });
+
+  it("consumes one shield instead of ending the run", () => {
+    const protectedState = advanceFredRun(startFredRun({
+      ...createFredRunState(),
+      spawnDistance: 10_000,
+      coinSpawnDistance: 10_000,
+      powerUpSpawnDistance: 10_000,
+      shieldActive: true,
+      obstacles: [{ id: 1, kind: "odo", x: 112, width: 38, height: 78 }],
+    }), 0.01, () => 0.5);
+    expect(protectedState.phase).toBe("running");
+    expect(protectedState.shieldActive).toBe(false);
+    expect(protectedState.shieldImpactRemaining).toBeGreaterThan(0);
+    expect(protectedState.obstacles).toEqual([]);
   });
 
   it("crosses 250-point boundaries without pausing or clearing obstacles", () => {

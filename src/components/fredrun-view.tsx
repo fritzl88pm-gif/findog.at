@@ -25,6 +25,8 @@ import {
   type FredRunObstacleKind,
   type FredRunEnvironment,
   type FredRunPhase,
+  type FredRunPowerUp,
+  type FredRunPowerUpKind,
   type FredRunState,
 } from "@/lib/fredrun";
 import {
@@ -150,6 +152,19 @@ type FredRunSnapshot = {
   phase: FredRunPhase;
   score: number;
   coinsCollected: number;
+  powerUpsCollected: number;
+  nearMisses: number;
+  nearMissScore: number;
+  comboMultiplier: number;
+  comboSeconds: number;
+  nearMissFeedback: boolean;
+  lastNearMissBonus: number;
+  magnetSeconds: number;
+  slowMotionSeconds: number;
+  shieldActive: boolean;
+  shieldImpact: boolean;
+  powerUpFeedback: boolean;
+  lastPowerUpKind: FredRunPowerUpKind | null;
   countdown: number;
 };
 
@@ -158,6 +173,19 @@ function snapshotFrom(state: FredRunState): FredRunSnapshot {
     phase: state.phase,
     score: state.score,
     coinsCollected: state.coinsCollected,
+    powerUpsCollected: state.powerUpsCollected,
+    nearMisses: state.nearMisses,
+    nearMissScore: state.nearMissScore,
+    comboMultiplier: state.comboMultiplier,
+    comboSeconds: Math.ceil(state.comboRemaining),
+    nearMissFeedback: state.nearMissFeedbackRemaining > 0,
+    lastNearMissBonus: state.lastNearMissBonus,
+    magnetSeconds: Math.ceil(state.magnetRemaining),
+    slowMotionSeconds: Math.ceil(state.slowMotionRemaining),
+    shieldActive: state.shieldActive,
+    shieldImpact: state.shieldImpactRemaining > 0,
+    powerUpFeedback: state.powerUpFeedbackRemaining > 0,
+    lastPowerUpKind: state.lastPowerUpKind,
     countdown: Math.ceil(state.countdownRemaining),
   };
 }
@@ -575,18 +603,132 @@ function drawCoin(
   context.restore();
 }
 
+const powerUpColors: Record<FredRunPowerUpKind, { light: string; dark: string }> = {
+  magnet: { light: "#ff5a73", dark: "#8d1235" },
+  shield: { light: "#56d8ff", dark: "#075a9d" },
+  "slow-motion": { light: "#c994ff", dark: "#563097" },
+};
+
+function drawPowerUp(
+  context: CanvasRenderingContext2D,
+  powerUp: FredRunPowerUp,
+  elapsed: number,
+  reducedMotion: boolean,
+) {
+  const colors = powerUpColors[powerUp.kind];
+  const pulse = reducedMotion ? 1 : 1 + Math.sin(elapsed * 4.2 + powerUp.id) * 0.07;
+  context.save();
+  context.translate(powerUp.x, powerUp.y);
+  context.scale(pulse, pulse);
+  context.shadowColor = colors.light;
+  context.shadowBlur = 13;
+  const gradient = context.createRadialGradient(-5, -6, 2, 0, 0, powerUp.radius + 4);
+  gradient.addColorStop(0, "#ffffff");
+  gradient.addColorStop(0.24, colors.light);
+  gradient.addColorStop(1, colors.dark);
+  context.fillStyle = gradient;
+  context.beginPath();
+  context.arc(0, 0, powerUp.radius + 3, 0, Math.PI * 2);
+  context.fill();
+  context.shadowBlur = 0;
+  context.strokeStyle = "rgba(255, 255, 255, 0.9)";
+  context.lineWidth = 2;
+  context.stroke();
+  context.strokeStyle = "#ffffff";
+  context.fillStyle = "#ffffff";
+  context.lineWidth = 3;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+
+  if (powerUp.kind === "magnet") {
+    context.beginPath();
+    context.arc(0, -1, 8, 0, Math.PI, false);
+    context.lineTo(-8, 8);
+    context.moveTo(8, -1);
+    context.lineTo(8, 8);
+    context.stroke();
+    context.fillRect(-10, 6, 5, 4);
+    context.fillRect(5, 6, 5, 4);
+  } else if (powerUp.kind === "shield") {
+    context.beginPath();
+    context.moveTo(0, -10);
+    context.lineTo(9, -6);
+    context.lineTo(7, 4);
+    context.quadraticCurveTo(5, 9, 0, 12);
+    context.quadraticCurveTo(-5, 9, -7, 4);
+    context.lineTo(-9, -6);
+    context.closePath();
+    context.stroke();
+  } else {
+    context.beginPath();
+    context.arc(0, 0, 9, 0, Math.PI * 2);
+    context.stroke();
+    context.beginPath();
+    context.moveTo(0, -5);
+    context.lineTo(0, 1);
+    context.lineTo(5, 4);
+    context.stroke();
+  }
+  context.restore();
+}
+
+function drawPlayerPowerEffects(
+  context: CanvasRenderingContext2D,
+  state: FredRunState,
+  reducedMotion: boolean,
+) {
+  const centerX = FREDRUN_PLAYER_X;
+  const centerY = FREDRUN_GROUND_Y - state.playerHeight - 72;
+  context.save();
+  if (state.shieldActive) {
+    const pulse = reducedMotion ? 0 : Math.sin(state.elapsed * 5) * 2;
+    const gradient = context.createRadialGradient(centerX - 18, centerY - 18, 8, centerX, centerY, 76);
+    gradient.addColorStop(0, "rgba(113, 224, 255, 0.08)");
+    gradient.addColorStop(0.72, "rgba(55, 171, 235, 0.12)");
+    gradient.addColorStop(1, "rgba(23, 112, 187, 0.34)");
+    context.fillStyle = gradient;
+    context.strokeStyle = "rgba(145, 231, 255, 0.9)";
+    context.lineWidth = 2.5;
+    context.beginPath();
+    context.ellipse(centerX, centerY, 62 + pulse, 78 + pulse, 0, 0, Math.PI * 2);
+    context.fill();
+    context.stroke();
+  }
+  if (state.magnetRemaining > 0) {
+    context.strokeStyle = "rgba(255, 95, 126, 0.7)";
+    context.lineWidth = 2;
+    context.setLineDash([7, 8]);
+    context.lineDashOffset = reducedMotion ? 0 : -state.elapsed * 22;
+    context.beginPath();
+    context.arc(centerX, centerY, 88, -0.85, 0.85);
+    context.stroke();
+  }
+  if (state.slowMotionRemaining > 0) {
+    context.strokeStyle = "rgba(205, 162, 255, 0.72)";
+    context.lineWidth = 3;
+    context.beginPath();
+    context.arc(centerX, centerY, 69, -Math.PI * 0.82, -Math.PI * 0.18);
+    context.stroke();
+  }
+  context.restore();
+}
+
 function drawHitFeedback(
   context: CanvasRenderingContext2D,
   state: FredRunState,
 ) {
-  if (state.phase !== "game-over") return;
+  if (state.phase !== "game-over" && state.shieldImpactRemaining <= 0) return;
   const centerX = FREDRUN_PLAYER_X + 13;
   const centerY = FREDRUN_GROUND_Y - state.playerHeight - 42;
   context.save();
   context.translate(centerX, centerY);
-  context.strokeStyle = "rgba(255, 242, 132, 0.94)";
+  context.strokeStyle = state.shieldImpactRemaining > 0
+    ? "rgba(145, 231, 255, 0.96)"
+    : "rgba(255, 242, 132, 0.94)";
   context.lineWidth = 4;
-  context.shadowColor = "rgba(220, 55, 15, 0.72)";
+  context.shadowColor = state.shieldImpactRemaining > 0
+    ? "rgba(32, 146, 224, 0.78)"
+    : "rgba(220, 55, 15, 0.72)";
   context.shadowBlur = 10;
   for (let index = 0; index < 10; index += 1) {
     const angle = index / 10 * Math.PI * 2;
@@ -630,6 +772,7 @@ function renderFredRun(
   context.imageSmoothingEnabled = true;
   drawBackground(context, state, images?.backgrounds ?? [], reducedMotion);
   state.coins.forEach((coin) => drawCoin(context, coin, images?.coin ?? null, state.elapsed, reducedMotion));
+  state.powerUps?.forEach((powerUp) => drawPowerUp(context, powerUp, state.elapsed, reducedMotion));
   if (images) {
     state.obstacles.forEach((obstacle) => drawObstacle(
       context,
@@ -641,6 +784,7 @@ function renderFredRun(
   }
 
   if (images) {
+    drawPlayerPowerEffects(context, state, reducedMotion);
     const sprite = activeSprite(state);
     const layout = spriteLayouts[sprite.key];
     const sourceX = (sprite.frame % layout.columns) * SPRITE_CELL_SIZE;
@@ -727,11 +871,20 @@ function FredRunVictoryDance() {
 
 function phaseStatus(snapshot: FredRunSnapshot): string {
   if (snapshot.phase === "ready") return "Fredrun ist bereit.";
-  if (snapshot.phase === "running") return `Runde läuft. ${snapshot.score} Punkte.`;
+  if (snapshot.phase === "running") {
+    const combo = snapshot.comboMultiplier > 1 ? ` Kombo mal ${snapshot.comboMultiplier}.` : "";
+    return `Runde läuft. ${snapshot.score} Punkte.${combo}`;
+  }
   if (snapshot.phase === "paused") return "Fredrun ist pausiert.";
   if (snapshot.phase === "countdown") return `Weiter in ${snapshot.countdown}.`;
   return `Runde beendet mit ${snapshot.score} Punkten.`;
 }
+
+const powerUpLabels: Record<FredRunPowerUpKind, string> = {
+  magnet: "Magnet",
+  shield: "Schild",
+  "slow-motion": "Zeitlupe",
+};
 
 function localHighScoreStorage(): Storage | null {
   try {
@@ -796,6 +949,19 @@ export default function FredRunView({
         current.phase === next.phase
         && current.score === next.score
         && current.coinsCollected === next.coinsCollected
+        && current.powerUpsCollected === next.powerUpsCollected
+        && current.nearMisses === next.nearMisses
+        && current.nearMissScore === next.nearMissScore
+        && current.comboMultiplier === next.comboMultiplier
+        && current.comboSeconds === next.comboSeconds
+        && current.nearMissFeedback === next.nearMissFeedback
+        && current.lastNearMissBonus === next.lastNearMissBonus
+        && current.magnetSeconds === next.magnetSeconds
+        && current.slowMotionSeconds === next.slowMotionSeconds
+        && current.shieldActive === next.shieldActive
+        && current.shieldImpact === next.shieldImpact
+        && current.powerUpFeedback === next.powerUpFeedback
+        && current.lastPowerUpKind === next.lastPowerUpKind
         && current.countdown === next.countdown
       ) {
         return current;
@@ -1181,7 +1347,7 @@ export default function FredRunView({
             </div>
           ) : null}
 
-          <div className={`fredrun-stage${showIntro ? " fredrun-stage--intro" : ""}${snapshot.phase === "game-over" ? " fredrun-stage--game-over fredrun-stage--hit" : ""}`}>
+          <div className={`fredrun-stage${showIntro ? " fredrun-stage--intro" : ""}${snapshot.phase === "game-over" ? " fredrun-stage--game-over fredrun-stage--hit" : snapshot.shieldImpact ? " fredrun-stage--hit fredrun-stage--shield-hit" : ""}`}>
             <canvas
               ref={canvasRef}
               className="fredrun-canvas"
@@ -1193,6 +1359,50 @@ export default function FredRunView({
               aria-hidden={showIntro || undefined}
               tabIndex={showIntro ? -1 : 0}
             />
+
+            {!showIntro && snapshot.phase !== "game-over" ? (
+              <div className="fredrun-effect-strip" aria-label="Aktive Effekte">
+                {snapshot.comboMultiplier > 1 ? (
+                  <span className="fredrun-effect-chip fredrun-effect-chip--combo">
+                    Kombo ×{snapshot.comboMultiplier} · {snapshot.comboSeconds}s
+                  </span>
+                ) : null}
+                {snapshot.magnetSeconds > 0 ? (
+                  <span className="fredrun-effect-chip fredrun-effect-chip--magnet">
+                    Magnet · {snapshot.magnetSeconds}s
+                  </span>
+                ) : null}
+                {snapshot.shieldActive ? (
+                  <span className="fredrun-effect-chip fredrun-effect-chip--shield">Schild · 1×</span>
+                ) : null}
+                {snapshot.slowMotionSeconds > 0 ? (
+                  <span className="fredrun-effect-chip fredrun-effect-chip--slow-motion">
+                    Zeitlupe · {snapshot.slowMotionSeconds}s
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+
+            {!showIntro && snapshot.phase === "running" ? (
+              <div className="fredrun-gameplay-feedback" aria-live="polite">
+                {snapshot.nearMissFeedback ? (
+                  <span
+                    key={`near-miss-${snapshot.nearMisses}`}
+                    className="fredrun-feedback-pop fredrun-feedback-pop--near-miss"
+                  >
+                    Knapp! <strong>+{snapshot.lastNearMissBonus} · ×{snapshot.comboMultiplier}</strong>
+                  </span>
+                ) : null}
+                {snapshot.powerUpFeedback && snapshot.lastPowerUpKind ? (
+                  <span
+                    key={`power-up-${snapshot.powerUpsCollected}`}
+                    className={`fredrun-feedback-pop fredrun-feedback-pop--${snapshot.lastPowerUpKind}`}
+                  >
+                    {powerUpLabels[snapshot.lastPowerUpKind]}!
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
 
             {assetState === "error" ? (
               <div className="fredrun-overlay" role="alert">
@@ -1255,6 +1465,11 @@ export default function FredRunView({
                     <FredRunCoinIcon className="fredrun-coin-icon--summary" />
                     <span>{snapshot.coinsCollected} Münzen · +{snapshot.coinsCollected * FREDRUN_COIN_SCORE} Punkte</span>
                   </p>
+                  {snapshot.nearMisses > 0 ? (
+                    <p className="fredrun-game-over-near-misses">
+                      {snapshot.nearMisses}× knapp vorbei · +{snapshot.nearMissScore} Punkte
+                    </p>
+                  ) : null}
                   <button className="primary-button" type="button" onClick={restartRound}>Noch einmal</button>
                 </div>
                 <FredRunVictoryDance />
