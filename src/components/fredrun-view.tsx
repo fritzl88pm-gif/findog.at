@@ -75,11 +75,32 @@ function unlockMobileFullscreenOrientation() {
   }
 }
 
-const spriteLayouts = {
-  walk: { source: "/fredrun/walk.png", columns: 8, frameCount: 64 },
-  jump: { source: "/fredrun/jump.png", columns: 6, frameCount: 24 },
-  victory: { source: "/fredrun/victory.png", columns: 8, frameCount: 64 },
-} as const;
+type SpriteKey = "walk" | "jump" | "victory";
+type FredRunCharacterId = "fred" | "frida";
+type CharacterSpriteLayout = {
+  source: string;
+  columns: number;
+  frameCount: number;
+  fps: number;
+};
+
+const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, CharacterSpriteLayout>> = {
+  fred: {
+    walk: { source: "/fredrun/walk.png", columns: 8, frameCount: 64, fps: 18 },
+    jump: { source: "/fredrun/jump.png", columns: 6, frameCount: 24, fps: 18 },
+    victory: { source: "/fredrun/victory.png", columns: 8, frameCount: 64, fps: 18 },
+  },
+  frida: {
+    walk: { source: "/fredrun/frida/walk.webp", columns: 8, frameCount: 64, fps: 16 },
+    jump: { source: "/fredrun/frida/jump.webp", columns: 8, frameCount: 64, fps: 16 },
+    victory: { source: "/fredrun/frida/victory.webp", columns: 8, frameCount: 32, fps: 16 },
+  },
+};
+
+const fredRunCharacters: Record<FredRunCharacterId, { name: string; description: string }> = {
+  fred: { name: "Fred", description: "Der blaue Findog-Klassiker" },
+  frida: { name: "Frida", description: "Pink, klug und voller Energie" },
+};
 
 const obstacleLayouts: Record<
   FredRunObstacleKind,
@@ -139,11 +160,11 @@ const obstacleLayouts: Record<
   },
 };
 
-type SpriteKey = keyof typeof spriteLayouts;
 type SpriteImages = Record<SpriteKey, HTMLImageElement>;
+type CharacterSpriteImages = Record<FredRunCharacterId, SpriteImages>;
 type ObstacleImages = Record<FredRunObstacleKind, HTMLImageElement>;
 type FredRunImages = {
-  sprites: SpriteImages;
+  characters: CharacterSpriteImages;
   obstacles: ObstacleImages;
   coin: HTMLImageElement;
   magnet: HTMLImageElement;
@@ -162,7 +183,6 @@ type FredRunSnapshot = {
   nearMissFeedback: boolean;
   lastNearMissBonus: number;
   magnetSeconds: number;
-  slowMotionSeconds: number;
   shieldActive: boolean;
   shieldImpact: boolean;
   powerUpFeedback: boolean;
@@ -183,7 +203,6 @@ function snapshotFrom(state: FredRunState): FredRunSnapshot {
     nearMissFeedback: state.nearMissFeedbackRemaining > 0,
     lastNearMissBonus: state.lastNearMissBonus,
     magnetSeconds: Math.ceil(state.magnetRemaining),
-    slowMotionSeconds: Math.ceil(state.slowMotionRemaining),
     shieldActive: state.shieldActive,
     shieldImpact: state.shieldImpactRemaining > 0,
     powerUpFeedback: state.powerUpFeedbackRemaining > 0,
@@ -589,6 +608,44 @@ function FredRunMagnetIcon({ className = "" }: { className?: string }) {
   );
 }
 
+function FredRunCharacterPreview({ characterId }: { characterId: FredRunCharacterId }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const layout = characterSpriteLayouts[characterId].walk;
+    void loadImage(layout.source).then((image) => {
+      if (cancelled) return;
+      const canvas = canvasRef.current;
+      const context = canvas?.getContext("2d");
+      if (!canvas || !context) return;
+      context.clearRect(0, 0, SPRITE_CELL_SIZE, SPRITE_CELL_SIZE);
+      context.drawImage(
+        image,
+        0,
+        0,
+        SPRITE_CELL_SIZE,
+        SPRITE_CELL_SIZE,
+        0,
+        0,
+        SPRITE_CELL_SIZE,
+        SPRITE_CELL_SIZE,
+      );
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [characterId]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="fredrun-character-preview"
+      width={SPRITE_CELL_SIZE}
+      height={SPRITE_CELL_SIZE}
+      aria-hidden="true"
+    />
+  );
+}
+
 function drawCoin(
   context: CanvasRenderingContext2D,
   coin: FredRunCoin,
@@ -622,7 +679,6 @@ function drawCoin(
 const powerUpColors: Record<FredRunPowerUpKind, { light: string; dark: string }> = {
   magnet: { light: "#ff5a73", dark: "#8d1235" },
   shield: { light: "#56d8ff", dark: "#075a9d" },
-  "slow-motion": { light: "#c994ff", dark: "#563097" },
 };
 
 function drawPowerUp(
@@ -674,7 +730,7 @@ function drawPowerUp(
       context.fillRect(-11, -10, 6, 5);
       context.fillRect(5, -10, 6, 5);
     }
-  } else if (powerUp.kind === "shield") {
+  } else {
     context.beginPath();
     context.moveTo(0, -10);
     context.lineTo(9, -6);
@@ -683,15 +739,6 @@ function drawPowerUp(
     context.quadraticCurveTo(-5, 9, -7, 4);
     context.lineTo(-9, -6);
     context.closePath();
-    context.stroke();
-  } else {
-    context.beginPath();
-    context.arc(0, 0, 9, 0, Math.PI * 2);
-    context.stroke();
-    context.beginPath();
-    context.moveTo(0, -5);
-    context.lineTo(0, 1);
-    context.lineTo(5, 4);
     context.stroke();
   }
   context.restore();
@@ -728,13 +775,6 @@ function drawPlayerPowerEffects(
     context.arc(centerX, centerY, 88, -0.85, 0.85);
     context.stroke();
   }
-  if (state.slowMotionRemaining > 0) {
-    context.strokeStyle = "rgba(205, 162, 255, 0.72)";
-    context.lineWidth = 3;
-    context.beginPath();
-    context.arc(centerX, centerY, 69, -Math.PI * 0.82, -Math.PI * 0.18);
-    context.stroke();
-  }
   context.restore();
 }
 
@@ -765,19 +805,25 @@ function drawHitFeedback(
   context.restore();
 }
 
-function activeSprite(state: FredRunState): { key: SpriteKey; frame: number } {
+function activeSprite(
+  state: FredRunState,
+  layouts: Record<SpriteKey, CharacterSpriteLayout>,
+): { key: SpriteKey; frame: number } {
   if (!state.grounded) {
     const progress = state.jumpElapsed / JUMP_ANIMATION_DURATION;
     return {
       key: "jump",
       frame: Math.min(
-        spriteLayouts.jump.frameCount - 1,
-        Math.max(0, Math.floor(progress * spriteLayouts.jump.frameCount)),
+        layouts.jump.frameCount - 1,
+        Math.max(0, Math.floor(progress * layouts.jump.frameCount)),
       ),
     };
   }
   if (state.phase === "running") {
-    return { key: "walk", frame: Math.floor(state.elapsed * 18) % spriteLayouts.walk.frameCount };
+    return {
+      key: "walk",
+      frame: Math.floor(state.elapsed * layouts.walk.fps) % layouts.walk.frameCount,
+    };
   }
   return { key: "walk", frame: 0 };
 }
@@ -787,6 +833,7 @@ function renderFredRun(
   state: FredRunState,
   images: FredRunImages | null,
   reducedMotion: boolean,
+  characterId: FredRunCharacterId,
 ) {
   const context = canvas.getContext("2d");
   if (!context || canvas.width === 0 || canvas.height === 0) {
@@ -816,13 +863,14 @@ function renderFredRun(
 
   if (images) {
     drawPlayerPowerEffects(context, state, reducedMotion);
-    const sprite = activeSprite(state);
-    const layout = spriteLayouts[sprite.key];
+    const layouts = characterSpriteLayouts[characterId];
+    const sprite = activeSprite(state, layouts);
+    const layout = layouts[sprite.key];
     const sourceX = (sprite.frame % layout.columns) * SPRITE_CELL_SIZE;
     const sourceY = Math.floor(sprite.frame / layout.columns) * SPRITE_CELL_SIZE;
     const footY = FREDRUN_GROUND_Y - state.playerHeight + 4;
     context.drawImage(
-      images.sprites[sprite.key],
+      images.characters[characterId][sprite.key],
       sourceX,
       sourceY,
       SPRITE_CELL_SIZE,
@@ -836,18 +884,18 @@ function renderFredRun(
   drawHitFeedback(context, state);
 }
 
-function FredRunVictoryDance() {
+function FredRunVictoryDance({ characterId }: { characterId: FredRunCharacterId }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [reducedMotion, setReducedMotion] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    void loadImage(spriteLayouts.victory.source).then((loadedImage) => {
+    void loadImage(characterSpriteLayouts[characterId].victory.source).then((loadedImage) => {
       if (!cancelled) setImage(loadedImage);
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [characterId]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -861,13 +909,14 @@ function FredRunVictoryDance() {
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d");
     if (!canvas || !context || !image) return;
+    const layout = characterSpriteLayouts[characterId].victory;
     let animationFrame: number | null = null;
     const draw = (timestamp: number) => {
       const frame = reducedMotion
-        ? 48
-        : Math.floor(timestamp / 1_000 * 18) % spriteLayouts.victory.frameCount;
-      const sourceX = (frame % spriteLayouts.victory.columns) * SPRITE_CELL_SIZE;
-      const sourceY = Math.floor(frame / spriteLayouts.victory.columns) * SPRITE_CELL_SIZE;
+        ? Math.min(layout.frameCount - 1, Math.floor(layout.frameCount * 0.75))
+        : Math.floor(timestamp / 1_000 * layout.fps) % layout.frameCount;
+      const sourceX = (frame % layout.columns) * SPRITE_CELL_SIZE;
+      const sourceY = Math.floor(frame / layout.columns) * SPRITE_CELL_SIZE;
       context.clearRect(0, 0, SPRITE_CELL_SIZE, SPRITE_CELL_SIZE);
       context.drawImage(
         image,
@@ -886,7 +935,7 @@ function FredRunVictoryDance() {
     return () => {
       if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
     };
-  }, [image, reducedMotion]);
+  }, [characterId, image, reducedMotion]);
 
   return (
     <canvas
@@ -895,7 +944,7 @@ function FredRunVictoryDance() {
       width={SPRITE_CELL_SIZE}
       height={SPRITE_CELL_SIZE}
       role="img"
-      aria-label="Fred tanzt"
+      aria-label={`${fredRunCharacters[characterId].name} tanzt`}
     />
   );
 }
@@ -914,7 +963,6 @@ function phaseStatus(snapshot: FredRunSnapshot): string {
 const powerUpLabels: Record<FredRunPowerUpKind, string> = {
   magnet: "Magnet",
   shield: "Schild",
-  "slow-motion": "Zeitlupe",
 };
 
 function localHighScoreStorage(): Storage | null {
@@ -947,10 +995,12 @@ export default function FredRunView({
   const frameRef = useRef<number | null>(null);
   const gameRef = useRef<FredRunState>(createFredRunState());
   const imagesRef = useRef<FredRunImages | null>(null);
+  const selectedCharacterRef = useRef<FredRunCharacterId>("fred");
   const bestScoreRef = useRef(0);
   const reducedMotionRef = useRef(false);
   const scoreSubmissionAbortRef = useRef<AbortController | null>(null);
   const [snapshot, setSnapshot] = useState<FredRunSnapshot>(() => snapshotFrom(createFredRunState()));
+  const [selectedCharacter, setSelectedCharacter] = useState<FredRunCharacterId>("fred");
   const [scorePulseToken, setScorePulseToken] = useState(0);
   const [coinPulseToken, setCoinPulseToken] = useState(0);
   const [bestScore, setBestScore] = useState(0);
@@ -988,7 +1038,6 @@ export default function FredRunView({
         && current.nearMissFeedback === next.nearMissFeedback
         && current.lastNearMissBonus === next.lastNearMissBonus
         && current.magnetSeconds === next.magnetSeconds
-        && current.slowMotionSeconds === next.slowMotionSeconds
         && current.shieldActive === next.shieldActive
         && current.shieldImpact === next.shieldImpact
         && current.powerUpFeedback === next.powerUpFeedback
@@ -1005,9 +1054,30 @@ export default function FredRunView({
     gameRef.current = state;
     publish(state);
     if (canvasRef.current) {
-      renderFredRun(canvasRef.current, state, imagesRef.current, reducedMotionRef.current);
+      renderFredRun(
+        canvasRef.current,
+        state,
+        imagesRef.current,
+        reducedMotionRef.current,
+        selectedCharacterRef.current,
+      );
     }
   }, [publish]);
+
+  const selectCharacter = useCallback((characterId: FredRunCharacterId) => {
+    if (gameRef.current.phase !== "ready") return;
+    selectedCharacterRef.current = characterId;
+    setSelectedCharacter(characterId);
+    if (canvasRef.current) {
+      renderFredRun(
+        canvasRef.current,
+        gameRef.current,
+        imagesRef.current,
+        reducedMotionRef.current,
+        characterId,
+      );
+    }
+  }, []);
 
   const prepareNewRun = useCallback(() => {
     setScorePulseToken(0);
@@ -1125,9 +1195,13 @@ export default function FredRunView({
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      Promise.all((Object.keys(spriteLayouts) as SpriteKey[]).map(async (key) => (
-        [key, await loadImage(spriteLayouts[key].source)] as const
-      ))),
+      Promise.all((Object.keys(characterSpriteLayouts) as FredRunCharacterId[]).map(async (characterId) => {
+        const layouts = characterSpriteLayouts[characterId];
+        const spriteEntries = await Promise.all((Object.keys(layouts) as SpriteKey[]).map(async (key) => (
+          [key, await loadImage(layouts[key].source)] as const
+        )));
+        return [characterId, Object.fromEntries(spriteEntries) as SpriteImages] as const;
+      })),
       Promise.all((Object.keys(obstacleLayouts) as FredRunObstacleKind[]).map(async (key) => (
         [key, await loadImage(obstacleLayouts[key].source)] as const
       ))),
@@ -1136,10 +1210,10 @@ export default function FredRunView({
       loadImage(INTRO_SOURCE),
       loadBackgrounds(),
     ])
-      .then(([spriteEntries, obstacleEntries, coin, magnet, , backgrounds]) => {
+      .then(([characterEntries, obstacleEntries, coin, magnet, , backgrounds]) => {
         if (cancelled) return;
         imagesRef.current = {
-          sprites: Object.fromEntries(spriteEntries) as SpriteImages,
+          characters: Object.fromEntries(characterEntries) as CharacterSpriteImages,
           obstacles: Object.fromEntries(obstacleEntries) as ObstacleImages,
           coin,
           magnet,
@@ -1175,7 +1249,13 @@ export default function FredRunView({
         canvas.width = width;
         canvas.height = height;
       }
-      renderFredRun(canvas, gameRef.current, imagesRef.current, reducedMotionRef.current);
+      renderFredRun(
+        canvas,
+        gameRef.current,
+        imagesRef.current,
+        reducedMotionRef.current,
+        selectedCharacterRef.current,
+      );
     };
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
@@ -1217,7 +1297,13 @@ export default function FredRunView({
         }
       }
       if (canvasRef.current) {
-        renderFredRun(canvasRef.current, state, imagesRef.current, reducedMotionRef.current);
+        renderFredRun(
+          canvasRef.current,
+          state,
+          imagesRef.current,
+          reducedMotionRef.current,
+          selectedCharacterRef.current,
+        );
       }
       frameRef.current = requestAnimationFrame(tick);
     };
@@ -1319,7 +1405,7 @@ export default function FredRunView({
             <div>
               <p className="eyebrow">Findog Spielpause</p>
               <h1 id="fredrun-view-title">Fredrun</h1>
-              <p>Spring mit Fred über REIH 100, Steuerkodex, Paragraphen und unerwartete Hindernisse.</p>
+              <p>Spring mit Fred oder Frida über REIH 100, Steuerkodex, Paragraphen und unerwartete Hindernisse.</p>
             </div>
             <div className="fredrun-controls-copy" aria-label="Steuerung">
               <span><kbd>Leertaste</kbd> oder <kbd>↑</kbd></span>
@@ -1409,11 +1495,6 @@ export default function FredRunView({
                 {snapshot.shieldActive ? (
                   <span className="fredrun-effect-chip fredrun-effect-chip--shield">Schild · 1×</span>
                 ) : null}
-                {snapshot.slowMotionSeconds > 0 ? (
-                  <span className="fredrun-effect-chip fredrun-effect-chip--slow-motion">
-                    Zeitlupe · {snapshot.slowMotionSeconds}s
-                  </span>
-                ) : null}
               </div>
             ) : null}
 
@@ -1471,7 +1552,33 @@ export default function FredRunView({
                 />
                 {assetState === "ready" ? (
                   <div className="fredrun-intro-action">
-                    <button className="primary-button" type="button" onClick={startRound}>Loslaufen</button>
+                    <div className="fredrun-character-picker" aria-label="Charakter auswählen">
+                      <span>Charakter wählen</span>
+                      <div className="fredrun-character-options">
+                        {(Object.keys(fredRunCharacters) as FredRunCharacterId[]).map((characterId) => {
+                          const character = fredRunCharacters[characterId];
+                          const selected = selectedCharacter === characterId;
+                          return (
+                            <button
+                              key={characterId}
+                              className={`fredrun-character-option${selected ? " is-selected" : ""}`}
+                              type="button"
+                              aria-pressed={selected}
+                              onClick={() => selectCharacter(characterId)}
+                            >
+                              <FredRunCharacterPreview characterId={characterId} />
+                              <span>
+                                <strong>{character.name}</strong>
+                                <small>{character.description}</small>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <button className="primary-button" type="button" onClick={startRound}>
+                      Mit {fredRunCharacters[selectedCharacter].name} loslaufen
+                    </button>
                   </div>
                 ) : null}
               </div>
@@ -1479,7 +1586,7 @@ export default function FredRunView({
             {snapshot.phase === "paused" ? (
               <div className="fredrun-overlay">
                 <p className="fredrun-overlay-kicker">Kurze Pause</p>
-                <h2>Fred wartet auf dich</h2>
+                <h2>{fredRunCharacters[selectedCharacter].name} wartet auf dich</h2>
                 <button className="primary-button" type="button" onClick={togglePause}>Weiterspielen</button>
               </div>
             ) : null}
@@ -1507,7 +1614,7 @@ export default function FredRunView({
                   ) : null}
                   <button className="primary-button" type="button" onClick={restartRound}>Noch einmal</button>
                 </div>
-                <FredRunVictoryDance />
+                <FredRunVictoryDance characterId={selectedCharacter} />
                 <form className="fredrun-score-form" onSubmit={(event) => void submitScore(event)}>
                   <label htmlFor="fredrun-player-name">
                     Name für die Topliste

@@ -98,6 +98,42 @@ const jqaManifest = JSON.parse(readFileSync(
     bytes: number;
   };
 };
+const fridaManifest = JSON.parse(readFileSync(
+  fileURLToPath(new URL("../../public/fredrun/frida/manifest.json", import.meta.url)),
+  "utf8",
+)) as {
+  source: {
+    referenceSha256: string;
+    autospriteCharacterId: string;
+    generation: {
+      videoTier: string;
+      durationSeconds: number;
+      sourceFrameSize: number;
+      sourceFrameCount: number;
+      firstFrameQuality: string;
+      creditsUsed: number;
+      shippedCreditsUsed: number;
+      discardedDraftCredits: number;
+      sound: boolean;
+    };
+  };
+  atlas: {
+    cellSize: number;
+    columns: number;
+    rows: number;
+    frameCount: number;
+    anchor: string;
+    animations: Record<"walk" | "jump" | "victory", {
+      spritesheetId: string;
+      columns: number;
+      rows: number;
+      frameCount: number;
+      outputFile: string;
+      outputSha256: string;
+      bytes: number;
+    }>;
+  };
+};
 const lukiManifest = JSON.parse(readFileSync(
   fileURLToPath(new URL("../../public/fredrun/luki-manifest.json", import.meta.url)),
   "utf8",
@@ -259,20 +295,20 @@ describe("Fredrun UI surface", () => {
     expect(stylesSource).toContain("@keyframes fredrun-hit-flash");
   });
 
-  it("renders near-miss combos and all three collectible power-up states", () => {
+  it("renders near-miss combos and both collectible power-up states", () => {
     expect(viewSource).toContain("state.powerUps?.forEach((powerUp) => drawPowerUp");
     expect(viewSource).toContain("drawPlayerPowerEffects(context, state, reducedMotion)");
     expect(viewSource).toContain('magnet: "Magnet"');
     expect(viewSource).toContain('const MAGNET_SOURCE = "/fredrun/powerup-magnet.png"');
     expect(viewSource).toContain("<FredRunMagnetIcon />");
     expect(viewSource).toContain('shield: "Schild"');
-    expect(viewSource).toContain('"slow-motion": "Zeitlupe"');
+    expect(viewSource).not.toContain('"slow-motion": "Zeitlupe"');
     expect(viewSource).toContain('className="fredrun-effect-strip"');
     expect(viewSource).toContain('className="fredrun-feedback-pop fredrun-feedback-pop--near-miss"');
     expect(viewSource).toContain("snapshot.nearMissScore");
     expect(stylesSource).toContain(".fredrun-effect-chip--magnet");
     expect(stylesSource).toContain(".fredrun-effect-chip--shield");
-    expect(stylesSource).toContain(".fredrun-effect-chip--slow-motion");
+    expect(stylesSource).not.toContain(".fredrun-effect-chip--slow-motion");
     expect(stylesSource).toContain("@keyframes fredrun-feedback-pop");
     expect(stylesSource).toContain("@keyframes fredrun-shield-flash");
   });
@@ -307,8 +343,8 @@ describe("Fredrun UI surface", () => {
         victory: { columns: 8, rows: 8, frameCount: 64 },
       },
     });
-    expect(viewSource).toContain('jump: { source: "/fredrun/jump.png", columns: 6, frameCount: 24 }');
-    expect(viewSource).toContain('victory: { source: "/fredrun/victory.png", columns: 8, frameCount: 64 }');
+    expect(viewSource).toContain('jump: { source: "/fredrun/jump.png", columns: 6, frameCount: 24, fps: 18 }');
+    expect(viewSource).toContain('victory: { source: "/fredrun/victory.png", columns: 8, frameCount: 64, fps: 18 }');
 
     const totalBytes = ["walk.png", "jump.png", "victory.png"].reduce((total, name) => (
       total + statSync(fileURLToPath(new URL(`../../public/fredrun/${name}`, import.meta.url))).size
@@ -316,12 +352,57 @@ describe("Fredrun UI surface", () => {
     expect(totalBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
   });
 
-  it("lays out the game-over score on the left and dancing Fred on the right", () => {
+  it("ships Frida with selectable run, jump, and victory animations", () => {
+    expect(fridaManifest.source).toMatchObject({
+      referenceSha256: "4C51E0D746845DFD56EA001E49C9EA45393D5996E07821733D07461A7E5C3587",
+      autospriteCharacterId: "cmstdc8v0007bu6l4ok6pknjd",
+      generation: {
+        videoTier: "pro",
+        durationSeconds: 4,
+        sourceFrameSize: 512,
+        sourceFrameCount: 64,
+        firstFrameQuality: "pro",
+        creditsUsed: 39,
+        shippedCreditsUsed: 26,
+        discardedDraftCredits: 13,
+        sound: false,
+      },
+    });
+    expect(fridaManifest.atlas).toMatchObject({
+      cellSize: 192,
+      columns: 8,
+      rows: 8,
+      frameCount: 64,
+      anchor: "bottom-center",
+    });
+    expect(fridaManifest.atlas.animations.walk).toMatchObject({ columns: 8, rows: 8, frameCount: 64 });
+    expect(fridaManifest.atlas.animations.jump).toMatchObject({ columns: 8, rows: 8, frameCount: 64 });
+    expect(fridaManifest.atlas.animations.victory).toMatchObject({ columns: 8, rows: 4, frameCount: 32 });
+    expect(Object.keys(fridaManifest.atlas.animations)).toEqual(["walk", "jump", "victory"]);
+    for (const animation of Object.values(fridaManifest.atlas.animations)) {
+      expect(animation.spritesheetId).toMatch(/^cm/);
+      expect(animation.outputSha256).toMatch(/^[A-F0-9]{64}$/);
+      expect(statSync(fileURLToPath(new URL(
+        `../../public/fredrun/frida/${animation.outputFile}`,
+        import.meta.url,
+      ))).size).toBe(animation.bytes);
+    }
+    expect(viewSource).toContain('walk: { source: "/fredrun/frida/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('jump: { source: "/fredrun/frida/jump.webp", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('victory: { source: "/fredrun/frida/victory.webp", columns: 8, frameCount: 32, fps: 16 }');
+    expect(viewSource).toContain('aria-label="Charakter auswählen"');
+    expect(viewSource).toContain("<FredRunCharacterPreview characterId={characterId} />");
+    expect(viewSource).toContain("selectCharacter(characterId)");
+    expect(stylesSource).toContain(".fredrun-character-options");
+    expect(stylesSource).toContain(".fredrun-character-option.is-selected");
+  });
+
+  it("lays out the game-over score on the left and the selected dancer on the right", () => {
     expect(viewSource).toContain('className="fredrun-game-over-summary"');
     expect(viewSource).toContain("<h2>{snapshot.score} Punkte</h2>");
     expect(viewSource).toContain(">Noch einmal</button>");
-    expect(viewSource).toContain("<FredRunVictoryDance />");
-    expect(viewSource).toContain('aria-label="Fred tanzt"');
+    expect(viewSource).toContain('<FredRunVictoryDance characterId={selectedCharacter} />');
+    expect(viewSource).toContain('aria-label={`${fredRunCharacters[characterId].name} tanzt`}');
     expect(stylesSource).toContain('"summary dance"');
     expect(stylesSource).toContain("grid-area: dance");
   });
@@ -352,9 +433,9 @@ describe("Fredrun UI surface", () => {
     }
   });
 
-  it("keeps the runner character name out of the visible game-page copy", () => {
+  it("names both selectable runners without naming individual opponents", () => {
     expect(viewSource).toContain(
-      "Spring mit Fred über REIH 100, Steuerkodex, Paragraphen und unerwartete Hindernisse.",
+      "Spring mit Fred oder Frida über REIH 100, Steuerkodex, Paragraphen und unerwartete Hindernisse.",
     );
     expect(viewSource).not.toContain("Spring mit Fred über Odo");
   });

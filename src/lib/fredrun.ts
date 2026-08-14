@@ -12,8 +12,6 @@ export const FREDRUN_NEAR_MISS_BASE_SCORE = 25;
 export const FREDRUN_NEAR_MISS_COMBO_SECONDS = 3;
 export const FREDRUN_MAX_COMBO_MULTIPLIER = 5;
 export const FREDRUN_MAGNET_SECONDS = 8;
-export const FREDRUN_SLOW_MOTION_SECONDS = 5;
-export const FREDRUN_SLOW_MOTION_MULTIPLIER = 0.68;
 export const FREDRUN_COLLECTIBLE_SPAWN_CLEARANCE = 18;
 
 const BASE_SPEED = 300;
@@ -37,7 +35,7 @@ const LUKI_SPEED_MULTIPLIER = 1.15;
 
 export type FredRunPhase = "ready" | "running" | "paused" | "countdown" | "game-over";
 export type FredRunObstacleKind = "odo" | "madinger" | "jqa" | "luki" | "reihe100" | "steuerkodex" | "paragraph";
-export type FredRunPowerUpKind = "magnet" | "shield" | "slow-motion";
+export type FredRunPowerUpKind = "magnet" | "shield";
 
 export type FredRunObstacle = {
   id: number;
@@ -100,7 +98,6 @@ export type FredRunState = {
   nearMissFeedbackRemaining: number;
   lastNearMissBonus: number;
   magnetRemaining: number;
-  slowMotionRemaining: number;
   shieldActive: boolean;
   shieldImpactRemaining: number;
   powerUpFeedbackRemaining: number;
@@ -140,7 +137,6 @@ export function createFredRunState(): FredRunState {
     nearMissFeedbackRemaining: 0,
     lastNearMissBonus: 0,
     magnetRemaining: 0,
-    slowMotionRemaining: 0,
     shieldActive: false,
     shieldImpactRemaining: 0,
     powerUpFeedbackRemaining: 0,
@@ -308,9 +304,7 @@ function coinFormation(random: () => number, firstId: number): FredRunCoin[] {
 
 function powerUpFor(random: () => number, id: number): FredRunPowerUp {
   const roll = Math.min(0.999999, Math.max(0, random()));
-  const kind: FredRunPowerUpKind = roll < 1 / 3
-    ? "magnet"
-    : roll < 2 / 3 ? "shield" : "slow-motion";
+  const kind: FredRunPowerUpKind = roll < 0.5 ? "magnet" : "shield";
   const height = 128 + Math.min(1, Math.max(0, random())) * 24;
   return {
     id,
@@ -441,15 +435,13 @@ export function advanceFredRun(
   let comboMultiplier = comboRemaining > 0 ? state.comboMultiplier : 0;
   let nearMissFeedbackRemaining = Math.max(0, state.nearMissFeedbackRemaining - delta);
   let magnetRemaining = Math.max(0, state.magnetRemaining - delta);
-  let slowMotionRemaining = Math.max(0, state.slowMotionRemaining - delta);
   let shieldActive = state.shieldActive;
   let shieldImpactRemaining = Math.max(0, state.shieldImpactRemaining - delta);
   let powerUpFeedbackRemaining = Math.max(0, state.powerUpFeedbackRemaining - delta);
   let lastPowerUpKind = state.lastPowerUpKind;
 
   const baseCurrentSpeed = fredRunSpeedForDistance(state.distance);
-  const currentSpeed = baseCurrentSpeed
-    * (slowMotionRemaining > 0 ? FREDRUN_SLOW_MOTION_MULTIPLIER : 1);
+  const currentSpeed = baseCurrentSpeed;
   const distance = state.distance + currentSpeed * delta;
   const baseNextSpeed = fredRunSpeedForDistance(distance);
   let spawnDistance = state.spawnDistance - currentSpeed * delta;
@@ -551,7 +543,6 @@ export function advanceFredRun(
     powerUpFeedbackRemaining = 1.2;
     if (powerUp.kind === "magnet") magnetRemaining = FREDRUN_MAGNET_SECONDS;
     if (powerUp.kind === "shield") shieldActive = true;
-    if (powerUp.kind === "slow-motion") slowMotionRemaining = FREDRUN_SLOW_MOTION_SECONDS;
   }
   if (collectedPowerUpIds.size > 0) {
     powerUps = powerUps.filter((powerUp) => !collectedPowerUpIds.has(powerUp.id));
@@ -599,8 +590,7 @@ export function advanceFredRun(
   const score = Math.floor(distance / SCORE_DISTANCE)
     + coinsCollected * FREDRUN_COIN_SCORE
     + nearMissScore;
-  const speed = baseNextSpeed
-    * (slowMotionRemaining > 0 ? FREDRUN_SLOW_MOTION_MULTIPLIER : 1);
+  const speed = baseNextSpeed;
 
   const advanced: FredRunState = {
     ...state,
@@ -629,7 +619,6 @@ export function advanceFredRun(
     nearMissFeedbackRemaining,
     lastNearMissBonus,
     magnetRemaining,
-    slowMotionRemaining,
     shieldActive,
     shieldImpactRemaining,
     powerUpFeedbackRemaining,

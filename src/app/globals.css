@@ -2779,10 +2779,97 @@ textarea:focus {
 
 .fredrun-intro-action {
   position: absolute;
-  bottom: clamp(14px, 8%, 58px);
+  bottom: clamp(10px, 4%, 28px);
   left: 50%;
   z-index: 2;
+  display: grid;
+  width: min(500px, calc(100% - 24px));
+  justify-items: center;
+  gap: 9px;
   transform: translateX(-50%);
+}
+
+.fredrun-character-picker {
+  display: grid;
+  width: 100%;
+  gap: 5px;
+  padding: 8px 10px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.54);
+  border-radius: 15px;
+  background: rgba(3, 12, 22, 0.78);
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(8px);
+}
+
+.fredrun-character-picker > span {
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.11em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.fredrun-character-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.fredrun-character-option {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 9px 4px 4px;
+  border: 2px solid transparent;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  text-align: left;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.fredrun-character-option:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.fredrun-character-option.is-selected {
+  border-color: #ffd36a;
+  background: rgba(255, 182, 42, 0.25);
+  box-shadow: 0 0 0 2px rgba(255, 186, 48, 0.14);
+  transform: translateY(-1px);
+}
+
+.fredrun-character-option:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 2px;
+}
+
+.fredrun-character-preview {
+  display: block;
+  width: 62px;
+  height: 62px;
+  object-fit: contain;
+}
+
+.fredrun-character-option > span {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.fredrun-character-option strong {
+  font-size: 0.86rem;
+}
+
+.fredrun-character-option small {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 0.62rem;
+  line-height: 1.15;
+  text-overflow: ellipsis;
 }
 
 .fredrun-intro-action .primary-button {
@@ -2876,10 +2963,6 @@ textarea:focus {
   background: rgba(7, 90, 157, 0.9);
 }
 
-.fredrun-effect-chip--slow-motion {
-  background: rgba(86, 48, 151, 0.9);
-}
-
 .fredrun-gameplay-feedback {
   position: absolute;
   top: 22%;
@@ -2917,10 +3000,6 @@ textarea:focus {
 
 .fredrun-feedback-pop--shield {
   background: rgba(7, 90, 157, 0.92);
-}
-
-.fredrun-feedback-pop--slow-motion {
-  background: rgba(86, 48, 151, 0.92);
 }
 
 @keyframes fredrun-feedback-pop {
@@ -6901,6 +6980,36 @@ textarea:focus {
     min-height: 38px;
     padding-inline: 18px;
     font-size: 0.76rem;
+  }
+
+  .fredrun-intro-action {
+    bottom: 7px;
+    width: min(430px, calc(100% - 14px));
+    gap: 5px;
+  }
+
+  .fredrun-character-picker {
+    padding: 5px 7px 6px;
+    border-radius: 11px;
+  }
+
+  .fredrun-character-option {
+    grid-template-columns: 46px minmax(0, 1fr);
+    gap: 5px;
+    padding: 2px 6px 2px 2px;
+  }
+
+  .fredrun-character-preview {
+    width: 46px;
+    height: 46px;
+  }
+
+  .fredrun-character-option strong {
+    font-size: 0.75rem;
+  }
+
+  .fredrun-character-option small {
+    font-size: 0.54rem;
   }
 
   .fredrun-hud {

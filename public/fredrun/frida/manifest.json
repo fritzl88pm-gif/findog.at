@@ -1,0 +1,67 @@
+{
+  "source": {
+    "referenceFile": "Photo 1.jpg",
+    "referenceSha256": "4C51E0D746845DFD56EA001E49C9EA45393D5996E07821733D07461A7E5C3587",
+    "autospriteCharacterId": "cmstdc8v0007bu6l4ok6pknjd",
+    "generation": {
+      "videoTier": "pro",
+      "durationSeconds": 4,
+      "sourceFrameSize": 512,
+      "sourceFrameCount": 64,
+      "firstFrameQuality": "pro",
+      "backgroundRemoval": "ultra",
+      "sound": false,
+      "creditsUsed": 39,
+      "shippedCreditsUsed": 26,
+      "discardedDraftCredits": 13
+    }
+  },
+  "atlas": {
+    "cellSize": 192,
+    "columns": 8,
+    "rows": 8,
+    "frameCount": 64,
+    "anchor": "bottom-center",
+    "animations": {
+      "walk": {
+        "sourceFile": "run-raw.png",
+        "sourceSha256": "C742EF16E6E04CFEB8915227C43E054D5F4584F062465A20A312A054C316602B",
+        "spritesheetId": "cmsteek2b002r2cu2hl6gknyk",
+        "sourceVideoId": "cmstebvgf00hbzcghq0g41h4a",
+        "columns": 8,
+        "rows": 8,
+        "frameCount": 64,
+        "sharedScale": 0.407323,
+        "outputFile": "walk.webp",
+        "outputSha256": "B7336E2CE2426DA7D8824226C3EDEB8DE0BE1236FA7A88ACC94D156996583A16",
+        "bytes": 618866
+      },
+      "jump": {
+        "sourceFile": "jump-raw.png",
+        "sourceSha256": "76E5A52359585EEFE92BCFFC51ECE48FE0FD2451C5E151D2BEED44D4F7F65671",
+        "spritesheetId": "cmstej0hi00d51wsnwzgcvct0",
+        "sourceVideoId": "cmsteg2dy00bq1wsn2sf93fxp",
+        "columns": 8,
+        "rows": 8,
+        "frameCount": 64,
+        "sharedScale": 0.404545,
+        "outputFile": "jump.webp",
+        "outputSha256": "14840679709F17D29590634DE20846192B05BB3F17F35EBD552128B10509E129",
+        "bytes": 625052
+      },
+      "victory": {
+        "sourceFile": "victory-raw.png",
+        "sourceSha256": "082FF54DF963893CD48A897FBB78A05B69E32E8122F584ABCF1CE268E08FB934",
+        "spritesheetId": "cmstdeedl004oexqfy0xjuaem",
+        "sourceVideoId": "cmstdcnno0083u6l4qbip1ud8",
+        "sharedScale": 1.017143,
+        "outputFile": "victory.webp",
+        "outputSha256": "70F337FD3DBAFD65044FB31DDE41109D4D9D22E5ABED59ADE5740383828B69AE",
+        "bytes": 355294,
+        "columns": 8,
+        "rows": 4,
+        "frameCount": 32
+      }
+    }
+  }
+}

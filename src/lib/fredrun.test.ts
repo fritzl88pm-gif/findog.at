@@ -9,8 +9,6 @@ import {
   FREDRUN_MAGNET_SECONDS,
   FREDRUN_NEAR_MISS_COMBO_SECONDS,
   FREDRUN_RESUME_COUNTDOWN_SECONDS,
-  FREDRUN_SLOW_MOTION_MULTIPLIER,
-  FREDRUN_SLOW_MOTION_SECONDS,
   advanceFredRun,
   createFredRunState,
   fredRunEnvironmentForDistance,
@@ -308,8 +306,7 @@ describe("Fredrun simulation", () => {
   it("spawns each rare power-up at a jump-reachable height", () => {
     const cases = [
       { roll: 0, kind: "magnet" },
-      { roll: 0.4, kind: "shield" },
-      { roll: 0.8, kind: "slow-motion" },
+      { roll: 0.8, kind: "shield" },
     ] as const;
     for (const expected of cases) {
       const values = [expected.roll, 0.5, 0.5];
@@ -370,8 +367,8 @@ describe("Fredrun simulation", () => {
     expect(state.coinSpawnDistance).toBe(0);
   });
 
-  it("activates magnet, shield, and slow motion when collected", () => {
-    const collect = (kind: "magnet" | "shield" | "slow-motion") => advanceFredRun(startFredRun({
+  it("activates magnet and shield when collected", () => {
+    const collect = (kind: "magnet" | "shield") => advanceFredRun(startFredRun({
       ...createFredRunState(),
       spawnDistance: 10_000,
       coinSpawnDistance: 10_000,
@@ -392,14 +389,9 @@ describe("Fredrun simulation", () => {
       shieldActive: true,
       lastPowerUpKind: "shield",
     });
-    expect(collect("slow-motion")).toMatchObject({
-      powerUpsCollected: 1,
-      slowMotionRemaining: FREDRUN_SLOW_MOTION_SECONDS,
-      lastPowerUpKind: "slow-motion",
-    });
   });
 
-  it("pulls coins with the magnet and slows the world without changing the speed curve", () => {
+  it("pulls coins with the magnet without changing the speed curve", () => {
     const normal = advanceFredRun(startFredRun({
       ...createFredRunState(),
       spawnDistance: 10_000,
@@ -413,15 +405,11 @@ describe("Fredrun simulation", () => {
       coinSpawnDistance: 10_000,
       powerUpSpawnDistance: 10_000,
       magnetRemaining: FREDRUN_MAGNET_SECONDS,
-      slowMotionRemaining: FREDRUN_SLOW_MOTION_SECONDS,
       coins: [{ id: 1, x: 300, y: 260, radius: 11 }],
     }), 0.05, () => 0.5);
     expect(powered.coins[0].x).toBeLessThan(normal.coins[0].x);
-    expect(powered.distance).toBeCloseTo(normal.distance * FREDRUN_SLOW_MOTION_MULTIPLIER, 8);
-    expect(powered.speed).toBeCloseTo(
-      fredRunSpeedForDistance(powered.distance) * FREDRUN_SLOW_MOTION_MULTIPLIER,
-      8,
-    );
+    expect(powered.distance).toBeCloseTo(normal.distance, 8);
+    expect(powered.speed).toBeCloseTo(fredRunSpeedForDistance(powered.distance), 8);
   });
 
   it("consumes one shield instead of ending the run", () => {
