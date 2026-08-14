@@ -740,6 +740,7 @@ export default function FredRunView({
   accessToken: string;
   standalone?: boolean;
 }) {
+  const gameShellRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<number | null>(null);
   const gameRef = useRef<FredRunState>(createFredRunState());
@@ -767,6 +768,8 @@ export default function FredRunView({
   const [submittedRunId, setSubmittedRunId] = useState<string | null>(null);
   const [scoreSubmissionMessage, setScoreSubmissionMessage] = useState("");
   const [scoreSubmissionError, setScoreSubmissionError] = useState("");
+  const [fullscreenAvailable, setFullscreenAvailable] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const publish = useCallback((state: FredRunState) => {
     setSnapshot((current) => {
@@ -837,6 +840,29 @@ export default function FredRunView({
       : pauseFredRun(gameRef.current);
     replaceGame(state);
   }, [replaceGame]);
+
+  const toggleFullscreen = useCallback(async () => {
+    const shell = gameShellRef.current;
+    if (!shell || !document.fullscreenEnabled) return;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await shell.requestFullscreen({ navigationUI: "hide" });
+      }
+    } catch {
+      setFullscreenAvailable(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const shell = gameShellRef.current;
+    setFullscreenAvailable(Boolean(document.fullscreenEnabled && shell?.requestFullscreen));
+    const syncFullscreenState = () => setIsFullscreen(document.fullscreenElement === shell);
+    syncFullscreenState();
+    document.addEventListener("fullscreenchange", syncFullscreenState);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
+  }, []);
 
   useEffect(() => {
     bestScoreRef.current = readFredRunHighScore(localHighScoreStorage());
@@ -1076,7 +1102,10 @@ export default function FredRunView({
           </header>
         )}
 
-        <div className={`fredrun-game-shell${showIntro ? " fredrun-game-shell--intro" : ""}`}>
+        <div
+          ref={gameShellRef}
+          className={`fredrun-game-shell${showIntro ? " fredrun-game-shell--intro" : ""}`}
+        >
           {!showIntro ? (
             <div className="fredrun-hud" aria-label="Spielstand">
               <div>
@@ -1101,6 +1130,26 @@ export default function FredRunView({
               </div>
               {showPauseButton ? (
                 <button type="button" onClick={togglePause}>{isPaused ? "Weiter" : "Pause"}</button>
+              ) : null}
+              {fullscreenAvailable ? (
+                <button
+                  className="fredrun-fullscreen-button"
+                  type="button"
+                  onClick={() => void toggleFullscreen()}
+                  aria-label={isFullscreen ? "Vollbild beenden" : "Vollbild öffnen"}
+                  title={isFullscreen ? "Vollbild beenden" : "Vollbild"}
+                  aria-pressed={isFullscreen}
+                >
+                  {isFullscreen ? (
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" />
+                    </svg>
+                  )}
+                </button>
               ) : null}
             </div>
           ) : null}

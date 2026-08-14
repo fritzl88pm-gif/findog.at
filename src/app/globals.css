@@ -2560,6 +2560,45 @@ textarea:focus {
   box-shadow: 0 22px 58px rgba(4, 18, 31, 0.24);
 }
 
+.fredrun-game-shell:fullscreen {
+  display: flex;
+  width: 100vw;
+  height: 100dvh;
+  padding:
+    env(safe-area-inset-top)
+    env(safe-area-inset-right)
+    env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+  flex-direction: column;
+  border: 0;
+  border-radius: 0;
+  background: #071723;
+}
+
+.fredrun-game-shell:fullscreen .fredrun-hud,
+.fredrun-game-shell:fullscreen .fredrun-mobile-action {
+  flex: 0 0 auto;
+}
+
+.fredrun-game-shell:fullscreen .fredrun-stage {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  aspect-ratio: auto;
+  place-items: center;
+  background: #071723;
+}
+
+.fredrun-game-shell:fullscreen .fredrun-canvas {
+  position: absolute;
+  inset: 0;
+  object-fit: contain;
+}
+
+.fredrun-game-shell:fullscreen .fredrun-endless-note {
+  display: none;
+}
+
 .fredrun-hud {
   display: flex;
   align-items: center;
@@ -2634,7 +2673,6 @@ textarea:focus {
 
 .fredrun-hud button {
   min-height: 34px;
-  margin-left: auto;
   border: 1px solid rgba(40, 111, 156, 0.2);
   border-radius: 999px;
   padding: 0 14px;
@@ -2644,8 +2682,30 @@ textarea:focus {
   font-weight: 750;
 }
 
+.fredrun-hud > button:first-of-type {
+  margin-left: auto;
+}
+
 .fredrun-hud button:hover {
   background: rgba(40, 111, 156, 0.08);
+}
+
+.fredrun-hud .fredrun-fullscreen-button {
+  display: none;
+  width: 36px;
+  min-width: 36px;
+  padding: 0;
+  place-items: center;
+}
+
+.fredrun-fullscreen-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .fredrun-stage {
@@ -6843,6 +6903,18 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
+}
+
+@media (max-width: 900px) {
+  .fredrun-hud .fredrun-fullscreen-button {
+    display: inline-grid;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .fredrun-hud .fredrun-fullscreen-button {
+    display: inline-grid;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

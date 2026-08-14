@@ -230,6 +230,17 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain('aria-live="assertive"');
   });
 
+  it("offers a supported mobile fullscreen control with synchronized state", () => {
+    expect(viewSource).toContain("document.fullscreenEnabled && shell?.requestFullscreen");
+    expect(viewSource).toContain('document.addEventListener("fullscreenchange", syncFullscreenState)');
+    expect(viewSource).toContain('await shell.requestFullscreen({ navigationUI: "hide" })');
+    expect(viewSource).toContain('aria-label={isFullscreen ? "Vollbild beenden" : "Vollbild öffnen"}');
+    expect(stylesSource).toContain(".fredrun-game-shell:fullscreen");
+    expect(stylesSource).toMatch(
+      /@media \(max-width: 900px\)[\s\S]*?\.fredrun-hud \.fredrun-fullscreen-button\s*\{\s*display: inline-grid;/u,
+    );
+  });
+
   it("renders collectible air coins, coin score feedback, and a collision impact", () => {
     expect(viewSource).toContain("state.coins.forEach((coin) => drawCoin");
     expect(viewSource).toContain('context.fillText("F", 0, 0.5)');
