@@ -1,0 +1,18 @@
+{
+  "generation": {
+    "mode": "built-in image generation",
+    "sourceSha256": "D62FA3219DE1D52BF3F55AE4FBAD14F1910A46BF94D7E66D72216BFE8BBB3EBA",
+    "prompt": "Approved modern red U-shaped horseshoe magnet with silver pole tips, dark outline, glossy highlights, and two short blue energy arcs."
+  },
+  "output": {
+    "file": "powerup-magnet.png",
+    "format": "png",
+    "sha256": "BCA93EE72F9BFE40F1E0BA9D47CE46568F6F679213FD3506637F86DB97801ACE",
+    "size": {
+      "width": 256,
+      "height": 256
+    },
+    "transparent": true,
+    "bytes": 62099
+  }
+}

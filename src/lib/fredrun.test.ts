@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   FREDRUN_COIN_SCORE,
+  FREDRUN_COLLECTIBLE_SPAWN_CLEARANCE,
   FREDRUN_GROUND_Y,
   FREDRUN_HIGH_SCORE_KEY,
   FREDRUN_JUMP_BUFFER_SECONDS,
@@ -323,6 +324,50 @@ describe("Fredrun simulation", () => {
       expect(state.powerUps[0].y).toBeLessThan(FREDRUN_GROUND_Y - 110);
       expect(state.powerUpSpawnDistance / fredRunSpeedForDistance(state.distance)).toBeGreaterThanOrEqual(10);
     }
+  });
+
+  it("delays a power-up until it has clear space from a coin formation", () => {
+    let state = advanceFredRun(startFredRun({
+      ...createFredRunState(),
+      spawnDistance: 10_000,
+      coinSpawnDistance: 0,
+      powerUpSpawnDistance: 0,
+    }), 1 / 120, () => 0);
+
+    expect(state.coins).toHaveLength(1);
+    expect(state.powerUps).toHaveLength(0);
+    expect(state.powerUpSpawnDistance).toBe(0);
+
+    for (let index = 0; index < 120 && state.powerUps.length === 0; index += 1) {
+      state = advanceFredRun(state, 1 / 120, () => 0);
+    }
+
+    expect(state.powerUps).toHaveLength(1);
+    for (const coin of state.coins) {
+      const powerUp = state.powerUps[0];
+      expect(Math.hypot(powerUp.x - coin.x, powerUp.y - coin.y)).toBeGreaterThanOrEqual(
+        powerUp.radius + coin.radius + FREDRUN_COLLECTIBLE_SPAWN_CLEARANCE,
+      );
+    }
+  });
+
+  it("delays a coin formation that would overlap an existing power-up", () => {
+    const state = advanceFredRun(startFredRun({
+      ...createFredRunState(),
+      spawnDistance: 10_000,
+      coinSpawnDistance: 0,
+      powerUpSpawnDistance: 10_000,
+      powerUps: [{
+        id: 1,
+        kind: "magnet",
+        x: 1_000,
+        y: FREDRUN_GROUND_Y - 138,
+        radius: 15,
+      }],
+    }), 1 / 120, () => 0);
+
+    expect(state.coins).toHaveLength(0);
+    expect(state.coinSpawnDistance).toBe(0);
   });
 
   it("activates magnet, shield, and slow motion when collected", () => {

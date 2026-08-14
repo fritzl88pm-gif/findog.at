@@ -263,6 +263,8 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain("state.powerUps?.forEach((powerUp) => drawPowerUp");
     expect(viewSource).toContain("drawPlayerPowerEffects(context, state, reducedMotion)");
     expect(viewSource).toContain('magnet: "Magnet"');
+    expect(viewSource).toContain('const MAGNET_SOURCE = "/fredrun/powerup-magnet.png"');
+    expect(viewSource).toContain("<FredRunMagnetIcon />");
     expect(viewSource).toContain('shield: "Schild"');
     expect(viewSource).toContain('"slow-motion": "Zeitlupe"');
     expect(viewSource).toContain('className="fredrun-effect-strip"');

@@ -42,6 +42,7 @@ const JUMP_ANIMATION_DURATION = 0.82;
 const FIXED_STEP = 1 / 120;
 const INTRO_SOURCE = "/fredrun/intro.webp";
 const COIN_SOURCE = "/fredrun/coin-f.webp";
+const MAGNET_SOURCE = "/fredrun/powerup-magnet.png";
 const BACKGROUND_FALLBACK_SOURCE = "/fredrun/vienna-panorama.webp";
 const FREDRUN_BACKGROUND_SOURCES = [
   "/fredrun/backgrounds/vienna-ominous.webp",
@@ -145,6 +146,7 @@ type FredRunImages = {
   sprites: SpriteImages;
   obstacles: ObstacleImages;
   coin: HTMLImageElement;
+  magnet: HTMLImageElement;
   backgrounds: HTMLImageElement[];
 };
 
@@ -573,6 +575,20 @@ function FredRunCoinIcon({ className = "" }: { className?: string }) {
   );
 }
 
+function FredRunMagnetIcon({ className = "" }: { className?: string }) {
+  return (
+    <NextImage
+      className={`fredrun-powerup-icon${className ? ` ${className}` : ""}`}
+      src={MAGNET_SOURCE}
+      alt=""
+      width={28}
+      height={28}
+      aria-hidden="true"
+      unoptimized
+    />
+  );
+}
+
 function drawCoin(
   context: CanvasRenderingContext2D,
   coin: FredRunCoin,
@@ -612,6 +628,7 @@ const powerUpColors: Record<FredRunPowerUpKind, { light: string; dark: string }>
 function drawPowerUp(
   context: CanvasRenderingContext2D,
   powerUp: FredRunPowerUp,
+  magnetImage: HTMLImageElement | null,
   elapsed: number,
   reducedMotion: boolean,
 ) {
@@ -641,14 +658,22 @@ function drawPowerUp(
   context.lineJoin = "round";
 
   if (powerUp.kind === "magnet") {
-    context.beginPath();
-    context.arc(0, -1, 8, 0, Math.PI, false);
-    context.lineTo(-8, 8);
-    context.moveTo(8, -1);
-    context.lineTo(8, 8);
-    context.stroke();
-    context.fillRect(-10, 6, 5, 4);
-    context.fillRect(5, 6, 5, 4);
+    if (magnetImage) {
+      const iconSize = powerUp.radius * 2.55;
+      context.drawImage(magnetImage, -iconSize / 2, -iconSize / 2, iconSize, iconSize);
+    } else {
+      context.strokeStyle = "#ff334f";
+      context.lineWidth = 6;
+      context.beginPath();
+      context.arc(0, 1, 8, 0, Math.PI, false);
+      context.lineTo(-8, -7);
+      context.moveTo(8, 1);
+      context.lineTo(8, -7);
+      context.stroke();
+      context.fillStyle = "#ffffff";
+      context.fillRect(-11, -10, 6, 5);
+      context.fillRect(5, -10, 6, 5);
+    }
   } else if (powerUp.kind === "shield") {
     context.beginPath();
     context.moveTo(0, -10);
@@ -772,7 +797,13 @@ function renderFredRun(
   context.imageSmoothingEnabled = true;
   drawBackground(context, state, images?.backgrounds ?? [], reducedMotion);
   state.coins.forEach((coin) => drawCoin(context, coin, images?.coin ?? null, state.elapsed, reducedMotion));
-  state.powerUps?.forEach((powerUp) => drawPowerUp(context, powerUp, state.elapsed, reducedMotion));
+  state.powerUps?.forEach((powerUp) => drawPowerUp(
+    context,
+    powerUp,
+    images?.magnet ?? null,
+    state.elapsed,
+    reducedMotion,
+  ));
   if (images) {
     state.obstacles.forEach((obstacle) => drawObstacle(
       context,
@@ -1101,15 +1132,17 @@ export default function FredRunView({
         [key, await loadImage(obstacleLayouts[key].source)] as const
       ))),
       loadImage(COIN_SOURCE),
+      loadImage(MAGNET_SOURCE),
       loadImage(INTRO_SOURCE),
       loadBackgrounds(),
     ])
-      .then(([spriteEntries, obstacleEntries, coin, , backgrounds]) => {
+      .then(([spriteEntries, obstacleEntries, coin, magnet, , backgrounds]) => {
         if (cancelled) return;
         imagesRef.current = {
           sprites: Object.fromEntries(spriteEntries) as SpriteImages,
           obstacles: Object.fromEntries(obstacleEntries) as ObstacleImages,
           coin,
+          magnet,
           backgrounds,
         };
         setAssetState("ready");
@@ -1369,6 +1402,7 @@ export default function FredRunView({
                 ) : null}
                 {snapshot.magnetSeconds > 0 ? (
                   <span className="fredrun-effect-chip fredrun-effect-chip--magnet">
+                    <FredRunMagnetIcon />
                     Magnet · {snapshot.magnetSeconds}s
                   </span>
                 ) : null}
@@ -1398,6 +1432,7 @@ export default function FredRunView({
                     key={`power-up-${snapshot.powerUpsCollected}`}
                     className={`fredrun-feedback-pop fredrun-feedback-pop--${snapshot.lastPowerUpKind}`}
                   >
+                    {snapshot.lastPowerUpKind === "magnet" ? <FredRunMagnetIcon /> : null}
                     {powerUpLabels[snapshot.lastPowerUpKind]}!
                   </span>
                 ) : null}

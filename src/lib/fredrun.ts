@@ -14,6 +14,7 @@ export const FREDRUN_MAX_COMBO_MULTIPLIER = 5;
 export const FREDRUN_MAGNET_SECONDS = 8;
 export const FREDRUN_SLOW_MOTION_SECONDS = 5;
 export const FREDRUN_SLOW_MOTION_MULTIPLIER = 0.68;
+export const FREDRUN_COLLECTIBLE_SPAWN_CLEARANCE = 18;
 
 const BASE_SPEED = 300;
 const SPEED_INCREASE_PER_SCORE_STEP = 120;
@@ -320,6 +321,16 @@ function powerUpFor(random: () => number, id: number): FredRunPowerUp {
   };
 }
 
+function collectibleSpawnIsClear(
+  collectible: { x: number; y: number; radius: number },
+  others: ReadonlyArray<{ x: number; y: number; radius: number }>,
+): boolean {
+  return others.every((other) => Math.hypot(
+    collectible.x - other.x,
+    collectible.y - other.y,
+  ) >= collectible.radius + other.radius + FREDRUN_COLLECTIBLE_SPAWN_CLEARANCE);
+}
+
 function obstacleSpeedMultiplier(kind: FredRunObstacleKind): number {
   if (kind === "odo") return ODO_SPEED_MULTIPLIER;
   if (kind === "madinger") return MADINGER_SPEED_MULTIPLIER;
@@ -489,18 +500,26 @@ export function advanceFredRun(
 
   if (coinSpawnDistance <= 0) {
     const formation = coinFormation(random, nextCoinId);
-    coins.push(...formation);
-    collisionCoins.push(...formation);
-    nextCoinId += formation.length;
-    coinSpawnDistance = nextCoinGap(baseNextSpeed, random);
+    if (formation.every((coin) => collectibleSpawnIsClear(coin, powerUps))) {
+      coins.push(...formation);
+      collisionCoins.push(...formation);
+      nextCoinId += formation.length;
+      coinSpawnDistance = nextCoinGap(baseNextSpeed, random);
+    } else {
+      coinSpawnDistance = 0;
+    }
   }
 
   if (powerUpSpawnDistance <= 0) {
     const powerUp = powerUpFor(random, nextPowerUpId);
-    powerUps.push(powerUp);
-    collisionPowerUps.push(powerUp);
-    nextPowerUpId += 1;
-    powerUpSpawnDistance = nextPowerUpGap(baseNextSpeed, random);
+    if (collectibleSpawnIsClear(powerUp, coins)) {
+      powerUps.push(powerUp);
+      collisionPowerUps.push(powerUp);
+      nextPowerUpId += 1;
+      powerUpSpawnDistance = nextPowerUpGap(baseNextSpeed, random);
+    } else {
+      powerUpSpawnDistance = 0;
+    }
   }
 
   const collectedCoinIds = new Set<number>();
