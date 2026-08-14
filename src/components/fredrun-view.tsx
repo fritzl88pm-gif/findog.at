@@ -53,6 +53,24 @@ const FREDRUN_BACKGROUND_SOURCES = [
 ] as const;
 const BACKGROUND_DRAW_HEIGHT = 450;
 const BACKGROUND_SCROLL_FACTOR = 0.12;
+const MOBILE_FULLSCREEN_QUERY = "(max-width: 900px), (pointer: coarse)";
+
+async function lockMobileFullscreenLandscape() {
+  if (!window.matchMedia(MOBILE_FULLSCREEN_QUERY).matches) return;
+  try {
+    await screen.orientation.lock("landscape");
+  } catch {
+    // Some mobile browsers expose fullscreen without allowing orientation locks.
+  }
+}
+
+function unlockMobileFullscreenOrientation() {
+  try {
+    screen.orientation.unlock();
+  } catch {
+    // Exiting fullscreen already clears the lock in supporting browsers.
+  }
+}
 
 const spriteLayouts = {
   walk: { source: "/fredrun/walk.png", columns: 8, frameCount: 64 },
@@ -847,8 +865,10 @@ export default function FredRunView({
     try {
       if (document.fullscreenElement) {
         await document.exitFullscreen();
+        unlockMobileFullscreenOrientation();
       } else {
         await shell.requestFullscreen({ navigationUI: "hide" });
+        await lockMobileFullscreenLandscape();
       }
     } catch {
       setFullscreenAvailable(false);
@@ -858,10 +878,17 @@ export default function FredRunView({
   useEffect(() => {
     const shell = gameShellRef.current;
     setFullscreenAvailable(Boolean(document.fullscreenEnabled && shell?.requestFullscreen));
-    const syncFullscreenState = () => setIsFullscreen(document.fullscreenElement === shell);
+    const syncFullscreenState = () => {
+      const fullscreen = document.fullscreenElement === shell;
+      setIsFullscreen(fullscreen);
+      if (!fullscreen) unlockMobileFullscreenOrientation();
+    };
     syncFullscreenState();
     document.addEventListener("fullscreenchange", syncFullscreenState);
-    return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
+    return () => {
+      document.removeEventListener("fullscreenchange", syncFullscreenState);
+      unlockMobileFullscreenOrientation();
+    };
   }, []);
 
   useEffect(() => {

@@ -234,8 +234,14 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain("document.fullscreenEnabled && shell?.requestFullscreen");
     expect(viewSource).toContain('document.addEventListener("fullscreenchange", syncFullscreenState)');
     expect(viewSource).toContain('await shell.requestFullscreen({ navigationUI: "hide" })');
+    expect(viewSource).toContain('const MOBILE_FULLSCREEN_QUERY = "(max-width: 900px), (pointer: coarse)"');
+    expect(viewSource).toContain('await screen.orientation.lock("landscape")');
+    expect(viewSource).toContain("screen.orientation.unlock()");
     expect(viewSource).toContain('aria-label={isFullscreen ? "Vollbild beenden" : "Vollbild öffnen"}');
     expect(stylesSource).toContain(".fredrun-game-shell:fullscreen");
+    expect(stylesSource).toMatch(
+      /\.fredrun-game-shell:fullscreen \.fredrun-stage\s*\{[\s\S]*?aspect-ratio: 8 \/ 3;/u,
+    );
     expect(stylesSource).toMatch(
       /@media \(max-width: 900px\)[\s\S]*?\.fredrun-hud \.fredrun-fullscreen-button\s*\{\s*display: inline-grid;/u,
     );

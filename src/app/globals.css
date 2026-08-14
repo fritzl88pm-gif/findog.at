@@ -2570,6 +2570,7 @@ textarea:focus {
     env(safe-area-inset-bottom)
     env(safe-area-inset-left);
   flex-direction: column;
+  justify-content: center;
   border: 0;
   border-radius: 0;
   background: #071723;
@@ -2583,8 +2584,8 @@ textarea:focus {
 .fredrun-game-shell:fullscreen .fredrun-stage {
   display: grid;
   min-height: 0;
-  flex: 1 1 auto;
-  aspect-ratio: auto;
+  flex: 0 0 auto;
+  aspect-ratio: 8 / 3;
   place-items: center;
   background: #071723;
 }
