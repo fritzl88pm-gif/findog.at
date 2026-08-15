@@ -2545,19 +2545,13 @@ textarea:focus {
 }
 
 .fredrun-game-shell {
-  --fredrun-intro-accent: #ff9f00;
-  --fredrun-intro-accent-deep: #ed6c00;
+  --fredrun-menu-accent: #ff9f00;
+  --fredrun-menu-accent-deep: #ed6c00;
   overflow: hidden;
   border: 1px solid rgba(40, 111, 156, 0.18);
   border-radius: 20px;
   background: var(--bg-surface);
   box-shadow: 0 18px 48px rgba(19, 53, 75, 0.12);
-}
-
-.fredrun-game-shell--intro {
-  border-color: rgba(255, 159, 0, 0.38);
-  background: #06131f;
-  box-shadow: 0 22px 58px rgba(4, 18, 31, 0.24);
 }
 
 .fredrun-game-shell:fullscreen {
@@ -2745,106 +2739,8 @@ textarea:focus {
   100% { box-shadow: inset 0 0 0 0 rgba(72, 201, 255, 0); }
 }
 
-.fredrun-stage--intro {
-  aspect-ratio: 1672 / 941;
-  background: #06131f;
-}
-
-.fredrun-stage--intro .fredrun-canvas {
-  visibility: hidden;
-}
-
 .fredrun-stage--game-over {
   min-height: 350px;
-}
-
-.fredrun-intro {
-  position: absolute;
-  inset: 0;
-  isolation: isolate;
-}
-
-.fredrun-intro::after {
-  position: absolute;
-  inset: 56% 0 0;
-  z-index: 1;
-  background: linear-gradient(180deg, transparent, rgba(3, 12, 22, 0.72));
-  content: "";
-  pointer-events: none;
-}
-
-.fredrun-intro-image {
-  object-fit: cover;
-}
-
-.fredrun-intro-action {
-  position: absolute;
-  bottom: clamp(10px, 4%, 28px);
-  left: 50%;
-  z-index: 2;
-  display: grid;
-  width: min(500px, calc(100% - 24px));
-  justify-items: center;
-  gap: 9px;
-  transform: translateX(-50%);
-}
-
-.fredrun-character-picker {
-  display: grid;
-  width: 100%;
-  gap: 5px;
-  padding: 8px 10px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.54);
-  border-radius: 15px;
-  background: rgba(3, 12, 22, 0.78);
-  color: #fff;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
-  backdrop-filter: blur(8px);
-}
-
-.fredrun-character-picker > span {
-  font-size: 0.66rem;
-  font-weight: 900;
-  letter-spacing: 0.11em;
-  text-align: center;
-  text-transform: uppercase;
-}
-
-.fredrun-character-options {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 7px;
-}
-
-.fredrun-character-option {
-  display: grid;
-  grid-template-columns: 62px minmax(0, 1fr);
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-  padding: 4px 9px 4px 4px;
-  border: 2px solid transparent;
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  text-align: left;
-  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
-}
-
-.fredrun-character-option:hover {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-.fredrun-character-option.is-selected {
-  border-color: #ffd36a;
-  background: rgba(255, 182, 42, 0.25);
-  box-shadow: 0 0 0 2px rgba(255, 186, 48, 0.14);
-  transform: translateY(-1px);
-}
-
-.fredrun-character-option:focus-visible {
-  outline: 3px solid #fff;
-  outline-offset: 2px;
 }
 
 .fredrun-character-preview {
@@ -2854,44 +2750,684 @@ textarea:focus {
   object-fit: contain;
 }
 
-.fredrun-character-option > span {
+.fredrun-game-shell--menu {
+  border-color: rgba(255, 159, 0, 0.38);
+  background: #06131f;
+  box-shadow: 0 22px 58px rgba(4, 18, 31, 0.24);
+}
+
+.fredrun-stage--menu {
+  height: clamp(560px, 62vw, 640px);
+  aspect-ratio: auto;
+  background: #06131f;
+}
+
+.fredrun-stage--menu .fredrun-canvas {
+  visibility: hidden;
+}
+
+.fredrun-game-shell:fullscreen .fredrun-stage--menu {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  aspect-ratio: auto;
+}
+
+.fredrun-menu-scene {
+  position: absolute;
+  inset: 0;
+  isolation: isolate;
+  overflow: hidden;
+  color: #fff;
+}
+
+.fredrun-menu-scene::after {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 77% 35%, rgba(255, 170, 31, 0.12), transparent 31%),
+    linear-gradient(105deg, rgba(3, 12, 22, 0.7), rgba(3, 12, 22, 0.34));
+  content: "";
+}
+
+.fredrun-menu-background {
+  z-index: -2;
+  object-fit: cover;
+  filter: saturate(0.86) brightness(0.6);
+  transform: scale(1.015);
+}
+
+.fredrun-menu {
+  position: absolute;
+  inset: clamp(10px, 2.5vw, 26px);
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 24px;
+  background: rgba(5, 20, 33, 0.88);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(18px) saturate(1.15);
+}
+
+.fredrun-menu-topbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 18px 10px;
+}
+
+.fredrun-menu-brand {
   display: grid;
   min-width: 0;
   gap: 1px;
 }
 
-.fredrun-character-option strong {
-  font-size: 0.86rem;
-}
-
-.fredrun-character-option small {
-  overflow: hidden;
-  color: rgba(255, 255, 255, 0.76);
-  font-size: 0.62rem;
-  line-height: 1.15;
-  text-overflow: ellipsis;
-}
-
-.fredrun-intro-action .primary-button {
-  min-width: 170px;
-  min-height: 46px;
-  border: 2px solid rgba(255, 255, 255, 0.9);
-  background: linear-gradient(180deg, var(--fredrun-intro-accent), var(--fredrun-intro-accent-deep));
-  color: #101820;
-  font-size: 0.9rem;
+.fredrun-menu-brand span,
+.fredrun-menu-kicker {
+  margin: 0;
+  color: #ffc558;
+  font-size: 0.64rem;
   font-weight: 900;
-  letter-spacing: 0.035em;
+  letter-spacing: 0.13em;
   text-transform: uppercase;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.38);
 }
 
-.fredrun-intro-action .primary-button:hover {
-  background: linear-gradient(180deg, #ffb31a, #f47a00);
+.fredrun-menu-brand strong {
+  font-size: clamp(1.4rem, 3.2vw, 2rem);
+  letter-spacing: -0.04em;
+  line-height: 1;
 }
 
-.fredrun-intro-action .primary-button:focus-visible {
-  outline: 3px solid #fff;
-  outline-offset: 3px;
+.fredrun-menu-actions,
+.fredrun-menu-wallet {
+  display: flex;
+  align-items: center;
+}
+
+.fredrun-menu-actions {
+  gap: 8px;
+}
+
+.fredrun-menu-wallet {
+  min-height: 44px;
+  gap: 8px;
+  padding: 6px 13px 6px 8px;
+  border: 1px solid rgba(255, 211, 106, 0.44);
+  border-radius: 999px;
+  background: rgba(2, 11, 20, 0.72);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.fredrun-coin-icon--menu {
+  width: 30px;
+  height: 30px;
+}
+
+.fredrun-menu-wallet span {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.fredrun-menu-wallet strong {
+  color: #ffe09a;
+  font-size: 1.08rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.fredrun-menu-fullscreen {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 50%;
+  background: rgba(2, 11, 20, 0.72);
+  color: #fff;
+  place-items: center;
+}
+
+.fredrun-menu-fullscreen:hover {
+  border-color: #ffc558;
+  background: rgba(255, 197, 88, 0.14);
+}
+
+.fredrun-menu-fullscreen svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fredrun-menu-nav {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+  padding: 0 18px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.13);
+}
+
+.fredrun-menu-nav button {
+  min-height: 44px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.78rem;
+  font-weight: 850;
+  letter-spacing: 0.025em;
+}
+
+.fredrun-menu-nav button:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.fredrun-menu-nav button.is-active {
+  border-color: rgba(255, 211, 106, 0.62);
+  background: linear-gradient(180deg, rgba(255, 181, 42, 0.28), rgba(237, 108, 0, 0.22));
+  color: #fff5df;
+  box-shadow: inset 0 -2px #ffc558;
+}
+
+.fredrun-menu-loading {
+  display: grid;
+  min-height: 0;
+  color: rgba(255, 255, 255, 0.76);
+  font-weight: 750;
+  place-items: center;
+}
+
+.fredrun-menu-content {
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: rgba(255, 197, 88, 0.58) rgba(255, 255, 255, 0.06);
+}
+
+.fredrun-menu-panel {
+  min-height: 100%;
+  padding: clamp(18px, 2.7vw, 30px);
+}
+
+.fredrun-menu-panel h2,
+.fredrun-menu-panel h3,
+.fredrun-menu-panel p {
+  margin: 0;
+}
+
+.fredrun-menu-play {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(220px, 0.85fr);
+  align-items: center;
+  gap: 18px;
+}
+
+.fredrun-menu-play-copy {
+  display: grid;
+  align-content: center;
+  gap: 12px;
+}
+
+.fredrun-menu-play-copy h2,
+.fredrun-menu-section-heading h2 {
+  font-size: clamp(1.55rem, 4vw, 2.65rem);
+  letter-spacing: -0.045em;
+  line-height: 1.02;
+  text-wrap: balance;
+}
+
+.fredrun-menu-play-copy > p:not(.fredrun-menu-kicker) {
+  max-width: 590px;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.fredrun-menu-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fredrun-menu-stats span {
+  display: grid;
+  min-width: 126px;
+  gap: 2px;
+  padding: 9px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.64rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fredrun-menu-stats strong {
+  color: #fff;
+  font-size: 0.94rem;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.fredrun-menu-play-actions,
+.fredrun-menu-dialog-actions,
+.fredrun-overlay-actions,
+.fredrun-game-over-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.fredrun-menu-play-actions button,
+.fredrun-menu-dialog-actions button,
+.fredrun-overlay-actions button,
+.fredrun-game-over-actions button {
+  min-height: 44px;
+}
+
+.fredrun-menu-play-actions .primary-button {
+  min-width: 160px;
+  background: linear-gradient(180deg, var(--fredrun-menu-accent), var(--fredrun-menu-accent-deep));
+  color: #111923;
+  font-weight: 900;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.3);
+}
+
+.fredrun-secondary-button {
+  min-height: 44px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: var(--radius-sm);
+  padding: 0 16px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.fredrun-secondary-button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.fredrun-menu-hero {
+  position: relative;
+  display: grid;
+  min-height: 260px;
+  place-items: center;
+}
+
+.fredrun-menu-hero-glow {
+  position: absolute;
+  width: min(260px, 86%);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 193, 75, 0.38), rgba(255, 154, 0, 0.08) 48%, transparent 70%);
+  filter: blur(3px);
+  animation: fredrun-menu-glow 2.8s ease-in-out infinite;
+}
+
+@keyframes fredrun-menu-glow {
+  50% { opacity: 0.68; transform: scale(0.94); }
+}
+
+.fredrun-character-preview--hero {
+  position: relative;
+  width: min(280px, 100%);
+  height: auto;
+  filter: drop-shadow(0 18px 18px rgba(0, 0, 0, 0.42));
+}
+
+.fredrun-menu-section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.fredrun-menu-section-heading > div {
+  display: grid;
+  gap: 5px;
+}
+
+.fredrun-menu-section-heading > span {
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 0.67rem;
+  font-weight: 750;
+}
+
+.fredrun-menu-character-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.fredrun-menu-character-card,
+.fredrun-shop-card,
+.fredrun-info-grid article {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.fredrun-menu-character-card {
+  display: grid;
+  min-width: 0;
+  grid-template-rows: auto 1fr auto;
+  gap: 8px;
+  padding: 11px;
+}
+
+.fredrun-menu-character-card.is-selected {
+  border-color: #ffc558;
+  background: rgba(255, 181, 42, 0.14);
+  box-shadow: 0 0 0 2px rgba(255, 197, 88, 0.15), inset 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.fredrun-menu-character-card.is-locked .fredrun-character-preview {
+  opacity: 0.55;
+  filter: grayscale(0.75);
+}
+
+.fredrun-menu-character-art {
+  position: relative;
+  display: grid;
+  min-height: 118px;
+  border-radius: 12px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.12), transparent 68%);
+  place-items: center;
+}
+
+.fredrun-menu-character-art .fredrun-character-preview {
+  width: 120px;
+  height: 120px;
+}
+
+.fredrun-menu-lock {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(3, 12, 22, 0.86);
+  font-size: 0.88rem;
+  place-items: center;
+}
+
+.fredrun-menu-character-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.fredrun-menu-character-copy h3,
+.fredrun-shop-card h3,
+.fredrun-info-grid h3 {
+  font-size: 0.95rem;
+}
+
+.fredrun-menu-character-copy p,
+.fredrun-shop-card p,
+.fredrun-info-grid p {
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.fredrun-menu-character-card > button,
+.fredrun-shop-card > button {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.09);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.fredrun-menu-character-card > button.is-selected {
+  border-color: rgba(255, 197, 88, 0.55);
+  background: rgba(255, 181, 42, 0.2);
+  color: #ffe5ae;
+}
+
+.fredrun-menu-character-card > button .fredrun-coin-icon,
+.fredrun-shop-price .fredrun-coin-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.fredrun-shop-note,
+.fredrun-menu-storage-warning,
+.fredrun-menu-purchase-message,
+.fredrun-info-fairness {
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.fredrun-shop-note,
+.fredrun-info-fairness {
+  border: 1px solid rgba(255, 197, 88, 0.22);
+  background: rgba(255, 181, 42, 0.1);
+  color: #ffe4ac;
+}
+
+.fredrun-menu-storage-warning {
+  border: 1px solid rgba(255, 128, 116, 0.38);
+  background: rgba(132, 24, 31, 0.28);
+  color: #ffd2cf;
+}
+
+.fredrun-menu-purchase-message {
+  border: 1px solid rgba(107, 228, 169, 0.35);
+  background: rgba(20, 116, 74, 0.28);
+  color: #c8ffe5;
+}
+
+.fredrun-shop-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.fredrun-shop-card {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 76px minmax(0, 1fr);
+  grid-template-rows: minmax(52px, auto) auto;
+  align-items: center;
+  gap: 7px 9px;
+  padding: 10px;
+}
+
+.fredrun-shop-card > .fredrun-character-preview {
+  width: 76px;
+  height: 76px;
+  grid-row: 1 / 3;
+}
+
+.fredrun-shop-card > div:not(.fredrun-shop-mystery) {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.fredrun-shop-owned,
+.fredrun-shop-price,
+.fredrun-shop-card--coming-soon > span {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 5px;
+  color: #aef0d2;
+  font-size: 0.69rem;
+  font-weight: 850;
+}
+
+.fredrun-shop-price {
+  color: #ffe09a;
+}
+
+.fredrun-shop-card > button {
+  grid-column: 1 / -1;
+}
+
+.fredrun-shop-card > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.fredrun-shop-card--coming-soon {
+  opacity: 0.72;
+}
+
+.fredrun-shop-mystery {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  grid-row: 1 / 3;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 2rem;
+  font-weight: 900;
+  place-items: center;
+}
+
+.fredrun-shop-card--coming-soon > span {
+  color: rgba(255, 255, 255, 0.52);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fredrun-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.fredrun-info-grid article {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 7px;
+  padding: 13px;
+}
+
+.fredrun-info-symbol,
+.fredrun-info-grid .fredrun-info-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-items: center;
+}
+
+.fredrun-info-symbol {
+  border-radius: 13px;
+  background: linear-gradient(145deg, #ffb52a, #ed6c00);
+  color: #14202a;
+  font-size: 1.15rem;
+  font-weight: 950;
+  box-shadow: 0 7px 15px rgba(0, 0, 0, 0.25);
+}
+
+.fredrun-info-grid .fredrun-info-icon {
+  object-fit: contain;
+}
+
+.fredrun-info-icon--shield {
+  overflow: visible;
+  padding: 5px;
+  border-radius: 13px;
+  background: linear-gradient(145deg, #61ddff, #0870af);
+  filter: drop-shadow(0 7px 8px rgba(0, 0, 0, 0.24));
+}
+
+.fredrun-info-icon--shield path:first-child {
+  fill: rgba(255, 255, 255, 0.28);
+  stroke: #fff;
+  stroke-width: 2.3;
+}
+
+.fredrun-info-icon--shield path:last-child {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fredrun-menu-dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  padding: 18px;
+  background: rgba(0, 6, 12, 0.74);
+  backdrop-filter: blur(6px);
+  place-items: center;
+}
+
+.fredrun-menu-dialog {
+  display: grid;
+  width: min(430px, 100%);
+  gap: 12px;
+  padding: clamp(20px, 4vw, 30px);
+  border: 1px solid rgba(255, 211, 106, 0.42);
+  border-radius: 18px;
+  background: #0b2233;
+  color: #fff;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+}
+
+.fredrun-menu-dialog h2,
+.fredrun-menu-dialog p {
+  margin: 0;
+}
+
+.fredrun-menu-dialog h2 {
+  font-size: clamp(1.35rem, 4vw, 1.9rem);
+}
+
+.fredrun-menu-dialog > p:not(.fredrun-menu-kicker) {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.fredrun-menu-dialog-actions {
+  justify-content: end;
 }
 
 .fredrun-canvas {
@@ -3075,6 +3611,24 @@ textarea:focus {
   text-wrap: balance;
 }
 
+.fredrun-pause-overlay[role="alertdialog"]::before {
+  height: min(250px, 90%);
+}
+
+.fredrun-overlay-actions {
+  justify-content: center;
+}
+
+.fredrun-overlay .fredrun-secondary-button {
+  border-color: rgba(40, 111, 156, 0.28);
+  background: rgba(40, 111, 156, 0.08);
+  color: var(--bmf-blue-deep);
+}
+
+.fredrun-overlay .fredrun-secondary-button:hover {
+  background: rgba(40, 111, 156, 0.16);
+}
+
 .fredrun-countdown-overlay {
   background: rgba(13, 31, 45, 0.34);
   color: #fff;
@@ -3165,6 +3719,17 @@ textarea:focus {
   gap: 7px;
 }
 
+.fredrun-game-over-coins > span {
+  display: grid;
+  gap: 1px;
+}
+
+.fredrun-game-over-coins small {
+  color: #987000;
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
 .fredrun-game-over-summary .fredrun-game-over-near-misses {
   color: #b34f00;
   font-weight: 800;
@@ -3172,6 +3737,21 @@ textarea:focus {
 
 .fredrun-game-over-summary .primary-button {
   min-width: 150px;
+}
+
+.fredrun-game-over-actions {
+  margin-top: 2px;
+}
+
+.fredrun-game-over-actions .primary-button,
+.fredrun-game-over-actions .fredrun-secondary-button {
+  min-width: 120px;
+}
+
+.fredrun-game-over-actions .fredrun-secondary-button {
+  border-color: rgba(40, 111, 156, 0.25);
+  background: rgba(40, 111, 156, 0.08);
+  color: var(--bmf-blue-deep);
 }
 
 .fredrun-game-over-dance {
@@ -6982,43 +7562,6 @@ textarea:focus {
     border-radius: 14px;
   }
 
-  .fredrun-intro-action .primary-button {
-    min-width: 140px;
-    min-height: 38px;
-    padding-inline: 18px;
-    font-size: 0.76rem;
-  }
-
-  .fredrun-intro-action {
-    bottom: 7px;
-    width: min(430px, calc(100% - 14px));
-    gap: 5px;
-  }
-
-  .fredrun-character-picker {
-    padding: 5px 7px 6px;
-    border-radius: 11px;
-  }
-
-  .fredrun-character-option {
-    grid-template-columns: 46px minmax(0, 1fr);
-    gap: 5px;
-    padding: 2px 6px 2px 2px;
-  }
-
-  .fredrun-character-preview {
-    width: 46px;
-    height: 46px;
-  }
-
-  .fredrun-character-option strong {
-    font-size: 0.75rem;
-  }
-
-  .fredrun-character-option small {
-    font-size: 0.54rem;
-  }
-
   .fredrun-hud {
     gap: 12px;
     padding: 9px 12px;
@@ -7192,6 +7735,235 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
+}
+
+@media (max-width: 760px) {
+  .fredrun-stage--menu {
+    height: min(720px, 86dvh);
+    min-height: 600px;
+  }
+
+  .fredrun-menu {
+    inset: 7px;
+    border-radius: 16px;
+  }
+
+  .fredrun-menu-topbar {
+    gap: 8px;
+    padding: 10px 10px 8px;
+  }
+
+  .fredrun-menu-brand span,
+  .fredrun-menu-wallet span {
+    display: none;
+  }
+
+  .fredrun-menu-wallet {
+    padding-right: 10px;
+  }
+
+  .fredrun-menu-nav {
+    gap: 3px;
+    padding: 0 8px 8px;
+  }
+
+  .fredrun-menu-nav button {
+    padding-inline: 6px;
+    font-size: 0.7rem;
+  }
+
+  .fredrun-menu-panel {
+    padding: 16px 12px;
+  }
+
+  .fredrun-menu-play {
+    grid-template-columns: minmax(0, 1fr) minmax(150px, 0.7fr);
+    gap: 8px;
+  }
+
+  .fredrun-menu-play-copy {
+    gap: 9px;
+  }
+
+  .fredrun-menu-play-copy > p:not(.fredrun-menu-kicker) {
+    font-size: 0.76rem;
+  }
+
+  .fredrun-menu-hero {
+    min-height: 210px;
+  }
+
+  .fredrun-menu-section-heading {
+    align-items: start;
+    margin-bottom: 12px;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .fredrun-menu-section-heading h2,
+  .fredrun-menu-play-copy h2 {
+    font-size: clamp(1.35rem, 5vw, 2rem);
+  }
+
+  .fredrun-menu-character-grid {
+    gap: 7px;
+  }
+
+  .fredrun-menu-character-card {
+    padding: 7px;
+  }
+
+  .fredrun-menu-character-art {
+    min-height: 92px;
+  }
+
+  .fredrun-menu-character-art .fredrun-character-preview {
+    width: 92px;
+    height: 92px;
+  }
+
+  .fredrun-menu-character-copy p {
+    display: none;
+  }
+
+  .fredrun-shop-grid,
+  .fredrun-info-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fredrun-pause-overlay,
+  .fredrun-pause-overlay[role="alertdialog"] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    align-content: center;
+    gap: 5px;
+    padding-inline: 12px;
+  }
+
+  .fredrun-pause-overlay .fredrun-overlay-kicker,
+  .fredrun-pause-overlay h2,
+  .fredrun-pause-overlay > p,
+  .fredrun-pause-overlay .fredrun-overlay-actions {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: center;
+    text-align: center;
+  }
+
+  .fredrun-pause-overlay .fredrun-overlay-actions .primary-button,
+  .fredrun-pause-overlay .fredrun-overlay-actions .fredrun-secondary-button,
+  .fredrun-game-over-actions .primary-button,
+  .fredrun-game-over-actions .fredrun-secondary-button {
+    min-height: 44px;
+    margin-top: 0;
+  }
+
+  .fredrun-game-over-actions {
+    gap: 5px;
+  }
+
+  .fredrun-game-over-actions .primary-button,
+  .fredrun-game-over-actions .fredrun-secondary-button {
+    min-width: 108px;
+    padding-inline: 10px;
+    font-size: 0.68rem;
+  }
+}
+
+@media (max-width: 540px) {
+  .fredrun-stage--menu {
+    height: 720px;
+    min-height: 0;
+  }
+
+  .fredrun-menu-play {
+    grid-template-columns: 1fr;
+  }
+
+  .fredrun-menu-hero {
+    min-height: 175px;
+    grid-row: 1;
+  }
+
+  .fredrun-character-preview--hero {
+    width: 190px;
+  }
+
+  .fredrun-menu-play-copy {
+    grid-row: 2;
+  }
+
+  .fredrun-menu-character-grid,
+  .fredrun-shop-grid,
+  .fredrun-info-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .fredrun-menu-character-copy p {
+    display: block;
+  }
+
+  .fredrun-menu-character-card {
+    grid-template-columns: 94px minmax(0, 1fr);
+    grid-template-rows: 1fr auto;
+    align-items: center;
+  }
+
+  .fredrun-menu-character-art {
+    grid-row: 1 / 3;
+  }
+
+  .fredrun-menu-character-card > button {
+    grid-column: 2;
+  }
+
+  .fredrun-menu-dialog-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+}
+
+@media (max-height: 520px) and (orientation: landscape) {
+  .fredrun-game-shell:fullscreen .fredrun-stage--menu {
+    min-height: 100%;
+  }
+
+  .fredrun-menu {
+    inset: 5px max(5px, env(safe-area-inset-right)) 5px max(5px, env(safe-area-inset-left));
+    border-radius: 13px;
+  }
+
+  .fredrun-menu-topbar {
+    padding-block: 6px;
+  }
+
+  .fredrun-menu-brand strong {
+    font-size: 1.25rem;
+  }
+
+  .fredrun-menu-nav {
+    padding-bottom: 6px;
+  }
+
+  .fredrun-menu-panel {
+    padding: 10px 14px 14px;
+  }
+
+  .fredrun-menu-play {
+    grid-template-columns: minmax(0, 1.2fr) minmax(150px, 0.55fr);
+  }
+
+  .fredrun-menu-hero {
+    min-height: 170px;
+  }
+
+  .fredrun-character-preview--hero {
+    width: 190px;
+  }
+
+  .fredrun-menu-play-copy > p:not(.fredrun-menu-kicker) {
+    line-height: 1.35;
+  }
 }
 
 @media (max-width: 900px) {

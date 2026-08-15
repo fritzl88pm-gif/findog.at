@@ -11,6 +11,7 @@ const standalonePageSource = readFileSync(
   "utf8",
 );
 const viewSource = readFileSync(fileURLToPath(new URL("../components/fredrun-view.tsx", import.meta.url)), "utf8");
+const profileSource = readFileSync(fileURLToPath(new URL("./fredrun-profile.ts", import.meta.url)), "utf8");
 const stylesSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 const manifest = JSON.parse(readFileSync(fileURLToPath(new URL("../../public/fredrun/manifest.json", import.meta.url)), "utf8")) as {
   source: {
@@ -300,13 +301,14 @@ describe("Fredrun UI surface", () => {
     );
   });
 
-  it("exposes keyboard, pointer, pause, restart, and accessible status controls", () => {
+  it("exposes keyboard, pointer, pause, replay, menu return, and accessible status controls", () => {
     expect(viewSource).toContain('event.code !== "Space"');
     expect(viewSource).toContain('event.code !== "ArrowUp"');
     expect(viewSource).toContain("onPointerDown");
     expect(viewSource).toContain("visibilitychange");
     expect(viewSource).toContain("pauseFredRun");
-    expect(viewSource).toContain("restartRound");
+    expect(viewSource).toContain("playAgain");
+    expect(viewSource).toContain("returnToMenu");
     expect(viewSource).toContain('aria-live="polite"');
     expect(viewSource).toContain('snapshot.phase === "countdown"');
     expect(viewSource).toContain('className="fredrun-overlay fredrun-countdown-overlay"');
@@ -437,11 +439,11 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain('walk: { source: "/fredrun/frida/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
     expect(viewSource).toContain('jump: { source: "/fredrun/frida/jump.webp", columns: 8, frameCount: 64, fps: 16 }');
     expect(viewSource).toContain('victory: { source: "/fredrun/frida/victory.webp", columns: 8, frameCount: 32, fps: 16 }');
-    expect(viewSource).toContain('aria-label="Charakter auswählen"');
+    expect(viewSource).toContain('id="fredrun-menu-characters-title">Charakter auswählen');
     expect(viewSource).toContain("<FredRunCharacterPreview characterId={characterId} />");
-    expect(viewSource).toContain("selectCharacter(characterId)");
-    expect(stylesSource).toContain(".fredrun-character-options");
-    expect(stylesSource).toContain(".fredrun-character-option.is-selected");
+    expect(viewSource).toContain("onSelectCharacter(characterId)");
+    expect(stylesSource).toContain(".fredrun-menu-character-grid");
+    expect(stylesSource).toContain(".fredrun-menu-character-card.is-selected");
   });
 
   it("ships Superfred with selectable run, jump, and victory animations", () => {
@@ -482,11 +484,11 @@ describe("Fredrun UI surface", () => {
       total + animation.bytes
     ), 0);
     expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
-    expect(viewSource).toContain('type FredRunCharacterId = "fred" | "frida" | "superfred"');
+    expect(profileSource).toContain('export const FREDRUN_CHARACTER_IDS = ["fred", "frida", "superfred"] as const');
     expect(viewSource).toContain('walk: { source: "/fredrun/superfred/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
     expect(viewSource).toContain('jump: { source: "/fredrun/superfred/jump.webp?v=second-variant-restored-1", columns: 8, frameCount: 64, fps: 16 }');
     expect(viewSource).toContain('victory: { source: "/fredrun/superfred/victory.webp", columns: 8, frameCount: 64, fps: 16 }');
-    expect(viewSource).toContain('superfred: { name: "Superfred", description: "Mit Cape und Extrapower" }');
+    expect(profileSource).toContain('superfred: { name: "Superfred", description: "Mit Cape und Extrapower", price: FREDRUN_SUPERFRED_PRICE }');
     expect(stylesSource).toContain("grid-template-columns: repeat(3, minmax(0, 1fr));");
     expect(viewSource).toContain('className="fredrun-overlay fredrun-pause-overlay"');
     expect(stylesSource).toContain(".fredrun-pause-overlay h2");
@@ -530,7 +532,7 @@ describe("Fredrun UI surface", () => {
 
   it("names both selectable runners without naming individual opponents", () => {
     expect(viewSource).toContain(
-      "Spring mit Fred oder Frida über REIH 100, Steuerkodex, Paragraphen und unerwartete Hindernisse.",
+      "Wähle deinen Charakter, sammle Münzen und spring über REIH 100, Steuerkodex und unerwartete Hindernisse.",
     );
     expect(viewSource).not.toContain("Spring mit Fred über Odo");
   });
@@ -543,7 +545,7 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).not.toContain("<span>Stufe</span>");
   });
 
-  it("uses the supplied intro artwork as the responsive title screen", () => {
+  it("uses the supplied intro artwork behind the responsive main menu", () => {
     expect(introManifest).toEqual({
       source: {
         file: "intro.png",
@@ -563,11 +565,35 @@ describe("Fredrun UI surface", () => {
       .toBe(introManifest.output.bytes);
     expect(introManifest.output.bytes).toBeLessThanOrEqual(400 * 1024);
     expect(viewSource).toContain('const INTRO_SOURCE = "/fredrun/intro.webp"');
-    expect(viewSource).toContain('className="fredrun-intro"');
-    expect(viewSource).toContain("Fred Runner: Fred läuft");
-    expect(viewSource).toContain('const showIntro = assetState !== "error" && snapshot.phase === "ready"');
-    expect(viewSource).toContain('aria-busy={assetState === "loading"}');
-    expect(viewSource).not.toContain("Fred macht sich bereit");
+    expect(viewSource).toContain('className="fredrun-menu-background"');
+    expect(viewSource).toContain('const showMenu = assetState !== "error" && snapshot.phase === "ready"');
+    expect(viewSource).toContain('aria-label="Fredrun-Hauptmenü"');
+    expect(viewSource).toContain('aria-busy={assetState === "loading" || !profileReady}');
+    expect(stylesSource).toContain(".fredrun-stage--menu");
+  });
+
+  it("renders the local wallet, character shop, information screen, and safe abort flow", () => {
+    expect(viewSource).toContain('{ id: "play", label: "Spielen" }');
+    expect(viewSource).toContain('{ id: "characters", label: "Charaktere" }');
+    expect(viewSource).toContain('{ id: "shop", label: "Shop" }');
+    expect(viewSource).toContain('{ id: "info", label: "Info" }');
+    expect(viewSource).toContain("profile.coinBalance.toLocaleString");
+    expect(viewSource).toContain("FREDRUN_SUPERFRED_PRICE");
+    expect(viewSource).toContain("purchaseFredRunCharacter");
+    expect(viewSource).toContain("settleFredRunCoins");
+    expect(viewSource).toContain("Kein Echtgeld");
+    expect(viewSource).toContain("Bald verfügbar");
+    expect(viewSource).toContain("Spielmechaniken & Power-ups");
+    expect(viewSource).toContain('role={abortConfirmation ? "alertdialog" : undefined}');
+    expect(viewSource).toContain("ungesicherte Münzen gehen verloren");
+    expect(viewSource).toContain("Run-Münzen");
+    expect(viewSource).toContain("handleFredRunDialogKeyDown");
+    expect(viewSource).toContain('inert={dialogOpen ? true : undefined}');
+    expect(viewSource).toContain("animated && !reducedMotion");
+    expect(stylesSource).toContain(".fredrun-menu-wallet");
+    expect(stylesSource).toContain(".fredrun-shop-grid");
+    expect(stylesSource).toContain(".fredrun-info-grid");
+    expect(stylesSource).toContain("@media (max-height: 520px) and (orientation: landscape)");
   });
 
   it("ships Odo as a normalized left-facing animated obstacle", () => {

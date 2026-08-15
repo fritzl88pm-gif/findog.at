@@ -1,11 +1,21 @@
 "use client";
 
 import NextImage from "next/image";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 
 import {
   FREDRUN_COIN_SCORE,
   FREDRUN_GROUND_Y,
+  FREDRUN_MAGNET_SECONDS,
+  FREDRUN_MAX_COMBO_MULTIPLIER,
+  FREDRUN_NEAR_MISS_COMBO_SECONDS,
   FREDRUN_PLAYER_X,
   FREDRUN_SCORE_PULSE_POINTS,
   FREDRUN_WORLD_HEIGHT,
@@ -29,6 +39,20 @@ import {
   type FredRunPowerUpKind,
   type FredRunState,
 } from "@/lib/fredrun";
+import {
+  FREDRUN_CHARACTERS,
+  FREDRUN_CHARACTER_IDS,
+  FREDRUN_SUPERFRED_PRICE,
+  createDefaultFredRunProfile,
+  isFredRunCharacterUnlocked,
+  purchaseFredRunCharacter,
+  readFredRunProfile,
+  selectFredRunCharacter,
+  settleFredRunCoins,
+  writeFredRunProfile,
+  type FredRunCharacterId,
+  type FredRunProfile,
+} from "@/lib/fredrun-profile";
 import {
   FREDRUN_PLAYER_NAME_MAX_LENGTH,
   normalizeFredRunPlayerName,
@@ -76,7 +100,6 @@ function unlockMobileFullscreenOrientation() {
 }
 
 type SpriteKey = "walk" | "jump" | "victory";
-type FredRunCharacterId = "fred" | "frida" | "superfred";
 type CharacterSpriteLayout = {
   source: string;
   columns: number;
@@ -102,11 +125,16 @@ const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, Chara
   },
 };
 
-const fredRunCharacters: Record<FredRunCharacterId, { name: string; description: string }> = {
-  fred: { name: "Fred", description: "Der blaue Findog-Klassiker" },
-  frida: { name: "Frida", description: "Pink, klug und voller Energie" },
-  superfred: { name: "Superfred", description: "Mit Cape und Extrapower" },
-};
+const fredRunCharacters = FREDRUN_CHARACTERS;
+
+type FredRunMenuTab = "play" | "characters" | "shop" | "info";
+
+const fredRunMenuTabs: ReadonlyArray<{ id: FredRunMenuTab; label: string }> = [
+  { id: "play", label: "Spielen" },
+  { id: "characters", label: "Charaktere" },
+  { id: "shop", label: "Shop" },
+  { id: "info", label: "Info" },
+];
 
 const obstacleLayouts: Record<
   FredRunObstacleKind,
@@ -614,22 +642,53 @@ function FredRunMagnetIcon({ className = "" }: { className?: string }) {
   );
 }
 
-function FredRunCharacterPreview({ characterId }: { characterId: FredRunCharacterId }) {
+function FredRunCharacterPreview({
+  characterId,
+  animated = false,
+  className = "",
+}: {
+  characterId: FredRunCharacterId;
+  animated?: boolean;
+  className?: string;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [image, setImage] = useState<HTMLImageElement | null>(null);
+  const [reducedMotion, setReducedMotion] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     const layout = characterSpriteLayouts[characterId].walk;
     void loadImage(layout.source).then((image) => {
-      if (cancelled) return;
-      const canvas = canvasRef.current;
-      const context = canvas?.getContext("2d");
-      if (!canvas || !context) return;
+      if (!cancelled) setImage(image);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [characterId]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updatePreference = () => setReducedMotion(media.matches);
+    updatePreference();
+    media.addEventListener("change", updatePreference);
+    return () => media.removeEventListener("change", updatePreference);
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context || !image) return;
+    const layout = characterSpriteLayouts[characterId].walk;
+    let animationFrame: number | null = null;
+    const draw = (timestamp: number) => {
+      const frame = animated && !reducedMotion
+        ? Math.floor(timestamp / 1_000 * layout.fps) % layout.frameCount
+        : 0;
+      const sourceX = (frame % layout.columns) * SPRITE_CELL_SIZE;
+      const sourceY = Math.floor(frame / layout.columns) * SPRITE_CELL_SIZE;
       context.clearRect(0, 0, SPRITE_CELL_SIZE, SPRITE_CELL_SIZE);
       context.drawImage(
         image,
-        0,
-        0,
+        sourceX,
+        sourceY,
         SPRITE_CELL_SIZE,
         SPRITE_CELL_SIZE,
         0,
@@ -637,18 +696,341 @@ function FredRunCharacterPreview({ characterId }: { characterId: FredRunCharacte
         SPRITE_CELL_SIZE,
         SPRITE_CELL_SIZE,
       );
-    }).catch(() => undefined);
-    return () => { cancelled = true; };
-  }, [characterId]);
+      if (animated && !reducedMotion) animationFrame = window.requestAnimationFrame(draw);
+    };
+    draw(performance.now());
+    return () => {
+      if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
+    };
+  }, [animated, characterId, image, reducedMotion]);
 
   return (
     <canvas
       ref={canvasRef}
-      className="fredrun-character-preview"
+      className={`fredrun-character-preview${className ? ` ${className}` : ""}`}
       width={SPRITE_CELL_SIZE}
       height={SPRITE_CELL_SIZE}
       aria-hidden="true"
     />
+  );
+}
+
+function FredRunFullscreenIcon({ active }: { active: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      {active ? (
+        <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+      ) : (
+        <path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" />
+      )}
+    </svg>
+  );
+}
+
+function FredRunShieldIcon() {
+  return (
+    <svg className="fredrun-info-icon fredrun-info-icon--shield" viewBox="0 0 48 48" aria-hidden="true">
+      <path d="M24 4 40 10v12c0 10.5-6.5 18.2-16 22-9.5-3.8-16-11.5-16-22V10l16-6Z" />
+      <path d="m17 24 5 5 10-11" />
+    </svg>
+  );
+}
+
+function handleFredRunDialogKeyDown(
+  event: ReactKeyboardEvent<HTMLDivElement>,
+  dismiss: () => void,
+) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    dismiss();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not([disabled])"));
+  if (focusable.length === 0) return;
+  const first = focusable[0];
+  const last = focusable.at(-1) ?? first;
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function FredRunMenu({
+  activeTab,
+  profile,
+  profileReady,
+  storageAvailable,
+  bestScore,
+  assetState,
+  fullscreenAvailable,
+  isFullscreen,
+  dialogOpen,
+  purchaseMessage,
+  onTabChange,
+  onStart,
+  onSelectCharacter,
+  onRequestPurchase,
+  onToggleFullscreen,
+}: {
+  activeTab: FredRunMenuTab;
+  profile: FredRunProfile;
+  profileReady: boolean;
+  storageAvailable: boolean;
+  bestScore: number;
+  assetState: "loading" | "ready" | "error";
+  fullscreenAvailable: boolean;
+  isFullscreen: boolean;
+  dialogOpen: boolean;
+  purchaseMessage: string;
+  onTabChange: (tab: FredRunMenuTab) => void;
+  onStart: () => void;
+  onSelectCharacter: (characterId: FredRunCharacterId) => void;
+  onRequestPurchase: (characterId: FredRunCharacterId) => void;
+  onToggleFullscreen: () => void;
+}) {
+  const selectedCharacter = fredRunCharacters[profile.selectedCharacter];
+  const ready = profileReady && assetState === "ready";
+
+  return (
+    <div className="fredrun-menu" inert={dialogOpen ? true : undefined}>
+      <div className="fredrun-menu-topbar">
+        <div className="fredrun-menu-brand">
+          <span>Findog Spielpause</span>
+          <strong>Fredrun</strong>
+        </div>
+        <div className="fredrun-menu-actions">
+          <div className="fredrun-menu-wallet" aria-label={`${profile.coinBalance} Münzen verfügbar`}>
+            <FredRunCoinIcon className="fredrun-coin-icon--menu" />
+            <span>Münzen</span>
+            <strong>{profile.coinBalance.toLocaleString("de-AT")}</strong>
+          </div>
+          {fullscreenAvailable ? (
+            <button
+              className="fredrun-menu-fullscreen"
+              type="button"
+              onClick={onToggleFullscreen}
+              aria-label={isFullscreen ? "Vollbild beenden" : "Vollbild öffnen"}
+              title={isFullscreen ? "Vollbild beenden" : "Vollbild"}
+              aria-pressed={isFullscreen}
+            >
+              <FredRunFullscreenIcon active={isFullscreen} />
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <nav className="fredrun-menu-nav" aria-label="Fredrun-Menü">
+        {fredRunMenuTabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            className={activeTab === tab.id ? "is-active" : undefined}
+            aria-current={activeTab === tab.id ? "page" : undefined}
+            onClick={() => onTabChange(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      {!profileReady ? (
+        <div className="fredrun-menu-loading" role="status">Spielstand wird geladen …</div>
+      ) : (
+        <div className="fredrun-menu-content">
+          {!storageAvailable ? (
+            <p className="fredrun-menu-storage-warning" role="status">
+              Fortschritt kann in diesem Browser derzeit nicht dauerhaft gespeichert werden.
+            </p>
+          ) : null}
+          {purchaseMessage ? (
+            <p className="fredrun-menu-purchase-message" role="status">{purchaseMessage}</p>
+          ) : null}
+
+          {activeTab === "play" ? (
+            <section className="fredrun-menu-panel fredrun-menu-play" aria-labelledby="fredrun-menu-play-title">
+              <div className="fredrun-menu-play-copy">
+                <p className="fredrun-menu-kicker">Bereit für Wien?</p>
+                <h2 id="fredrun-menu-play-title">Mit {selectedCharacter.name} loslaufen</h2>
+                <p>Weiche Hindernissen aus, sammle Münzen und halte dem steigenden Tempo so lange wie möglich stand.</p>
+                <div className="fredrun-menu-stats">
+                  <span>Ausgewählt <strong>{selectedCharacter.name}</strong></span>
+                  <span>Bestwert <strong>{bestScore}</strong></span>
+                </div>
+                <div className="fredrun-menu-play-actions">
+                  <button className="primary-button" type="button" onClick={onStart} disabled={!ready}>
+                    {assetState === "loading" ? "Spiel wird geladen …" : "Run starten"}
+                  </button>
+                  <button className="fredrun-secondary-button" type="button" onClick={() => onTabChange("characters")}>
+                    Charakter wechseln
+                  </button>
+                </div>
+              </div>
+              <div className="fredrun-menu-hero" aria-label={`${selectedCharacter.name} läuft`}>
+                <span className="fredrun-menu-hero-glow" aria-hidden="true" />
+                <FredRunCharacterPreview
+                  characterId={profile.selectedCharacter}
+                  animated
+                  className="fredrun-character-preview--hero"
+                />
+              </div>
+            </section>
+          ) : null}
+
+          {activeTab === "characters" ? (
+            <section className="fredrun-menu-panel" aria-labelledby="fredrun-menu-characters-title">
+              <div className="fredrun-menu-section-heading">
+                <div>
+                  <p className="fredrun-menu-kicker">Dein Runner</p>
+                  <h2 id="fredrun-menu-characters-title">Charakter auswählen</h2>
+                </div>
+                <span>Alle spielen sich gleich</span>
+              </div>
+              <div className="fredrun-menu-character-grid">
+                {FREDRUN_CHARACTER_IDS.map((characterId) => {
+                  const character = fredRunCharacters[characterId];
+                  const unlocked = isFredRunCharacterUnlocked(profile, characterId);
+                  const selected = profile.selectedCharacter === characterId;
+                  return (
+                    <article
+                      key={characterId}
+                      className={`fredrun-menu-character-card${selected ? " is-selected" : ""}${unlocked ? "" : " is-locked"}`}
+                    >
+                      <div className="fredrun-menu-character-art">
+                        <FredRunCharacterPreview characterId={characterId} />
+                        {!unlocked ? <span className="fredrun-menu-lock" aria-hidden="true">🔒</span> : null}
+                      </div>
+                      <div className="fredrun-menu-character-copy">
+                        <h3>{character.name}</h3>
+                        <p>{character.description}</p>
+                      </div>
+                      {unlocked ? (
+                        <button
+                          type="button"
+                          className={selected ? "is-selected" : undefined}
+                          aria-pressed={selected}
+                          onClick={() => onSelectCharacter(characterId)}
+                        >
+                          {selected ? "Ausgewählt" : "Auswählen"}
+                        </button>
+                      ) : (
+                        <button type="button" onClick={() => onTabChange("shop")}>
+                          <FredRunCoinIcon /> {character.price.toLocaleString("de-AT")} · Zum Shop
+                        </button>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+
+          {activeTab === "shop" ? (
+            <section className="fredrun-menu-panel" aria-labelledby="fredrun-menu-shop-title">
+              <div className="fredrun-menu-section-heading">
+                <div>
+                  <p className="fredrun-menu-kicker">Nur erspielt</p>
+                  <h2 id="fredrun-menu-shop-title">Charakter-Shop</h2>
+                </div>
+                <span>Kein Echtgeld · nur erspielte Münzen</span>
+              </div>
+              <div className="fredrun-shop-note">
+                Sammle Münzen während deiner Runs. Erst am Rundenende landen sie sicher in deinem Guthaben.
+              </div>
+              <div className="fredrun-shop-grid">
+                {FREDRUN_CHARACTER_IDS.map((characterId) => {
+                  const character = fredRunCharacters[characterId];
+                  const unlocked = isFredRunCharacterUnlocked(profile, characterId);
+                  const missingCoins = Math.max(0, character.price - profile.coinBalance);
+                  return (
+                    <article key={characterId} className={`fredrun-shop-card${unlocked ? " is-owned" : ""}`}>
+                      <FredRunCharacterPreview characterId={characterId} />
+                      <div>
+                        <h3>{character.name}</h3>
+                        <p>{character.description}</p>
+                      </div>
+                      {unlocked ? (
+                        <span className="fredrun-shop-owned">✓ Freigeschaltet</span>
+                      ) : (
+                        <>
+                          <strong className="fredrun-shop-price"><FredRunCoinIcon /> {character.price.toLocaleString("de-AT")}</strong>
+                          <button
+                            type="button"
+                            disabled={missingCoins > 0}
+                            onClick={() => onRequestPurchase(characterId)}
+                          >
+                            {missingCoins > 0 ? `Noch ${missingCoins.toLocaleString("de-AT")} Münzen` : "Freischalten"}
+                          </button>
+                        </>
+                      )}
+                    </article>
+                  );
+                })}
+                {[1, 2].map((slot) => (
+                  <article key={slot} className="fredrun-shop-card fredrun-shop-card--coming-soon" aria-label="Bald verfügbar">
+                    <div className="fredrun-shop-mystery" aria-hidden="true">?</div>
+                    <div>
+                      <h3>Bald verfügbar</h3>
+                      <p>Ein neuer Charakter wartet schon.</p>
+                    </div>
+                    <span>Coming soon</span>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {activeTab === "info" ? (
+            <section className="fredrun-menu-panel" aria-labelledby="fredrun-menu-info-title">
+              <div className="fredrun-menu-section-heading">
+                <div>
+                  <p className="fredrun-menu-kicker">So funktioniert’s</p>
+                  <h2 id="fredrun-menu-info-title">Spielmechaniken & Power-ups</h2>
+                </div>
+              </div>
+              <div className="fredrun-info-grid">
+                <article>
+                  <span className="fredrun-info-symbol" aria-hidden="true">∞</span>
+                  <h3>Endlos laufen</h3>
+                  <p>Es gibt keine Levels. Das Tempo steigt kontinuierlich, bis dich ein Hindernis erwischt.</p>
+                </article>
+                <article>
+                  <span className="fredrun-info-symbol" aria-hidden="true">↑</span>
+                  <h3>Springen & Pause</h3>
+                  <p>Nutze Leertaste, Pfeil nach oben oder tippe das Spielfeld an. Nach einer Pause läuft ein 3-Sekunden-Countdown.</p>
+                </article>
+                <article>
+                  <FredRunCoinIcon className="fredrun-info-icon" />
+                  <h3>Münzen</h3>
+                  <p>Jede Münze bringt {FREDRUN_COIN_SCORE} Punkte. Dein Shop-Guthaben wird erst bei einem regulären Rundenende gutgeschrieben.</p>
+                </article>
+                <article>
+                  <span className="fredrun-info-symbol" aria-hidden="true">×{FREDRUN_MAX_COMBO_MULTIPLIER}</span>
+                  <h3>Knapp vorbei</h3>
+                  <p>Enge Sprünge starten eine Kombo. Innerhalb von {FREDRUN_NEAR_MISS_COMBO_SECONDS} Sekunden steigt der Bonus bis ×{FREDRUN_MAX_COMBO_MULTIPLIER}.</p>
+                </article>
+                <article>
+                  <FredRunMagnetIcon className="fredrun-info-icon" />
+                  <h3>Magnet</h3>
+                  <p>Zieht {FREDRUN_MAGNET_SECONDS} Sekunden lang Münzen in deiner Nähe automatisch an.</p>
+                </article>
+                <article>
+                  <FredRunShieldIcon />
+                  <h3>Schild</h3>
+                  <p>Fängt genau eine Kollision ab und hält deinen Run am Leben.</p>
+                </article>
+              </div>
+              <p className="fredrun-info-fairness">
+                Fred, Frida und Superfred unterscheiden sich nur optisch. Sprunghöhe, Tempo und Highscore-Chancen bleiben identisch.
+              </p>
+            </section>
+          ) : null}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1002,11 +1384,20 @@ export default function FredRunView({
   const gameRef = useRef<FredRunState>(createFredRunState());
   const imagesRef = useRef<FredRunImages | null>(null);
   const selectedCharacterRef = useRef<FredRunCharacterId>("fred");
+  const profileRef = useRef<FredRunProfile>(createDefaultFredRunProfile());
+  const currentRunIdRef = useRef<string | null>(null);
   const bestScoreRef = useRef(0);
   const reducedMotionRef = useRef(false);
   const scoreSubmissionAbortRef = useRef<AbortController | null>(null);
   const [snapshot, setSnapshot] = useState<FredRunSnapshot>(() => snapshotFrom(createFredRunState()));
-  const [selectedCharacter, setSelectedCharacter] = useState<FredRunCharacterId>("fred");
+  const [profile, setProfile] = useState<FredRunProfile>(() => createDefaultFredRunProfile());
+  const [profileReady, setProfileReady] = useState(false);
+  const [storageAvailable, setStorageAvailable] = useState(true);
+  const [menuTab, setMenuTab] = useState<FredRunMenuTab>("play");
+  const [pendingPurchase, setPendingPurchase] = useState<FredRunCharacterId | null>(null);
+  const [purchaseMessage, setPurchaseMessage] = useState("");
+  const [abortConfirmation, setAbortConfirmation] = useState(false);
+  const [lastAwardedCoins, setLastAwardedCoins] = useState(0);
   const [scorePulseToken, setScorePulseToken] = useState(0);
   const [coinPulseToken, setCoinPulseToken] = useState(0);
   const [bestScore, setBestScore] = useState(0);
@@ -1028,6 +1419,7 @@ export default function FredRunView({
   const [scoreSubmissionError, setScoreSubmissionError] = useState("");
   const [fullscreenAvailable, setFullscreenAvailable] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const selectedCharacter = profile.selectedCharacter;
 
   const publish = useCallback((state: FredRunState) => {
     setSnapshot((current) => {
@@ -1070,28 +1462,39 @@ export default function FredRunView({
     }
   }, [publish]);
 
-  const selectCharacter = useCallback((characterId: FredRunCharacterId) => {
-    if (gameRef.current.phase !== "ready") return;
-    selectedCharacterRef.current = characterId;
-    setSelectedCharacter(characterId);
+  const commitProfile = useCallback((nextProfile: FredRunProfile) => {
+    profileRef.current = nextProfile;
+    selectedCharacterRef.current = nextProfile.selectedCharacter;
+    setProfile(nextProfile);
+    setStorageAvailable(writeFredRunProfile(localHighScoreStorage(), nextProfile));
     if (canvasRef.current) {
       renderFredRun(
         canvasRef.current,
         gameRef.current,
         imagesRef.current,
         reducedMotionRef.current,
-        characterId,
+        nextProfile.selectedCharacter,
       );
     }
   }, []);
 
+  const selectCharacter = useCallback((characterId: FredRunCharacterId) => {
+    if (gameRef.current.phase !== "ready") return;
+    const nextProfile = selectFredRunCharacter(profileRef.current, characterId);
+    if (nextProfile !== profileRef.current) commitProfile(nextProfile);
+  }, [commitProfile]);
+
   const prepareNewRun = useCallback(() => {
+    const runId = createRunId();
     setScorePulseToken(0);
     setCoinPulseToken(0);
-    setCurrentRunId(createRunId());
+    currentRunIdRef.current = runId;
+    setCurrentRunId(runId);
     setSubmittedRunId(null);
     setScoreSubmissionMessage("");
     setScoreSubmissionError("");
+    setAbortConfirmation(false);
+    setLastAwardedCoins(0);
   }, []);
 
   const startOrJump = useCallback(() => {
@@ -1110,27 +1513,55 @@ export default function FredRunView({
   }, [assetState, prepareNewRun, replaceGame]);
 
   const startRound = useCallback(() => {
-    if (assetState !== "ready") return;
+    if (assetState !== "ready" || !profileReady) return;
     prepareNewRun();
     replaceGame(startFredRun(gameRef.current.phase === "ready" ? gameRef.current : restartFredRun()));
-  }, [assetState, prepareNewRun, replaceGame]);
+  }, [assetState, prepareNewRun, profileReady, replaceGame]);
 
-  const restartRound = useCallback(() => {
+  const returnToMenu = useCallback(() => {
     setScorePulseToken(0);
     setCoinPulseToken(0);
+    currentRunIdRef.current = null;
     setCurrentRunId(null);
     setSubmittedRunId(null);
     setScoreSubmissionMessage("");
     setScoreSubmissionError("");
+    setAbortConfirmation(false);
+    setLastAwardedCoins(0);
+    setMenuTab("play");
     replaceGame(restartFredRun());
   }, [replaceGame]);
 
+  const playAgain = useCallback(() => {
+    if (assetState !== "ready") return;
+    prepareNewRun();
+    replaceGame(startFredRun(restartFredRun()));
+  }, [assetState, prepareNewRun, replaceGame]);
+
   const togglePause = useCallback(() => {
+    setAbortConfirmation(false);
     const state = gameRef.current.phase === "paused"
       ? resumeFredRun(gameRef.current)
       : pauseFredRun(gameRef.current);
     replaceGame(state);
   }, [replaceGame]);
+
+  const requestPurchase = useCallback((characterId: FredRunCharacterId) => {
+    if (isFredRunCharacterUnlocked(profileRef.current, characterId)) return;
+    if (profileRef.current.coinBalance < fredRunCharacters[characterId].price) return;
+    setPurchaseMessage("");
+    setPendingPurchase(characterId);
+  }, []);
+
+  const confirmPurchase = useCallback(() => {
+    if (!pendingPurchase) return;
+    const result = purchaseFredRunCharacter(profileRef.current, pendingPurchase);
+    if (result.status === "purchased") {
+      commitProfile(result.profile);
+      setPurchaseMessage(`${fredRunCharacters[pendingPurchase].name} ist jetzt freigeschaltet und ausgewählt.`);
+    }
+    setPendingPurchase(null);
+  }, [commitProfile, pendingPurchase]);
 
   const toggleFullscreen = useCallback(async () => {
     const shell = gameShellRef.current;
@@ -1165,8 +1596,15 @@ export default function FredRunView({
   }, []);
 
   useEffect(() => {
-    bestScoreRef.current = readFredRunHighScore(localHighScoreStorage());
+    const storage = localHighScoreStorage();
+    bestScoreRef.current = readFredRunHighScore(storage);
     setBestScore(bestScoreRef.current);
+    const storedProfile = readFredRunProfile(storage);
+    profileRef.current = storedProfile.profile;
+    selectedCharacterRef.current = storedProfile.profile.selectedCharacter;
+    setProfile(storedProfile.profile);
+    setStorageAvailable(storedProfile.storageAvailable);
+    setProfileReady(true);
   }, []);
 
   useEffect(() => {
@@ -1300,6 +1738,13 @@ export default function FredRunView({
             bestScoreRef.current = nextBest;
             setBestScore(nextBest);
           }
+          const settlement = settleFredRunCoins(
+            profileRef.current,
+            currentRunIdRef.current,
+            state.coinsCollected,
+          );
+          setLastAwardedCoins(settlement.awardedCoins);
+          if (settlement.profile !== profileRef.current) commitProfile(settlement.profile);
         }
       }
       if (canvasRef.current) {
@@ -1317,11 +1762,12 @@ export default function FredRunView({
     return () => {
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
     };
-  }, [publish]);
+  }, [commitProfile, publish]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.code !== "Space" && event.code !== "ArrowUp") return;
+      if (gameRef.current.phase === "ready") return;
       if (
         event.target instanceof HTMLElement
         && event.target.closest("input, textarea, button, [contenteditable='true']")
@@ -1399,7 +1845,7 @@ export default function FredRunView({
 
   const isPaused = snapshot.phase === "paused";
   const showPauseButton = snapshot.phase === "running" || isPaused;
-  const showIntro = assetState !== "error" && snapshot.phase === "ready";
+  const showMenu = assetState !== "error" && snapshot.phase === "ready";
   const normalizedPlayerName = normalizeFredRunPlayerName(playerName);
   const scoreWasSubmitted = Boolean(currentRunId && submittedRunId === currentRunId);
 
@@ -1411,7 +1857,7 @@ export default function FredRunView({
             <div>
               <p className="eyebrow">Findog Spielpause</p>
               <h1 id="fredrun-view-title">Fredrun</h1>
-              <p>Spring mit Fred oder Frida über REIH 100, Steuerkodex, Paragraphen und unerwartete Hindernisse.</p>
+              <p>Wähle deinen Charakter, sammle Münzen und spring über REIH 100, Steuerkodex und unerwartete Hindernisse.</p>
             </div>
             <div className="fredrun-controls-copy" aria-label="Steuerung">
               <span><kbd>Leertaste</kbd> oder <kbd>↑</kbd></span>
@@ -1422,10 +1868,14 @@ export default function FredRunView({
 
         <div
           ref={gameShellRef}
-          className={`fredrun-game-shell${showIntro ? " fredrun-game-shell--intro" : ""}`}
+          className={`fredrun-game-shell${showMenu ? " fredrun-game-shell--menu" : ""}`}
         >
-          {!showIntro ? (
-            <div className="fredrun-hud" aria-label="Spielstand">
+          {!showMenu ? (
+            <div
+              className="fredrun-hud"
+              aria-label="Spielstand"
+              inert={abortConfirmation ? true : undefined}
+            >
               <div>
                 <span>Punkte</span>
                 <strong
@@ -1437,7 +1887,7 @@ export default function FredRunView({
               </div>
               <div><span>Bestwert</span><strong>{bestScore}</strong></div>
               <div className="fredrun-coin-hud">
-                <span>Münzen</span>
+                <span>Run-Münzen</span>
                 <strong
                   key={coinPulseToken}
                   className={coinPulseToken > 0 ? "fredrun-coin--pulse" : undefined}
@@ -1458,21 +1908,13 @@ export default function FredRunView({
                   title={isFullscreen ? "Vollbild beenden" : "Vollbild"}
                   aria-pressed={isFullscreen}
                 >
-                  {isFullscreen ? (
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
-                    </svg>
-                  ) : (
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" />
-                    </svg>
-                  )}
+                  <FredRunFullscreenIcon active={isFullscreen} />
                 </button>
               ) : null}
             </div>
           ) : null}
 
-          <div className={`fredrun-stage${showIntro ? " fredrun-stage--intro" : ""}${snapshot.phase === "game-over" ? " fredrun-stage--game-over fredrun-stage--hit" : snapshot.shieldImpact ? " fredrun-stage--hit fredrun-stage--shield-hit" : ""}`}>
+          <div className={`fredrun-stage${showMenu ? " fredrun-stage--menu" : ""}${snapshot.phase === "game-over" ? " fredrun-stage--game-over fredrun-stage--hit" : snapshot.shieldImpact ? " fredrun-stage--hit fredrun-stage--shield-hit" : ""}`}>
             <canvas
               ref={canvasRef}
               className="fredrun-canvas"
@@ -1481,11 +1923,11 @@ export default function FredRunView({
                 startOrJump();
               }}
               aria-label="Fredrun-Spielfeld. Leertaste, Pfeil nach oben oder Antippen zum Springen."
-              aria-hidden={showIntro || undefined}
-              tabIndex={showIntro ? -1 : 0}
+              aria-hidden={showMenu || undefined}
+              tabIndex={showMenu ? -1 : 0}
             />
 
-            {!showIntro && snapshot.phase !== "game-over" ? (
+            {!showMenu && snapshot.phase !== "game-over" ? (
               <div className="fredrun-effect-strip" aria-label="Aktive Effekte">
                 {snapshot.comboMultiplier > 1 ? (
                   <span className="fredrun-effect-chip fredrun-effect-chip--combo">
@@ -1504,7 +1946,7 @@ export default function FredRunView({
               </div>
             ) : null}
 
-            {!showIntro && snapshot.phase === "running" ? (
+            {!showMenu && snapshot.phase === "running" ? (
               <div className="fredrun-gameplay-feedback" aria-live="polite">
                 {snapshot.nearMissFeedback ? (
                   <span
@@ -1541,59 +1983,110 @@ export default function FredRunView({
                 </button>
               </div>
             ) : null}
-            {showIntro ? (
+            {showMenu ? (
               <div
-                className="fredrun-intro"
-                aria-label={assetState === "loading" ? "Fredrun wird geladen" : "Fredrun-Titelscreen"}
-                aria-busy={assetState === "loading"}
+                className="fredrun-menu-scene"
+                aria-label="Fredrun-Hauptmenü"
+                aria-busy={assetState === "loading" || !profileReady}
               >
                 <NextImage
-                  className="fredrun-intro-image"
+                  className="fredrun-menu-background"
                   src={INTRO_SOURCE}
-                  alt="Fred Runner: Fred läuft vor Akten, Gesetzbüchern und dem Ruf nach einem Beschluss davon."
+                  alt=""
                   fill
                   loading="eager"
                   sizes="(max-width: 760px) 100vw, 1040px"
+                  aria-hidden="true"
                   unoptimized
                 />
-                {assetState === "ready" ? (
-                  <div className="fredrun-intro-action">
-                    <div className="fredrun-character-picker" aria-label="Charakter auswählen">
-                      <span>Charakter wählen</span>
-                      <div className="fredrun-character-options">
-                        {(Object.keys(fredRunCharacters) as FredRunCharacterId[]).map((characterId) => {
-                          const character = fredRunCharacters[characterId];
-                          const selected = selectedCharacter === characterId;
-                          return (
-                            <button
-                              key={characterId}
-                              className={`fredrun-character-option${selected ? " is-selected" : ""}`}
-                              type="button"
-                              aria-pressed={selected}
-                              onClick={() => selectCharacter(characterId)}
-                            >
-                              <FredRunCharacterPreview characterId={characterId} />
-                              <span>
-                                <strong>{character.name}</strong>
-                                <small>{character.description}</small>
-                              </span>
-                            </button>
-                          );
-                        })}
+                <FredRunMenu
+                  activeTab={menuTab}
+                  profile={profile}
+                  profileReady={profileReady}
+                  storageAvailable={storageAvailable}
+                  bestScore={bestScore}
+                  assetState={assetState}
+                  fullscreenAvailable={fullscreenAvailable}
+                  isFullscreen={isFullscreen}
+                  dialogOpen={pendingPurchase !== null}
+                  purchaseMessage={purchaseMessage}
+                  onTabChange={(tab) => {
+                    setMenuTab(tab);
+                    setPurchaseMessage("");
+                  }}
+                  onStart={startRound}
+                  onSelectCharacter={selectCharacter}
+                  onRequestPurchase={requestPurchase}
+                  onToggleFullscreen={() => void toggleFullscreen()}
+                />
+                {pendingPurchase ? (
+                  <div className="fredrun-menu-dialog-backdrop">
+                    <div
+                      className="fredrun-menu-dialog"
+                      role="alertdialog"
+                      aria-modal="true"
+                      aria-labelledby="fredrun-purchase-title"
+                      aria-describedby="fredrun-purchase-description"
+                      onKeyDown={(event) => handleFredRunDialogKeyDown(event, () => setPendingPurchase(null))}
+                    >
+                      <p className="fredrun-menu-kicker">Freischalten</p>
+                      <h2 id="fredrun-purchase-title">{fredRunCharacters[pendingPurchase].name} kaufen?</h2>
+                      <p id="fredrun-purchase-description">
+                        Dafür werden <strong>{FREDRUN_SUPERFRED_PRICE.toLocaleString("de-AT")} Münzen</strong> von deinem Guthaben abgezogen. Der Kauf kann nicht rückgängig gemacht werden.
+                      </p>
+                      <div className="fredrun-menu-dialog-actions">
+                        <button type="button" className="fredrun-secondary-button" onClick={() => setPendingPurchase(null)} autoFocus>
+                          Abbrechen
+                        </button>
+                        <button type="button" className="primary-button" onClick={confirmPurchase}>
+                          Jetzt freischalten
+                        </button>
                       </div>
                     </div>
-                    <button className="primary-button" type="button" onClick={startRound}>
-                      Mit {fredRunCharacters[selectedCharacter].name} loslaufen
-                    </button>
                   </div>
                 ) : null}
               </div>
             ) : null}
             {snapshot.phase === "paused" ? (
-              <div className="fredrun-overlay fredrun-pause-overlay">
-                <p className="fredrun-overlay-kicker">Kurze Pause</p>
-                <h2>{fredRunCharacters[selectedCharacter].name} wartet auf dich</h2>
-                <button className="primary-button" type="button" onClick={togglePause}>Weiterspielen</button>
+              <div
+                className="fredrun-overlay fredrun-pause-overlay"
+                role={abortConfirmation ? "alertdialog" : undefined}
+                aria-modal={abortConfirmation || undefined}
+                aria-labelledby={abortConfirmation ? "fredrun-abort-title" : undefined}
+                onKeyDown={abortConfirmation
+                  ? (event) => handleFredRunDialogKeyDown(event, () => setAbortConfirmation(false))
+                  : undefined}
+              >
+                {abortConfirmation ? (
+                  <>
+                    <p className="fredrun-overlay-kicker">Run abbrechen?</p>
+                    <h2 id="fredrun-abort-title">
+                      {snapshot.coinsCollected > 0
+                        ? `${snapshot.coinsCollected} ungesicherte Münzen gehen verloren`
+                        : "Zurück zum Hauptmenü?"}
+                    </h2>
+                    <p>Nur Münzen aus regulär beendeten Runden werden deinem Guthaben gutgeschrieben.</p>
+                    <div className="fredrun-overlay-actions">
+                      <button className="primary-button" type="button" onClick={() => setAbortConfirmation(false)} autoFocus>
+                        Weiterspielen
+                      </button>
+                      <button className="fredrun-secondary-button" type="button" onClick={returnToMenu}>
+                        Run abbrechen
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="fredrun-overlay-kicker">Kurze Pause</p>
+                    <h2>{fredRunCharacters[selectedCharacter].name} wartet auf dich</h2>
+                    <div className="fredrun-overlay-actions">
+                      <button className="primary-button" type="button" onClick={togglePause}>Weiterspielen</button>
+                      <button className="fredrun-secondary-button" type="button" onClick={() => setAbortConfirmation(true)}>
+                        Hauptmenü
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             ) : null}
             {snapshot.phase === "countdown" ? (
@@ -1611,14 +2104,20 @@ export default function FredRunView({
                   <p>Bestwert: {bestScore}</p>
                   <p className="fredrun-game-over-coins">
                     <FredRunCoinIcon className="fredrun-coin-icon--summary" />
-                    <span>{snapshot.coinsCollected} Münzen · +{snapshot.coinsCollected * FREDRUN_COIN_SCORE} Punkte</span>
+                    <span>
+                      {snapshot.coinsCollected} Run-Münzen · +{snapshot.coinsCollected * FREDRUN_COIN_SCORE} Punkte
+                      <small>+{lastAwardedCoins} ins Guthaben · Gesamt {profile.coinBalance.toLocaleString("de-AT")}</small>
+                    </span>
                   </p>
                   {snapshot.nearMisses > 0 ? (
                     <p className="fredrun-game-over-near-misses">
                       {snapshot.nearMisses}× knapp vorbei · +{snapshot.nearMissScore} Punkte
                     </p>
                   ) : null}
-                  <button className="primary-button" type="button" onClick={restartRound}>Noch einmal</button>
+                  <div className="fredrun-game-over-actions">
+                    <button className="primary-button" type="button" onClick={playAgain}>Noch einmal</button>
+                    <button className="fredrun-secondary-button" type="button" onClick={returnToMenu}>Hauptmenü</button>
+                  </div>
                 </div>
                 <FredRunVictoryDance characterId={selectedCharacter} />
                 <form className="fredrun-score-form" onSubmit={(event) => void submitScore(event)}>
@@ -1664,7 +2163,7 @@ export default function FredRunView({
             ) : null}
           </div>
 
-          {!showIntro ? (
+          {!showMenu ? (
             <>
               {snapshot.phase === "running" ? (
                 <div className="fredrun-mobile-action">
