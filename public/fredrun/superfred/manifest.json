@@ -38,16 +38,16 @@
       },
       "jump": {
         "sourceFile": "jump-raw.png",
-        "sourceSha256": "C9E99396BD735E4E48E1C5D18C97D71011FBB7DF178000D8D747BB3639BD2DA0",
-        "spritesheetId": "cmsu4q17y00a7g90czpzdj86q",
-        "sourceVideoId": "cmsu4mmb3000g7i6ovsgkub4g",
+        "sourceSha256": "AEF6D1F97C26E2180785246C018181024E3670456175DBD158BBF95FDF8023C3",
+        "spritesheetId": "cmsu7gxlk005mi8xkxrzbaqk3",
+        "sourceVideoId": "cmsu7ea300074rzewawv777px",
         "columns": 8,
         "rows": 8,
         "frameCount": 64,
-        "sharedScale": 0.39821,
+        "sharedScale": 0.439506,
         "outputFile": "jump.webp",
-        "outputSha256": "18DE5050A820EE5814230F57B9DA2F1ED404B7D184035D38EE2D1E729A0413DF",
-        "bytes": 637390
+        "outputSha256": "0FBA34398D43AE0E873D3A36CDFB1384B2677906707933D9979480FC2596A385",
+        "bytes": 636310
       },
       "victory": {
         "sourceFile": "victory-raw.png",

@@ -484,7 +484,7 @@ describe("Fredrun UI surface", () => {
     expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
     expect(viewSource).toContain('type FredRunCharacterId = "fred" | "frida" | "superfred"');
     expect(viewSource).toContain('walk: { source: "/fredrun/superfred/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
-    expect(viewSource).toContain('jump: { source: "/fredrun/superfred/jump.webp?v=original-restored-1", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('jump: { source: "/fredrun/superfred/jump.webp?v=second-variant-restored-1", columns: 8, frameCount: 64, fps: 16 }');
     expect(viewSource).toContain('victory: { source: "/fredrun/superfred/victory.webp", columns: 8, frameCount: 64, fps: 16 }');
     expect(viewSource).toContain('superfred: { name: "Superfred", description: "Mit Cape und Extrapower" }');
     expect(stylesSource).toContain("grid-template-columns: repeat(3, minmax(0, 1fr));");
