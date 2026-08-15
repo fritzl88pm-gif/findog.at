@@ -64,6 +64,7 @@ const SPRITE_CELL_SIZE = 192;
 const SPRITE_DRAW_SIZE = 166;
 const JUMP_ANIMATION_DURATION = 0.82;
 const FIXED_STEP = 1 / 120;
+const LOADING_SCREEN_MINIMUM_MS = 850;
 const INTRO_SOURCE = "/fredrun/intro.webp";
 const COIN_SOURCE = "/fredrun/coin-f.webp";
 const MAGNET_SOURCE = "/fredrun/powerup-magnet.png";
@@ -1392,6 +1393,7 @@ export default function FredRunView({
   const [snapshot, setSnapshot] = useState<FredRunSnapshot>(() => snapshotFrom(createFredRunState()));
   const [profile, setProfile] = useState<FredRunProfile>(() => createDefaultFredRunProfile());
   const [profileReady, setProfileReady] = useState(false);
+  const [minimumLoadingComplete, setMinimumLoadingComplete] = useState(false);
   const [storageAvailable, setStorageAvailable] = useState(true);
   const [menuTab, setMenuTab] = useState<FredRunMenuTab>("play");
   const [pendingPurchase, setPendingPurchase] = useState<FredRunCharacterId | null>(null);
@@ -1420,6 +1422,11 @@ export default function FredRunView({
   const [fullscreenAvailable, setFullscreenAvailable] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const selectedCharacter = profile.selectedCharacter;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setMinimumLoadingComplete(true), LOADING_SCREEN_MINIMUM_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const publish = useCallback((state: FredRunState) => {
     setSnapshot((current) => {
@@ -1845,7 +1852,14 @@ export default function FredRunView({
 
   const isPaused = snapshot.phase === "paused";
   const showPauseButton = snapshot.phase === "running" || isPaused;
-  const showMenu = assetState !== "error" && snapshot.phase === "ready";
+  const isReadyPhase = snapshot.phase === "ready";
+  const showLoading = isReadyPhase
+    && assetState !== "error"
+    && (assetState !== "ready" || !profileReady || !minimumLoadingComplete);
+  const showMenu = isReadyPhase
+    && assetState === "ready"
+    && profileReady
+    && minimumLoadingComplete;
   const normalizedPlayerName = normalizeFredRunPlayerName(playerName);
   const scoreWasSubmitted = Boolean(currentRunId && submittedRunId === currentRunId);
 
@@ -1868,9 +1882,9 @@ export default function FredRunView({
 
         <div
           ref={gameShellRef}
-          className={`fredrun-game-shell${showMenu ? " fredrun-game-shell--menu" : ""}`}
+          className={`fredrun-game-shell${isReadyPhase ? " fredrun-game-shell--menu" : ""}`}
         >
-          {!showMenu ? (
+          {!isReadyPhase ? (
             <div
               className="fredrun-hud"
               aria-label="Spielstand"
@@ -1914,7 +1928,7 @@ export default function FredRunView({
             </div>
           ) : null}
 
-          <div className={`fredrun-stage${showMenu ? " fredrun-stage--menu" : ""}${snapshot.phase === "game-over" ? " fredrun-stage--game-over fredrun-stage--hit" : snapshot.shieldImpact ? " fredrun-stage--hit fredrun-stage--shield-hit" : ""}`}>
+          <div className={`fredrun-stage${isReadyPhase ? " fredrun-stage--menu" : ""}${snapshot.phase === "game-over" ? " fredrun-stage--game-over fredrun-stage--hit" : snapshot.shieldImpact ? " fredrun-stage--hit fredrun-stage--shield-hit" : ""}`}>
             <canvas
               ref={canvasRef}
               className="fredrun-canvas"
@@ -1923,11 +1937,11 @@ export default function FredRunView({
                 startOrJump();
               }}
               aria-label="Fredrun-Spielfeld. Leertaste, Pfeil nach oben oder Antippen zum Springen."
-              aria-hidden={showMenu || undefined}
-              tabIndex={showMenu ? -1 : 0}
+              aria-hidden={isReadyPhase || undefined}
+              tabIndex={isReadyPhase ? -1 : 0}
             />
 
-            {!showMenu && snapshot.phase !== "game-over" ? (
+            {!isReadyPhase && snapshot.phase !== "game-over" ? (
               <div className="fredrun-effect-strip" aria-label="Aktive Effekte">
                 {snapshot.comboMultiplier > 1 ? (
                   <span className="fredrun-effect-chip fredrun-effect-chip--combo">
@@ -1946,7 +1960,7 @@ export default function FredRunView({
               </div>
             ) : null}
 
-            {!showMenu && snapshot.phase === "running" ? (
+            {!isReadyPhase && snapshot.phase === "running" ? (
               <div className="fredrun-gameplay-feedback" aria-live="polite">
                 {snapshot.nearMissFeedback ? (
                   <span
@@ -1983,11 +1997,37 @@ export default function FredRunView({
                 </button>
               </div>
             ) : null}
+            {showLoading ? (
+              <div
+                className="fredrun-loading-screen"
+                role="status"
+                aria-live="polite"
+                aria-label="Fredrun wird geladen"
+                aria-busy="true"
+              >
+                <NextImage
+                  className="fredrun-loading-background"
+                  src={INTRO_SOURCE}
+                  alt=""
+                  fill
+                  loading="eager"
+                  sizes="(max-width: 760px) 100vw, 1040px"
+                  aria-hidden="true"
+                  unoptimized
+                />
+                <div className="fredrun-loading-card">
+                  <FredRunCoinIcon className="fredrun-loading-coin" />
+                  <p className="fredrun-menu-kicker">Wien wird vorbereitet</p>
+                  <h2>Fredrun lädt</h2>
+                  <div className="fredrun-loading-track" aria-hidden="true"><span /></div>
+                  <small>Charaktere und Spielwelt werden geladen …</small>
+                </div>
+              </div>
+            ) : null}
             {showMenu ? (
               <div
                 className="fredrun-menu-scene"
                 aria-label="Fredrun-Hauptmenü"
-                aria-busy={assetState === "loading" || !profileReady}
               >
                 <NextImage
                   className="fredrun-menu-background"
@@ -2163,7 +2203,7 @@ export default function FredRunView({
             ) : null}
           </div>
 
-          {!showMenu ? (
+          {!isReadyPhase ? (
             <>
               {snapshot.phase === "running" ? (
                 <div className="fredrun-mobile-action">

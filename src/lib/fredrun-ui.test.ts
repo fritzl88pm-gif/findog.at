@@ -566,10 +566,23 @@ describe("Fredrun UI surface", () => {
     expect(introManifest.output.bytes).toBeLessThanOrEqual(400 * 1024);
     expect(viewSource).toContain('const INTRO_SOURCE = "/fredrun/intro.webp"');
     expect(viewSource).toContain('className="fredrun-menu-background"');
-    expect(viewSource).toContain('const showMenu = assetState !== "error" && snapshot.phase === "ready"');
+    expect(viewSource).toContain('const showMenu = isReadyPhase');
+    expect(viewSource).toContain('&& assetState === "ready"');
     expect(viewSource).toContain('aria-label="Fredrun-Hauptmenü"');
-    expect(viewSource).toContain('aria-busy={assetState === "loading" || !profileReady}');
     expect(stylesSource).toContain(".fredrun-stage--menu");
+  });
+
+  it("shows a dedicated loading screen until assets and the local profile are ready", () => {
+    expect(viewSource).toContain("const LOADING_SCREEN_MINIMUM_MS = 850");
+    expect(viewSource).toContain("const showLoading = isReadyPhase");
+    expect(viewSource).toContain('assetState !== "ready" || !profileReady || !minimumLoadingComplete');
+    expect(viewSource).toContain('className="fredrun-loading-screen"');
+    expect(viewSource).toContain('aria-label="Fredrun wird geladen"');
+    expect(viewSource).toContain('aria-busy="true"');
+    expect(viewSource).toContain('className="fredrun-loading-background"');
+    expect(viewSource).toContain('className="fredrun-loading-card"');
+    expect(stylesSource).toContain(".fredrun-loading-track");
+    expect(stylesSource).toContain("@keyframes fredrun-loading-progress");
   });
 
   it("renders the local wallet, character shop, information screen, and safe abort flow", () => {
