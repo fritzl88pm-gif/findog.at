@@ -6,6 +6,10 @@ import { describe, expect, it } from "vitest";
 import { fredRunEnvironmentForDistance } from "./fredrun";
 
 const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.meta.url)), "utf8");
+const standalonePageSource = readFileSync(
+  fileURLToPath(new URL("../app/fredrun/page.tsx", import.meta.url)),
+  "utf8",
+);
 const viewSource = readFileSync(fileURLToPath(new URL("../components/fredrun-view.tsx", import.meta.url)), "utf8");
 const stylesSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 const manifest = JSON.parse(readFileSync(fileURLToPath(new URL("../../public/fredrun/manifest.json", import.meta.url)), "utf8")) as {
@@ -242,6 +246,12 @@ function executableBackgroundLoader(
 }
 
 describe("Fredrun UI surface", () => {
+  it("exposes the standalone game route in production", () => {
+    expect(standalonePageSource).toContain("<FredRunView accessToken=\"\" standalone />");
+    expect(standalonePageSource).not.toContain("process.env.NODE_ENV");
+    expect(standalonePageSource).not.toContain("notFound()");
+  });
+
   it("registers Fredrun in both navigation modes and the app view", () => {
     expect(pageSource).toContain('"fredrun"');
     expect(pageSource).toContain('onClick={openFredRunView}');
