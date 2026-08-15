@@ -1,0 +1,67 @@
+{
+  "source": {
+    "referenceFile": "Superfred.png",
+    "referenceSha256": "5638F87F96ADFC18040BDE92EDD297894B217A8D6772890B7728EE35F11318A6",
+    "autospriteCharacterId": "cmsu4m95j00057i6op1njwhmy",
+    "generation": {
+      "videoTier": "pro",
+      "durationSeconds": 4,
+      "sourceFrameSize": 512,
+      "sourceFrameCount": 64,
+      "firstFrameQuality": "pro",
+      "backgroundRemoval": "ultra",
+      "sound": false,
+      "creditsUsed": 78,
+      "shippedCreditsUsed": 39,
+      "discardedDraftCredits": 39
+    }
+  },
+  "atlas": {
+    "cellSize": 192,
+    "columns": 8,
+    "rows": 8,
+    "frameCount": 64,
+    "anchor": "bottom-center",
+    "animations": {
+      "walk": {
+        "sourceFile": "run-raw.png",
+        "sourceSha256": "E70B80199C34C58A7769DFACA72B5BB89C47F2050A3347AFA1C5FF4FCD99BEE6",
+        "spritesheetId": "cmsu4q2l300abg90c76i2k987",
+        "sourceVideoId": "cmsu4mm9b000e7i6o53e2ofzo",
+        "columns": 8,
+        "rows": 8,
+        "frameCount": 64,
+        "sharedScale": 0.459948,
+        "outputFile": "walk.webp",
+        "outputSha256": "A9126B4F0298458D0B7855297E616D727E10E2A68F991678D0B81EB4CA2AA8C5",
+        "bytes": 778956
+      },
+      "jump": {
+        "sourceFile": "jump-raw.png",
+        "sourceSha256": "C9E99396BD735E4E48E1C5D18C97D71011FBB7DF178000D8D747BB3639BD2DA0",
+        "spritesheetId": "cmsu4q17y00a7g90czpzdj86q",
+        "sourceVideoId": "cmsu4mmb3000g7i6ovsgkub4g",
+        "columns": 8,
+        "rows": 8,
+        "frameCount": 64,
+        "sharedScale": 0.39821,
+        "outputFile": "jump.webp",
+        "outputSha256": "18DE5050A820EE5814230F57B9DA2F1ED404B7D184035D38EE2D1E729A0413DF",
+        "bytes": 637390
+      },
+      "victory": {
+        "sourceFile": "victory-raw.png",
+        "sourceSha256": "6F85436011086A0FB8AC700AF71D3F8C07DDA10D052FA697CC685A140047403A",
+        "spritesheetId": "cmsu4q87100akg90c3tx2be7w",
+        "sourceVideoId": "cmsu4mmdx000o7i6o81tcvoz5",
+        "columns": 8,
+        "rows": 8,
+        "frameCount": 64,
+        "sharedScale": 0.382796,
+        "outputFile": "victory.webp",
+        "outputSha256": "942C2952CEBD800BD433FE67C8722E44A1B1114A38CBB3B181ECDAD911D46C4E",
+        "bytes": 697664
+      }
+    }
+  }
+}

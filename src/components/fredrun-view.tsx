@@ -76,7 +76,7 @@ function unlockMobileFullscreenOrientation() {
 }
 
 type SpriteKey = "walk" | "jump" | "victory";
-type FredRunCharacterId = "fred" | "frida";
+type FredRunCharacterId = "fred" | "frida" | "superfred";
 type CharacterSpriteLayout = {
   source: string;
   columns: number;
@@ -95,11 +95,17 @@ const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, Chara
     jump: { source: "/fredrun/frida/jump.webp", columns: 8, frameCount: 64, fps: 16 },
     victory: { source: "/fredrun/frida/victory.webp", columns: 8, frameCount: 32, fps: 16 },
   },
+  superfred: {
+    walk: { source: "/fredrun/superfred/walk.webp", columns: 8, frameCount: 64, fps: 16 },
+    jump: { source: "/fredrun/superfred/jump.webp?v=original-restored-1", columns: 8, frameCount: 64, fps: 16 },
+    victory: { source: "/fredrun/superfred/victory.webp", columns: 8, frameCount: 64, fps: 16 },
+  },
 };
 
 const fredRunCharacters: Record<FredRunCharacterId, { name: string; description: string }> = {
   fred: { name: "Fred", description: "Der blaue Findog-Klassiker" },
   frida: { name: "Frida", description: "Pink, klug und voller Energie" },
+  superfred: { name: "Superfred", description: "Mit Cape und Extrapower" },
 };
 
 const obstacleLayouts: Record<
@@ -1584,7 +1590,7 @@ export default function FredRunView({
               </div>
             ) : null}
             {snapshot.phase === "paused" ? (
-              <div className="fredrun-overlay">
+              <div className="fredrun-overlay fredrun-pause-overlay">
                 <p className="fredrun-overlay-kicker">Kurze Pause</p>
                 <h2>{fredRunCharacters[selectedCharacter].name} wartet auf dich</h2>
                 <button className="primary-button" type="button" onClick={togglePause}>Weiterspielen</button>

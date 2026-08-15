@@ -2812,7 +2812,7 @@ textarea:focus {
 
 .fredrun-character-options {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
 }
 
@@ -3066,6 +3066,13 @@ textarea:focus {
   min-height: 38px;
   margin-top: 4px;
   padding: 0 18px;
+}
+
+.fredrun-pause-overlay h2 {
+  max-width: min(300px, 78vw);
+  font-size: clamp(1.1rem, 3.4vw, 1.75rem);
+  line-height: 1.08;
+  text-wrap: balance;
 }
 
 .fredrun-countdown-overlay {
@@ -7064,6 +7071,33 @@ textarea:focus {
 
   .fredrun-overlay .primary-button {
     min-height: 32px;
+  }
+
+  .fredrun-pause-overlay {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    column-gap: 12px;
+    padding-inline: max(18px, 7vw);
+  }
+
+  .fredrun-pause-overlay .fredrun-overlay-kicker {
+    grid-column: 1;
+    justify-self: start;
+  }
+
+  .fredrun-pause-overlay h2 {
+    grid-column: 1;
+    max-width: none;
+    font-size: clamp(0.95rem, 3.2vw, 1.3rem);
+    text-align: left;
+  }
+
+  .fredrun-pause-overlay .primary-button {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    align-self: center;
+    margin-top: 0;
+    white-space: nowrap;
   }
 
   .fredrun-stage--game-over {

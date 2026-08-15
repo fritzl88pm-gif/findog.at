@@ -138,6 +138,43 @@ const fridaManifest = JSON.parse(readFileSync(
     }>;
   };
 };
+const superfredManifest = JSON.parse(readFileSync(
+  fileURLToPath(new URL("../../public/fredrun/superfred/manifest.json", import.meta.url)),
+  "utf8",
+)) as {
+  source: {
+    referenceFile: string;
+    referenceSha256: string;
+    autospriteCharacterId: string;
+    generation: {
+      videoTier: string;
+      durationSeconds: number;
+      sourceFrameSize: number;
+      sourceFrameCount: number;
+      firstFrameQuality: string;
+      creditsUsed: number;
+      shippedCreditsUsed: number;
+      discardedDraftCredits: number;
+      sound: boolean;
+    };
+  };
+  atlas: {
+    cellSize: number;
+    columns: number;
+    rows: number;
+    frameCount: number;
+    anchor: string;
+    animations: Record<"walk" | "jump" | "victory", {
+      spritesheetId: string;
+      columns: number;
+      rows: number;
+      frameCount: number;
+      outputFile: string;
+      outputSha256: string;
+      bytes: number;
+    }>;
+  };
+};
 const lukiManifest = JSON.parse(readFileSync(
   fileURLToPath(new URL("../../public/fredrun/luki-manifest.json", import.meta.url)),
   "utf8",
@@ -405,6 +442,54 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain("selectCharacter(characterId)");
     expect(stylesSource).toContain(".fredrun-character-options");
     expect(stylesSource).toContain(".fredrun-character-option.is-selected");
+  });
+
+  it("ships Superfred with selectable run, jump, and victory animations", () => {
+    expect(superfredManifest.source).toMatchObject({
+      referenceFile: "Superfred.png",
+      referenceSha256: "5638F87F96ADFC18040BDE92EDD297894B217A8D6772890B7728EE35F11318A6",
+      autospriteCharacterId: "cmsu4m95j00057i6op1njwhmy",
+      generation: {
+        videoTier: "pro",
+        durationSeconds: 4,
+        sourceFrameSize: 512,
+        sourceFrameCount: 64,
+        firstFrameQuality: "pro",
+        creditsUsed: 78,
+        shippedCreditsUsed: 39,
+        discardedDraftCredits: 39,
+        sound: false,
+      },
+    });
+    expect(superfredManifest.atlas).toMatchObject({
+      cellSize: 192,
+      columns: 8,
+      rows: 8,
+      frameCount: 64,
+      anchor: "bottom-center",
+    });
+    expect(Object.keys(superfredManifest.atlas.animations)).toEqual(["walk", "jump", "victory"]);
+    for (const animation of Object.values(superfredManifest.atlas.animations)) {
+      expect(animation).toMatchObject({ columns: 8, rows: 8, frameCount: 64 });
+      expect(animation.spritesheetId).toMatch(/^cms/);
+      expect(animation.outputSha256).toMatch(/^[A-F0-9]{64}$/);
+      expect(statSync(fileURLToPath(new URL(
+        `../../public/fredrun/superfred/${animation.outputFile}`,
+        import.meta.url,
+      ))).size).toBe(animation.bytes);
+    }
+    const totalBytes = Object.values(superfredManifest.atlas.animations).reduce((total, animation) => (
+      total + animation.bytes
+    ), 0);
+    expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
+    expect(viewSource).toContain('type FredRunCharacterId = "fred" | "frida" | "superfred"');
+    expect(viewSource).toContain('walk: { source: "/fredrun/superfred/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('jump: { source: "/fredrun/superfred/jump.webp?v=original-restored-1", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('victory: { source: "/fredrun/superfred/victory.webp", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('superfred: { name: "Superfred", description: "Mit Cape und Extrapower" }');
+    expect(stylesSource).toContain("grid-template-columns: repeat(3, minmax(0, 1fr));");
+    expect(viewSource).toContain('className="fredrun-overlay fredrun-pause-overlay"');
+    expect(stylesSource).toContain(".fredrun-pause-overlay h2");
   });
 
   it("lays out the game-over score on the left and the selected dancer on the right", () => {
