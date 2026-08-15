@@ -11,9 +11,9 @@
       "firstFrameQuality": "pro",
       "backgroundRemoval": "ultra",
       "sound": false,
-      "creditsUsed": 39,
-      "shippedCreditsUsed": 26,
-      "discardedDraftCredits": 13
+      "creditsUsed": 65,
+      "shippedCreditsUsed": 39,
+      "discardedDraftCredits": 26
     }
   },
   "atlas": {
@@ -48,6 +48,19 @@
         "outputFile": "jump.webp",
         "outputSha256": "14840679709F17D29590634DE20846192B05BB3F17F35EBD552128B10509E129",
         "bytes": 625052
+      },
+      "jumpAlt": {
+        "sourceFile": "jump-alt-raw.png",
+        "sourceSha256": "4E665CA57973EED71305712ABF42B65EF4FFB25D08556049AC27F81934C03AEB",
+        "spritesheetId": "cmstybteb00je10fzvlivl9d0",
+        "sourceVideoId": "cmsty8ydn00atxa6gyakgu8y7",
+        "columns": 8,
+        "rows": 8,
+        "frameCount": 64,
+        "sharedScale": 0.405467,
+        "outputFile": "jump-alt.webp",
+        "outputSha256": "A0DD42BC8276C990EFDFFDF8254E1298D2DE779B4E66AFE609588F09C32F20EA",
+        "bytes": 601864
       },
       "victory": {
         "sourceFile": "victory-raw.png",

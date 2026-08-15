@@ -127,7 +127,7 @@ const fridaManifest = JSON.parse(readFileSync(
     rows: number;
     frameCount: number;
     anchor: string;
-    animations: Record<"walk" | "jump" | "victory", {
+    animations: Record<"walk" | "jump" | "jumpAlt" | "victory", {
       spritesheetId: string;
       columns: number;
       rows: number;
@@ -362,7 +362,7 @@ describe("Fredrun UI surface", () => {
     expect(totalBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
   });
 
-  it("ships Frida with selectable run, jump, and victory animations", () => {
+  it("ships Frida with selectable run, two jump variants, and a victory animation", () => {
     expect(fridaManifest.source).toMatchObject({
       referenceSha256: "4C51E0D746845DFD56EA001E49C9EA45393D5996E07821733D07461A7E5C3587",
       autospriteCharacterId: "cmstdc8v0007bu6l4ok6pknjd",
@@ -372,9 +372,9 @@ describe("Fredrun UI surface", () => {
         sourceFrameSize: 512,
         sourceFrameCount: 64,
         firstFrameQuality: "pro",
-        creditsUsed: 39,
-        shippedCreditsUsed: 26,
-        discardedDraftCredits: 13,
+        creditsUsed: 65,
+        shippedCreditsUsed: 39,
+        discardedDraftCredits: 26,
         sound: false,
       },
     });
@@ -387,8 +387,9 @@ describe("Fredrun UI surface", () => {
     });
     expect(fridaManifest.atlas.animations.walk).toMatchObject({ columns: 8, rows: 8, frameCount: 64 });
     expect(fridaManifest.atlas.animations.jump).toMatchObject({ columns: 8, rows: 8, frameCount: 64 });
+    expect(fridaManifest.atlas.animations.jumpAlt).toMatchObject({ columns: 8, rows: 8, frameCount: 64 });
     expect(fridaManifest.atlas.animations.victory).toMatchObject({ columns: 8, rows: 4, frameCount: 32 });
-    expect(Object.keys(fridaManifest.atlas.animations)).toEqual(["walk", "jump", "victory"]);
+    expect(Object.keys(fridaManifest.atlas.animations)).toEqual(["walk", "jump", "jumpAlt", "victory"]);
     for (const animation of Object.values(fridaManifest.atlas.animations)) {
       expect(animation.spritesheetId).toMatch(/^cm/);
       expect(animation.outputSha256).toMatch(/^[A-F0-9]{64}$/);
@@ -399,7 +400,12 @@ describe("Fredrun UI surface", () => {
     }
     expect(viewSource).toContain('walk: { source: "/fredrun/frida/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
     expect(viewSource).toContain('jump: { source: "/fredrun/frida/jump.webp", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('source: "/fredrun/frida/jump-alt.webp"');
     expect(viewSource).toContain('victory: { source: "/fredrun/frida/victory.webp", columns: 8, frameCount: 32, fps: 16 }');
+    expect(viewSource).toContain("fridaJumpVariantRef.current = randomFridaJumpVariant()");
+    expect(viewSource).toContain("next.jumpElapsed < previous.jumpElapsed");
+    expect(viewSource).toContain('characterId === "frida"');
+    expect(viewSource).toContain('sprite.key === "jump"');
     expect(viewSource).toContain('aria-label="Charakter auswählen"');
     expect(viewSource).toContain("<FredRunCharacterPreview characterId={characterId} />");
     expect(viewSource).toContain("selectCharacter(characterId)");

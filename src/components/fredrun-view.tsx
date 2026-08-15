@@ -84,6 +84,8 @@ type CharacterSpriteLayout = {
   fps: number;
 };
 
+type FridaJumpVariant = 0 | 1;
+
 const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, CharacterSpriteLayout>> = {
   fred: {
     walk: { source: "/fredrun/walk.png", columns: 8, frameCount: 64, fps: 18 },
@@ -96,6 +98,24 @@ const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, Chara
     victory: { source: "/fredrun/frida/victory.webp", columns: 8, frameCount: 32, fps: 16 },
   },
 };
+
+const fridaAlternateJumpLayout: CharacterSpriteLayout = {
+  source: "/fredrun/frida/jump-alt.webp",
+  columns: 8,
+  frameCount: 64,
+  fps: 16,
+};
+
+function randomFridaJumpVariant(randomValue = Math.random()): FridaJumpVariant {
+  return randomValue < 0.5 ? 0 : 1;
+}
+
+function beginsJump(previous: FredRunState, next: FredRunState): boolean {
+  return !next.grounded && (
+    previous.grounded
+    || next.jumpElapsed < previous.jumpElapsed
+  );
+}
 
 const fredRunCharacters: Record<FredRunCharacterId, { name: string; description: string }> = {
   fred: { name: "Fred", description: "Der blaue Findog-Klassiker" },
@@ -165,6 +185,7 @@ type CharacterSpriteImages = Record<FredRunCharacterId, SpriteImages>;
 type ObstacleImages = Record<FredRunObstacleKind, HTMLImageElement>;
 type FredRunImages = {
   characters: CharacterSpriteImages;
+  fridaAlternateJump: HTMLImageElement;
   obstacles: ObstacleImages;
   coin: HTMLImageElement;
   magnet: HTMLImageElement;
@@ -834,6 +855,7 @@ function renderFredRun(
   images: FredRunImages | null,
   reducedMotion: boolean,
   characterId: FredRunCharacterId,
+  fridaJumpVariant: FridaJumpVariant,
 ) {
   const context = canvas.getContext("2d");
   if (!context || canvas.width === 0 || canvas.height === 0) {
@@ -865,12 +887,17 @@ function renderFredRun(
     drawPlayerPowerEffects(context, state, reducedMotion);
     const layouts = characterSpriteLayouts[characterId];
     const sprite = activeSprite(state, layouts);
-    const layout = layouts[sprite.key];
+    const useAlternateFridaJump = characterId === "frida"
+      && sprite.key === "jump"
+      && fridaJumpVariant === 1;
+    const layout = useAlternateFridaJump ? fridaAlternateJumpLayout : layouts[sprite.key];
     const sourceX = (sprite.frame % layout.columns) * SPRITE_CELL_SIZE;
     const sourceY = Math.floor(sprite.frame / layout.columns) * SPRITE_CELL_SIZE;
     const footY = FREDRUN_GROUND_Y - state.playerHeight + 4;
     context.drawImage(
-      images.characters[characterId][sprite.key],
+      useAlternateFridaJump
+        ? images.fridaAlternateJump
+        : images.characters[characterId][sprite.key],
       sourceX,
       sourceY,
       SPRITE_CELL_SIZE,
@@ -996,6 +1023,7 @@ export default function FredRunView({
   const gameRef = useRef<FredRunState>(createFredRunState());
   const imagesRef = useRef<FredRunImages | null>(null);
   const selectedCharacterRef = useRef<FredRunCharacterId>("fred");
+  const fridaJumpVariantRef = useRef<FridaJumpVariant>(0);
   const bestScoreRef = useRef(0);
   const reducedMotionRef = useRef(false);
   const scoreSubmissionAbortRef = useRef<AbortController | null>(null);
@@ -1051,6 +1079,9 @@ export default function FredRunView({
   }, []);
 
   const replaceGame = useCallback((state: FredRunState) => {
+    if (beginsJump(gameRef.current, state)) {
+      fridaJumpVariantRef.current = randomFridaJumpVariant();
+    }
     gameRef.current = state;
     publish(state);
     if (canvasRef.current) {
@@ -1060,6 +1091,7 @@ export default function FredRunView({
         imagesRef.current,
         reducedMotionRef.current,
         selectedCharacterRef.current,
+        fridaJumpVariantRef.current,
       );
     }
   }, [publish]);
@@ -1075,6 +1107,7 @@ export default function FredRunView({
         imagesRef.current,
         reducedMotionRef.current,
         characterId,
+        fridaJumpVariantRef.current,
       );
     }
   }, []);
@@ -1205,15 +1238,17 @@ export default function FredRunView({
       Promise.all((Object.keys(obstacleLayouts) as FredRunObstacleKind[]).map(async (key) => (
         [key, await loadImage(obstacleLayouts[key].source)] as const
       ))),
+      loadImage(fridaAlternateJumpLayout.source),
       loadImage(COIN_SOURCE),
       loadImage(MAGNET_SOURCE),
       loadImage(INTRO_SOURCE),
       loadBackgrounds(),
     ])
-      .then(([characterEntries, obstacleEntries, coin, magnet, , backgrounds]) => {
+      .then(([characterEntries, obstacleEntries, fridaAlternateJump, coin, magnet, , backgrounds]) => {
         if (cancelled) return;
         imagesRef.current = {
           characters: Object.fromEntries(characterEntries) as CharacterSpriteImages,
+          fridaAlternateJump,
           obstacles: Object.fromEntries(obstacleEntries) as ObstacleImages,
           coin,
           magnet,
@@ -1255,6 +1290,7 @@ export default function FredRunView({
         imagesRef.current,
         reducedMotionRef.current,
         selectedCharacterRef.current,
+        fridaJumpVariantRef.current,
       );
     };
     const observer = new ResizeObserver(resize);
@@ -1286,6 +1322,9 @@ export default function FredRunView({
         if (state.coinsCollected > previousState.coinsCollected) {
           setCoinPulseToken(state.coinsCollected);
         }
+        if (beginsJump(previousState, state)) {
+          fridaJumpVariantRef.current = randomFridaJumpVariant();
+        }
         gameRef.current = state;
         publish(state);
         if (state.phase === "game-over" && previousPhase !== "game-over") {
@@ -1303,6 +1342,7 @@ export default function FredRunView({
           imagesRef.current,
           reducedMotionRef.current,
           selectedCharacterRef.current,
+          fridaJumpVariantRef.current,
         );
       }
       frameRef.current = requestAnimationFrame(tick);
