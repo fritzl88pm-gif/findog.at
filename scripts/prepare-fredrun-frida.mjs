@@ -33,16 +33,6 @@ const animations = [
     sourceColumns: 8,
     frameCount: 64,
   },
-  {
-    key: "jumpAlt",
-    sourceFile: "jump-alt-raw.png",
-    outputFile: "jump-alt.webp",
-    spritesheetId: "cmstybteb00je10fzvlivl9d0",
-    sourceVideoId: "cmsty8ydn00atxa6gyakgu8y7",
-    sourceCellSize: 512,
-    sourceColumns: 8,
-    frameCount: 64,
-  },
 ];
 
 function sha256(buffer) {
@@ -125,7 +115,7 @@ async function normalizeAnimation(animation) {
     });
   }
 
-  const outputPath = path.join(OUTPUT_DIRECTORY, animation.outputFile ?? `${animation.key}.webp`);
+  const outputPath = path.join(OUTPUT_DIRECTORY, `${animation.key}.webp`);
   await sharp({
     create: {
       width: OUTPUT_COLUMNS * CELL_SIZE,
@@ -177,9 +167,9 @@ async function main() {
         firstFrameQuality: "pro",
         backgroundRemoval: "ultra",
         sound: false,
-        creditsUsed: 65,
-        shippedCreditsUsed: 39,
-        discardedDraftCredits: 26,
+        creditsUsed: 78,
+        shippedCreditsUsed: 26,
+        discardedDraftCredits: 52,
       },
     },
     atlas: {
