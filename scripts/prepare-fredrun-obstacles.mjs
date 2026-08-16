@@ -21,8 +21,8 @@ const sourceAssets = [
   },
   {
     key: "paragraph",
-    input: process.argv[4] ?? "C:/Users/conta/Downloads/t63Z-G-kR6wiyjHJAAKTa_EacK2To4.png",
-    sha256: "F5460B622F0D7FBF94232FFCCB4AEC6D281BFE0C31D2E48E5DD260BB378B3316",
+    input: process.argv[4] ?? "/opt/data/generated-images/images/2026/08/20260816-183655_fredrun-white-paragraph-obstacle-transparent-source_custom-alpha-restoration_python-pillow_27b339b0.png",
+    sha256: "27B339B0067235CAEB7E087BFCFD1E050568A675138E2ABF55126A81BA45A904",
   },
 ];
 

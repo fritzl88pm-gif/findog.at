@@ -44,24 +44,24 @@
       "outputBytes": 23292
     },
     "paragraph": {
-      "sourceFile": "t63Z-G-kR6wiyjHJAAKTa_EacK2To4.png",
-      "sha256": "F5460B622F0D7FBF94232FFCCB4AEC6D281BFE0C31D2E48E5DD260BB378B3316",
+      "sourceFile": "20260816-183655_fredrun-white-paragraph-obstacle-transparent-source_custom-alpha-restoration_python-pillow_27b339b0.png",
+      "sha256": "27B339B0067235CAEB7E087BFCFD1E050568A675138E2ABF55126A81BA45A904",
       "sourceSize": {
-        "width": 376,
-        "height": 376
+        "width": 1065,
+        "height": 1476
       },
       "sourceBounds": {
-        "left": 63,
-        "top": 9,
-        "width": 257,
-        "height": 357
+        "left": 0,
+        "top": 0,
+        "width": 1065,
+        "height": 1476
       },
       "outputFile": "paragraph.webp",
       "outputSize": {
-        "width": 138,
+        "width": 139,
         "height": 192
       },
-      "outputBytes": 19716
+      "outputBytes": 21244
     }
   }
 }
