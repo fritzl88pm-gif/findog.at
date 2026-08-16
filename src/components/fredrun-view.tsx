@@ -110,7 +110,7 @@ type CharacterSpriteLayout = {
 
 const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, CharacterSpriteLayout>> = {
   fred: {
-    walk: { source: "/fredrun/walk.png", columns: 8, frameCount: 64, fps: 18 },
+    walk: { source: "/fredrun/walk.png?v=smooth-walk-1", columns: 8, frameCount: 64, fps: 18 },
     jump: { source: "/fredrun/jump.png", columns: 6, frameCount: 24, fps: 18 },
     victory: { source: "/fredrun/victory.png", columns: 8, frameCount: 64, fps: 18 },
   },
@@ -120,8 +120,8 @@ const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, Chara
     victory: { source: "/fredrun/frida/victory.webp", columns: 8, frameCount: 32, fps: 16 },
   },
   superfred: {
-    walk: { source: "/fredrun/superfred/walk.webp", columns: 8, frameCount: 64, fps: 16 },
-    jump: { source: "/fredrun/superfred/jump.webp?v=superman-jump-1", columns: 8, frameCount: 64, fps: 16 },
+    walk: { source: "/fredrun/superfred/walk.webp?v=smooth-walk-1", columns: 8, frameCount: 64, fps: 16 },
+    jump: { source: "/fredrun/superfred/jump.webp?v=superman-jump-2", columns: 8, frameCount: 64, fps: 16 },
     victory: { source: "/fredrun/superfred/victory.webp", columns: 8, frameCount: 64, fps: 16 },
   },
 };
@@ -1607,9 +1607,17 @@ export default function FredRunView({
     bestScoreRef.current = readFredRunHighScore(storage);
     setBestScore(bestScoreRef.current);
     const storedProfile = readFredRunProfile(storage);
-    profileRef.current = storedProfile.profile;
-    selectedCharacterRef.current = storedProfile.profile.selectedCharacter;
-    setProfile(storedProfile.profile);
+    const initialProfile = process.env.NODE_ENV !== "production"
+      ? {
+          ...storedProfile.profile,
+          unlockedCharacters: storedProfile.profile.unlockedCharacters.includes("superfred")
+            ? storedProfile.profile.unlockedCharacters
+            : [...storedProfile.profile.unlockedCharacters, "superfred" as const],
+        }
+      : storedProfile.profile;
+    profileRef.current = initialProfile;
+    selectedCharacterRef.current = initialProfile.selectedCharacter;
+    setProfile(initialProfile);
     setStorageAvailable(storedProfile.storageAvailable);
     setProfileReady(true);
   }, []);

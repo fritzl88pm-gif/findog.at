@@ -31,6 +31,11 @@ const jumpFrameIndices = Array.from({ length: JUMP_OUTPUT_FRAME_COUNT }, (_, ind
   Math.round(index * (JUMP_SOURCE_FRAME_COUNT - 1) / (JUMP_OUTPUT_FRAME_COUNT - 1))
 ));
 
+const runFrameIndices = [
+  ...Array.from({ length: 32 }, (_, index) => index + 24),
+  ...Array.from({ length: 32 }, (_, index) => index + 24),
+];
+
 function sha256(buffer) {
   return createHash("sha256").update(buffer).digest("hex").toUpperCase();
 }
@@ -136,6 +141,7 @@ async function main() {
     sourceColumns: RUN_SOURCE_COLUMNS,
     sourceRows: RUN_SOURCE_COLUMNS,
     outputColumns: 8,
+    frameIndices: runFrameIndices,
   })];
   for (const animation of archiveAnimations) {
     const entryName = `${animation.sourceDirectory}/spritesheet.png`;
@@ -227,6 +233,7 @@ async function main() {
         sha256: EXPECTED_RUN_HASH,
         sourceGrid: `${RUN_SOURCE_COLUMNS}x${RUN_SOURCE_COLUMNS}`,
         sourceFrameCount: RUN_SOURCE_FRAME_COUNT,
+        selectedFrameIndices: runFrameIndices,
       },
     },
     atlas: {

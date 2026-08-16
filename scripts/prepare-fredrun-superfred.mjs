@@ -26,6 +26,13 @@ const animations = [
     sourceCellSize: 512,
     sourceColumns: 8,
     frameCount: 64,
+    sourceFrames: [
+      // 4 seamless, continuous 16-frame dual strides from cleanest cycle (frames 40..55)
+      40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55,
+      40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55,
+      40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55,
+      40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55,
+    ],
   },
   {
     key: "jump",
@@ -36,10 +43,22 @@ const animations = [
     sourceColumns: 8,
     sourceFrameCount: 64,
     frameCount: 64,
+    sourceFrames: [
+      // Phase 1: Clean, snappy takeoff into Superman flight (10 frames)
+      24, 24, 25, 25, 26, 26, 26, 27, 27, 27,
+      // Phase 2: Smooth Superman flight & undulating cape (38 frames)
+      28, 28, 29, 29, 30, 30, 31, 31, 32, 32,
+      33, 33, 34, 34, 35, 35, 36, 36, 37, 37,
+      38, 38, 37, 37, 36, 36, 35, 35, 34, 34,
+      33, 33, 32, 32, 31, 31, 30, 30,
+      // Phase 3: Descent, touchdown absorption & recovery (16 frames)
+      39, 39, 40, 40, 41, 41, 42, 42, 43, 43,
+      44, 44, 45, 45, 46, 46,
+    ],
     phaseFrames: {
-      takeoff: [0, 24],
-      superman: [25, 40],
-      landing: [41, 63],
+      takeoff: [24, 27],
+      superman: [28, 38],
+      landing: [39, 46],
     },
   },
   {
