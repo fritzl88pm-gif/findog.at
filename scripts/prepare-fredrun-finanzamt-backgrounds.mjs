@@ -1,203 +1,272 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import sharp from "sharp";
 
 const RAW_DIRECTORY = path.resolve(
-  process.argv[2] ?? "/opt/data/tmp/fredrun-finanzamt-generated",
+  process.argv[2] ?? "/opt/data/tmp/fredrun-finanzamt-close-office",
 );
 const OUTPUT_DIRECTORY = path.resolve(
   "public/fredrun/levels/finanzamt-night/backgrounds",
 );
-const CONTACT_SHEET_PATH = path.join(RAW_DIRECTORY, "contact-sheet.png");
+const PREVIEW_PATH = path.join(RAW_DIRECTORY, "close-office-three-tile-preview.png");
 const OUTPUT_WIDTH = 2172;
 const OUTPUT_HEIGHT = 665;
 const OUTPUT_QUALITY = 84;
 
-const sourceAssets = [
-  {
-    id: "records-corridor",
-    title: "Records corridor",
-    anchorScore: 0,
-    rawFile: "01-records-corridor-raw.png",
-    rawSha256: "96fff0d1df83bca896c491b83cb0d2943d60737918e77d77fe675ed73b4064b2",
-    metadataPath: "/opt/data/generated-images/metadata/2026/08/20260816-192556_fredrun-finanzamt-night-records-corridor_codex-built-in-image-gen-model-i_openai-codex_96fff0d1.json",
-    crop: { left: 0, top: 304, width: 1672, height: 512 },
-  },
-  {
-    id: "open-plan-office",
-    title: "Open-plan office",
-    anchorScore: 500,
-    rawFile: "02-open-plan-office-raw.png",
-    rawSha256: "8ed55cb687592d04caf35047e301f38ed077714ca6b6c5b5f16b2af8489d88a9",
-    metadataPath: "/opt/data/generated-images/metadata/2026/08/20260816-193006_fredrun-finanzamt-night-open-plan-office_codex-built-in-image-gen-model-i_openai-codex_8ed55cb6.json",
-    crop: { left: 0, top: 227, width: 1823, height: 558 },
-  },
-  {
-    id: "archive-basement",
-    title: "Archive basement",
-    anchorScore: 1000,
-    rawFile: "03-archive-basement-raw.png",
-    rawSha256: "5991896c5b1468fe29d2de9b2b09159310fe4c9444e3f1e3aaa0400d977d93b7",
-    metadataPath: "/opt/data/generated-images/metadata/2026/08/20260816-193519_fredrun-finanzamt-night-archive-basement_codex-built-in-image-gen-model-i_openai-codex_5991896c.json",
-    crop: { left: 0, top: 304, width: 1672, height: 512 },
-  },
-  {
-    id: "caseworker-corridor",
-    title: "Caseworker corridor",
-    anchorScore: 1500,
-    rawFile: "04-caseworker-corridor-raw.png",
-    rawSha256: "115d8fd6e2a2051113553118e5272e2fc1e4e439c151e5b7b3db2a3be64ff20c",
-    metadataPath: "/opt/data/generated-images/metadata/2026/08/20260816-194120_fredrun-finanzamt-night-caseworker-corridor_gpt-image-2_openai-codex_115d8fd6.json",
-    crop: { left: 0, top: 320, width: 1672, height: 512 },
-  },
+const sourceAsset = {
+  id: "close-office",
+  title: "Close office and records room",
+  anchorScore: 0,
+  rawFile: "close-office-raw.png",
+  rawSha256: "c0823fc34d9b90bf9cd4febbb0a6586e29605e038d89fbc28596579545952f9a",
+  metadataPath: "/opt/data/generated-images/metadata/2026/08/20260816-204046_fredrun-finanzamt-night-close-office_codex-built-in-image-gen-model-i_openai-codex_c0823fc3.json",
+};
+
+const legacyOutputFiles = [
+  "records-corridor.webp",
+  "open-plan-office.webp",
+  "archive-basement.webp",
+  "caseworker-corridor.webp",
+];
+
+const overlayDescriptions = [
+  'professional wall sign: exact text "Finanzamt Österreich"',
+  'binder spine: exact text "BAO"',
+  'calendar note: exact text "31.12."',
+  'coffee mug: exact mark "§"',
+  "small Fred-blue dog silhouette sticker",
+];
+
+const sourceWallSignBounds = { left: 34, top: 176, width: 120, height: 68 };
+const wallSignPatch = { id: "wall-sign", left: 300, top: 176, width: 120, height: 68 };
+const mirroredTextPatches = [
+  wallSignPatch,
+  { id: "calendar-note", left: 1160, top: 262, width: 53, height: 42 },
+  { id: "binder-spine", left: 1267, top: 326, width: 63, height: 18 },
+  { id: "coffee-mug", left: 612, top: 326, width: 36, height: 29 },
 ];
 
 function sha256(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
-function assertMetadata(asset, metadata, raw, rawMetadata) {
+function assertMetadata(metadata, raw, rawMetadata, archivedRaw, archivedPrompt) {
   const rawHash = sha256(raw);
-  if (rawHash !== asset.rawSha256 || metadata.sha256 !== asset.rawSha256) {
-    throw new Error(`Unexpected raw hash for ${asset.rawFile}`);
+  if (
+    rawHash !== sourceAsset.rawSha256
+    || metadata.sha256 !== sourceAsset.rawSha256
+    || sha256(archivedRaw) !== sourceAsset.rawSha256
+  ) {
+    throw new Error(`Unexpected source or archive hash for ${sourceAsset.rawFile}`);
   }
   if (
     metadata.width !== rawMetadata.width
     || metadata.height !== rawMetadata.height
     || metadata.bytes !== raw.length
+    || metadata.source_path !== path.join(RAW_DIRECTORY, sourceAsset.rawFile)
   ) {
-    throw new Error(`Archive metadata does not match ${asset.rawFile}`);
+    throw new Error(`Archive metadata does not match ${sourceAsset.rawFile}`);
   }
-  if (!Array.isArray(metadata.tags) || !["findog", "fredrun", "finanzamt-night"].every(
-    (tag) => metadata.tags.includes(tag),
-  )) {
-    throw new Error(`Archive metadata tags are incomplete for ${asset.rawFile}`);
+  if (archivedPrompt.trim() !== metadata.prompt.trim()) {
+    throw new Error(`Archived prompt differs for ${sourceAsset.rawFile}`);
   }
-  if (
-    asset.crop.left < 0
-    || asset.crop.top < 0
-    || asset.crop.left + asset.crop.width > rawMetadata.width
-    || asset.crop.top + asset.crop.height > rawMetadata.height
-  ) {
-    throw new Error(`Crop is outside the source bounds for ${asset.rawFile}`);
+  if (!Array.isArray(metadata.tags) || ![
+    "findog",
+    "fredrun",
+    "finanzamt-night",
+    "close-office",
+  ].every((tag) => metadata.tags.includes(tag))) {
+    throw new Error(`Archive metadata tags are incomplete for ${sourceAsset.rawFile}`);
   }
 }
 
-async function makeContactSheet(outputPaths) {
-  const padding = 16;
-  const gap = 16;
-  const labelHeight = 34;
-  const thumbnailWidth = 900;
-  const thumbnailHeight = Math.round(thumbnailWidth * OUTPUT_HEIGHT / OUTPUT_WIDTH);
-  const panelHeight = labelHeight + thumbnailHeight;
-  const sheetWidth = padding * 2 + thumbnailWidth * 2 + gap;
-  const sheetHeight = padding * 2 + panelHeight * 2 + gap;
-  const composites = [];
+function exactScenicOverlay() {
+  const signCenterX = wallSignPatch.left + wallSignPatch.width / 2;
+  return Buffer.from(`
+    <svg width="${OUTPUT_WIDTH}" height="${OUTPUT_HEIGHT}" viewBox="0 0 ${OUTPUT_WIDTH} ${OUTPUT_HEIGHT}" xmlns="http://www.w3.org/2000/svg">
+      <g font-family="DejaVu Sans, sans-serif">
+        <g aria-label="Finanzamt Österreich">
+          <rect x="${wallSignPatch.left}" y="${wallSignPatch.top}" width="${wallSignPatch.width}" height="${wallSignPatch.height}" rx="3" fill="#b6a37e" stroke="#342f29" stroke-width="3"/>
+          <rect x="${wallSignPatch.left + 5}" y="${wallSignPatch.top + 5}" width="${wallSignPatch.width - 10}" height="${wallSignPatch.height - 10}" rx="1" fill="#c8b994" stroke="#6e624d" stroke-width="1"/>
+          <circle cx="${wallSignPatch.left + 10}" cy="${wallSignPatch.top + 10}" r="2" fill="#453d31"/>
+          <circle cx="${wallSignPatch.left + wallSignPatch.width - 10}" cy="${wallSignPatch.top + 10}" r="2" fill="#453d31"/>
+          <circle cx="${wallSignPatch.left + 10}" cy="${wallSignPatch.top + wallSignPatch.height - 10}" r="2" fill="#453d31"/>
+          <circle cx="${wallSignPatch.left + wallSignPatch.width - 10}" cy="${wallSignPatch.top + wallSignPatch.height - 10}" r="2" fill="#453d31"/>
+          <text x="${signCenterX}" y="${wallSignPatch.top + 30}" text-anchor="middle" font-size="15" font-weight="700" fill="#18202a">Finanzamt</text>
+          <text x="${signCenterX}" y="${wallSignPatch.top + 50}" text-anchor="middle" font-size="15" font-weight="700" fill="#18202a">Österreich</text>
+        </g>
+        <g aria-label="31.12.">
+          <rect x="1160" y="267" width="53" height="37" rx="2" fill="#d5d0bc" stroke="#3b4148" stroke-width="2"/>
+          <rect x="1165" y="262" width="4" height="9" rx="2" fill="#59606a"/>
+          <rect x="1204" y="262" width="4" height="9" rx="2" fill="#59606a"/>
+          <text x="1186.5" y="291" text-anchor="middle" font-size="14" font-weight="700" fill="#27313a">31.12.</text>
+        </g>
+        <g aria-label="BAO">
+          <rect x="1267" y="326" width="63" height="18" rx="2" fill="#1c2631" stroke="#76808b" stroke-width="1"/>
+          <rect x="1281" y="328" width="35" height="14" rx="1" fill="#bbb49d"/>
+          <text x="1298.5" y="339" text-anchor="middle" font-size="11" font-weight="700" fill="#1c2631">BAO</text>
+        </g>
+        <g aria-label="§">
+          <rect x="614" y="326" width="23" height="27" rx="6" fill="#d8d5c9" stroke="#2b333b" stroke-width="2"/>
+          <path d="M637 333c9 0 9 13 0 13" fill="none" stroke="#d8d5c9" stroke-width="4"/>
+          <path d="M637 333c9 0 9 13 0 13" fill="none" stroke="#2b333b" stroke-width="1.5"/>
+          <text x="625.5" y="346" text-anchor="middle" font-size="16" font-weight="700" fill="#28313a">§</text>
+        </g>
+        <g aria-label="Fred blue dog sticker" transform="translate(526 237)">
+          <path d="M2 8 6 3l4 4 9-1 4 4-2 10h-4l-1-6H9l-1 6H4L3 12 0 11Z" fill="#3e83cb" stroke="#183d67" stroke-width="1" stroke-linejoin="round"/>
+          <circle cx="20" cy="9" r="1.2" fill="#d9edff"/>
+        </g>
+      </g>
+    </svg>
+  `);
+}
 
-  for (const [index, outputPath] of outputPaths.entries()) {
-    const column = index % 2;
-    const row = Math.floor(index / 2);
-    const left = padding + column * (thumbnailWidth + gap);
-    const top = padding + row * (panelHeight + gap);
-    const label = await sharp({
-      text: {
-        text: `<span foreground="#ffffff" weight="bold" size="24576">${index + 1}</span>`,
-        rgba: true,
-        width: thumbnailWidth,
-        height: labelHeight,
-        align: "left",
-      },
-    }).png().toBuffer();
-    const thumbnail = await sharp(outputPath)
-      .resize(thumbnailWidth, thumbnailHeight, { fit: "fill", kernel: sharp.kernel.lanczos3 })
-      .png()
-      .toBuffer();
-    composites.push({ input: label, left: left + 8, top });
-    composites.push({ input: thumbnail, left, top: top + labelHeight });
-  }
+async function makeThreeTilePreview(outputPath) {
+  const tileWidth = 724;
+  const tileHeight = Math.round(tileWidth * OUTPUT_HEIGHT / OUTPUT_WIDTH);
+  const tile = await sharp(outputPath)
+    .resize(tileWidth, tileHeight, { fit: "fill", kernel: sharp.kernel.lanczos3 })
+    .png()
+    .toBuffer();
+  const mirroredTile = await sharp(tile).flop().png().toBuffer();
+  const scaleX = tileWidth / OUTPUT_WIDTH;
+  const scaleY = tileHeight / OUTPUT_HEIGHT;
+  const textPatchComposites = await Promise.all(mirroredTextPatches.map(async (patch) => {
+    const left = Math.floor(patch.left * scaleX);
+    const top = Math.floor(patch.top * scaleY);
+    const right = Math.ceil((patch.left + patch.width) * scaleX);
+    const bottom = Math.ceil((patch.top + patch.height) * scaleY);
+    const width = right - left;
+    const height = bottom - top;
+    return {
+      input: await sharp(tile).extract({ left, top, width, height }).png().toBuffer(),
+      left: tileWidth - right,
+      top,
+    };
+  }));
+  const correctedMirroredTile = await sharp(mirroredTile)
+    .composite(textPatchComposites)
+    .png()
+    .toBuffer();
 
   await sharp({
     create: {
-      width: sheetWidth,
-      height: sheetHeight,
+      width: tileWidth * 3,
+      height: tileHeight,
       channels: 3,
       background: "#071723",
     },
-  }).composite(composites).png({ compressionLevel: 9 }).toFile(CONTACT_SHEET_PATH);
+  }).composite([
+    { input: tile, left: 0, top: 0 },
+    { input: correctedMirroredTile, left: tileWidth, top: 0 },
+    { input: tile, left: tileWidth * 2, top: 0 },
+  ]).png({ compressionLevel: 9 }).toFile(PREVIEW_PATH);
 }
 
 async function main() {
+  const rawPath = path.join(RAW_DIRECTORY, sourceAsset.rawFile);
+  const raw = await readFile(rawPath);
+  const rawMetadata = await sharp(raw).metadata();
+  const metadata = JSON.parse(await readFile(sourceAsset.metadataPath, "utf8"));
+  await Promise.all([
+    access(metadata.archive_path),
+    access(metadata.prompt_path),
+  ]);
+  const [archivedRaw, archivedPrompt] = await Promise.all([
+    readFile(metadata.archive_path),
+    readFile(metadata.prompt_path, "utf8"),
+  ]);
+  assertMetadata(metadata, raw, rawMetadata, archivedRaw, archivedPrompt);
+
   await mkdir(OUTPUT_DIRECTORY, { recursive: true });
-  const stages = [];
-  const outputPaths = [];
+  await Promise.all(legacyOutputFiles.map((file) => (
+    rm(path.join(OUTPUT_DIRECTORY, file), { force: true })
+  )));
 
-  for (const asset of sourceAssets) {
-    const rawPath = path.join(RAW_DIRECTORY, asset.rawFile);
-    const raw = await readFile(rawPath);
-    const rawMetadata = await sharp(raw).metadata();
-    const metadata = JSON.parse(await readFile(asset.metadataPath, "utf8"));
-    assertMetadata(asset, metadata, raw, rawMetadata);
+  const outputFile = "close-office.webp";
+  const outputPath = path.join(OUTPUT_DIRECTORY, outputFile);
+  const resizedRaw = await sharp(raw)
+    .resize(OUTPUT_WIDTH, OUTPUT_HEIGHT, { fit: "fill", kernel: sharp.kernel.lanczos3 })
+    .png()
+    .toBuffer();
+  const cleanWallStrip = await sharp(resizedRaw)
+    .extract({
+      left: sourceWallSignBounds.left + sourceWallSignBounds.width + 5,
+      top: sourceWallSignBounds.top,
+      width: 32,
+      height: sourceWallSignBounds.height,
+    })
+    .resize(sourceWallSignBounds.width, sourceWallSignBounds.height, {
+      fit: "fill",
+      kernel: sharp.kernel.lanczos3,
+    })
+    .png()
+    .toBuffer();
+  await sharp(resizedRaw)
+    .composite([
+      {
+        input: cleanWallStrip,
+        left: sourceWallSignBounds.left,
+        top: sourceWallSignBounds.top,
+      },
+      { input: exactScenicOverlay(), left: 0, top: 0 },
+    ])
+    .webp({ quality: OUTPUT_QUALITY, effort: 6, smartSubsample: true })
+    .toFile(outputPath);
 
-    await Promise.all([
-      access(metadata.archive_path),
-      access(metadata.prompt_path),
-    ]);
-    const archivedRaw = await readFile(metadata.archive_path);
-    if (sha256(archivedRaw) !== asset.rawSha256) {
-      throw new Error(`Archived image differs from ${asset.rawFile}`);
-    }
-
-    const outputFile = `${asset.id}.webp`;
-    const outputPath = path.join(OUTPUT_DIRECTORY, outputFile);
-    await sharp(raw)
-      .extract(asset.crop)
-      .resize(OUTPUT_WIDTH, OUTPUT_HEIGHT, { fit: "fill", kernel: sharp.kernel.lanczos3 })
-      .webp({ quality: OUTPUT_QUALITY, effort: 6, smartSubsample: true })
-      .toFile(outputPath);
-
-    const output = await readFile(outputPath);
-    const outputMetadata = await sharp(output).metadata();
-    const outputStat = await stat(outputPath);
-    outputPaths.push(outputPath);
-    stages.push({
-      id: asset.id,
-      title: asset.title,
-      anchorScore: asset.anchorScore,
-      prompt: metadata.prompt,
-      provenance: {
-        provider: metadata.provider,
-        model: metadata.model,
-        createdAt: metadata.created_at,
-        rawPath,
-        archivePath: metadata.archive_path,
-        archiveMetadataPath: metadata.metadata_path,
-        archivePromptPath: metadata.prompt_path,
+  const output = await readFile(outputPath);
+  const outputMetadata = await sharp(output).metadata();
+  const outputStat = await stat(outputPath);
+  const stage = {
+    id: sourceAsset.id,
+    title: sourceAsset.title,
+    anchorScore: sourceAsset.anchorScore,
+    prompt: metadata.prompt,
+    provenance: {
+      provider: metadata.provider,
+      model: metadata.model,
+      createdAt: metadata.created_at,
+      rawPath,
+      archivePath: metadata.archive_path,
+      archiveSha256: sourceAsset.rawSha256,
+      archiveMetadataPath: metadata.metadata_path,
+      archivePromptPath: metadata.prompt_path,
+    },
+    raw: {
+      file: sourceAsset.rawFile,
+      format: rawMetadata.format,
+      width: rawMetadata.width,
+      height: rawMetadata.height,
+      bytes: raw.length,
+      sha256: sourceAsset.rawSha256,
+    },
+    processing: {
+      resize: {
+        width: OUTPUT_WIDTH,
+        height: OUTPUT_HEIGHT,
+        fit: "fill",
+        kernel: "lanczos3",
       },
-      raw: {
-        file: asset.rawFile,
-        format: rawMetadata.format,
-        width: rawMetadata.width,
-        height: rawMetadata.height,
-        bytes: raw.length,
-        sha256: asset.rawSha256,
+      overlays: overlayDescriptions,
+      overlayFormat: "deterministic SVG composited by Sharp before WebP encoding",
+      scenicSignRelocation: {
+        sourceBounds: sourceWallSignBounds,
+        outputBounds: wallSignPatch,
+        sourceTreatment: "replace source plaque with adjacent wall texture before adding exact sign",
       },
-      processing: {
-        crop: asset.crop,
-        resize: { width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT, kernel: "lanczos3" },
-      },
-      output: {
-        file: outputFile,
-        runtimePath: `/fredrun/levels/finanzamt-night/backgrounds/${outputFile}`,
-        format: outputMetadata.format,
-        width: outputMetadata.width,
-        height: outputMetadata.height,
-        bytes: outputStat.size,
-        sha256: sha256(output),
-      },
-    });
-  }
+    },
+    output: {
+      file: outputFile,
+      runtimePath: `/fredrun/levels/finanzamt-night/backgrounds/${outputFile}`,
+      format: outputMetadata.format,
+      width: outputMetadata.width,
+      height: outputMetadata.height,
+      bytes: outputStat.size,
+      sha256: sha256(output),
+    },
+  };
 
   const manifest = {
     schemaVersion: 1,
@@ -206,10 +275,10 @@ async function main() {
     generation: {
       route: "OpenAI Codex built-in image_gen",
       rawDirectory: RAW_DIRECTORY,
-      tags: ["findog", "fredrun", "finanzamt-night"],
+      tags: ["findog", "fredrun", "finanzamt-night", "close-office"],
       sound: {
         included: false,
-        decision: "No sound was generated or added; this world uses the existing Fredrun audio behavior.",
+        decision: "No sound was generated or added; existing Fredrun audio code and assets are unchanged.",
       },
     },
     runtime: {
@@ -217,19 +286,33 @@ async function main() {
       width: OUTPUT_WIDTH,
       height: OUTPUT_HEIGHT,
       quality: OUTPUT_QUALITY,
-      scoreAnchors: sourceAssets.map(({ anchorScore }) => anchorScore),
-      transition: "hard stage selection at each score anchor",
-      finalState: "hold caseworker-corridor from 1500 points onward",
-      loop: "alternating mirrored horizontal tiles",
+      scoreAnchors: [0],
+      transition: "none; one continuous stage from score 0 onward",
+      finalState: "hold close-office for the entire run",
+      loop: "alternating mirrored horizontal tiles with pixel-continuous joins",
+      mirroredTextTreatment: {
+        method: "redraw unmirrored source patches after each mirrored tile",
+        patches: mirroredTextPatches,
+      },
       fallbackSource: "/fredrun/vienna-panorama.webp",
+      composition: "close side-on office and records room with a clear lower running lane",
+      effects: {
+        fluorescentFlicker: {
+          renderer: "deterministic cool-light gradient localized above the running lane",
+          opacityRange: [0.008, 0.042],
+          reducedMotion: "disabled",
+          worldScope: "night-office only; Vienna receives zero overlay opacity",
+        },
+      },
       processing: {
         script: "scripts/prepare-fredrun-finanzamt-backgrounds.mjs",
-        method: "lane-aware integer crop, exact resize with Lanczos 3, then WebP encoding",
+        method: "deterministic full-frame exact resize with Lanczos 3, SVG scenic overlays, then WebP encoding",
+        overlays: overlayDescriptions,
         sharpVersion: sharp.versions.sharp,
         libvipsVersion: sharp.versions.vips,
       },
     },
-    stages,
+    stages: [stage],
   };
 
   await writeFile(
@@ -237,7 +320,7 @@ async function main() {
     `${JSON.stringify(manifest, null, 2)}\n`,
     "utf8",
   );
-  await makeContactSheet(outputPaths);
+  await makeThreeTilePreview(outputPath);
 }
 
 await main();

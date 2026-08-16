@@ -59,6 +59,7 @@ import {
 import {
   FREDRUN_WORLDS,
   FREDRUN_WORLD_IDS,
+  fredRunFluorescentFlicker,
   fredRunWorldBackgroundForScore,
   loadFredRunWorldBackgrounds,
   type FredRunWorldBackgrounds,
@@ -82,6 +83,12 @@ const MAGNET_SOURCE = "/fredrun/powerup-magnet.png";
 const BACKGROUND_DRAW_HEIGHT = 450;
 const BACKGROUND_SCROLL_FACTOR = 0.12;
 const MOBILE_FULLSCREEN_QUERY = "(max-width: 900px), (pointer: coarse)";
+const NIGHT_OFFICE_TEXT_PATCHES = [
+  { left: 300, top: 176, width: 120, height: 68 },
+  { left: 1160, top: 262, width: 53, height: 42 },
+  { left: 1267, top: 326, width: 63, height: 18 },
+  { left: 612, top: 326, width: 36, height: 29 },
+] as const;
 
 async function lockMobileFullscreenLandscape() {
   if (!window.matchMedia(MOBILE_FULLSCREEN_QUERY).matches) return;
@@ -304,6 +311,7 @@ function drawViennaBackground(
   image: HTMLImageElement,
   reducedMotion: boolean,
   opacity = 1,
+  preserveMirroredText = false,
 ) {
   const tileWidth = BACKGROUND_DRAW_HEIGHT * image.naturalWidth / image.naturalHeight;
   const period = tileWidth * 2;
@@ -323,6 +331,25 @@ function drawViennaBackground(
       context.translate(tileLeft + seamSafeWidth, 0);
       context.scale(-1, 1);
       context.drawImage(image, 0, drawY, seamSafeWidth, BACKGROUND_DRAW_HEIGHT);
+      if (preserveMirroredText) {
+        context.restore();
+        context.save();
+        const scaleX = seamSafeWidth / image.naturalWidth;
+        const scaleY = BACKGROUND_DRAW_HEIGHT / image.naturalHeight;
+        for (const patch of NIGHT_OFFICE_TEXT_PATCHES) {
+          context.drawImage(
+            image,
+            patch.left,
+            patch.top,
+            patch.width,
+            patch.height,
+            tileLeft + seamSafeWidth - (patch.left + patch.width) * scaleX,
+            drawY + patch.top * scaleY,
+            patch.width * scaleX,
+            patch.height * scaleY,
+          );
+        }
+      }
     } else {
       context.drawImage(image, tileLeft, drawY, seamSafeWidth, BACKGROUND_DRAW_HEIGHT);
     }
@@ -499,6 +526,19 @@ function drawAtmosphericParticles(
   }
 }
 
+function drawFluorescentFlicker(
+  context: CanvasRenderingContext2D,
+  opacity: number,
+) {
+  if (opacity <= 0) return;
+  const ceilingGlow = context.createLinearGradient(0, 0, 0, FREDRUN_GROUND_Y);
+  ceilingGlow.addColorStop(0, `rgba(214, 236, 247, ${opacity})`);
+  ceilingGlow.addColorStop(0.52, `rgba(205, 229, 242, ${opacity * 0.55})`);
+  ceilingGlow.addColorStop(1, "rgba(196, 222, 237, 0)");
+  context.fillStyle = ceilingGlow;
+  context.fillRect(0, 0, FREDRUN_WORLD_WIDTH, FREDRUN_GROUND_Y);
+}
+
 function drawBackground(
   context: CanvasRenderingContext2D,
   state: FredRunState,
@@ -515,17 +555,30 @@ function drawBackground(
   const worldBackgrounds = backgrounds?.[worldId] ?? [];
   const fromBackground = worldBackgrounds[selection.fromStage] ?? null;
   const toBackground = worldBackgrounds[selection.toStage] ?? null;
+  const preserveMirroredText = world.backgrounds.renderStyle === "night-office";
 
   if (fromBackground) {
-    drawViennaBackground(context, state, fromBackground, reducedMotion);
+    drawViennaBackground(context, state, fromBackground, reducedMotion, 1, preserveMirroredText);
     if (toBackground && selection.toStage !== selection.fromStage && selection.blend > 0) {
-      drawViennaBackground(context, state, toBackground, reducedMotion, selection.blend);
+      drawViennaBackground(
+        context,
+        state,
+        toBackground,
+        reducedMotion,
+        selection.blend,
+        preserveMirroredText,
+      );
     }
   } else if (toBackground) {
-    drawViennaBackground(context, state, toBackground, reducedMotion);
+    drawViennaBackground(context, state, toBackground, reducedMotion, 1, preserveMirroredText);
   } else {
     drawFallbackBackground(context, state, reducedMotion);
   }
+
+  drawFluorescentFlicker(
+    context,
+    fredRunFluorescentFlicker(worldId, state.elapsed, reducedMotion),
+  );
 
   if (world.backgrounds.renderStyle === "vienna-disaster") {
     drawStormAtmosphere(context, state, environment, reducedMotion);

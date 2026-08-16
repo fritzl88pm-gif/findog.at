@@ -4,15 +4,16 @@
   "displayName": "Finanzamt bei Nacht",
   "generation": {
     "route": "OpenAI Codex built-in image_gen",
-    "rawDirectory": "/opt/data/tmp/fredrun-finanzamt-generated",
+    "rawDirectory": "/opt/data/tmp/fredrun-finanzamt-close-office",
     "tags": [
       "findog",
       "fredrun",
-      "finanzamt-night"
+      "finanzamt-night",
+      "close-office"
     ],
     "sound": {
       "included": false,
-      "decision": "No sound was generated or added; this world uses the existing Fredrun audio behavior."
+      "decision": "No sound was generated or added; existing Fredrun audio code and assets are unchanged."
     }
   },
   "runtime": {
@@ -21,201 +22,135 @@
     "height": 665,
     "quality": 84,
     "scoreAnchors": [
-      0,
-      500,
-      1000,
-      1500
+      0
     ],
-    "transition": "hard stage selection at each score anchor",
-    "finalState": "hold caseworker-corridor from 1500 points onward",
-    "loop": "alternating mirrored horizontal tiles",
+    "transition": "none; one continuous stage from score 0 onward",
+    "finalState": "hold close-office for the entire run",
+    "loop": "alternating mirrored horizontal tiles with pixel-continuous joins",
+    "mirroredTextTreatment": {
+      "method": "redraw unmirrored source patches after each mirrored tile",
+      "patches": [
+        {
+          "id": "wall-sign",
+          "left": 300,
+          "top": 176,
+          "width": 120,
+          "height": 68
+        },
+        {
+          "id": "calendar-note",
+          "left": 1160,
+          "top": 262,
+          "width": 53,
+          "height": 42
+        },
+        {
+          "id": "binder-spine",
+          "left": 1267,
+          "top": 326,
+          "width": 63,
+          "height": 18
+        },
+        {
+          "id": "coffee-mug",
+          "left": 612,
+          "top": 326,
+          "width": 36,
+          "height": 29
+        }
+      ]
+    },
     "fallbackSource": "/fredrun/vienna-panorama.webp",
+    "composition": "close side-on office and records room with a clear lower running lane",
+    "effects": {
+      "fluorescentFlicker": {
+        "renderer": "deterministic cool-light gradient localized above the running lane",
+        "opacityRange": [
+          0.008,
+          0.042
+        ],
+        "reducedMotion": "disabled",
+        "worldScope": "night-office only; Vienna receives zero overlay opacity"
+      }
+    },
     "processing": {
       "script": "scripts/prepare-fredrun-finanzamt-backgrounds.mjs",
-      "method": "lane-aware integer crop, exact resize with Lanczos 3, then WebP encoding",
+      "method": "deterministic full-frame exact resize with Lanczos 3, SVG scenic overlays, then WebP encoding",
+      "overlays": [
+        "professional wall sign: exact text \"Finanzamt Österreich\"",
+        "binder spine: exact text \"BAO\"",
+        "calendar note: exact text \"31.12.\"",
+        "coffee mug: exact mark \"§\"",
+        "small Fred-blue dog silhouette sticker"
+      ],
       "sharpVersion": "0.34.5",
       "libvipsVersion": "8.17.3"
     }
   },
   "stages": [
     {
-      "id": "records-corridor",
-      "title": "Records corridor",
+      "id": "close-office",
+      "title": "Close office and records room",
       "anchorScore": 0,
-      "prompt": "Use case: stylized-concept. Asset type: production side-scrolling runner game background, scene 1 of a cohesive four-scene world. Create an original endless Austrian tax-office records corridor at night, with repeating tall filing cabinets, orderly dossier shelves, institutional doors without labels, and a rhythmic line of fluorescent ceiling lights. Empty government records corridor after hours; deep perspective kept mostly perpendicular to the runner lane, with architecture designed to tile plausibly through alternating mirrored horizontal scrolling. Premium professional stylized 2.5D game environment illustration, painterly 3D-like forms, not photorealistic; cohesive with a charming polished cartoon runner game while keeping foreground sprites highly readable. Very wide cinematic 16:9 or ultrawide landscape. Side-on camera, nearly perpendicular elevation with only gentle depth. An uninterrupted, level, dark floor/ground line at the lower fifth. Keep the full lower running lane clear from edge to edge; all cabinets and fixtures behind it. Layer detail in midground/background. No giant foreground object. Moody blue and teal night palette, cold fluorescent ceiling rhythm, a few small isolated warm utility lights, controlled contrast, calm uncanny after-hours atmosphere. No people, animals, characters, silhouettes, logos, readable text, letters, numbers, signs, gibberish, or watermarks. No obstacles blocking the lower running lane. Stable ground geometry and readable at mobile size. No fire, smoke, destruction, Vienna landmarks, or copied existing assets. Avoid photorealism, fisheye, extreme vanishing point, tilted floor, foreground clutter, illegible paperwork text, visual noise.",
+      "prompt": "Use case: stylized-concept\nAsset type: production panoramic background for a polished side-scrolling browser runner game\nPrimary request: Create one cohesive close-up Austrian tax-office office-and-records room at night, seen as a side-on architectural cutaway very near the camera/player. This is a compact working room, not a hallway: desks, office chairs tucked behind desks, filing cabinets, densely filled folder shelving, midground doors and glass partitions, and fluorescent ceiling fixtures all belong to the same continuous environment.\nScene/backdrop: empty public administration office after hours, calm slightly uncanny night atmosphere, coherent continuous room across the full width.\nStyle/medium: premium stylized 2.5D game environment illustration with painterly 3D-like forms, crisp professional finish, not photorealistic.\nComposition/framing: very wide cinematic landscape, side-on perpendicular elevation with shallow depth and no distant central vanishing point. Furniture and shelving should feel large and close to the viewer, occupying the upper and middle portions. Reserve the entire lower 22 percent as a completely unobstructed, straight, level dark running lane from left edge to right edge. Keep desks, chairs, cabinets, partition posts, boxes, and all props entirely behind and above that lane. Make both outer edges visually calm and compatible with alternating mirrored horizontal repetition: no cropped dominant object, doorway, sign, or strong diagonal at either edge.\nLighting/mood: moody midnight blue, slate, muted teal, and restrained warm desk-lamp accents. A rhythmic set of visible cool-white fluorescent fixtures along the ceiling; soft pools of light, readable silhouettes, controlled contrast, no harsh flash.\nMaterials/textures: practical laminated desks, metal filing cabinets, paper folders, glass partitions, acoustic ceiling, subtly worn institutional surfaces.\nText (verbatim): Include one small professional wall plaque with exactly “Finanzamt Österreich” (F-i-n-a-n-z-a-m-t space Ö-s-t-e-r-r-e-i-c-h), but keep it scenic and not dominant. Tiny optional details: a binder marked “BAO”, a small calendar note “31.12.”, a coffee mug marked “§”, and one tiny friendly blue dog silhouette sticker. Exact typography will also be reinforced in deterministic post-processing.\nConstraints: no people, no animals, no human silhouettes; lower running lane totally clear edge-to-edge; all furniture in midground; close compact room scale; one continuous seamless-feeling scene; stable ground geometry; readable on mobile; plausible when alternating with a horizontally mirrored copy.\nAvoid: broad corridor, distant hallway, central vanishing point, huge atrium, multiple disconnected rooms, hard visual scene boundaries, obstacles in the lower lane, foreground clutter, fisheye, tilted floor, fire, smoke, destruction, Vienna landmarks, unrelated logos, watermarks, gibberish signage, extra readable text, copied existing game assets.",
       "provenance": {
         "provider": "OpenAI Codex",
         "model": "Codex built-in image_gen (model identifier not exposed)",
-        "createdAt": "2026-08-16T19:25:56+00:00",
-        "rawPath": "/opt/data/tmp/fredrun-finanzamt-generated/01-records-corridor-raw.png",
-        "archivePath": "/opt/data/generated-images/images/2026/08/20260816-192556_fredrun-finanzamt-night-records-corridor_codex-built-in-image-gen-model-i_openai-codex_96fff0d1.png",
-        "archiveMetadataPath": "/opt/data/generated-images/metadata/2026/08/20260816-192556_fredrun-finanzamt-night-records-corridor_codex-built-in-image-gen-model-i_openai-codex_96fff0d1.json",
-        "archivePromptPath": "/opt/data/generated-images/prompts/2026/08/20260816-192556_fredrun-finanzamt-night-records-corridor_codex-built-in-image-gen-model-i_openai-codex_96fff0d1.txt"
+        "createdAt": "2026-08-16T20:40:46+00:00",
+        "rawPath": "/opt/data/tmp/fredrun-finanzamt-close-office/close-office-raw.png",
+        "archivePath": "/opt/data/generated-images/images/2026/08/20260816-204046_fredrun-finanzamt-night-close-office_codex-built-in-image-gen-model-i_openai-codex_c0823fc3.png",
+        "archiveSha256": "c0823fc34d9b90bf9cd4febbb0a6586e29605e038d89fbc28596579545952f9a",
+        "archiveMetadataPath": "/opt/data/generated-images/metadata/2026/08/20260816-204046_fredrun-finanzamt-night-close-office_codex-built-in-image-gen-model-i_openai-codex_c0823fc3.json",
+        "archivePromptPath": "/opt/data/generated-images/prompts/2026/08/20260816-204046_fredrun-finanzamt-night-close-office_codex-built-in-image-gen-model-i_openai-codex_c0823fc3.txt"
       },
       "raw": {
-        "file": "01-records-corridor-raw.png",
+        "file": "close-office-raw.png",
         "format": "png",
-        "width": 1672,
-        "height": 941,
-        "bytes": 1313462,
-        "sha256": "96fff0d1df83bca896c491b83cb0d2943d60737918e77d77fe675ed73b4064b2"
+        "width": 1983,
+        "height": 793,
+        "bytes": 1509927,
+        "sha256": "c0823fc34d9b90bf9cd4febbb0a6586e29605e038d89fbc28596579545952f9a"
       },
       "processing": {
-        "crop": {
-          "left": 0,
-          "top": 304,
-          "width": 1672,
-          "height": 512
-        },
         "resize": {
           "width": 2172,
           "height": 665,
+          "fit": "fill",
           "kernel": "lanczos3"
-        }
-      },
-      "output": {
-        "file": "records-corridor.webp",
-        "runtimePath": "/fredrun/levels/finanzamt-night/backgrounds/records-corridor.webp",
-        "format": "webp",
-        "width": 2172,
-        "height": 665,
-        "bytes": 59376,
-        "sha256": "91126e1c3f949b574347e72d6fe1488cabb205cffc05844d1acaef3c674322e3"
-      }
-    },
-    {
-      "id": "open-plan-office",
-      "title": "Open-plan office",
-      "anchorScore": 500,
-      "prompt": "Use case: stylized-concept. Asset type: production side-scrolling runner game background, scene 2 of the same cohesive Fredrun Finanzamt-night world. Create an original open-plan Austrian tax office at night, with rows of modest desks, dark or softly glowing abstract monitors, blank paperwork, desk organizers, and empty office chairs. Large empty open-plan public administration office after hours. Broad rain-dark windows across the back wall, low partitions and repeated desk bays, clearly different from a filing corridor. Premium professional stylized 2.5D game environment illustration, painterly 3D-like forms, not photorealistic; same cohesive visual language as a polished charming cartoon runner game. Very wide cinematic 16:9 or ultrawide landscape, side-on camera perpendicular enough for horizontal runner gameplay. Keep desks and chairs entirely in the midground behind a continuous clear running lane. Stable level floor/ground line at the lower fifth, clear edge to edge. Moderate depth without an aggressive central vanishing point. Moody blue and teal night palette, rain-cooled window light, scattered warm desk lamps and a few low monitor glows, readable silhouettes and restrained detail behind foreground sprites. No people, animals, characters, human silhouettes, logos, readable text, letters or numbers on screens or paper, signs, gibberish, or watermarks. Screens show only abstract muted shapes or remain dark. No obstacle blocking the lower lane. Mobile-readable. No fire, smoke, destruction, Vienna landmarks, or copied existing assets. Avoid photorealism, fisheye, tilted floor, foreground chairs intruding into the runner lane, excessive paper clutter, bright white screens, text-like interface marks, visual noise.",
-      "provenance": {
-        "provider": "OpenAI Codex",
-        "model": "Codex built-in image_gen (model identifier not exposed)",
-        "createdAt": "2026-08-16T19:30:06+00:00",
-        "rawPath": "/opt/data/tmp/fredrun-finanzamt-generated/02-open-plan-office-raw.png",
-        "archivePath": "/opt/data/generated-images/images/2026/08/20260816-193006_fredrun-finanzamt-night-open-plan-office_codex-built-in-image-gen-model-i_openai-codex_8ed55cb6.png",
-        "archiveMetadataPath": "/opt/data/generated-images/metadata/2026/08/20260816-193006_fredrun-finanzamt-night-open-plan-office_codex-built-in-image-gen-model-i_openai-codex_8ed55cb6.json",
-        "archivePromptPath": "/opt/data/generated-images/prompts/2026/08/20260816-193006_fredrun-finanzamt-night-open-plan-office_codex-built-in-image-gen-model-i_openai-codex_8ed55cb6.txt"
-      },
-      "raw": {
-        "file": "02-open-plan-office-raw.png",
-        "format": "png",
-        "width": 1823,
-        "height": 863,
-        "bytes": 1584323,
-        "sha256": "8ed55cb687592d04caf35047e301f38ed077714ca6b6c5b5f16b2af8489d88a9"
-      },
-      "processing": {
-        "crop": {
-          "left": 0,
-          "top": 227,
-          "width": 1823,
-          "height": 558
         },
-        "resize": {
-          "width": 2172,
-          "height": 665,
-          "kernel": "lanczos3"
+        "overlays": [
+          "professional wall sign: exact text \"Finanzamt Österreich\"",
+          "binder spine: exact text \"BAO\"",
+          "calendar note: exact text \"31.12.\"",
+          "coffee mug: exact mark \"§\"",
+          "small Fred-blue dog silhouette sticker"
+        ],
+        "overlayFormat": "deterministic SVG composited by Sharp before WebP encoding",
+        "scenicSignRelocation": {
+          "sourceBounds": {
+            "left": 34,
+            "top": 176,
+            "width": 120,
+            "height": 68
+          },
+          "outputBounds": {
+            "id": "wall-sign",
+            "left": 300,
+            "top": 176,
+            "width": 120,
+            "height": 68
+          },
+          "sourceTreatment": "replace source plaque with adjacent wall texture before adding exact sign"
         }
       },
       "output": {
-        "file": "open-plan-office.webp",
-        "runtimePath": "/fredrun/levels/finanzamt-night/backgrounds/open-plan-office.webp",
+        "file": "close-office.webp",
+        "runtimePath": "/fredrun/levels/finanzamt-night/backgrounds/close-office.webp",
         "format": "webp",
         "width": 2172,
         "height": 665,
-        "bytes": 87280,
-        "sha256": "5a5b4be4f6d4e8a3aaa893d40068fe6b718aa6bff3b204da60744dd290c004fa"
-      }
-    },
-    {
-      "id": "archive-basement",
-      "title": "Archive basement",
-      "anchorScore": 1000,
-      "prompt": "Use case: stylized-concept. Asset type: production side-scrolling runner game background, scene 3 of the same cohesive Fredrun Finanzamt-night world. Create an original dense government archive basement at night, packed with long metal shelving, orderly cardboard archive boxes, ring binders and document folders, with pipes and compact fluorescent fixtures overhead. Empty subterranean tax-record archive, clearly a basement and clearly different from an office or corridor. Shelves form a side-on wall of organized storage with a few deep aisle openings behind, while the runner lane remains completely clear. Premium professional stylized 2.5D game environment illustration, painterly 3D-like forms, not photorealistic; same cohesive polished cartoon runner-game art direction as the other Finanzamt night scenes. Very wide cinematic 16:9 or ultrawide landscape. Mostly perpendicular side view for horizontal gameplay, limited perspective. Continuous stable concrete floor/ground line near the lower fifth. No boxes, carts, shelving legs, or giant objects in the clear edge-to-edge running lane. Dense detail stays behind the lane and is grouped into readable shapes for mobile. Deep blue-green and teal basement shadows, cold overhead fixtures, a few isolated warm cage lamps, slightly dusty but clean and professional, atmospheric without fog obscuring forms. No people, animals, characters, silhouettes, logos, readable text, letters, numbers, labels, signs, gibberish, barcodes, or watermarks. Box faces and folder spines are blank. No obstacle blocking the lower lane. No fire, smoke, destruction, Vienna landmarks, or copied existing assets. Avoid photorealism, horror imagery, fisheye, tilted floor, extreme perspective, foreground clutter, random loose paper in the lane, illegible labels, visual noise.",
-      "provenance": {
-        "provider": "OpenAI Codex",
-        "model": "Codex built-in image_gen (model identifier not exposed)",
-        "createdAt": "2026-08-16T19:35:19+00:00",
-        "rawPath": "/opt/data/tmp/fredrun-finanzamt-generated/03-archive-basement-raw.png",
-        "archivePath": "/opt/data/generated-images/images/2026/08/20260816-193519_fredrun-finanzamt-night-archive-basement_codex-built-in-image-gen-model-i_openai-codex_5991896c.png",
-        "archiveMetadataPath": "/opt/data/generated-images/metadata/2026/08/20260816-193519_fredrun-finanzamt-night-archive-basement_codex-built-in-image-gen-model-i_openai-codex_5991896c.json",
-        "archivePromptPath": "/opt/data/generated-images/prompts/2026/08/20260816-193519_fredrun-finanzamt-night-archive-basement_codex-built-in-image-gen-model-i_openai-codex_5991896c.txt"
-      },
-      "raw": {
-        "file": "03-archive-basement-raw.png",
-        "format": "png",
-        "width": 1672,
-        "height": 941,
-        "bytes": 1596560,
-        "sha256": "5991896c5b1468fe29d2de9b2b09159310fe4c9444e3f1e3aaa0400d977d93b7"
-      },
-      "processing": {
-        "crop": {
-          "left": 0,
-          "top": 304,
-          "width": 1672,
-          "height": 512
-        },
-        "resize": {
-          "width": 2172,
-          "height": 665,
-          "kernel": "lanczos3"
-        }
-      },
-      "output": {
-        "file": "archive-basement.webp",
-        "runtimePath": "/fredrun/levels/finanzamt-night/backgrounds/archive-basement.webp",
-        "format": "webp",
-        "width": 2172,
-        "height": 665,
-        "bytes": 81944,
-        "sha256": "555f7a85243466b5d35b74b6972bd643f251e0360b552fc283e2623656d4e0b8"
-      }
-    },
-    {
-      "id": "caseworker-corridor",
-      "title": "Caseworker corridor",
-      "anchorScore": 1500,
-      "prompt": "Use case: stylized-concept\nAsset type: high-quality raster side-scrolling game background\nPrimary request: Create one original late-night Austrian tax-office caseworker corridor, visually coherent with an existing set of moody Finanzamt game environments yet clearly distinct from a records corridor, an open-plan office, and an archive basement.\nScene/backdrop: A long administrative corridor lined with glass-partitioned individual caseworker office rooms. Through the glass, show unoccupied desks, modest office chairs, stacks of folders, loose paperwork, filing trays, and restrained Austrian public-office interior details without flags, emblems, branding, or signage. Beyond or behind the rooms, include dark exterior windows streaked with rain and a subtle distant night-city presence.\nSubject: The empty corridor environment itself; no people or characters.\nStyle/medium: polished stylized 2.5D game-environment concept art, painterly-realistic surfaces, crisp controlled shapes, coherent architectural perspective, production-ready background art; match the visual language of dark blue institutional interiors with selective warm lamps.\nComposition/framing: wide ultrawide landscape, approximately 16:9, camera largely perpendicular to the corridor for a side-on platformer view, stable horizon and only restrained depth into rooms. Preserve an uninterrupted, empty, flat horizontal running lane across the full width near the lower fifth of the frame. Architectural rhythm should come from alternating glass office bays, mullions, doors, and glimpses of desks, not from large foreground props. Keep all furniture and paperwork behind the glass and out of the lane.\nLighting/mood: very late at night, quiet, bureaucratic, slightly noir and atmospheric. Cool blue/teal ambient night light dominates; a few isolated warm amber desk lamps glow behind glass, creating soft reflections on partitions and the polished corridor floor. Rain trails on dark windows catch subtle blue highlights.\nColor palette: deep navy, slate blue, muted teal, charcoal, desaturated gray, with controlled warm amber pools from desk lamps.\nMaterials/textures: rain-streaked glass, subtle condensation and reflections, painted metal mullions, institutional floor tile, veneered desks, paper and cardboard folders; detailed but uncluttered.\nText: none.\nConstraints: one continuous coherent location; readable side-scrolling silhouette; lane remains empty and stable; no people, no characters, no logos, no readable text, no signs, no watermarks, no gibberish; no large foreground object blocking the lane; no dramatic vanishing-point camera; no close-up furniture; no excessive fisheye distortion.\nAvoid: duplicating the prior scenes' filing-cabinet wall, open-plan cubicle field, or industrial archive shelving; avoid daylight, crowds, fantasy elements, neon cyberpunk styling, photoreal camera grain, interface overlays, captions, borders, or letters.",
-      "provenance": {
-        "provider": "openai-codex",
-        "model": "gpt-image-2",
-        "createdAt": "2026-08-16T19:41:20+00:00",
-        "rawPath": "/opt/data/tmp/fredrun-finanzamt-generated/04-caseworker-corridor-raw.png",
-        "archivePath": "/opt/data/generated-images/images/2026/08/20260816-194120_fredrun-finanzamt-night-caseworker-corridor_gpt-image-2_openai-codex_115d8fd6.png",
-        "archiveMetadataPath": "/opt/data/generated-images/metadata/2026/08/20260816-194120_fredrun-finanzamt-night-caseworker-corridor_gpt-image-2_openai-codex_115d8fd6.json",
-        "archivePromptPath": "/opt/data/generated-images/prompts/2026/08/20260816-194120_fredrun-finanzamt-night-caseworker-corridor_gpt-image-2_openai-codex_115d8fd6.txt"
-      },
-      "raw": {
-        "file": "04-caseworker-corridor-raw.png",
-        "format": "png",
-        "width": 1672,
-        "height": 941,
-        "bytes": 1721290,
-        "sha256": "115d8fd6e2a2051113553118e5272e2fc1e4e439c151e5b7b3db2a3be64ff20c"
-      },
-      "processing": {
-        "crop": {
-          "left": 0,
-          "top": 320,
-          "width": 1672,
-          "height": 512
-        },
-        "resize": {
-          "width": 2172,
-          "height": 665,
-          "kernel": "lanczos3"
-        }
-      },
-      "output": {
-        "file": "caseworker-corridor.webp",
-        "runtimePath": "/fredrun/levels/finanzamt-night/backgrounds/caseworker-corridor.webp",
-        "format": "webp",
-        "width": 2172,
-        "height": 665,
-        "bytes": 94864,
-        "sha256": "6b95d964ffb688b7567ecfb499fb16ed7a183435fda8a973baeb05b7f0ec9d64"
+        "bytes": 59050,
+        "sha256": "79cba1c0b94ca3ff793a832203e4caec2674ad808d7c727be3471eafb3b9050a"
       }
     }
   ]

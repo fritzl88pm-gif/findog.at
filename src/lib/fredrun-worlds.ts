@@ -18,7 +18,7 @@ export type FredRunWorldDefinition = {
   backgrounds: {
     stages: readonly FredRunWorldBackgroundStage[];
     fallbackSource: string;
-    transition: { kind: "crossfade"; scoreDuration: number } | { kind: "hard" };
+    crossfadeScoreDuration: number | null;
     renderStyle: "vienna-disaster" | "night-office";
   };
 };
@@ -42,7 +42,7 @@ export const FREDRUN_WORLDS = {
         { source: "/fredrun/backgrounds/vienna-cold-ash-aftermath.webp", anchorScore: 3_500 },
       ],
       fallbackSource: "/fredrun/vienna-panorama.webp",
-      transition: { kind: "crossfade", scoreDuration: 40 },
+      crossfadeScoreDuration: 40,
       renderStyle: "vienna-disaster",
     },
   },
@@ -54,13 +54,10 @@ export const FREDRUN_WORLDS = {
     playDescription: "Lauf durch das stille Amt, sammle Münzen und bleib zwischen Akten und Schreibtischen in Bewegung.",
     backgrounds: {
       stages: [
-        { source: "/fredrun/levels/finanzamt-night/backgrounds/records-corridor.webp", anchorScore: 0 },
-        { source: "/fredrun/levels/finanzamt-night/backgrounds/open-plan-office.webp", anchorScore: 500 },
-        { source: "/fredrun/levels/finanzamt-night/backgrounds/archive-basement.webp", anchorScore: 1_000 },
-        { source: "/fredrun/levels/finanzamt-night/backgrounds/caseworker-corridor.webp", anchorScore: 1_500 },
+        { source: "/fredrun/levels/finanzamt-night/backgrounds/close-office.webp", anchorScore: 0 },
       ],
       fallbackSource: "/fredrun/vienna-panorama.webp",
-      transition: { kind: "hard" },
+      crossfadeScoreDuration: null,
       renderStyle: "night-office",
     },
   },
@@ -112,7 +109,7 @@ export function fredRunWorldBackgroundForScore(
   }
 
   const toStage = Math.min(background.stages.length - 1, fromStage + 1);
-  if (background.transition.kind === "hard" || fromStage === toStage) {
+  if (background.crossfadeScoreDuration === null || fromStage === toStage) {
     return { fromStage, toStage: fromStage, blend: 0 };
   }
 
@@ -120,10 +117,28 @@ export function fredRunWorldBackgroundForScore(
   const nextAnchor = background.stages[toStage].anchorScore;
   const scoreSpan = nextAnchor - currentAnchor;
   const segmentProgress = normalizedScore / scoreSpan - currentAnchor / scoreSpan;
-  const crossfadeFraction = background.transition.scoreDuration / scoreSpan;
+  const crossfadeFraction = background.crossfadeScoreDuration / scoreSpan;
   return {
     fromStage,
     toStage,
     blend: smoothstep((segmentProgress - (1 - crossfadeFraction)) / crossfadeFraction),
   };
+}
+
+export function fredRunFluorescentFlicker(
+  worldId: FredRunWorldId,
+  elapsed: number,
+  reducedMotion: boolean,
+): number {
+  if (
+    reducedMotion
+    || FREDRUN_WORLDS[worldId].backgrounds.renderStyle !== "night-office"
+  ) {
+    return 0;
+  }
+
+  const time = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+  const slowWave = 0.5 + 0.5 * Math.sin(time * 0.83 + Math.sin(time * 0.17) * 0.9);
+  const secondaryWave = 0.5 + 0.5 * Math.sin(time * 1.97 + 1.1);
+  return 0.008 + 0.034 * (slowWave * 0.78 + secondaryWave * 0.22);
 }

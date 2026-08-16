@@ -24,10 +24,14 @@ import {
   type FredRunState,
   writeFredRunHighScore,
 } from "./fredrun";
-import { fredRunWorldBackgroundForScore } from "./fredrun-worlds";
+import {
+  FREDRUN_WORLDS,
+  fredRunFluorescentFlicker,
+  fredRunWorldBackgroundForScore,
+} from "./fredrun-worlds";
 
 describe("Fredrun world background progression", () => {
-  it("keeps Vienna's crossfade and uses hard ordered stages for Finanzamt", () => {
+  it("keeps Vienna's crossfade and uses one continuous Finanzamt panorama", () => {
     const viennaCrossfade = fredRunWorldBackgroundForScore("vienna", 480);
     expect(viennaCrossfade).toMatchObject({
       fromStage: 0,
@@ -39,21 +43,20 @@ describe("Fredrun world background progression", () => {
       toStage: 7,
       blend: 0,
     });
-    expect(fredRunWorldBackgroundForScore("finanzamt-night", 499)).toEqual({
-      fromStage: 0,
-      toStage: 0,
-      blend: 0,
-    });
-    expect(fredRunWorldBackgroundForScore("finanzamt-night", 500)).toEqual({
-      fromStage: 1,
-      toStage: 1,
-      blend: 0,
-    });
-    expect(fredRunWorldBackgroundForScore("finanzamt-night", 10_000)).toEqual({
-      fromStage: 3,
-      toStage: 3,
-      blend: 0,
-    });
+    expect(FREDRUN_WORLDS["finanzamt-night"].backgrounds.stages).toEqual([
+      {
+        source: "/fredrun/levels/finanzamt-night/backgrounds/close-office.webp",
+        anchorScore: 0,
+      },
+    ]);
+    expect("transition" in FREDRUN_WORLDS["finanzamt-night"].backgrounds).toBe(false);
+    for (const score of [-1, 0, 499, 500, 1_500, 10_000, Number.POSITIVE_INFINITY]) {
+      expect(fredRunWorldBackgroundForScore("finanzamt-night", score)).toEqual({
+        fromStage: 0,
+        toStage: 0,
+        blend: 0,
+      });
+    }
 
     for (const distance of [0, 480 * 34, 500 * 34, 1_475 * 34, 3_500 * 34, 10_000 * 34]) {
       const existingVienna = fredRunEnvironmentForDistance(distance);
@@ -65,6 +68,29 @@ describe("Fredrun world background progression", () => {
         toStage: existingVienna.toStage,
         blend: existingVienna.blend,
       });
+    }
+  });
+
+  it("selects a subtle deterministic fluorescent flicker only for Finanzamt", () => {
+    const times = Array.from({ length: 241 }, (_, index) => index / 8);
+    const samples = times.map((elapsed) => fredRunFluorescentFlicker(
+      "finanzamt-night",
+      elapsed,
+      false,
+    ));
+
+    expect(samples.every((opacity) => opacity >= 0 && opacity <= 0.045)).toBe(true);
+    expect(new Set(samples.map((opacity) => opacity.toFixed(6))).size).toBeGreaterThan(100);
+    expect(fredRunFluorescentFlicker("finanzamt-night", 12.345, false))
+      .toBe(fredRunFluorescentFlicker("finanzamt-night", 12.345, false));
+    expect(Math.abs(
+      fredRunFluorescentFlicker("finanzamt-night", 8 + 1 / 120, false)
+      - fredRunFluorescentFlicker("finanzamt-night", 8, false),
+    )).toBeLessThan(0.002);
+
+    for (const elapsed of times) {
+      expect(fredRunFluorescentFlicker("vienna", elapsed, false)).toBe(0);
+      expect(fredRunFluorescentFlicker("finanzamt-night", elapsed, true)).toBe(0);
     }
   });
 });
