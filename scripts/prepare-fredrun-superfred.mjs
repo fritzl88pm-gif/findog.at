@@ -6,6 +6,9 @@ import sharp from "sharp";
 
 const SOURCE_DIRECTORY = path.resolve(process.argv[2] ?? "tmp/superfred-autosprite");
 const OUTPUT_DIRECTORY = path.resolve(process.argv[3] ?? "public/fredrun/superfred");
+const USER_JUMP_SOURCE_PATH = path.resolve(
+  process.argv[4] ?? "C:/Users/conta/Downloads/1786815054521_67465ed8-cf75-4fdb-be5f-cb1cca53584b.png",
+);
 const CELL_SIZE = 192;
 const OUTPUT_COLUMNS = 8;
 const ALPHA_THRESHOLD = 8;
@@ -26,20 +29,18 @@ const animations = [
   },
   {
     key: "jump",
-    sourceFile: "jump-raw.png",
-    spritesheetId: "cmsu7gxlk005mi8xkxrzbaqk3",
-    sourceVideoId: "cmsu7ea300074rzewawv777px",
+    sourceFile: path.basename(USER_JUMP_SOURCE_PATH),
+    sourcePath: USER_JUMP_SOURCE_PATH,
+    sourceKind: "user-provided-spritesheet",
     sourceCellSize: 512,
     sourceColumns: 8,
     sourceFrameCount: 64,
     frameCount: 64,
-    sourceFrames: [
-      8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
-      14, 15, 16, 17, 18, 19, 20, 21, 21, 22, 22, 23,
-      24, 24, 25, 25, 26, 26, 27, 27, 28, 28, 29, 29,
-      30, 30, 31, 31, 32, 32, 33, 33, 34, 34, 35, 35,
-      40, 40, 41, 41, 42, 42, 43, 43, 44, 44, 45, 45, 46, 46, 47, 47,
-    ],
+    phaseFrames: {
+      takeoff: [0, 24],
+      superman: [25, 40],
+      landing: [41, 63],
+    },
   },
   {
     key: "victory",
@@ -63,6 +64,10 @@ function sourceRectangle(animation, index) {
     width: animation.sourceCellSize,
     height: animation.sourceCellSize,
   };
+}
+
+function animationSourcePath(animation) {
+  return animation.sourcePath ?? path.join(SOURCE_DIRECTORY, animation.sourceFile);
 }
 
 function findAlphaBounds(data, channels, imageWidth, rectangle) {
@@ -91,7 +96,7 @@ function findAlphaBounds(data, channels, imageWidth, rectangle) {
 }
 
 async function normalizeAnimation(animation) {
-  const sourcePath = path.join(SOURCE_DIRECTORY, animation.sourceFile);
+  const sourcePath = animationSourcePath(animation);
   const source = await readFile(sourcePath);
   const { data, info } = await sharp(source).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const sourceRows = Math.ceil((animation.sourceFrameCount ?? animation.frameCount) / animation.sourceColumns);
@@ -155,10 +160,15 @@ async function normalizeAnimation(animation) {
   const output = await readFile(outputPath);
   const outputStats = await stat(outputPath);
   return {
-    sourceFile: animation.sourceFile,
+    sourceKind: animation.sourceKind ?? "autosprite",
+    sourceFile: path.basename(sourcePath),
     sourceSha256: sha256(source),
     spritesheetId: animation.spritesheetId,
     sourceVideoId: animation.sourceVideoId,
+    sourceGrid: `${animation.sourceColumns}x${sourceRows}`,
+    sourceFrameCount: animation.sourceFrameCount ?? animation.frameCount,
+    sourceFrames,
+    phaseFrames: animation.phaseFrames,
     columns: OUTPUT_COLUMNS,
     rows: Math.ceil(animation.frameCount / OUTPUT_COLUMNS),
     frameCount: animation.frameCount,
@@ -175,7 +185,7 @@ async function main() {
   const previousManifest = JSON.parse(await readFile(manifestPath, "utf8"));
   const normalizedEntries = await Promise.all(animations.map(async (animation) => {
     try {
-      await access(path.join(SOURCE_DIRECTORY, animation.sourceFile));
+      await access(animationSourcePath(animation));
       return [animation.key, await normalizeAnimation(animation)];
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;

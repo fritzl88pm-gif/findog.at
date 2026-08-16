@@ -121,7 +121,7 @@ const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, Chara
   },
   superfred: {
     walk: { source: "/fredrun/superfred/walk.webp", columns: 8, frameCount: 64, fps: 16 },
-    jump: { source: "/fredrun/superfred/jump.webp?v=second-variant-restored-1", columns: 8, frameCount: 64, fps: 16 },
+    jump: { source: "/fredrun/superfred/jump.webp?v=superman-jump-1", columns: 8, frameCount: 64, fps: 16 },
     victory: { source: "/fredrun/superfred/victory.webp", columns: 8, frameCount: 64, fps: 16 },
   },
 };

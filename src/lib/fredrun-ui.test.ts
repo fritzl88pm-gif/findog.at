@@ -17,6 +17,7 @@ const manifest = JSON.parse(readFileSync(fileURLToPath(new URL("../../public/fre
   source: {
     archive: { sha256: string; includedAnimations: string[] };
     jumpSheet: { sha256: string; sourceGrid: string; sourceFrameCount: number; selectedFrameIndices: number[] };
+    runSheet: { file: string; sha256: string; sourceGrid: string; sourceFrameCount: number };
   };
   atlas: {
     cellSize: number;
@@ -166,7 +167,14 @@ const superfredManifest = JSON.parse(readFileSync(
     frameCount: number;
     anchor: string;
     animations: Record<"walk" | "jump" | "victory", {
-      spritesheetId: string;
+      sourceKind?: string;
+      sourceFile?: string;
+      sourceSha256?: string;
+      spritesheetId?: string;
+      sourceGrid?: string;
+      sourceFrameCount?: number;
+      sourceFrames?: number[];
+      phaseFrames?: Record<"takeoff" | "superman" | "landing", number[]>;
       columns: number;
       rows: number;
       frameCount: number;
@@ -374,7 +382,7 @@ describe("Fredrun UI surface", () => {
 
   it("ships the three runtime atlases while preserving source provenance", () => {
     expect(manifest.source.archive.sha256).toBe("DCD8D61B48B88FE525DA2D151544B8B8C859C9E3E222DEE18732E160E1A9F735");
-    expect(manifest.source.archive.includedAnimations).toEqual(["walk_right", "Victory"]);
+    expect(manifest.source.archive.includedAnimations).toEqual(["Victory"]);
     expect(manifest.source.jumpSheet).toMatchObject({
       sha256: "F16512E534978A7F3E0081A455DC1EE57064383AC2D4C8C994050EB087670789",
       sourceGrid: "7x7",
@@ -383,6 +391,12 @@ describe("Fredrun UI surface", () => {
     expect(manifest.source.jumpSheet.selectedFrameIndices).toHaveLength(24);
     expect(manifest.source.jumpSheet.selectedFrameIndices[0]).toBe(0);
     expect(manifest.source.jumpSheet.selectedFrameIndices.at(-1)).toBe(48);
+    expect(manifest.source.runSheet).toEqual({
+      file: "Fred-run.png",
+      sha256: "72A63C14C1D2E620884FF9C1D9C553A6184EBB528F2A08B26DE6B6EA39CDEBDE",
+      sourceGrid: "8x8",
+      sourceFrameCount: 64,
+    });
     expect(manifest.atlas).toMatchObject({
       cellSize: 192,
       anchor: "bottom-center",
@@ -473,20 +487,37 @@ describe("Fredrun UI surface", () => {
     expect(Object.keys(superfredManifest.atlas.animations)).toEqual(["walk", "jump", "victory"]);
     for (const animation of Object.values(superfredManifest.atlas.animations)) {
       expect(animation).toMatchObject({ columns: 8, rows: 8, frameCount: 64 });
-      expect(animation.spritesheetId).toMatch(/^cms/);
       expect(animation.outputSha256).toMatch(/^[A-F0-9]{64}$/);
       expect(statSync(fileURLToPath(new URL(
         `../../public/fredrun/superfred/${animation.outputFile}`,
         import.meta.url,
       ))).size).toBe(animation.bytes);
     }
+    expect(superfredManifest.atlas.animations.walk.spritesheetId).toMatch(/^cms/);
+    expect(superfredManifest.atlas.animations.victory.spritesheetId).toMatch(/^cms/);
+    expect(superfredManifest.atlas.animations.jump).toMatchObject({
+      sourceKind: "user-provided-spritesheet",
+      sourceFile: "1786815054521_67465ed8-cf75-4fdb-be5f-cb1cca53584b.png",
+      sourceSha256: "40A74232D99C82CC917366EA10A3EDC67CDA8D053A121B39617B76FE5B7AEE60",
+      sourceGrid: "8x8",
+      sourceFrameCount: 64,
+      phaseFrames: {
+        takeoff: [0, 24],
+        superman: [25, 40],
+        landing: [41, 63],
+      },
+    });
+    expect(superfredManifest.atlas.animations.jump.sourceFrames).toEqual(
+      Array.from({ length: 64 }, (_, index) => index),
+    );
     const totalBytes = Object.values(superfredManifest.atlas.animations).reduce((total, animation) => (
       total + animation.bytes
     ), 0);
     expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
     expect(profileSource).toContain('export const FREDRUN_CHARACTER_IDS = ["fred", "frida", "superfred"] as const');
     expect(viewSource).toContain('walk: { source: "/fredrun/superfred/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
-    expect(viewSource).toContain('jump: { source: "/fredrun/superfred/jump.webp?v=second-variant-restored-1", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('const JUMP_ANIMATION_DURATION = 0.82;');
+    expect(viewSource).toContain('jump: { source: "/fredrun/superfred/jump.webp?v=superman-jump-1", columns: 8, frameCount: 64, fps: 16 }');
     expect(viewSource).toContain('victory: { source: "/fredrun/superfred/victory.webp", columns: 8, frameCount: 64, fps: 16 }');
     expect(profileSource).toContain('superfred: { name: "Superfred", description: "Mit Cape und Extrapower", price: FREDRUN_SUPERFRED_PRICE }');
     expect(stylesSource).toContain("grid-template-columns: repeat(3, minmax(0, 1fr));");

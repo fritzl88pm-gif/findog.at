@@ -7,8 +7,10 @@ import sharp from "sharp";
 
 const SOURCE_ZIP_PATH = process.argv[2] ?? "C:/Users/conta/Downloads/Fred-spritesheet.zip";
 const JUMP_SHEET_PATH = process.argv[3] ?? "C:/Users/conta/Downloads/Fred-jump.png";
+const RUN_SHEET_PATH = process.argv[4] ?? "C:/Users/conta/Downloads/Fred-run.png";
 const EXPECTED_ZIP_HASH = "DCD8D61B48B88FE525DA2D151544B8B8C859C9E3E222DEE18732E160E1A9F735";
 const EXPECTED_JUMP_HASH = "F16512E534978A7F3E0081A455DC1EE57064383AC2D4C8C994050EB087670789";
+const EXPECTED_RUN_HASH = "72A63C14C1D2E620884FF9C1D9C553A6184EBB528F2A08B26DE6B6EA39CDEBDE";
 const OUTPUT_DIRECTORY = path.resolve("public/fredrun");
 const CELL_SIZE = 192;
 const ALPHA_THRESHOLD = 8;
@@ -18,9 +20,10 @@ const BOTTOM_PADDING = 8;
 const JUMP_SOURCE_COLUMNS = 7;
 const JUMP_SOURCE_FRAME_COUNT = 49;
 const JUMP_OUTPUT_FRAME_COUNT = 24;
+const RUN_SOURCE_COLUMNS = 8;
+const RUN_SOURCE_FRAME_COUNT = 64;
 
 const archiveAnimations = [
-  { key: "walk", sourceDirectory: "walk_right", sourceColumns: 8, sourceRows: 8, outputColumns: 8 },
   { key: "victory", sourceDirectory: "Victory", sourceColumns: 8, sourceRows: 8, outputColumns: 8 },
 ];
 
@@ -117,15 +120,23 @@ async function decodeAnimation(config) {
 }
 
 async function main() {
-  const [zipSource, jumpSource] = await Promise.all([
+  const [zipSource, jumpSource, runSource] = await Promise.all([
     readFile(SOURCE_ZIP_PATH),
     readFile(JUMP_SHEET_PATH),
+    readFile(RUN_SHEET_PATH),
   ]);
   if (sha256(zipSource) !== EXPECTED_ZIP_HASH) throw new Error("Unerwartetes Fred-Spritepaket.");
   if (sha256(jumpSource) !== EXPECTED_JUMP_HASH) throw new Error("Unerwartetes Fred-Sprungsheet.");
+  if (sha256(runSource) !== EXPECTED_RUN_HASH) throw new Error("Unerwartetes Fred-Laufsheet.");
 
   const zip = new PizZip(zipSource);
-  const decoded = [];
+  const decoded = [await decodeAnimation({
+    key: "walk",
+    buffer: runSource,
+    sourceColumns: RUN_SOURCE_COLUMNS,
+    sourceRows: RUN_SOURCE_COLUMNS,
+    outputColumns: 8,
+  })];
   for (const animation of archiveAnimations) {
     const entryName = `${animation.sourceDirectory}/spritesheet.png`;
     const entry = zip.file(entryName);
@@ -210,6 +221,12 @@ async function main() {
         sourceGrid: "7x7",
         sourceFrameCount: JUMP_SOURCE_FRAME_COUNT,
         selectedFrameIndices: jumpFrameIndices,
+      },
+      runSheet: {
+        file: path.basename(RUN_SHEET_PATH),
+        sha256: EXPECTED_RUN_HASH,
+        sourceGrid: `${RUN_SOURCE_COLUMNS}x${RUN_SOURCE_COLUMNS}`,
+        sourceFrameCount: RUN_SOURCE_FRAME_COUNT,
       },
     },
     atlas: {
