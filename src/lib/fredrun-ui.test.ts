@@ -277,6 +277,7 @@ const finanzamtBackgroundManifest = JSON.parse(readFileSync(
     height: number;
     quality: number;
     scoreAnchors: number[];
+    crossfadeScoreDuration: number;
     transition: string;
     finalState: string;
     loop: string;
@@ -306,8 +307,13 @@ const finanzamtBackgroundManifest = JSON.parse(readFileSync(
       archiveSha256: string;
       archiveMetadataPath: string;
       archivePromptPath: string;
+      archiveTags: string[];
     };
     raw: { width: number; height: number; bytes: number; sha256: string };
+    processing: {
+      overlays: string[];
+      exactOverlayPatches: Array<{ id: string; left: number; top: number; width: number; height: number }>;
+    };
     output: {
       file: string;
       runtimePath: string;
@@ -707,13 +713,13 @@ describe("Fredrun UI surface", () => {
     expect(stylesSource).toContain(".fredrun-level-card.is-selected");
   });
 
-  it("ships one continuous close-up Finanzamt panorama with complete provenance", () => {
+  it("ships four distinct close-up Finanzamt rooms with complete provenance", () => {
     expect(finanzamtBackgroundManifest).toMatchObject({
       schemaVersion: 1,
       worldId: "finanzamt-night",
       generation: {
         route: "OpenAI Codex built-in image_gen",
-        rawDirectory: "/opt/data/tmp/fredrun-finanzamt-close-office",
+        rawDirectory: "/opt/data/tmp/fredrun-finanzamt-multi-scene",
         tags: ["findog", "fredrun", "finanzamt-night", "close-office"],
         sound: { included: false },
       },
@@ -722,9 +728,10 @@ describe("Fredrun UI surface", () => {
         width: 2172,
         height: 665,
         quality: 84,
-        scoreAnchors: [0],
-        transition: "none; one continuous stage from score 0 onward",
-        finalState: "hold close-office for the entire run",
+        scoreAnchors: [0, 500, 1_000, 1_500],
+        crossfadeScoreDuration: 40,
+        transition: "smoothstep crossfade over the final 40 score points before each next anchor",
+        finalState: "hold close-archive from score 1500 onward",
         loop: "alternating mirrored horizontal tiles with pixel-continuous joins",
         mirroredTextTreatment: {
           method: "redraw unmirrored source patches after each mirrored tile",
@@ -750,25 +757,40 @@ describe("Fredrun UI surface", () => {
       width: 120,
       height: 68,
     });
-    expect(finanzamtBackgroundManifest.runtime.processing.overlays).toEqual([
+    const expectedOverlays = [
       'professional wall sign: exact text "Finanzamt Österreich"',
       'binder spine: exact text "BAO"',
       'calendar note: exact text "31.12."',
       'coffee mug: exact mark "§"',
       "small Fred-blue dog silhouette sticker",
-    ]);
-    expect(finanzamtBackgroundManifest.stages).toHaveLength(1);
+    ];
+    expect(finanzamtBackgroundManifest.runtime.processing.overlays).toEqual(expectedOverlays);
+    expect(finanzamtBackgroundManifest.stages).toHaveLength(4);
     expect(finanzamtBackgroundManifest.stages.map(({ anchorScore }) => anchorScore))
-      .toEqual([0]);
+      .toEqual([0, 500, 1_000, 1_500]);
     expect(finanzamtBackgroundManifest.stages.map(({ output }) => output.runtimePath)).toEqual(
       FREDRUN_WORLDS["finanzamt-night"].backgrounds.stages.map(({ source }) => source),
     );
-    expect(finanzamtBackgroundManifest.stages[0].id).toBe("close-office");
+    expect(finanzamtBackgroundManifest.stages.map(({ id }) => id)).toEqual([
+      "close-caseworker-office",
+      "close-records-room",
+      "close-glass-offices",
+      "close-archive",
+    ]);
+
+    const rawHashes = new Set(finanzamtBackgroundManifest.stages.map(({ raw }) => raw.sha256));
+    const outputHashes = new Set(finanzamtBackgroundManifest.stages.map(({ output }) => output.sha256));
+    expect(rawHashes.size).toBe(4);
+    expect(outputHashes.size).toBe(4);
+    expect(() => statSync(fileURLToPath(new URL(
+      "../../public/fredrun/levels/finanzamt-night/backgrounds/close-office.webp",
+      import.meta.url,
+    )))).toThrow();
 
     for (const stage of finanzamtBackgroundManifest.stages) {
       expect(stage.prompt.length).toBeGreaterThan(500);
       expect(stage.provenance.rawPath).toBe(
-        "/opt/data/tmp/fredrun-finanzamt-close-office/close-office-raw.png",
+        `/opt/data/tmp/fredrun-finanzamt-multi-scene/${stage.id}-raw.png`,
       );
       expect(stage.provenance.archivePath).toMatch(/^\/opt\/data\/generated-images\/images\/2026\/08\//u);
       expect(stage.provenance.archiveSha256).toBe(stage.raw.sha256);
@@ -776,6 +798,13 @@ describe("Fredrun UI surface", () => {
       expect(stage.provenance.archivePromptPath).toMatch(/^\/opt\/data\/generated-images\/prompts\/2026\/08\//u);
       expect(stage.provenance.provider.toLowerCase()).toContain("codex");
       expect(stage.provenance.model.length).toBeGreaterThan(5);
+      expect(stage.provenance.archiveTags).toEqual(expect.arrayContaining([
+        "findog",
+        "fredrun",
+        "finanzamt-night",
+        "close-office",
+        stage.id === "close-caseworker-office" ? "close-office" : stage.id,
+      ]));
       expect(stage.raw).toMatchObject({ bytes: expect.any(Number), sha256: expect.stringMatching(/^[a-f0-9]{64}$/u) });
       expect(stage.output).toMatchObject({
         format: "webp",
@@ -783,13 +812,16 @@ describe("Fredrun UI surface", () => {
         height: 665,
         sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
       });
+      expect(stage.processing.overlays).toEqual(expectedOverlays);
+      expect(stage.processing.exactOverlayPatches).toEqual(
+        finanzamtBackgroundManifest.runtime.mirroredTextTreatment.patches,
+      );
       const output = readFileSync(fileURLToPath(new URL(
         `../../public${stage.output.runtimePath}`,
         import.meta.url,
       )));
       expect(output.length).toBe(stage.output.bytes);
       expect(sha256(output)).toBe(stage.output.sha256);
-      expect(stage.anchorScore).toBe(0);
     }
   });
 
@@ -1088,7 +1120,12 @@ describe("Fredrun UI surface", () => {
     const viennaSources = stagedBackgroundSourcesFromView();
     const finanzamtSources = FREDRUN_WORLDS["finanzamt-night"].backgrounds.stages
       .map(({ source }) => source);
-    const failedSources = new Set([viennaSources[1], finanzamtSources[0]]);
+    const failedSources = new Set([
+      viennaSources[1],
+      finanzamtSources[0],
+      finanzamtSources[2],
+      finanzamtSources[3],
+    ]);
     const fallbackSource = "/fredrun/vienna-panorama.webp";
     const backgrounds = await loadFredRunWorldBackgrounds(async (source) => {
       if (failedSources.has(source)) throw new Error("stage failed");

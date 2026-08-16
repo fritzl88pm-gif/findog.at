@@ -4,13 +4,19 @@
   "displayName": "Finanzamt bei Nacht",
   "generation": {
     "route": "OpenAI Codex built-in image_gen",
-    "rawDirectory": "/opt/data/tmp/fredrun-finanzamt-close-office",
+    "rawDirectory": "/opt/data/tmp/fredrun-finanzamt-multi-scene",
     "tags": [
       "findog",
       "fredrun",
       "finanzamt-night",
       "close-office"
     ],
+    "visualAnchor": {
+      "id": "close-caseworker-office",
+      "rawSha256": "c0823fc34d9b90bf9cd4febbb0a6586e29605e038d89fbc28596579545952f9a",
+      "reuse": "accepted close-office source retained unchanged as scene 1 and edit anchor for scenes 2-4"
+    },
+    "method": "scene 1 reuses the accepted raw; scenes 2-4 are full-quality built-in image edits of that anchor",
     "sound": {
       "included": false,
       "decision": "No sound was generated or added; existing Fredrun audio code and assets are unchanged."
@@ -22,10 +28,14 @@
     "height": 665,
     "quality": 84,
     "scoreAnchors": [
-      0
+      0,
+      500,
+      1000,
+      1500
     ],
-    "transition": "none; one continuous stage from score 0 onward",
-    "finalState": "hold close-office for the entire run",
+    "crossfadeScoreDuration": 40,
+    "transition": "smoothstep crossfade over the final 40 score points before each next anchor",
+    "finalState": "hold close-archive from score 1500 onward",
     "loop": "alternating mirrored horizontal tiles with pixel-continuous joins",
     "mirroredTextTreatment": {
       "method": "redraw unmirrored source patches after each mirrored tile",
@@ -61,7 +71,7 @@
       ]
     },
     "fallbackSource": "/fredrun/vienna-panorama.webp",
-    "composition": "close side-on office and records room with a clear lower running lane",
+    "composition": "four distinct close side-on office workrooms with matched camera geometry and a clear lower running lane",
     "effects": {
       "fluorescentFlicker": {
         "renderer": "deterministic cool-light gradient localized above the running lane",
@@ -87,24 +97,40 @@
       "libvipsVersion": "8.17.3"
     }
   },
+  "previews": {
+    "contactSheet": "/opt/data/tmp/fredrun-finanzamt-multi-scene/all-scenes-contact-sheet.png",
+    "threeTileMirrored": [
+      "/opt/data/tmp/fredrun-finanzamt-multi-scene/close-caseworker-office-three-tile-preview.png",
+      "/opt/data/tmp/fredrun-finanzamt-multi-scene/close-records-room-three-tile-preview.png",
+      "/opt/data/tmp/fredrun-finanzamt-multi-scene/close-glass-offices-three-tile-preview.png",
+      "/opt/data/tmp/fredrun-finanzamt-multi-scene/close-archive-three-tile-preview.png"
+    ]
+  },
   "stages": [
     {
-      "id": "close-office",
-      "title": "Close office and records room",
+      "id": "close-caseworker-office",
+      "title": "Close caseworker office",
       "anchorScore": 0,
       "prompt": "Use case: stylized-concept\nAsset type: production panoramic background for a polished side-scrolling browser runner game\nPrimary request: Create one cohesive close-up Austrian tax-office office-and-records room at night, seen as a side-on architectural cutaway very near the camera/player. This is a compact working room, not a hallway: desks, office chairs tucked behind desks, filing cabinets, densely filled folder shelving, midground doors and glass partitions, and fluorescent ceiling fixtures all belong to the same continuous environment.\nScene/backdrop: empty public administration office after hours, calm slightly uncanny night atmosphere, coherent continuous room across the full width.\nStyle/medium: premium stylized 2.5D game environment illustration with painterly 3D-like forms, crisp professional finish, not photorealistic.\nComposition/framing: very wide cinematic landscape, side-on perpendicular elevation with shallow depth and no distant central vanishing point. Furniture and shelving should feel large and close to the viewer, occupying the upper and middle portions. Reserve the entire lower 22 percent as a completely unobstructed, straight, level dark running lane from left edge to right edge. Keep desks, chairs, cabinets, partition posts, boxes, and all props entirely behind and above that lane. Make both outer edges visually calm and compatible with alternating mirrored horizontal repetition: no cropped dominant object, doorway, sign, or strong diagonal at either edge.\nLighting/mood: moody midnight blue, slate, muted teal, and restrained warm desk-lamp accents. A rhythmic set of visible cool-white fluorescent fixtures along the ceiling; soft pools of light, readable silhouettes, controlled contrast, no harsh flash.\nMaterials/textures: practical laminated desks, metal filing cabinets, paper folders, glass partitions, acoustic ceiling, subtly worn institutional surfaces.\nText (verbatim): Include one small professional wall plaque with exactly “Finanzamt Österreich” (F-i-n-a-n-z-a-m-t space Ö-s-t-e-r-r-e-i-c-h), but keep it scenic and not dominant. Tiny optional details: a binder marked “BAO”, a small calendar note “31.12.”, a coffee mug marked “§”, and one tiny friendly blue dog silhouette sticker. Exact typography will also be reinforced in deterministic post-processing.\nConstraints: no people, no animals, no human silhouettes; lower running lane totally clear edge-to-edge; all furniture in midground; close compact room scale; one continuous seamless-feeling scene; stable ground geometry; readable on mobile; plausible when alternating with a horizontally mirrored copy.\nAvoid: broad corridor, distant hallway, central vanishing point, huge atrium, multiple disconnected rooms, hard visual scene boundaries, obstacles in the lower lane, foreground clutter, fisheye, tilted floor, fire, smoke, destruction, Vienna landmarks, unrelated logos, watermarks, gibberish signage, extra readable text, copied existing game assets.",
       "provenance": {
         "provider": "OpenAI Codex",
         "model": "Codex built-in image_gen (model identifier not exposed)",
         "createdAt": "2026-08-16T20:40:46+00:00",
-        "rawPath": "/opt/data/tmp/fredrun-finanzamt-close-office/close-office-raw.png",
+        "rawPath": "/opt/data/tmp/fredrun-finanzamt-multi-scene/close-caseworker-office-raw.png",
         "archivePath": "/opt/data/generated-images/images/2026/08/20260816-204046_fredrun-finanzamt-night-close-office_codex-built-in-image-gen-model-i_openai-codex_c0823fc3.png",
         "archiveSha256": "c0823fc34d9b90bf9cd4febbb0a6586e29605e038d89fbc28596579545952f9a",
         "archiveMetadataPath": "/opt/data/generated-images/metadata/2026/08/20260816-204046_fredrun-finanzamt-night-close-office_codex-built-in-image-gen-model-i_openai-codex_c0823fc3.json",
-        "archivePromptPath": "/opt/data/generated-images/prompts/2026/08/20260816-204046_fredrun-finanzamt-night-close-office_codex-built-in-image-gen-model-i_openai-codex_c0823fc3.txt"
+        "archivePromptPath": "/opt/data/generated-images/prompts/2026/08/20260816-204046_fredrun-finanzamt-night-close-office_codex-built-in-image-gen-model-i_openai-codex_c0823fc3.txt",
+        "archiveTags": [
+          "findog",
+          "fredrun",
+          "finanzamt-night",
+          "close-office"
+        ],
+        "sceneTag": "close-office"
       },
       "raw": {
-        "file": "close-office-raw.png",
+        "file": "close-caseworker-office-raw.png",
         "format": "png",
         "width": 1983,
         "height": 793,
@@ -126,6 +152,36 @@
           "small Fred-blue dog silhouette sticker"
         ],
         "overlayFormat": "deterministic SVG composited by Sharp before WebP encoding",
+        "exactOverlayPatches": [
+          {
+            "id": "wall-sign",
+            "left": 300,
+            "top": 176,
+            "width": 120,
+            "height": 68
+          },
+          {
+            "id": "calendar-note",
+            "left": 1160,
+            "top": 262,
+            "width": 53,
+            "height": 42
+          },
+          {
+            "id": "binder-spine",
+            "left": 1267,
+            "top": 326,
+            "width": 63,
+            "height": 18
+          },
+          {
+            "id": "coffee-mug",
+            "left": 612,
+            "top": 326,
+            "width": 36,
+            "height": 29
+          }
+        ],
         "scenicSignRelocation": {
           "sourceBounds": {
             "left": 34,
@@ -140,17 +196,311 @@
             "width": 120,
             "height": 68
           },
-          "sourceTreatment": "replace source plaque with adjacent wall texture before adding exact sign"
+          "sourceTreatment": "replace generated source plaque with adjacent wall texture before adding exact sign"
         }
       },
       "output": {
-        "file": "close-office.webp",
-        "runtimePath": "/fredrun/levels/finanzamt-night/backgrounds/close-office.webp",
+        "file": "close-caseworker-office.webp",
+        "runtimePath": "/fredrun/levels/finanzamt-night/backgrounds/close-caseworker-office.webp",
         "format": "webp",
         "width": 2172,
         "height": 665,
         "bytes": 59050,
         "sha256": "79cba1c0b94ca3ff793a832203e4caec2674ad808d7c727be3471eafb3b9050a"
+      }
+    },
+    {
+      "id": "close-records-room",
+      "title": "Close records workroom",
+      "anchorScore": 500,
+      "prompt": "Use case: precise-object-edit\nAsset type: production panoramic background for a polished side-scrolling browser runner game\nInput images: Image 1: edit target and visual anchor\nPrimary request: Transform only the room identity into a close records workroom in an Austrian public-administration office at night. Replace the caseworker desks and glass-door emphasis with near waist-high filing cabinets, dense dossier shelves, binder cubbies, archival carts, and one broad sorting table behind the running lane. This must be a compact active records workroom, not a hallway, corridor, deep aisle, or distant room.\nStyle/medium: preserve Image 1's exact premium stylized 2.5D painterly game-environment illustration style and crisp 3D-like forms.\nComposition/framing: preserve Image 1's exact ultra-wide canvas, side-on perpendicular elevation, camera height, shallow depth, horizon, architectural scale, ceiling height, fluorescent-fixture rhythm, straight level floor line, and the entire unobstructed dark lower running lane. Keep furniture large and close behind the lane. Keep both outer edges visually calm for alternating mirrored tiling. Reserve an uncluttered wall area near 14 percent of canvas width for a later deterministic plaque, plus small plausible blank prop surfaces near the middle for later deterministic Easter-egg overlays.\nLighting/mood: preserve the same midnight blue, slate, muted teal palette, cool fluorescent lighting, restrained warm practical accents, exposure, contrast, and calm slightly uncanny late-night mood.\nConstraints: change only the interior room identity and furnishings; keep geometry, framing, floor/lane, perspective, palette, lighting, and art style unchanged. No people, animals, human silhouettes, obstacles in the lower lane, unrelated logos, trademarks, watermarks, generated signs, letters, numbers, symbols, labels, handwriting, or readable text. All binder spines and boxes must be blank. Furniture must be structurally plausible, clean, and unmelted. No extra foreground objects.\nAvoid: broad corridor, distant hallway, central vanishing point, deep archive aisle, atrium, disconnected rooms, door-dominated composition, tilted floor, fisheye, broken furniture, gibberish typography, duplicated props, clutter crossing into the lower lane, fire, smoke, destruction, Vienna landmarks.",
+      "provenance": {
+        "provider": "OpenAI Codex",
+        "model": "Codex built-in image_gen (model identifier not exposed)",
+        "createdAt": "2026-08-16T23:12:14+00:00",
+        "rawPath": "/opt/data/tmp/fredrun-finanzamt-multi-scene/close-records-room-raw.png",
+        "archivePath": "/opt/data/generated-images/images/2026/08/20260816-231214_fredrun-finanzamt-night-close-records-room_codex-built-in-image-gen-model-i_openai-codex_bce050e9.png",
+        "archiveSha256": "bce050e9a7b2b141d986aac4f448a8fb8602572186c830c4c65414e7a2c885a5",
+        "archiveMetadataPath": "/opt/data/generated-images/metadata/2026/08/20260816-231214_fredrun-finanzamt-night-close-records-room_codex-built-in-image-gen-model-i_openai-codex_bce050e9.json",
+        "archivePromptPath": "/opt/data/generated-images/prompts/2026/08/20260816-231214_fredrun-finanzamt-night-close-records-room_codex-built-in-image-gen-model-i_openai-codex_bce050e9.txt",
+        "archiveTags": [
+          "findog",
+          "fredrun",
+          "finanzamt-night",
+          "close-office",
+          "close-records-room"
+        ],
+        "sceneTag": "close-records-room"
+      },
+      "raw": {
+        "file": "close-records-room-raw.png",
+        "format": "png",
+        "width": 1983,
+        "height": 793,
+        "bytes": 1538299,
+        "sha256": "bce050e9a7b2b141d986aac4f448a8fb8602572186c830c4c65414e7a2c885a5"
+      },
+      "processing": {
+        "resize": {
+          "width": 2172,
+          "height": 665,
+          "fit": "fill",
+          "kernel": "lanczos3"
+        },
+        "overlays": [
+          "professional wall sign: exact text \"Finanzamt Österreich\"",
+          "binder spine: exact text \"BAO\"",
+          "calendar note: exact text \"31.12.\"",
+          "coffee mug: exact mark \"§\"",
+          "small Fred-blue dog silhouette sticker"
+        ],
+        "overlayFormat": "deterministic SVG composited by Sharp before WebP encoding",
+        "exactOverlayPatches": [
+          {
+            "id": "wall-sign",
+            "left": 300,
+            "top": 176,
+            "width": 120,
+            "height": 68
+          },
+          {
+            "id": "calendar-note",
+            "left": 1160,
+            "top": 262,
+            "width": 53,
+            "height": 42
+          },
+          {
+            "id": "binder-spine",
+            "left": 1267,
+            "top": 326,
+            "width": 63,
+            "height": 18
+          },
+          {
+            "id": "coffee-mug",
+            "left": 612,
+            "top": 326,
+            "width": 36,
+            "height": 29
+          }
+        ],
+        "scenicSignRelocation": {
+          "sourceBounds": null,
+          "outputBounds": {
+            "id": "wall-sign",
+            "left": 300,
+            "top": 176,
+            "width": 120,
+            "height": 68
+          },
+          "sourceTreatment": "raw contains no generated readable sign; add exact deterministic sign directly"
+        }
+      },
+      "output": {
+        "file": "close-records-room.webp",
+        "runtimePath": "/fredrun/levels/finanzamt-night/backgrounds/close-records-room.webp",
+        "format": "webp",
+        "width": 2172,
+        "height": 665,
+        "bytes": 61522,
+        "sha256": "58c84cab31db0492fcab46bada1f9be17b41f4ccc8b5762e9eebbc965a9471cc"
+      }
+    },
+    {
+      "id": "close-glass-offices",
+      "title": "Close glass-partitioned offices",
+      "anchorScore": 1000,
+      "prompt": "Use case: precise-object-edit\nAsset type: production panoramic background for a polished side-scrolling browser runner game\nInput images: Image 1: edit target and visual anchor\nPrimary request: Transform only the room identity into close side-on glass-partitioned individual tax-office rooms at night. Create a compact row of nearby shallow glass-fronted offices directly behind the running lane, with clearly separated slim partition frames, nearby modest desks, tucked office chairs, low filing pedestals, and several restrained warm desk lamps. The offices must feel close to the camera and individually readable, never like a broad or distant corridor.\nStyle/medium: preserve Image 1's exact premium stylized 2.5D painterly game-environment illustration style and crisp 3D-like forms.\nComposition/framing: preserve Image 1's exact ultra-wide canvas, side-on perpendicular elevation, camera height, shallow depth, horizon, architectural scale, ceiling height, fluorescent-fixture rhythm, straight level floor line, and the entire unobstructed dark lower running lane. Keep glass partitions, furniture, and office walls large and close behind the lane. Keep both outer edges visually calm for alternating mirrored tiling. Reserve an opaque uncluttered wall panel near 14 percent of canvas width for a later deterministic plaque, plus small plausible blank desk or shelf surfaces near the middle for later deterministic Easter-egg overlays.\nLighting/mood: preserve the same midnight blue, slate, muted teal palette, cool fluorescent lighting and exposure, adding only restrained warm pools from desk lamps; maintain controlled contrast and the calm slightly uncanny late-night mood.\nMaterials/textures: practical glass partition panels with subtle reflections, dark metal mullions, laminated desks, office chairs, file drawers, acoustic ceiling, subtly worn institutional surfaces.\nConstraints: change only the interior room identity and furnishings; keep geometry, framing, floor/lane, perspective, palette, base lighting, and art style unchanged. No people, animals, human silhouettes, obstacles in the lower lane, unrelated logos, trademarks, watermarks, generated signs, letters, numbers, symbols, labels, handwriting, or readable text. All papers, screens, binders, plaques, and boxes must be blank. Furniture and glass frames must be structurally plausible, straight, clean, and unmelted. No extra foreground objects.\nAvoid: broad corridor, distant hallway, central vanishing point, deep view through doors, atrium, disconnected camera angles, tilted floor, fisheye, broken furniture, warped glass, gibberish typography, duplicated props, clutter crossing into the lower lane, fire, smoke, destruction, Vienna landmarks.",
+      "provenance": {
+        "provider": "OpenAI Codex",
+        "model": "Codex built-in image_gen (model identifier not exposed)",
+        "createdAt": "2026-08-16T23:12:14+00:00",
+        "rawPath": "/opt/data/tmp/fredrun-finanzamt-multi-scene/close-glass-offices-raw.png",
+        "archivePath": "/opt/data/generated-images/images/2026/08/20260816-231214_fredrun-finanzamt-night-close-glass-offices_codex-built-in-image-gen-model-i_openai-codex_3f9ec233.png",
+        "archiveSha256": "3f9ec23364a5d6c3f6c3fd5b665a7ae0e6561c6d0d7b7dc911c3730463d3ca88",
+        "archiveMetadataPath": "/opt/data/generated-images/metadata/2026/08/20260816-231214_fredrun-finanzamt-night-close-glass-offices_codex-built-in-image-gen-model-i_openai-codex_3f9ec233.json",
+        "archivePromptPath": "/opt/data/generated-images/prompts/2026/08/20260816-231214_fredrun-finanzamt-night-close-glass-offices_codex-built-in-image-gen-model-i_openai-codex_3f9ec233.txt",
+        "archiveTags": [
+          "findog",
+          "fredrun",
+          "finanzamt-night",
+          "close-office",
+          "close-glass-offices"
+        ],
+        "sceneTag": "close-glass-offices"
+      },
+      "raw": {
+        "file": "close-glass-offices-raw.png",
+        "format": "png",
+        "width": 1983,
+        "height": 793,
+        "bytes": 1450515,
+        "sha256": "3f9ec23364a5d6c3f6c3fd5b665a7ae0e6561c6d0d7b7dc911c3730463d3ca88"
+      },
+      "processing": {
+        "resize": {
+          "width": 2172,
+          "height": 665,
+          "fit": "fill",
+          "kernel": "lanczos3"
+        },
+        "overlays": [
+          "professional wall sign: exact text \"Finanzamt Österreich\"",
+          "binder spine: exact text \"BAO\"",
+          "calendar note: exact text \"31.12.\"",
+          "coffee mug: exact mark \"§\"",
+          "small Fred-blue dog silhouette sticker"
+        ],
+        "overlayFormat": "deterministic SVG composited by Sharp before WebP encoding",
+        "exactOverlayPatches": [
+          {
+            "id": "wall-sign",
+            "left": 300,
+            "top": 176,
+            "width": 120,
+            "height": 68
+          },
+          {
+            "id": "calendar-note",
+            "left": 1160,
+            "top": 262,
+            "width": 53,
+            "height": 42
+          },
+          {
+            "id": "binder-spine",
+            "left": 1267,
+            "top": 326,
+            "width": 63,
+            "height": 18
+          },
+          {
+            "id": "coffee-mug",
+            "left": 612,
+            "top": 326,
+            "width": 36,
+            "height": 29
+          }
+        ],
+        "scenicSignRelocation": {
+          "sourceBounds": null,
+          "outputBounds": {
+            "id": "wall-sign",
+            "left": 300,
+            "top": 176,
+            "width": 120,
+            "height": 68
+          },
+          "sourceTreatment": "raw contains no generated readable sign; add exact deterministic sign directly"
+        }
+      },
+      "output": {
+        "file": "close-glass-offices.webp",
+        "runtimePath": "/fredrun/levels/finanzamt-night/backgrounds/close-glass-offices.webp",
+        "format": "webp",
+        "width": 2172,
+        "height": 665,
+        "bytes": 43248,
+        "sha256": "3a11296f46ac062b6272a7f0498274156a3c0b09e02b1a3cc601ca2eddef2b52"
+      }
+    },
+    {
+      "id": "close-archive",
+      "title": "Close archive basement workroom",
+      "anchorScore": 1500,
+      "prompt": "Use case: precise-object-edit\nAsset type: production panoramic background for a polished side-scrolling browser runner game\nInput images: Image 1: edit target and visual anchor\nPrimary request: Transform only the room identity into a close compact archive basement workroom at night. Replace the caseworker-office emphasis with nearby heavy-duty archive shelving, orderly document boxes, rows of blank binders, compact drawer units, one small sturdy archive worktable, and practical basement details directly behind the running lane. This is a shallow workroom with shelves close to the camera, not a deep aisle, tunnel, hallway, or distant underground corridor.\nStyle/medium: preserve Image 1's exact premium stylized 2.5D painterly game-environment illustration style and crisp 3D-like forms.\nComposition/framing: preserve Image 1's exact ultra-wide canvas, side-on perpendicular elevation, camera height, shallow depth, horizon, architectural scale, ceiling height, fluorescent-fixture rhythm, straight level floor line, and the entire unobstructed dark lower running lane. Keep shelves, boxes, binders, drawers, and worktable large and close behind the lane. Keep both outer edges visually calm for alternating mirrored tiling. Reserve an uncluttered structural wall panel near 14 percent of canvas width for a later deterministic plaque, plus small plausible blank prop surfaces near the middle for later deterministic Easter-egg overlays.\nLighting/mood: preserve the same midnight blue, slate, muted teal palette, cool fluorescent lighting, exposure, contrast, and calm slightly uncanny late-night mood, with at most one restrained warm task-light accent.\nMaterials/textures: sturdy dark metal archive shelves, cardboard records boxes, practical binders, concrete or institutional wall panels, worn laminated worktable, acoustic or utility ceiling.\nConstraints: change only the interior room identity and furnishings; keep geometry, framing, floor/lane, perspective, palette, lighting, and art style unchanged. No people, animals, human silhouettes, obstacles in the lower lane, unrelated logos, trademarks, watermarks, generated signs, letters, numbers, symbols, labels, handwriting, or readable text. Every box, binder, drawer, and plaque must be blank. Shelving and furniture must be structurally plausible, upright, orderly, clean, and unmelted. No extra foreground objects.\nAvoid: deep archive aisle, central vanishing point, tunnel, broad corridor, distant hallway, huge basement, atrium, disconnected rooms, tilted floor, fisheye, broken shelves, warped boxes, gibberish typography, duplicated props, clutter crossing into the lower lane, fire, smoke, flooding, destruction, Vienna landmarks.",
+      "provenance": {
+        "provider": "OpenAI Codex",
+        "model": "Codex built-in image_gen (model identifier not exposed)",
+        "createdAt": "2026-08-16T23:12:15+00:00",
+        "rawPath": "/opt/data/tmp/fredrun-finanzamt-multi-scene/close-archive-raw.png",
+        "archivePath": "/opt/data/generated-images/images/2026/08/20260816-231215_fredrun-finanzamt-night-close-archive_codex-built-in-image-gen-model-i_openai-codex_4f263535.png",
+        "archiveSha256": "4f263535fb15ea8db5cfc20ebc9a552c7fa07efa894d72df897485626e2d664e",
+        "archiveMetadataPath": "/opt/data/generated-images/metadata/2026/08/20260816-231215_fredrun-finanzamt-night-close-archive_codex-built-in-image-gen-model-i_openai-codex_4f263535.json",
+        "archivePromptPath": "/opt/data/generated-images/prompts/2026/08/20260816-231215_fredrun-finanzamt-night-close-archive_codex-built-in-image-gen-model-i_openai-codex_4f263535.txt",
+        "archiveTags": [
+          "findog",
+          "fredrun",
+          "finanzamt-night",
+          "close-office",
+          "close-archive"
+        ],
+        "sceneTag": "close-archive"
+      },
+      "raw": {
+        "file": "close-archive-raw.png",
+        "format": "png",
+        "width": 1983,
+        "height": 793,
+        "bytes": 1500503,
+        "sha256": "4f263535fb15ea8db5cfc20ebc9a552c7fa07efa894d72df897485626e2d664e"
+      },
+      "processing": {
+        "resize": {
+          "width": 2172,
+          "height": 665,
+          "fit": "fill",
+          "kernel": "lanczos3"
+        },
+        "overlays": [
+          "professional wall sign: exact text \"Finanzamt Österreich\"",
+          "binder spine: exact text \"BAO\"",
+          "calendar note: exact text \"31.12.\"",
+          "coffee mug: exact mark \"§\"",
+          "small Fred-blue dog silhouette sticker"
+        ],
+        "overlayFormat": "deterministic SVG composited by Sharp before WebP encoding",
+        "exactOverlayPatches": [
+          {
+            "id": "wall-sign",
+            "left": 300,
+            "top": 176,
+            "width": 120,
+            "height": 68
+          },
+          {
+            "id": "calendar-note",
+            "left": 1160,
+            "top": 262,
+            "width": 53,
+            "height": 42
+          },
+          {
+            "id": "binder-spine",
+            "left": 1267,
+            "top": 326,
+            "width": 63,
+            "height": 18
+          },
+          {
+            "id": "coffee-mug",
+            "left": 612,
+            "top": 326,
+            "width": 36,
+            "height": 29
+          }
+        ],
+        "scenicSignRelocation": {
+          "sourceBounds": null,
+          "outputBounds": {
+            "id": "wall-sign",
+            "left": 300,
+            "top": 176,
+            "width": 120,
+            "height": 68
+          },
+          "sourceTreatment": "raw contains no generated readable sign; add exact deterministic sign directly"
+        }
+      },
+      "output": {
+        "file": "close-archive.webp",
+        "runtimePath": "/fredrun/levels/finanzamt-night/backgrounds/close-archive.webp",
+        "format": "webp",
+        "width": 2172,
+        "height": 665,
+        "bytes": 51848,
+        "sha256": "c379794d01b63779822dc916fe38b3f6c193270313cf5af8eac976e35fc21ee9"
       }
     }
   ]

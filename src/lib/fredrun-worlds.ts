@@ -54,10 +54,13 @@ export const FREDRUN_WORLDS = {
     playDescription: "Lauf durch das stille Amt, sammle Münzen und bleib zwischen Akten und Schreibtischen in Bewegung.",
     backgrounds: {
       stages: [
-        { source: "/fredrun/levels/finanzamt-night/backgrounds/close-office.webp", anchorScore: 0 },
+        { source: "/fredrun/levels/finanzamt-night/backgrounds/close-caseworker-office.webp", anchorScore: 0 },
+        { source: "/fredrun/levels/finanzamt-night/backgrounds/close-records-room.webp", anchorScore: 500 },
+        { source: "/fredrun/levels/finanzamt-night/backgrounds/close-glass-offices.webp", anchorScore: 1_000 },
+        { source: "/fredrun/levels/finanzamt-night/backgrounds/close-archive.webp", anchorScore: 1_500 },
       ],
       fallbackSource: "/fredrun/vienna-panorama.webp",
-      crossfadeScoreDuration: null,
+      crossfadeScoreDuration: 40,
       renderStyle: "night-office",
     },
   },

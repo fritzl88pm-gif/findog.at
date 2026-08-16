@@ -31,7 +31,22 @@ import {
 } from "./fredrun-worlds";
 
 describe("Fredrun world background progression", () => {
-  it("keeps Vienna's crossfade and uses one continuous Finanzamt panorama", () => {
+  it("keeps Vienna unchanged and crossfades four distinct Finanzamt rooms", () => {
+    expect(FREDRUN_WORLDS.vienna.backgrounds).toEqual({
+      stages: [
+        { source: "/fredrun/backgrounds/vienna-ominous.webp", anchorScore: 0 },
+        { source: "/fredrun/backgrounds/vienna-gathering-storm.webp", anchorScore: 500 },
+        { source: "/fredrun/backgrounds/vienna-storm-damage.webp", anchorScore: 1_000 },
+        { source: "/fredrun/backgrounds/vienna-heavy-smoke-emergency.webp", anchorScore: 1_500 },
+        { source: "/fredrun/backgrounds/vienna-burning-collapse.webp", anchorScore: 2_000 },
+        { source: "/fredrun/backgrounds/vienna-widespread-fire-collapse.webp", anchorScore: 2_500 },
+        { source: "/fredrun/backgrounds/vienna-rubble-ashes.webp", anchorScore: 3_000 },
+        { source: "/fredrun/backgrounds/vienna-cold-ash-aftermath.webp", anchorScore: 3_500 },
+      ],
+      fallbackSource: "/fredrun/vienna-panorama.webp",
+      crossfadeScoreDuration: 40,
+      renderStyle: "vienna-disaster",
+    });
     const viennaCrossfade = fredRunWorldBackgroundForScore("vienna", 480);
     expect(viennaCrossfade).toMatchObject({
       fromStage: 0,
@@ -45,18 +60,58 @@ describe("Fredrun world background progression", () => {
     });
     expect(FREDRUN_WORLDS["finanzamt-night"].backgrounds.stages).toEqual([
       {
-        source: "/fredrun/levels/finanzamt-night/backgrounds/close-office.webp",
+        source: "/fredrun/levels/finanzamt-night/backgrounds/close-caseworker-office.webp",
         anchorScore: 0,
       },
+      {
+        source: "/fredrun/levels/finanzamt-night/backgrounds/close-records-room.webp",
+        anchorScore: 500,
+      },
+      {
+        source: "/fredrun/levels/finanzamt-night/backgrounds/close-glass-offices.webp",
+        anchorScore: 1_000,
+      },
+      {
+        source: "/fredrun/levels/finanzamt-night/backgrounds/close-archive.webp",
+        anchorScore: 1_500,
+      },
     ]);
-    expect("transition" in FREDRUN_WORLDS["finanzamt-night"].backgrounds).toBe(false);
-    for (const score of [-1, 0, 499, 500, 1_500, 10_000, Number.POSITIVE_INFINITY]) {
-      expect(fredRunWorldBackgroundForScore("finanzamt-night", score)).toEqual({
-        fromStage: 0,
-        toStage: 0,
-        blend: 0,
-      });
+    expect(FREDRUN_WORLDS["finanzamt-night"].backgrounds.crossfadeScoreDuration).toBe(40);
+
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", -1))
+      .toEqual({ fromStage: 0, toStage: 1, blend: 0 });
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 459))
+      .toEqual({ fromStage: 0, toStage: 1, blend: 0 });
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 460))
+      .toEqual({ fromStage: 0, toStage: 1, blend: 0 });
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 470))
+      .toMatchObject({ fromStage: 0, toStage: 1 });
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 470).blend)
+      .toBeCloseTo(0.15625, 12);
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 480))
+      .toMatchObject({ fromStage: 0, toStage: 1 });
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 480).blend)
+      .toBeCloseTo(0.5, 12);
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 490))
+      .toMatchObject({ fromStage: 0, toStage: 1 });
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 490).blend)
+      .toBeCloseTo(0.84375, 12);
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 500))
+      .toEqual({ fromStage: 1, toStage: 2, blend: 0 });
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 980))
+      .toMatchObject({ fromStage: 1, toStage: 2 });
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 980).blend)
+      .toBeCloseTo(0.5, 12);
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 1_480))
+      .toMatchObject({ fromStage: 2, toStage: 3 });
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 1_480).blend)
+      .toBeCloseTo(0.5, 12);
+    for (const score of [1_500, 10_000, Number.MAX_SAFE_INTEGER]) {
+      expect(fredRunWorldBackgroundForScore("finanzamt-night", score))
+        .toEqual({ fromStage: 3, toStage: 3, blend: 0 });
     }
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", Number.POSITIVE_INFINITY))
+      .toEqual({ fromStage: 0, toStage: 1, blend: 0 });
 
     for (const distance of [0, 480 * 34, 500 * 34, 1_475 * 34, 3_500 * 34, 10_000 * 34]) {
       const existingVienna = fredRunEnvironmentForDistance(distance);
