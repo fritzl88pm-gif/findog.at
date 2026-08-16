@@ -3022,7 +3022,7 @@ textarea:focus {
 
 .fredrun-menu-nav {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
   padding: 4px;
   margin: 0 18px 12px;
@@ -3252,6 +3252,143 @@ textarea:focus {
   font-size: 0.68rem;
   font-weight: 800;
   box-shadow: 0 2px 5px rgba(19, 53, 75, 0.05);
+}
+
+.fredrun-level-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.fredrun-level-card {
+  display: grid;
+  min-width: 0;
+  grid-template-rows: auto 1fr auto;
+  gap: 11px;
+  padding: 11px;
+  border: 1.5px solid rgba(40, 111, 156, 0.2);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 4px 16px rgba(19, 53, 75, 0.07);
+  transition: var(--transition);
+}
+
+.fredrun-level-card.is-selected {
+  border-color: var(--bmf-blue);
+  background: rgba(40, 111, 156, 0.06);
+  box-shadow: 0 0 0 2.5px rgba(40, 111, 156, 0.3), 0 8px 22px rgba(40, 111, 156, 0.14);
+}
+
+.fredrun-level-art {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 2172 / 665;
+  border: 1px solid rgba(40, 111, 156, 0.16);
+  border-radius: 11px;
+  background: #102432;
+}
+
+.fredrun-level-art img {
+  object-fit: cover;
+  transition: filter 180ms ease;
+}
+
+.fredrun-level-card.is-locked .fredrun-level-art img {
+  filter: brightness(0.58) saturate(0.68);
+}
+
+.fredrun-level-state {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  padding: 5px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+  background: rgba(7, 23, 35, 0.86);
+  color: #fff;
+  font-size: 0.64rem;
+  font-weight: 850;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(6px);
+}
+
+.fredrun-level-copy {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+.fredrun-level-copy h3 {
+  color: var(--bmf-blue-deep);
+  font-size: 1rem;
+  font-weight: 850;
+}
+
+.fredrun-level-copy p {
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.fredrun-level-card > button,
+.fredrun-level-purchase button {
+  min-height: 42px;
+  border: 2px solid var(--bmf-blue);
+  border-radius: 10px;
+  padding: 0 13px;
+  background: #ffffff;
+  color: var(--bmf-blue-dark);
+  font-size: 0.74rem;
+  font-weight: 850;
+}
+
+.fredrun-level-card > button:hover:not(:disabled),
+.fredrun-level-purchase button:hover:not(:disabled) {
+  background: var(--bmf-blue);
+  color: #ffffff;
+}
+
+.fredrun-level-card > button.is-selected {
+  border-color: rgba(40, 111, 156, 0.22);
+  background: rgba(40, 111, 156, 0.1);
+  color: var(--bmf-blue-deep);
+  opacity: 1;
+}
+
+.fredrun-level-purchase {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fredrun-level-purchase strong {
+  display: flex;
+  min-width: max-content;
+  align-items: center;
+  gap: 5px;
+  color: #9a4c06;
+  font-size: 0.72rem;
+}
+
+.fredrun-level-purchase .fredrun-coin-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.fredrun-level-purchase button {
+  flex: 1 1 auto;
+  border-color: #c46207;
+  color: #8a3d03;
+}
+
+.fredrun-level-purchase button:disabled {
+  cursor: not-allowed;
+  border-color: #cbd5e1;
+  background: #f1f5f9;
+  color: #475569;
+  opacity: 1;
 }
 
 .fredrun-menu-character-grid {
@@ -7991,8 +8128,8 @@ textarea:focus {
 
   .fredrun-menu-nav button {
     min-height: 38px;
-    padding-inline: 6px;
-    font-size: 0.72rem;
+    padding-inline: 4px;
+    font-size: 0.69rem;
   }
 
   .fredrun-menu-panel {
@@ -8117,6 +8254,7 @@ textarea:focus {
   }
 
   .fredrun-menu-character-grid,
+  .fredrun-level-grid,
   .fredrun-shop-grid,
   .fredrun-info-grid {
     grid-template-columns: 1fr;

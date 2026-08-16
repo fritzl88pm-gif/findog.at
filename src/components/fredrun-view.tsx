@@ -22,6 +22,7 @@ import {
   FREDRUN_WORLD_WIDTH,
   advanceFredRun,
   createFredRunState,
+  fredRunContinuousScoreForDistance,
   fredRunEnvironmentForDistance,
   jumpFredRun,
   pauseFredRun,
@@ -42,17 +43,27 @@ import {
 import {
   FREDRUN_CHARACTERS,
   FREDRUN_CHARACTER_IDS,
-  FREDRUN_SUPERFRED_PRICE,
   createDefaultFredRunProfile,
   isFredRunCharacterUnlocked,
+  isFredRunWorldUnlocked,
   purchaseFredRunCharacter,
+  purchaseFredRunWorld,
   readFredRunProfile,
   selectFredRunCharacter,
+  selectFredRunWorld,
   settleFredRunCoins,
   writeFredRunProfile,
   type FredRunCharacterId,
   type FredRunProfile,
 } from "@/lib/fredrun-profile";
+import {
+  FREDRUN_WORLDS,
+  FREDRUN_WORLD_IDS,
+  fredRunWorldBackgroundForScore,
+  loadFredRunWorldBackgrounds,
+  type FredRunWorldBackgrounds,
+  type FredRunWorldId,
+} from "@/lib/fredrun-worlds";
 import {
   FREDRUN_PLAYER_NAME_MAX_LENGTH,
   normalizeFredRunPlayerName,
@@ -68,17 +79,6 @@ const LOADING_SCREEN_MINIMUM_MS = 850;
 const INTRO_SOURCE = "/fredrun/intro.webp";
 const COIN_SOURCE = "/fredrun/coin-f.webp";
 const MAGNET_SOURCE = "/fredrun/powerup-magnet.png";
-const BACKGROUND_FALLBACK_SOURCE = "/fredrun/vienna-panorama.webp";
-const FREDRUN_BACKGROUND_SOURCES = [
-  "/fredrun/backgrounds/vienna-ominous.webp",
-  "/fredrun/backgrounds/vienna-gathering-storm.webp",
-  "/fredrun/backgrounds/vienna-storm-damage.webp",
-  "/fredrun/backgrounds/vienna-heavy-smoke-emergency.webp",
-  "/fredrun/backgrounds/vienna-burning-collapse.webp",
-  "/fredrun/backgrounds/vienna-widespread-fire-collapse.webp",
-  "/fredrun/backgrounds/vienna-rubble-ashes.webp",
-  "/fredrun/backgrounds/vienna-cold-ash-aftermath.webp",
-] as const;
 const BACKGROUND_DRAW_HEIGHT = 450;
 const BACKGROUND_SCROLL_FACTOR = 0.12;
 const MOBILE_FULLSCREEN_QUERY = "(max-width: 900px), (pointer: coarse)";
@@ -128,10 +128,11 @@ const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, Chara
 
 const fredRunCharacters = FREDRUN_CHARACTERS;
 
-type FredRunMenuTab = "play" | "characters" | "shop" | "info";
+type FredRunMenuTab = "play" | "levels" | "characters" | "shop" | "info";
 
 const fredRunMenuTabs: ReadonlyArray<{ id: FredRunMenuTab; label: string }> = [
   { id: "play", label: "Spielen" },
+  { id: "levels", label: "Levels" },
   { id: "characters", label: "Charaktere" },
   { id: "shop", label: "Shop" },
   { id: "info", label: "Info" },
@@ -203,8 +204,12 @@ type FredRunImages = {
   obstacles: ObstacleImages;
   coin: HTMLImageElement;
   magnet: HTMLImageElement;
-  backgrounds: HTMLImageElement[];
+  backgrounds: FredRunWorldBackgrounds<HTMLImageElement>;
 };
+
+type FredRunPurchaseTarget =
+  | { kind: "character"; id: FredRunCharacterId }
+  | { kind: "world"; id: FredRunWorldId };
 
 type FredRunSnapshot = {
   phase: FredRunPhase;
@@ -254,16 +259,6 @@ function loadImage(source: string): Promise<HTMLImageElement> {
     image.onerror = () => reject(new Error(`Sprite konnte nicht geladen werden: ${source}`));
     image.src = source;
   });
-}
-
-async function loadBackgrounds(): Promise<HTMLImageElement[]> {
-  return Promise.all(FREDRUN_BACKGROUND_SOURCES.map(async (source) => {
-    try {
-      return await loadImage(source);
-    } catch {
-      return loadImage(BACKGROUND_FALLBACK_SOURCE);
-    }
-  }));
 }
 
 function drawFallbackBackground(
@@ -507,17 +502,24 @@ function drawAtmosphericParticles(
 function drawBackground(
   context: CanvasRenderingContext2D,
   state: FredRunState,
-  backgrounds: HTMLImageElement[],
+  backgrounds: FredRunWorldBackgrounds<HTMLImageElement> | null,
   reducedMotion: boolean,
+  worldId: FredRunWorldId,
 ) {
   const environment = fredRunEnvironmentForDistance(state.distance);
-  const fromBackground = backgrounds[environment.fromStage] ?? null;
-  const toBackground = backgrounds[environment.toStage] ?? null;
+  const world = FREDRUN_WORLDS[worldId];
+  const selection = fredRunWorldBackgroundForScore(
+    worldId,
+    fredRunContinuousScoreForDistance(state.distance),
+  );
+  const worldBackgrounds = backgrounds?.[worldId] ?? [];
+  const fromBackground = worldBackgrounds[selection.fromStage] ?? null;
+  const toBackground = worldBackgrounds[selection.toStage] ?? null;
 
   if (fromBackground) {
     drawViennaBackground(context, state, fromBackground, reducedMotion);
-    if (toBackground && environment.toStage !== environment.fromStage && environment.blend > 0) {
-      drawViennaBackground(context, state, toBackground, reducedMotion, environment.blend);
+    if (toBackground && selection.toStage !== selection.fromStage && selection.blend > 0) {
+      drawViennaBackground(context, state, toBackground, reducedMotion, selection.blend);
     }
   } else if (toBackground) {
     drawViennaBackground(context, state, toBackground, reducedMotion);
@@ -525,17 +527,25 @@ function drawBackground(
     drawFallbackBackground(context, state, reducedMotion);
   }
 
-  drawStormAtmosphere(context, state, environment, reducedMotion);
-  drawRainAtmosphere(context, state, environment, reducedMotion);
-  drawSmokeAtmosphere(context, state, environment, reducedMotion);
-  drawAtmosphericParticles(context, state, environment, reducedMotion);
+  if (world.backgrounds.renderStyle === "vienna-disaster") {
+    drawStormAtmosphere(context, state, environment, reducedMotion);
+    drawRainAtmosphere(context, state, environment, reducedMotion);
+    drawSmokeAtmosphere(context, state, environment, reducedMotion);
+    drawAtmosphericParticles(context, state, environment, reducedMotion);
 
-  const devastation = Math.min(1, environment.progress / 5);
-  context.fillStyle = `rgb(${Math.round(184 - 111 * devastation)}, ${Math.round(192 - 121 * devastation)}, ${Math.round(182 - 114 * devastation)})`;
-  context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT - FREDRUN_GROUND_Y);
-  context.fillStyle = `rgb(${Math.round(115 - 67 * devastation)}, ${Math.round(140 - 94 * devastation)}, ${Math.round(121 - 77 * devastation)})`;
-  context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, 6);
-  context.strokeStyle = `rgba(32, 29, 27, ${0.2 + 0.22 * devastation})`;
+    const devastation = Math.min(1, environment.progress / 5);
+    context.fillStyle = `rgb(${Math.round(184 - 111 * devastation)}, ${Math.round(192 - 121 * devastation)}, ${Math.round(182 - 114 * devastation)})`;
+    context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT - FREDRUN_GROUND_Y);
+    context.fillStyle = `rgb(${Math.round(115 - 67 * devastation)}, ${Math.round(140 - 94 * devastation)}, ${Math.round(121 - 77 * devastation)})`;
+    context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, 6);
+    context.strokeStyle = `rgba(32, 29, 27, ${0.2 + 0.22 * devastation})`;
+  } else {
+    context.fillStyle = "#101d27";
+    context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT - FREDRUN_GROUND_Y);
+    context.fillStyle = "#31495a";
+    context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, 6);
+    context.strokeStyle = "rgba(89, 119, 139, 0.42)";
+  }
   context.lineWidth = 2;
   const groundOffset = reducedMotion ? 0 : state.distance % 76;
   for (let x = -groundOffset; x < FREDRUN_WORLD_WIDTH; x += 76) {
@@ -545,7 +555,7 @@ function drawBackground(
     context.stroke();
   }
 
-  if (environment.darkness > 0) {
+  if (world.backgrounds.renderStyle === "vienna-disaster" && environment.darkness > 0) {
     context.fillStyle = `rgba(9, 12, 18, ${environment.darkness})`;
     context.fillRect(0, 0, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT);
   }
@@ -774,7 +784,9 @@ function FredRunMenu({
   onTabChange,
   onStart,
   onSelectCharacter,
-  onRequestPurchase,
+  onSelectWorld,
+  onRequestCharacterPurchase,
+  onRequestWorldPurchase,
   onToggleFullscreen,
 }: {
   activeTab: FredRunMenuTab;
@@ -790,10 +802,13 @@ function FredRunMenu({
   onTabChange: (tab: FredRunMenuTab) => void;
   onStart: () => void;
   onSelectCharacter: (characterId: FredRunCharacterId) => void;
-  onRequestPurchase: (characterId: FredRunCharacterId) => void;
+  onSelectWorld: (worldId: FredRunWorldId) => void;
+  onRequestCharacterPurchase: (characterId: FredRunCharacterId) => void;
+  onRequestWorldPurchase: (worldId: FredRunWorldId) => void;
   onToggleFullscreen: () => void;
 }) {
   const selectedCharacter = fredRunCharacters[profile.selectedCharacter];
+  const selectedWorld = FREDRUN_WORLDS[profile.selectedWorld];
   const ready = profileReady && assetState === "ready";
 
   return (
@@ -854,11 +869,12 @@ function FredRunMenu({
           {activeTab === "play" ? (
             <section className="fredrun-menu-panel fredrun-menu-play" aria-labelledby="fredrun-menu-play-title">
               <div className="fredrun-menu-play-copy">
-                <p className="fredrun-menu-kicker">Bereit für Wien?</p>
+                <p className="fredrun-menu-kicker">{selectedWorld.playKicker}</p>
                 <h2 id="fredrun-menu-play-title">Mit {selectedCharacter.name} loslaufen</h2>
-                <p>Weiche Hindernissen aus, sammle Münzen und halte dem steigenden Tempo so lange wie möglich stand.</p>
+                <p>{selectedWorld.playDescription}</p>
                 <div className="fredrun-menu-stats">
                   <span>Ausgewählt <strong>{selectedCharacter.name}</strong></span>
+                  <span>Level <strong>{selectedWorld.name}</strong></span>
                   <span>Bestwert <strong>{bestScore}</strong></span>
                 </div>
                 <div className="fredrun-menu-play-actions">
@@ -877,6 +893,74 @@ function FredRunMenu({
                   animated
                   className="fredrun-character-preview--hero"
                 />
+              </div>
+            </section>
+          ) : null}
+
+          {activeTab === "levels" ? (
+            <section className="fredrun-menu-panel" aria-labelledby="fredrun-menu-levels-title">
+              <div className="fredrun-menu-section-heading">
+                <div>
+                  <p className="fredrun-menu-kicker">Deine Spielwelt</p>
+                  <h2 id="fredrun-menu-levels-title">Level auswählen</h2>
+                </div>
+                <span>Wechsel nur vor dem Run</span>
+              </div>
+              <div className="fredrun-level-grid">
+                {FREDRUN_WORLD_IDS.map((worldId) => {
+                  const world = FREDRUN_WORLDS[worldId];
+                  const unlocked = isFredRunWorldUnlocked(profile, worldId);
+                  const selected = profile.selectedWorld === worldId;
+                  const missingCoins = Math.max(0, world.price - profile.coinBalance);
+                  return (
+                    <article
+                      key={worldId}
+                      className={`fredrun-level-card${selected ? " is-selected" : ""}${unlocked ? "" : " is-locked"}`}
+                      aria-label={`${world.name}, ${selected ? "ausgewählt" : unlocked ? "freigeschaltet" : "gesperrt"}`}
+                    >
+                      <div className="fredrun-level-art">
+                        <NextImage
+                          src={world.backgrounds.stages[0].source}
+                          alt=""
+                          fill
+                          sizes="(max-width: 540px) 90vw, 420px"
+                          unoptimized
+                        />
+                        <span className="fredrun-level-state">
+                          {selected ? "✓ Ausgewählt" : unlocked ? "Freigeschaltet" : "🔒 Gesperrt"}
+                        </span>
+                      </div>
+                      <div className="fredrun-level-copy">
+                        <h3>{world.name}</h3>
+                        <p>{world.description}</p>
+                      </div>
+                      {unlocked ? (
+                        <button
+                          type="button"
+                          className={selected ? "is-selected" : undefined}
+                          aria-pressed={selected}
+                          disabled={selected}
+                          onClick={() => onSelectWorld(worldId)}
+                        >
+                          {selected ? "Ausgewählt" : "Level auswählen"}
+                        </button>
+                      ) : (
+                        <div className="fredrun-level-purchase">
+                          <strong><FredRunCoinIcon /> {world.price.toLocaleString("de-AT")} Münzen</strong>
+                          <button
+                            type="button"
+                            disabled={missingCoins > 0}
+                            onClick={() => onRequestWorldPurchase(worldId)}
+                          >
+                            {missingCoins > 0
+                              ? `Noch ${missingCoins.toLocaleString("de-AT")} Münzen`
+                              : `Für ${world.price.toLocaleString("de-AT")} freischalten`}
+                          </button>
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
               </div>
             </section>
           ) : null}
@@ -961,7 +1045,7 @@ function FredRunMenu({
                           <button
                             type="button"
                             disabled={missingCoins > 0}
-                            onClick={() => onRequestPurchase(characterId)}
+                            onClick={() => onRequestCharacterPurchase(characterId)}
                           >
                             {missingCoins > 0 ? `Noch ${missingCoins.toLocaleString("de-AT")} Münzen` : "Freischalten"}
                           </button>
@@ -996,7 +1080,7 @@ function FredRunMenu({
                 <article>
                   <span className="fredrun-info-symbol" aria-hidden="true">∞</span>
                   <h3>Endlos laufen</h3>
-                  <p>Es gibt keine Levels. Das Tempo steigt kontinuierlich, bis dich ein Hindernis erwischt.</p>
+                  <p>Jeder Run läuft endlos. Das Tempo steigt kontinuierlich, bis dich ein Hindernis erwischt.</p>
                 </article>
                 <article>
                   <span className="fredrun-info-symbol" aria-hidden="true">↑</span>
@@ -1223,6 +1307,7 @@ function renderFredRun(
   images: FredRunImages | null,
   reducedMotion: boolean,
   characterId: FredRunCharacterId,
+  worldId: FredRunWorldId,
 ) {
   const context = canvas.getContext("2d");
   if (!context || canvas.width === 0 || canvas.height === 0) {
@@ -1231,7 +1316,7 @@ function renderFredRun(
   context.setTransform(canvas.width / FREDRUN_WORLD_WIDTH, 0, 0, canvas.height / FREDRUN_WORLD_HEIGHT, 0, 0);
   context.clearRect(0, 0, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT);
   context.imageSmoothingEnabled = true;
-  drawBackground(context, state, images?.backgrounds ?? [], reducedMotion);
+  drawBackground(context, state, images?.backgrounds ?? null, reducedMotion, worldId);
   state.coins.forEach((coin) => drawCoin(context, coin, images?.coin ?? null, state.elapsed, reducedMotion));
   state.powerUps?.forEach((powerUp) => drawPowerUp(
     context,
@@ -1385,6 +1470,7 @@ export default function FredRunView({
   const gameRef = useRef<FredRunState>(createFredRunState());
   const imagesRef = useRef<FredRunImages | null>(null);
   const selectedCharacterRef = useRef<FredRunCharacterId>("fred");
+  const currentRunWorldRef = useRef<FredRunWorldId>("vienna");
   const profileRef = useRef<FredRunProfile>(createDefaultFredRunProfile());
   const currentRunIdRef = useRef<string | null>(null);
   const bestScoreRef = useRef(0);
@@ -1396,7 +1482,7 @@ export default function FredRunView({
   const [minimumLoadingComplete, setMinimumLoadingComplete] = useState(false);
   const [storageAvailable, setStorageAvailable] = useState(true);
   const [menuTab, setMenuTab] = useState<FredRunMenuTab>("play");
-  const [pendingPurchase, setPendingPurchase] = useState<FredRunCharacterId | null>(null);
+  const [pendingPurchase, setPendingPurchase] = useState<FredRunPurchaseTarget | null>(null);
   const [purchaseMessage, setPurchaseMessage] = useState("");
   const [abortConfirmation, setAbortConfirmation] = useState(false);
   const [lastAwardedCoins, setLastAwardedCoins] = useState(0);
@@ -1465,6 +1551,7 @@ export default function FredRunView({
         imagesRef.current,
         reducedMotionRef.current,
         selectedCharacterRef.current,
+        currentRunWorldRef.current,
       );
     }
   }, [publish]);
@@ -1472,6 +1559,9 @@ export default function FredRunView({
   const commitProfile = useCallback((nextProfile: FredRunProfile) => {
     profileRef.current = nextProfile;
     selectedCharacterRef.current = nextProfile.selectedCharacter;
+    if (gameRef.current.phase === "ready") {
+      currentRunWorldRef.current = nextProfile.selectedWorld;
+    }
     setProfile(nextProfile);
     setStorageAvailable(writeFredRunProfile(localHighScoreStorage(), nextProfile));
     if (canvasRef.current) {
@@ -1481,6 +1571,7 @@ export default function FredRunView({
         imagesRef.current,
         reducedMotionRef.current,
         nextProfile.selectedCharacter,
+        currentRunWorldRef.current,
       );
     }
   }, []);
@@ -1489,6 +1580,14 @@ export default function FredRunView({
     if (gameRef.current.phase !== "ready") return;
     const nextProfile = selectFredRunCharacter(profileRef.current, characterId);
     if (nextProfile !== profileRef.current) commitProfile(nextProfile);
+  }, [commitProfile]);
+
+  const selectWorld = useCallback((worldId: FredRunWorldId) => {
+    if (gameRef.current.phase !== "ready") return;
+    const nextProfile = selectFredRunWorld(profileRef.current, worldId);
+    if (nextProfile === profileRef.current) return;
+    commitProfile(nextProfile);
+    setPurchaseMessage(`${FREDRUN_WORLDS[worldId].name} ist ausgewählt.`);
   }, [commitProfile]);
 
   const prepareNewRun = useCallback(() => {
@@ -1502,6 +1601,7 @@ export default function FredRunView({
     setScoreSubmissionError("");
     setAbortConfirmation(false);
     setLastAwardedCoins(0);
+    currentRunWorldRef.current = profileRef.current.selectedWorld;
   }, []);
 
   const startOrJump = useCallback(() => {
@@ -1536,6 +1636,7 @@ export default function FredRunView({
     setAbortConfirmation(false);
     setLastAwardedCoins(0);
     setMenuTab("play");
+    currentRunWorldRef.current = profileRef.current.selectedWorld;
     replaceGame(restartFredRun());
   }, [replaceGame]);
 
@@ -1553,19 +1654,35 @@ export default function FredRunView({
     replaceGame(state);
   }, [replaceGame]);
 
-  const requestPurchase = useCallback((characterId: FredRunCharacterId) => {
+  const requestCharacterPurchase = useCallback((characterId: FredRunCharacterId) => {
     if (isFredRunCharacterUnlocked(profileRef.current, characterId)) return;
     if (profileRef.current.coinBalance < fredRunCharacters[characterId].price) return;
     setPurchaseMessage("");
-    setPendingPurchase(characterId);
+    setPendingPurchase({ kind: "character", id: characterId });
+  }, []);
+
+  const requestWorldPurchase = useCallback((worldId: FredRunWorldId) => {
+    if (isFredRunWorldUnlocked(profileRef.current, worldId)) return;
+    if (profileRef.current.coinBalance < FREDRUN_WORLDS[worldId].price) return;
+    setPurchaseMessage("");
+    setPendingPurchase({ kind: "world", id: worldId });
   }, []);
 
   const confirmPurchase = useCallback(() => {
     if (!pendingPurchase) return;
-    const result = purchaseFredRunCharacter(profileRef.current, pendingPurchase);
+    const definition = pendingPurchase.kind === "character"
+      ? fredRunCharacters[pendingPurchase.id]
+      : FREDRUN_WORLDS[pendingPurchase.id];
+    const result = pendingPurchase.kind === "character"
+      ? purchaseFredRunCharacter(profileRef.current, pendingPurchase.id)
+      : purchaseFredRunWorld(profileRef.current, pendingPurchase.id);
     if (result.status === "purchased") {
       commitProfile(result.profile);
-      setPurchaseMessage(`${fredRunCharacters[pendingPurchase].name} ist jetzt freigeschaltet und ausgewählt.`);
+      setPurchaseMessage(`${definition.name} ist jetzt freigeschaltet und ausgewählt.`);
+    } else if (result.status === "insufficient-funds") {
+      setPurchaseMessage(`Für ${definition.name} fehlen noch Münzen.`);
+    } else {
+      setPurchaseMessage(`${definition.name} ist bereits freigeschaltet.`);
     }
     setPendingPurchase(null);
   }, [commitProfile, pendingPurchase]);
@@ -1617,6 +1734,7 @@ export default function FredRunView({
       : storedProfile.profile;
     profileRef.current = initialProfile;
     selectedCharacterRef.current = initialProfile.selectedCharacter;
+    currentRunWorldRef.current = initialProfile.selectedWorld;
     setProfile(initialProfile);
     setStorageAvailable(storedProfile.storageAvailable);
     setProfileReady(true);
@@ -1667,7 +1785,7 @@ export default function FredRunView({
       loadImage(COIN_SOURCE),
       loadImage(MAGNET_SOURCE),
       loadImage(INTRO_SOURCE),
-      loadBackgrounds(),
+      loadFredRunWorldBackgrounds(loadImage),
     ])
       .then(([characterEntries, obstacleEntries, coin, magnet, , backgrounds]) => {
         if (cancelled) return;
@@ -1714,6 +1832,7 @@ export default function FredRunView({
         imagesRef.current,
         reducedMotionRef.current,
         selectedCharacterRef.current,
+        currentRunWorldRef.current,
       );
     };
     const observer = new ResizeObserver(resize);
@@ -1769,6 +1888,7 @@ export default function FredRunView({
           imagesRef.current,
           reducedMotionRef.current,
           selectedCharacterRef.current,
+          currentRunWorldRef.current,
         );
       }
       frameRef.current = requestAnimationFrame(tick);
@@ -2064,7 +2184,9 @@ export default function FredRunView({
                   }}
                   onStart={startRound}
                   onSelectCharacter={selectCharacter}
-                  onRequestPurchase={requestPurchase}
+                  onSelectWorld={selectWorld}
+                  onRequestCharacterPurchase={requestCharacterPurchase}
+                  onRequestWorldPurchase={requestWorldPurchase}
                   onToggleFullscreen={() => void toggleFullscreen()}
                 />
                 {pendingPurchase ? (
@@ -2078,9 +2200,15 @@ export default function FredRunView({
                       onKeyDown={(event) => handleFredRunDialogKeyDown(event, () => setPendingPurchase(null))}
                     >
                       <p className="fredrun-menu-kicker">Freischalten</p>
-                      <h2 id="fredrun-purchase-title">{fredRunCharacters[pendingPurchase].name} kaufen?</h2>
+                      <h2 id="fredrun-purchase-title">
+                        {pendingPurchase.kind === "character"
+                          ? fredRunCharacters[pendingPurchase.id].name
+                          : FREDRUN_WORLDS[pendingPurchase.id].name} kaufen?
+                      </h2>
                       <p id="fredrun-purchase-description">
-                        Dafür werden <strong>{FREDRUN_SUPERFRED_PRICE.toLocaleString("de-AT")} Münzen</strong> von deinem Guthaben abgezogen. Der Kauf kann nicht rückgängig gemacht werden.
+                        Dafür werden <strong>{(pendingPurchase.kind === "character"
+                          ? fredRunCharacters[pendingPurchase.id].price
+                          : FREDRUN_WORLDS[pendingPurchase.id].price).toLocaleString("de-AT")} Münzen</strong> von deinem Guthaben abgezogen. Der Kauf kann nicht rückgängig gemacht werden.
                       </p>
                       <div className="fredrun-menu-dialog-actions">
                         <button type="button" className="fredrun-secondary-button" onClick={() => setPendingPurchase(null)} autoFocus>

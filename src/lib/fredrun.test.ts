@@ -11,6 +11,7 @@ import {
   FREDRUN_RESUME_COUNTDOWN_SECONDS,
   advanceFredRun,
   createFredRunState,
+  fredRunContinuousScoreForDistance,
   fredRunEnvironmentForDistance,
   fredRunSpeedForDistance,
   fredRunSpeedForScore,
@@ -23,6 +24,50 @@ import {
   type FredRunState,
   writeFredRunHighScore,
 } from "./fredrun";
+import { fredRunWorldBackgroundForScore } from "./fredrun-worlds";
+
+describe("Fredrun world background progression", () => {
+  it("keeps Vienna's crossfade and uses hard ordered stages for Finanzamt", () => {
+    const viennaCrossfade = fredRunWorldBackgroundForScore("vienna", 480);
+    expect(viennaCrossfade).toMatchObject({
+      fromStage: 0,
+      toStage: 1,
+    });
+    expect(viennaCrossfade.blend).toBeCloseTo(0.5, 12);
+    expect(fredRunWorldBackgroundForScore("vienna", 10_000)).toEqual({
+      fromStage: 7,
+      toStage: 7,
+      blend: 0,
+    });
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 499)).toEqual({
+      fromStage: 0,
+      toStage: 0,
+      blend: 0,
+    });
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 500)).toEqual({
+      fromStage: 1,
+      toStage: 1,
+      blend: 0,
+    });
+    expect(fredRunWorldBackgroundForScore("finanzamt-night", 10_000)).toEqual({
+      fromStage: 3,
+      toStage: 3,
+      blend: 0,
+    });
+
+    for (const distance of [0, 480 * 34, 500 * 34, 1_475 * 34, 3_500 * 34, 10_000 * 34]) {
+      const existingVienna = fredRunEnvironmentForDistance(distance);
+      expect(fredRunWorldBackgroundForScore(
+        "vienna",
+        fredRunContinuousScoreForDistance(distance),
+      )).toEqual({
+        fromStage: existingVienna.fromStage,
+        toStage: existingVienna.toStage,
+        blend: existingVienna.blend,
+      });
+    }
+  });
+});
 
 describe("Fredrun simulation", () => {
   it("uses the exact continuous and uncapped 120-per-250-points speed curve", () => {

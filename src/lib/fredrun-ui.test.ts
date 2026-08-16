@@ -1,9 +1,15 @@
+import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
 import { fredRunEnvironmentForDistance } from "./fredrun";
+import {
+  FREDRUN_WORLD_IDS,
+  FREDRUN_WORLDS,
+  loadFredRunWorldBackgrounds,
+} from "./fredrun-worlds";
 
 const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.meta.url)), "utf8");
 const standalonePageSource = readFileSync(
@@ -250,13 +256,62 @@ const stagedBackgroundManifest = JSON.parse(readFileSync(
     output: { file: string; width: number; height: number; bytes: number; sha256: string };
   }>;
 };
+const finanzamtBackgroundManifest = JSON.parse(readFileSync(
+  fileURLToPath(new URL(
+    "../../public/fredrun/levels/finanzamt-night/backgrounds/manifest.json",
+    import.meta.url,
+  )),
+  "utf8",
+)) as {
+  schemaVersion: number;
+  worldId: string;
+  generation: {
+    route: string;
+    rawDirectory: string;
+    sound: { included: boolean; decision: string };
+  };
+  runtime: {
+    format: string;
+    width: number;
+    height: number;
+    quality: number;
+    scoreAnchors: number[];
+    transition: string;
+    finalState: string;
+    fallbackSource: string;
+    processing: { script: string; method: string };
+  };
+  stages: Array<{
+    id: string;
+    anchorScore: number;
+    prompt: string;
+    provenance: {
+      provider: string;
+      model: string;
+      rawPath: string;
+      archivePath: string;
+      archiveMetadataPath: string;
+      archivePromptPath: string;
+    };
+    raw: { width: number; height: number; bytes: number; sha256: string };
+    output: {
+      file: string;
+      runtimePath: string;
+      format: string;
+      width: number;
+      height: number;
+      bytes: number;
+      sha256: string;
+    };
+  }>;
+};
+
+function sha256(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
 
 function stagedBackgroundSourcesFromView(): string[] {
-  const declaration = viewSource.match(
-    /const FREDRUN_BACKGROUND_SOURCES = \[([\s\S]*?)\] as const;/u,
-  );
-  if (!declaration) return [];
-  return Array.from(declaration[1].matchAll(/"([^"]+)"/gu), (match) => match[1]);
+  return FREDRUN_WORLDS.vienna.backgrounds.stages.map(({ source }) => source);
 }
 
 function viewImplementationBetween(start: string, end: string): string {
@@ -264,31 +319,6 @@ function viewImplementationBetween(start: string, end: string): string {
   const endIndex = viewSource.indexOf(end, startIndex);
   if (startIndex < 0 || endIndex < 0) return "";
   return viewSource.slice(startIndex, endIndex);
-}
-
-function executableBackgroundLoader(
-  loadImage: (source: string) => Promise<unknown>,
-): () => Promise<unknown[]> {
-  const implementation = viewImplementationBetween(
-    "async function loadBackgrounds",
-    "function drawFallbackBackground",
-  );
-  const bodyStart = implementation.indexOf("{");
-  const bodyEnd = implementation.lastIndexOf("}");
-  if (bodyStart < 0 || bodyEnd < 0) return async () => [];
-
-  const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor as FunctionConstructor;
-  return AsyncFunction(
-    "FREDRUN_BACKGROUND_SOURCES",
-    "BACKGROUND_FALLBACK_SOURCE",
-    "loadImage",
-    implementation.slice(bodyStart + 1, bodyEnd),
-  ).bind(
-    undefined,
-    stagedBackgroundSourcesFromView(),
-    "/fredrun/vienna-panorama.webp",
-    loadImage,
-  ) as () => Promise<unknown[]>;
 }
 
 describe("Fredrun UI surface", () => {
@@ -628,7 +658,7 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain('{ id: "shop", label: "Shop" }');
     expect(viewSource).toContain('{ id: "info", label: "Info" }');
     expect(viewSource).toContain("profile.coinBalance.toLocaleString");
-    expect(viewSource).toContain("FREDRUN_SUPERFRED_PRICE");
+    expect(profileSource).toContain("FREDRUN_SUPERFRED_PRICE");
     expect(viewSource).toContain("purchaseFredRunCharacter");
     expect(viewSource).toContain("settleFredRunCoins");
     expect(viewSource).toContain("Kein Echtgeld");
@@ -644,6 +674,80 @@ describe("Fredrun UI surface", () => {
     expect(stylesSource).toContain(".fredrun-shop-grid");
     expect(stylesSource).toContain(".fredrun-info-grid");
     expect(stylesSource).toContain("@media (max-height: 520px) and (orientation: landscape)");
+  });
+
+  it("integrates a compact Levels menu with world purchase and selected-world play copy", () => {
+    expect(FREDRUN_WORLD_IDS).toEqual(["vienna", "finanzamt-night"]);
+    expect(FREDRUN_WORLDS.vienna).toMatchObject({ name: "Wien", price: 0 });
+    expect(FREDRUN_WORLDS["finanzamt-night"]).toMatchObject({
+      name: "Finanzamt bei Nacht",
+      price: 500,
+    });
+    expect(viewSource).toContain('{ id: "levels", label: "Levels" }');
+    expect(viewSource).toContain('activeTab === "levels"');
+    expect(viewSource).toContain("FREDRUN_WORLD_IDS.map");
+    expect(viewSource).toContain("purchaseFredRunWorld");
+    expect(viewSource).toContain("selectedWorld.playKicker");
+    expect(viewSource).toContain("selectedWorld.playDescription");
+    expect(stylesSource).toContain(".fredrun-level-grid");
+    expect(stylesSource).toContain(".fredrun-level-card.is-selected");
+  });
+
+  it("ships four distinct Finanzamt stages with complete runtime and archive provenance", () => {
+    expect(finanzamtBackgroundManifest).toMatchObject({
+      schemaVersion: 1,
+      worldId: "finanzamt-night",
+      generation: {
+        route: "OpenAI Codex built-in image_gen",
+        rawDirectory: "/opt/data/tmp/fredrun-finanzamt-generated",
+        sound: { included: false },
+      },
+      runtime: {
+        format: "webp",
+        width: 2172,
+        height: 665,
+        quality: 84,
+        scoreAnchors: [0, 500, 1000, 1500],
+        transition: "hard stage selection at each score anchor",
+        finalState: "hold caseworker-corridor from 1500 points onward",
+        fallbackSource: "/fredrun/vienna-panorama.webp",
+        processing: { script: "scripts/prepare-fredrun-finanzamt-backgrounds.mjs" },
+      },
+    });
+    expect(finanzamtBackgroundManifest.generation.sound.decision.length).toBeGreaterThan(20);
+    expect(finanzamtBackgroundManifest.runtime.processing.method).toContain("lane-aware integer crop");
+    expect(finanzamtBackgroundManifest.stages).toHaveLength(4);
+    expect(finanzamtBackgroundManifest.stages.map(({ anchorScore }) => anchorScore))
+      .toEqual([0, 500, 1000, 1500]);
+    expect(finanzamtBackgroundManifest.stages.map(({ output }) => output.runtimePath)).toEqual(
+      FREDRUN_WORLDS["finanzamt-night"].backgrounds.stages.map(({ source }) => source),
+    );
+    expect(new Set(finanzamtBackgroundManifest.stages.map(({ raw }) => raw.sha256)).size).toBe(4);
+    expect(new Set(finanzamtBackgroundManifest.stages.map(({ output }) => output.sha256)).size).toBe(4);
+
+    for (const [index, stage] of finanzamtBackgroundManifest.stages.entries()) {
+      expect(stage.prompt.length).toBeGreaterThan(500);
+      expect(stage.provenance.rawPath).toMatch(/^\/opt\/data\/tmp\/fredrun-finanzamt-generated\//u);
+      expect(stage.provenance.archivePath).toMatch(/^\/opt\/data\/generated-images\/images\/2026\/08\//u);
+      expect(stage.provenance.archiveMetadataPath).toMatch(/^\/opt\/data\/generated-images\/metadata\/2026\/08\//u);
+      expect(stage.provenance.archivePromptPath).toMatch(/^\/opt\/data\/generated-images\/prompts\/2026\/08\//u);
+      expect(stage.provenance.provider.toLowerCase()).toContain("codex");
+      expect(stage.provenance.model.length).toBeGreaterThan(5);
+      expect(stage.raw).toMatchObject({ bytes: expect.any(Number), sha256: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+      expect(stage.output).toMatchObject({
+        format: "webp",
+        width: 2172,
+        height: 665,
+        sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      });
+      const output = readFileSync(fileURLToPath(new URL(
+        `../../public${stage.output.runtimePath}`,
+        import.meta.url,
+      )));
+      expect(output.length).toBe(stage.output.bytes);
+      expect(sha256(output)).toBe(stage.output.sha256);
+      expect(stage.anchorScore).toBe(index * 500);
+    }
   });
 
   it("ships Odo as a normalized left-facing animated obstacle", () => {
@@ -818,12 +922,12 @@ describe("Fredrun UI surface", () => {
     });
     expect(statSync(fileURLToPath(new URL("../../public/fredrun/vienna-panorama.webp", import.meta.url))).size)
       .toBe(backgroundManifest.output.bytes);
-    expect(viewSource).toContain('const BACKGROUND_FALLBACK_SOURCE = "/fredrun/vienna-panorama.webp"');
+    expect(FREDRUN_WORLDS.vienna.backgrounds.fallbackSource).toBe("/fredrun/vienna-panorama.webp");
     expect(viewSource).toContain("drawViennaBackground");
     expect(viewSource).toContain("context.scale(-1, 1)");
   });
 
-  it("declares eight ordered score-anchored background assets in the view and manifest", () => {
+  it("declares eight ordered score-anchored Vienna backgrounds in the registry and manifest", () => {
     const scoreAnchors = Array.from({ length: 8 }, (_, index) => index * 500);
     expect(stagedBackgroundManifest).toMatchObject({
       generation: {
@@ -892,9 +996,10 @@ describe("Fredrun UI surface", () => {
       "function drawObstacle",
     );
     expect(drawBackgroundSource).toContain("fredRunEnvironmentForDistance(state.distance)");
-    expect(drawBackgroundSource).toContain("environment.fromStage");
-    expect(drawBackgroundSource).toContain("environment.toStage");
-    expect(drawBackgroundSource).toContain("environment.blend");
+    expect(drawBackgroundSource).toContain("fredRunWorldBackgroundForScore");
+    expect(drawBackgroundSource).toContain("selection.fromStage");
+    expect(drawBackgroundSource).toContain("selection.toStage");
+    expect(drawBackgroundSource).toContain("selection.blend");
     expect(drawBackgroundSource).toContain("environment.darkness");
     expect(drawBackgroundSource).toContain("drawStormAtmosphere");
     expect(drawBackgroundSource).toContain("drawRainAtmosphere");
@@ -932,16 +1037,22 @@ describe("Fredrun UI surface", () => {
   });
 
   it("keeps successfully loaded stages when one background image fails", async () => {
-    const sources = stagedBackgroundSourcesFromView();
-    const failedSource = sources[1];
+    const viennaSources = stagedBackgroundSourcesFromView();
+    const finanzamtSources = FREDRUN_WORLDS["finanzamt-night"].backgrounds.stages
+      .map(({ source }) => source);
+    const failedSources = new Set([viennaSources[1], finanzamtSources[2]]);
     const fallbackSource = "/fredrun/vienna-panorama.webp";
-    const loadBackgrounds = executableBackgroundLoader(async (source) => {
-      if (source === failedSource) throw new Error("stage failed");
+    const backgrounds = await loadFredRunWorldBackgrounds(async (source) => {
+      if (failedSources.has(source)) throw new Error("stage failed");
       return { source };
     });
 
-    await expect(loadBackgrounds()).resolves.toEqual(sources.map((source) => ({
-      source: source === failedSource ? fallbackSource : source,
+    expect(backgrounds.vienna).toEqual(viennaSources.map((source) => ({
+      source: failedSources.has(source) ? fallbackSource : source,
     })));
+    expect(backgrounds["finanzamt-night"]).toEqual(finanzamtSources.map((source) => ({
+      source: failedSources.has(source) ? fallbackSource : source,
+    })));
+    expect(viewSource).toContain("loadFredRunWorldBackgrounds(loadImage)");
   });
 });
