@@ -42,7 +42,7 @@ const animations = [
     metadata: {
       animationName: "Blue Booster Jump",
       facingDirection: "right",
-      runtimeEffect: "embedded-electric-blue-boot-thrusters",
+      runtimeEffect: "embedded-right-plus-frame-anchored-left-blue-boot-thrusters",
       runtimePlayback: {
         mode: "full-atlas-synced-to-fredrun-physics",
         durationSeconds: 0.82,

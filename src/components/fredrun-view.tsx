@@ -124,6 +124,31 @@ type CharacterSpriteLayout = {
   fps: number;
 };
 
+type CyberfredBoosterAnchor = {
+  x: number;
+  y: number;
+  angle: number;
+};
+
+const CYBERFRED_LEFT_BOOSTER_ANCHORS: Readonly<Record<number, CyberfredBoosterAnchor>> = {
+  3: { x: 73, y: 164, angle: -0.05 },
+  4: { x: 58, y: 153, angle: -0.08 },
+  5: { x: 56, y: 151, angle: -0.08 },
+  6: { x: 55, y: 151, angle: -0.08 },
+  7: { x: 55, y: 151, angle: -0.08 },
+  8: { x: 55, y: 151, angle: -0.08 },
+  9: { x: 55, y: 151, angle: -0.08 },
+  10: { x: 55, y: 151, angle: -0.08 },
+  11: { x: 55, y: 151, angle: -0.08 },
+  12: { x: 55, y: 151, angle: -0.08 },
+  13: { x: 55, y: 151, angle: -0.08 },
+  14: { x: 56, y: 152, angle: -0.08 },
+  15: { x: 57, y: 153, angle: -0.08 },
+  16: { x: 59, y: 154, angle: -0.08 },
+  17: { x: 62, y: 156, angle: -0.07 },
+  18: { x: 68, y: 160, angle: -0.06 },
+};
+
 const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, CharacterSpriteLayout>> = {
   fred: {
     walk: { source: "/fredrun/walk.png?v=smooth-walk-1", columns: 8, frameCount: 64, fps: 18 },
@@ -142,7 +167,7 @@ const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, Chara
   },
   cyberfred: {
     walk: { source: "/fredrun/cyberfred/walk.webp", columns: 8, frameCount: 64, fps: 16 },
-    jump: { source: "/fredrun/cyberfred/jump.webp?v=provided-clean-jump-v5", columns: 6, frameCount: 24, fps: 24 },
+    jump: { source: "/fredrun/cyberfred/jump.webp?v=dual-boosters-v6", columns: 6, frameCount: 24, fps: 24 },
     victory: { source: "/fredrun/cyberfred/victory.webp?v=robot-dance-v2", columns: 8, frameCount: 64, fps: 16 },
   },
 };
@@ -1349,6 +1374,56 @@ function drawHitFeedback(
   context.restore();
 }
 
+function drawCyberfredLeftJumpBooster(
+  context: CanvasRenderingContext2D,
+  state: FredRunState,
+  spriteFrame: number,
+  reducedMotion: boolean,
+) {
+  if (state.grounded) return;
+  const anchor = CYBERFRED_LEFT_BOOSTER_ANCHORS[spriteFrame];
+  if (!anchor) return;
+
+  const spriteLeft = FREDRUN_PLAYER_X - SPRITE_DRAW_SIZE / 2;
+  const spriteTop = FREDRUN_GROUND_Y - state.playerHeight + 4 - SPRITE_DRAW_SIZE;
+  const spriteScale = SPRITE_DRAW_SIZE / SPRITE_CELL_SIZE;
+  const pulse = reducedMotion ? 0 : Math.sin(state.elapsed * 48) * 1.5;
+  const flameLength = 21 + pulse;
+
+  context.save();
+  context.globalCompositeOperation = "lighter";
+  context.translate(
+    spriteLeft + anchor.x * spriteScale,
+    spriteTop + anchor.y * spriteScale,
+  );
+  context.rotate(anchor.angle);
+  context.shadowColor = "rgba(26, 181, 255, 0.9)";
+  context.shadowBlur = 9;
+
+  const outerFlame = context.createLinearGradient(0, 0, 0, flameLength);
+  outerFlame.addColorStop(0, "rgba(236, 255, 255, 0.98)");
+  outerFlame.addColorStop(0.32, "rgba(105, 224, 255, 0.94)");
+  outerFlame.addColorStop(0.72, "rgba(24, 138, 255, 0.72)");
+  outerFlame.addColorStop(1, "rgba(9, 91, 255, 0)");
+  context.fillStyle = outerFlame;
+  context.beginPath();
+  context.moveTo(-4.5, 0);
+  context.quadraticCurveTo(-7, flameLength * 0.48, -3.5, flameLength);
+  context.quadraticCurveTo(3, flameLength * 0.56, 4.5, 0);
+  context.closePath();
+  context.fill();
+
+  context.shadowBlur = 3;
+  context.fillStyle = "rgba(245, 255, 255, 0.9)";
+  context.beginPath();
+  context.moveTo(-1.8, 1);
+  context.quadraticCurveTo(-3, flameLength * 0.32, -1.2, flameLength * 0.58);
+  context.quadraticCurveTo(2, flameLength * 0.34, 1.8, 1);
+  context.closePath();
+  context.fill();
+  context.restore();
+}
+
 function activeSprite(
   state: FredRunState,
   layouts: Record<SpriteKey, CharacterSpriteLayout>,
@@ -1410,6 +1485,9 @@ function renderFredRun(
     drawPlayerPowerEffects(context, state, reducedMotion);
     const layouts = characterSpriteLayouts[characterId];
     const sprite = activeSprite(state, layouts);
+    if (characterId === "cyberfred" && sprite.key === "jump") {
+      drawCyberfredLeftJumpBooster(context, state, sprite.frame, reducedMotion);
+    }
     const layout = layouts[sprite.key];
     const sourceX = (sprite.frame % layout.columns) * SPRITE_CELL_SIZE;
     const sourceY = Math.floor(sprite.frame / layout.columns) * SPRITE_CELL_SIZE;
