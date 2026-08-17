@@ -437,6 +437,16 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain('input, textarea, button, [contenteditable=\'true\']');
   });
 
+  it("keeps authenticated progress in Supabase and local storage only for standalone play", () => {
+    expect(viewSource).toContain('fetch("/api/fredrun/progress"');
+    expect(viewSource).toContain('action: "settle_run"');
+    expect(viewSource).toContain('action: "purchase"');
+    expect(viewSource).toContain('action: "select"');
+    expect(viewSource).toContain('if (!accessToken) {');
+    expect(viewSource).toContain("readFredRunProfile(storage)");
+    expect(viewSource).toContain("serverBacked={Boolean(accessToken)}");
+  });
+
   it("ships the three runtime atlases while preserving source provenance", () => {
     expect(manifest.source.archive.sha256).toBe("DCD8D61B48B88FE525DA2D151544B8B8C859C9E3E222DEE18732E160E1A9F735");
     expect(manifest.source.archive.includedAnimations).toEqual(["Victory"]);
@@ -591,7 +601,7 @@ describe("Fredrun UI surface", () => {
   it("lays out the game-over score on the left and the selected dancer on the right", () => {
     expect(viewSource).toContain('className="fredrun-game-over-summary"');
     expect(viewSource).toContain("<h2>{snapshot.score} Punkte</h2>");
-    expect(viewSource).toContain(">Noch einmal</button>");
+    expect(viewSource).toContain("Noch einmal");
     expect(viewSource).toContain('<FredRunVictoryDance characterId={selectedCharacter} />');
     expect(viewSource).toContain('aria-label={`${fredRunCharacters[characterId].name} tanzt`}');
     expect(stylesSource).toContain('"summary dance"');

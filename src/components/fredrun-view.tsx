@@ -71,6 +71,11 @@ import {
   parseFredRunHighscoresResponse,
   type FredRunLeaderboardEntry,
 } from "@/lib/fredrun-highscores";
+import {
+  parseFredRunProgressApiResponse,
+  type FredRunProgressAction,
+  type FredRunProgressApiResponse,
+} from "@/lib/fredrun-progress";
 
 const SPRITE_CELL_SIZE = 192;
 const SPRITE_DRAW_SIZE = 166;
@@ -828,6 +833,7 @@ function FredRunMenu({
   profile,
   profileReady,
   storageAvailable,
+  serverBacked,
   bestScore,
   assetState,
   fullscreenAvailable,
@@ -846,6 +852,7 @@ function FredRunMenu({
   profile: FredRunProfile;
   profileReady: boolean;
   storageAvailable: boolean;
+  serverBacked: boolean;
   bestScore: number;
   assetState: "loading" | "ready" | "error";
   fullscreenAvailable: boolean;
@@ -912,7 +919,9 @@ function FredRunMenu({
         <div className="fredrun-menu-content">
           {!storageAvailable ? (
             <p className="fredrun-menu-storage-warning" role="status">
-              Fortschritt kann in diesem Browser derzeit nicht dauerhaft gespeichert werden.
+              {serverBacked
+                ? "Dein nutzergebundener Spielstand kann derzeit nicht mit Supabase synchronisiert werden."
+                : "Fortschritt kann in diesem Browser derzeit nicht dauerhaft gespeichert werden."}
             </p>
           ) : null}
           {purchaseMessage ? (
@@ -1506,6 +1515,31 @@ function highscoreResponseError(payload: unknown, fallback: string): string {
   return typeof error === "string" && error.length <= 240 ? error : fallback;
 }
 
+async function requestFredRunProgress(
+  accessToken: string,
+  action?: FredRunProgressAction,
+  signal?: AbortSignal,
+): Promise<FredRunProgressApiResponse> {
+  const response = await fetch("/api/fredrun/progress", {
+    method: action ? "POST" : "GET",
+    cache: "no-store",
+    credentials: "same-origin",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      ...(action ? { "Content-Type": "application/json" } : {}),
+    },
+    body: action ? JSON.stringify(action) : undefined,
+    signal,
+  });
+  const payload = await response.json().catch(() => null) as unknown;
+  if (!response.ok) {
+    throw new Error(highscoreResponseError(payload, "Dein FredRun-Spielstand konnte nicht gespeichert werden."));
+  }
+  const parsed = parseFredRunProgressApiResponse(payload);
+  if (!parsed) throw new Error("Der FredRun-Spielstand hat ein ungültiges Antwortformat.");
+  return parsed;
+}
+
 function createRunId(): string {
   return crypto.randomUUID();
 }
@@ -1529,14 +1563,17 @@ export default function FredRunView({
   const bestScoreRef = useRef(0);
   const reducedMotionRef = useRef(false);
   const scoreSubmissionAbortRef = useRef<AbortController | null>(null);
+  const progressMutationPendingRef = useRef(false);
   const [snapshot, setSnapshot] = useState<FredRunSnapshot>(() => snapshotFrom(createFredRunState()));
   const [profile, setProfile] = useState<FredRunProfile>(() => createDefaultFredRunProfile());
   const [profileReady, setProfileReady] = useState(false);
   const [minimumLoadingComplete, setMinimumLoadingComplete] = useState(false);
   const [storageAvailable, setStorageAvailable] = useState(true);
+  const [isProgressMutationPending, setIsProgressMutationPending] = useState(false);
   const [menuTab, setMenuTab] = useState<FredRunMenuTab>("play");
   const [pendingPurchase, setPendingPurchase] = useState<FredRunPurchaseTarget | null>(null);
   const [purchaseMessage, setPurchaseMessage] = useState("");
+  const [progressError, setProgressError] = useState("");
   const [abortConfirmation, setAbortConfirmation] = useState(false);
   const [lastAwardedCoins, setLastAwardedCoins] = useState(0);
   const [scorePulseToken, setScorePulseToken] = useState(0);
@@ -1616,7 +1653,9 @@ export default function FredRunView({
       currentRunWorldRef.current = nextProfile.selectedWorld;
     }
     setProfile(nextProfile);
-    setStorageAvailable(writeFredRunProfile(localHighScoreStorage(), nextProfile));
+    setStorageAvailable(accessToken
+      ? true
+      : writeFredRunProfile(localHighScoreStorage(), nextProfile));
     if (canvasRef.current) {
       renderFredRun(
         canvasRef.current,
@@ -1627,21 +1666,94 @@ export default function FredRunView({
         currentRunWorldRef.current,
       );
     }
-  }, []);
+  }, [accessToken]);
+
+  const applyServerProgressAction = useCallback(async (
+    action: FredRunProgressAction,
+  ): Promise<FredRunProgressApiResponse | null> => {
+    if (!accessToken || progressMutationPendingRef.current) return null;
+    progressMutationPendingRef.current = true;
+    setIsProgressMutationPending(true);
+    try {
+      const response = await requestFredRunProgress(accessToken, action);
+      commitProfile(response.progress.profile);
+      bestScoreRef.current = response.progress.bestScore;
+      setBestScore(response.progress.bestScore);
+      setStorageAvailable(true);
+      setProgressError("");
+      return response;
+    } catch (error) {
+      setStorageAvailable(false);
+      const message = error instanceof Error
+        ? error.message
+        : "Dein FredRun-Spielstand konnte nicht gespeichert werden.";
+      setProgressError(message);
+      setPurchaseMessage(message);
+      return null;
+    } finally {
+      progressMutationPendingRef.current = false;
+      setIsProgressMutationPending(false);
+    }
+  }, [accessToken, commitProfile]);
+
+  const settleServerRun = useCallback((runId: string, collectedCoins: number, score: number) => {
+    setProgressError("");
+    setLastAwardedCoins(0);
+    void applyServerProgressAction({
+      action: "settle_run",
+      runId,
+      collectedCoins,
+      score,
+    }).then((response) => {
+      if (response && currentRunIdRef.current === runId) {
+        setLastAwardedCoins(response.awardedCoins);
+      }
+    });
+  }, [applyServerProgressAction]);
 
   const selectCharacter = useCallback((characterId: FredRunCharacterId) => {
     if (gameRef.current.phase !== "ready") return;
+    if (accessToken) {
+      if (
+        progressMutationPendingRef.current
+        || !isFredRunCharacterUnlocked(profileRef.current, characterId)
+        || profileRef.current.selectedCharacter === characterId
+      ) return;
+      void applyServerProgressAction({
+        action: "select",
+        itemType: "character",
+        itemId: characterId,
+      });
+      return;
+    }
     const nextProfile = selectFredRunCharacter(profileRef.current, characterId);
     if (nextProfile !== profileRef.current) commitProfile(nextProfile);
-  }, [commitProfile]);
+  }, [accessToken, applyServerProgressAction, commitProfile]);
 
   const selectWorld = useCallback((worldId: FredRunWorldId) => {
     if (gameRef.current.phase !== "ready") return;
+    if (accessToken) {
+      if (
+        progressMutationPendingRef.current
+        || !isFredRunWorldUnlocked(profileRef.current, worldId)
+        || profileRef.current.selectedWorld === worldId
+      ) return;
+      void applyServerProgressAction({
+        action: "select",
+        itemType: "world",
+        itemId: worldId,
+      }).then((response) => {
+        if (response?.status === "selected") {
+          setPurchaseMessage(`${FREDRUN_WORLDS[worldId].name} ist ausgewählt.`);
+        }
+      });
+      return;
+    }
     const nextProfile = selectFredRunWorld(profileRef.current, worldId);
     if (nextProfile === profileRef.current) return;
     commitProfile(nextProfile);
     setPurchaseMessage(`${FREDRUN_WORLDS[worldId].name} ist ausgewählt.`);
-  }, [commitProfile]);
+  }, [accessToken, applyServerProgressAction, commitProfile]);
 
   const prepareNewRun = useCallback(() => {
     const runId = createRunId();
@@ -1658,7 +1770,7 @@ export default function FredRunView({
   }, []);
 
   const startOrJump = useCallback(() => {
-    if (assetState !== "ready") return;
+    if (assetState !== "ready" || progressMutationPendingRef.current) return;
     let state = gameRef.current;
     if (state.phase === "ready") {
       prepareNewRun();
@@ -1673,7 +1785,7 @@ export default function FredRunView({
   }, [assetState, prepareNewRun, replaceGame]);
 
   const startRound = useCallback(() => {
-    if (assetState !== "ready" || !profileReady) return;
+    if (assetState !== "ready" || !profileReady || progressMutationPendingRef.current) return;
     prepareNewRun();
     replaceGame(startFredRun(gameRef.current.phase === "ready" ? gameRef.current : restartFredRun()));
   }, [assetState, prepareNewRun, profileReady, replaceGame]);
@@ -1694,7 +1806,7 @@ export default function FredRunView({
   }, [replaceGame]);
 
   const playAgain = useCallback(() => {
-    if (assetState !== "ready") return;
+    if (assetState !== "ready" || progressMutationPendingRef.current) return;
     prepareNewRun();
     replaceGame(startFredRun(restartFredRun()));
   }, [assetState, prepareNewRun, replaceGame]);
@@ -1722,10 +1834,25 @@ export default function FredRunView({
   }, []);
 
   const confirmPurchase = useCallback(() => {
-    if (!pendingPurchase) return;
+    if (!pendingPurchase || progressMutationPendingRef.current) return;
     const definition = pendingPurchase.kind === "character"
       ? fredRunCharacters[pendingPurchase.id]
       : FREDRUN_WORLDS[pendingPurchase.id];
+    if (accessToken) {
+      const action: FredRunProgressAction = pendingPurchase.kind === "character"
+        ? { action: "purchase", itemType: "character", itemId: pendingPurchase.id }
+        : { action: "purchase", itemType: "world", itemId: pendingPurchase.id };
+      void applyServerProgressAction(action).then((response) => {
+        if (response?.status === "purchased") {
+          setPurchaseMessage(`${definition.name} ist jetzt freigeschaltet und ausgewählt.`);
+        } else if (response?.status === "insufficient-funds") {
+          setPurchaseMessage(`Für ${definition.name} fehlen noch Münzen.`);
+        } else if (response?.status === "already-owned") {
+          setPurchaseMessage(`${definition.name} ist bereits freigeschaltet.`);
+        }
+      }).finally(() => setPendingPurchase(null));
+      return;
+    }
     const result = pendingPurchase.kind === "character"
       ? purchaseFredRunCharacter(profileRef.current, pendingPurchase.id)
       : purchaseFredRunWorld(profileRef.current, pendingPurchase.id);
@@ -1738,7 +1865,7 @@ export default function FredRunView({
       setPurchaseMessage(`${definition.name} ist bereits freigeschaltet.`);
     }
     setPendingPurchase(null);
-  }, [commitProfile, pendingPurchase]);
+  }, [accessToken, applyServerProgressAction, commitProfile, pendingPurchase]);
 
   const toggleFullscreen = useCallback(async () => {
     const shell = gameShellRef.current;
@@ -1774,24 +1901,50 @@ export default function FredRunView({
 
   useEffect(() => {
     const storage = localHighScoreStorage();
-    bestScoreRef.current = readFredRunHighScore(storage);
-    setBestScore(bestScoreRef.current);
-    const storedProfile = readFredRunProfile(storage);
-    const initialProfile = process.env.NODE_ENV !== "production"
-      ? {
-          ...storedProfile.profile,
-          unlockedCharacters: storedProfile.profile.unlockedCharacters.includes("superfred")
-            ? storedProfile.profile.unlockedCharacters
-            : [...storedProfile.profile.unlockedCharacters, "superfred" as const],
-        }
-      : storedProfile.profile;
-    profileRef.current = initialProfile;
-    selectedCharacterRef.current = initialProfile.selectedCharacter;
-    currentRunWorldRef.current = initialProfile.selectedWorld;
-    setProfile(initialProfile);
-    setStorageAvailable(storedProfile.storageAvailable);
-    setProfileReady(true);
-  }, []);
+    if (!accessToken) {
+      bestScoreRef.current = readFredRunHighScore(storage);
+      setBestScore(bestScoreRef.current);
+      const storedProfile = readFredRunProfile(storage);
+      const initialProfile = process.env.NODE_ENV !== "production"
+        ? {
+            ...storedProfile.profile,
+            unlockedCharacters: storedProfile.profile.unlockedCharacters.includes("superfred")
+              ? storedProfile.profile.unlockedCharacters
+              : [...storedProfile.profile.unlockedCharacters, "superfred" as const],
+          }
+        : storedProfile.profile;
+      commitProfile(initialProfile);
+      setStorageAvailable(storedProfile.storageAvailable);
+      setProfileReady(true);
+      return;
+    }
+
+    const controller = new AbortController();
+    setProfileReady(false);
+    void requestFredRunProgress(accessToken, undefined, controller.signal).then((response) => {
+      if (controller.signal.aborted) return;
+      commitProfile(response.progress.profile);
+      bestScoreRef.current = response.progress.bestScore;
+      setBestScore(response.progress.bestScore);
+      setStorageAvailable(true);
+      setProgressError("");
+      setProfileReady(true);
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return;
+      const fallback = createDefaultFredRunProfile();
+      commitProfile(fallback);
+      bestScoreRef.current = 0;
+      setBestScore(0);
+      setStorageAvailable(false);
+      const message = error instanceof Error
+        ? error.message
+        : "Dein FredRun-Spielstand konnte nicht geladen werden.";
+      setProgressError(message);
+      setPurchaseMessage(message);
+      setProfileReady(true);
+    });
+    return () => controller.abort();
+  }, [accessToken, commitProfile]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1920,18 +2073,23 @@ export default function FredRunView({
         gameRef.current = state;
         publish(state);
         if (state.phase === "game-over" && previousPhase !== "game-over") {
-          const nextBest = writeFredRunHighScore(localHighScoreStorage(), state.score, bestScoreRef.current);
-          if (nextBest !== bestScoreRef.current) {
-            bestScoreRef.current = nextBest;
-            setBestScore(nextBest);
+          const runId = currentRunIdRef.current;
+          if (accessToken && runId) {
+            settleServerRun(runId, state.coinsCollected, state.score);
+          } else {
+            const nextBest = writeFredRunHighScore(localHighScoreStorage(), state.score, bestScoreRef.current);
+            if (nextBest !== bestScoreRef.current) {
+              bestScoreRef.current = nextBest;
+              setBestScore(nextBest);
+            }
+            const settlement = settleFredRunCoins(
+              profileRef.current,
+              runId,
+              state.coinsCollected,
+            );
+            setLastAwardedCoins(settlement.awardedCoins);
+            if (settlement.profile !== profileRef.current) commitProfile(settlement.profile);
           }
-          const settlement = settleFredRunCoins(
-            profileRef.current,
-            currentRunIdRef.current,
-            state.coinsCollected,
-          );
-          setLastAwardedCoins(settlement.awardedCoins);
-          if (settlement.profile !== profileRef.current) commitProfile(settlement.profile);
         }
       }
       if (canvasRef.current) {
@@ -1950,7 +2108,7 @@ export default function FredRunView({
     return () => {
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
     };
-  }, [commitProfile, publish]);
+  }, [accessToken, commitProfile, publish, settleServerRun]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -2225,6 +2383,7 @@ export default function FredRunView({
                   profile={profile}
                   profileReady={profileReady}
                   storageAvailable={storageAvailable}
+                  serverBacked={Boolean(accessToken)}
                   bestScore={bestScore}
                   assetState={assetState}
                   fullscreenAvailable={fullscreenAvailable}
@@ -2264,11 +2423,22 @@ export default function FredRunView({
                           : FREDRUN_WORLDS[pendingPurchase.id].price).toLocaleString("de-AT")} Münzen</strong> von deinem Guthaben abgezogen. Der Kauf kann nicht rückgängig gemacht werden.
                       </p>
                       <div className="fredrun-menu-dialog-actions">
-                        <button type="button" className="fredrun-secondary-button" onClick={() => setPendingPurchase(null)} autoFocus>
+                        <button
+                          type="button"
+                          className="fredrun-secondary-button"
+                          onClick={() => setPendingPurchase(null)}
+                          disabled={isProgressMutationPending}
+                          autoFocus
+                        >
                           Abbrechen
                         </button>
-                        <button type="button" className="primary-button" onClick={confirmPurchase}>
-                          Jetzt freischalten
+                        <button
+                          type="button"
+                          className="primary-button"
+                          onClick={confirmPurchase}
+                          disabled={isProgressMutationPending}
+                        >
+                          {isProgressMutationPending ? "Wird gespeichert …" : "Jetzt freischalten"}
                         </button>
                       </div>
                     </div>
@@ -2338,13 +2508,44 @@ export default function FredRunView({
                       <small>+{lastAwardedCoins} ins Guthaben · Gesamt {profile.coinBalance.toLocaleString("de-AT")}</small>
                     </span>
                   </p>
+                  {isProgressMutationPending ? (
+                    <p className="fredrun-score-feedback" role="status">Spielstand wird gespeichert …</p>
+                  ) : null}
+                  {progressError ? (
+                    <div>
+                      <p className="fredrun-score-feedback fredrun-score-feedback--error" role="alert">
+                        {progressError}
+                      </p>
+                      {accessToken && currentRunId ? (
+                        <button
+                          className="fredrun-secondary-button"
+                          type="button"
+                          disabled={isProgressMutationPending}
+                          onClick={() => settleServerRun(
+                            currentRunId,
+                            snapshot.coinsCollected,
+                            snapshot.score,
+                          )}
+                        >
+                          Spielstand erneut speichern
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {snapshot.nearMisses > 0 ? (
                     <p className="fredrun-game-over-near-misses">
                       {snapshot.nearMisses}× knapp vorbei · +{snapshot.nearMissScore} Punkte
                     </p>
                   ) : null}
                   <div className="fredrun-game-over-actions">
-                    <button className="primary-button" type="button" onClick={playAgain}>Noch einmal</button>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      onClick={playAgain}
+                      disabled={isProgressMutationPending}
+                    >
+                      Noch einmal
+                    </button>
                     <button className="fredrun-secondary-button" type="button" onClick={returnToMenu}>Hauptmenü</button>
                   </div>
                 </div>
