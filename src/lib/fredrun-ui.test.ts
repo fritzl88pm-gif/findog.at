@@ -1167,4 +1167,12 @@ describe("Fredrun UI surface", () => {
     })));
     expect(viewSource).toContain("loadFredRunWorldBackgrounds(loadImage)");
   });
+
+  it("replaces the complete game surface with a server-provided access block", () => {
+    expect(viewSource).toContain('const [accessBlockMessage, setAccessBlockMessage] = useState("")');
+    expect(viewSource).toContain("parseFredRunAccessBlockedResponse(payload)");
+    expect(viewSource).toMatch(/if \(accessBlockMessage\) \{[\s\S]*?className="fredrun-access-block"[\s\S]*?\{accessBlockMessage\}/u);
+    expect(viewSource).not.toMatch(/@[a-z0-9.-]+\.[a-z]{2,}/iu);
+    expect(stylesSource).toContain(".fredrun-access-block");
+  });
 });

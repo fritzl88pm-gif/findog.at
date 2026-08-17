@@ -1,10 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
+import {
+  assertFredRunAccessAllowed,
+  FredRunAccessBlockedServerError,
+} from "@/lib/fredrun-access-server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { GET, POST } from "./route";
 
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
+vi.mock("@/lib/fredrun-access-server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/fredrun-access-server")>()),
+  assertFredRunAccessAllowed: vi.fn(),
+}));
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
 
 const scoreRows = [
@@ -41,7 +49,7 @@ function createSupabaseMock(options: {
 
   const rpc = vi.fn().mockResolvedValue({ data: options.rpcData ?? true, error: options.rpcError ?? null });
   const from = vi.fn((table: string) => table === "fredrun_scores" ? scoreBuilder : profileBuilder);
-  return { client: { auth: {}, from, rpc }, scoreBuilder, profileBuilder, rpc };
+  return { client: { auth: {}, from, rpc }, scoreBuilder, profileBuilder, from, rpc };
 }
 
 function request(method = "GET", body?: unknown) {
@@ -59,6 +67,7 @@ describe("/api/fredrun/highscores", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "user-1" });
+    vi.mocked(assertFredRunAccessAllowed).mockResolvedValue();
   });
 
   it("returns the stored alias and deterministic top ten", async () => {
@@ -96,6 +105,27 @@ describe("/api/fredrun/highscores", () => {
       submitted_score: 321,
     });
     await expect(response.json()).resolves.toMatchObject({ submitted: true, playerName: "Fredi" });
+  });
+
+  it("returns the configured block before reading or submitting highscores", async () => {
+    const message = "bitte noch 1432 VKs erledigen um weiter zu spielen...";
+    const mock = createSupabaseMock();
+    vi.mocked(getSupabaseServerClient).mockReturnValue(mock.client as never);
+    vi.mocked(assertFredRunAccessAllowed).mockRejectedValue(new FredRunAccessBlockedServerError(message));
+
+    for (const response of [
+      await GET(request()),
+      await POST(request("POST", {
+        runId: "123e4567-e89b-42d3-a456-426614174000",
+        name: "Fredi",
+        score: 1,
+      })),
+    ]) {
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({ error: message, code: "fredrun_blocked" });
+    }
+    expect(mock.from).not.toHaveBeenCalled();
+    expect(mock.rpc).not.toHaveBeenCalled();
   });
 
   it("treats an idempotent retry as successful without claiming a new row", async () => {

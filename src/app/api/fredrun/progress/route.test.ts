@@ -1,10 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
+import {
+  assertFredRunAccessAllowed,
+  FredRunAccessBlockedServerError,
+} from "@/lib/fredrun-access-server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { GET, POST } from "./route";
 
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
+vi.mock("@/lib/fredrun-access-server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/fredrun-access-server")>()),
+  assertFredRunAccessAllowed: vi.fn(),
+}));
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
 
 const storedProgress = {
@@ -40,6 +48,7 @@ describe("/api/fredrun/progress", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "user-1" });
+    vi.mocked(assertFredRunAccessAllowed).mockResolvedValue();
   });
 
   it("creates or loads only the authenticated user's progress", async () => {
@@ -81,6 +90,27 @@ describe("/api/fredrun/progress", () => {
       target_id: null,
     });
     await expect(response.json()).resolves.toMatchObject({ status: "settled", awardedCoins: 14 });
+  });
+
+  it("returns the configured block instead of loading or mutating progress", async () => {
+    const message = "bitte noch 1432 VKs erledigen um weiter zu spielen...";
+    const mock = createSupabaseMock([]);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(mock.client as never);
+    vi.mocked(assertFredRunAccessAllowed).mockRejectedValue(new FredRunAccessBlockedServerError(message));
+
+    for (const response of [
+      await GET(request()),
+      await POST(request("POST", {
+        action: "settle_run",
+        runId: "123e4567-e89b-42d3-a456-426614174000",
+        collectedCoins: 1,
+        score: 1,
+      })),
+    ]) {
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({ error: message, code: "fredrun_blocked" });
+    }
+    expect(mock.rpc).not.toHaveBeenCalled();
   });
 
   it("rejects malformed actions before calling the database", async () => {

@@ -99,10 +99,13 @@ Apply all migrations in order through the Supabase SQL editor or your migration 
 37. `supabase/migrations/20260817073451_fredrun_user_progress.sql`
 38. `supabase/migrations/20260817075512_harden_fredrun_progress_audit.sql`
 39. `supabase/migrations/20260817075656_index_fredrun_progress_catalog_fks.sql`
+40. `supabase/migrations/20260817130855_block_fredrun_user_access.sql`
 
 Supabase Auth must be enabled for email/password login. Authorized accounts are manually provisioned; the app does not expose self-service registration. Server persistence stores the authenticated Supabase `user.id` as `conversations.client_id`, `messages.client_id`, and `agent_runs.client_id`. Fred sessions and messages use separate `fred_*` tables and retain their bridge/webhook provenance. For assistant messages, `content` remains the original provider answer; `display_content`, `research_trace`, `source_references`, and `content_transformation` record the bounded native presentation separately. Deleting an owned conversation cascades to its messages, agent runs, and agent steps; deleting a Fred conversation cascades to its Fred messages and processed webhook events. The admin request audit records only submitted user prompts and is deliberately independent of conversation deletion; deleting the audit history does not remove a user's conversations.
 
 Authenticated FredRun sessions store coin balance, best score, selected character and world, and unlocks per Supabase Auth user. Mutations are serialized through server-only RPC calls; every settlement, purchase, and selection writes an immutable provenance event. Shared legacy browser progress and scores from earlier game versions are deliberately not assigned to an arbitrary account. The public standalone `/fredrun` route has no authenticated identity and therefore continues to use browser-local progress.
+
+FredRun access restrictions are keyed by Supabase Auth user ID and checked before progress or highscore access. Block records remain server-only, database triggers reject writes for blocked users, and moderation events retain the actor, reason, provenance, and affected-row count without hard-coding account emails in the application.
 
 Successful research results are stored separately from the 1,200-character agent-step preview. One additional batched, non-reasoning LLM call can create up to ten compact Memory Cards per run. Opaque MCP text remains a non-authoritative discovery hint and is requeried before legal use; only deterministically typed RIS/EVI evidence with the exact matching Stichtag can become reusable legal memory.
 

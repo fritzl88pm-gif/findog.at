@@ -76,6 +76,10 @@ import {
   type FredRunProgressAction,
   type FredRunProgressApiResponse,
 } from "@/lib/fredrun-progress";
+import {
+  FredRunAccessBlockedError,
+  parseFredRunAccessBlockedResponse,
+} from "@/lib/fredrun-access";
 
 const SPRITE_CELL_SIZE = 192;
 const SPRITE_DRAW_SIZE = 166;
@@ -1515,6 +1519,15 @@ function highscoreResponseError(payload: unknown, fallback: string): string {
   return typeof error === "string" && error.length <= 240 ? error : fallback;
 }
 
+function fredRunRequestError(response: Response, payload: unknown, fallback: string): Error {
+  const blockedMessage = response.status === 403
+    ? parseFredRunAccessBlockedResponse(payload)
+    : null;
+  return blockedMessage
+    ? new FredRunAccessBlockedError(blockedMessage)
+    : new Error(highscoreResponseError(payload, fallback));
+}
+
 async function requestFredRunProgress(
   accessToken: string,
   action?: FredRunProgressAction,
@@ -1533,7 +1546,7 @@ async function requestFredRunProgress(
   });
   const payload = await response.json().catch(() => null) as unknown;
   if (!response.ok) {
-    throw new Error(highscoreResponseError(payload, "Dein FredRun-Spielstand konnte nicht gespeichert werden."));
+    throw fredRunRequestError(response, payload, "Dein FredRun-Spielstand konnte nicht gespeichert werden.");
   }
   const parsed = parseFredRunProgressApiResponse(payload);
   if (!parsed) throw new Error("Der FredRun-Spielstand hat ein ungültiges Antwortformat.");
@@ -1574,6 +1587,7 @@ export default function FredRunView({
   const [pendingPurchase, setPendingPurchase] = useState<FredRunPurchaseTarget | null>(null);
   const [purchaseMessage, setPurchaseMessage] = useState("");
   const [progressError, setProgressError] = useState("");
+  const [accessBlockMessage, setAccessBlockMessage] = useState("");
   const [abortConfirmation, setAbortConfirmation] = useState(false);
   const [lastAwardedCoins, setLastAwardedCoins] = useState(0);
   const [scorePulseToken, setScorePulseToken] = useState(0);
@@ -1683,6 +1697,9 @@ export default function FredRunView({
       setProgressError("");
       return response;
     } catch (error) {
+      if (error instanceof FredRunAccessBlockedError) {
+        setAccessBlockMessage(error.message);
+      }
       setStorageAvailable(false);
       const message = error instanceof Error
         ? error.message
@@ -1923,6 +1940,7 @@ export default function FredRunView({
     setProfileReady(false);
     void requestFredRunProgress(accessToken, undefined, controller.signal).then((response) => {
       if (controller.signal.aborted) return;
+      setAccessBlockMessage("");
       commitProfile(response.progress.profile);
       bestScoreRef.current = response.progress.bestScore;
       setBestScore(response.progress.bestScore);
@@ -1931,6 +1949,12 @@ export default function FredRunView({
       setProfileReady(true);
     }).catch((error: unknown) => {
       if (controller.signal.aborted) return;
+      if (error instanceof FredRunAccessBlockedError) {
+        setAccessBlockMessage(error.message);
+        setStorageAvailable(false);
+        setProfileReady(true);
+        return;
+      }
       const fallback = createDefaultFredRunProfile();
       commitProfile(fallback);
       bestScoreRef.current = 0;
@@ -1957,7 +1981,7 @@ export default function FredRunView({
     }).then(async (response) => {
       const payload = await response.json().catch(() => null) as unknown;
       if (!response.ok) {
-        throw new Error(highscoreResponseError(payload, "Die Topliste konnte nicht geladen werden."));
+        throw fredRunRequestError(response, payload, "Die Topliste konnte nicht geladen werden.");
       }
       const parsed = parseFredRunHighscoresResponse(payload);
       if (!parsed) throw new Error("Die Topliste lieferte ein ungültiges Antwortformat.");
@@ -1966,6 +1990,9 @@ export default function FredRunView({
       setLeaderboardState("ready");
     }).catch((error: unknown) => {
       if (controller.signal.aborted) return;
+      if (error instanceof FredRunAccessBlockedError) {
+        setAccessBlockMessage(error.message);
+      }
       setLeaderboardState("error");
       setLeaderboardError(error instanceof Error ? error.message : "Die Topliste konnte nicht geladen werden.");
     });
@@ -2168,7 +2195,7 @@ export default function FredRunView({
       });
       const payload = await response.json().catch(() => null) as unknown;
       if (!response.ok) {
-        throw new Error(highscoreResponseError(payload, "Der Score konnte nicht eingereicht werden."));
+        throw fredRunRequestError(response, payload, "Der Score konnte nicht eingereicht werden.");
       }
       const parsed = parseFredRunHighscoresResponse(payload);
       if (!parsed) throw new Error("Die Topliste lieferte ein ungültiges Antwortformat.");
@@ -2182,6 +2209,9 @@ export default function FredRunView({
       );
     } catch (error) {
       if (controller.signal.aborted) return;
+      if (error instanceof FredRunAccessBlockedError) {
+        setAccessBlockMessage(error.message);
+      }
       setScoreSubmissionError(error instanceof Error ? error.message : "Der Score konnte nicht eingereicht werden.");
     } finally {
       if (scoreSubmissionAbortRef.current === controller) scoreSubmissionAbortRef.current = null;
@@ -2201,23 +2231,37 @@ export default function FredRunView({
     && minimumLoadingComplete;
   const normalizedPlayerName = normalizeFredRunPlayerName(playerName);
   const scoreWasSubmitted = Boolean(currentRunId && submittedRunId === currentRunId);
+  const viewHeader = standalone ? null : (
+    <header className="forms-view-header fredrun-header">
+      <div>
+        <p className="eyebrow">Findog Spielpause</p>
+        <h1 id="fredrun-view-title">Fredrun</h1>
+        <p>Wähle deinen Charakter, sammle Münzen und spring über REIH 100, Steuerkodex und unerwartete Hindernisse.</p>
+      </div>
+      <div className="fredrun-controls-copy" aria-label="Steuerung">
+        <span><kbd>Leertaste</kbd> oder <kbd>↑</kbd></span>
+        <small>Alternativ Spielfeld antippen</small>
+      </div>
+    </header>
+  );
+
+  if (accessBlockMessage) {
+    return (
+      <section className="forms-panel fredrun-panel" aria-labelledby="fredrun-view-title">
+        <div className="forms-view fredrun-view">
+          {viewHeader}
+          <div className="fredrun-access-block" role="alert">
+            <p>{accessBlockMessage}</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="forms-panel fredrun-panel" aria-labelledby="fredrun-view-title">
       <div className="forms-view fredrun-view">
-        {standalone ? null : (
-          <header className="forms-view-header fredrun-header">
-            <div>
-              <p className="eyebrow">Findog Spielpause</p>
-              <h1 id="fredrun-view-title">Fredrun</h1>
-              <p>Wähle deinen Charakter, sammle Münzen und spring über REIH 100, Steuerkodex und unerwartete Hindernisse.</p>
-            </div>
-            <div className="fredrun-controls-copy" aria-label="Steuerung">
-              <span><kbd>Leertaste</kbd> oder <kbd>↑</kbd></span>
-              <small>Alternativ Spielfeld antippen</small>
-            </div>
-          </header>
-        )}
+        {viewHeader}
 
         <div
           ref={gameShellRef}

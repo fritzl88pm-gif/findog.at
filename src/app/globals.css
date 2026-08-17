@@ -2554,6 +2554,26 @@ textarea:focus {
   box-shadow: 0 18px 48px rgba(19, 53, 75, 0.12);
 }
 
+.fredrun-access-block {
+  min-height: 20rem;
+  display: grid;
+  place-items: center;
+  padding: clamp(2rem, 8vw, 5rem);
+  border: 1px solid rgba(122, 84, 17, 0.2);
+  border-radius: 1.5rem;
+  background: linear-gradient(145deg, rgba(255, 251, 237, 0.98), rgba(247, 235, 199, 0.9));
+  text-align: center;
+}
+
+.fredrun-access-block p {
+  max-width: 38rem;
+  margin: 0;
+  color: #5f420f;
+  font-size: clamp(1.1rem, 2.5vw, 1.45rem);
+  font-weight: 750;
+  line-height: 1.5;
+}
+
 .fredrun-game-shell:fullscreen {
   display: flex;
   width: 100vw;

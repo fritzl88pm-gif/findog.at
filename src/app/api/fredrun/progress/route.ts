@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
+import { FREDRUN_ACCESS_BLOCK_CODE } from "@/lib/fredrun-access";
+import {
+  assertFredRunAccessAllowed,
+  FredRunAccessBlockedServerError,
+} from "@/lib/fredrun-access-server";
 import {
   parseFredRunProgressAction,
   parseFredRunProgressApiResponse,
@@ -35,6 +40,9 @@ async function authenticatedContext(request: Request) {
 }
 
 function errorResponse(error: unknown): NextResponse {
+  if (error instanceof FredRunAccessBlockedServerError) {
+    return json({ error: error.message, code: FREDRUN_ACCESS_BLOCK_CODE }, error.status);
+  }
   if (error instanceof UserVisibleError) return json({ error: error.message }, error.status);
   return json({ error: "Dein FredRun-Spielstand ist derzeit nicht verfügbar." }, 500);
 }
@@ -54,6 +62,7 @@ function mutationParameters(action: FredRunProgressAction, userId: string) {
 export async function GET(request: Request) {
   try {
     const { supabase, user } = await authenticatedContext(request);
+    await assertFredRunAccessAllowed(supabase, user.id);
     const { data, error } = await supabase.rpc("ensure_fredrun_user_progress", {
       player_id: user.id,
     });
@@ -70,6 +79,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const { supabase, user } = await authenticatedContext(request);
+    await assertFredRunAccessAllowed(supabase, user.id);
     let body: unknown;
     try {
       body = await request.json();
