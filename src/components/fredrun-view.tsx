@@ -122,19 +122,6 @@ type CharacterSpriteLayout = {
   columns: number;
   frameCount: number;
   fps: number;
-  frameSequence?: readonly number[];
-};
-
-const CYBERFRED_JUMP_FRAME_SEQUENCE = [22] as const;
-
-type CyberfredBootAnchor = {
-  x: number;
-  y: number;
-  angle: number;
-};
-
-const CYBERFRED_JUMP_BOOT_ANCHORS: Readonly<Record<number, readonly CyberfredBootAnchor[]>> = {
-  22: [{ x: 62, y: 169, angle: -0.1 }, { x: 119, y: 168, angle: 0.1 }],
 };
 
 const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, CharacterSpriteLayout>> = {
@@ -155,13 +142,7 @@ const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, Chara
   },
   cyberfred: {
     walk: { source: "/fredrun/cyberfred/walk.webp", columns: 8, frameCount: 64, fps: 16 },
-    jump: {
-      source: "/fredrun/cyberfred/jump.webp?v=stable-booster-pose-v4",
-      columns: 8,
-      frameCount: 64,
-      fps: 16,
-      frameSequence: CYBERFRED_JUMP_FRAME_SEQUENCE,
-    },
+    jump: { source: "/fredrun/cyberfred/jump.webp?v=provided-clean-jump-v5", columns: 6, frameCount: 24, fps: 24 },
     victory: { source: "/fredrun/cyberfred/victory.webp?v=robot-dance-v2", columns: 8, frameCount: 64, fps: 16 },
   },
 };
@@ -1341,77 +1322,6 @@ function drawPlayerPowerEffects(
   context.restore();
 }
 
-function drawCyberfredJumpThrusters(
-  context: CanvasRenderingContext2D,
-  state: FredRunState,
-  spriteFrame: number,
-  reducedMotion: boolean,
-) {
-  if (state.grounded) return;
-
-  const progress = Math.min(1, Math.max(0, state.jumpElapsed / JUMP_ANIMATION_DURATION));
-  const thrustEnvelope = Math.sin(progress * Math.PI);
-  const flicker = reducedMotion ? 0 : Math.sin(state.elapsed * 36) * 1.5;
-  const flameLength = 27 + thrustEnvelope * 11 + flicker;
-  const spriteLeft = FREDRUN_PLAYER_X - SPRITE_DRAW_SIZE / 2;
-  const spriteTop = FREDRUN_GROUND_Y - state.playerHeight + 4 - SPRITE_DRAW_SIZE;
-  const spriteScale = SPRITE_DRAW_SIZE / SPRITE_CELL_SIZE;
-  const sourceAnchors = CYBERFRED_JUMP_BOOT_ANCHORS[spriteFrame]
-    ?? CYBERFRED_JUMP_BOOT_ANCHORS[CYBERFRED_JUMP_FRAME_SEQUENCE[0]];
-  const bootOrigins = sourceAnchors.map((anchor, index) => ({
-    x: spriteLeft + anchor.x * spriteScale,
-    y: spriteTop + anchor.y * spriteScale,
-    angle: anchor.angle,
-    phase: index * Math.PI,
-  }));
-
-  context.save();
-  context.globalCompositeOperation = "lighter";
-  for (const boot of bootOrigins) {
-    const pulse = reducedMotion ? 0 : Math.sin(state.elapsed * 62 + boot.phase) * 2;
-    const length = flameLength + pulse;
-    context.save();
-    context.translate(boot.x, boot.y);
-    context.rotate(boot.angle);
-    context.shadowColor = "rgba(0, 174, 255, 0.95)";
-    context.shadowBlur = 14;
-
-    const outerFlame = context.createLinearGradient(0, 0, -8, length);
-    outerFlame.addColorStop(0, "rgba(224, 251, 255, 0.98)");
-    outerFlame.addColorStop(0.28, "rgba(64, 214, 255, 0.96)");
-    outerFlame.addColorStop(0.72, "rgba(0, 113, 255, 0.78)");
-    outerFlame.addColorStop(1, "rgba(0, 71, 255, 0)");
-    context.fillStyle = outerFlame;
-    context.beginPath();
-    context.moveTo(-6, 0);
-    context.quadraticCurveTo(-12, length * 0.42, -8, length);
-    context.quadraticCurveTo(1, length * 0.58, 6, 0);
-    context.closePath();
-    context.fill();
-
-    context.shadowBlur = 5;
-    context.fillStyle = "rgba(235, 255, 255, 0.92)";
-    context.beginPath();
-    context.moveTo(-2.5, 1);
-    context.quadraticCurveTo(-5, length * 0.32, -3, length * 0.62);
-    context.quadraticCurveTo(2, length * 0.36, 2.5, 1);
-    context.closePath();
-    context.fill();
-
-    if (!reducedMotion) {
-      context.fillStyle = "rgba(87, 221, 255, 0.82)";
-      for (let spark = 0; spark < 3; spark += 1) {
-        const travel = (state.elapsed * (45 + spark * 9) + spark * 11) % Math.max(1, length);
-        context.beginPath();
-        context.arc(-5 - spark * 3, 8 + travel, 1.8 - spark * 0.35, 0, Math.PI * 2);
-        context.fill();
-      }
-    }
-    context.restore();
-  }
-  context.restore();
-}
-
 function drawHitFeedback(
   context: CanvasRenderingContext2D,
   state: FredRunState,
@@ -1445,15 +1355,12 @@ function activeSprite(
 ): { key: SpriteKey; frame: number } {
   if (!state.grounded) {
     const progress = state.jumpElapsed / JUMP_ANIMATION_DURATION;
-    const frameSequence = layouts.jump.frameSequence;
-    const playbackFrameCount = frameSequence?.length ?? layouts.jump.frameCount;
-    const playbackIndex = Math.min(
-      playbackFrameCount - 1,
-      Math.max(0, Math.floor(progress * playbackFrameCount)),
-    );
     return {
       key: "jump",
-      frame: frameSequence?.[playbackIndex] ?? playbackIndex,
+      frame: Math.min(
+        layouts.jump.frameCount - 1,
+        Math.max(0, Math.floor(progress * layouts.jump.frameCount)),
+      ),
     };
   }
   if (state.phase === "running") {
@@ -1503,9 +1410,6 @@ function renderFredRun(
     drawPlayerPowerEffects(context, state, reducedMotion);
     const layouts = characterSpriteLayouts[characterId];
     const sprite = activeSprite(state, layouts);
-    if (characterId === "cyberfred") {
-      drawCyberfredJumpThrusters(context, state, sprite.frame, reducedMotion);
-    }
     const layout = layouts[sprite.key];
     const sourceX = (sprite.frame % layout.columns) * SPRITE_CELL_SIZE;
     const sourceY = Math.floor(sprite.frame / layout.columns) * SPRITE_CELL_SIZE;

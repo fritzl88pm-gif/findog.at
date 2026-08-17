@@ -6,6 +6,7 @@ import sharp from "sharp";
 
 const SOURCE_DIRECTORY = path.resolve(process.argv[2] ?? "tmp/cyberfred-autosprite");
 const OUTPUT_DIRECTORY = path.resolve(process.argv[3] ?? "public/fredrun/cyberfred");
+const ONLY_ANIMATION_KEY = process.argv[4] ?? "";
 const CELL_SIZE = 192;
 const OUTPUT_COLUMNS = 8;
 const SOURCE_CELL_SIZE = 512;
@@ -16,6 +17,13 @@ const HORIZONTAL_PADDING = 8;
 const TOP_PADDING = 6;
 const BOTTOM_PADDING = 8;
 const REFERENCE_SHA256 = "CBDD7B6B92AE436C2AC5CD258BB54260E1E7A86236E30E7926A2E8CA2CA68B6E";
+const PROVIDED_JUMP_SOURCE_FRAMES = [
+  20, 24, 27, 30,
+  31, 32, 33, 34, 35, 36,
+  37, 38, 39, 40, 41, 42,
+  43, 44, 45,
+  47, 51, 55, 59, 63,
+];
 
 const animations = [
   {
@@ -26,19 +34,19 @@ const animations = [
   },
   {
     key: "jump",
-    sourceFile: "jump-raw.png",
-    spritesheetId: "cmsxfvcto0009zuxdynj10ejx",
-    sourceVideoId: "cmsxfsw6c004q146wxpooqsje",
+    sourceFile: "jump-provided.png",
+    sourceLabel: "1786987959871_a309b29b-d608-4cdb-8ba9-ffd3336b1786.png",
+    sourceKind: "provided-spritesheet",
+    sourceFrameIndices: PROVIDED_JUMP_SOURCE_FRAMES,
+    outputColumns: 6,
     metadata: {
       animationName: "Blue Booster Jump",
-      firstFramePoseId: "cmsxfrmrv002h146wd2gwlna2",
       facingDirection: "right",
-      runtimeEffect: "electric-blue-boot-thrusters",
+      runtimeEffect: "embedded-electric-blue-boot-thrusters",
       runtimePlayback: {
-        mode: "locked-airborne-booster-pose",
-        frameSequence: [22],
-        displayedFrameCount: 1,
-        footAnchors: "per-frame-source-cell-coordinates",
+        mode: "full-atlas-synced-to-fredrun-physics",
+        durationSeconds: 0.82,
+        heightSource: "shared-fredrun-physics",
       },
     },
   },
@@ -59,12 +67,12 @@ function sha256(buffer) {
   return createHash("sha256").update(buffer).digest("hex").toUpperCase();
 }
 
-function sourceRectangle(index) {
+function sourceRectangle(index, sourceColumns, sourceCellSize) {
   return {
-    left: index % SOURCE_COLUMNS * SOURCE_CELL_SIZE,
-    top: Math.floor(index / SOURCE_COLUMNS) * SOURCE_CELL_SIZE,
-    width: SOURCE_CELL_SIZE,
-    height: SOURCE_CELL_SIZE,
+    left: index % sourceColumns * sourceCellSize,
+    top: Math.floor(index / sourceColumns) * sourceCellSize,
+    width: sourceCellSize,
+    height: sourceCellSize,
   };
 }
 
@@ -97,17 +105,29 @@ async function normalizeAnimation(animation) {
   const sourcePath = path.join(SOURCE_DIRECTORY, animation.sourceFile);
   const source = await readFile(sourcePath);
   const { data, info } = await sharp(source).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  const sourceRows = Math.ceil(FRAME_COUNT / SOURCE_COLUMNS);
+  const sourceColumns = animation.sourceColumns ?? SOURCE_COLUMNS;
+  const sourceCellSize = animation.sourceCellSize ?? SOURCE_CELL_SIZE;
+  const sourceFrameCount = animation.sourceFrameCount ?? FRAME_COUNT;
+  const sourceRows = Math.ceil(sourceFrameCount / sourceColumns);
+  const sourceFrameIndices = animation.sourceFrameIndices
+    ?? Array.from({ length: sourceFrameCount }, (_, index) => index);
+  const outputColumns = animation.outputColumns ?? OUTPUT_COLUMNS;
+  const outputFrameCount = sourceFrameIndices.length;
   if (
-    info.width !== SOURCE_COLUMNS * SOURCE_CELL_SIZE
-    || info.height !== sourceRows * SOURCE_CELL_SIZE
+    info.width !== sourceColumns * sourceCellSize
+    || info.height !== sourceRows * sourceCellSize
   ) {
-    throw new Error(`Unerwartete AutoSprite-Größe für ${animation.sourceFile}: ${info.width}x${info.height}.`);
+    throw new Error(`Unerwartete Sprite-Größe für ${animation.sourceFile}: ${info.width}x${info.height}.`);
   }
 
-  const frames = Array.from({ length: FRAME_COUNT }, (_, index) => {
-    const rectangle = sourceRectangle(index);
-    return { index, rectangle, bounds: findAlphaBounds(data, info.channels, info.width, rectangle) };
+  const frames = sourceFrameIndices.map((sourceIndex, outputIndex) => {
+    const rectangle = sourceRectangle(sourceIndex, sourceColumns, sourceCellSize);
+    return {
+      sourceIndex,
+      outputIndex,
+      rectangle,
+      bounds: findAlphaBounds(data, info.channels, info.width, rectangle),
+    };
   });
   const maxWidth = Math.max(...frames.map((frame) => frame.bounds.width));
   const maxHeight = Math.max(...frames.map((frame) => frame.bounds.height));
@@ -132,16 +152,16 @@ async function normalizeAnimation(animation) {
       .toBuffer();
     composites.push({
       input,
-      left: frame.index % OUTPUT_COLUMNS * CELL_SIZE + Math.round((CELL_SIZE - width) / 2),
-      top: Math.floor(frame.index / OUTPUT_COLUMNS) * CELL_SIZE + CELL_SIZE - BOTTOM_PADDING - height,
+      left: frame.outputIndex % outputColumns * CELL_SIZE + Math.round((CELL_SIZE - width) / 2),
+      top: Math.floor(frame.outputIndex / outputColumns) * CELL_SIZE + CELL_SIZE - BOTTOM_PADDING - height,
     });
   }
 
   const outputPath = path.join(OUTPUT_DIRECTORY, `${animation.key}.webp`);
   await sharp({
     create: {
-      width: OUTPUT_COLUMNS * CELL_SIZE,
-      height: Math.ceil(FRAME_COUNT / OUTPUT_COLUMNS) * CELL_SIZE,
+      width: outputColumns * CELL_SIZE,
+      height: Math.ceil(outputFrameCount / outputColumns) * CELL_SIZE,
       channels: 4,
       background: { r: 0, g: 0, b: 0, alpha: 0 },
     },
@@ -153,16 +173,17 @@ async function normalizeAnimation(animation) {
   const output = await readFile(outputPath);
   const outputStats = await stat(outputPath);
   return {
-    sourceKind: "autosprite",
-    sourceFile: animation.sourceFile,
+    sourceKind: animation.sourceKind ?? "autosprite",
+    sourceFile: animation.sourceLabel ?? animation.sourceFile,
     sourceSha256: sha256(source),
-    spritesheetId: animation.spritesheetId,
-    sourceVideoId: animation.sourceVideoId,
-    sourceGrid: `${SOURCE_COLUMNS}x${sourceRows}`,
-    sourceFrameCount: FRAME_COUNT,
-    columns: OUTPUT_COLUMNS,
-    rows: Math.ceil(FRAME_COUNT / OUTPUT_COLUMNS),
-    frameCount: FRAME_COUNT,
+    ...(animation.spritesheetId ? { spritesheetId: animation.spritesheetId } : {}),
+    ...(animation.sourceVideoId ? { sourceVideoId: animation.sourceVideoId } : {}),
+    sourceGrid: `${sourceColumns}x${sourceRows}`,
+    sourceFrameCount,
+    ...(animation.sourceFrameIndices ? { sourceFrames: sourceFrameIndices } : {}),
+    columns: outputColumns,
+    rows: Math.ceil(outputFrameCount / outputColumns),
+    frameCount: outputFrameCount,
     sharedScale: Number(scale.toFixed(6)),
     outputFile: path.basename(outputPath),
     outputSha256: sha256(output),
@@ -173,10 +194,20 @@ async function normalizeAnimation(animation) {
 
 async function main() {
   await mkdir(OUTPUT_DIRECTORY, { recursive: true });
-  const normalizedEntries = await Promise.all(animations.map(async (animation) => (
+  const selectedAnimations = ONLY_ANIMATION_KEY
+    ? animations.filter((animation) => animation.key === ONLY_ANIMATION_KEY)
+    : animations;
+  if (selectedAnimations.length === 0) {
+    throw new Error(`Unbekannte Cyberfred-Animation: ${ONLY_ANIMATION_KEY}`);
+  }
+  const normalizedEntries = await Promise.all(selectedAnimations.map(async (animation) => (
     [animation.key, await normalizeAnimation(animation)]
   )));
-  const manifest = {
+  const manifestPath = path.join(OUTPUT_DIRECTORY, "manifest.json");
+  const existingManifest = ONLY_ANIMATION_KEY
+    ? JSON.parse(await readFile(manifestPath, "utf8"))
+    : null;
+  const generatedManifest = {
     source: {
       referenceFile: "Photo 1.jpg",
       referenceSha256: REFERENCE_SHA256,
@@ -203,8 +234,18 @@ async function main() {
       animations: Object.fromEntries(normalizedEntries),
     },
   };
+  const manifest = existingManifest ? {
+    ...existingManifest,
+    atlas: {
+      ...existingManifest.atlas,
+      animations: {
+        ...existingManifest.atlas.animations,
+        ...Object.fromEntries(normalizedEntries),
+      },
+    },
+  } : generatedManifest;
   await writeFile(
-    path.join(OUTPUT_DIRECTORY, "manifest.json"),
+    manifestPath,
     `${JSON.stringify(manifest, null, 2)}\n`,
     "utf8",
   );
