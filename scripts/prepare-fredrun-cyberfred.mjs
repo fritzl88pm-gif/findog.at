@@ -34,6 +34,12 @@ const animations = [
       firstFramePoseId: "cmsxfrmrv002h146wd2gwlna2",
       facingDirection: "right",
       runtimeEffect: "electric-blue-boot-thrusters",
+      runtimePlayback: {
+        mode: "curated-single-arc",
+        frameSequence: [8, 10, 12, 14, 16, 18, 20, 21, 22, 22, 21, 20, 18, 16, 14, 12, 10, 8],
+        displayedFrameCount: 18,
+        footAnchors: "per-frame-source-cell-coordinates",
+      },
     },
   },
   {
