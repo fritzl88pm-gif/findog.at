@@ -27,14 +27,25 @@ const animations = [
   {
     key: "jump",
     sourceFile: "jump-raw.png",
-    spritesheetId: "cmsxenyzs00csvsmf6ovejlwm",
-    sourceVideoId: "cmsxekvsf00b4vsmf39ijuwbk",
+    spritesheetId: "cmsxfvcto0009zuxdynj10ejx",
+    sourceVideoId: "cmsxfsw6c004q146wxpooqsje",
+    metadata: {
+      animationName: "Blue Booster Jump",
+      firstFramePoseId: "cmsxfrmrv002h146wd2gwlna2",
+      facingDirection: "right",
+      runtimeEffect: "electric-blue-boot-thrusters",
+    },
   },
   {
     key: "victory",
     sourceFile: "victory-raw.png",
-    spritesheetId: "cmsxenyon006qil4utgws2fr5",
-    sourceVideoId: "cmsxekvur00bevsmf5r5lc1l9",
+    spritesheetId: "cmsxfw00400013794zpps1oqa",
+    sourceVideoId: "cmsxfsvn9004m146w9fjcc2sf",
+    metadata: {
+      animationName: "Cyberfred Robot Dance",
+      loop: true,
+      danceStyle: "classic-robot-dance",
+    },
   },
 ];
 
@@ -150,6 +161,7 @@ async function normalizeAnimation(animation) {
     outputFile: path.basename(outputPath),
     outputSha256: sha256(output),
     bytes: outputStats.size,
+    ...animation.metadata,
   };
 }
 
@@ -171,9 +183,9 @@ async function main() {
         firstFrameQuality: "pro",
         backgroundRemoval: "ultra",
         sound: false,
-        creditsUsed: 39,
+        creditsUsed: 65,
         shippedCreditsUsed: 39,
-        discardedDraftCredits: 0,
+        discardedDraftCredits: 26,
       },
     },
     atlas: {

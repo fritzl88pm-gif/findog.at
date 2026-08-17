@@ -11,9 +11,9 @@
       "firstFrameQuality": "pro",
       "backgroundRemoval": "ultra",
       "sound": false,
-      "creditsUsed": 39,
+      "creditsUsed": 65,
       "shippedCreditsUsed": 39,
-      "discardedDraftCredits": 0
+      "discardedDraftCredits": 26
     }
   },
   "atlas": {
@@ -42,34 +42,41 @@
       "jump": {
         "sourceKind": "autosprite",
         "sourceFile": "jump-raw.png",
-        "sourceSha256": "08814DE58399CA64AA7FC69383C1792EB957AEF26135367F9549482C3199672A",
-        "spritesheetId": "cmsxenyzs00csvsmf6ovejlwm",
-        "sourceVideoId": "cmsxekvsf00b4vsmf39ijuwbk",
+        "sourceSha256": "B4F774D589FF5C40B2ED6493CDC6AE57FF57B7A5DB968297EC2FCA20C19F94E3",
+        "spritesheetId": "cmsxfvcto0009zuxdynj10ejx",
+        "sourceVideoId": "cmsxfsw6c004q146wxpooqsje",
         "sourceGrid": "8x8",
         "sourceFrameCount": 64,
         "columns": 8,
         "rows": 8,
         "frameCount": 64,
-        "sharedScale": 0.390351,
+        "sharedScale": 0.358149,
         "outputFile": "jump.webp",
-        "outputSha256": "E11F55AB30FC8D42DF572822597D30A0F4CA93ACF4B43007098C9A814DF0D087",
-        "bytes": 651772
+        "outputSha256": "5A279FA654ACD8D0CFB596A0B75E3C3DA257C3738EB622897EDC287784910D81",
+        "bytes": 691354,
+        "animationName": "Blue Booster Jump",
+        "firstFramePoseId": "cmsxfrmrv002h146wd2gwlna2",
+        "facingDirection": "right",
+        "runtimeEffect": "electric-blue-boot-thrusters"
       },
       "victory": {
         "sourceKind": "autosprite",
         "sourceFile": "victory-raw.png",
-        "sourceSha256": "104CF2ACF9DD1DCEF9D9B3AABBCDC816A5C6CFB5705C1CD53CDEE71FEC32D480",
-        "spritesheetId": "cmsxenyon006qil4utgws2fr5",
-        "sourceVideoId": "cmsxekvur00bevsmf5r5lc1l9",
+        "sourceSha256": "C5338CF3BA563FF2EF6FE01FF236AE9A2A0330791E1A75AE77D8FB3E28A44588",
+        "spritesheetId": "cmsxfw00400013794zpps1oqa",
+        "sourceVideoId": "cmsxfsvn9004m146w9fjcc2sf",
         "sourceGrid": "8x8",
         "sourceFrameCount": 64,
         "columns": 8,
         "rows": 8,
         "frameCount": 64,
-        "sharedScale": 0.39821,
+        "sharedScale": 0.355289,
         "outputFile": "victory.webp",
-        "outputSha256": "695AF6AA2B6F929D20F440F2FA5141956B91D0C9D6598D8DF928DEF7F2E3CD0B",
-        "bytes": 626904
+        "outputSha256": "FDF46A8CB1A8E7E97ECF634B1A5AA169BD319CC863A2620A48C4343CD3112E2A",
+        "bytes": 646930,
+        "animationName": "Cyberfred Robot Dance",
+        "loop": true,
+        "danceStyle": "classic-robot-dance"
       }
     }
   }

@@ -616,9 +616,9 @@ describe("Fredrun UI surface", () => {
         sourceFrameCount: 64,
         firstFrameQuality: "pro",
         backgroundRemoval: "ultra",
-        creditsUsed: 39,
+        creditsUsed: 65,
         shippedCreditsUsed: 39,
-        discardedDraftCredits: 0,
+        discardedDraftCredits: 26,
         sound: false,
       },
     });
@@ -651,8 +651,20 @@ describe("Fredrun UI surface", () => {
     ), 0);
     expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
     expect(viewSource).toContain('walk: { source: "/fredrun/cyberfred/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
-    expect(viewSource).toContain('jump: { source: "/fredrun/cyberfred/jump.webp", columns: 8, frameCount: 64, fps: 16 }');
-    expect(viewSource).toContain('victory: { source: "/fredrun/cyberfred/victory.webp", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('jump: { source: "/fredrun/cyberfred/jump.webp?v=blue-boosters-v2", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('victory: { source: "/fredrun/cyberfred/victory.webp?v=robot-dance-v2", columns: 8, frameCount: 64, fps: 16 }');
+    expect(cyberfredManifest.atlas.animations.jump).toMatchObject({
+      animationName: "Blue Booster Jump",
+      facingDirection: "right",
+      runtimeEffect: "electric-blue-boot-thrusters",
+    });
+    expect(cyberfredManifest.atlas.animations.victory).toMatchObject({
+      animationName: "Cyberfred Robot Dance",
+      danceStyle: "classic-robot-dance",
+      loop: true,
+    });
+    expect(viewSource).toContain("function drawCyberfredJumpThrusters");
+    expect(viewSource).toContain('characterId === "cyberfred"');
     expect(profileSource).toContain('export const FREDRUN_CYBERFRED_PRICE = 2_000;');
     expect(profileSource).toContain('name: "Cyberfred"');
     expect(profileSource).toContain('price: FREDRUN_CYBERFRED_PRICE');
