@@ -77,6 +77,8 @@ describe("Fredrun world background progression", () => {
       },
     ]);
     expect(FREDRUN_WORLDS["finanzamt-night"].backgrounds.crossfadeScoreDuration).toBe(40);
+    expect(FREDRUN_WORLDS["finanzamt-night"].backgrounds.fallbackSource)
+      .toBe("/fredrun/levels/finanzamt-night/backgrounds/close-office.webp");
 
     expect(fredRunWorldBackgroundForScore("finanzamt-night", -1))
       .toEqual({ fromStage: 0, toStage: 1, blend: 0 });

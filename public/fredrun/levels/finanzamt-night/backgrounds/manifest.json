@@ -70,7 +70,16 @@
         }
       ]
     },
-    "fallbackSource": "/fredrun/vienna-panorama.webp",
+    "fallbackSource": "/fredrun/levels/finanzamt-night/backgrounds/close-office.webp",
+    "compatibilityAliases": [
+      {
+        "runtimePath": "/fredrun/levels/finanzamt-night/backgrounds/close-office.webp",
+        "targetStageId": "close-caseworker-office",
+        "bytes": 59050,
+        "sha256": "79cba1c0b94ca3ff793a832203e4caec2674ad808d7c727be3471eafb3b9050a",
+        "purpose": "keep already-open clients on the night-office art instead of the Vienna fallback"
+      }
+    ],
     "composition": "four distinct close side-on office workrooms with matched camera geometry and a clear lower running lane",
     "effects": {
       "fluorescentFlicker": {

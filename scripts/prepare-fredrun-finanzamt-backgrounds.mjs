@@ -344,6 +344,11 @@ async function main() {
     await makeThreeTilePreview(outputPath, sourceAsset);
   }
 
+  const compatibilityAliasFile = "close-office.webp";
+  const compatibilityAliasPath = path.join(OUTPUT_DIRECTORY, compatibilityAliasFile);
+  const compatibilityAlias = await readFile(outputPaths[0]);
+  await writeFile(compatibilityAliasPath, compatibilityAlias);
+
   const manifest = {
     schemaVersion: 1,
     worldId: "finanzamt-night",
@@ -377,7 +382,14 @@ async function main() {
         method: "redraw unmirrored source patches after each mirrored tile",
         patches: mirroredTextPatches,
       },
-      fallbackSource: "/fredrun/vienna-panorama.webp",
+      fallbackSource: "/fredrun/levels/finanzamt-night/backgrounds/close-office.webp",
+      compatibilityAliases: [{
+        runtimePath: `/fredrun/levels/finanzamt-night/backgrounds/${compatibilityAliasFile}`,
+        targetStageId: sourceAssets[0].id,
+        bytes: compatibilityAlias.length,
+        sha256: sha256(compatibilityAlias),
+        purpose: "keep already-open clients on the night-office art instead of the Vienna fallback",
+      }],
       composition: "four distinct close side-on office workrooms with matched camera geometry and a clear lower running lane",
       effects: {
         fluorescentFlicker: {

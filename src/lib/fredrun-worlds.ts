@@ -59,7 +59,7 @@ export const FREDRUN_WORLDS = {
         { source: "/fredrun/levels/finanzamt-night/backgrounds/close-glass-offices.webp", anchorScore: 1_000 },
         { source: "/fredrun/levels/finanzamt-night/backgrounds/close-archive.webp", anchorScore: 1_500 },
       ],
-      fallbackSource: "/fredrun/vienna-panorama.webp",
+      fallbackSource: "/fredrun/levels/finanzamt-night/backgrounds/close-office.webp",
       crossfadeScoreDuration: 40,
       renderStyle: "night-office",
     },

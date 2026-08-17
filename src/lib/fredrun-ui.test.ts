@@ -286,6 +286,13 @@ const finanzamtBackgroundManifest = JSON.parse(readFileSync(
       patches: Array<{ id: string; left: number; top: number; width: number; height: number }>;
     };
     fallbackSource: string;
+    compatibilityAliases: Array<{
+      runtimePath: string;
+      targetStageId: string;
+      bytes: number;
+      sha256: string;
+      purpose: string;
+    }>;
     effects: {
       fluorescentFlicker: {
         opacityRange: number[];
@@ -736,7 +743,11 @@ describe("Fredrun UI surface", () => {
         mirroredTextTreatment: {
           method: "redraw unmirrored source patches after each mirrored tile",
         },
-        fallbackSource: "/fredrun/vienna-panorama.webp",
+        fallbackSource: "/fredrun/levels/finanzamt-night/backgrounds/close-office.webp",
+        compatibilityAliases: [{
+          runtimePath: "/fredrun/levels/finanzamt-night/backgrounds/close-office.webp",
+          targetStageId: "close-caseworker-office",
+        }],
         effects: {
           fluorescentFlicker: {
             opacityRange: [0.008, 0.042],
@@ -782,10 +793,15 @@ describe("Fredrun UI surface", () => {
     const outputHashes = new Set(finanzamtBackgroundManifest.stages.map(({ output }) => output.sha256));
     expect(rawHashes.size).toBe(4);
     expect(outputHashes.size).toBe(4);
-    expect(() => statSync(fileURLToPath(new URL(
+    const compatibilityAlias = readFileSync(fileURLToPath(new URL(
       "../../public/fredrun/levels/finanzamt-night/backgrounds/close-office.webp",
       import.meta.url,
-    )))).toThrow();
+    )));
+    const compatibilityAliasManifest = finanzamtBackgroundManifest.runtime.compatibilityAliases[0];
+    expect(compatibilityAlias.length).toBe(compatibilityAliasManifest.bytes);
+    expect(sha256(compatibilityAlias)).toBe(compatibilityAliasManifest.sha256);
+    expect(compatibilityAliasManifest.sha256)
+      .toBe(finanzamtBackgroundManifest.stages[0].output.sha256);
 
     for (const stage of finanzamtBackgroundManifest.stages) {
       expect(stage.prompt.length).toBeGreaterThan(500);
@@ -1126,17 +1142,18 @@ describe("Fredrun UI surface", () => {
       finanzamtSources[2],
       finanzamtSources[3],
     ]);
-    const fallbackSource = "/fredrun/vienna-panorama.webp";
+    const viennaFallbackSource = FREDRUN_WORLDS.vienna.backgrounds.fallbackSource;
+    const finanzamtFallbackSource = FREDRUN_WORLDS["finanzamt-night"].backgrounds.fallbackSource;
     const backgrounds = await loadFredRunWorldBackgrounds(async (source) => {
       if (failedSources.has(source)) throw new Error("stage failed");
       return { source };
     });
 
     expect(backgrounds.vienna).toEqual(viennaSources.map((source) => ({
-      source: failedSources.has(source) ? fallbackSource : source,
+      source: failedSources.has(source) ? viennaFallbackSource : source,
     })));
     expect(backgrounds["finanzamt-night"]).toEqual(finanzamtSources.map((source) => ({
-      source: failedSources.has(source) ? fallbackSource : source,
+      source: failedSources.has(source) ? finanzamtFallbackSource : source,
     })));
     expect(viewSource).toContain("loadFredRunWorldBackgrounds(loadImage)");
   });
