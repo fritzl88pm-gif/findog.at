@@ -35,9 +35,9 @@ const animations = [
       facingDirection: "right",
       runtimeEffect: "electric-blue-boot-thrusters",
       runtimePlayback: {
-        mode: "curated-single-arc",
-        frameSequence: [8, 10, 12, 14, 16, 18, 20, 21, 22, 22, 21, 20, 18, 16, 14, 12, 10, 8],
-        displayedFrameCount: 18,
+        mode: "locked-airborne-booster-pose",
+        frameSequence: [22],
+        displayedFrameCount: 1,
         footAnchors: "per-frame-source-cell-coordinates",
       },
     },

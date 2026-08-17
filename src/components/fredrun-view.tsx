@@ -125,10 +125,7 @@ type CharacterSpriteLayout = {
   frameSequence?: readonly number[];
 };
 
-const CYBERFRED_JUMP_FRAME_SEQUENCE = [
-  8, 10, 12, 14, 16, 18, 20, 21,
-  22, 22, 21, 20, 18, 16, 14, 12, 10, 8,
-] as const;
+const CYBERFRED_JUMP_FRAME_SEQUENCE = [22] as const;
 
 type CyberfredBootAnchor = {
   x: number;
@@ -137,14 +134,6 @@ type CyberfredBootAnchor = {
 };
 
 const CYBERFRED_JUMP_BOOT_ANCHORS: Readonly<Record<number, readonly CyberfredBootAnchor[]>> = {
-  8: [{ x: 80, y: 169, angle: -0.06 }, { x: 108, y: 170, angle: 0.08 }],
-  10: [{ x: 84, y: 169, angle: -0.06 }, { x: 111, y: 170, angle: 0.08 }],
-  12: [{ x: 83, y: 169, angle: -0.06 }, { x: 111, y: 171, angle: 0.08 }],
-  14: [{ x: 79, y: 164, angle: -0.08 }, { x: 112, y: 170, angle: 0.08 }],
-  16: [{ x: 68, y: 168, angle: -0.08 }, { x: 116, y: 169, angle: 0.08 }],
-  18: [{ x: 73, y: 169, angle: -0.08 }, { x: 119, y: 169, angle: 0.08 }],
-  20: [{ x: 76, y: 168, angle: -0.08 }, { x: 116, y: 170, angle: 0.08 }],
-  21: [{ x: 68, y: 168, angle: -0.08 }, { x: 116, y: 169, angle: 0.08 }],
   22: [{ x: 62, y: 169, angle: -0.1 }, { x: 119, y: 168, angle: 0.1 }],
 };
 
@@ -167,7 +156,7 @@ const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, Chara
   cyberfred: {
     walk: { source: "/fredrun/cyberfred/walk.webp", columns: 8, frameCount: 64, fps: 16 },
     jump: {
-      source: "/fredrun/cyberfred/jump.webp?v=smooth-single-arc-v3",
+      source: "/fredrun/cyberfred/jump.webp?v=stable-booster-pose-v4",
       columns: 8,
       frameCount: 64,
       fps: 16,

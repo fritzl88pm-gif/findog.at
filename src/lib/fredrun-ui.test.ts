@@ -664,7 +664,7 @@ describe("Fredrun UI surface", () => {
     ), 0);
     expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
     expect(viewSource).toContain('walk: { source: "/fredrun/cyberfred/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
-    expect(viewSource).toContain('source: "/fredrun/cyberfred/jump.webp?v=smooth-single-arc-v3"');
+    expect(viewSource).toContain('source: "/fredrun/cyberfred/jump.webp?v=stable-booster-pose-v4"');
     expect(viewSource).toContain("frameSequence: CYBERFRED_JUMP_FRAME_SEQUENCE");
     expect(viewSource).toContain('victory: { source: "/fredrun/cyberfred/victory.webp?v=robot-dance-v2", columns: 8, frameCount: 64, fps: 16 }');
     expect(cyberfredManifest.atlas.animations.jump).toMatchObject({
@@ -673,9 +673,9 @@ describe("Fredrun UI surface", () => {
       runtimeEffect: "electric-blue-boot-thrusters",
     });
     expect(cyberfredManifest.atlas.animations.jump.runtimePlayback).toEqual({
-      mode: "curated-single-arc",
-      frameSequence: [8, 10, 12, 14, 16, 18, 20, 21, 22, 22, 21, 20, 18, 16, 14, 12, 10, 8],
-      displayedFrameCount: 18,
+      mode: "locked-airborne-booster-pose",
+      frameSequence: [22],
+      displayedFrameCount: 1,
       footAnchors: "per-frame-source-cell-coordinates",
     });
     expect(cyberfredManifest.atlas.animations.victory).toMatchObject({
