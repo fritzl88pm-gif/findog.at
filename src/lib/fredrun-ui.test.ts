@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
 import { fredRunEnvironmentForDistance } from "./fredrun";
@@ -668,7 +669,7 @@ describe("Fredrun UI surface", () => {
     ), 0);
     expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
     expect(viewSource).toContain('walk: { source: "/fredrun/cyberfred/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
-    expect(viewSource).toContain('jump: { source: "/fredrun/cyberfred/jump.webp?v=dual-boosters-v6", columns: 6, frameCount: 24, fps: 24 }');
+    expect(viewSource).toContain('jump: { source: "/fredrun/cyberfred/jump.webp?v=embedded-dual-boosters-v7", columns: 6, frameCount: 24, fps: 24 }');
     expect(viewSource).toContain('victory: { source: "/fredrun/cyberfred/victory.webp?v=robot-dance-v2", columns: 8, frameCount: 64, fps: 16 }');
     expect(cyberfredManifest.atlas.animations.jump).toMatchObject({
       sourceKind: "provided-spritesheet",
@@ -682,7 +683,7 @@ describe("Fredrun UI surface", () => {
       frameCount: 24,
       animationName: "Blue Booster Jump",
       facingDirection: "right",
-      runtimeEffect: "embedded-right-plus-frame-anchored-left-blue-boot-thrusters",
+      runtimeEffect: "embedded-dual-original-blue-boot-thrusters",
     });
     expect(cyberfredManifest.atlas.animations.jump.runtimePlayback).toEqual({
       mode: "full-atlas-synced-to-fredrun-physics",
@@ -694,11 +695,45 @@ describe("Fredrun UI surface", () => {
       danceStyle: "classic-robot-dance",
       loop: true,
     });
-    expect(viewSource).toContain("function drawCyberfredLeftJumpBooster");
-    expect(viewSource).toContain("CYBERFRED_LEFT_BOOSTER_ANCHORS[spriteFrame]");
+    expect(viewSource).not.toContain("drawCyberfredLeftJumpBooster");
+    expect(viewSource).not.toContain("CYBERFRED_LEFT_BOOSTER_ANCHORS");
     expect(profileSource).toContain('export const FREDRUN_CYBERFRED_PRICE = 2_000;');
     expect(profileSource).toContain('name: "Cyberfred"');
     expect(profileSource).toContain('price: FREDRUN_CYBERFRED_PRICE');
+  });
+
+  it("embeds an original blue booster beneath both Cyberfred boots during flight", async () => {
+    const jumpAtlasPath = fileURLToPath(new URL(
+      "../../public/fredrun/cyberfred/jump.webp",
+      import.meta.url,
+    ));
+    const flameZones = [
+      { left: 42, top: 142, width: 54, height: 48 },
+      { left: 98, top: 142, width: 58, height: 48 },
+    ];
+
+    for (let frame = 3; frame <= 17; frame += 1) {
+      for (const zone of flameZones) {
+        const { data, info } = await sharp(jumpAtlasPath)
+          .extract({
+            left: frame % 6 * 192 + zone.left,
+            top: Math.floor(frame / 6) * 192 + zone.top,
+            width: zone.width,
+            height: zone.height,
+          })
+          .ensureAlpha()
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+        let blueFlamePixels = 0;
+        for (let pixel = 0; pixel < data.length; pixel += info.channels) {
+          const red = data[pixel];
+          const blue = data[pixel + 2];
+          const alpha = data[pixel + 3];
+          if (alpha > 30 && blue > 110 && blue > red + 12) blueFlamePixels += 1;
+        }
+        expect(blueFlamePixels, `Cyberfred frame ${frame} is missing a boot booster`).toBeGreaterThan(250);
+      }
+    }
   });
 
   it("lays out the game-over score on the left and the selected dancer on the right", () => {

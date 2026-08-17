@@ -24,6 +24,22 @@ const PROVIDED_JUMP_SOURCE_FRAMES = [
   43, 44, 45,
   47, 51, 55, 59, 63,
 ];
+const DUAL_BOOSTER_SOURCE_FRAMES = new Set([
+  30, 31, 32, 33, 34, 35, 36, 37,
+  38, 39, 40, 41, 42, 43, 44, 45,
+]);
+const ORIGINAL_BOOSTER_RECTANGLE = {
+  left: 270,
+  top: 380,
+  width: 140,
+  height: 126,
+};
+const SECOND_BOOSTER_PLACEMENT = {
+  left: 91,
+  top: 378,
+  width: 119,
+  height: 107,
+};
 
 const animations = [
   {
@@ -42,7 +58,7 @@ const animations = [
     metadata: {
       animationName: "Blue Booster Jump",
       facingDirection: "right",
-      runtimeEffect: "embedded-right-plus-frame-anchored-left-blue-boot-thrusters",
+      runtimeEffect: "embedded-dual-original-blue-boot-thrusters",
       runtimePlayback: {
         mode: "full-atlas-synced-to-fredrun-physics",
         durationSeconds: 0.82,
@@ -101,10 +117,50 @@ function findAlphaBounds(data, channels, imageWidth, rectangle) {
   return { left, top, width: right - left + 1, height: bottom - top + 1 };
 }
 
+async function prepareSourceFrame(animation, source, sourceIndex, rectangle) {
+  const originalFrame = await sharp(source)
+    .extract(rectangle)
+    .png()
+    .toBuffer();
+  if (animation.key !== "jump" || !DUAL_BOOSTER_SOURCE_FRAMES.has(sourceIndex)) {
+    return originalFrame;
+  }
+
+  const secondBooster = await sharp(originalFrame)
+    .extract(ORIGINAL_BOOSTER_RECTANGLE)
+    .flop()
+    .resize(
+      SECOND_BOOSTER_PLACEMENT.width,
+      SECOND_BOOSTER_PLACEMENT.height,
+      { fit: "fill", kernel: sharp.kernel.lanczos3 },
+    )
+    .png()
+    .toBuffer();
+
+  return sharp({
+    create: {
+      width: SOURCE_CELL_SIZE,
+      height: SOURCE_CELL_SIZE,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .composite([
+      {
+        input: secondBooster,
+        left: SECOND_BOOSTER_PLACEMENT.left,
+        top: SECOND_BOOSTER_PLACEMENT.top,
+      },
+      { input: originalFrame, left: 0, top: 0 },
+    ])
+    .png()
+    .toBuffer();
+}
+
 async function normalizeAnimation(animation) {
   const sourcePath = path.join(SOURCE_DIRECTORY, animation.sourceFile);
   const source = await readFile(sourcePath);
-  const { data, info } = await sharp(source).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const info = await sharp(source).metadata();
   const sourceColumns = animation.sourceColumns ?? SOURCE_COLUMNS;
   const sourceCellSize = animation.sourceCellSize ?? SOURCE_CELL_SIZE;
   const sourceFrameCount = animation.sourceFrameCount ?? FRAME_COUNT;
@@ -120,15 +176,26 @@ async function normalizeAnimation(animation) {
     throw new Error(`Unerwartete Sprite-Größe für ${animation.sourceFile}: ${info.width}x${info.height}.`);
   }
 
-  const frames = sourceFrameIndices.map((sourceIndex, outputIndex) => {
+  const frames = await Promise.all(sourceFrameIndices.map(async (sourceIndex, outputIndex) => {
     const rectangle = sourceRectangle(sourceIndex, sourceColumns, sourceCellSize);
+    const frameSource = await prepareSourceFrame(animation, source, sourceIndex, rectangle);
+    const { data: frameData, info: frameInfo } = await sharp(frameSource)
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
     return {
       sourceIndex,
       outputIndex,
       rectangle,
-      bounds: findAlphaBounds(data, info.channels, info.width, rectangle),
+      frameSource,
+      bounds: findAlphaBounds(frameData, frameInfo.channels, frameInfo.width, {
+        left: 0,
+        top: 0,
+        width: sourceCellSize,
+        height: sourceCellSize,
+      }),
     };
-  });
+  }));
   const maxWidth = Math.max(...frames.map((frame) => frame.bounds.width));
   const maxHeight = Math.max(...frames.map((frame) => frame.bounds.height));
   const scale = Math.min(
@@ -140,10 +207,10 @@ async function normalizeAnimation(animation) {
   for (const frame of frames) {
     const width = Math.max(1, Math.round(frame.bounds.width * scale));
     const height = Math.max(1, Math.round(frame.bounds.height * scale));
-    const input = await sharp(source)
+    const input = await sharp(frame.frameSource)
       .extract({
-        left: frame.rectangle.left + frame.bounds.left,
-        top: frame.rectangle.top + frame.bounds.top,
+        left: frame.bounds.left,
+        top: frame.bounds.top,
         width: frame.bounds.width,
         height: frame.bounds.height,
       })
