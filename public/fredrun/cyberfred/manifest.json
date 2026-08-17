@@ -1,0 +1,76 @@
+{
+  "source": {
+    "referenceFile": "Photo 1.jpg",
+    "referenceSha256": "CBDD7B6B92AE436C2AC5CD258BB54260E1E7A86236E30E7926A2E8CA2CA68B6E",
+    "autospriteCharacterId": "cmsxekm1900atvsmf58tejjnd",
+    "generation": {
+      "videoTier": "pro",
+      "durationSeconds": 4,
+      "sourceFrameSize": 512,
+      "sourceFrameCount": 64,
+      "firstFrameQuality": "pro",
+      "backgroundRemoval": "ultra",
+      "sound": false,
+      "creditsUsed": 39,
+      "shippedCreditsUsed": 39,
+      "discardedDraftCredits": 0
+    }
+  },
+  "atlas": {
+    "cellSize": 192,
+    "columns": 8,
+    "rows": 8,
+    "frameCount": 64,
+    "anchor": "bottom-center",
+    "animations": {
+      "walk": {
+        "sourceKind": "autosprite",
+        "sourceFile": "run-raw.png",
+        "sourceSha256": "C1D00BE030E72CCC512339F510ADA1AA737DF1ABBE61A7B840BF2F8FEF1261ED",
+        "spritesheetId": "cmsxeo5s9006uil4usl7cp9oj",
+        "sourceVideoId": "cmsxekvt600b6vsmfsx6vuf77",
+        "sourceGrid": "8x8",
+        "sourceFrameCount": 64,
+        "columns": 8,
+        "rows": 8,
+        "frameCount": 64,
+        "sharedScale": 0.372385,
+        "outputFile": "walk.webp",
+        "outputSha256": "DA6CB90D5734867583C7DF9F2E4CB82BA3D93FF1A359E5865CD4523F103363D3",
+        "bytes": 729362
+      },
+      "jump": {
+        "sourceKind": "autosprite",
+        "sourceFile": "jump-raw.png",
+        "sourceSha256": "08814DE58399CA64AA7FC69383C1792EB957AEF26135367F9549482C3199672A",
+        "spritesheetId": "cmsxenyzs00csvsmf6ovejlwm",
+        "sourceVideoId": "cmsxekvsf00b4vsmf39ijuwbk",
+        "sourceGrid": "8x8",
+        "sourceFrameCount": 64,
+        "columns": 8,
+        "rows": 8,
+        "frameCount": 64,
+        "sharedScale": 0.390351,
+        "outputFile": "jump.webp",
+        "outputSha256": "E11F55AB30FC8D42DF572822597D30A0F4CA93ACF4B43007098C9A814DF0D087",
+        "bytes": 651772
+      },
+      "victory": {
+        "sourceKind": "autosprite",
+        "sourceFile": "victory-raw.png",
+        "sourceSha256": "104CF2ACF9DD1DCEF9D9B3AABBCDC816A5C6CFB5705C1CD53CDEE71FEC32D480",
+        "spritesheetId": "cmsxenyon006qil4utgws2fr5",
+        "sourceVideoId": "cmsxekvur00bevsmf5r5lc1l9",
+        "sourceGrid": "8x8",
+        "sourceFrameCount": 64,
+        "columns": 8,
+        "rows": 8,
+        "frameCount": 64,
+        "sharedScale": 0.39821,
+        "outputFile": "victory.webp",
+        "outputSha256": "695AF6AA2B6F929D20F440F2FA5141956B91D0C9D6598D8DF928DEF7F2E3CD0B",
+        "bytes": 626904
+      }
+    }
+  }
+}

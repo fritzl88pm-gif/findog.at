@@ -123,6 +123,7 @@ const fridaManifest = JSON.parse(readFileSync(
       sourceFrameSize: number;
       sourceFrameCount: number;
       firstFrameQuality: string;
+      backgroundRemoval: string;
       creditsUsed: number;
       shippedCreditsUsed: number;
       discardedDraftCredits: number;
@@ -160,6 +161,7 @@ const superfredManifest = JSON.parse(readFileSync(
       sourceFrameSize: number;
       sourceFrameCount: number;
       firstFrameQuality: string;
+      backgroundRemoval: string;
       creditsUsed: number;
       shippedCreditsUsed: number;
       discardedDraftCredits: number;
@@ -190,6 +192,10 @@ const superfredManifest = JSON.parse(readFileSync(
     }>;
   };
 };
+const cyberfredManifest = JSON.parse(readFileSync(
+  fileURLToPath(new URL("../../public/fredrun/cyberfred/manifest.json", import.meta.url)),
+  "utf8",
+)) as typeof superfredManifest;
 const lukiManifest = JSON.parse(readFileSync(
   fileURLToPath(new URL("../../public/fredrun/luki-manifest.json", import.meta.url)),
   "utf8",
@@ -587,7 +593,7 @@ describe("Fredrun UI surface", () => {
       total + animation.bytes
     ), 0);
     expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
-    expect(profileSource).toContain('export const FREDRUN_CHARACTER_IDS = ["fred", "frida", "superfred"] as const');
+    expect(profileSource).toContain('export const FREDRUN_CHARACTER_IDS = ["fred", "frida", "superfred", "cyberfred"] as const');
     expect(viewSource).toContain('walk: { source: "/fredrun/superfred/walk.webp?v=smooth-walk-1", columns: 8, frameCount: 64, fps: 16 }');
     expect(viewSource).toContain('const JUMP_ANIMATION_DURATION = 0.82;');
     expect(viewSource).toContain('jump: { source: "/fredrun/superfred/jump.webp?v=superman-jump-2", columns: 8, frameCount: 64, fps: 16 }');
@@ -596,6 +602,60 @@ describe("Fredrun UI surface", () => {
     expect(stylesSource).toContain("grid-template-columns: repeat(3, minmax(0, 1fr));");
     expect(viewSource).toContain('className="fredrun-overlay fredrun-pause-overlay"');
     expect(stylesSource).toContain(".fredrun-pause-overlay h2");
+  });
+
+  it("ships Cyberfred with AutoSprite run, jump, and dance animations", () => {
+    expect(cyberfredManifest.source).toMatchObject({
+      referenceFile: "Photo 1.jpg",
+      referenceSha256: "CBDD7B6B92AE436C2AC5CD258BB54260E1E7A86236E30E7926A2E8CA2CA68B6E",
+      autospriteCharacterId: "cmsxekm1900atvsmf58tejjnd",
+      generation: {
+        videoTier: "pro",
+        durationSeconds: 4,
+        sourceFrameSize: 512,
+        sourceFrameCount: 64,
+        firstFrameQuality: "pro",
+        backgroundRemoval: "ultra",
+        creditsUsed: 39,
+        shippedCreditsUsed: 39,
+        discardedDraftCredits: 0,
+        sound: false,
+      },
+    });
+    expect(cyberfredManifest.atlas).toMatchObject({
+      cellSize: 192,
+      columns: 8,
+      rows: 8,
+      frameCount: 64,
+      anchor: "bottom-center",
+    });
+    expect(Object.keys(cyberfredManifest.atlas.animations)).toEqual(["walk", "jump", "victory"]);
+    for (const animation of Object.values(cyberfredManifest.atlas.animations)) {
+      expect(animation).toMatchObject({
+        sourceKind: "autosprite",
+        sourceGrid: "8x8",
+        sourceFrameCount: 64,
+        columns: 8,
+        rows: 8,
+        frameCount: 64,
+      });
+      expect(animation.spritesheetId).toMatch(/^cms/);
+      expect(animation.outputSha256).toMatch(/^[A-F0-9]{64}$/);
+      expect(statSync(fileURLToPath(new URL(
+        `../../public/fredrun/cyberfred/${animation.outputFile}`,
+        import.meta.url,
+      ))).size).toBe(animation.bytes);
+    }
+    const totalBytes = Object.values(cyberfredManifest.atlas.animations).reduce((total, animation) => (
+      total + animation.bytes
+    ), 0);
+    expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
+    expect(viewSource).toContain('walk: { source: "/fredrun/cyberfred/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('jump: { source: "/fredrun/cyberfred/jump.webp", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('victory: { source: "/fredrun/cyberfred/victory.webp", columns: 8, frameCount: 64, fps: 16 }');
+    expect(profileSource).toContain('export const FREDRUN_CYBERFRED_PRICE = 2_000;');
+    expect(profileSource).toContain('name: "Cyberfred"');
+    expect(profileSource).toContain('price: FREDRUN_CYBERFRED_PRICE');
   });
 
   it("lays out the game-over score on the left and the selected dancer on the right", () => {

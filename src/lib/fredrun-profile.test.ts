@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   FREDRUN_FINANZAMT_NIGHT_PRICE,
+  FREDRUN_CYBERFRED_PRICE,
   FREDRUN_PROFILE_KEY,
   FREDRUN_SUPERFRED_PRICE,
   createDefaultFredRunProfile,
@@ -186,6 +187,31 @@ describe("Fredrun character economy", () => {
       },
     });
     expect(purchaseFredRunCharacter(purchased.profile, "superfred")).toEqual({
+      status: "already-owned",
+      profile: purchased.profile,
+    });
+  });
+
+  it("requires 2000 coins and buys Cyberfred exactly once", () => {
+    const insufficient = purchaseFredRunCharacter({
+      ...createDefaultFredRunProfile(),
+      coinBalance: FREDRUN_CYBERFRED_PRICE - 1,
+    }, "cyberfred");
+    expect(insufficient.status).toBe("insufficient-funds");
+
+    const purchased = purchaseFredRunCharacter({
+      ...createDefaultFredRunProfile(),
+      coinBalance: FREDRUN_CYBERFRED_PRICE,
+    }, "cyberfred");
+    expect(purchased).toMatchObject({
+      status: "purchased",
+      profile: {
+        coinBalance: 0,
+        unlockedCharacters: ["fred", "frida", "cyberfred"],
+        selectedCharacter: "cyberfred",
+      },
+    });
+    expect(purchaseFredRunCharacter(purchased.profile, "cyberfred")).toEqual({
       status: "already-owned",
       profile: purchased.profile,
     });

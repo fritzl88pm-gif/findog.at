@@ -140,6 +140,11 @@ const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, Chara
     jump: { source: "/fredrun/superfred/jump.webp?v=superman-jump-2", columns: 8, frameCount: 64, fps: 16 },
     victory: { source: "/fredrun/superfred/victory.webp", columns: 8, frameCount: 64, fps: 16 },
   },
+  cyberfred: {
+    walk: { source: "/fredrun/cyberfred/walk.webp", columns: 8, frameCount: 64, fps: 16 },
+    jump: { source: "/fredrun/cyberfred/jump.webp", columns: 8, frameCount: 64, fps: 16 },
+    victory: { source: "/fredrun/cyberfred/victory.webp", columns: 8, frameCount: 64, fps: 16 },
+  },
 };
 
 const fredRunCharacters = FREDRUN_CHARACTERS;

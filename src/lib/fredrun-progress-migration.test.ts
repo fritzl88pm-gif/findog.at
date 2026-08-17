@@ -15,6 +15,10 @@ const indexMigration = readFileSync(fileURLToPath(new URL(
   "../../supabase/migrations/20260817075656_index_fredrun_progress_catalog_fks.sql",
   import.meta.url,
 )), "utf8");
+const cyberfredMigration = readFileSync(fileURLToPath(new URL(
+  "../../supabase/migrations/20260817154502_add_cyberfred_character.sql",
+  import.meta.url,
+)), "utf8");
 
 describe("FredRun user progress migration", () => {
   it("owns progress, unlocks, and immutable events by auth user", () => {
@@ -53,5 +57,10 @@ describe("FredRun user progress migration", () => {
   it("covers both catalog foreign keys for audited catalog changes", () => {
     expect(indexMigration).toMatch(/fredrun_user_unlocks\s*\(item_type, item_id\)/iu);
     expect(indexMigration).toMatch(/fredrun_progress_events\s*\(item_type, item_id\)/iu);
+  });
+
+  it("adds Cyberfred to the audited server catalog and selected-character constraint", () => {
+    expect(cyberfredMigration).toMatch(/check \(selected_character in \('fred', 'frida', 'superfred', 'cyberfred'\)\)/iu);
+    expect(cyberfredMigration).toMatch(/values \('character', 'cyberfred', 3, 2000, false, true\)/iu);
   });
 });

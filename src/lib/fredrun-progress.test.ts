@@ -9,8 +9,8 @@ import {
 const storedProgress = {
   coinBalance: 725,
   bestScore: 12_500,
-  unlockedCharacters: ["fred", "frida", "superfred"],
-  selectedCharacter: "superfred",
+  unlockedCharacters: ["fred", "frida", "superfred", "cyberfred"],
+  selectedCharacter: "cyberfred",
   unlockedWorlds: ["vienna", "finanzamt-night"],
   selectedWorld: "finanzamt-night",
   lastSettledRunId: "123e4567-e89b-42d3-a456-426614174000",
@@ -23,8 +23,8 @@ describe("FredRun server progress", () => {
     expect(parseFredRunServerProgress(storedProgress)).toEqual({
       profile: {
         coinBalance: 725,
-        unlockedCharacters: ["fred", "frida", "superfred"],
-        selectedCharacter: "superfred",
+        unlockedCharacters: ["fred", "frida", "superfred", "cyberfred"],
+        selectedCharacter: "cyberfred",
         unlockedWorlds: ["vienna", "finanzamt-night"],
         selectedWorld: "finanzamt-night",
         lastSettledRunId: "123e4567-e89b-42d3-a456-426614174000",
@@ -52,8 +52,8 @@ describe("FredRun server progress", () => {
     expect(parseFredRunProgressAction({
       action: "purchase",
       itemType: "character",
-      itemId: "superfred",
-    })).toEqual({ action: "purchase", itemType: "character", itemId: "superfred" });
+      itemId: "cyberfred",
+    })).toEqual({ action: "purchase", itemType: "character", itemId: "cyberfred" });
     expect(parseFredRunProgressAction({
       action: "select",
       itemType: "world",
