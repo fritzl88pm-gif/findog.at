@@ -13,6 +13,10 @@ import {
   createFredRunState,
   fredRunContinuousScoreForDistance,
   fredRunEnvironmentForDistance,
+  fredRunPowerUpDistanceMultiplierForScore,
+  fredRunReactionTimeFactorForScore,
+  fredRunShieldDurationForScore,
+  fredRunShieldSpawnRateForScore,
   fredRunSpeedForDistance,
   fredRunSpeedForScore,
   jumpFredRun,
@@ -147,8 +151,31 @@ describe("Fredrun world background progression", () => {
 
     for (const elapsed of times) {
       expect(fredRunFluorescentFlicker("vienna", elapsed, false)).toBe(0);
+      expect(fredRunFluorescentFlicker("alps", elapsed, false)).toBe(0);
       expect(fredRunFluorescentFlicker("finanzamt-night", elapsed, true)).toBe(0);
     }
+  });
+
+  it("configures the sunny Alps world with 4 daytime mountain stages and smooth crossfades", () => {
+    expect(FREDRUN_WORLDS.alps.name).toBe("Alpenpanorama");
+    expect(FREDRUN_WORLDS.alps.price).toBe(0);
+    expect(FREDRUN_WORLDS.alps.backgrounds.renderStyle).toBe("alps-sunny");
+    expect(FREDRUN_WORLDS.alps.backgrounds.stages).toEqual([
+      { source: "/fredrun/levels/alps/backgrounds/meadow.webp", anchorScore: 0 },
+      { source: "/fredrun/levels/alps/backgrounds/lake.webp", anchorScore: 500 },
+      { source: "/fredrun/levels/alps/backgrounds/peaks.webp", anchorScore: 1_000 },
+      { source: "/fredrun/levels/alps/backgrounds/plateau.webp", anchorScore: 1_500 },
+    ]);
+    expect(FREDRUN_WORLDS.alps.backgrounds.fallbackSource).toBe("/fredrun/levels/alps/backgrounds/fallback.webp");
+
+    expect(fredRunWorldBackgroundForScore("alps", 0)).toEqual({ fromStage: 0, toStage: 1, blend: 0 });
+    expect(fredRunWorldBackgroundForScore("alps", 250)).toEqual({ fromStage: 0, toStage: 1, blend: 0 });
+    expect(fredRunWorldBackgroundForScore("alps", 375).blend).toBeCloseTo(0.5, 12);
+    expect(fredRunWorldBackgroundForScore("alps", 500)).toEqual({ fromStage: 1, toStage: 2, blend: 0 });
+    expect(fredRunWorldBackgroundForScore("alps", 875).blend).toBeCloseTo(0.5, 12);
+    expect(fredRunWorldBackgroundForScore("alps", 1_000)).toEqual({ fromStage: 2, toStage: 3, blend: 0 });
+    expect(fredRunWorldBackgroundForScore("alps", 1_375).blend).toBeCloseTo(0.5, 12);
+    expect(fredRunWorldBackgroundForScore("alps", 2_000)).toEqual({ fromStage: 3, toStage: 3, blend: 0 });
   });
 });
 
@@ -235,7 +262,29 @@ describe("Fredrun simulation", () => {
     expect(state.spawnDistance).toBeGreaterThan(0);
   });
 
-  it("keeps at least 1.2 real-time seconds between spawns at unbounded speed", () => {
+  it("keeps at least 1.2 real-time seconds between spawns up to 3,000 points", () => {
+    const distance = 2_500 * 34;
+    const state = startFredRun({
+      ...createFredRunState(),
+      distance,
+      score: 2_500,
+      speed: fredRunSpeedForDistance(distance),
+      spawnDistance: 0,
+    });
+    const advanced = advanceFredRun(state, 1 / 120, () => 0);
+    expect(advanced.speed).toBeGreaterThan(1_400);
+    expect(advanced.spawnDistance / advanced.speed).toBeCloseTo(1.2, 5);
+  });
+
+  it("progressively compresses the reaction time window above 3,000 points without a hard cap", () => {
+    expect(fredRunReactionTimeFactorForScore(0)).toBe(1.2);
+    expect(fredRunReactionTimeFactorForScore(3_000)).toBe(1.2);
+    expect(fredRunReactionTimeFactorForScore(4_000)).toBeCloseTo(1.1409, 3);
+    expect(fredRunReactionTimeFactorForScore(6_000)).toBeCloseTo(1.05, 3);
+    expect(fredRunReactionTimeFactorForScore(8_000)).toBeCloseTo(0.9833, 3);
+    expect(fredRunReactionTimeFactorForScore(13_000)).toBeCloseTo(0.875, 3);
+    expect(fredRunReactionTimeFactorForScore(23_000)).toBeCloseTo(0.7667, 3);
+
     const distance = 8_000 * 34;
     const state = startFredRun({
       ...createFredRunState(),
@@ -245,8 +294,8 @@ describe("Fredrun simulation", () => {
       spawnDistance: 0,
     });
     const advanced = advanceFredRun(state, 1 / 120, () => 0);
-    expect(advanced.speed).toBeGreaterThan(4_000);
-    expect(advanced.spawnDistance / advanced.speed).toBeCloseTo(1.2, 5);
+    const expectedFactor = fredRunReactionTimeFactorForScore(8_000);
+    expect(advanced.spawnDistance / advanced.speed).toBeCloseTo(expectedFactor, 4);
   });
 
   it("spawns both animated opponents and keeps all collision boxes jumpable", () => {
@@ -553,6 +602,71 @@ describe("Fredrun simulation", () => {
     expect(protectedState.shieldActive).toBe(false);
     expect(protectedState.shieldImpactRemaining).toBeGreaterThan(0);
     expect(protectedState.obstacles).toEqual([]);
+  });
+
+  it("gives shields an expiring timer above 3,000 points and smoothly scales duration", () => {
+    expect(fredRunShieldDurationForScore(0)).toBe(0);
+    expect(fredRunShieldDurationForScore(3_000)).toBe(0);
+    expect(fredRunShieldDurationForScore(4_000)).toBeCloseTo(18.286, 3);
+    expect(fredRunShieldDurationForScore(6_000)).toBeCloseTo(15.765, 3);
+    expect(fredRunShieldDurationForScore(10_000)).toBeCloseTo(12.696, 3);
+    expect(fredRunShieldDurationForScore(20_000)).toBeCloseTo(9.263, 3);
+
+    // Collecting shield at score 5,000 sets shieldRemaining to ~16.9s
+    const collectedAt5k = advanceFredRun(startFredRun({
+      ...createFredRunState(),
+      distance: 5_000 * 34,
+      score: 5_000,
+      spawnDistance: 10_000,
+      coinSpawnDistance: 10_000,
+      powerUpSpawnDistance: 10_000,
+      playerHeight: 30,
+      playerVelocity: -20,
+      grounded: false,
+      powerUps: [{ id: 1, kind: "shield", x: 136, y: 200, radius: 15 }],
+    }), 0.01, () => 0.5);
+
+    expect(collectedAt5k.shieldActive).toBe(true);
+    expect(collectedAt5k.shieldRemaining).toBeCloseTo(fredRunShieldDurationForScore(5_000), 1);
+
+    // Advancing until shield expires
+    let expiringState = collectedAt5k;
+    const duration = collectedAt5k.shieldRemaining;
+    const steps = Math.ceil(duration / 0.05) + 2;
+    for (let step = 0; step < steps; step += 1) {
+      expiringState = advanceFredRun(expiringState, 0.05, () => 0.5);
+    }
+    expect(expiringState.shieldActive).toBe(false);
+    expect(expiringState.shieldRemaining).toBe(0);
+  });
+
+  it("initializes a shield timer when an active shield crosses the 3,000-point threshold", () => {
+    const pre3kState = startFredRun({
+      ...createFredRunState(),
+      distance: 2_999 * 34,
+      score: 2_999,
+      spawnDistance: 10_000,
+      coinSpawnDistance: 10_000,
+      powerUpSpawnDistance: 10_000,
+      shieldActive: true,
+      shieldRemaining: 0,
+    });
+    const post3kState = advanceFredRun(pre3kState, 0.1, () => 0.5);
+    expect(post3kState.score).toBeGreaterThan(3_000);
+    expect(post3kState.shieldRemaining).toBeGreaterThan(0);
+  });
+
+  it("scales down shield drop probability and increases power-up distance above 3,000 points", () => {
+    expect(fredRunShieldSpawnRateForScore(0)).toBe(0.5);
+    expect(fredRunShieldSpawnRateForScore(3_000)).toBe(0.5);
+    expect(fredRunShieldSpawnRateForScore(6_000)).toBeCloseTo(0.4074, 3);
+    expect(fredRunShieldSpawnRateForScore(10_000)).toBeCloseTo(0.3402, 3);
+    expect(fredRunShieldSpawnRateForScore(20_000)).toBeCloseTo(0.2651, 3);
+
+    expect(fredRunPowerUpDistanceMultiplierForScore(0)).toBe(10);
+    expect(fredRunPowerUpDistanceMultiplierForScore(3_000)).toBe(10);
+    expect(fredRunPowerUpDistanceMultiplierForScore(6_000)).toBe(11.35);
+    expect(fredRunPowerUpDistanceMultiplierForScore(10_000)).toBe(13.15);
   });
 
   it("crosses 250-point boundaries without pausing or clearing obstacles", () => {

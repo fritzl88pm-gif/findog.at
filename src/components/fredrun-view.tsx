@@ -2,6 +2,7 @@
 
 import NextImage from "next/image";
 import {
+  memo,
   useCallback,
   useEffect,
   useRef,
@@ -124,6 +125,7 @@ type CharacterSpriteLayout = {
   frameCount: number;
   fps: number;
   footBaseline?: number;
+  drawScale?: number;
 };
 
 const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, CharacterSpriteLayout>> = {
@@ -144,7 +146,7 @@ const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, Chara
   },
   cyberfred: {
     walk: { source: "/fredrun/cyberfred/walk.webp", columns: 8, frameCount: 64, fps: 16 },
-    jump: { source: "/fredrun/cyberfred/jump.webp?v=video-dual-boosters-v9", columns: 8, frameCount: 32, fps: 24, footBaseline: 168 },
+    jump: { source: "/fredrun/cyberfred/jump.webp?v=video-dual-boosters-v9", columns: 8, frameCount: 32, fps: 24, footBaseline: 168, drawScale: 1.16 },
     victory: { source: "/fredrun/cyberfred/victory.webp?v=robot-dance-v2", columns: 8, frameCount: 64, fps: 16 },
   },
   superfrida: {
@@ -252,6 +254,7 @@ type FredRunSnapshot = {
   lastNearMissBonus: number;
   magnetSeconds: number;
   shieldActive: boolean;
+  shieldSeconds: number;
   shieldImpact: boolean;
   powerUpFeedback: boolean;
   lastPowerUpKind: FredRunPowerUpKind | null;
@@ -272,6 +275,7 @@ function snapshotFrom(state: FredRunState): FredRunSnapshot {
     lastNearMissBonus: state.lastNearMissBonus,
     magnetSeconds: Math.ceil(state.magnetRemaining),
     shieldActive: state.shieldActive,
+    shieldSeconds: state.shieldActive && state.shieldRemaining > 0 ? Math.ceil(state.shieldRemaining) : 0,
     shieldImpact: state.shieldImpactRemaining > 0,
     powerUpFeedback: state.powerUpFeedbackRemaining > 0,
     lastPowerUpKind: state.lastPowerUpKind,
@@ -289,16 +293,91 @@ function loadImage(source: string): Promise<HTMLImageElement> {
   });
 }
 
+let cachedFallbackSkyGradient: CanvasGradient | null = null;
+function getFallbackSkyGradient(context: CanvasRenderingContext2D): CanvasGradient {
+  if (!cachedFallbackSkyGradient) {
+    const sky = context.createLinearGradient(0, 0, 0, FREDRUN_GROUND_Y);
+    sky.addColorStop(0, "#dff5ff");
+    sky.addColorStop(0.64, "#f7fcff");
+    sky.addColorStop(1, "#fff8df");
+    cachedFallbackSkyGradient = sky;
+  }
+  return cachedFallbackSkyGradient;
+}
+
+let cachedRainVeilGradient: CanvasGradient | null = null;
+function getRainVeilGradient(context: CanvasRenderingContext2D): CanvasGradient {
+  if (!cachedRainVeilGradient) {
+    const rainVeil = context.createLinearGradient(0, 0, 0, FREDRUN_GROUND_Y);
+    rainVeil.addColorStop(0, "rgba(94, 120, 145, 0.28)");
+    rainVeil.addColorStop(1, "rgba(25, 43, 59, 1)");
+    cachedRainVeilGradient = rainVeil;
+  }
+  return cachedRainVeilGradient;
+}
+
+let cachedFluorescentGradient: CanvasGradient | null = null;
+function getFluorescentGradient(context: CanvasRenderingContext2D): CanvasGradient {
+  if (!cachedFluorescentGradient) {
+    const ceilingGlow = context.createLinearGradient(0, 0, 0, FREDRUN_GROUND_Y);
+    ceilingGlow.addColorStop(0, "rgba(214, 236, 247, 1)");
+    ceilingGlow.addColorStop(0.52, "rgba(205, 229, 242, 0.55)");
+    ceilingGlow.addColorStop(1, "rgba(196, 222, 237, 0)");
+    cachedFluorescentGradient = ceilingGlow;
+  }
+  return cachedFluorescentGradient;
+}
+
+let cachedPowerUpGradients: Record<FredRunPowerUpKind, CanvasGradient> | null = null;
+function getPowerUpGradient(context: CanvasRenderingContext2D, kind: FredRunPowerUpKind): CanvasGradient {
+  if (!cachedPowerUpGradients) {
+    const magnetGrad = context.createRadialGradient(-5, -6, 2, 0, 0, 19);
+    magnetGrad.addColorStop(0, "#ffffff");
+    magnetGrad.addColorStop(0.24, "#ff5a73");
+    magnetGrad.addColorStop(1, "#8d1235");
+
+    const shieldGrad = context.createRadialGradient(-5, -6, 2, 0, 0, 19);
+    shieldGrad.addColorStop(0, "#ffffff");
+    shieldGrad.addColorStop(0.24, "#56d8ff");
+    shieldGrad.addColorStop(1, "#075a9d");
+
+    cachedPowerUpGradients = {
+      magnet: magnetGrad,
+      shield: shieldGrad,
+    };
+  }
+  return cachedPowerUpGradients[kind];
+}
+
+let cachedShieldGradientNormal: CanvasGradient | null = null;
+let cachedShieldGradientExpiring: CanvasGradient | null = null;
+function getShieldGradient(context: CanvasRenderingContext2D, isExpiring: boolean): CanvasGradient {
+  if (isExpiring) {
+    if (!cachedShieldGradientExpiring) {
+      const grad = context.createRadialGradient(-18, -18, 8, 0, 0, 76);
+      grad.addColorStop(0, "rgba(113, 224, 255, 0.08)");
+      grad.addColorStop(0.72, "rgba(255, 120, 150, 0.14)");
+      grad.addColorStop(1, "rgba(200, 40, 80, 0.38)");
+      cachedShieldGradientExpiring = grad;
+    }
+    return cachedShieldGradientExpiring;
+  }
+  if (!cachedShieldGradientNormal) {
+    const grad = context.createRadialGradient(-18, -18, 8, 0, 0, 76);
+    grad.addColorStop(0, "rgba(113, 224, 255, 0.08)");
+    grad.addColorStop(0.72, "rgba(55, 171, 235, 0.12)");
+    grad.addColorStop(1, "rgba(23, 112, 187, 0.34)");
+    cachedShieldGradientNormal = grad;
+  }
+  return cachedShieldGradientNormal;
+}
+
 function drawFallbackBackground(
   context: CanvasRenderingContext2D,
   state: FredRunState,
   reducedMotion: boolean,
 ) {
-  const sky = context.createLinearGradient(0, 0, 0, FREDRUN_GROUND_Y);
-  sky.addColorStop(0, "#dff5ff");
-  sky.addColorStop(0.64, "#f7fcff");
-  sky.addColorStop(1, "#fff8df");
-  context.fillStyle = sky;
+  context.fillStyle = getFallbackSkyGradient(context);
   context.fillRect(0, 0, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT);
 
   const cloudOffset = reducedMotion ? 0 : (state.distance * 0.04) % 1120;
@@ -406,10 +485,15 @@ function drawLightningBolt(
     { x: x + direction * (4 + seededUnit(seed + 5) * 12), y: 148 },
   ];
 
-  context.strokeStyle = `rgba(226, 240, 255, ${0.78 * flash})`;
+  context.strokeStyle = `rgba(188, 217, 255, ${0.45 * flash})`;
+  context.lineWidth = 4.5;
+  context.beginPath();
+  context.moveTo(points[0].x, points[0].y);
+  for (const point of points.slice(1)) context.lineTo(point.x, point.y);
+  context.stroke();
+
+  context.strokeStyle = `rgba(255, 255, 255, ${0.9 * flash})`;
   context.lineWidth = 1.5;
-  context.shadowColor = `rgba(188, 217, 255, ${0.65 * flash})`;
-  context.shadowBlur = 9;
   context.beginPath();
   context.moveTo(points[0].x, points[0].y);
   for (const point of points.slice(1)) context.lineTo(point.x, point.y);
@@ -464,11 +548,10 @@ function drawRainAtmosphere(
 ) {
   if (environment.rain <= 0.01 || reducedMotion) return;
   context.save();
-  const rainVeil = context.createLinearGradient(0, 0, 0, FREDRUN_GROUND_Y);
-  rainVeil.addColorStop(0, `rgba(94, 120, 145, ${0.018 * environment.rain})`);
-  rainVeil.addColorStop(1, `rgba(25, 43, 59, ${0.065 * environment.rain})`);
-  context.fillStyle = rainVeil;
+  context.globalAlpha = 0.065 * environment.rain;
+  context.fillStyle = getRainVeilGradient(context);
   context.fillRect(0, 0, FREDRUN_WORLD_WIDTH, FREDRUN_GROUND_Y);
+  context.globalAlpha = 1;
 
   context.strokeStyle = `rgba(190, 216, 236, ${0.09 + 0.12 * environment.rain})`;
   context.lineWidth = 1;
@@ -552,12 +635,70 @@ function drawFluorescentFlicker(
   opacity: number,
 ) {
   if (opacity <= 0) return;
-  const ceilingGlow = context.createLinearGradient(0, 0, 0, FREDRUN_GROUND_Y);
-  ceilingGlow.addColorStop(0, `rgba(214, 236, 247, ${opacity})`);
-  ceilingGlow.addColorStop(0.52, `rgba(205, 229, 242, ${opacity * 0.55})`);
-  ceilingGlow.addColorStop(1, "rgba(196, 222, 237, 0)");
-  context.fillStyle = ceilingGlow;
+  context.save();
+  context.globalAlpha = opacity;
+  context.fillStyle = getFluorescentGradient(context);
   context.fillRect(0, 0, FREDRUN_WORLD_WIDTH, FREDRUN_GROUND_Y);
+  context.restore();
+}
+
+function drawAlpsSunrays(
+  context: CanvasRenderingContext2D,
+  state: FredRunState,
+  reducedMotion: boolean,
+) {
+  context.save();
+  const originX = 520;
+  const originY = -30;
+  const rayCount = 7;
+  const baseTime = reducedMotion ? 0 : state.elapsed * 0.25;
+
+  for (let i = 0; i < rayCount; i += 1) {
+    const rayAngle = -0.55 + (i / (rayCount - 1)) * 1.1 + Math.sin(baseTime + i * 0.8) * 0.04;
+    const rayWidth = 52 + Math.sin(baseTime * 1.3 + i) * 10;
+    const opacity = 0.02 + Math.sin(baseTime * 0.9 + i * 1.1) * 0.012;
+    const length = 520;
+
+    const endX1 = originX + Math.sin(rayAngle - 0.05) * length;
+    const endY1 = originY + Math.cos(rayAngle - 0.05) * length;
+    const endX2 = originX + Math.sin(rayAngle + 0.05) * length + rayWidth;
+    const endY2 = originY + Math.cos(rayAngle + 0.05) * length;
+
+    context.fillStyle = `rgba(255, 245, 210, ${opacity})`;
+    context.beginPath();
+    context.moveTo(originX, originY);
+    context.lineTo(endX1, endY1);
+    context.lineTo(endX2, endY2);
+    context.closePath();
+    context.fill();
+  }
+  context.restore();
+}
+
+function drawAlpsParticles(
+  context: CanvasRenderingContext2D,
+  state: FredRunState,
+  reducedMotion: boolean,
+) {
+  if (reducedMotion) return;
+  context.save();
+  for (let index = 0; index < 20; index += 1) {
+    const life = (state.elapsed * (0.035 + (index % 4) * 0.008) + seededUnit(index + 50)) % 1;
+    const sway = Math.sin(state.elapsed * 1.1 + index * 0.7) * 16;
+    const x = (seededUnit(index + 70) * (FREDRUN_WORLD_WIDTH + 80) - state.distance * 0.05 + sway + FREDRUN_WORLD_WIDTH + 80) % (FREDRUN_WORLD_WIDTH + 80) - 40;
+    const y = FREDRUN_GROUND_Y - 24 - life * 200;
+    const opacity = Math.sin(life * Math.PI) * 0.42;
+    const size = 1.1 + (index % 3) * 0.7;
+    context.fillStyle = index % 3 === 0
+      ? `rgba(255, 245, 175, ${opacity})`
+      : index % 3 === 1
+      ? `rgba(255, 255, 255, ${opacity * 0.85})`
+      : `rgba(210, 240, 255, ${opacity * 0.6})`;
+    context.beginPath();
+    context.arc(x, y, size, 0, Math.PI * 2);
+    context.fill();
+  }
+  context.restore();
 }
 
 function drawBackground(
@@ -613,25 +754,54 @@ function drawBackground(
     context.fillStyle = `rgb(${Math.round(115 - 67 * devastation)}, ${Math.round(140 - 94 * devastation)}, ${Math.round(121 - 77 * devastation)})`;
     context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, 6);
     context.strokeStyle = `rgba(32, 29, 27, ${0.2 + 0.22 * devastation})`;
+    context.lineWidth = 2;
+    const groundOffset = reducedMotion ? 0 : state.distance % 76;
+    for (let x = -groundOffset; x < FREDRUN_WORLD_WIDTH; x += 76) {
+      context.beginPath();
+      context.moveTo(x, FREDRUN_GROUND_Y + 35);
+      context.lineTo(x + 28, FREDRUN_GROUND_Y + 35);
+      context.stroke();
+    }
+    if (environment.darkness > 0) {
+      context.fillStyle = `rgba(9, 12, 18, ${environment.darkness})`;
+      context.fillRect(0, 0, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT);
+    }
+  } else if (world.backgrounds.renderStyle === "alps-sunny") {
+    drawAlpsSunrays(context, state, reducedMotion);
+    drawAlpsParticles(context, state, reducedMotion);
+
+    // Harmonious Alpine meadow ground
+    context.fillStyle = "#2b3d1c";
+    context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT - FREDRUN_GROUND_Y);
+    context.fillStyle = "#487928";
+    context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, 8);
+    context.fillStyle = "#70a63c";
+    context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, 2);
+
+    // Alpine path / grass texture markings
+    context.strokeStyle = "rgba(168, 214, 98, 0.35)";
+    context.lineWidth = 2;
+    const groundOffset = reducedMotion ? 0 : state.distance % 76;
+    for (let x = -groundOffset; x < FREDRUN_WORLD_WIDTH; x += 76) {
+      context.beginPath();
+      context.moveTo(x, FREDRUN_GROUND_Y + 28);
+      context.lineTo(x + 24, FREDRUN_GROUND_Y + 28);
+      context.stroke();
+    }
   } else {
     context.fillStyle = "#101d27";
     context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT - FREDRUN_GROUND_Y);
     context.fillStyle = "#31495a";
     context.fillRect(0, FREDRUN_GROUND_Y, FREDRUN_WORLD_WIDTH, 6);
     context.strokeStyle = "rgba(89, 119, 139, 0.42)";
-  }
-  context.lineWidth = 2;
-  const groundOffset = reducedMotion ? 0 : state.distance % 76;
-  for (let x = -groundOffset; x < FREDRUN_WORLD_WIDTH; x += 76) {
-    context.beginPath();
-    context.moveTo(x, FREDRUN_GROUND_Y + 35);
-    context.lineTo(x + 28, FREDRUN_GROUND_Y + 35);
-    context.stroke();
-  }
-
-  if (world.backgrounds.renderStyle === "vienna-disaster" && environment.darkness > 0) {
-    context.fillStyle = `rgba(9, 12, 18, ${environment.darkness})`;
-    context.fillRect(0, 0, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT);
+    context.lineWidth = 2;
+    const groundOffset = reducedMotion ? 0 : state.distance % 76;
+    for (let x = -groundOffset; x < FREDRUN_WORLD_WIDTH; x += 76) {
+      context.beginPath();
+      context.moveTo(x, FREDRUN_GROUND_Y + 35);
+      context.lineTo(x + 28, FREDRUN_GROUND_Y + 35);
+      context.stroke();
+    }
   }
 }
 
@@ -651,9 +821,6 @@ function drawObstacle(
     const bubbleY = drawY - 29;
     const bubbleWidth = 92;
     const bubbleHeight = 42;
-    context.shadowColor = "rgba(19, 53, 75, 0.18)";
-    context.shadowBlur = 6;
-    context.shadowOffsetY = 3;
     context.fillStyle = "rgba(255, 255, 255, 0.97)";
     context.strokeStyle = "#17242d";
     context.lineWidth = 2;
@@ -665,7 +832,6 @@ function drawObstacle(
     context.closePath();
     context.fill();
     context.stroke();
-    context.shadowColor = "transparent";
     context.fillStyle = "#101820";
     context.font = "900 12px system-ui";
     context.textAlign = "center";
@@ -673,9 +839,6 @@ function drawObstacle(
     context.fillText("Wo", bubbleX + bubbleWidth / 2, bubbleY + 13);
     context.fillText("Beschluss?", bubbleX + bubbleWidth / 2, bubbleY + 28);
   }
-  context.shadowColor = "rgba(19, 53, 75, 0.2)";
-  context.shadowBlur = 7;
-  context.shadowOffsetY = 4;
   if (layout.animation) {
     const frame = reducedMotion
       ? 0
@@ -844,7 +1007,7 @@ function handleFredRunDialogKeyDown(
   }
 }
 
-function FredRunMenu({
+const FredRunMenu = memo(function FredRunMenu({
   activeTab,
   profile,
   profileReady,
@@ -1195,7 +1358,7 @@ function FredRunMenu({
       )}
     </div>
   );
-}
+});
 
 function drawCoin(
   context: CanvasRenderingContext2D,
@@ -1210,8 +1373,6 @@ function drawCoin(
   context.scale(spin, 1);
   if (image) {
     const diameter = coin.radius * 3;
-    context.shadowColor = "rgba(55, 42, 10, 0.38)";
-    context.shadowBlur = 6;
     context.drawImage(image, -diameter / 2, -diameter / 2, diameter, diameter);
   } else {
     context.fillStyle = "#ffd438";
@@ -1239,22 +1400,14 @@ function drawPowerUp(
   elapsed: number,
   reducedMotion: boolean,
 ) {
-  const colors = powerUpColors[powerUp.kind];
   const pulse = reducedMotion ? 1 : 1 + Math.sin(elapsed * 4.2 + powerUp.id) * 0.07;
   context.save();
   context.translate(powerUp.x, powerUp.y);
   context.scale(pulse, pulse);
-  context.shadowColor = colors.light;
-  context.shadowBlur = 13;
-  const gradient = context.createRadialGradient(-5, -6, 2, 0, 0, powerUp.radius + 4);
-  gradient.addColorStop(0, "#ffffff");
-  gradient.addColorStop(0.24, colors.light);
-  gradient.addColorStop(1, colors.dark);
-  context.fillStyle = gradient;
+  context.fillStyle = getPowerUpGradient(context, powerUp.kind);
   context.beginPath();
   context.arc(0, 0, powerUp.radius + 3, 0, Math.PI * 2);
   context.fill();
-  context.shadowBlur = 0;
   context.strokeStyle = "rgba(255, 255, 255, 0.9)";
   context.lineWidth = 2;
   context.stroke();
@@ -1304,18 +1457,19 @@ function drawPlayerPowerEffects(
   const centerY = FREDRUN_GROUND_Y - state.playerHeight - 72;
   context.save();
   if (state.shieldActive) {
-    const pulse = reducedMotion ? 0 : Math.sin(state.elapsed * 5) * 2;
-    const gradient = context.createRadialGradient(centerX - 18, centerY - 18, 8, centerX, centerY, 76);
-    gradient.addColorStop(0, "rgba(113, 224, 255, 0.08)");
-    gradient.addColorStop(0.72, "rgba(55, 171, 235, 0.12)");
-    gradient.addColorStop(1, "rgba(23, 112, 187, 0.34)");
-    context.fillStyle = gradient;
-    context.strokeStyle = "rgba(145, 231, 255, 0.9)";
+    const isExpiring = state.shieldRemaining > 0 && state.shieldRemaining <= 3;
+    const pulseSpeed = isExpiring ? 14 : 5;
+    const pulse = reducedMotion ? 0 : Math.sin(state.elapsed * pulseSpeed) * 2;
+    context.save();
+    context.translate(centerX, centerY);
+    context.fillStyle = getShieldGradient(context, isExpiring);
+    context.strokeStyle = isExpiring ? "rgba(255, 160, 180, 0.95)" : "rgba(145, 231, 255, 0.9)";
     context.lineWidth = 2.5;
     context.beginPath();
-    context.ellipse(centerX, centerY, 62 + pulse, 78 + pulse, 0, 0, Math.PI * 2);
+    context.ellipse(0, 0, 62 + pulse, 78 + pulse, 0, 0, Math.PI * 2);
     context.fill();
     context.stroke();
+    context.restore();
   }
   if (state.magnetRemaining > 0) {
     context.strokeStyle = "rgba(255, 95, 126, 0.7)";
@@ -1338,19 +1492,27 @@ function drawHitFeedback(
   const centerY = FREDRUN_GROUND_Y - state.playerHeight - 42;
   context.save();
   context.translate(centerX, centerY);
-  context.strokeStyle = state.shieldImpactRemaining > 0
+  const isShield = state.shieldImpactRemaining > 0;
+  context.strokeStyle = isShield
+    ? "rgba(32, 146, 224, 0.4)"
+    : "rgba(220, 55, 15, 0.4)";
+  context.lineWidth = 7;
+  for (let index = 0; index < 10; index += 1) {
+    const angle = (index / 10) * Math.PI * 2;
+    context.beginPath();
+    context.moveTo(Math.cos(angle) * 28, Math.sin(angle) * 28);
+    context.lineTo(Math.cos(angle) * (45 + (index % 2) * 9), Math.sin(angle) * (45 + (index % 2) * 9));
+    context.stroke();
+  }
+  context.strokeStyle = isShield
     ? "rgba(145, 231, 255, 0.96)"
     : "rgba(255, 242, 132, 0.94)";
-  context.lineWidth = 4;
-  context.shadowColor = state.shieldImpactRemaining > 0
-    ? "rgba(32, 146, 224, 0.78)"
-    : "rgba(220, 55, 15, 0.72)";
-  context.shadowBlur = 10;
+  context.lineWidth = 3.5;
   for (let index = 0; index < 10; index += 1) {
-    const angle = index / 10 * Math.PI * 2;
+    const angle = (index / 10) * Math.PI * 2;
     context.beginPath();
     context.moveTo(Math.cos(angle) * 30, Math.sin(angle) * 30);
-    context.lineTo(Math.cos(angle) * (43 + index % 2 * 9), Math.sin(angle) * (43 + index % 2 * 9));
+    context.lineTo(Math.cos(angle) * (43 + (index % 2) * 9), Math.sin(angle) * (43 + (index % 2) * 9));
     context.stroke();
   }
   context.restore();
@@ -1421,19 +1583,21 @@ function renderFredRun(
     const sourceX = (sprite.frame % layout.columns) * SPRITE_CELL_SIZE;
     const sourceY = Math.floor(sprite.frame / layout.columns) * SPRITE_CELL_SIZE;
     const footY = FREDRUN_GROUND_Y - state.playerHeight + 4;
+    const drawScale = layout.drawScale ?? 1;
+    const drawSize = Math.round(SPRITE_DRAW_SIZE * drawScale);
     const spriteFootOffset = (
       DEFAULT_SPRITE_FOOT_BASELINE - (layout.footBaseline ?? DEFAULT_SPRITE_FOOT_BASELINE)
-    ) / SPRITE_CELL_SIZE * SPRITE_DRAW_SIZE;
+    ) / SPRITE_CELL_SIZE * drawSize;
     context.drawImage(
       images.characters[characterId][sprite.key],
       sourceX,
       sourceY,
       SPRITE_CELL_SIZE,
       SPRITE_CELL_SIZE,
-      FREDRUN_PLAYER_X - SPRITE_DRAW_SIZE / 2,
-      footY - SPRITE_DRAW_SIZE + spriteFootOffset,
-      SPRITE_DRAW_SIZE,
-      SPRITE_DRAW_SIZE,
+      FREDRUN_PLAYER_X - drawSize / 2,
+      footY - drawSize + spriteFootOffset,
+      drawSize,
+      drawSize,
     );
   }
   drawHitFeedback(context, state);
@@ -1572,6 +1736,155 @@ function createRunId(): string {
   return crypto.randomUUID();
 }
 
+const FredRunHud = memo(function FredRunHud({
+  score,
+  scorePulseToken,
+  bestScore,
+  coinsCollected,
+  coinPulseToken,
+  showPauseButton,
+  isPaused,
+  togglePause,
+  fullscreenAvailable,
+  isFullscreen,
+  toggleFullscreen,
+  inert,
+}: {
+  score: number;
+  scorePulseToken: number;
+  bestScore: number;
+  coinsCollected: number;
+  coinPulseToken: number;
+  showPauseButton: boolean;
+  isPaused: boolean;
+  togglePause: () => void;
+  fullscreenAvailable: boolean;
+  isFullscreen: boolean;
+  toggleFullscreen: () => void;
+  inert?: boolean;
+}) {
+  return (
+    <div
+      className="fredrun-hud"
+      aria-label="Spielstand"
+      inert={inert ? true : undefined}
+    >
+      <div>
+        <span>Punkte</span>
+        <strong
+          key={scorePulseToken}
+          className={scorePulseToken > 0 ? "fredrun-score--pulse" : undefined}
+        >
+          {score}
+        </strong>
+      </div>
+      <div><span>Bestwert</span><strong>{bestScore}</strong></div>
+      <div className="fredrun-coin-hud">
+        <span>Run-Münzen</span>
+        <strong
+          key={coinPulseToken}
+          className={coinPulseToken > 0 ? "fredrun-coin--pulse" : undefined}
+        >
+          <FredRunCoinIcon className="fredrun-coin-icon--hud" />
+          {coinsCollected}
+        </strong>
+      </div>
+      {showPauseButton ? (
+        <button type="button" onClick={togglePause}>{isPaused ? "Weiter" : "Pause"}</button>
+      ) : null}
+      {fullscreenAvailable ? (
+        <button
+          className="fredrun-fullscreen-button"
+          type="button"
+          onClick={() => void toggleFullscreen()}
+          aria-label={isFullscreen ? "Vollbild beenden" : "Vollbild öffnen"}
+          title={isFullscreen ? "Vollbild beenden" : "Vollbild"}
+          aria-pressed={isFullscreen}
+        >
+          <FredRunFullscreenIcon active={isFullscreen} />
+        </button>
+      ) : null}
+    </div>
+  );
+});
+
+const FredRunEffectStrip = memo(function FredRunEffectStrip({
+  comboMultiplier,
+  comboSeconds,
+  magnetSeconds,
+  shieldActive,
+  shieldSeconds,
+}: {
+  comboMultiplier: number;
+  comboSeconds: number;
+  magnetSeconds: number;
+  shieldActive: boolean;
+  shieldSeconds: number;
+}) {
+  return (
+    <div className="fredrun-effect-strip" aria-label="Aktive Effekte">
+      {comboMultiplier > 1 ? (
+        <span className="fredrun-effect-chip fredrun-effect-chip--combo">
+          Kombo ×{comboMultiplier} · {comboSeconds}s
+        </span>
+      ) : null}
+      {magnetSeconds > 0 ? (
+        <span className="fredrun-effect-chip fredrun-effect-chip--magnet">
+          <FredRunMagnetIcon />
+          Magnet · {magnetSeconds}s
+        </span>
+      ) : null}
+      {shieldActive ? (
+        <span className="fredrun-effect-chip fredrun-effect-chip--shield">
+          {shieldSeconds > 0
+            ? `Schild · ${shieldSeconds}s`
+            : "Schild · 1×"}
+        </span>
+      ) : null}
+    </div>
+  );
+});
+
+const FredRunGameplayFeedback = memo(function FredRunGameplayFeedback({
+  nearMissFeedback,
+  nearMisses,
+  lastNearMissBonus,
+  comboMultiplier,
+  powerUpFeedback,
+  powerUpsCollected,
+  lastPowerUpKind,
+}: {
+  nearMissFeedback: boolean;
+  nearMisses: number;
+  lastNearMissBonus: number;
+  comboMultiplier: number;
+  powerUpFeedback: boolean;
+  powerUpsCollected: number;
+  lastPowerUpKind: FredRunPowerUpKind | null;
+}) {
+  return (
+    <div className="fredrun-gameplay-feedback" aria-live="polite">
+      {nearMissFeedback ? (
+        <span
+          key={`near-miss-${nearMisses}`}
+          className="fredrun-feedback-pop fredrun-feedback-pop--near-miss"
+        >
+          Knapp! <strong>+{lastNearMissBonus} · ×{comboMultiplier}</strong>
+        </span>
+      ) : null}
+      {powerUpFeedback && lastPowerUpKind ? (
+        <span
+          key={`power-up-${powerUpsCollected}`}
+          className={`fredrun-feedback-pop fredrun-feedback-pop--${lastPowerUpKind}`}
+        >
+          {lastPowerUpKind === "magnet" ? <FredRunMagnetIcon /> : null}
+          {powerUpLabels[lastPowerUpKind]}!
+        </span>
+      ) : null}
+    </div>
+  );
+});
+
 export default function FredRunView({
   accessToken,
   standalone = false,
@@ -1649,6 +1962,7 @@ export default function FredRunView({
         && current.lastNearMissBonus === next.lastNearMissBonus
         && current.magnetSeconds === next.magnetSeconds
         && current.shieldActive === next.shieldActive
+        && current.shieldSeconds === next.shieldSeconds
         && current.shieldImpact === next.shieldImpact
         && current.powerUpFeedback === next.powerUpFeedback
         && current.lastPowerUpKind === next.lastPowerUpKind
@@ -2283,47 +2597,20 @@ export default function FredRunView({
           className={`fredrun-game-shell${isReadyPhase ? " fredrun-game-shell--menu" : ""}`}
         >
           {!isReadyPhase ? (
-            <div
-              className="fredrun-hud"
-              aria-label="Spielstand"
+            <FredRunHud
+              score={snapshot.score}
+              scorePulseToken={scorePulseToken}
+              bestScore={bestScore}
+              coinsCollected={snapshot.coinsCollected}
+              coinPulseToken={coinPulseToken}
+              showPauseButton={showPauseButton}
+              isPaused={isPaused}
+              togglePause={togglePause}
+              fullscreenAvailable={fullscreenAvailable}
+              isFullscreen={isFullscreen}
+              toggleFullscreen={toggleFullscreen}
               inert={abortConfirmation ? true : undefined}
-            >
-              <div>
-                <span>Punkte</span>
-                <strong
-                  key={scorePulseToken}
-                  className={scorePulseToken > 0 ? "fredrun-score--pulse" : undefined}
-                >
-                  {snapshot.score}
-                </strong>
-              </div>
-              <div><span>Bestwert</span><strong>{bestScore}</strong></div>
-              <div className="fredrun-coin-hud">
-                <span>Run-Münzen</span>
-                <strong
-                  key={coinPulseToken}
-                  className={coinPulseToken > 0 ? "fredrun-coin--pulse" : undefined}
-                >
-                  <FredRunCoinIcon className="fredrun-coin-icon--hud" />
-                  {snapshot.coinsCollected}
-                </strong>
-              </div>
-              {showPauseButton ? (
-                <button type="button" onClick={togglePause}>{isPaused ? "Weiter" : "Pause"}</button>
-              ) : null}
-              {fullscreenAvailable ? (
-                <button
-                  className="fredrun-fullscreen-button"
-                  type="button"
-                  onClick={() => void toggleFullscreen()}
-                  aria-label={isFullscreen ? "Vollbild beenden" : "Vollbild öffnen"}
-                  title={isFullscreen ? "Vollbild beenden" : "Vollbild"}
-                  aria-pressed={isFullscreen}
-                >
-                  <FredRunFullscreenIcon active={isFullscreen} />
-                </button>
-              ) : null}
-            </div>
+            />
           ) : null}
 
           <div className={`fredrun-stage${isReadyPhase ? " fredrun-stage--menu" : ""}${snapshot.phase === "game-over" ? " fredrun-stage--game-over fredrun-stage--hit" : snapshot.shieldImpact ? " fredrun-stage--hit fredrun-stage--shield-hit" : ""}`}>
@@ -2340,44 +2627,25 @@ export default function FredRunView({
             />
 
             {!isReadyPhase && snapshot.phase !== "game-over" ? (
-              <div className="fredrun-effect-strip" aria-label="Aktive Effekte">
-                {snapshot.comboMultiplier > 1 ? (
-                  <span className="fredrun-effect-chip fredrun-effect-chip--combo">
-                    Kombo ×{snapshot.comboMultiplier} · {snapshot.comboSeconds}s
-                  </span>
-                ) : null}
-                {snapshot.magnetSeconds > 0 ? (
-                  <span className="fredrun-effect-chip fredrun-effect-chip--magnet">
-                    <FredRunMagnetIcon />
-                    Magnet · {snapshot.magnetSeconds}s
-                  </span>
-                ) : null}
-                {snapshot.shieldActive ? (
-                  <span className="fredrun-effect-chip fredrun-effect-chip--shield">Schild · 1×</span>
-                ) : null}
-              </div>
+              <FredRunEffectStrip
+                comboMultiplier={snapshot.comboMultiplier}
+                comboSeconds={snapshot.comboSeconds}
+                magnetSeconds={snapshot.magnetSeconds}
+                shieldActive={snapshot.shieldActive}
+                shieldSeconds={snapshot.shieldSeconds}
+              />
             ) : null}
 
             {!isReadyPhase && snapshot.phase === "running" ? (
-              <div className="fredrun-gameplay-feedback" aria-live="polite">
-                {snapshot.nearMissFeedback ? (
-                  <span
-                    key={`near-miss-${snapshot.nearMisses}`}
-                    className="fredrun-feedback-pop fredrun-feedback-pop--near-miss"
-                  >
-                    Knapp! <strong>+{snapshot.lastNearMissBonus} · ×{snapshot.comboMultiplier}</strong>
-                  </span>
-                ) : null}
-                {snapshot.powerUpFeedback && snapshot.lastPowerUpKind ? (
-                  <span
-                    key={`power-up-${snapshot.powerUpsCollected}`}
-                    className={`fredrun-feedback-pop fredrun-feedback-pop--${snapshot.lastPowerUpKind}`}
-                  >
-                    {snapshot.lastPowerUpKind === "magnet" ? <FredRunMagnetIcon /> : null}
-                    {powerUpLabels[snapshot.lastPowerUpKind]}!
-                  </span>
-                ) : null}
-              </div>
+              <FredRunGameplayFeedback
+                nearMissFeedback={snapshot.nearMissFeedback}
+                nearMisses={snapshot.nearMisses}
+                lastNearMissBonus={snapshot.lastNearMissBonus}
+                comboMultiplier={snapshot.comboMultiplier}
+                powerUpFeedback={snapshot.powerUpFeedback}
+                powerUpsCollected={snapshot.powerUpsCollected}
+                lastPowerUpKind={snapshot.lastPowerUpKind}
+              />
             ) : null}
 
             {assetState === "error" ? (

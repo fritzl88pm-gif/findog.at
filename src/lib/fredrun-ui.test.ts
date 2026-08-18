@@ -701,7 +701,7 @@ describe("Fredrun UI surface", () => {
     ), 0);
     expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
     expect(viewSource).toContain('walk: { source: "/fredrun/cyberfred/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
-    expect(viewSource).toContain('jump: { source: "/fredrun/cyberfred/jump.webp?v=video-dual-boosters-v9", columns: 8, frameCount: 32, fps: 24, footBaseline: 168 }');
+    expect(viewSource).toContain('jump: { source: "/fredrun/cyberfred/jump.webp?v=video-dual-boosters-v9", columns: 8, frameCount: 32, fps: 24, footBaseline: 168, drawScale: 1.16 }');
     expect(viewSource).toContain('victory: { source: "/fredrun/cyberfred/victory.webp?v=robot-dance-v2", columns: 8, frameCount: 64, fps: 16 }');
     expect(cyberfredManifest.atlas.animations.jump).toMatchObject({
       sourceKind: "provided-video",
@@ -971,11 +971,15 @@ describe("Fredrun UI surface", () => {
   });
 
   it("integrates a compact Levels menu with world purchase and selected-world play copy", () => {
-    expect(FREDRUN_WORLD_IDS).toEqual(["vienna", "finanzamt-night"]);
+    expect(FREDRUN_WORLD_IDS).toEqual(["vienna", "finanzamt-night", "alps"]);
     expect(FREDRUN_WORLDS.vienna).toMatchObject({ name: "Wien", price: 0 });
     expect(FREDRUN_WORLDS["finanzamt-night"]).toMatchObject({
       name: "Finanzamt bei Nacht",
       price: 500,
+    });
+    expect(FREDRUN_WORLDS.alps).toMatchObject({
+      name: "Alpenpanorama",
+      price: 0,
     });
     expect(viewSource).toContain('{ id: "levels", label: "Levels" }');
     expect(viewSource).toContain('activeTab === "levels"');

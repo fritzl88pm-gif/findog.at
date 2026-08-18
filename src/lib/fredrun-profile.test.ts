@@ -19,18 +19,18 @@ import {
 } from "./fredrun-profile";
 
 describe("Fredrun local profile", () => {
-  it("starts with Fred and Frida unlocked and no coins", () => {
+  it("starts with Fred, Frida, Vienna and Alps unlocked and no coins", () => {
     expect(createDefaultFredRunProfile()).toEqual({
       coinBalance: 0,
       unlockedCharacters: ["fred", "frida"],
       selectedCharacter: "fred",
-      unlockedWorlds: ["vienna"],
-      selectedWorld: "vienna",
+      unlockedWorlds: ["vienna", "alps"],
+      selectedWorld: "alps",
       lastSettledRunId: null,
     });
   });
 
-  it("normalizes an old v1 profile to Vienna without losing existing progress", () => {
+  it("normalizes an old v1 profile to Vienna and Alps without losing existing progress", () => {
     expect(normalizeFredRunProfile({
       coinBalance: 725,
       unlockedCharacters: ["fred", "frida", "superfred"],
@@ -40,7 +40,7 @@ describe("Fredrun local profile", () => {
       coinBalance: 725,
       unlockedCharacters: ["fred", "frida", "superfred"],
       selectedCharacter: "superfred",
-      unlockedWorlds: ["vienna"],
+      unlockedWorlds: ["vienna", "alps"],
       selectedWorld: "vienna",
       lastSettledRunId: "settled-v1-run",
     });
@@ -65,13 +65,13 @@ describe("Fredrun local profile", () => {
       coinBalance: 725,
       unlockedCharacters: ["fred", "frida", "superfred"],
       selectedCharacter: "superfred",
-      unlockedWorlds: ["vienna"],
+      unlockedWorlds: ["vienna", "alps"],
       selectedWorld: "vienna",
       lastSettledRunId: "settled-v1-run",
     });
   });
 
-  it("repairs malformed data and never locks the free characters", () => {
+  it("repairs malformed data and never locks the free characters and worlds", () => {
     expect(normalizeFredRunProfile({
       coinBalance: -20,
       unlockedCharacters: ["superfred", "unknown", "superfred"],
@@ -81,7 +81,7 @@ describe("Fredrun local profile", () => {
       coinBalance: 0,
       unlockedCharacters: ["fred", "frida", "superfred"],
       selectedCharacter: "fred",
-      unlockedWorlds: ["vienna"],
+      unlockedWorlds: ["vienna", "alps"],
       selectedWorld: "vienna",
       lastSettledRunId: null,
     });
@@ -136,7 +136,7 @@ describe("Fredrun world economy", () => {
       status: "purchased",
       profile: {
         coinBalance: 225,
-        unlockedWorlds: ["vienna", "finanzamt-night"],
+        unlockedWorlds: ["vienna", "finanzamt-night", "alps"],
         selectedWorld: "finanzamt-night",
       },
     });
@@ -152,7 +152,7 @@ describe("Fredrun world economy", () => {
 
     const unlocked: FredRunProfile = {
       ...locked,
-      unlockedWorlds: ["vienna", "finanzamt-night"],
+      unlockedWorlds: ["vienna", "alps", "finanzamt-night"],
     };
     expect(selectFredRunWorld(unlocked, "finanzamt-night")).toMatchObject({
       selectedWorld: "finanzamt-night",

@@ -99,6 +99,7 @@ export type FredRunState = {
   lastNearMissBonus: number;
   magnetRemaining: number;
   shieldActive: boolean;
+  shieldRemaining: number;
   shieldImpactRemaining: number;
   powerUpFeedbackRemaining: number;
   lastPowerUpKind: FredRunPowerUpKind | null;
@@ -138,6 +139,7 @@ export function createFredRunState(): FredRunState {
     lastNearMissBonus: 0,
     magnetRemaining: 0,
     shieldActive: false,
+    shieldRemaining: 0,
     shieldImpactRemaining: 0,
     powerUpFeedbackRemaining: 0,
     lastPowerUpKind: null,
@@ -219,6 +221,42 @@ export function fredRunSpeedForDistance(distance: number): number {
   return fredRunSpeedForScore(fredRunContinuousScoreForDistance(distance));
 }
 
+export function fredRunReactionTimeFactorForScore(score: number): number {
+  const normalized = normalizedPositive(score);
+  if (normalized <= 3_000) {
+    return 1.2;
+  }
+  const excess = (normalized - 3_000) / 1_000;
+  return 0.55 + 0.65 / (1 + 0.1 * excess);
+}
+
+export function fredRunShieldDurationForScore(score: number): number {
+  const normalized = normalizedPositive(score);
+  if (normalized <= 3_000) {
+    return 0;
+  }
+  const excess = (normalized - 3_000) / 1_000;
+  return 4.0 + 16.0 / (1 + 0.12 * excess);
+}
+
+export function fredRunShieldSpawnRateForScore(score: number): number {
+  const normalized = normalizedPositive(score);
+  if (normalized <= 3_000) {
+    return 0.5;
+  }
+  const excess = (normalized - 3_000) / 1_000;
+  return 0.15 + 0.35 / (1 + 0.12 * excess);
+}
+
+export function fredRunPowerUpDistanceMultiplierForScore(score: number): number {
+  const normalized = normalizedPositive(score);
+  if (normalized <= 3_000) {
+    return 10;
+  }
+  const excess = (normalized - 3_000) / 1_000;
+  return 10 + 0.45 * excess;
+}
+
 export type FredRunEnvironment = {
   fromStage: number;
   toStage: number;
@@ -276,9 +314,12 @@ function obstacleFor(random: () => number, id: number): FredRunObstacle {
   return { id, ...spec, x: FREDRUN_WORLD_WIDTH + 40 };
 }
 
-function nextGap(speed: number, random: () => number): number {
-  const safeMinimum = Math.max(470, speed * 1.2);
-  return safeMinimum + Math.min(1, Math.max(0, random())) * 190;
+function nextGap(speed: number, score: number, random: () => number): number {
+  const timeFactor = fredRunReactionTimeFactorForScore(score);
+  const baseFloor = 470 * (timeFactor / 1.2);
+  const safeMinimum = Math.max(baseFloor, speed * timeFactor);
+  const variance = 190 * (timeFactor / 1.2);
+  return safeMinimum + Math.min(1, Math.max(0, random())) * variance;
 }
 
 function nextCoinGap(speed: number, random: () => number): number {
@@ -286,8 +327,9 @@ function nextCoinGap(speed: number, random: () => number): number {
   return safeMinimum + Math.min(1, Math.max(0, random())) * 360;
 }
 
-function nextPowerUpGap(speed: number, random: () => number): number {
-  const safeMinimum = Math.max(3_600, speed * 10);
+function nextPowerUpGap(speed: number, score: number, random: () => number): number {
+  const multiplier = fredRunPowerUpDistanceMultiplierForScore(score);
+  const safeMinimum = Math.max(3_600, speed * multiplier);
   return safeMinimum + Math.min(1, Math.max(0, random())) * 1_800;
 }
 
@@ -302,9 +344,10 @@ function coinFormation(random: () => number, firstId: number): FredRunCoin[] {
   }));
 }
 
-function powerUpFor(random: () => number, id: number): FredRunPowerUp {
+function powerUpFor(random: () => number, id: number, score: number = 0): FredRunPowerUp {
   const roll = Math.min(0.999999, Math.max(0, random()));
-  const kind: FredRunPowerUpKind = roll < 0.5 ? "magnet" : "shield";
+  const shieldThreshold = 1 - fredRunShieldSpawnRateForScore(score);
+  const kind: FredRunPowerUpKind = roll < shieldThreshold ? "magnet" : "shield";
   const height = 128 + Math.min(1, Math.max(0, random())) * 24;
   return {
     id,
@@ -436,6 +479,7 @@ export function advanceFredRun(
   let nearMissFeedbackRemaining = Math.max(0, state.nearMissFeedbackRemaining - delta);
   let magnetRemaining = Math.max(0, state.magnetRemaining - delta);
   let shieldActive = state.shieldActive;
+  let shieldRemaining = state.shieldRemaining;
   let shieldImpactRemaining = Math.max(0, state.shieldImpactRemaining - delta);
   let powerUpFeedbackRemaining = Math.max(0, state.powerUpFeedbackRemaining - delta);
   let lastPowerUpKind = state.lastPowerUpKind;
@@ -444,6 +488,20 @@ export function advanceFredRun(
   const currentSpeed = baseCurrentSpeed;
   const distance = state.distance + currentSpeed * delta;
   const baseNextSpeed = fredRunSpeedForDistance(distance);
+  const currentScore = Math.max(
+    state.score,
+    Math.floor(distance / SCORE_DISTANCE) + state.coinsCollected * FREDRUN_COIN_SCORE + state.nearMissScore,
+  );
+
+  if (shieldActive && currentScore > 3_000) {
+    if (shieldRemaining <= 0) {
+      shieldRemaining = fredRunShieldDurationForScore(currentScore);
+    }
+    shieldRemaining = Math.max(0, shieldRemaining - delta);
+    if (shieldRemaining === 0) {
+      shieldActive = false;
+    }
+  }
   let spawnDistance = state.spawnDistance - currentSpeed * delta;
   let coinSpawnDistance = state.coinSpawnDistance - currentSpeed * delta;
   let powerUpSpawnDistance = state.powerUpSpawnDistance - currentSpeed * delta;
@@ -487,7 +545,7 @@ export function advanceFredRun(
     obstacles.push(obstacle);
     collisionObstacles.push(obstacle);
     nextObstacleId += 1;
-    spawnDistance = nextGap(baseNextSpeed, random);
+    spawnDistance = nextGap(baseNextSpeed, currentScore, random);
   }
 
   if (coinSpawnDistance <= 0) {
@@ -503,12 +561,12 @@ export function advanceFredRun(
   }
 
   if (powerUpSpawnDistance <= 0) {
-    const powerUp = powerUpFor(random, nextPowerUpId);
+    const powerUp = powerUpFor(random, nextPowerUpId, currentScore);
     if (collectibleSpawnIsClear(powerUp, coins)) {
       powerUps.push(powerUp);
       collisionPowerUps.push(powerUp);
       nextPowerUpId += 1;
-      powerUpSpawnDistance = nextPowerUpGap(baseNextSpeed, random);
+      powerUpSpawnDistance = nextPowerUpGap(baseNextSpeed, currentScore, random);
     } else {
       powerUpSpawnDistance = 0;
     }
@@ -542,7 +600,10 @@ export function advanceFredRun(
     lastPowerUpKind = powerUp.kind;
     powerUpFeedbackRemaining = 1.2;
     if (powerUp.kind === "magnet") magnetRemaining = FREDRUN_MAGNET_SECONDS;
-    if (powerUp.kind === "shield") shieldActive = true;
+    if (powerUp.kind === "shield") {
+      shieldActive = true;
+      shieldRemaining = currentScore > 3_000 ? fredRunShieldDurationForScore(currentScore) : 0;
+    }
   }
   if (collectedPowerUpIds.size > 0) {
     powerUps = powerUps.filter((powerUp) => !collectedPowerUpIds.has(powerUp.id));
@@ -555,6 +616,7 @@ export function advanceFredRun(
   let fatalCollision = collisionIds.size > 0;
   if (fatalCollision && shieldActive) {
     shieldActive = false;
+    shieldRemaining = 0;
     shieldImpactRemaining = 0.5;
     obstacles = obstacles.filter((obstacle) => !collisionIds.has(obstacle.id));
     fatalCollision = false;
@@ -620,6 +682,7 @@ export function advanceFredRun(
     lastNearMissBonus,
     magnetRemaining,
     shieldActive,
+    shieldRemaining,
     shieldImpactRemaining,
     powerUpFeedbackRemaining,
     lastPowerUpKind,

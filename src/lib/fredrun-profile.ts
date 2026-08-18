@@ -67,7 +67,7 @@ export type FredRunSettlementResult = {
 };
 
 const DEFAULT_UNLOCKED_CHARACTERS: FredRunCharacterId[] = ["fred", "frida"];
-const DEFAULT_UNLOCKED_WORLDS: FredRunWorldId[] = ["vienna"];
+const DEFAULT_UNLOCKED_WORLDS: FredRunWorldId[] = ["vienna", "alps"];
 
 export function createDefaultFredRunProfile(): FredRunProfile {
   return {
@@ -75,7 +75,7 @@ export function createDefaultFredRunProfile(): FredRunProfile {
     unlockedCharacters: [...DEFAULT_UNLOCKED_CHARACTERS],
     selectedCharacter: "fred",
     unlockedWorlds: [...DEFAULT_UNLOCKED_WORLDS],
-    selectedWorld: "vienna",
+    selectedWorld: "alps",
     lastSettledRunId: null,
   };
 }

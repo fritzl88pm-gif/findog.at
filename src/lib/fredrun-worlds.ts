@@ -1,6 +1,7 @@
 export const FREDRUN_FINANZAMT_NIGHT_PRICE = 500;
+export const FREDRUN_ALPS_PRICE = 0;
 
-export const FREDRUN_WORLD_IDS = ["vienna", "finanzamt-night"] as const;
+export const FREDRUN_WORLD_IDS = ["vienna", "finanzamt-night", "alps"] as const;
 
 export type FredRunWorldId = (typeof FREDRUN_WORLD_IDS)[number];
 
@@ -19,7 +20,7 @@ export type FredRunWorldDefinition = {
     stages: readonly FredRunWorldBackgroundStage[];
     fallbackSource: string;
     crossfadeScoreDuration: number | null;
-    renderStyle: "vienna-disaster" | "night-office";
+    renderStyle: "vienna-disaster" | "night-office" | "alps-sunny";
   };
 };
 
@@ -62,6 +63,24 @@ export const FREDRUN_WORLDS = {
       fallbackSource: "/fredrun/levels/finanzamt-night/backgrounds/close-office.webp",
       crossfadeScoreDuration: 40,
       renderStyle: "night-office",
+    },
+  },
+  alps: {
+    name: "Alpenpanorama",
+    description: "Sonnige Bergwelt, blühende Almwiesen und schneebedeckte Gipfel.",
+    price: FREDRUN_ALPS_PRICE,
+    playKicker: "Bereit für die Alpen?",
+    playDescription: "Lauf durch die sonnigen Berge, sammle Münzen und spring über Hindernisse im glasklaren Alpenlicht.",
+    backgrounds: {
+      stages: [
+        { source: "/fredrun/levels/alps/backgrounds/meadow.webp", anchorScore: 0 },
+        { source: "/fredrun/levels/alps/backgrounds/lake.webp", anchorScore: 500 },
+        { source: "/fredrun/levels/alps/backgrounds/peaks.webp", anchorScore: 1_000 },
+        { source: "/fredrun/levels/alps/backgrounds/plateau.webp", anchorScore: 1_500 },
+      ],
+      fallbackSource: "/fredrun/levels/alps/backgrounds/fallback.webp",
+      crossfadeScoreDuration: 250,
+      renderStyle: "alps-sunny",
     },
   },
 } as const satisfies Record<FredRunWorldId, FredRunWorldDefinition>;
