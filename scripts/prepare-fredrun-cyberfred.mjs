@@ -17,29 +17,6 @@ const HORIZONTAL_PADDING = 8;
 const TOP_PADDING = 6;
 const BOTTOM_PADDING = 8;
 const REFERENCE_SHA256 = "CBDD7B6B92AE436C2AC5CD258BB54260E1E7A86236E30E7926A2E8CA2CA68B6E";
-const PROVIDED_JUMP_SOURCE_FRAMES = [
-  20, 24, 27, 30,
-  31, 32, 33, 34, 35, 36,
-  37, 38, 39, 40, 41, 42,
-  43, 44, 45,
-  47, 51, 55, 59, 63,
-];
-const DUAL_BOOSTER_SOURCE_FRAMES = new Set([
-  30, 31, 32, 33, 34, 35, 36, 37,
-  38, 39, 40, 41, 42, 43, 44, 45,
-]);
-const ORIGINAL_BOOSTER_RECTANGLE = {
-  left: 270,
-  top: 380,
-  width: 140,
-  height: 126,
-};
-const SECOND_BOOSTER_PLACEMENT = {
-  left: 91,
-  top: 378,
-  width: 119,
-  height: 107,
-};
 
 const animations = [
   {
@@ -50,15 +27,19 @@ const animations = [
   },
   {
     key: "jump",
-    sourceFile: "jump-provided.png",
-    sourceLabel: "1786987959871_a309b29b-d608-4cdb-8ba9-ffd3336b1786.png",
-    sourceKind: "provided-spritesheet",
-    sourceFrameIndices: PROVIDED_JUMP_SOURCE_FRAMES,
-    outputColumns: 6,
+    sourceFile: "jump-video-raw-u2.png",
+    sourceMetadataFile: "jump-video-raw-u2.json",
+    sourceLabel: "Cyberfred-jump.mp4",
+    sourceKind: "provided-video",
+    sourceColumns: 8,
+    sourceCellSize: 640,
+    sourceFrameCount: 32,
+    outputColumns: 8,
+    outputFootBaseline: 168,
     metadata: {
       animationName: "Blue Booster Jump",
       facingDirection: "right",
-      runtimeEffect: "embedded-dual-original-blue-boot-thrusters",
+      sourceUsage: "selected-video-frames-with-original-dual-boot-flames",
       runtimePlayback: {
         mode: "full-atlas-synced-to-fredrun-physics",
         durationSeconds: 0.82,
@@ -117,50 +98,13 @@ function findAlphaBounds(data, channels, imageWidth, rectangle) {
   return { left, top, width: right - left + 1, height: bottom - top + 1 };
 }
 
-async function prepareSourceFrame(animation, source, sourceIndex, rectangle) {
-  const originalFrame = await sharp(source)
-    .extract(rectangle)
-    .png()
-    .toBuffer();
-  if (animation.key !== "jump" || !DUAL_BOOSTER_SOURCE_FRAMES.has(sourceIndex)) {
-    return originalFrame;
-  }
-
-  const secondBooster = await sharp(originalFrame)
-    .extract(ORIGINAL_BOOSTER_RECTANGLE)
-    .flop()
-    .resize(
-      SECOND_BOOSTER_PLACEMENT.width,
-      SECOND_BOOSTER_PLACEMENT.height,
-      { fit: "fill", kernel: sharp.kernel.lanczos3 },
-    )
-    .png()
-    .toBuffer();
-
-  return sharp({
-    create: {
-      width: SOURCE_CELL_SIZE,
-      height: SOURCE_CELL_SIZE,
-      channels: 4,
-      background: { r: 0, g: 0, b: 0, alpha: 0 },
-    },
-  })
-    .composite([
-      {
-        input: secondBooster,
-        left: SECOND_BOOSTER_PLACEMENT.left,
-        top: SECOND_BOOSTER_PLACEMENT.top,
-      },
-      { input: originalFrame, left: 0, top: 0 },
-    ])
-    .png()
-    .toBuffer();
-}
-
 async function normalizeAnimation(animation) {
   const sourcePath = path.join(SOURCE_DIRECTORY, animation.sourceFile);
   const source = await readFile(sourcePath);
-  const info = await sharp(source).metadata();
+  const sourceMetadata = animation.sourceMetadataFile
+    ? JSON.parse(await readFile(path.join(SOURCE_DIRECTORY, animation.sourceMetadataFile), "utf8"))
+    : null;
+  const { data, info } = await sharp(source).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const sourceColumns = animation.sourceColumns ?? SOURCE_COLUMNS;
   const sourceCellSize = animation.sourceCellSize ?? SOURCE_CELL_SIZE;
   const sourceFrameCount = animation.sourceFrameCount ?? FRAME_COUNT;
@@ -176,41 +120,50 @@ async function normalizeAnimation(animation) {
     throw new Error(`Unerwartete Sprite-Größe für ${animation.sourceFile}: ${info.width}x${info.height}.`);
   }
 
-  const frames = await Promise.all(sourceFrameIndices.map(async (sourceIndex, outputIndex) => {
+  const frames = sourceFrameIndices.map((sourceIndex, outputIndex) => {
     const rectangle = sourceRectangle(sourceIndex, sourceColumns, sourceCellSize);
-    const frameSource = await prepareSourceFrame(animation, source, sourceIndex, rectangle);
-    const { data: frameData, info: frameInfo } = await sharp(frameSource)
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
     return {
       sourceIndex,
       outputIndex,
       rectangle,
-      frameSource,
-      bounds: findAlphaBounds(frameData, frameInfo.channels, frameInfo.width, {
-        left: 0,
-        top: 0,
-        width: sourceCellSize,
-        height: sourceCellSize,
-      }),
+      bounds: findAlphaBounds(data, info.channels, info.width, rectangle),
+      anchor: sourceMetadata?.frameAnchors?.[sourceIndex] ?? null,
     };
-  }));
-  const maxWidth = Math.max(...frames.map((frame) => frame.bounds.width));
-  const maxHeight = Math.max(...frames.map((frame) => frame.bounds.height));
-  const scale = Math.min(
-    (CELL_SIZE - HORIZONTAL_PADDING * 2) / maxWidth,
-    (CELL_SIZE - TOP_PADDING - BOTTOM_PADDING) / maxHeight,
-  );
+  });
+  const hasFrameAnchors = frames.every((frame) => frame.anchor);
+  const outputFootBaseline = animation.outputFootBaseline ?? CELL_SIZE - BOTTOM_PADDING;
+  let scale;
+  if (hasFrameAnchors) {
+    const maxLeftExtent = Math.max(...frames.map((frame) => frame.anchor.x - frame.bounds.left));
+    const maxRightExtent = Math.max(...frames.map((frame) => (
+      frame.bounds.left + frame.bounds.width - frame.anchor.x
+    )));
+    const maxTopExtent = Math.max(...frames.map((frame) => frame.anchor.y - frame.bounds.top));
+    const maxBottomExtent = Math.max(...frames.map((frame) => (
+      frame.bounds.top + frame.bounds.height - frame.anchor.y
+    )));
+    scale = Math.min(
+      (CELL_SIZE - HORIZONTAL_PADDING * 2) / (maxLeftExtent + maxRightExtent),
+      (outputFootBaseline - TOP_PADDING) / maxTopExtent,
+      (CELL_SIZE - BOTTOM_PADDING - outputFootBaseline) / Math.max(maxBottomExtent, 1),
+    );
+  } else {
+    const maxWidth = Math.max(...frames.map((frame) => frame.bounds.width));
+    const maxHeight = Math.max(...frames.map((frame) => frame.bounds.height));
+    scale = Math.min(
+      (CELL_SIZE - HORIZONTAL_PADDING * 2) / maxWidth,
+      (CELL_SIZE - TOP_PADDING - BOTTOM_PADDING) / maxHeight,
+    );
+  }
   const composites = [];
 
   for (const frame of frames) {
     const width = Math.max(1, Math.round(frame.bounds.width * scale));
     const height = Math.max(1, Math.round(frame.bounds.height * scale));
-    const input = await sharp(frame.frameSource)
+    const input = await sharp(source)
       .extract({
-        left: frame.bounds.left,
-        top: frame.bounds.top,
+        left: frame.rectangle.left + frame.bounds.left,
+        top: frame.rectangle.top + frame.bounds.top,
         width: frame.bounds.width,
         height: frame.bounds.height,
       })
@@ -219,8 +172,16 @@ async function normalizeAnimation(animation) {
       .toBuffer();
     composites.push({
       input,
-      left: frame.outputIndex % outputColumns * CELL_SIZE + Math.round((CELL_SIZE - width) / 2),
-      top: Math.floor(frame.outputIndex / outputColumns) * CELL_SIZE + CELL_SIZE - BOTTOM_PADDING - height,
+      left: frame.outputIndex % outputColumns * CELL_SIZE + Math.round(
+        hasFrameAnchors
+          ? CELL_SIZE / 2 - (frame.anchor.x - frame.bounds.left) * scale
+          : (CELL_SIZE - width) / 2,
+      ),
+      top: Math.floor(frame.outputIndex / outputColumns) * CELL_SIZE + Math.round(
+        hasFrameAnchors
+          ? outputFootBaseline - (frame.anchor.y - frame.bounds.top) * scale
+          : CELL_SIZE - BOTTOM_PADDING - height,
+      ),
     });
   }
 
@@ -242,7 +203,8 @@ async function normalizeAnimation(animation) {
   return {
     sourceKind: animation.sourceKind ?? "autosprite",
     sourceFile: animation.sourceLabel ?? animation.sourceFile,
-    sourceSha256: sha256(source),
+    sourceSha256: sourceMetadata?.sourceSha256 ?? sha256(source),
+    ...(sourceMetadata ? { intermediateAtlasSha256: sha256(source) } : {}),
     ...(animation.spritesheetId ? { spritesheetId: animation.spritesheetId } : {}),
     ...(animation.sourceVideoId ? { sourceVideoId: animation.sourceVideoId } : {}),
     sourceGrid: `${sourceColumns}x${sourceRows}`,
@@ -252,6 +214,21 @@ async function normalizeAnimation(animation) {
     rows: Math.ceil(outputFrameCount / outputColumns),
     frameCount: outputFrameCount,
     sharedScale: Number(scale.toFixed(6)),
+    anchorMode: hasFrameAnchors ? "per-frame-body-bottom" : "bottom-center",
+    footBaseline: outputFootBaseline,
+    ...(sourceMetadata ? {
+      sourceVideo: {
+        width: sourceMetadata.sourceWidth,
+        height: sourceMetadata.sourceHeight,
+        fps: sourceMetadata.sourceFps,
+        frameCount: sourceMetadata.sourceFrameCount,
+        selectedFrames: sourceMetadata.selectedFrames,
+      },
+      processing: {
+        backgroundRemoval: sourceMetadata.backgroundRemoval,
+        segmentationModel: sourceMetadata.segmentationModel,
+      },
+    } : {}),
     outputFile: path.basename(outputPath),
     outputSha256: sha256(output),
     bytes: outputStats.size,

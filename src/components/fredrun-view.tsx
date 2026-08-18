@@ -83,6 +83,7 @@ import {
 
 const SPRITE_CELL_SIZE = 192;
 const SPRITE_DRAW_SIZE = 166;
+const DEFAULT_SPRITE_FOOT_BASELINE = 184;
 const JUMP_ANIMATION_DURATION = 0.82;
 const FIXED_STEP = 1 / 120;
 const LOADING_SCREEN_MINIMUM_MS = 850;
@@ -122,6 +123,7 @@ type CharacterSpriteLayout = {
   columns: number;
   frameCount: number;
   fps: number;
+  footBaseline?: number;
 };
 
 const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, CharacterSpriteLayout>> = {
@@ -142,7 +144,7 @@ const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, Chara
   },
   cyberfred: {
     walk: { source: "/fredrun/cyberfred/walk.webp", columns: 8, frameCount: 64, fps: 16 },
-    jump: { source: "/fredrun/cyberfred/jump.webp?v=embedded-dual-boosters-v7", columns: 6, frameCount: 24, fps: 24 },
+    jump: { source: "/fredrun/cyberfred/jump.webp?v=video-dual-boosters-v9", columns: 8, frameCount: 32, fps: 24, footBaseline: 168 },
     victory: { source: "/fredrun/cyberfred/victory.webp?v=robot-dance-v2", columns: 8, frameCount: 64, fps: 16 },
   },
 };
@@ -1414,6 +1416,9 @@ function renderFredRun(
     const sourceX = (sprite.frame % layout.columns) * SPRITE_CELL_SIZE;
     const sourceY = Math.floor(sprite.frame / layout.columns) * SPRITE_CELL_SIZE;
     const footY = FREDRUN_GROUND_Y - state.playerHeight + 4;
+    const spriteFootOffset = (
+      DEFAULT_SPRITE_FOOT_BASELINE - (layout.footBaseline ?? DEFAULT_SPRITE_FOOT_BASELINE)
+    ) / SPRITE_CELL_SIZE * SPRITE_DRAW_SIZE;
     context.drawImage(
       images.characters[characterId][sprite.key],
       sourceX,
@@ -1421,7 +1426,7 @@ function renderFredRun(
       SPRITE_CELL_SIZE,
       SPRITE_CELL_SIZE,
       FREDRUN_PLAYER_X - SPRITE_DRAW_SIZE / 2,
-      footY - SPRITE_DRAW_SIZE,
+      footY - SPRITE_DRAW_SIZE + spriteFootOffset,
       SPRITE_DRAW_SIZE,
       SPRITE_DRAW_SIZE,
     );

@@ -200,6 +200,13 @@ const cyberfredManifest = JSON.parse(readFileSync(
   atlas: {
     animations: {
       jump: {
+        sourceVideo: {
+          width: number;
+          height: number;
+          fps: number;
+          frameCount: number;
+          selectedFrames: number[];
+        };
         runtimePlayback: {
           mode: string;
           durationSeconds: number;
@@ -669,21 +676,29 @@ describe("Fredrun UI surface", () => {
     ), 0);
     expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
     expect(viewSource).toContain('walk: { source: "/fredrun/cyberfred/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
-    expect(viewSource).toContain('jump: { source: "/fredrun/cyberfred/jump.webp?v=embedded-dual-boosters-v7", columns: 6, frameCount: 24, fps: 24 }');
+    expect(viewSource).toContain('jump: { source: "/fredrun/cyberfred/jump.webp?v=video-dual-boosters-v9", columns: 8, frameCount: 32, fps: 24, footBaseline: 168 }');
     expect(viewSource).toContain('victory: { source: "/fredrun/cyberfred/victory.webp?v=robot-dance-v2", columns: 8, frameCount: 64, fps: 16 }');
     expect(cyberfredManifest.atlas.animations.jump).toMatchObject({
-      sourceKind: "provided-spritesheet",
-      sourceFile: "1786987959871_a309b29b-d608-4cdb-8ba9-ffd3336b1786.png",
-      sourceSha256: "BBB7C5086095E98B56E2AF597DC69012BBEBF1EF5E9767B579420F63E2DC737A",
-      sourceGrid: "8x8",
-      sourceFrameCount: 64,
-      sourceFrames: [20, 24, 27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 47, 51, 55, 59, 63],
-      columns: 6,
+      sourceKind: "provided-video",
+      sourceFile: "Cyberfred-jump.mp4",
+      sourceSha256: "3932052A47E3DD7B84B2F079A1A093B19E8C8A39F106695E1224993D729F2AB1",
+      sourceGrid: "8x4",
+      sourceFrameCount: 32,
+      columns: 8,
       rows: 4,
-      frameCount: 24,
+      frameCount: 32,
+      anchorMode: "per-frame-body-bottom",
+      footBaseline: 168,
       animationName: "Blue Booster Jump",
       facingDirection: "right",
-      runtimeEffect: "embedded-dual-original-blue-boot-thrusters",
+      sourceUsage: "selected-video-frames-with-original-dual-boot-flames",
+    });
+    expect(cyberfredManifest.atlas.animations.jump.sourceVideo).toMatchObject({
+      width: 640,
+      height: 640,
+      fps: 24,
+      frameCount: 97,
+      selectedFrames: [32, 34, 35, 37, 38, 40, 42, 43, 45, 47, 48, 50, 51, 53, 55, 56, 58, 59, 61, 63, 64, 66, 67, 69, 71, 72, 74, 76, 77, 79, 80, 82],
     });
     expect(cyberfredManifest.atlas.animations.jump.runtimePlayback).toEqual({
       mode: "full-atlas-synced-to-fredrun-physics",
@@ -702,22 +717,22 @@ describe("Fredrun UI surface", () => {
     expect(profileSource).toContain('price: FREDRUN_CYBERFRED_PRICE');
   });
 
-  it("embeds an original blue booster beneath both Cyberfred boots during flight", async () => {
+  it("keeps both original Cyberfred boot flames visible throughout the flight phase", async () => {
     const jumpAtlasPath = fileURLToPath(new URL(
       "../../public/fredrun/cyberfred/jump.webp",
       import.meta.url,
     ));
     const flameZones = [
-      { left: 42, top: 142, width: 54, height: 48 },
-      { left: 98, top: 142, width: 58, height: 48 },
+      { left: 8, top: 128, width: 62, height: 58, minimumBluePixels: 250 },
+      { left: 84, top: 128, width: 70, height: 58, minimumBluePixels: 500 },
     ];
 
-    for (let frame = 3; frame <= 17; frame += 1) {
+    for (let frame = 8; frame <= 20; frame += 1) {
       for (const zone of flameZones) {
         const { data, info } = await sharp(jumpAtlasPath)
           .extract({
-            left: frame % 6 * 192 + zone.left,
-            top: Math.floor(frame / 6) * 192 + zone.top,
+            left: frame % 8 * 192 + zone.left,
+            top: Math.floor(frame / 8) * 192 + zone.top,
             width: zone.width,
             height: zone.height,
           })
@@ -731,7 +746,8 @@ describe("Fredrun UI surface", () => {
           const alpha = data[pixel + 3];
           if (alpha > 30 && blue > 110 && blue > red + 12) blueFlamePixels += 1;
         }
-        expect(blueFlamePixels, `Cyberfred frame ${frame} is missing a boot booster`).toBeGreaterThan(250);
+        expect(blueFlamePixels, `Cyberfred frame ${frame} is missing an original boot flame`)
+          .toBeGreaterThan(zone.minimumBluePixels);
       }
     }
   });
