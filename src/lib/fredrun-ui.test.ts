@@ -216,6 +216,25 @@ const cyberfredManifest = JSON.parse(readFileSync(
     };
   };
 };
+const superfridaManifest = JSON.parse(readFileSync(
+  fileURLToPath(new URL("../../public/fredrun/superfrida/manifest.json", import.meta.url)),
+  "utf8",
+)) as typeof superfredManifest & {
+  atlas: {
+    animations: {
+      jump: {
+        sourceFrames: number[];
+        facingDirection: string;
+        sourceUsage: string;
+        runtimePlayback: {
+          mode: string;
+          durationSeconds: number;
+          heightSource: string;
+        };
+      };
+    };
+  };
+};
 const lukiManifest = JSON.parse(readFileSync(
   fileURLToPath(new URL("../../public/fredrun/luki-manifest.json", import.meta.url)),
   "utf8",
@@ -613,7 +632,7 @@ describe("Fredrun UI surface", () => {
       total + animation.bytes
     ), 0);
     expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
-    expect(profileSource).toContain('export const FREDRUN_CHARACTER_IDS = ["fred", "frida", "superfred", "cyberfred"] as const');
+    expect(profileSource).toContain('export const FREDRUN_CHARACTER_IDS = ["fred", "frida", "superfred", "cyberfred", "superfrida"] as const');
     expect(viewSource).toContain('walk: { source: "/fredrun/superfred/walk.webp?v=smooth-walk-1", columns: 8, frameCount: 64, fps: 16 }');
     expect(viewSource).toContain('const JUMP_ANIMATION_DURATION = 0.82;');
     expect(viewSource).toContain('jump: { source: "/fredrun/superfred/jump.webp?v=superman-jump-2", columns: 8, frameCount: 64, fps: 16 }');
@@ -715,6 +734,71 @@ describe("Fredrun UI surface", () => {
     expect(profileSource).toContain('export const FREDRUN_CYBERFRED_PRICE = 2_000;');
     expect(profileSource).toContain('name: "Cyberfred"');
     expect(profileSource).toContain('price: FREDRUN_CYBERFRED_PRICE');
+  });
+
+  it("ships unlockable Superfrida with a Pro run and controlled right-facing jump", () => {
+    expect(superfridaManifest.source).toMatchObject({
+      referenceSha256: "EF9559C593F4069290F0039A26BE2BFBDA81F1082FA9CC32C0A5FC7117EBF908",
+      autospriteCharacterId: "cmsxmqssh0074vlisw1avagcx",
+      generation: {
+        videoTier: "pro",
+        durationSeconds: 4,
+        sourceFrameSize: 512,
+        sourceFrameCount: 64,
+        firstFrameQuality: "pro",
+        backgroundRemoval: "ultra",
+        creditsUsed: 39,
+        shippedCreditsUsed: 13,
+        discardedDraftCredits: 26,
+        sound: false,
+      },
+    });
+    expect(superfridaManifest.atlas).toMatchObject({
+      cellSize: 192,
+      columns: 8,
+      rows: 8,
+      frameCount: 64,
+      anchor: "bottom-center",
+    });
+    expect(Object.keys(superfridaManifest.atlas.animations)).toEqual(["walk", "jump", "victory"]);
+    const totalBytes = Object.values(superfridaManifest.atlas.animations).reduce(
+      (total, animation) => total + animation.bytes,
+      0,
+    );
+    expect(totalBytes).toBeLessThanOrEqual(3 * 1024 * 1024);
+    for (const animation of Object.values(superfridaManifest.atlas.animations)) {
+      expect(animation).toMatchObject({ columns: 8, rows: 8, frameCount: 64 });
+      expect(animation.outputSha256).toMatch(/^[A-F0-9]{64}$/);
+      expect(statSync(fileURLToPath(new URL(
+        `../../public/fredrun/superfrida/${animation.outputFile}`,
+        import.meta.url,
+      ))).size).toBe(animation.bytes);
+    }
+    expect(superfridaManifest.atlas.animations.walk).toMatchObject({
+      spritesheetId: "cmsydjj9w004jgayl6qlgcw7z",
+      sourceVideoId: "cmsydgqb70048gaylj4gnd2b0",
+      generationTier: "pro",
+      facingDirection: "right",
+    });
+    expect(superfridaManifest.atlas.animations.jump).toMatchObject({
+      spritesheetId: "cmsxmv3q500anvlisvz2l4m60",
+      sourceVideoId: "cmsxmrmb2006lj0sb6kbykf48",
+      facingDirection: "right",
+      sourceUsage: "right-facing-frames-only-resequenced-for-takeoff-apex-landing",
+      runtimePlayback: {
+        mode: "full-atlas-synced-to-fredrun-physics",
+        durationSeconds: 0.82,
+        heightSource: "shared-fredrun-physics",
+      },
+    });
+    expect(superfridaManifest.atlas.animations.jump.sourceFrames).toHaveLength(64);
+    expect(superfridaManifest.atlas.animations.jump.sourceFrames.every((frame) => frame <= 15)).toBe(true);
+    expect(viewSource).toContain('walk: { source: "/fredrun/superfrida/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('jump: { source: "/fredrun/superfrida/jump.webp", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('victory: { source: "/fredrun/superfrida/victory.webp", columns: 8, frameCount: 64, fps: 16 }');
+    expect(profileSource).toContain('export const FREDRUN_SUPERFRIDA_PRICE = 3_000;');
+    expect(profileSource).toContain('name: "Superfrida"');
+    expect(profileSource).toContain('price: FREDRUN_SUPERFRIDA_PRICE');
   });
 
   it("keeps both original Cyberfred boot flames visible throughout the flight phase", async () => {

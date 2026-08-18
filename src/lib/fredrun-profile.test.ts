@@ -4,6 +4,7 @@ import {
   FREDRUN_FINANZAMT_NIGHT_PRICE,
   FREDRUN_CYBERFRED_PRICE,
   FREDRUN_PROFILE_KEY,
+  FREDRUN_SUPERFRIDA_PRICE,
   FREDRUN_SUPERFRED_PRICE,
   createDefaultFredRunProfile,
   normalizeFredRunProfile,
@@ -212,6 +213,31 @@ describe("Fredrun character economy", () => {
       },
     });
     expect(purchaseFredRunCharacter(purchased.profile, "cyberfred")).toEqual({
+      status: "already-owned",
+      profile: purchased.profile,
+    });
+  });
+
+  it("requires 3000 coins and buys Superfrida exactly once", () => {
+    const insufficient = purchaseFredRunCharacter({
+      ...createDefaultFredRunProfile(),
+      coinBalance: FREDRUN_SUPERFRIDA_PRICE - 1,
+    }, "superfrida");
+    expect(insufficient.status).toBe("insufficient-funds");
+
+    const purchased = purchaseFredRunCharacter({
+      ...createDefaultFredRunProfile(),
+      coinBalance: FREDRUN_SUPERFRIDA_PRICE,
+    }, "superfrida");
+    expect(purchased).toMatchObject({
+      status: "purchased",
+      profile: {
+        coinBalance: 0,
+        unlockedCharacters: ["fred", "frida", "superfrida"],
+        selectedCharacter: "superfrida",
+      },
+    });
+    expect(purchaseFredRunCharacter(purchased.profile, "superfrida")).toEqual({
       status: "already-owned",
       profile: purchased.profile,
     });

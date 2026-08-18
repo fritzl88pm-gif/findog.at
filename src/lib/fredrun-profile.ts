@@ -10,8 +10,9 @@ export { FREDRUN_FINANZAMT_NIGHT_PRICE } from "./fredrun-worlds";
 export const FREDRUN_PROFILE_KEY = "findog.fredrun.profile.v1";
 export const FREDRUN_SUPERFRED_PRICE = 1_000;
 export const FREDRUN_CYBERFRED_PRICE = 2_000;
+export const FREDRUN_SUPERFRIDA_PRICE = 3_000;
 
-export const FREDRUN_CHARACTER_IDS = ["fred", "frida", "superfred", "cyberfred"] as const;
+export const FREDRUN_CHARACTER_IDS = ["fred", "frida", "superfred", "cyberfred", "superfrida"] as const;
 
 export type FredRunCharacterId = (typeof FREDRUN_CHARACTER_IDS)[number];
 
@@ -29,6 +30,11 @@ export const FREDRUN_CHARACTERS: Record<FredRunCharacterId, FredRunCharacterDefi
     name: "Cyberfred",
     description: "Hightech-Rüstung, rote Visor-Power",
     price: FREDRUN_CYBERFRED_PRICE,
+  },
+  superfrida: {
+    name: "Superfrida",
+    description: "Pinkes Cape und heldenhafte Sprungkraft",
+    price: FREDRUN_SUPERFRIDA_PRICE,
   },
 };
 

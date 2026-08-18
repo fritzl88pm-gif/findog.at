@@ -19,6 +19,10 @@ const cyberfredMigration = readFileSync(fileURLToPath(new URL(
   "../../supabase/migrations/20260817154502_add_cyberfred_character.sql",
   import.meta.url,
 )), "utf8");
+const superfridaMigration = readFileSync(fileURLToPath(new URL(
+  "../../supabase/migrations/20260818081208_add_superfrida_character.sql",
+  import.meta.url,
+)), "utf8");
 const adminCoinGrantMigration = readFileSync(fileURLToPath(new URL(
   "../../supabase/migrations/20260817160731_add_fredrun_admin_coin_grant_audit.sql",
   import.meta.url,
@@ -66,6 +70,11 @@ describe("FredRun user progress migration", () => {
   it("adds Cyberfred to the audited server catalog and selected-character constraint", () => {
     expect(cyberfredMigration).toMatch(/check \(selected_character in \('fred', 'frida', 'superfred', 'cyberfred'\)\)/iu);
     expect(cyberfredMigration).toMatch(/values \('character', 'cyberfred', 3, 2000, false, true\)/iu);
+  });
+
+  it("adds Superfrida to the audited server catalog and selected-character constraint", () => {
+    expect(superfridaMigration).toMatch(/check \(selected_character in \('fred', 'frida', 'superfred', 'cyberfred', 'superfrida'\)\)/iu);
+    expect(superfridaMigration).toMatch(/values \('character', 'superfrida', 4, 3000, false, true\)/iu);
   });
 
   it("distinguishes administrative coin grants in both immutable audit streams", () => {
