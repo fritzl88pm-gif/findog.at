@@ -148,8 +148,8 @@ const characterSpriteLayouts: Record<FredRunCharacterId, Record<SpriteKey, Chara
     victory: { source: "/fredrun/cyberfred/victory.webp?v=robot-dance-v2", columns: 8, frameCount: 64, fps: 16 },
   },
   superfrida: {
-    walk: { source: "/fredrun/superfrida/walk.webp", columns: 8, frameCount: 64, fps: 16 },
-    jump: { source: "/fredrun/superfrida/jump.webp", columns: 8, frameCount: 64, fps: 16 },
+    walk: { source: "/fredrun/superfrida/walk.webp?v=provided-sheet-1", columns: 8, frameCount: 64, fps: 16 },
+    jump: { source: "/fredrun/superfrida/jump.webp?v=provided-sheet-1", columns: 8, frameCount: 64, fps: 16 },
     victory: { source: "/fredrun/superfrida/victory.webp", columns: 8, frameCount: 64, fps: 16 },
   },
 };

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import sharp from "sharp";
 
-const SOURCE_DIRECTORY = path.resolve(process.argv[2] ?? ".tmp/superfrida-autosprite");
+const SOURCE_DIRECTORY = path.resolve(process.argv[2] ?? ".tmp/superfrida-sources");
 const OUTPUT_DIRECTORY = path.resolve(process.argv[3] ?? "public/fredrun/superfrida");
 const CELL_SIZE = 192;
 const OUTPUT_COLUMNS = 8;
@@ -18,39 +18,36 @@ const TOP_PADDING = 6;
 const BOTTOM_PADDING = 8;
 const REFERENCE_SHA256 = "EF9559C593F4069290F0039A26BE2BFBDA81F1082FA9CC32C0A5FC7117EBF908";
 
-const jumpSourceFrames = [
-  // Anticipation and takeoff: play the clean right-facing landing poses backwards.
-  ...Array.from({ length: 15 }, (_, index) => 15 - index).flatMap((frame) => [frame, frame]),
-  // Hold the clean airborne apex briefly so it reads at Fredrun's 0.82 s jump duration.
-  0, 0, 0, 0,
-  // Descent and landing: play the same right-facing poses forward.
-  ...Array.from({ length: 15 }, (_, index) => index + 1).flatMap((frame) => [frame, frame]),
-];
+// The provided sheet contains two jumps. Frames 0-39 form the complete first
+// anticipation/takeoff/flight/landing cycle; resample only that cycle so Fredrun
+// does not play a frantic double jump during its shared 0.82 second physics arc.
+const jumpSourceFrames = Array.from(
+  { length: FRAME_COUNT },
+  (_, index) => Math.round(index * 39 / (FRAME_COUNT - 1)),
+);
 
 const animations = [
   {
     key: "walk",
-    sourceFile: "run-pro.png",
-    spritesheetId: "cmsydjj9w004jgayl6qlgcw7z",
-    sourceVideoId: "cmsydgqb70048gaylj4gnd2b0",
+    sourceKind: "provided-spritesheet",
+    sourceFile: "Superfrida-run.png",
     metadata: {
-      animationName: "Superfrida Side-Scroller Run",
-      generationTier: "pro",
+      animationName: "Superfrida Provided Side-Scroller Run",
+      generationTier: "user-provided",
       loop: true,
       facingDirection: "right",
     },
   },
   {
     key: "jump",
-    sourceFile: "jump.png",
-    spritesheetId: "cmsxmv3q500anvlisvz2l4m60",
-    sourceVideoId: "cmsxmrmb2006lj0sb6kbykf48",
+    sourceKind: "provided-spritesheet",
+    sourceFile: "Superfrida-jump.png",
     sourceFrames: jumpSourceFrames,
     metadata: {
-      animationName: "Superfrida Controlled Side Jump",
-      generationTier: "existing-autosprite-clip-edited",
+      animationName: "Superfrida Provided Single-Cycle Jump",
+      generationTier: "user-provided-edited",
       facingDirection: "right",
-      sourceUsage: "right-facing-frames-only-resequenced-for-takeoff-apex-landing",
+      sourceUsage: "first-complete-jump-cycle-frames-0-through-39-resampled-to-64",
       runtimePlayback: {
         mode: "full-atlas-synced-to-fredrun-physics",
         durationSeconds: 0.82,
@@ -60,6 +57,7 @@ const animations = [
   },
   {
     key: "victory",
+    sourceKind: "autosprite",
     sourceFile: "victory.png",
     spritesheetId: "cmsxmv47i00atvlisbe4djzg7",
     sourceVideoId: "cmsxmrmdb0089vlis891y33sd",
@@ -173,11 +171,11 @@ async function normalizeAnimation(animation) {
   const output = await readFile(outputPath);
   const outputStats = await stat(outputPath);
   return {
-    sourceKind: "autosprite",
+    sourceKind: animation.sourceKind,
     sourceFile: animation.sourceFile,
     sourceSha256: sha256(source),
-    spritesheetId: animation.spritesheetId,
-    sourceVideoId: animation.sourceVideoId,
+    ...(animation.spritesheetId ? { spritesheetId: animation.spritesheetId } : {}),
+    ...(animation.sourceVideoId ? { sourceVideoId: animation.sourceVideoId } : {}),
     sourceGrid: "8x8",
     sourceFrameCount: SOURCE_FRAME_COUNT,
     ...(animation.sourceFrames ? { sourceFrames } : {}),
@@ -198,6 +196,7 @@ async function main() {
   const normalizedEntries = await Promise.all(animations.map(async (animation) => (
     [animation.key, await normalizeAnimation(animation)]
   )));
+  const normalizedAnimations = Object.fromEntries(normalizedEntries);
   const manifest = {
     source: {
       referenceFile: "Superfrida AutoSprite character",
@@ -212,8 +211,19 @@ async function main() {
         backgroundRemoval: "ultra",
         sound: false,
         creditsUsed: 39,
-        shippedCreditsUsed: 13,
-        discardedDraftCredits: 26,
+        shippedCreditsUsed: 0,
+        discardedDraftCredits: 39,
+        status: "replaced-by-user-provided-spritesheets",
+      },
+      providedSheets: {
+        walk: {
+          file: normalizedAnimations.walk.sourceFile,
+          sha256: normalizedAnimations.walk.sourceSha256,
+        },
+        jump: {
+          file: normalizedAnimations.jump.sourceFile,
+          sha256: normalizedAnimations.jump.sourceSha256,
+        },
       },
     },
     atlas: {
@@ -222,7 +232,7 @@ async function main() {
       rows: Math.ceil(FRAME_COUNT / OUTPUT_COLUMNS),
       frameCount: FRAME_COUNT,
       anchor: "bottom-center",
-      animations: Object.fromEntries(normalizedEntries),
+      animations: normalizedAnimations,
     },
   };
   await writeFile(

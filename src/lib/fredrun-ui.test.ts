@@ -234,6 +234,12 @@ const superfridaManifest = JSON.parse(readFileSync(
       };
     };
   };
+  source: {
+    providedSheets: {
+      walk: { file: string; sha256: string };
+      jump: { file: string; sha256: string };
+    };
+  };
 };
 const lukiManifest = JSON.parse(readFileSync(
   fileURLToPath(new URL("../../public/fredrun/luki-manifest.json", import.meta.url)),
@@ -736,7 +742,7 @@ describe("Fredrun UI surface", () => {
     expect(profileSource).toContain('price: FREDRUN_CYBERFRED_PRICE');
   });
 
-  it("ships unlockable Superfrida with a Pro run and controlled right-facing jump", () => {
+  it("ships unlockable Superfrida with the provided run and one controlled jump cycle", () => {
     expect(superfridaManifest.source).toMatchObject({
       referenceSha256: "EF9559C593F4069290F0039A26BE2BFBDA81F1082FA9CC32C0A5FC7117EBF908",
       autospriteCharacterId: "cmsxmqssh0074vlisw1avagcx",
@@ -748,9 +754,20 @@ describe("Fredrun UI surface", () => {
         firstFrameQuality: "pro",
         backgroundRemoval: "ultra",
         creditsUsed: 39,
-        shippedCreditsUsed: 13,
-        discardedDraftCredits: 26,
+        shippedCreditsUsed: 0,
+        discardedDraftCredits: 39,
+        status: "replaced-by-user-provided-spritesheets",
         sound: false,
+      },
+    });
+    expect(superfridaManifest.source.providedSheets).toEqual({
+      walk: {
+        file: "Superfrida-run.png",
+        sha256: "F963887BEA6E0491726E883CA87227DD5A72B3BC1B2029ADCAE9AFE1407FC1AC",
+      },
+      jump: {
+        file: "Superfrida-jump.png",
+        sha256: "4D9E851ACBD165BC3B9C424E929F8B89D60D65928D6EEF8A9BF31DA8AD63D509",
       },
     });
     expect(superfridaManifest.atlas).toMatchObject({
@@ -775,16 +792,16 @@ describe("Fredrun UI surface", () => {
       ))).size).toBe(animation.bytes);
     }
     expect(superfridaManifest.atlas.animations.walk).toMatchObject({
-      spritesheetId: "cmsydjj9w004jgayl6qlgcw7z",
-      sourceVideoId: "cmsydgqb70048gaylj4gnd2b0",
-      generationTier: "pro",
+      sourceKind: "provided-spritesheet",
+      sourceFile: "Superfrida-run.png",
+      generationTier: "user-provided",
       facingDirection: "right",
     });
     expect(superfridaManifest.atlas.animations.jump).toMatchObject({
-      spritesheetId: "cmsxmv3q500anvlisvz2l4m60",
-      sourceVideoId: "cmsxmrmb2006lj0sb6kbykf48",
+      sourceKind: "provided-spritesheet",
+      sourceFile: "Superfrida-jump.png",
       facingDirection: "right",
-      sourceUsage: "right-facing-frames-only-resequenced-for-takeoff-apex-landing",
+      sourceUsage: "first-complete-jump-cycle-frames-0-through-39-resampled-to-64",
       runtimePlayback: {
         mode: "full-atlas-synced-to-fredrun-physics",
         durationSeconds: 0.82,
@@ -792,9 +809,11 @@ describe("Fredrun UI surface", () => {
       },
     });
     expect(superfridaManifest.atlas.animations.jump.sourceFrames).toHaveLength(64);
-    expect(superfridaManifest.atlas.animations.jump.sourceFrames.every((frame) => frame <= 15)).toBe(true);
-    expect(viewSource).toContain('walk: { source: "/fredrun/superfrida/walk.webp", columns: 8, frameCount: 64, fps: 16 }');
-    expect(viewSource).toContain('jump: { source: "/fredrun/superfrida/jump.webp", columns: 8, frameCount: 64, fps: 16 }');
+    expect(superfridaManifest.atlas.animations.jump.sourceFrames[0]).toBe(0);
+    expect(superfridaManifest.atlas.animations.jump.sourceFrames.at(-1)).toBe(39);
+    expect(superfridaManifest.atlas.animations.jump.sourceFrames.every((frame) => frame <= 39)).toBe(true);
+    expect(viewSource).toContain('walk: { source: "/fredrun/superfrida/walk.webp?v=provided-sheet-1", columns: 8, frameCount: 64, fps: 16 }');
+    expect(viewSource).toContain('jump: { source: "/fredrun/superfrida/jump.webp?v=provided-sheet-1", columns: 8, frameCount: 64, fps: 16 }');
     expect(viewSource).toContain('victory: { source: "/fredrun/superfrida/victory.webp", columns: 8, frameCount: 64, fps: 16 }');
     expect(profileSource).toContain('export const FREDRUN_SUPERFRIDA_PRICE = 3_000;');
     expect(profileSource).toContain('name: "Superfrida"');
