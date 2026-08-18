@@ -13,10 +13,19 @@ vi.mock("@/lib/scanning/settings", async (importOriginal) => {
   return {
     getScanningSettings: vi.fn(),
     updateScanningSettings: vi.fn(),
+    isValidDocumentPipeline: actual.isValidDocumentPipeline,
     isValidModelId: actual.isValidModelId,
   };
 });
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
+
+function putRequest(body: unknown): Request {
+  return new Request("https://findog.at/api/admin/scanning-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
 
 describe("Admin scanning-settings API", () => {
   beforeEach(() => {
@@ -25,6 +34,7 @@ describe("Admin scanning-settings API", () => {
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "admin-1" });
     vi.mocked(isAdminUser).mockResolvedValue(true);
     vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "mineru_with_openrouter_fallback",
       modelId: "google/gemini-3.5-flash",
       prompt: "Current scanning prompt",
       updatedAt: "2026-07-19T08:00:00.000Z",
@@ -32,10 +42,12 @@ describe("Admin scanning-settings API", () => {
     });
   });
 
-  it("returns scanning settings with modelId and prompt", async () => {
+  it("returns exactly the scanning fields and existing metadata", async () => {
     const response = await GET(new Request("https://findog.at/api/admin/scanning-settings"));
+
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
+      documentPipeline: "mineru_with_openrouter_fallback",
       modelId: "google/gemini-3.5-flash",
       prompt: "Current scanning prompt",
       updatedAt: "2026-07-19T08:00:00.000Z",
@@ -49,27 +61,31 @@ describe("Admin scanning-settings API", () => {
     expect(response.status).toBe(403);
   });
 
-  it("updates scanning settings with valid modelId and prompt", async () => {
+  it("updates document pipeline, model and prompt", async () => {
     vi.mocked(updateScanningSettings).mockResolvedValue({
+      documentPipeline: "openrouter_only",
       modelId: "anthropic/claude-sonnet-4-20250514",
       prompt: "New scanning prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
       updatedBy: "admin-1",
     });
 
-    const response = await PUT(new Request("https://findog.at/api/admin/scanning-settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ modelId: "anthropic/claude-sonnet-4-20250514", prompt: "New scanning prompt" }),
+    const response = await PUT(putRequest({
+      documentPipeline: "openrouter_only",
+      modelId: "anthropic/claude-sonnet-4-20250514",
+      prompt: "New scanning prompt",
     }));
+
     expect(response.status).toBe(200);
     expect(updateScanningSettings).toHaveBeenCalledWith(
       expect.anything(),
       "admin-1",
       "anthropic/claude-sonnet-4-20250514",
       "New scanning prompt",
+      "openrouter_only",
     );
     await expect(response.json()).resolves.toEqual({
+      documentPipeline: "openrouter_only",
       modelId: "anthropic/claude-sonnet-4-20250514",
       prompt: "New scanning prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -79,31 +95,35 @@ describe("Admin scanning-settings API", () => {
 
   it("rejects PUT without admin auth", async () => {
     vi.mocked(isAdminUser).mockResolvedValue(false);
-    const response = await PUT(new Request("https://findog.at/api/admin/scanning-settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ modelId: "model/x", prompt: "prompt" }),
+    const response = await PUT(putRequest({
+      documentPipeline: "openrouter_only",
+      modelId: "model/x",
+      prompt: "prompt",
     }));
     expect(response.status).toBe(403);
     expect(updateScanningSettings).not.toHaveBeenCalled();
   });
 
-  it("rejects PUT with missing fields", async () => {
-    const response = await PUT(new Request("https://findog.at/api/admin/scanning-settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ modelId: "model/x" }),
-    }));
-    expect(response.status).toBe(400);
-    expect(updateScanningSettings).not.toHaveBeenCalled();
-  });
-
-  it("rejects PUT with extra fields", async () => {
-    const response = await PUT(new Request("https://findog.at/api/admin/scanning-settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ modelId: "model/x", prompt: "prompt", extra: "field" }),
-    }));
+  it.each([
+    ["missing pipeline", { modelId: "model/x", prompt: "prompt" }],
+    ["missing model", { documentPipeline: "openrouter_only", prompt: "prompt" }],
+    ["missing prompt", { documentPipeline: "openrouter_only", modelId: "model/x" }],
+    ["extra field", {
+      documentPipeline: "openrouter_only",
+      modelId: "model/x",
+      prompt: "prompt",
+      extra: "field",
+    }],
+    ["invalid pipeline", { documentPipeline: "local_ocr", modelId: "model/x", prompt: "prompt" }],
+    ["invalid model", { documentPipeline: "openrouter_only", modelId: "invalid model", prompt: "prompt" }],
+    ["empty prompt", { documentPipeline: "openrouter_only", modelId: "model/x", prompt: "" }],
+    ["oversized prompt", {
+      documentPipeline: "openrouter_only",
+      modelId: "model/x",
+      prompt: "x".repeat(40_001),
+    }],
+  ])("rejects PUT with %s", async (_label, body) => {
+    const response = await PUT(putRequest(body));
     expect(response.status).toBe(400);
     expect(updateScanningSettings).not.toHaveBeenCalled();
   });
@@ -113,26 +133,6 @@ describe("Admin scanning-settings API", () => {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: "not-json",
-    }));
-    expect(response.status).toBe(400);
-    expect(updateScanningSettings).not.toHaveBeenCalled();
-  });
-
-  it("rejects PUT with invalid model ID", async () => {
-    const response = await PUT(new Request("https://findog.at/api/admin/scanning-settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ modelId: "invalid model", prompt: "prompt" }),
-    }));
-    expect(response.status).toBe(400);
-    expect(updateScanningSettings).not.toHaveBeenCalled();
-  });
-
-  it("rejects PUT with empty prompt", async () => {
-    const response = await PUT(new Request("https://findog.at/api/admin/scanning-settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ modelId: "model/x", prompt: "" }),
     }));
     expect(response.status).toBe(400);
     expect(updateScanningSettings).not.toHaveBeenCalled();

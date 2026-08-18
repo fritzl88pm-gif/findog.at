@@ -107,14 +107,14 @@ describe("GET /api/fred/capabilities", () => {
     expect(authenticateSupabaseRequest).toHaveBeenCalledWith(request, expect.anything());
   });
 
-  it("returns fileUpload false when MINERU_API_TOKEN is missing", async () => {
+  it("keeps file upload enabled when only MINERU_API_TOKEN is missing", async () => {
     vi.stubEnv("MINERU_API_TOKEN", "");
     const request = new Request("https://findog.at/api/fred/capabilities", {
       headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
     });
     const response = await GET(request);
     const data = await response.json() as Record<string, unknown>;
-    expect(data.fileUpload).toBe(false);
+    expect(data.fileUpload).toBe(true);
     expect(data.webSearch).toBe(true);
   });
 
@@ -306,7 +306,7 @@ describe("GET /api/fred/capabilities", () => {
 
     await expect(response.json()).resolves.toEqual({
       webSearch: true,
-      fileUpload: false,
+      fileUpload: true,
       proMode: false,
       quickFred: false,
     });

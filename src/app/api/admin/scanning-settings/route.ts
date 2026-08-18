@@ -3,7 +3,12 @@ import { NextResponse } from "next/server";
 import { isAdminUser } from "@/lib/admin-auth";
 import { authenticateSupabaseRequest, type AuthenticatedUser } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
-import { getScanningSettings, isValidModelId, updateScanningSettings } from "@/lib/scanning/settings";
+import {
+  getScanningSettings,
+  isValidDocumentPipeline,
+  isValidModelId,
+  updateScanningSettings,
+} from "@/lib/scanning/settings";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -20,6 +25,7 @@ async function authenticateAdmin(request: Request, supabase: ServerClient): Prom
 async function readSettings(supabase: ServerClient) {
   const record = await getScanningSettings(supabase);
   return {
+    documentPipeline: record.documentPipeline,
     modelId: record.modelId,
     prompt: record.prompt,
     updatedAt: record.updatedAt,
@@ -66,20 +72,43 @@ export async function PUT(request: Request) {
       throw new UserVisibleError("Die Anfrage ist ungültig.", 400);
     }
     const fields = body as Record<string, unknown>;
-    if (Object.keys(fields).length !== 2) {
-      throw new UserVisibleError("Die Anfrage muss genau die Felder modelId und prompt enthalten.", 400);
+    if (Object.keys(fields).length !== 3) {
+      throw new UserVisibleError(
+        "Die Anfrage muss genau die Felder documentPipeline, modelId und prompt enthalten.",
+        400,
+      );
     }
-    if (typeof fields.modelId !== "string" || typeof fields.prompt !== "string") {
-      throw new UserVisibleError("Die Anfrage muss genau die Felder modelId und prompt enthalten.", 400);
+    if (
+      typeof fields.documentPipeline !== "string"
+      || typeof fields.modelId !== "string"
+      || typeof fields.prompt !== "string"
+    ) {
+      throw new UserVisibleError(
+        "Die Anfrage muss genau die Felder documentPipeline, modelId und prompt enthalten.",
+        400,
+      );
+    }
+    if (!isValidDocumentPipeline(fields.documentPipeline)) {
+      throw new UserVisibleError("Die Dokument-Pipeline ist ungültig.", 400);
     }
     if (!isValidModelId(fields.modelId)) {
       throw new UserVisibleError("Die OpenRouter-Modell-ID ist ungültig.", 400);
     }
-    if (!fields.prompt.trim()) {
-      throw new UserVisibleError("Der Scanning-Prompt darf nicht leer sein.", 400);
+    if (!fields.prompt.trim() || fields.prompt.length > 40000) {
+      throw new UserVisibleError(
+        "Der Scanning-Prompt ist ungültig (maximal 40.000 Zeichen, nicht leer).",
+        400,
+      );
     }
-    const record = await updateScanningSettings(supabase, user.id, fields.modelId, fields.prompt);
+    const record = await updateScanningSettings(
+      supabase,
+      user.id,
+      fields.modelId,
+      fields.prompt,
+      fields.documentPipeline,
+    );
     return json({
+      documentPipeline: record.documentPipeline,
       modelId: record.modelId,
       prompt: record.prompt,
       updatedAt: record.updatedAt,

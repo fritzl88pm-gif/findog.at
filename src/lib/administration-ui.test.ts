@@ -49,9 +49,26 @@ describe("Administration UI tabs and scanning settings", () => {
     expect(pageSource).toContain("/api/admin/scanning-settings");
   });
 
+  it("renders an accessible OCR pipeline select with German labels and descriptions", () => {
+    expect(pageSource).toContain('<label htmlFor="scanning-document-pipeline">OCR-Pipeline</label>');
+    expect(pageSource).toContain('id="scanning-document-pipeline"');
+    expect(pageSource).toContain('aria-describedby="scanning-document-pipeline-description"');
+    expect(pageSource).toContain('value="mineru_with_openrouter_fallback"');
+    expect(pageSource).toContain("MinerU mit OpenRouter-Fallback");
+    expect(pageSource).toContain("MinerU wird zuerst genutzt; bei Fehler folgt OpenRouter.");
+    expect(pageSource).toContain('value="openrouter_only"');
+    expect(pageSource).toContain("Nur OpenRouter");
+    expect(pageSource).toContain("Dokumente werden ausschließlich über OpenRouter verarbeitet.");
+  });
+
+  it("loads, validates and saves the document pipeline with the scanning settings", () => {
+    expect(pageSource).toMatch(/payload\.documentPipeline !== "mineru_with_openrouter_fallback"[\s\S]*?payload\.documentPipeline !== "openrouter_only"/u);
+    expect(pageSource).toContain("setScanningDocumentPipeline(payload.documentPipeline)");
+    expect(pageSource).toContain("documentPipeline: scanningDocumentPipeline");
+  });
+
   it("renders a model ID text input field for scanning settings", () => {
-    expect(pageSource).toContain("OpenRouter-Modell-ID");
-    expect(pageSource).toContain("Freds Dokument-Fallback");
+    expect(pageSource).toContain('<label htmlFor="scanning-model-id">OpenRouter-Modell-ID</label>');
   });
 
   it("renders a prompt textarea for scanning settings", () => {
@@ -72,5 +89,6 @@ describe("Administration UI tabs and scanning settings", () => {
     expect(pageSource).not.toContain("adminSystemPrompt");
     expect(pageSource).not.toContain("Globaler Systemprompt");
     expect(pageSource).not.toContain("BFG PRO");
+    expect(pageSource).not.toMatch(/API[_ -]?Key|Api[_ -]?Key|Secret/i);
   });
 });

@@ -76,6 +76,10 @@ import {
 import FredRunView from "@/components/fredrun-view";
 import L17bCountrySelect from "@/components/l17b-country-select";
 import ScanningView from "@/components/scanning-view";
+import {
+  DEFAULT_DOCUMENT_PIPELINE,
+  type DocumentPipeline,
+} from "@/lib/scanning/settings";
 import KnowledgeLandscapeView from "@/components/knowledge-landscape-view";
 import QuizView from "@/components/quiz-view";
 import ReasoningsView from "@/components/reasonings-view";
@@ -1216,6 +1220,7 @@ export default function Home() {
   const [isAdminUserCreating, setIsAdminUserCreating] = useState(false);
   const [isAdminUserMutationRunning, setIsAdminUserMutationRunning] = useState(false);
   const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "personalities">("scanning");
+  const [scanningDocumentPipeline, setScanningDocumentPipeline] = useState<DocumentPipeline>(DEFAULT_DOCUMENT_PIPELINE);
   const [scanningModelId, setScanningModelId] = useState("");
   const [scanningPrompt, setScanningPrompt] = useState("");
   const [isScanningSettingsLoading, setIsScanningSettingsLoading] = useState(false);
@@ -2103,6 +2108,10 @@ export default function Home() {
         !response.ok
         || typeof payload.modelId !== "string"
         || !payload.modelId.trim()
+        || (
+          payload.documentPipeline !== "mineru_with_openrouter_fallback"
+          && payload.documentPipeline !== "openrouter_only"
+        )
         || typeof payload.prompt !== "string"
         || !payload.prompt.trim()
         || typeof payload.updatedAt !== "string"
@@ -2113,6 +2122,7 @@ export default function Home() {
             : "Die Scanning-Konfiguration konnte nicht geladen werden.",
         );
       }
+      setScanningDocumentPipeline(payload.documentPipeline);
       setScanningModelId(payload.modelId);
       setScanningPrompt(payload.prompt);
     } catch (settingsError) {
@@ -2145,13 +2155,21 @@ export default function Home() {
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ modelId: scanningModelId.trim(), prompt: scanningPrompt.trim() }),
+        body: JSON.stringify({
+          documentPipeline: scanningDocumentPipeline,
+          modelId: scanningModelId.trim(),
+          prompt: scanningPrompt.trim(),
+        }),
       });
       const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (
         !response.ok
         || typeof payload.modelId !== "string"
         || !payload.modelId.trim()
+        || (
+          payload.documentPipeline !== "mineru_with_openrouter_fallback"
+          && payload.documentPipeline !== "openrouter_only"
+        )
         || typeof payload.prompt !== "string"
         || !payload.prompt.trim()
         || typeof payload.updatedAt !== "string"
@@ -2162,6 +2180,7 @@ export default function Home() {
             : "Die Scanning-Konfiguration konnte nicht gespeichert werden.",
         );
       }
+      setScanningDocumentPipeline(payload.documentPipeline);
       setScanningModelId(payload.modelId);
       setScanningPrompt(payload.prompt);
       setAdminNotice("Die Scanning-Konfiguration wurde gespeichert und gilt für neue Auswertungen.");
@@ -4065,8 +4084,35 @@ export default function Home() {
                 <div className="form-generator-heading">
                   <h2>Scanning-Einstellungen</h2>
                   <p>
-                    OpenRouter-Modell für die Belegauswertung und Freds Dokument-Fallback.
+                    Konfiguriert die Dokument-OCR und das OpenRouter-Modell.
                     Der statische Prompt gilt nur für die Belegauswertung.
+                  </p>
+                </div>
+                <div className="field-group">
+                  <label htmlFor="scanning-document-pipeline">OCR-Pipeline</label>
+                  <select
+                    id="scanning-document-pipeline"
+                    value={scanningDocumentPipeline}
+                    aria-describedby="scanning-document-pipeline-description"
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (value === "mineru_with_openrouter_fallback" || value === "openrouter_only") {
+                        setScanningDocumentPipeline(value);
+                        setAdminError("");
+                        setAdminNotice("");
+                      }
+                    }}
+                    disabled={isScanningSettingsLoading || isScanningSettingsSaving}
+                  >
+                    <option value="mineru_with_openrouter_fallback">
+                      MinerU mit OpenRouter-Fallback
+                    </option>
+                    <option value="openrouter_only">Nur OpenRouter</option>
+                  </select>
+                  <p id="scanning-document-pipeline-description" className="admin-model-hint">
+                    {scanningDocumentPipeline === "mineru_with_openrouter_fallback"
+                      ? "MinerU wird zuerst genutzt; bei Fehler folgt OpenRouter."
+                      : "Dokumente werden ausschließlich über OpenRouter verarbeitet."}
                   </p>
                 </div>
                 <div className="field-group">

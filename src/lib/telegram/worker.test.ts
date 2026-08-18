@@ -1441,9 +1441,8 @@ describe("processUpdate: photo attachments", () => {
       new TelegramFileTooLargeError("this message intentionally has no German size wording"),
     );
     const preprocessor = createAttachmentPreprocessor({
-      mineru: vi.fn(),
+      document: vi.fn(),
       gemini: vi.fn(),
-      documentFallback: vi.fn(),
     });
     const { executeTurn, calls } = answerTurn();
     const config = fakeConfig({

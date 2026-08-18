@@ -15,11 +15,13 @@ export type AttachmentInput = {
 export type MineruProvider = (files: MineruFileInput[], opts?: { signal?: AbortSignal }) => Promise<string[]>;
 export type GeminiProvider = (imageDataUri: string, opts?: { signal?: AbortSignal }) => Promise<string>;
 export type DocumentFallbackProvider = (files: MineruFileInput[], opts?: { signal?: AbortSignal }) => Promise<string[]>;
+export type DocumentProvider = DocumentFallbackProvider;
 
 export type BuildAttachmentOptions = {
   mineruProvider?: MineruProvider;
   geminiProvider?: GeminiProvider;
   documentFallbackProvider?: DocumentFallbackProvider;
+  documentProvider?: DocumentProvider;
 };
 
 const MINERU_KINDS = new Set<MineruFileInput["kind"]>(["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"]);
@@ -124,7 +126,11 @@ export async function buildAttachmentContext(
     .map((file, index) => ({ file, index }))
     .filter(({ file }) => GEMINI_KINDS.has(file.kind));
 
-  if (mineruEntries.length > 0 && !options.mineruProvider) {
+  if (
+    mineruEntries.length > 0
+    && !options.documentProvider
+    && !options.mineruProvider
+  ) {
     throw new AttachmentsError("MinerU-Provider nicht verfügbar.");
   }
   if (geminiEntries.length > 0 && !options.geminiProvider) {
@@ -132,9 +138,16 @@ export async function buildAttachmentContext(
   }
 
   const mineruFiles = mineruEntries.map(({ file }) => file);
+  const sharedDocumentProvider = options.documentProvider;
   const mineruPromise = mineruEntries.length === 0
     ? Promise.resolve<string[]>([])
-    : (async () => {
+    : sharedDocumentProvider
+      ? (async () => validateProviderResults(
+        "Dokument-OCR",
+        mineruFiles,
+        await sharedDocumentProvider(mineruFiles),
+      ))()
+      : (async () => {
       try {
         return validateProviderResults(
           "MinerU",

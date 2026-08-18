@@ -25,9 +25,8 @@ function json(payload: unknown, status = 200): NextResponse {
 }
 
 function findogFileUploadEnabled(): boolean {
-  const mineruToken = process.env.MINERU_API_TOKEN?.trim() ?? "";
   const openrouterKey = process.env.OPENROUTER_API_KEY?.trim() ?? "";
-  return mineruToken !== "" && openrouterKey !== "";
+  return openrouterKey !== "";
 }
 
 function fredProModeEnabled(): boolean {

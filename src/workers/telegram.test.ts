@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { buildStorage } from "./telegram";
+import { createConfiguredDocumentProvider } from "@/lib/attachments/document-pipeline";
+import { getScanningSettings } from "@/lib/scanning/settings";
+import { buildPreprocessorProviders, buildStorage } from "./telegram";
 
 function fakeSupabase(overrides: Record<string, unknown> = {}) {
   return {
@@ -9,6 +11,13 @@ function fakeSupabase(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+vi.mock("@/lib/attachments/document-pipeline", () => ({
+  createConfiguredDocumentProvider: vi.fn(),
+}));
+vi.mock("@/lib/scanning/settings", () => ({
+  getScanningSettings: vi.fn(),
+}));
 
 const integrationId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
@@ -152,6 +161,49 @@ describe("buildStorage.setMode", () => {
   });
 
 });
+
+describe("buildPreprocessorProviders", () => {
+  it("wires Telegram documents to the shared configured provider", () => {
+    const supabase = fakeSupabase();
+    const documentProvider = vi.fn();
+    vi.mocked(createConfiguredDocumentProvider).mockReturnValue(documentProvider);
+
+    const providers = buildPreprocessorProviders(supabase as never);
+
+    expect(createConfiguredDocumentProvider).toHaveBeenCalledWith(expect.objectContaining({
+      getSettings: expect.any(Function),
+      mineruProvider: expect.any(Function),
+      openrouterProvider: expect.any(Function),
+    }));
+    const dependencies = vi.mocked(createConfiguredDocumentProvider).mock.calls[0][0];
+    expect(dependencies.getSettings).toBeDefined();
+    expect(providers.document).toBe(documentProvider);
+    expect(providers.gemini).toBeDefined();
+  });
+
+  it("reads current scanning settings without caching them at worker startup", async () => {
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "openrouter_only",
+      modelId: "vendor/model",
+      prompt: "prompt",
+      updatedAt: "2026-08-18T00:00:00.000Z",
+      updatedBy: null,
+    });
+    const documentProvider = vi.fn().mockResolvedValue(["OCR"]);
+    vi.mocked(createConfiguredDocumentProvider).mockReturnValue(documentProvider);
+    const supabase = fakeSupabase();
+
+    const providers = buildPreprocessorProviders(supabase as never);
+    const dependencies = vi.mocked(createConfiguredDocumentProvider).mock.calls[0][0];
+    await dependencies.getSettings();
+    await dependencies.getSettings();
+
+    expect(providers.document).toBe(documentProvider);
+    expect(getScanningSettings).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(getScanningSettings).mock.calls).toHaveLength(2);
+  });
+});
+
 
 describe("import safety", () => {
   it("importing buildStorage does not trigger main startup (direct-execution guard)", async () => {

@@ -17,6 +17,7 @@ import {
   MAX_IMAGE_UPLOADS,
 } from "@/lib/attachments/validation";
 import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-fallback";
+import { createConfiguredDocumentProvider } from "@/lib/attachments/document-pipeline";
 import { processMineruBatch } from "@/lib/attachments/mineru-cloud";
 import { describeImage } from "@/lib/attachments/gemini-image-context";
 import {
@@ -947,17 +948,21 @@ export async function POST(request: Request) {
             }, ATTACHMENT_HEARTBEAT_INTERVAL_MS);
             try {
               const attachmentInputs = body.attachments.map(attachmentToInput);
+              const configuredDocumentProvider = createConfiguredDocumentProvider({
+                getSettings: () => getScanningSettings(supabase),
+                mineruProvider: (files, options = {}) => processMineruBatch(files, options),
+                openrouterProvider: (files, options) => extractDocumentsWithConfiguredModel(files, {
+                  model: options.model,
+                  signal: options.signal,
+                }),
+              });
               const combined = await runWithTimeout(
                 async (signal) => buildAttachmentContext(body.query, attachmentInputs, {
-                  mineruProvider: (files) => processMineruBatch(files, { signal }),
+                  documentProvider: (files, options = {}) => configuredDocumentProvider(files, {
+                    ...options,
+                    signal,
+                  }),
                   geminiProvider: (uri) => describeImage(uri, { signal }),
-                  documentFallbackProvider: async (files) => {
-                    const settings = await getScanningSettings(supabase);
-                    return extractDocumentsWithConfiguredModel(files, {
-                      model: settings.modelId,
-                      signal,
-                    });
-                  },
                 }),
                 {
                   deadline,

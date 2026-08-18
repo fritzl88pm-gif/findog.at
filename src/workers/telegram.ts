@@ -21,6 +21,7 @@ import {
 import { processMineruBatch } from "@/lib/attachments/mineru-cloud";
 import { describeImage } from "@/lib/attachments/gemini-image-context";
 import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-fallback";
+import { createConfiguredDocumentProvider } from "@/lib/attachments/document-pipeline";
 import {
   mintFredEmbedSession,
   readFredEmbedServerConfig,
@@ -115,6 +116,20 @@ export function buildRpc(supabase: Supabase): JobQueueRpc {
     requestCancelForChat: (params) => invokeRpc(supabase, "request_cancel_telegram_update_for_chat", params),
     checkCancelled: (params) => invokeRpc(supabase, "check_telegram_update_cancelled", params),
     enqueue: (params) => invokeRpc(supabase, "enqueue_telegram_update", params),
+  };
+}
+
+export function buildPreprocessorProviders(supabase: Supabase): AttachmentPreprocessorProviders {
+  return {
+    document: createConfiguredDocumentProvider({
+      getSettings: () => getScanningSettings(supabase),
+      mineruProvider: (files, options = {}) => processMineruBatch(files, options),
+      openrouterProvider: (files, options) => extractDocumentsWithConfiguredModel(files, {
+        model: options.model,
+        signal: options.signal,
+      }),
+    }),
+    gemini: (uri, options = {}) => describeImage(uri, options),
   };
 }
 
@@ -498,17 +513,7 @@ async function main(): Promise<void> {
     throw dbError("TELEGRAM_DB_PROBE_FAILED");
   }
 
-  const preprocessorProviders: AttachmentPreprocessorProviders = {
-    mineru: (files, opts) => processMineruBatch(files, opts ?? {}),
-    gemini: (uri, opts) => describeImage(uri, opts ?? {}),
-    documentFallback: async (files, opts) => {
-      const settings = await getScanningSettings(supabase);
-      return extractDocumentsWithConfiguredModel(files, {
-        model: settings.modelId,
-        ...(opts ?? {}),
-      });
-    },
-  };
+  const preprocessorProviders = buildPreprocessorProviders(supabase);
 
   const config: WorkerConfig = {
     rpc: buildRpc(supabase),

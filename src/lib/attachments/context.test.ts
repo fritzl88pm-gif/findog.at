@@ -212,6 +212,25 @@ describe("Attachment context builder", () => {
     })).rejects.toThrow("Dokument-Fallback lieferte eine unvollständige Antwort");
   });
 
+  it("uses a shared document provider for all non-image documents", async () => {
+    const documentProvider = vi.fn().mockResolvedValue(["First document", "Second document"]);
+    const geminiProvider = vi.fn().mockResolvedValue("Image result");
+    const result = await buildAttachmentContext("Q", [pdfInput("one.pdf"), pdfInput("two.pdf"), pngInput("photo.png")], {
+      documentProvider,
+      geminiProvider,
+    });
+
+    expect(documentProvider).toHaveBeenCalledTimes(1);
+    expect(documentProvider).toHaveBeenCalledWith([
+      expect.objectContaining({ name: "one.pdf" }),
+      expect.objectContaining({ name: "two.pdf" }),
+    ]);
+    expect(geminiProvider).toHaveBeenCalledTimes(1);
+    expect(result).toContain("First document");
+    expect(result).toContain("Second document");
+    expect(result).toContain("Image result");
+  });
+
   it("processes MinerU batch and Gemini images in a single call", async () => {
     const mineruProvider = vi.fn().mockResolvedValue(["PDF result"]);
     const geminiProvider = vi.fn().mockResolvedValueOnce("Image description");

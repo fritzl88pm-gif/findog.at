@@ -7,7 +7,7 @@ import {
   attachmentKindFromMime,
 } from "@/lib/attachments/validation";
 import { UserVisibleError } from "@/lib/errors";
-import type { MineruProvider, GeminiProvider, DocumentFallbackProvider } from "@/lib/attachments/context";
+import type { DocumentProvider, GeminiProvider } from "@/lib/attachments/context";
 
 const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024; // 20 MiB
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024; // 10 MiB
@@ -37,9 +37,8 @@ function filenameWithMimeExtension(fileName: string | undefined, mimeType: strin
 }
 
 export interface AttachmentPreprocessorProviders {
-  mineru: MineruProvider;
+  document: DocumentProvider;
   gemini: GeminiProvider;
-  documentFallback: DocumentFallbackProvider;
 }
 
 /**
@@ -141,15 +140,12 @@ export function createAttachmentPreprocessor(
         bytes: validated.bytes,
       }],
       {
-        mineruProvider: signal
-          ? (files) => providers.mineru(files, { signal })
-          : providers.mineru,
+        documentProvider: signal
+          ? (files, options = {}) => providers.document(files, { ...options, signal })
+          : providers.document,
         geminiProvider: signal
           ? (uri) => providers.gemini(uri, { signal })
           : providers.gemini,
-        documentFallbackProvider: signal
-          ? (files) => providers.documentFallback(files, { signal })
-          : providers.documentFallback,
       },
     );
 

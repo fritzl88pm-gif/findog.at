@@ -5,11 +5,26 @@ import { UserVisibleError } from "../errors";
 type ServerSupabaseClient = Pick<SupabaseClient, "from">;
 
 export type ScanningSettingsRecord = {
+  documentPipeline: DocumentPipeline;
   modelId: string;
   prompt: string;
   updatedAt: string;
   updatedBy: string | null;
 };
+
+export type DocumentPipeline =
+  | "mineru_with_openrouter_fallback"
+  | "openrouter_only";
+
+export const DEFAULT_DOCUMENT_PIPELINE: DocumentPipeline = "mineru_with_openrouter_fallback";
+export const DOCUMENT_PIPELINES = [
+  DEFAULT_DOCUMENT_PIPELINE,
+  "openrouter_only",
+] as const;
+
+export function isValidDocumentPipeline(value: unknown): value is DocumentPipeline {
+  return typeof value === "string" && DOCUMENT_PIPELINES.includes(value as DocumentPipeline);
+}
 
 export const DEFAULT_SCANNING_MODEL_ID = "google/gemini-3.5-flash";
 
@@ -79,6 +94,7 @@ function parseScanningSettingsRecord(value: unknown): ScanningSettingsRecord | n
   if (
     typeof row.model_id !== "string"
     || !row.model_id.trim()
+    || !isValidDocumentPipeline(row.document_pipeline)
     || typeof row.prompt !== "string"
     || !row.prompt.trim()
     || typeof row.updated_at !== "string"
@@ -87,6 +103,7 @@ function parseScanningSettingsRecord(value: unknown): ScanningSettingsRecord | n
     return null;
   }
   return {
+    documentPipeline: row.document_pipeline,
     modelId: row.model_id,
     prompt: row.prompt,
     updatedAt: row.updated_at,
@@ -99,7 +116,7 @@ export async function getScanningSettings(
 ): Promise<ScanningSettingsRecord> {
   const { data, error } = await supabase
     .from("scanning_settings")
-    .select("model_id,prompt,updated_at,updated_by")
+    .select("model_id,document_pipeline,prompt,updated_at,updated_by")
     .eq("id", true)
     .maybeSingle();
 
@@ -110,15 +127,23 @@ export async function getScanningSettings(
     );
   }
 
+  if (data === null) {
+    return {
+      documentPipeline: DEFAULT_DOCUMENT_PIPELINE,
+      modelId: DEFAULT_SCANNING_MODEL_ID,
+      prompt: DEFAULT_SCANNING_PROMPT,
+      updatedAt: new Date(0).toISOString(),
+      updatedBy: null,
+    };
+  }
+
   const record = parseScanningSettingsRecord(data);
   if (record) return record;
 
-  return {
-    modelId: DEFAULT_SCANNING_MODEL_ID,
-    prompt: DEFAULT_SCANNING_PROMPT,
-    updatedAt: new Date(0).toISOString(),
-    updatedBy: null,
-  };
+  throw new UserVisibleError(
+    "Die Scanning-Konfiguration ist ungültig. Bitte die Administration prüfen.",
+    503,
+  );
 }
 
 export async function updateScanningSettings(
@@ -126,7 +151,11 @@ export async function updateScanningSettings(
   userId: string,
   modelId: string,
   prompt: string,
+  documentPipeline: DocumentPipeline,
 ): Promise<ScanningSettingsRecord> {
+  if (!isValidDocumentPipeline(documentPipeline)) {
+    throw new UserVisibleError("Die Dokument-Pipeline ist ungültig.", 400);
+  }
   if (!isValidModelId(modelId)) {
     throw new UserVisibleError("Die OpenRouter-Modell-ID ist ungültig.", 400);
   }
@@ -142,12 +171,13 @@ export async function updateScanningSettings(
     .from("scanning_settings")
     .upsert({
       id: true,
+      document_pipeline: documentPipeline,
       model_id: modelId.trim(),
       prompt: prompt.trim(),
       updated_at: updatedAt,
       updated_by: userId,
     }, { onConflict: "id" })
-    .select("model_id,prompt,updated_at,updated_by")
+    .select("model_id,document_pipeline,prompt,updated_at,updated_by")
     .maybeSingle();
 
   const record = parseScanningSettingsRecord(data);

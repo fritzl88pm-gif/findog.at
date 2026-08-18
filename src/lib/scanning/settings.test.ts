@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getScanningSettings, updateScanningSettings, DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, isValidModelId } from "./settings";
+import {
+  DEFAULT_DOCUMENT_PIPELINE,
+  DEFAULT_SCANNING_MODEL_ID,
+  DEFAULT_SCANNING_PROMPT,
+  getScanningSettings,
+  isValidDocumentPipeline,
+  isValidModelId,
+  updateScanningSettings,
+} from "./settings";
 
 describe("Scanning settings resolver", () => {
   let supabase: ReturnType<typeof createMockSupabase>;
@@ -23,6 +31,7 @@ describe("Scanning settings resolver", () => {
     supabase.maybeSingle.mockResolvedValue({
       data: {
         model_id: "openai/gpt-4o",
+        document_pipeline: "openrouter_only",
         prompt: "Custom prompt text",
         updated_at: "2026-07-19T10:00:00.000Z",
         updated_by: "admin-1",
@@ -33,6 +42,7 @@ describe("Scanning settings resolver", () => {
     const result = await getScanningSettings(supabase as never);
     expect(result).toEqual({
       modelId: "openai/gpt-4o",
+      documentPipeline: "openrouter_only",
       prompt: "Custom prompt text",
       updatedAt: "2026-07-19T10:00:00.000Z",
       updatedBy: "admin-1",
@@ -45,7 +55,35 @@ describe("Scanning settings resolver", () => {
     const result = await getScanningSettings(supabase as never);
     expect(result.modelId).toBe(DEFAULT_SCANNING_MODEL_ID);
     expect(result.prompt).toBe(DEFAULT_SCANNING_PROMPT);
+    expect(result.documentPipeline).toBe(DEFAULT_DOCUMENT_PIPELINE);
     expect(result.updatedBy).toBeNull();
+    expect(supabase.select).toHaveBeenCalledWith(
+      "model_id,document_pipeline,prompt,updated_at,updated_by",
+    );
+  });
+
+  it("rejects a persisted pipeline outside the database allow-list", async () => {
+    supabase.maybeSingle.mockResolvedValue({
+      data: {
+        model_id: "openai/gpt-4o",
+        document_pipeline: "local_ocr",
+        prompt: "Custom prompt text",
+        updated_at: "2026-07-19T10:00:00.000Z",
+        updated_by: "admin-1",
+      },
+      error: null,
+    });
+
+    await expect(getScanningSettings(supabase as never)).rejects.toThrow(
+      "Die Scanning-Konfiguration ist ungültig.",
+    );
+  });
+
+  it("validates document pipeline values", () => {
+    expect(isValidDocumentPipeline(DEFAULT_DOCUMENT_PIPELINE)).toBe(true);
+    expect(isValidDocumentPipeline("openrouter_only")).toBe(true);
+    expect(isValidDocumentPipeline("local_ocr")).toBe(false);
+    expect(isValidDocumentPipeline("")).toBe(false);
   });
 
   it("throws when the database query errors", async () => {
@@ -69,6 +107,7 @@ describe("Scanning settings resolver", () => {
     supabase.maybeSingle.mockResolvedValue({
       data: {
         model_id: "anthropic/claude-sonnet-4-20250514",
+        document_pipeline: "openrouter_only",
         prompt: "New scanning prompt",
         updated_at: "2026-07-19T12:00:00.000Z",
         updated_by: "admin-1",
@@ -81,26 +120,44 @@ describe("Scanning settings resolver", () => {
       "admin-1",
       "anthropic/claude-sonnet-4-20250514",
       "New scanning prompt",
+      "openrouter_only",
     );
     expect(result.modelId).toBe("anthropic/claude-sonnet-4-20250514");
+    expect(result.documentPipeline).toBe("openrouter_only");
     expect(result.prompt).toBe("New scanning prompt");
+    expect(supabase.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      document_pipeline: "openrouter_only",
+    }), expect.anything());
+  });
+
+  it("rejects an invalid document pipeline on update", async () => {
+    await expect(
+      updateScanningSettings(
+        supabase as never,
+        "admin-1",
+        "model/x",
+        "prompt",
+        "local_ocr" as unknown as Parameters<typeof updateScanningSettings>[4],
+      ),
+    ).rejects.toThrow("Dokument-Pipeline ist ungültig.");
+    expect(supabase.upsert).not.toHaveBeenCalled();
   });
 
   it("rejects invalid model IDs on update", async () => {
     await expect(
-      updateScanningSettings(supabase as never, "admin-1", "", "prompt"),
+      updateScanningSettings(supabase as never, "admin-1", "", "prompt", DEFAULT_DOCUMENT_PIPELINE),
     ).rejects.toThrow("OpenRouter-Modell-ID ist ungültig.");
     await expect(
-      updateScanningSettings(supabase as never, "admin-1", "bad model", "prompt"),
+      updateScanningSettings(supabase as never, "admin-1", "bad model", "prompt", DEFAULT_DOCUMENT_PIPELINE),
     ).rejects.toThrow("OpenRouter-Modell-ID ist ungültig.");
   });
 
   it("rejects empty or oversized prompts on update", async () => {
     await expect(
-      updateScanningSettings(supabase as never, "admin-1", "model/x", ""),
+      updateScanningSettings(supabase as never, "admin-1", "model/x", "", DEFAULT_DOCUMENT_PIPELINE),
     ).rejects.toThrow("Scanning-Prompt ist ungültig");
     await expect(
-      updateScanningSettings(supabase as never, "admin-1", "model/x", "x".repeat(40001)),
+      updateScanningSettings(supabase as never, "admin-1", "model/x", "x".repeat(40001), DEFAULT_DOCUMENT_PIPELINE),
     ).rejects.toThrow("Scanning-Prompt ist ungültig");
   });
 });

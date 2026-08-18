@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { buildAttachmentContext } from "@/lib/attachments/context";
 import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-fallback";
+import { createConfiguredDocumentProvider } from "@/lib/attachments/document-pipeline";
 import {
   mintFredEmbedSession,
   readFredEmbedServerConfig,
@@ -42,6 +43,9 @@ vi.mock("@/lib/attachments/context", async (importOriginal) => {
 });
 vi.mock("@/lib/attachments/document-fallback", () => ({
   extractDocumentsWithConfiguredModel: vi.fn(),
+}));
+vi.mock("@/lib/attachments/document-pipeline", () => ({
+  createConfiguredDocumentProvider: vi.fn(),
 }));
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
 vi.mock("@/lib/scanning/settings", async (importOriginal) => {
@@ -212,12 +216,19 @@ describe("POST /api/fred/chat", () => {
     });
     vi.mocked(buildAttachmentContext).mockImplementation(async (question) => `${question}\n\nEXTRACTED`);
     vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "mineru_with_openrouter_fallback",
       modelId: "google/gemini-3.5-flash",
       prompt: "Configured scanning prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
       updatedBy: userId,
     });
     vi.mocked(extractDocumentsWithConfiguredModel).mockResolvedValue(["FALLBACK"]);
+    vi.mocked(createConfiguredDocumentProvider).mockImplementation(({ getSettings, openrouterProvider }) => (
+      async (files, options) => {
+        const settings = await getSettings();
+        return openrouterProvider(files, { ...(options ?? {}), model: settings.modelId });
+      }
+    ));
   });
 
   afterEach(() => {
@@ -738,20 +749,21 @@ describe("POST /api/fred/chat", () => {
     });
   });
 
-  it("uses the admin-configured model only when the MinerU document fallback is invoked", async () => {
+  it("wires document preprocessing through the shared configured provider", async () => {
     const rpc = rpcForTurn();
     const supabase = { rpc };
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase as never);
     vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "openrouter_only",
       modelId: "google/gemini-3.5-flash:online",
       prompt: "Scanning-specific prompt must not be used for Fred extraction",
       updatedAt: "2026-07-19T10:00:00.000Z",
       updatedBy: userId,
     });
     vi.mocked(buildAttachmentContext).mockImplementationOnce(async (question, attachments, options) => {
-      if (!options?.documentFallbackProvider) throw new Error("document fallback missing");
-      const fallback = await options.documentFallbackProvider(attachments as never);
-      return `${question}\n\n${fallback.join("\n")}`;
+      if (!options?.documentProvider) throw new Error("shared document provider missing");
+      const documents = await options.documentProvider(attachments as never, {});
+      return `${question}\n\n${documents.join("\n")}`;
     });
 
     const response = await POST(multipartRequest({
@@ -760,6 +772,10 @@ describe("POST /api/fred/chat", () => {
     }));
     await response.text();
 
+    const dependencies = vi.mocked(createConfiguredDocumentProvider).mock.calls[0][0];
+    expect(typeof dependencies.getSettings).toBe("function");
+    expect(typeof dependencies.mineruProvider).toBe("function");
+    expect(typeof dependencies.openrouterProvider).toBe("function");
     expect(getScanningSettings).toHaveBeenCalledWith(supabase);
     expect(extractDocumentsWithConfiguredModel).toHaveBeenCalledWith(
       [expect.objectContaining({ name: "Fallback.pdf", kind: "pdf" })],
