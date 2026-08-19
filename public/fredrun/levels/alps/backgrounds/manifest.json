@@ -1,36 +1,230 @@
 {
+  "schemaVersion": 1,
   "worldId": "alps",
-  "name": "Alpenpanorama",
-  "theme": "Austrian Alps Hiking Ascent",
-  "dimensions": {
+  "displayName": "Alpenpanorama",
+  "generation": {
+    "provider": "openai-codex",
+    "model": "gpt-image-2-high"
+  },
+  "runtime": {
+    "format": "webp",
     "width": 2172,
-    "height": 665
+    "height": 665,
+    "quality": 82,
+    "scoreAnchors": [
+      0,
+      500,
+      1000,
+      1500
+    ],
+    "crossfadeScoreDuration": 250,
+    "transition": "smoothstep crossfade over the final 250 score points before each next anchor",
+    "finalState": "hold plateau from score 1500 onward",
+    "loop": "alternating mirrored horizontal tiles",
+    "fallback": {
+      "file": "fallback.webp",
+      "runtimePath": "/fredrun/levels/alps/backgrounds/fallback.webp",
+      "sha256": "70a073aa31779601073a18ae8cf1825c40415bb881b739549db02a2af18d2481",
+      "bytes": 266016,
+      "width": 2172,
+      "height": 665,
+      "format": "webp"
+    },
+    "effects": {
+      "animatedSunrays": {
+        "renderer": "canvas-2d",
+        "reducedMotion": "static rays with animated particles disabled",
+        "worldScope": "alps only"
+      }
+    },
+    "composition": "four cheerful Alpine scenes with a clear lower running lane",
+    "processing": {
+      "script": "scripts/prepare-fredrun-alps-backgrounds.mjs",
+      "crop": "wide cover crop anchored to the lower running lane",
+      "resize": {
+        "width": 2172,
+        "height": 665,
+        "fit": "cover",
+        "position": "south",
+        "kernel": "lanczos3"
+      },
+      "sharpVersion": "0.34.5",
+      "libvipsVersion": "8.17.3"
+    }
+  },
+  "previews": {
+    "directory": "/opt/data/tmp/fredrun-alps-qa",
+    "contactSheet": {
+      "file": "/opt/data/tmp/fredrun-alps-qa/alps-contact-sheet.png",
+      "sha256": "71d7cba365621587bf63f0c2bf9cc454e605f3d88bbe6c7dce4ea5f030aee0b3",
+      "bytes": 3545856,
+      "width": 2172,
+      "height": 750
+    },
+    "threeTile": [
+      {
+        "id": "meadow",
+        "file": "/opt/data/tmp/fredrun-alps-qa/meadow-three-tile-preview.png",
+        "sha256": "fc73202579661163ee6c79c7e23d39efd10a111f9363e5cdc6d17eef8aa41c24",
+        "bytes": 713211,
+        "width": 2172,
+        "height": 221
+      },
+      {
+        "id": "lake",
+        "file": "/opt/data/tmp/fredrun-alps-qa/lake-three-tile-preview.png",
+        "sha256": "ccb0b5280d35ba1886d11718432df540a3ac760bf8ad4e29611406403204f838",
+        "bytes": 713248,
+        "width": 2172,
+        "height": 221
+      },
+      {
+        "id": "peaks",
+        "file": "/opt/data/tmp/fredrun-alps-qa/peaks-three-tile-preview.png",
+        "sha256": "e2d50e63a9ad01141e8c252af275f21ac97e9853def4062099ecb9fddcc33555",
+        "bytes": 687104,
+        "width": 2172,
+        "height": 221
+      },
+      {
+        "id": "plateau",
+        "file": "/opt/data/tmp/fredrun-alps-qa/plateau-three-tile-preview.png",
+        "sha256": "c1e4c3c81b8b9ff2e9b870d7c352364e01368759cf4dbad729751f1aaa89f08f",
+        "bytes": 698285,
+        "width": 2172,
+        "height": 221
+      }
+    ],
+    "midpoints": [
+      {
+        "from": "meadow",
+        "to": "lake",
+        "file": "/opt/data/tmp/fredrun-alps-qa/meadow-lake-midpoint-preview.png",
+        "sha256": "5ed3df93ee161f80d0967b5160335d69428f89846d3ce959774c0dc302a37d73",
+        "bytes": 1061360,
+        "width": 2172,
+        "height": 221
+      },
+      {
+        "from": "lake",
+        "to": "peaks",
+        "file": "/opt/data/tmp/fredrun-alps-qa/lake-peaks-midpoint-preview.png",
+        "sha256": "e1288927cba7e4516346f7d618cd3b38277a1c8d7e33c35479efce3190e1741d",
+        "bytes": 1218580,
+        "width": 2172,
+        "height": 221
+      },
+      {
+        "from": "peaks",
+        "to": "plateau",
+        "file": "/opt/data/tmp/fredrun-alps-qa/peaks-plateau-midpoint-preview.png",
+        "sha256": "ecc0c3efbe821a47f80be715ef86277c0a40520ed18735d1be20bfdb1a9a3aea",
+        "bytes": 1210327,
+        "width": 2172,
+        "height": 221
+      }
+    ]
   },
   "stages": [
     {
       "id": "meadow",
-      "source": "/fredrun/levels/alps/backgrounds/meadow.webp",
+      "label": "1. Tal & Almwiese",
       "anchorScore": 0,
-      "label": "1. Tal & Almwiese"
+      "source": {
+        "path": "/opt/data/generated-images/images/2026/08/20260819-041425_fredrun-alpenpanorama-almwiese-anchor_gpt-image-2-high_openai-codex_a9a00814.png",
+        "sha256": "a9a0081415f670184834fd4083d37c3b02c3ebfb498311eeafa7f669b64f5020",
+        "bytes": 2497644,
+        "width": 1774,
+        "height": 887
+      },
+      "generation": {
+        "provider": "openai-codex",
+        "model": "gpt-image-2-high"
+      },
+      "output": {
+        "file": "meadow.webp",
+        "runtimePath": "/fredrun/levels/alps/backgrounds/meadow.webp",
+        "sha256": "70a073aa31779601073a18ae8cf1825c40415bb881b739549db02a2af18d2481",
+        "bytes": 266016,
+        "width": 2172,
+        "height": 665,
+        "format": "webp"
+      }
     },
     {
       "id": "lake",
-      "source": "/fredrun/levels/alps/backgrounds/lake.webp",
+      "label": "2. Zirbenwald & Bergsee",
       "anchorScore": 500,
-      "label": "2. Zirbenwald & Bergsee"
+      "source": {
+        "path": "/opt/data/generated-images/images/2026/08/20260819-041425_fredrun-alpenpanorama-bergsee_gpt-image-2-high_openai-codex_47ba45db.png",
+        "sha256": "47ba45db4b754952add9048e6c99170d4dac9a954e6d5e37b333131c1229b0fe",
+        "bytes": 2494395,
+        "width": 1774,
+        "height": 887
+      },
+      "generation": {
+        "provider": "openai-codex",
+        "model": "gpt-image-2-high"
+      },
+      "output": {
+        "file": "lake.webp",
+        "runtimePath": "/fredrun/levels/alps/backgrounds/lake.webp",
+        "sha256": "51edae6eb7db34506df6df5b58c94b76a2c0c47361901557d8c3ddc4b6610822",
+        "bytes": 283898,
+        "width": 2172,
+        "height": 665,
+        "format": "webp"
+      }
     },
     {
       "id": "peaks",
-      "source": "/fredrun/levels/alps/backgrounds/peaks.webp",
+      "label": "3. Hochalm & Felsregion",
       "anchorScore": 1000,
-      "label": "3. Hochalm & Felsregion"
+      "source": {
+        "path": "/opt/data/generated-images/images/2026/08/20260819-041425_fredrun-alpenpanorama-hochalm_gpt-image-2-high_openai-codex_ddc976aa.png",
+        "sha256": "ddc976aab3dac233edf592a093f357dda9e009571467943ba06c21adb5bc3712",
+        "bytes": 2499459,
+        "width": 1983,
+        "height": 793
+      },
+      "generation": {
+        "provider": "openai-codex",
+        "model": "gpt-image-2-high"
+      },
+      "output": {
+        "file": "peaks.webp",
+        "runtimePath": "/fredrun/levels/alps/backgrounds/peaks.webp",
+        "sha256": "68a992e9b2cfd88d847eaee1268fe62353af16443c9d5370fd7f329ff9d2a137",
+        "bytes": 238422,
+        "width": 2172,
+        "height": 665,
+        "format": "webp"
+      }
     },
     {
       "id": "plateau",
-      "source": "/fredrun/levels/alps/backgrounds/plateau.webp",
+      "label": "4. Gipfelgrat & Gipfelkreuz",
       "anchorScore": 1500,
-      "label": "4. Gipfelgrat & Gipfelkreuz"
+      "source": {
+        "path": "/opt/data/generated-images/images/2026/08/20260819-041425_fredrun-alpenpanorama-gipfelplateau_gpt-image-2-high_openai-codex_22c45ba3.png",
+        "sha256": "22c45ba3ea06fbf23ac29618d16d496e1f14f6f3fc47f92247dd833511f39554",
+        "bytes": 2236663,
+        "width": 1774,
+        "height": 887
+      },
+      "generation": {
+        "provider": "openai-codex",
+        "model": "gpt-image-2-high"
+      },
+      "output": {
+        "file": "plateau.webp",
+        "runtimePath": "/fredrun/levels/alps/backgrounds/plateau.webp",
+        "sha256": "b34f1a3708481ada8f969d013c958d8f866754bd86ac34bba65b9b8aef8db9f1",
+        "bytes": 214830,
+        "width": 2172,
+        "height": 665,
+        "format": "webp"
+      }
     }
-  ],
-  "fallback": "/fredrun/levels/alps/backgrounds/fallback.webp"
+  ]
 }
