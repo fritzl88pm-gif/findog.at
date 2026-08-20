@@ -5389,12 +5389,14 @@ textarea:focus {
   grid-template-columns: minmax(250px, 0.8fr) minmax(280px, 1fr);
   gap: 20px;
   align-items: start;
+  min-width: 0;
 }
 
 .admin-system-prompt-card,
 .admin-model-settings-card {
   margin-bottom: 20px;
   padding: 22px;
+  min-width: 0;
 }
 
 .admin-tabs {
@@ -5402,6 +5404,13 @@ textarea:focus {
   gap: 0;
   margin-bottom: 20px;
   border-bottom: 2px solid var(--border-color);
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  min-width: 0;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scroll-snap-type: x proximity;
 }
 
 .admin-tab-button {
@@ -5415,6 +5424,8 @@ textarea:focus {
   font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
+  scroll-snap-align: start;
   transition: var(--transition);
 }
 
@@ -5439,11 +5450,22 @@ textarea:focus {
   font-size: 0.82rem;
   line-height: 1.55;
   tab-size: 2;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.admin-model-hint {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
 }
 
 .admin-model-settings-list {
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
 .admin-model-global-controls {
@@ -5453,11 +5475,13 @@ textarea:focus {
   border-radius: 8px;
   padding: 16px;
   background: rgba(40, 111, 156, 0.035);
+  min-width: 0;
 }
 
 .admin-model-image-assignments {
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
 .admin-model-image-assignment {
@@ -5465,6 +5489,7 @@ textarea:focus {
   grid-template-columns: 32px minmax(160px, 0.8fr) minmax(180px, 1fr);
   gap: 10px;
   align-items: center;
+  min-width: 0;
 }
 
 .admin-model-image-assignment img,
@@ -5488,6 +5513,7 @@ textarea:focus {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 14px;
+  min-width: 0;
 }
 
 .admin-model-toggle {
@@ -5499,6 +5525,7 @@ textarea:focus {
 
 .admin-model-toggle input {
   margin-top: 4px;
+  flex-shrink: 0;
 }
 
 .admin-model-toggle span {
@@ -5511,6 +5538,7 @@ textarea:focus {
 .admin-model-no-reasoning {
   color: var(--muted);
   font-size: 0.8rem;
+  overflow-wrap: break-word;
 }
 
 .admin-model-reasoning {
@@ -5520,26 +5548,29 @@ textarea:focus {
 .admin-model-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
 }
 
 .admin-openai-compatible-section {
   margin-top: 1.5rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   border-radius: 0.5rem;
   padding: 0.75rem;
+  min-width: 0;
 }
 
 .admin-openai-compatible-summary {
   cursor: pointer;
   font-weight: 600;
   font-size: 0.9rem;
-  color: var(--text-muted);
+  color: var(--muted);
   padding: 0.25rem 0;
   user-select: none;
 }
 
 .admin-openai-compatible-summary:hover {
-  color: var(--text);
+  color: var(--ink);
 }
 
 .admin-openai-compatible-create-form {
@@ -5547,6 +5578,7 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  min-width: 0;
 }
 
 .admin-openai-compatible-create-form .field-group {
@@ -5558,24 +5590,24 @@ textarea:focus {
 .admin-openai-compatible-create-form .field-group label {
   font-size: 0.8rem;
   font-weight: 500;
-  color: var(--text-muted);
+  color: var(--muted);
 }
 
 .admin-openai-compatible-create-form input,
 .admin-openai-compatible-create-form select {
   padding: 0.4rem 0.6rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   border-radius: 0.375rem;
   font-size: 0.875rem;
-  background: var(--background);
-  color: var(--text);
+  background: var(--bg-surface);
+  color: var(--ink);
 }
 
 .admin-openai-compatible-create-form input:focus,
 .admin-openai-compatible-create-form select:focus {
   outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 2px var(--primary-alpha);
+  border-color: var(--bmf-blue);
+  box-shadow: 0 0 0 2px rgba(40, 111, 156, 0.15);
 }
 
 .admin-openai-compatible-model-list {
@@ -5583,6 +5615,7 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  min-width: 0;
 }
 
 .admin-openai-compatible-model {
@@ -5590,15 +5623,17 @@ textarea:focus {
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.75rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   border-radius: 0.5rem;
+  min-width: 0;
 }
 
 .admin-openai-compatible-model small {
   display: block;
-  color: var(--text-muted);
+  color: var(--muted);
   margin-top: 0.2rem;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .admin-openai-compatible-actions {
@@ -5606,17 +5641,20 @@ textarea:focus {
   align-items: center;
   justify-content: flex-end;
   gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .admin-create-user-card,
 .admin-user-list-card,
 .admin-user-profile-card {
   padding: 22px;
+  min-width: 0;
 }
 
 .admin-create-user-form {
   display: grid;
   gap: 14px;
+  min-width: 0;
 }
 
 .admin-create-user-form .primary-button {
@@ -5625,6 +5663,7 @@ textarea:focus {
 
 .admin-user-profile-card {
   grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .admin-user-list,
@@ -5634,11 +5673,12 @@ textarea:focus {
   margin: 0;
   padding: 0;
   list-style: none;
+  min-width: 0;
 }
 
 .admin-user-list {
   max-height: 360px;
-  overflow: auto;
+  overflow-y: auto;
 }
 
 .admin-user-list button {
@@ -5651,6 +5691,13 @@ textarea:focus {
   background: var(--bg-surface);
   color: var(--bmf-blue-deep);
   text-align: left;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.admin-user-list button strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .admin-user-list button:hover:not(:disabled),
@@ -5665,6 +5712,7 @@ textarea:focus {
 .admin-empty-state {
   color: var(--muted);
   font-size: 0.8rem;
+  overflow-wrap: break-word;
 }
 
 .admin-profile-metadata {
@@ -5672,6 +5720,7 @@ textarea:focus {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin: 0;
+  min-width: 0;
 }
 
 .admin-profile-metadata > div {
@@ -5690,6 +5739,7 @@ textarea:focus {
 
 .admin-profile-metadata dd {
   overflow-wrap: anywhere;
+  word-break: break-word;
   margin: 5px 0 0;
   color: var(--bmf-blue-deep);
   font-weight: 700;
@@ -5698,6 +5748,7 @@ textarea:focus {
 .admin-request-history {
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
 .admin-request-history h3 {
@@ -5708,19 +5759,22 @@ textarea:focus {
 
 .admin-request-history ol {
   max-height: 440px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .admin-request-history li {
   border-left: 3px solid var(--accent-yellow);
   background: rgba(40, 111, 156, 0.04);
   padding: 12px 14px;
+  min-width: 0;
 }
 
 .admin-request-history p {
   margin: 5px 0 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  word-break: break-word;
   line-height: 1.5;
 }
 
@@ -5730,10 +5784,12 @@ textarea:focus {
   gap: 10px;
   border-top: 1px solid var(--border-color);
   padding-top: 18px;
+  min-width: 0;
 }
 
 .admin-feedback-card {
   padding: 22px;
+  min-width: 0;
 }
 
 .admin-feedback-heading {
@@ -5741,6 +5797,7 @@ textarea:focus {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  min-width: 0;
 }
 
 .admin-feedback-list {
@@ -5749,6 +5806,7 @@ textarea:focus {
   margin: 0;
   padding: 0;
   list-style: none;
+  min-width: 0;
 }
 
 .admin-feedback-list > li {
@@ -5759,6 +5817,7 @@ textarea:focus {
   border-radius: 10px;
   padding: 16px;
   background: var(--bg-surface);
+  min-width: 0;
 }
 
 .admin-feedback-list header {
@@ -5766,6 +5825,7 @@ textarea:focus {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  min-width: 0;
 }
 
 .admin-feedback-list header > div {
@@ -5776,6 +5836,8 @@ textarea:focus {
 
 .admin-feedback-list header strong {
   color: var(--bmf-blue-deep);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .admin-feedback-list header small,
@@ -5783,12 +5845,14 @@ textarea:focus {
   color: var(--muted);
   font-size: 0.76rem;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .admin-feedback-report {
   border-radius: 8px;
   padding: 12px 14px;
   background: rgba(198, 40, 40, 0.06);
+  min-width: 0;
 }
 
 .admin-feedback-report span {
@@ -5803,12 +5867,14 @@ textarea:focus {
   margin: 5px 0 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  word-break: break-word;
   line-height: 1.55;
 }
 
 .admin-feedback-list details {
   border-top: 1px solid var(--border-color);
   padding-top: 10px;
+  min-width: 0;
 }
 
 .admin-feedback-list summary {
@@ -5822,12 +5888,14 @@ textarea:focus {
   display: grid;
   gap: 12px;
   margin-top: 12px;
+  min-width: 0;
 }
 
 .admin-feedback-context section {
   border-radius: 8px;
   padding: 12px 14px;
   background: rgba(40, 111, 156, 0.045);
+  min-width: 0;
 }
 
 .admin-feedback-context h3 {
@@ -5841,23 +5909,90 @@ textarea:focus {
   color: #8d2020;
 }
 
+@media (max-width: 960px) {
+  .admin-user-management {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 760px) {
   .admin-user-management,
-  .admin-profile-metadata,
   .admin-model-setting {
     grid-template-columns: 1fr;
   }
 
-  .admin-profile-actions {
-    align-items: stretch;
-    flex-direction: column;
+  .admin-profile-metadata {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .admin-profile-actions,
   .admin-feedback-heading,
   .admin-feedback-list header,
   .feedback-inline-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .admin-model-image-assignment {
+    grid-template-columns: 32px 1fr;
+  }
+
+  .admin-model-image-assignment select {
+    grid-column: 1 / -1;
+  }
+
+  .admin-model-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .admin-model-actions > button,
+  .admin-model-actions > .primary-button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .admin-tab-button {
+    padding: 8px 12px;
+    font-size: 0.84rem;
+  }
+
+  .admin-create-user-card,
+  .admin-user-list-card,
+  .admin-user-profile-card,
+  .admin-system-prompt-card,
+  .admin-feedback-card {
+    padding: 14px;
+    border-radius: var(--radius-md);
+  }
+
+  .admin-profile-metadata {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-create-user-form .primary-button,
+  .admin-profile-actions button,
+  .admin-feedback-heading button {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .admin-system-prompt-textarea {
+    min-height: 320px;
+  }
+
+  .admin-openai-compatible-model {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .admin-openai-compatible-actions {
+    justify-content: stretch;
+  }
+
+  .admin-openai-compatible-actions button {
+    width: 100%;
   }
 }
 
@@ -5866,6 +6001,7 @@ textarea:focus {
 .admin-personality-section {
   display: grid;
   gap: 18px;
+  min-width: 0;
 }
 
 .admin-personality-create-button {
@@ -5879,6 +6015,11 @@ textarea:focus {
   margin: 0;
   padding: 0;
   list-style: none;
+  min-width: 0;
+}
+
+.admin-personality-list > li {
+  min-width: 0;
 }
 
 .admin-personality-list > li > button {
@@ -5891,6 +6032,7 @@ textarea:focus {
   font-size: 0.88rem;
   font-weight: 650;
   cursor: pointer;
+  overflow-wrap: break-word;
   transition: var(--transition);
 }
 
@@ -5905,6 +6047,7 @@ textarea:focus {
 .admin-personality-form {
   max-width: 680px;
   padding: 22px;
+  min-width: 0;
 }
 
 @media (max-width: 760px) {
@@ -5919,6 +6062,19 @@ textarea:focus {
 
   .admin-personality-form {
     padding: 16px;
+  }
+}
+
+@media (max-width: 520px) {
+  .admin-personality-create-button,
+  .admin-personality-form button {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .admin-personality-form {
+    padding: 14px;
+    border-radius: var(--radius-md);
   }
 }
 
@@ -9769,6 +9925,12 @@ textarea:focus {
   margin-top: 6px;
 }
 
+@media (max-width: 960px) {
+  .admin-downloads-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 900px) {
   .downloads-layout,
   .admin-downloads-grid {
@@ -9787,6 +9949,18 @@ textarea:focus {
     width: auto;
     gap: 10px;
     padding: 8px 10px;
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-downloads-heading,
+  .admin-downloads-document-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-downloads-inline-fields {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -9835,17 +10009,32 @@ textarea:focus {
   }
 }
 
+@media (max-width: 520px) {
+  .admin-downloads-categories-card,
+  .admin-downloads-upload-card,
+  .admin-downloads-documents-card {
+    padding: 14px;
+    border-radius: var(--radius-md);
+  }
+
+  .admin-downloads-form .primary-button,
+  .admin-downloads-heading button,
+  .admin-downloads-document-list li > button {
+    width: 100%;
+    justify-self: stretch;
+  }
+}
+
 /* OmniRoute administration */
 .admin-omniroute-panel {
   display: grid;
   gap: 20px;
+  min-width: 0;
 }
 
 .admin-omniroute-card {
   gap: 22px;
-  border-top-color: var(--accent-yellow);
-  background: #102938;
-  color: #eaf3f8;
+  min-width: 0;
 }
 
 .admin-omniroute-heading {
@@ -9853,19 +10042,21 @@ textarea:focus {
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
+  min-width: 0;
 }
 
 .admin-omniroute-heading h2,
 .admin-omniroute-section h3,
 .admin-omniroute-health h4 {
   margin: 0;
-  color: #ffffff;
+  color: var(--bmf-blue-deep);
 }
 
 .admin-omniroute-heading p {
   margin: 7px 0 0;
-  color: #9fb8c8;
+  color: var(--muted);
   font-size: 0.88rem;
+  line-height: 1.5;
 }
 
 .admin-omniroute-controls {
@@ -9873,66 +10064,78 @@ textarea:focus {
   grid-template-columns: auto minmax(150px, 1fr);
   gap: 8px 10px;
   align-items: center;
+  min-width: 0;
 }
 
 .admin-omniroute-controls label {
-  color: #9fb8c8;
+  color: var(--bmf-blue-deep);
   font-size: 0.78rem;
   font-weight: 700;
 }
 
 .admin-omniroute-controls select {
   min-height: 40px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   padding: 0 10px;
-  background: #173444;
-  color: #eaf3f8;
+  background: #fafbfc;
+  color: var(--ink);
+  transition: var(--transition);
+}
+
+.admin-omniroute-controls select:hover {
+  border-color: var(--border-hover);
+  background-color: var(--bg-surface);
+}
+
+.admin-omniroute-controls select:focus {
+  border-color: var(--border-focus);
+  background-color: var(--bg-surface);
+  box-shadow: 0 0 0 3px rgba(40, 111, 156, 0.12);
+  outline: none;
 }
 
 .admin-omniroute-controls .compact-button {
   grid-column: 1 / -1;
   justify-self: end;
-  border-color: rgba(255, 212, 0, 0.5);
-  background: rgba(255, 212, 0, 0.08);
-  color: #ffd400;
 }
 
 .admin-omniroute-card .error-box,
 .admin-omniroute-card .notice-box {
   margin: 0;
-  border-color: rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.05);
-  color: #eaf3f8;
 }
 
 .admin-omniroute-updated {
   margin: 0;
-  color: #9fb8c8;
+  color: var(--muted);
   font-size: 0.82rem;
 }
 
 .admin-omniroute-section {
   display: grid;
   gap: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   padding: 18px;
-  background: rgba(255, 255, 255, 0.025);
+  background: rgba(40, 111, 156, 0.025);
+  min-width: 0;
 }
 
 .admin-omniroute-section h3 {
   font-size: 1.05rem;
+  font-weight: 700;
 }
 
 .admin-omniroute-quota {
   display: grid;
   gap: 18px;
+  min-width: 0;
 }
 
 .admin-omniroute-progress {
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .admin-omniroute-progress-label {
@@ -9940,26 +10143,28 @@ textarea:focus {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: #9fb8c8;
+  color: var(--muted);
   font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .admin-omniroute-progress-label strong {
-  color: #ffd400;
+  color: var(--bmf-blue-deep);
+  font-weight: 700;
 }
 
 .admin-omniroute-progress > div[role="progressbar"] {
   overflow: hidden;
   height: 12px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(40, 111, 156, 0.12);
 }
 
 .admin-omniroute-progress span {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #ffd400, #79c2ff);
+  background: linear-gradient(90deg, var(--bmf-blue), var(--bmf-blue-dark));
   transition: width 0.25s ease-out;
 }
 
@@ -9968,18 +10173,19 @@ textarea:focus {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin: 0;
+  min-width: 0;
 }
 
 .admin-omniroute-metric {
   min-width: 0;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   padding: 12px;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--bg-surface);
 }
 
 .admin-omniroute-metric dt {
-  color: #9fb8c8;
+  color: var(--muted);
   font-size: 0.72rem;
   font-weight: 750;
   text-transform: uppercase;
@@ -9987,8 +10193,9 @@ textarea:focus {
 
 .admin-omniroute-metric dd {
   overflow-wrap: anywhere;
+  word-break: break-word;
   margin: 5px 0 0;
-  color: #ffffff;
+  color: var(--bmf-blue-deep);
   font-size: 0.95rem;
   font-weight: 700;
 }
@@ -9996,36 +10203,43 @@ textarea:focus {
 .admin-omniroute-metric small {
   display: block;
   margin-top: 4px;
-  color: #9fb8c8;
+  color: var(--muted);
   font-size: 0.74rem;
+  overflow-wrap: anywhere;
 }
 
 .admin-omniroute-table-wrap {
   overflow-x: auto;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  max-width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  -webkit-overflow-scrolling: touch;
 }
 
 .admin-omniroute-table-wrap table {
   width: 100%;
-  min-width: 720px;
+  min-width: 640px;
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
 }
 
 .admin-omniroute-table-wrap caption {
   padding: 10px 12px;
-  color: #9fb8c8;
+  color: var(--muted);
   font-size: 0.78rem;
   text-align: left;
+  font-weight: 600;
 }
 
 .admin-omniroute-table-wrap th,
 .admin-omniroute-table-wrap td {
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  border-top: 1px solid var(--border-color);
   padding: 10px 12px;
   text-align: right;
   white-space: nowrap;
+  font-size: 0.85rem;
 }
 
 .admin-omniroute-table-wrap thead th,
@@ -10034,46 +10248,63 @@ textarea:focus {
 }
 
 .admin-omniroute-table-wrap thead th {
-  color: #9fb8c8;
+  color: var(--muted);
   font-size: 0.72rem;
   text-transform: uppercase;
+  font-weight: 750;
+  background: rgba(40, 111, 156, 0.04);
 }
 
-.admin-omniroute-table-wrap tbody th,
+.admin-omniroute-table-wrap tbody th {
+  color: var(--bmf-blue-deep);
+  font-weight: 650;
+}
+
 .admin-omniroute-table-wrap td {
-  color: #eaf3f8;
+  color: var(--ink);
 }
 
 .admin-omniroute-provider-row {
-  background: rgba(40, 111, 156, 0.12);
+  background: rgba(40, 111, 156, 0.06);
+  font-weight: 600;
 }
 
 .admin-omniroute-health-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+  min-width: 0;
 }
 
 .admin-omniroute-health {
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  min-width: 0;
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   padding: 14px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-surface);
+}
+
+.admin-omniroute-health h4 {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+  font-weight: 700;
 }
 
 .admin-omniroute-health dl {
   display: grid;
   gap: 8px;
   margin: 0;
+  min-width: 0;
 }
 
 .admin-omniroute-health dl > div {
   display: grid;
   gap: 3px;
+  min-width: 0;
 }
 
 .admin-omniroute-health dt {
-  color: #9fb8c8;
+  color: var(--muted);
   font-size: 0.72rem;
   font-weight: 750;
   text-transform: uppercase;
@@ -10081,15 +10312,17 @@ textarea:focus {
 
 .admin-omniroute-health dd {
   overflow-wrap: anywhere;
+  word-break: break-word;
   margin: 0;
-  color: #ffffff;
+  color: var(--ink);
   font-size: 0.88rem;
   font-weight: 650;
 }
 
 .admin-omniroute-model-health {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--border-color);
   padding-top: 8px;
+  margin-top: 4px;
 }
 
 @media (max-width: 960px) {
@@ -10099,6 +10332,12 @@ textarea:focus {
 
   .admin-omniroute-health-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-omniroute-section {
+    padding: 16px;
   }
 }
 
@@ -10118,5 +10357,26 @@ textarea:focus {
 
   .admin-omniroute-metrics {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .admin-omniroute-card {
+    padding: 14px;
+    border-radius: var(--radius-md);
+  }
+
+  .admin-omniroute-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-omniroute-section {
+    padding: 12px;
+  }
+
+  .admin-omniroute-table-wrap th,
+  .admin-omniroute-table-wrap td {
+    padding: 8px 10px;
+    font-size: 0.8rem;
   }
 }
