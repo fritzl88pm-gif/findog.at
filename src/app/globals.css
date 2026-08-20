@@ -6571,7 +6571,9 @@ textarea:focus {
   display: none;
 }
 
-.fred-streaming-preview-text:not(:empty) + .fred-thinking-indicator {
+.fred-streaming-preview:not(.is-status)
+  .fred-streaming-preview-text:not(:empty)
+  + .fred-thinking-indicator {
   display: none;
 }
 

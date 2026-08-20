@@ -99,6 +99,17 @@ describe("Fred native Findog UI", () => {
     );
   });
 
+  it("keeps the sniff animation visible while uploaded documents are analyzed", () => {
+    expect(routeSource).toContain('label: "Anhänge werden analysiert …"');
+    expect(viewSource).toContain('previewContainerRef.current?.classList.add("is-status")');
+    expect(viewSource.match(/previewContainerRef\.current\?\.classList\.remove\("is-status"\)/gu))
+      .toHaveLength(2);
+    expect(viewSource).toContain('className="fred-streaming-preview" ref={previewContainerRef}');
+    expect(cssSource).toMatch(
+      /\.fred-streaming-preview:not\(\.is-status\)[\s\S]*?\.fred-streaming-preview-text:not\(:empty\)[\s\S]*?\+ \.fred-thinking-indicator \{[\s\S]*?display: none;/u,
+    );
+  });
+
   it("uses Findog message bubbles, rich answers and the native composer for live responses", () => {
     expect(viewSource).toContain('className={`message ${message.role}');
     expect(viewSource).toContain("renderAssistantContent(message.content)");

@@ -260,6 +260,7 @@ const StreamingAssistantPreview = forwardRef<
     onGrowth: () => void;
   }
 >(function StreamingAssistantPreview({ agentName, onGrowth }, ref) {
+  const previewContainerRef = useRef<HTMLDivElement>(null);
   const textContainerRef = useRef<HTMLSpanElement>(null);
   const textNodeRef = useRef<Text | null>(null);
   const bufferRef = useRef<ReturnType<typeof createStreamingTextBuffer> | null>(null);
@@ -299,6 +300,7 @@ const StreamingAssistantPreview = forwardRef<
     append: (text) => {
       if (showingStatusRef.current) {
         showingStatusRef.current = false;
+        previewContainerRef.current?.classList.remove("is-status");
         bufferRef.current?.replace(text);
         return;
       }
@@ -306,10 +308,12 @@ const StreamingAssistantPreview = forwardRef<
     },
     replace: (text) => {
       showingStatusRef.current = false;
+      previewContainerRef.current?.classList.remove("is-status");
       bufferRef.current?.replace(text);
     },
     setStatus: (text) => {
       showingStatusRef.current = true;
+      previewContainerRef.current?.classList.add("is-status");
       bufferRef.current?.replace(text);
     },
     flush: () => bufferRef.current?.flush(),
@@ -317,7 +321,7 @@ const StreamingAssistantPreview = forwardRef<
   }), []);
 
   return (
-    <div className="fred-streaming-preview">
+    <div className="fred-streaming-preview" ref={previewContainerRef}>
       <span className="message-body fred-streaming-preview-text" ref={textContainerRef} />
       <FredSniffingIndicator agentName={agentName} />
     </div>
