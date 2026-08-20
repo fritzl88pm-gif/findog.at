@@ -4077,7 +4077,7 @@ export default function Home() {
                 onClick={() => setAdminTab("omniroute")}
                 onKeyDown={(e) => handleAdminTabKeyDown(e, "omniroute")}
               >
-                Gemini &amp; OmniRoute
+                Codex, Gemini &amp; OmniRoute
               </button>
               <button
                 id="admin-tab-personalities"

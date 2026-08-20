@@ -17,10 +17,11 @@ import type {
 export const OMNIROUTE_USAGE_CACHE_TTL_MS = 5 * 60 * 1_000;
 export const OMNIROUTE_USAGE_TIMEOUT_MS = 10_000;
 const MAX_OMNIROUTE_RESPONSE_BYTES = 2 * 1_024 * 1_024;
-export const OMNIROUTE_GEMINI_COMBO_NAME = "omniroute-gemini-3.7-flash-high";
+export const OMNIROUTE_LUNA_MAX_COMBO_NAME = "omniroute-luna-max-gemini-3.7-flash-high";
 
 type JsonRecord = Record<string, unknown>;
-type ProviderKind = "gemini" | "openrouter";
+type ProviderKind = "codex" | "gemini" | "openrouter";
+type ProviderConnectionMap = Map<string, ProviderKind>;
 
 type InternalRouteTarget = {
   model: string;
@@ -76,8 +77,16 @@ function integer(value: unknown): number | null {
 }
 
 function percent(value: unknown): number | null {
-  const number = nonnegativeNumber(value);
-  return number === null ? null : Math.min(100, number);
+  let candidate: number | null;
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (text.length === 0 || text.length > 16 || !/^\d+(?:\.\d+)?$/u.test(text)) return null;
+    candidate = Number(text);
+    if (!Number.isFinite(candidate)) return null;
+  } else {
+    candidate = nonnegativeNumber(value);
+  }
+  return candidate === null ? null : Math.min(100, candidate);
 }
 
 function timestamp(value: unknown): string | null {
@@ -110,12 +119,14 @@ function modelText(value: unknown): string | null {
 
 function providerKind(value: unknown): ProviderKind | null {
   const text = typeof value === "string" ? value.toLowerCase() : "";
+  if (text.includes("codex")) return "codex";
   if (text.includes("antigravity") || text.includes("agy") || text.includes("gemini")) return "gemini";
   if (text.includes("openrouter")) return "openrouter";
   return null;
 }
 
 function publicProvider(kind: ProviderKind): string {
+  if (kind === "codex") return "OpenAI Codex";
   return kind === "gemini" ? "Gemini / Antigravity" : "OpenRouter";
 }
 
@@ -141,58 +152,133 @@ function normalizeQuota(
 ): OmniRouteQuotaSnapshot | null {
   const quota = recordOf(value);
   if (!quota) return null;
-  const quotas = quota as JsonRecord;
-  const unlimited = quotas.unlimited === true;
-  const used = nonnegativeNumber(quotas.used);
-  const total = nonnegativeNumber(quotas.total);
-  const reportedRemaining = percent(quotas.remainingPercentage);
-  const remainingPercent = reportedRemaining
-    ?? (used !== null && total !== null && total > 0 ? Math.max(0, Math.min(100, ((total - used) / total) * 100)) : null);
-  if (!unlimited && used === null && total === null && remainingPercent === null) return null;
+  const unlimited = quota.unlimited === true;
+  const used = nonnegativeNumber(quota.used);
+  const total = unlimited ? null : nonnegativeNumber(quota.total);
+  const reportedRemaining = unlimited ? null : nonnegativeNumber(quota.remaining);
+  const reportedRemainingPercent = percent(quota.remainingPercentage);
+  const calculatedRemainingPercent = reportedRemaining !== null && total !== null && total > 0
+    ? (reportedRemaining / total) * 100
+    : used !== null && total !== null && total > 0
+      ? ((total - used) / total) * 100
+      : null;
+  const remainingPercent = reportedRemainingPercent
+    ?? (calculatedRemainingPercent === null ? null : Math.max(0, Math.min(100, calculatedRemainingPercent)));
+  if (
+    !unlimited
+    && used === null
+    && total === null
+    && reportedRemaining === null
+    && remainingPercent === null
+  ) return null;
 
   return {
     used,
-    total: unlimited ? null : total,
+    total,
+    remaining: unlimited ? null : reportedRemaining,
     remainingPercent: unlimited ? 100 : remainingPercent,
-    resetAt: timestamp(quotas.resetAt),
-    plan: publicText(quotas.plan ?? cache.plan, 120),
-    source: publicText(quotas.quotaSource ?? cache.source, 120),
-    quotaFetchedAt: timestamp(quotas.fetchedAt ?? cache.fetchedAt),
+    unlimited,
+    resetAt: timestamp(quota.resetAt),
+    plan: publicText(quota.plan ?? cache.plan, 120),
+    source: publicText(quota.quotaSource ?? cache.source, 120),
+    quotaLabel: publicToken(quota.displayName ?? quota.interval ?? cache.displayName, 40),
+    quotaFetchedAt: timestamp(quota.fetchedAt ?? cache.fetchedAt),
     quotaSyncIntervalMinutes: integer(intervalMinutes ?? cache.intervalMinutes),
   };
 }
 
-export function normalizeProviderLimitsPayload(payload: unknown): OmniRouteQuotaSnapshot | null {
+function preferredQuota<T extends { score?: number }>(
+  candidates: Array<T & { quota: OmniRouteQuotaSnapshot }>,
+): T & { quota: OmniRouteQuotaSnapshot } | null {
+  return candidates.sort((left, right) => (right.score ?? 0) - (left.score ?? 0)
+    || (right.quota.quotaFetchedAt ? new Date(right.quota.quotaFetchedAt).getTime() : 0)
+      - (left.quota.quotaFetchedAt ? new Date(left.quota.quotaFetchedAt).getTime() : 0))[0] ?? null;
+}
+
+export function normalizeProviderConnectionsPayload(payload: unknown): ProviderConnectionMap {
+  const root = recordOf(payload);
+  if (!root) throw new OmniRoutePayloadError();
+  const connections = root.connections === undefined || root.connections === null
+    ? []
+    : requiredArray(root.connections);
+  const mapping: ProviderConnectionMap = new Map();
+  for (const connectionValue of connections) {
+    const connection = recordOf(connectionValue);
+    if (!connection) continue;
+    const id = publicText(connection.id, 200);
+    const kind = providerKind(connection.provider);
+    if (!id || !kind) continue;
+    const existing = mapping.get(id);
+    if (existing && existing !== kind) throw new OmniRoutePayloadError();
+    mapping.set(id, kind);
+  }
+  return mapping;
+}
+
+function cacheProviderKind(cacheId: string, connections: ProviderConnectionMap): ProviderKind | null {
+  return connections.get(cacheId) ?? null;
+}
+
+function normalizeQuotaSnapshots(
+  payload: unknown,
+  connections: ProviderConnectionMap,
+): { quota: OmniRouteQuotaSnapshot | null; codexQuota: OmniRouteQuotaSnapshot | null } {
   const root = recordOf(payload);
   const caches = root?.caches === undefined || root.caches === null ? null : recordOf(root.caches);
-  if (!root || !caches) return null;
+  if (!root || !caches) return { quota: null, codexQuota: null };
 
-  const candidates = Object.entries(caches)
-    .flatMap(([cacheId, cacheValue]) => {
-      const cache = recordOf(cacheValue);
-      if (!cache) return [];
-      const quotasValue = cache.quotas === undefined || cache.quotas === null ? null : recordOf(cache.quotas);
-      if (!quotasValue) return [];
-      const normalizedId = cacheId.toLowerCase();
-      const preference = normalizedId.includes("antigravity")
-        ? 2_000
-        : normalizedId.includes("agy")
-          ? 1_000
-          : 0;
-      return Object.entries(quotasValue)
-        .flatMap(([model, quotaValue]) => {
-          const score = quotaModelScore(model);
-          if (score < 0) return [];
-          const quota = normalizeQuota(quotaValue, cache, root?.intervalMinutes);
-          return quota ? [{ cache, model, quota, score, preference }] : [];
-        })
-        .map((candidate) => ({ ...candidate, preference }));
-    })
-    .sort((left, right) => right.score - left.score
-      || right.preference - left.preference
-      || left.model.localeCompare(right.model));
+  const geminiCandidates: Array<{ model: string; quota: OmniRouteQuotaSnapshot; score: number }> = [];
+  const codexCandidates: Array<{ quota: OmniRouteQuotaSnapshot }> = [];
+  for (const [cacheId, cacheValue] of Object.entries(caches)) {
+    const kind = cacheProviderKind(cacheId, connections);
+    if (!kind) continue;
+    const cache = recordOf(cacheValue);
+    if (!cache) continue;
+    const quotasValue = cache.quotas === undefined || cache.quotas === null ? null : recordOf(cache.quotas);
+    if (!quotasValue) continue;
 
-  return candidates[0]?.quota ?? null;
+    if (kind === "codex") {
+      const session = quotasValue.session === undefined || quotasValue.session === null
+        ? null
+        : recordOf(quotasValue.session);
+      if (session) {
+        const quota = normalizeQuota(session, cache, root.intervalMinutes);
+        if (quota) codexCandidates.push({ quota });
+      }
+      continue;
+    }
+
+    if (kind !== "gemini") continue;
+    for (const [model, quotaValue] of Object.entries(quotasValue)) {
+      const score = quotaModelScore(model);
+      if (score < 0) continue;
+      const quota = normalizeQuota(quotaValue, cache, root.intervalMinutes);
+      if (quota) geminiCandidates.push({ quota, model, score });
+    }
+  }
+
+  const preferredGemini = preferredQuota(geminiCandidates);
+  return {
+    quota: preferredGemini?.quota ?? null,
+    codexQuota: preferredQuota(codexCandidates)?.quota ?? null,
+  };
+}
+
+export function normalizeProviderLimitsPayload(
+  payload: unknown,
+  providerConnections?: unknown,
+): OmniRouteQuotaSnapshot | null {
+  return normalizeQuotaSnapshots(
+    payload,
+    normalizeProviderConnectionsPayload(providerConnections ?? { connections: [] }),
+  ).quota;
+}
+
+export function normalizeProviderQuotasPayload(
+  payload: unknown,
+  providerConnections: unknown,
+): { quota: OmniRouteQuotaSnapshot | null; codexQuota: OmniRouteQuotaSnapshot | null } {
+  return normalizeQuotaSnapshots(payload, normalizeProviderConnectionsPayload(providerConnections));
 }
 
 function normalizeUsageSummary(value: unknown): OmniRouteUsageSummary | null {
@@ -308,7 +394,7 @@ function normalizeComboConfiguration(payload: unknown): {
 
   const configuredCombo = combos
     .map((value) => recordOf(value))
-    .find((combo) => combo?.name === OMNIROUTE_GEMINI_COMBO_NAME);
+    .find((combo) => combo?.name === OMNIROUTE_LUNA_MAX_COMBO_NAME);
   if (!configuredCombo) return { configuration: null, routeTargets: [] };
 
   const models = configuredCombo.models === undefined || configuredCombo.models === null
@@ -324,7 +410,7 @@ function normalizeComboConfiguration(payload: unknown): {
 
   return {
     configuration: {
-      name: OMNIROUTE_GEMINI_COMBO_NAME,
+      name: OMNIROUTE_LUNA_MAX_COMBO_NAME,
       strategy: publicToken(configuredCombo.strategy),
       targets: routeTargets.map((target) => target.model),
       version: integer(configuredCombo.version),
@@ -376,8 +462,8 @@ export function normalizeProviderStatsPayload(
   const metricsRoot = root.comboMetrics === undefined || root.comboMetrics === null
     ? null
     : recordOf(root.comboMetrics);
-  const metrics = metricsRoot && OMNIROUTE_GEMINI_COMBO_NAME in metricsRoot
-    ? recordOf(metricsRoot[OMNIROUTE_GEMINI_COMBO_NAME])
+  const metrics = metricsRoot && OMNIROUTE_LUNA_MAX_COMBO_NAME in metricsRoot
+    ? recordOf(metricsRoot[OMNIROUTE_LUNA_MAX_COMBO_NAME])
     : null;
 
   const models = comboModelEntries(metrics?.byModel)
@@ -477,7 +563,7 @@ function normalizeProviderHealth(
   const provider = recordOf(value);
   if (!provider) return null;
   const kind = providerKind(provider.provider);
-  if (!kind) return null;
+  if (kind !== "codex" && kind !== "gemini") return null;
 
   const accounts = provider.accounts === undefined || provider.accounts === null
     ? []
@@ -544,30 +630,29 @@ export function normalizeHealthMatrixPayload(
   const providers = root.providers === undefined || root.providers === null
     ? []
     : requiredArray(root.providers);
-  const geminiTarget = routeTargets.find((target) => target.provider === "gemini")?.model
-    ?? "gemini-3.7-flash-high";
-  const openRouterTarget = routeTargets.find((target) => target.provider === "openrouter")?.model;
   const records = providers
-    .map((value) => ({ value, provider: recordOf(value) }))
-    .filter((entry): entry is { value: unknown; provider: JsonRecord } => entry.provider !== null);
-  const geminiProvider = records
-    .filter((entry) => providerKind(entry.provider.provider) === "gemini")
-    .sort((left, right) => {
-      const score = (entry: { provider: JsonRecord }) => entry.provider.provider === "antigravity" ? 1 : 0;
-      return score(right) - score(left);
-    })[0];
-  const openRouterProvider = records.find((entry) => providerKind(entry.provider.provider) === "openrouter");
+    .map((value) => recordOf(value))
+    .filter((value): value is JsonRecord => value !== null);
 
-  return [
-    geminiProvider ? normalizeProviderHealth(geminiProvider.value, geminiTarget) : null,
-    openRouterProvider && openRouterTarget
-      ? normalizeProviderHealth(openRouterProvider.value, openRouterTarget)
-      : null,
-  ].filter((entry): entry is OmniRouteProviderHealth => entry !== null);
+  return routeTargets
+    .filter((target) => target.provider === "codex" || target.provider === "gemini")
+    .map((target) => {
+      const provider = records
+        .filter((entry) => providerKind(entry.provider) === target.provider)
+        .sort((left, right) => {
+          const score = (entry: JsonRecord) => (
+            target.provider === "gemini" && entry.provider === "antigravity" ? 1 : 0
+          );
+          return score(right) - score(left);
+        })[0];
+      return provider ? normalizeProviderHealth(provider, target.model) : null;
+    })
+    .filter((entry): entry is OmniRouteProviderHealth => entry !== null);
 }
 
 export function normalizeOmniRouteUsagePayloads(input: {
   providerLimits: unknown;
+  providerConnections: unknown;
   analytics: unknown;
   providerStats: unknown;
   healthMatrix: unknown;
@@ -577,14 +662,13 @@ export function normalizeOmniRouteUsagePayloads(input: {
 }): Omit<OmniRouteAdminUsageSnapshot, "stale" | "warning"> {
   const { configuration, routeTargets } = normalizeComboConfiguration(input.combos);
   const usage = normalizeAnalyticsPayload(input.analytics);
+  const quotas = normalizeProviderQuotasPayload(input.providerLimits, input.providerConnections);
   return {
     generatedAt: timestamp(input.generatedAt ?? new Date().toISOString()) ?? new Date().toISOString(),
     range: input.range,
-    quota: normalizeProviderLimitsPayload(input.providerLimits),
-    usage: {
-      ...usage,
-      models: usage.models.filter((entry) => routeTargets.some((target) => sameModel(entry.model, target.model))),
-    },
+    quota: quotas.quota,
+    codexQuota: quotas.codexQuota,
+    usage,
     combo: normalizeProviderStatsPayload(input.providerStats, configuration, routeTargets),
     providerHealth: normalizeHealthMatrixPayload(input.healthMatrix, routeTargets),
   };
@@ -678,8 +762,9 @@ async function fetchUsageSnapshot(
   fetcher: typeof fetch,
 ): Promise<Omit<OmniRouteAdminUsageSnapshot, "stale" | "warning">> {
   const config = serverConfig();
-  const [providerLimits, analytics, providerStats, healthMatrix, combos] = await Promise.all([
+  const [providerLimits, providerConnections, analytics, providerStats, healthMatrix, combos] = await Promise.all([
     fetchOmniRouteJson("/api/usage/provider-limits", config, fetcher),
+    fetchOmniRouteJson("/api/providers", config, fetcher),
     fetchOmniRouteJson(`/api/usage/analytics?range=${encodeURIComponent(range)}`, config, fetcher),
     fetchOmniRouteJson("/api/provider-stats", config, fetcher),
     fetchOmniRouteJson("/api/providers/health-matrix", config, fetcher),
@@ -688,6 +773,7 @@ async function fetchUsageSnapshot(
 
   return normalizeOmniRouteUsagePayloads({
     providerLimits,
+    providerConnections,
     analytics,
     providerStats,
     healthMatrix,

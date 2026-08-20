@@ -5,29 +5,31 @@ import {
   getOmniRouteUsageSnapshot,
   normalizeAnalyticsPayload,
   normalizeOmniRouteUsagePayloads,
+  normalizeProviderConnectionsPayload,
   normalizeProviderLimitsPayload,
-  OMNIROUTE_GEMINI_COMBO_NAME,
+  normalizeProviderQuotasPayload,
+  OMNIROUTE_LUNA_MAX_COMBO_NAME,
 } from "./omniroute-usage";
 
 function providerLimitsPayload() {
   return {
     caches: {
-      "secret-cache-connection": {
+      "opaque-cache-codex": {
         quotas: {
-          "gemini-3.6-flash-high": {
-            used: 1,
-            total: 2,
-            resetAt: "2026-08-19T00:00:00.000Z",
-            remainingPercentage: 50,
+          session: {
+            used: 20,
+            total: 100,
+            remaining: 80,
+            remainingPercentage: 80,
+            resetAt: "2026-08-24T00:00:00.000Z",
             unlimited: false,
-            fractionReported: 1,
-            quotaSource: "legacy-secret",
+            displayName: "Weekly",
           },
         },
-        plan: "Legacy Plan",
-        message: "secret cache message",
-        fetchedAt: "2026-08-18T08:00:00.000Z",
-        source: "legacy",
+        plan: "Codex Pro",
+        fetchedAt: "2026-08-20T09:00:00.000Z",
+        source: "codex-oauth",
+        account: "secret-codex-account@example.at",
       },
       antigravity: {
         quotas: {
@@ -45,45 +47,77 @@ function providerLimitsPayload() {
         plan: "Gemini Plan",
         fetchedAt: "2026-08-20T08:00:00.000Z",
         source: "antigravity",
+        apiKey: "secret-gemini-key",
+      },
+      "unmapped-gemini": {
+        quotas: { "gemini-3.7-flash-high": { used: 1, total: 2 } },
       },
     },
     intervalMinutes: 15,
-    lastAutoSyncAt: "2026-08-20T08:00:00.000Z",
+    lastAutoSyncAt: "2026-08-20T09:00:00.000Z",
+  };
+}
+
+function providersPayload() {
+  return {
+    connections: [
+      {
+        id: "opaque-cache-codex",
+        provider: "codex",
+        email: "secret-codex-account@example.at",
+        accessToken: "secret-access-token",
+      },
+      { id: "antigravity", provider: "agy", label: "secret-account-label", apiKey: "secret-key" },
+      { id: "another-gemini", provider: "gemini" },
+    ],
+    byAccount: [{ email: "secret-account@example.at" }],
+    byApiKey: [{ key: "secret-api-key" }],
   };
 }
 
 function analyticsPayload() {
   return {
     summary: {
-      totalRequests: 100,
-      promptTokens: 1_000,
-      completionTokens: 2_000,
-      totalTokens: 3_000,
-      successfulRequests: 98,
-      successRatePct: 98,
+      totalRequests: 130,
+      promptTokens: 1_300,
+      completionTokens: 2_600,
+      totalTokens: 3_900,
+      successfulRequests: 128,
+      successRatePct: "98.46",
       avgLatencyMs: 812.5,
-      totalCost: 1.25,
-      fallbackCount: 2,
-      lastRequest: "2026-08-20T09:00:00.000Z",
+      totalCost: 1.5,
+      fallbackCount: 12,
+      lastRequest: "2026-08-20T10:00:00.000Z",
     },
     byModel: [
       {
-        model: "gemini-3.7-flash-high",
-        provider: "antigravity",
-        rawModel: "secret-raw-model",
-        requests: 90,
-        promptTokens: 900,
-        completionTokens: 1_800,
-        totalTokens: 2_700,
-        avgLatencyMs: 800,
-        successRatePct: 99,
-        lastUsed: "2026-08-20T09:00:00.000Z",
+        model: "gpt-5.6-luna-max",
+        provider: "codex",
+        rawModel: "secret-codex-raw-model",
+        requests: 100,
+        promptTokens: 1_000,
+        completionTokens: 2_000,
+        totalTokens: 3_000,
+        avgLatencyMs: 750,
+        successRatePct: "100.00",
+        lastUsed: "2026-08-20T10:00:00.000Z",
         cost: 1,
       },
       {
-        model: "luna-pro",
+        model: "gemini-3.7-flash-high",
+        provider: "antigravity",
+        requests: 20,
+        promptTokens: 200,
+        completionTokens: 400,
+        totalTokens: 600,
+        avgLatencyMs: 850,
+        successRatePct: 95,
+        lastUsed: "2026-08-20T09:00:00.000Z",
+        cost: 0.25,
+      },
+      {
+        model: "openrouter/luna-pro",
         provider: "openrouter",
-        rawModel: "secret-luna",
         requests: 10,
         promptTokens: 100,
         completionTokens: 200,
@@ -97,24 +131,36 @@ function analyticsPayload() {
     ],
     byProvider: [
       {
-        provider: "antigravity",
-        requests: 90,
-        promptTokens: 900,
-        completionTokens: 1_800,
-        totalTokens: 2_700,
-        avgLatencyMs: 800,
-        successRatePct: 99,
-        lastUsed: "2026-08-20T09:00:00.000Z",
+        provider: "codex",
+        requests: 100,
+        promptTokens: 1_000,
+        completionTokens: 2_000,
+        totalTokens: 3_000,
+        avgLatencyMs: 750,
+        successRatePct: "100.00",
+        lastUsed: "2026-08-20T10:00:00.000Z",
         cost: 1,
       },
+      {
+        provider: "antigravity",
+        requests: 20,
+        promptTokens: 200,
+        completionTokens: 400,
+        totalTokens: 600,
+        avgLatencyMs: 850,
+        successRatePct: 95,
+        lastUsed: "2026-08-20T09:00:00.000Z",
+        cost: 0.25,
+      },
+      { provider: "openrouter", requests: 10, totalTokens: 300, successRatePct: "90.00", avgLatencyMs: 900 },
       { provider: "secret-provider", requests: 99 },
     ],
     dailyTrend: [
       { date: "2026-08-19", requests: 40, tokens: 1_000, cost: 0.4, latency: 800 },
-      { date: "2026-08-20", requests: 60, tokens: 2_000, cost: 0.85, latency: 820 },
+      { date: "2026-08-20", requests: 90, tokens: 2_900, cost: 1.1, latency: 820 },
     ],
-    byAccount: [{ email: "secret@example.at", requests: 100 }],
-    byApiKey: [{ key: "secret-api-key", requests: 100 }],
+    byAccount: [{ email: "secret@example.at", requests: 130 }],
+    byApiKey: [{ key: "secret-api-key", requests: 130 }],
   };
 }
 
@@ -123,15 +169,16 @@ function combosPayload() {
     combos: [
       { name: "other-combo", strategy: "priority", models: [], version: 1, updatedAt: "2026-08-01T00:00:00.000Z" },
       {
-        name: OMNIROUTE_GEMINI_COMBO_NAME,
+        name: OMNIROUTE_LUNA_MAX_COMBO_NAME,
         strategy: "priority",
         models: [
-          { model: "gemini-3.7-flash-high", providerId: "secret-gemini-execution" },
-          { model: "openrouter/luna-pro", providerId: "secret-openrouter-execution" },
+          { model: "codex/gpt-5.6-luna-max", providerId: "codex", execution: "secret-execution" },
+          { model: "gemini-3.7-flash-high", providerId: "agy", execution: "secret-gemini-execution" },
         ],
-        version: 7,
-        updatedAt: "2026-08-18T10:00:00.000Z",
+        version: 8,
+        updatedAt: "2026-08-19T10:00:00.000Z",
       },
+      { name: "omniroute-gemini-3.7-flash-high", models: [] },
     ],
   };
 }
@@ -139,50 +186,99 @@ function combosPayload() {
 function providerStatsPayload() {
   return {
     comboMetrics: {
-      [OMNIROUTE_GEMINI_COMBO_NAME]: {
-        totalRequests: 200,
-        totalSuccesses: 190,
-        totalFailures: 5,
-        totalFallbacks: 5,
-        totalLatencyMs: 200_000,
+      [OMNIROUTE_LUNA_MAX_COMBO_NAME]: {
+        totalRequests: 240,
+        totalSuccesses: 230,
+        totalFailures: 7,
+        totalFallbacks: 10,
         strategy: "priority",
-        lastUsedAt: "2026-08-20T09:30:00.000Z",
+        lastUsedAt: "2026-08-20T10:30:00.000Z",
         byModel: {
-          "gemini-3.7-flash-high": {
-            requests: 180,
-            successes: 176,
+          "codex/gpt-5.6-luna-max": {
+            requests: 200,
+            successes: 196,
             failures: 4,
-            avgLatencyMs: 900,
+            avgLatencyMs: 800,
             lastStatus: "ok",
-            lastUsedAt: "2026-08-20T09:30:00.000Z",
+            lastUsedAt: "2026-08-20T10:30:00.000Z",
             execution: "secret-execution",
             targetId: "secret-target",
           },
-          "openrouter/luna-pro": {
-            requests: 20,
-            successes: 14,
-            failures: 1,
+          "gemini-3.7-flash-high": {
+            requests: 40,
+            successes: 34,
+            failures: 3,
             avgLatencyMs: 1_100,
             lastStatus: "fallback",
-            lastUsedAt: "2026-08-20T09:00:00.000Z",
+            lastUsedAt: "2026-08-20T10:00:00.000Z",
           },
+          "openrouter/luna-pro": { requests: 999 },
         },
         productionTraffic: true,
-        avgLatencyMs: 1_000,
-        successRate: 95,
+        avgLatencyMs: 850,
+        successRate: "95.83",
         fallbackRate: 2.5,
         byTarget: [{ targetId: "secret-target", label: "secret-label" }],
       },
+      "omniroute-gemini-3.7-flash-high": { totalRequests: 999 },
     },
   };
 }
 
 function healthMatrixPayload() {
   return {
-    checkedAt: "2026-08-20T10:00:00.000Z",
+    checkedAt: "2026-08-20T11:00:00.000Z",
     range: "24h",
     summary: { secret: "secret" },
     providers: [
+      {
+        provider: "codex",
+        state: "healthy",
+        connections: { total: 1, active: 1, cooldown: 0 },
+        modelLockoutCount: 1,
+        requests: 200,
+        successRate: "98.00",
+        avgLatencyMs: 750,
+        lastRequestAt: "2026-08-20T10:30:00.000Z",
+        lastErrorAt: "2026-08-19T10:00:00.000Z",
+        accounts: [
+          {
+            id: "secret-codex-account-id",
+            email: "secret-codex-account@example.at",
+            label: "secret-account-label",
+            state: "healthy",
+            rateLimitedUntil: "2026-08-20T12:00:00.000Z",
+            cooldownRemainingMs: 1_800_000,
+            lastErrorType: "RATE_LIMIT",
+            errorCode: "429",
+            lastErrorAt: "2026-08-20T11:00:00.000Z",
+            models: [
+              {
+                model: "gpt-5.6-luna-max",
+                status: "rate_limited",
+                isLockedOut: true,
+                lockoutReason: "secret reason",
+                lockoutRemainingMs: 1_800_000,
+                requests: 100,
+                successes: 98,
+                successRate: "98.00",
+                avgLatencyMs: 750,
+                lastStatus: "ok",
+                lastErrorStatus: "429",
+                lastRequestAt: "2026-08-20T10:30:00.000Z",
+                lastErrorAt: "2026-08-20T11:00:00.000Z",
+              },
+              { model: "codex-secret-other", status: "healthy" },
+            ],
+          },
+        ],
+      },
+      {
+        provider: "openrouter",
+        state: "healthy",
+        connections: 1,
+        accounts: [{ models: [{ model: "openrouter/luna-pro", status: "healthy" }] }],
+      },
       {
         provider: "antigravity",
         state: "healthy",
@@ -192,13 +288,12 @@ function healthMatrixPayload() {
         successRate: 98,
         avgLatencyMs: 800,
         lastRequestAt: "2026-08-20T09:00:00.000Z",
-        lastErrorAt: "2026-08-19T09:00:00.000Z",
         accounts: [
           {
-            id: "secret-account-id",
+            id: "secret-gemini-account-id",
             label: "secret-account-label",
             state: "healthy",
-            rateLimitedUntil: "2026-08-20T11:00:00.000Z",
+            rateLimitedUntil: "2026-08-20T13:00:00.000Z",
             cooldownRemainingMs: 3_600_000,
             lastErrorType: "RATE_LIMIT",
             errorCode: "429",
@@ -208,12 +303,11 @@ function healthMatrixPayload() {
                 model: "gemini-3.7-flash-high",
                 status: "rate_limited",
                 isLockedOut: true,
-                lockoutReason: "secret reason",
                 lockoutRemainingMs: 3_600_000,
-                requests: 90,
-                successes: 88,
-                successRate: 97.8,
-                avgLatencyMs: 800,
+                requests: 20,
+                successes: 19,
+                successRate: 95,
+                avgLatencyMs: 850,
                 lastStatus: "ok",
                 lastErrorStatus: "429",
                 lastRequestAt: "2026-08-20T09:00:00.000Z",
@@ -225,31 +319,9 @@ function healthMatrixPayload() {
         ],
       },
       {
-        provider: "openrouter",
-        state: "healthy",
-        connections: { total: 1, active: 1, cooldown: 0 },
-        modelLockoutCount: 0,
-        requests: 10,
-        successRate: 100,
-        avgLatencyMs: 900,
-        accounts: [{
-          id: "secret-openrouter-id",
-          label: "secret-label",
-          models: [{
-            model: "openrouter/luna-pro",
-            status: "healthy",
-            requests: 10,
-            successes: 10,
-            avgLatencyMs: 900,
-            lastStatus: "ok",
-            lastRequestAt: "2026-08-20T08:00:00.000Z",
-          }],
-        }],
-      },
-      {
         provider: "agy",
-        state: "healthy",
-        connections: { total: 1, active: 1, cooldown: 0 },
+        state: "idle",
+        connections: 1,
         accounts: [{ models: [{ model: "gemini-3.7-flash-high", status: "idle" }] }],
       },
       { provider: "secret-provider", state: "unknown", accounts: [] },
@@ -258,57 +330,79 @@ function healthMatrixPayload() {
 }
 
 describe("OmniRoute usage normalization", () => {
-  it("selects the preferred antigravity cache and Gemini Flash quota", () => {
-    expect(normalizeProviderLimitsPayload(providerLimitsPayload())).toEqual({
+  it("maps caches only through sanitized provider relationships", () => {
+    const quotas = normalizeProviderQuotasPayload(providerLimitsPayload(), providersPayload());
+
+    expect(quotas.codexQuota).toEqual({
+      used: 20,
+      total: 100,
+      remaining: 80,
+      remainingPercent: 80,
+      unlimited: false,
+      resetAt: "2026-08-24T00:00:00.000Z",
+      plan: "Codex Pro",
+      source: "codex-oauth",
+      quotaLabel: "Weekly",
+      quotaFetchedAt: "2026-08-20T09:00:00.000Z",
+      quotaSyncIntervalMinutes: 15,
+    });
+    expect(quotas.quota).toMatchObject({
       used: 25,
       total: 100,
       remainingPercent: 75,
-      resetAt: "2026-08-21T00:00:00.000Z",
       plan: "Gemini Plan",
       source: "normalized-pool",
-      quotaFetchedAt: "2026-08-20T08:00:00.000Z",
-      quotaSyncIntervalMinutes: 15,
     });
+    expect(normalizeProviderLimitsPayload(providerLimitsPayload(), providersPayload())).toMatchObject({
+      remainingPercent: 75,
+    });
+    expect(normalizeProviderQuotasPayload(providerLimitsPayload(), { connections: [] })).toEqual({
+      quota: null,
+      codexQuota: null,
+    });
+    expect(JSON.stringify(quotas)).not.toContain("opaque-cache");
+    expect(JSON.stringify(quotas)).not.toContain("secret");
   });
 
-  it("prefers the representative quota version before choosing an equivalent cache", () => {
-    const quota = normalizeProviderLimitsPayload({
-      intervalMinutes: 10,
+  it("does not infer a Codex quota from a plan name or opaque cache ID", () => {
+    const quotas = normalizeProviderQuotasPayload({
+      intervalMinutes: 5,
       caches: {
-        agy: {
-          fetchedAt: "2026-08-20T07:00:00.000Z",
-          quotas: { "gemini-3.6-flash-high": { used: 1, total: 4, remainingPercentage: 75 } },
-        },
-        "opaque-connection": {
-          fetchedAt: "2026-08-20T08:00:00.000Z",
-          quotas: { "gemini-3.7-flash-high": { used: 2, total: 4, remainingPercentage: 50 } },
+        "codex-shaped-opaque-id": {
+          plan: "Codex Pro",
+          quotas: { session: { used: 1, total: 2 } },
         },
       },
+    }, {
+      connections: [{ id: "codex-shaped-opaque-id", provider: "gemini", apiKey: "secret" }],
     });
-    expect(quota).toMatchObject({ used: 2, total: 4, remainingPercent: 50 });
+    expect(quotas.codexQuota).toBeNull();
   });
 
-  it("returns null for missing quota data", () => {
-    expect(normalizeProviderLimitsPayload({ caches: {} })).toBeNull();
-    expect(normalizeProviderLimitsPayload(null)).toBeNull();
-  });
-
-  it("normalizes analytics strictly and strips unsupported provider data", () => {
+  it("normalizes bounded percentage strings and supported historical analytics", () => {
     const usage = normalizeAnalyticsPayload(analyticsPayload());
-    expect(usage.summary).toEqual(analyticsPayload().summary);
-    expect(usage.models).toHaveLength(2);
-    expect(usage.providers).toHaveLength(1);
-    expect(usage.dailyTrend).toEqual([
-      { date: "2026-08-19", requests: 40, tokens: 1_000, cost: 0.4 },
-      { date: "2026-08-20", requests: 60, tokens: 2_000, cost: 0.85 },
+
+    expect(usage.summary?.successRatePct).toBe(98.46);
+    expect(usage.models.map((model) => [model.provider, model.model, model.successRatePct])).toEqual([
+      ["OpenAI Codex", "gpt-5.6-luna-max", 100],
+      ["Gemini / Antigravity", "gemini-3.7-flash-high", 95],
+      ["OpenRouter", "openrouter/luna-pro", 90],
     ]);
+    expect(usage.providers.map((provider) => provider.provider)).toEqual([
+      "OpenAI Codex",
+      "Gemini / Antigravity",
+      "OpenRouter",
+    ]);
+    expect(normalizeAnalyticsPayload({ summary: { successRatePct: "100.00" } })?.summary).toBeDefined();
+    expect(normalizeAnalyticsPayload({ summary: { successRatePct: "100,00" } }).summary?.successRatePct).toBeNull();
     expect(JSON.stringify(usage)).not.toContain("byAccount");
     expect(JSON.stringify(usage)).not.toContain("secret");
   });
 
-  it("normalizes only the configured combo and target health", () => {
+  it("normalizes the live combo, active health and historical usage breakdown", () => {
     const snapshot = normalizeOmniRouteUsagePayloads({
       providerLimits: providerLimitsPayload(),
+      providerConnections: providersPayload(),
       analytics: analyticsPayload(),
       providerStats: providerStatsPayload(),
       healthMatrix: healthMatrixPayload(),
@@ -318,41 +412,44 @@ describe("OmniRoute usage normalization", () => {
     });
 
     expect(Object.keys(snapshot).sort()).toEqual([
-      "combo", "generatedAt", "providerHealth", "quota", "range", "usage",
+      "codexQuota", "combo", "generatedAt", "providerHealth", "quota", "range", "usage",
     ]);
     expect(snapshot.combo).toMatchObject({
-      name: OMNIROUTE_GEMINI_COMBO_NAME,
+      name: OMNIROUTE_LUNA_MAX_COMBO_NAME,
       strategy: "priority",
-      targets: ["gemini-3.7-flash-high", "openrouter/luna-pro"],
-      version: 7,
+      targets: ["codex/gpt-5.6-luna-max", "gemini-3.7-flash-high"],
+      version: 8,
       productionTraffic: true,
-      requests: 200,
-      successes: 190,
-      failures: 5,
-      fallbacks: 5,
+      requests: 240,
+      successes: 230,
+      failures: 7,
+      fallbacks: 10,
+      successRatePct: 95.83,
       models: [
-        expect.objectContaining({ model: "gemini-3.7-flash-high", requests: 180 }),
-        expect.objectContaining({ model: "openrouter/luna-pro", requests: 20 }),
+        expect.objectContaining({ model: "codex/gpt-5.6-luna-max", requests: 200 }),
+        expect.objectContaining({ model: "gemini-3.7-flash-high", requests: 40 }),
       ],
     });
-    expect(snapshot.providerHealth).toHaveLength(2);
+    expect(snapshot.providerHealth.map((provider) => provider.provider)).toEqual(["codex", "gemini"]);
     expect(snapshot.providerHealth[0]).toMatchObject({
-      provider: "gemini",
+      provider: "codex",
       state: "healthy",
-      connections: 2,
-      cooldownRemainingMs: 3_600_000,
+      connections: 1,
+      cooldownRemainingMs: 1_800_000,
       lastErrorType: "RATE_LIMIT",
       lastErrorCode: "429",
+      successRatePct: 98,
       models: [expect.objectContaining({
-        model: "gemini-3.7-flash-high",
+        model: "codex/gpt-5.6-luna-max",
         isLockedOut: true,
-        requests: 90,
+        requests: 100,
       })],
     });
-    expect(snapshot.providerHealth[1]?.models[0]?.model).toBe("openrouter/luna-pro");
+    expect(snapshot.providerHealth[1]?.models[0]?.model).toBe("gemini-3.7-flash-high");
     expect(snapshot.usage.models.map((model) => model.model)).toEqual([
+      "gpt-5.6-luna-max",
       "gemini-3.7-flash-high",
-      "luna-pro",
+      "openrouter/luna-pro",
     ]);
 
     const serializedSnapshot = JSON.stringify(snapshot);
@@ -366,14 +463,17 @@ describe("OmniRoute usage normalization", () => {
       "byTarget",
       "lockoutReason",
       "apiKey",
+      "accessToken",
+      "email",
     ]) {
       expect(serializedSnapshot).not.toContain(forbidden);
     }
   });
 
-  it("handles missing sections without spreading upstream objects and rejects malformed containers", () => {
+  it("handles missing sections and rejects malformed containers", () => {
     const snapshot = normalizeOmniRouteUsagePayloads({
       providerLimits: {},
+      providerConnections: {},
       analytics: {},
       providerStats: {},
       healthMatrix: {},
@@ -382,14 +482,18 @@ describe("OmniRoute usage normalization", () => {
       generatedAt: "2026-08-20T12:00:00.000Z",
     });
     expect(snapshot.quota).toBeNull();
+    expect(snapshot.codexQuota).toBeNull();
     expect(snapshot.usage).toEqual({ summary: null, models: [], providers: [], dailyTrend: [] });
     expect(snapshot.combo).toBeNull();
     expect(snapshot.providerHealth).toEqual([]);
 
     expect(() => normalizeProviderLimitsPayload("invalid")).toThrow();
     expect(() => normalizeAnalyticsPayload({ byModel: "invalid" })).toThrow();
+    expect(() => normalizeProviderConnectionsPayload({ connections: "invalid" })).toThrow();
+    expect(() => normalizeProviderConnectionsPayload({ connections: [null, "invalid"] })).toThrow();
     expect(() => normalizeOmniRouteUsagePayloads({
       providerLimits: {},
+      providerConnections: {},
       analytics: {},
       providerStats: {},
       healthMatrix: {},
@@ -421,6 +525,7 @@ describe("OmniRoute usage cache", () => {
       void init;
       const url = String(input);
       if (url.endsWith("/api/usage/provider-limits")) return Response.json(providerLimitsPayload());
+      if (url.endsWith("/api/providers")) return Response.json(providersPayload());
       if (url.includes("/api/usage/analytics?range=")) return Response.json(analyticsPayload());
       if (url.endsWith("/api/provider-stats")) return Response.json(providerStatsPayload());
       if (url.endsWith("/api/providers/health-matrix")) return Response.json(healthMatrixPayload());
@@ -429,11 +534,12 @@ describe("OmniRoute usage cache", () => {
     });
   }
 
-  it("uses a normalized base URL, bearer authentication and bounded abort signals", async () => {
+  it("makes six authenticated bounded requests and never emits the provider payload", async () => {
     const fetcher = successfulFetcher();
     const snapshot = await getOmniRouteUsageSnapshot("24h", { fetcher: fetcher as unknown as typeof fetch });
 
-    expect(fetcher).toHaveBeenCalledTimes(5);
+    expect(fetcher).toHaveBeenCalledTimes(6);
+    expect(String(fetcher.mock.calls[1]?.[0])).toBe("https://omniroute.example/sub/api/providers");
     for (const call of fetcher.mock.calls) {
       const url = String(call[0]);
       expect(url.startsWith("https://omniroute.example/sub/api/")).toBe(true);
@@ -445,7 +551,9 @@ describe("OmniRoute usage cache", () => {
       expect(call[1]?.signal).toBeInstanceOf(AbortSignal);
     }
     expect(snapshot.stale).toBe(false);
-    expect(snapshot.range).toBe("24h");
+    expect(snapshot.codexQuota).toMatchObject({ quotaLabel: "Weekly", remainingPercent: 80 });
+    expect(JSON.stringify(snapshot)).not.toContain("opaque-cache");
+    expect(JSON.stringify(snapshot)).not.toContain("secret-access-token");
   });
 
   it("serves a fresh snapshot without another upstream call", async () => {
@@ -453,7 +561,7 @@ describe("OmniRoute usage cache", () => {
     await getOmniRouteUsageSnapshot("7d", { fetcher: fetcher as unknown as typeof fetch });
     const cached = await getOmniRouteUsageSnapshot("7d", { fetcher: fetcher as unknown as typeof fetch });
 
-    expect(fetcher).toHaveBeenCalledTimes(5);
+    expect(fetcher).toHaveBeenCalledTimes(6);
     expect(cached.stale).toBe(false);
   });
 
@@ -466,8 +574,8 @@ describe("OmniRoute usage cache", () => {
       fetcher: failingFetcher as unknown as typeof fetch,
     });
 
-    expect(fetcher).toHaveBeenCalledTimes(5);
-    expect(failingFetcher).toHaveBeenCalledTimes(5);
+    expect(fetcher).toHaveBeenCalledTimes(6);
+    expect(failingFetcher).toHaveBeenCalledTimes(6);
     expect(first.stale).toBe(false);
     expect(refreshed.stale).toBe(true);
     expect(refreshed.generatedAt).toBe(first.generatedAt);

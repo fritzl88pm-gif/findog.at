@@ -3,10 +3,13 @@ export type OmniRouteUsageRange = "24h" | "7d" | "30d";
 export type OmniRouteQuotaSnapshot = {
   used: number | null;
   total: number | null;
+  remaining: number | null;
   remainingPercent: number | null;
+  unlimited: boolean;
   resetAt: string | null;
   plan: string | null;
   source: string | null;
+  quotaLabel: string | null;
   quotaFetchedAt: string | null;
   quotaSyncIntervalMinutes: number | null;
 };
@@ -107,7 +110,7 @@ export type OmniRouteModelHealth = {
 };
 
 export type OmniRouteProviderHealth = {
-  provider: "gemini" | "openrouter";
+  provider: "codex" | "gemini";
   state: string | null;
   connections: number | null;
   modelLockoutCount: number | null;
@@ -128,6 +131,7 @@ export type OmniRouteAdminUsageSnapshot = {
   stale: boolean;
   range: OmniRouteUsageRange;
   quota: OmniRouteQuotaSnapshot | null;
+  codexQuota: OmniRouteQuotaSnapshot | null;
   usage: OmniRouteUsageSnapshot;
   combo: OmniRouteComboSnapshot | null;
   providerHealth: OmniRouteProviderHealth[];

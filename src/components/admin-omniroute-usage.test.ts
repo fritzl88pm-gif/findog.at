@@ -10,13 +10,13 @@ const componentSource = readFileSync(
 );
 const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
-describe("Admin Gemini & OmniRoute UI", () => {
+describe("Admin Codex, Gemini & OmniRoute UI", () => {
   it("renders a dedicated keyboard-navigable top-level admin tab", () => {
     expect(pageSource).toContain('id="admin-tab-omniroute"');
     expect(pageSource).toContain('aria-controls="admin-panel-omniroute"');
     expect(pageSource).toContain('onClick={() => setAdminTab("omniroute")}');
     expect(pageSource).toContain('onKeyDown={(e) => handleAdminTabKeyDown(e, "omniroute")}');
-    expect(pageSource).toContain("Gemini &amp; OmniRoute");
+    expect(pageSource).toContain("Codex, Gemini &amp; OmniRoute");
     expect(pageSource).toMatch(/ADMIN_TAB_IDS\s*=\s*\[[^\]]*"omniroute"[^\]]*\]/u);
   });
 
@@ -38,14 +38,18 @@ describe("Admin Gemini & OmniRoute UI", () => {
     expect(componentSource).toMatch(/refresh\s*\?\s*"&refresh=1"\s*:\s*""/u);
     expect(componentSource).toContain('"Aktualisieren"');
     expect(componentSource).toContain("new AbortController()");
+    expect(componentSource).toContain('|| !("codexQuota" in payload)');
   });
 
   it("renders loading, error, stale and empty states with required German labels", () => {
     for (const label of [
+      "Codex OAuth Quota",
       "Gemini Flash Pool",
       "Verbleibend",
+      "Verbleibende Einheiten",
+      "Reset / Fenster",
       "Normalisierte Nutzung",
-      "Nächster Reset",
+      "Unbegrenzt",
       "Quota-Quelle",
       "Letzte Quota-Synchronisation",
       "Aktiver Cooldown / Rate-Limit",
@@ -57,12 +61,13 @@ describe("Admin Gemini & OmniRoute UI", () => {
       "Durchschnittliche Latenz",
       "Letzte Anfrage",
       "Aktive Route",
-      "Primäres Gemini 3.7-Ziel",
-      "Fallback-Ziel (Luna Pro)",
+      "Primäres Ziel (Luna Max via Codex OAuth)",
+      "Fallback-Ziel (Gemini 3.7 Flash High)",
       "Produktionsstatus",
       "Provider und Modell",
       "Tagesverlauf",
       "Provider-Health",
+      "OpenAI Codex",
       "Zuletzt aktualisiert",
       "Veraltete Daten:",
     ]) {
@@ -93,5 +98,8 @@ describe("Admin Gemini & OmniRoute UI", () => {
     expect(clientSurface).not.toContain("connectionId");
     expect(clientSurface).not.toContain("byApiKey");
     expect(clientSurface).not.toContain("byAccount");
+    expect(clientSurface).not.toContain("Luna Pro");
+    expect(componentSource).not.toContain('label: "OpenRouter"');
+    expect(componentSource).not.toContain('provider.provider === "openrouter"');
   });
 });

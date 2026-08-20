@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   OmniRouteAdminUsageSnapshot,
+  OmniRouteQuotaSnapshot,
   OmniRouteModelHealth,
   OmniRouteProviderHealth,
   OmniRouteUsageRange,
@@ -33,6 +34,7 @@ function snapshotFromPayload(value: unknown): OmniRouteAdminUsageSnapshot | null
     || typeof payload.stale !== "boolean"
     || (payload.range !== "24h" && payload.range !== "7d" && payload.range !== "30d")
     || !("quota" in payload)
+    || !("codexQuota" in payload)
     || !("usage" in payload)
     || !("combo" in payload)
     || !Array.isArray(payload.providerHealth)
@@ -122,6 +124,82 @@ function Metric({ label, value, detail }: { label: string; value: string; detail
   );
 }
 
+function normalizedQuotaUsage(quota: OmniRouteQuotaSnapshot | null): string {
+  if (!quota) return "–";
+  if (quota.unlimited) {
+    return quota.used === null
+      ? "Unbegrenzt"
+      : `${formatNumber(quota.used)} Einheiten · unbegrenzt`;
+  }
+  if (quota.used === null || quota.total === null) return "–";
+  return metricValue(`${formatNumber(quota.used)} / ${formatNumber(quota.total)}`, "Einheiten");
+}
+
+function QuotaPanel({
+  title,
+  quota,
+  health,
+  generatedAt,
+  headingId,
+}: {
+  title: string;
+  quota: OmniRouteQuotaSnapshot | null;
+  health: OmniRouteProviderHealth | undefined;
+  generatedAt: string | undefined;
+  headingId: string;
+}) {
+  return (
+    <section className="admin-omniroute-section" aria-labelledby={headingId}>
+      <h3 id={headingId}>{title}</h3>
+      <div className="admin-omniroute-quota">
+        <div className="admin-omniroute-progress">
+          <div className="admin-omniroute-progress-label">
+            <span>Verbleibend</span>
+            <strong>{formatPercent(quota?.remainingPercent)}</strong>
+          </div>
+          {quota?.remainingPercent !== null && quota?.remainingPercent !== undefined ? (
+            <div
+              role="progressbar"
+              aria-labelledby={headingId}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progressValue(quota.remainingPercent)}
+              aria-valuetext={`${formatNumber(quota.remainingPercent, 1)} Prozent verbleibend`}
+            >
+              <span style={{ width: `${progressValue(quota.remainingPercent)}%` }} />
+            </div>
+          ) : (
+            <p className="admin-empty-state">Keine Quotenwerte vorhanden.</p>
+          )}
+        </div>
+        <dl className="admin-omniroute-metrics">
+          <Metric label="Normalisierte Nutzung" value={normalizedQuotaUsage(quota)} />
+          <Metric label="Verbleibende Einheiten" value={quota?.remaining === null || quota?.remaining === undefined ? "–" : formatNumber(quota.remaining)} />
+          <Metric label="Reset / Fenster" value={formatDateTime(quota?.resetAt)} detail={quota?.quotaLabel ?? undefined} />
+          <Metric label="Plan" value={quota?.plan ?? "–"} />
+          <Metric label="Quota-Quelle" value={quota?.source ?? "–"} />
+          <Metric label="Letzte Quota-Synchronisation" value={formatDateTime(quota?.quotaFetchedAt)} />
+          <Metric
+            label="Quota-Intervall"
+            value={quota?.quotaSyncIntervalMinutes === null || quota?.quotaSyncIntervalMinutes === undefined
+              ? "–"
+              : metricValue(formatNumber(quota.quotaSyncIntervalMinutes), "Minuten")}
+          />
+          <Metric
+            label="Aktiver Cooldown / Rate-Limit"
+            value={isRateLimited(health, generatedAt) ? "Aktiv" : "Nein"}
+            detail={health?.cooldownRemainingMs
+              ? `Verbleibend ${formatDuration(remainingAtSnapshot(health.cooldownRemainingMs, generatedAt))}`
+              : health?.rateLimitedUntil
+                ? `Bis ${formatDateTime(health.rateLimitedUntil)}`
+                : undefined}
+          />
+        </dl>
+      </div>
+    </section>
+  );
+}
+
 export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsageProps) {
   const [range, setRange] = useState<OmniRouteUsageRange>("24h");
   const [snapshot, setSnapshot] = useState<OmniRouteAdminUsageSnapshot | null>(null);
@@ -174,8 +252,9 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
   const quota = snapshot?.quota ?? null;
   const summary = snapshot?.usage.summary ?? null;
   const combo = snapshot?.combo ?? null;
+  const codexQuota = snapshot?.codexQuota ?? null;
+  const codexHealth = snapshot?.providerHealth.find((provider) => provider.provider === "codex");
   const geminiHealth = snapshot?.providerHealth.find((provider) => provider.provider === "gemini");
-  const openRouterHealth = snapshot?.providerHealth.find((provider) => provider.provider === "openrouter");
 
   return (
     <section
@@ -187,8 +266,8 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
       <div className="form-generator-card admin-omniroute-card">
         <div className="admin-omniroute-heading">
           <div>
-            <h2>Gemini &amp; OmniRoute</h2>
-            <p>Geschützte Serverauswertung von Flash-Quote, Nutzung, Route und Provider-Health.</p>
+            <h2>Codex, Gemini &amp; OmniRoute</h2>
+            <p>Geschützte Serverauswertung von Codex-OAuth- und Gemini-Quoten, Nutzung, Route und Provider-Health.</p>
           </div>
           <div className="admin-omniroute-controls">
             <label htmlFor="admin-omniroute-range">Zeitraum</label>
@@ -231,58 +310,20 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
               <time dateTime={snapshot.generatedAt}>{formatDateTime(snapshot.generatedAt)}</time>
             </p>
 
-            <section className="admin-omniroute-section" aria-labelledby="admin-omniroute-quota-title">
-              <h3 id="admin-omniroute-quota-title">Gemini Flash Pool</h3>
-              <div className="admin-omniroute-quota">
-                <div className="admin-omniroute-progress">
-                  <div className="admin-omniroute-progress-label">
-                    <span>Verbleibend</span>
-                    <strong>{formatPercent(quota?.remainingPercent)}</strong>
-                  </div>
-                  {quota?.remainingPercent !== null && quota?.remainingPercent !== undefined ? (
-                    <div
-                      role="progressbar"
-                      aria-labelledby="admin-omniroute-quota-title"
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={progressValue(quota.remainingPercent)}
-                      aria-valuetext={`${formatNumber(quota.remainingPercent, 1)} Prozent verbleibend`}
-                    >
-                      <span style={{ width: `${progressValue(quota.remainingPercent)}%` }} />
-                    </div>
-                  ) : (
-                    <p className="admin-empty-state">Keine Quotenwerte vorhanden.</p>
-                  )}
-                </div>
-                <dl className="admin-omniroute-metrics">
-                  <Metric
-                    label="Normalisierte Nutzung"
-                    value={quota?.used !== null && quota?.used !== undefined && quota?.total !== null && quota?.total !== undefined
-                      ? metricValue(`${formatNumber(quota.used)} / ${formatNumber(quota.total)}`, "Einheiten")
-                      : "–"}
-                  />
-                  <Metric label="Nächster Reset" value={formatDateTime(quota?.resetAt)} />
-                  <Metric label="Plan" value={quota?.plan ?? "–"} />
-                  <Metric label="Quota-Quelle" value={quota?.source ?? "–"} />
-                  <Metric label="Letzte Quota-Synchronisation" value={formatDateTime(quota?.quotaFetchedAt)} />
-                  <Metric
-                    label="Quota-Intervall"
-                    value={quota?.quotaSyncIntervalMinutes === null || quota?.quotaSyncIntervalMinutes === undefined
-                      ? "–"
-                      : metricValue(formatNumber(quota.quotaSyncIntervalMinutes), "Minuten")}
-                  />
-                  <Metric
-                    label="Aktiver Cooldown / Rate-Limit"
-                    value={isRateLimited(geminiHealth, snapshot?.generatedAt) ? "Aktiv" : "Nein"}
-                    detail={geminiHealth?.cooldownRemainingMs
-                      ? `Verbleibend ${formatDuration(remainingAtSnapshot(geminiHealth.cooldownRemainingMs, snapshot.generatedAt))}`
-                      : geminiHealth?.rateLimitedUntil
-                        ? `Bis ${formatDateTime(geminiHealth.rateLimitedUntil)}`
-                        : undefined}
-                  />
-                </dl>
-              </div>
-            </section>
+            <QuotaPanel
+              title="Codex OAuth Quota"
+              headingId="admin-omniroute-codex-quota-title"
+              quota={codexQuota}
+              health={codexHealth}
+              generatedAt={snapshot.generatedAt}
+            />
+            <QuotaPanel
+              title="Gemini Flash Pool"
+              headingId="admin-omniroute-quota-title"
+              quota={quota}
+              health={geminiHealth}
+              generatedAt={snapshot.generatedAt}
+            />
 
             <section className="admin-omniroute-section" aria-labelledby="admin-omniroute-usage-title">
               <h3 id="admin-omniroute-usage-title">OmniRoute-Nutzung</h3>
@@ -306,8 +347,8 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
                   <dl className="admin-omniroute-metrics">
                     <Metric label="Combo" value={combo.name} />
                     <Metric label="Prioritäts-Strategie" value={combo.strategy ?? "–"} />
-                    <Metric label="Primäres Gemini 3.7-Ziel" value={combo.targets[0] ?? "–"} />
-                    <Metric label="Fallback-Ziel (Luna Pro)" value={combo.targets[1] ?? "–"} />
+                    <Metric label="Primäres Ziel (Luna Max via Codex OAuth)" value={combo.targets[0] ?? "–"} />
+                    <Metric label="Fallback-Ziel (Gemini 3.7 Flash High)" value={combo.targets[1] ?? "–"} />
                     <Metric label="Produktionsstatus" value={combo.productionTraffic ? "Produktion" : "Kein Produktions-Traffic"} />
                     <Metric label="Erfolgreiche Anfragen" value={formatNumber(combo.successes)} />
                     <Metric label="Fehler" value={formatNumber(combo.failures)} />
@@ -347,7 +388,7 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
                   )}
                 </>
               ) : (
-                <p className="admin-empty-state">Keine aktive Gemini-Combo gefunden.</p>
+                <p className="admin-empty-state">Keine aktive Codex/Gemini-Combo gefunden.</p>
               )}
             </section>
 
@@ -432,13 +473,13 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
 
             <section className="admin-omniroute-section" aria-labelledby="admin-omniroute-health-title">
               <h3 id="admin-omniroute-health-title">Provider-Health</h3>
-              {[geminiHealth, openRouterHealth].every((provider) => !provider) ? (
+              {[codexHealth, geminiHealth].every((provider) => !provider) ? (
                 <p className="admin-empty-state">Keine Provider-Health-Daten vorhanden.</p>
               ) : (
                 <div className="admin-omniroute-health-grid">
                   {[
+                    { label: "OpenAI Codex", provider: codexHealth },
                     { label: "Gemini / Antigravity", provider: geminiHealth },
-                    { label: "OpenRouter", provider: openRouterHealth },
                   ].map(({ label, provider }) => (
                     <article key={label} className="admin-omniroute-health">
                       <h4>{label}</h4>
