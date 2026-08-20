@@ -2450,10 +2450,34 @@ textarea:focus {
   padding: 2px 0 6px;
 }
 
-.fred-thinking-indicator img {
+.fred-sniff-sprite {
   display: block;
+  flex: 0 0 112px;
   width: 112px;
-  height: auto;
+  height: 140px;
+  aspect-ratio: 4 / 5;
+  background-image: url("/fred-sniff-sprite.png");
+  background-position: 0 0;
+  background-repeat: no-repeat;
+  background-size: 1120px 1120px;
+  animation:
+    fredSniffColumns 800ms steps(10) infinite,
+    fredSniffRows 6.4s steps(8) infinite;
+}
+
+@keyframes fredSniffColumns {
+  to { background-position-x: -1120px; }
+}
+
+@keyframes fredSniffRows {
+  to { background-position-y: -1120px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fred-sniff-sprite {
+    background-position: 0 -560px;
+    animation: none;
+  }
 }
 
 .fred-native-tool-button {

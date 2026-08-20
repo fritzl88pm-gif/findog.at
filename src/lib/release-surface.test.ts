@@ -12,6 +12,7 @@ describe("approved release surface", () => {
   const adminSettingsPath = fileURLToPath(new URL("../app/api/admin/settings/route.ts", import.meta.url));
   const chatRoutePath = fileURLToPath(new URL("../app/api/chat/route.ts", import.meta.url));
   const faviconPath = fileURLToPath(new URL("../../public/favicon.png", import.meta.url));
+  const fredSniffSpritePath = fileURLToPath(new URL("../../public/fred-sniff-sprite.png", import.meta.url));
   const bfgIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-search.png", import.meta.url));
   const bfgProIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-pro-search.png", import.meta.url));
   const germanSvPensionIllustrationPath = fileURLToPath(new URL("../../public/fred-german-sv-pension.png", import.meta.url));
@@ -66,12 +67,17 @@ describe("approved release surface", () => {
       pageSource.indexOf(') : appView === "bfg-decisions" ? ('),
     );
 
-    expect(bfgProView).not.toContain("fred-sniff.gif");
     expect(bfgProView).not.toContain("<img");
     expect(bfgProView).toContain('<span className="bfg-pro-loading-indicator" aria-hidden="true" />');
     expect(pageSource).toContain("Accept: BFG_PRO_STREAM_CONTENT_TYPE");
     expect(pageSource).toContain("parseBfgProStreamLine(line)");
     expect(pageSource).toContain("setBfgProStatus(bfgProStageLabel(streamEvent))");
+  });
+
+  it("ships the supplied Fred sniff sprite unchanged", () => {
+    expect(createHash("sha256").update(readFileSync(fredSniffSpritePath)).digest("hex")).toBe(
+      "6f3c229daae03ba31c4d635b3525840bfbbcb2b0a4821064667e5372a4a7c3b1",
+    );
   });
 
   it("keeps the Quiz view behind the administrator capability in every client path", () => {

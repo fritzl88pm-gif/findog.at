@@ -227,6 +227,18 @@ function ResearchTrace({
   );
 }
 
+function FredSniffingIndicator({ agentName }: { agentName: "Fred" | "QuickFred" }) {
+  return (
+    <div
+      className="fred-thinking-indicator"
+      role="status"
+      aria-label={`${agentName} denkt nach`}
+    >
+      <span className="fred-sniff-sprite" aria-hidden="true" />
+    </div>
+  );
+}
+
 type StreamingAssistantPreviewHandle = {
   append: (text: string) => void;
   replace: (text: string) => void;
@@ -301,14 +313,7 @@ const StreamingAssistantPreview = forwardRef<
   return (
     <div className="fred-streaming-preview">
       <span className="message-body fred-streaming-preview-text" ref={textContainerRef} />
-      <div
-        className="fred-thinking-indicator"
-        role="status"
-        aria-label={`${agentName} denkt nach`}
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/fred-sniff.gif" alt="" />
-      </div>
+      <FredSniffingIndicator agentName={agentName} />
     </div>
   );
 });
@@ -1478,14 +1483,9 @@ export default function FredNativeChatView({
                       </div>
                     )
                     : (
-                      <div
-                        className="fred-thinking-indicator"
-                        role="status"
-                        aria-label={`${fredAgentName(message.agentKey)} denkt nach`}
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src="/fred-sniff.gif" alt="" />
-                      </div>
+                      <FredSniffingIndicator
+                        agentName={fredAgentName(message.agentKey)}
+                      />
                     ))
                   : renderUserContent(message.content)}
                 {message.role === "assistant" && message.content ? (
