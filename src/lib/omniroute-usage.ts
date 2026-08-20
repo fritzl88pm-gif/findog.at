@@ -1,0 +1,728 @@
+import { UserVisibleError } from "./errors";
+import type {
+  OmniRouteAdminUsageSnapshot,
+  OmniRouteComboModelStats,
+  OmniRouteComboSnapshot,
+  OmniRouteDailyTrend,
+  OmniRouteModelHealth,
+  OmniRouteModelUsage,
+  OmniRouteProviderHealth,
+  OmniRouteProviderUsage,
+  OmniRouteQuotaSnapshot,
+  OmniRouteUsageRange,
+  OmniRouteUsageSnapshot,
+  OmniRouteUsageSummary,
+} from "./omniroute-usage-types";
+
+export const OMNIROUTE_USAGE_CACHE_TTL_MS = 5 * 60 * 1_000;
+export const OMNIROUTE_USAGE_TIMEOUT_MS = 10_000;
+const MAX_OMNIROUTE_RESPONSE_BYTES = 2 * 1_024 * 1_024;
+export const OMNIROUTE_GEMINI_COMBO_NAME = "omniroute-gemini-3.7-flash-high";
+
+type JsonRecord = Record<string, unknown>;
+type ProviderKind = "gemini" | "openrouter";
+
+type InternalRouteTarget = {
+  model: string;
+  provider: ProviderKind;
+};
+
+type OmniRouteServerConfig = {
+  baseUrl: string;
+  apiKey: string;
+};
+
+type UsageCacheEntry = {
+  fetchedAt: number;
+  snapshot: Omit<OmniRouteAdminUsageSnapshot, "stale" | "warning">;
+};
+
+class OmniRoutePayloadError extends Error {
+  constructor() {
+    super("OmniRoute returned an invalid payload.");
+    this.name = "OmniRoutePayloadError";
+  }
+}
+
+const usageCache = new Map<OmniRouteUsageRange, UsageCacheEntry>();
+
+export function clearOmniRouteUsageCacheForTests(): void {
+  usageCache.clear();
+}
+
+function recordOf(value: unknown): JsonRecord | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) throw new OmniRoutePayloadError();
+  return value as JsonRecord;
+}
+
+function requiredArray(value: unknown): unknown[] {
+  if (!Array.isArray(value)) throw new OmniRoutePayloadError();
+  return value;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function nonnegativeNumber(value: unknown): number | null {
+  const number = finiteNumber(value);
+  return number === null || number < 0 ? null : number;
+}
+
+function integer(value: unknown): number | null {
+  const number = nonnegativeNumber(value);
+  return number !== null && Number.isSafeInteger(number) ? number : null;
+}
+
+function percent(value: unknown): number | null {
+  const number = nonnegativeNumber(value);
+  return number === null ? null : Math.min(100, number);
+}
+
+function timestamp(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.length > 64) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function latestTimestamp(current: string | null, next: string | null): string | null {
+  if (!current) return next;
+  if (!next) return current;
+  return new Date(next).getTime() >= new Date(current).getTime() ? next : current;
+}
+
+function publicText(value: unknown, maxLength = 120): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxLength) return null;
+  if (/[\u0000-\u001f\u007f]/u.test(value)) return null;
+  return value.trim() || null;
+}
+
+function publicToken(value: unknown, maxLength = 100): string | null {
+  const text = publicText(value, maxLength);
+  return text && /^[A-Za-z0-9][A-Za-z0-9 _./:-]*$/u.test(text) ? text : null;
+}
+
+function modelText(value: unknown): string | null {
+  const text = publicText(value, 200);
+  return text && /^[A-Za-z0-9][A-Za-z0-9._/:+-]{0,199}$/u.test(text) ? text : null;
+}
+
+function providerKind(value: unknown): ProviderKind | null {
+  const text = typeof value === "string" ? value.toLowerCase() : "";
+  if (text.includes("antigravity") || text.includes("agy") || text.includes("gemini")) return "gemini";
+  if (text.includes("openrouter")) return "openrouter";
+  return null;
+}
+
+function publicProvider(kind: ProviderKind): string {
+  return kind === "gemini" ? "Gemini / Antigravity" : "OpenRouter";
+}
+
+function sameModel(candidate: string, target: string): boolean {
+  if (candidate === target) return true;
+  const candidateBase = candidate.split("/").pop() ?? candidate;
+  const targetBase = target.split("/").pop() ?? target;
+  return candidateBase === targetBase;
+}
+
+function quotaModelScore(model: string): number {
+  const normalized = model.toLowerCase();
+  if (normalized === "gemini-3.7-flash-high") return 1_000;
+  if (normalized === "gemini-3.6-flash-high") return 900;
+  if (normalized.includes("gemini") && normalized.includes("flash")) return 800;
+  return -1;
+}
+
+function normalizeQuota(
+  value: unknown,
+  cache: JsonRecord,
+  intervalMinutes: unknown,
+): OmniRouteQuotaSnapshot | null {
+  const quota = recordOf(value);
+  if (!quota) return null;
+  const quotas = quota as JsonRecord;
+  const unlimited = quotas.unlimited === true;
+  const used = nonnegativeNumber(quotas.used);
+  const total = nonnegativeNumber(quotas.total);
+  const reportedRemaining = percent(quotas.remainingPercentage);
+  const remainingPercent = reportedRemaining
+    ?? (used !== null && total !== null && total > 0 ? Math.max(0, Math.min(100, ((total - used) / total) * 100)) : null);
+  if (!unlimited && used === null && total === null && remainingPercent === null) return null;
+
+  return {
+    used,
+    total: unlimited ? null : total,
+    remainingPercent: unlimited ? 100 : remainingPercent,
+    resetAt: timestamp(quotas.resetAt),
+    plan: publicText(quotas.plan ?? cache.plan, 120),
+    source: publicText(quotas.quotaSource ?? cache.source, 120),
+    quotaFetchedAt: timestamp(quotas.fetchedAt ?? cache.fetchedAt),
+    quotaSyncIntervalMinutes: integer(intervalMinutes ?? cache.intervalMinutes),
+  };
+}
+
+export function normalizeProviderLimitsPayload(payload: unknown): OmniRouteQuotaSnapshot | null {
+  const root = recordOf(payload);
+  const caches = root?.caches === undefined || root.caches === null ? null : recordOf(root.caches);
+  if (!root || !caches) return null;
+
+  const candidates = Object.entries(caches)
+    .flatMap(([cacheId, cacheValue]) => {
+      const cache = recordOf(cacheValue);
+      if (!cache) return [];
+      const quotasValue = cache.quotas === undefined || cache.quotas === null ? null : recordOf(cache.quotas);
+      if (!quotasValue) return [];
+      const normalizedId = cacheId.toLowerCase();
+      const preference = normalizedId.includes("antigravity")
+        ? 2_000
+        : normalizedId.includes("agy")
+          ? 1_000
+          : 0;
+      return Object.entries(quotasValue)
+        .flatMap(([model, quotaValue]) => {
+          const score = quotaModelScore(model);
+          if (score < 0) return [];
+          const quota = normalizeQuota(quotaValue, cache, root?.intervalMinutes);
+          return quota ? [{ cache, model, quota, score, preference }] : [];
+        })
+        .map((candidate) => ({ ...candidate, preference }));
+    })
+    .sort((left, right) => right.score - left.score
+      || right.preference - left.preference
+      || left.model.localeCompare(right.model));
+
+  return candidates[0]?.quota ?? null;
+}
+
+function normalizeUsageSummary(value: unknown): OmniRouteUsageSummary | null {
+  const summary = recordOf(value);
+  if (!summary) return null;
+  return {
+    totalRequests: integer(summary.totalRequests),
+    promptTokens: integer(summary.promptTokens),
+    completionTokens: integer(summary.completionTokens),
+    totalTokens: integer(summary.totalTokens),
+    successfulRequests: integer(summary.successfulRequests),
+    successRatePct: percent(summary.successRatePct),
+    avgLatencyMs: nonnegativeNumber(summary.avgLatencyMs),
+    totalCost: nonnegativeNumber(summary.totalCost),
+    fallbackCount: integer(summary.fallbackCount),
+    lastRequest: timestamp(summary.lastRequest),
+  };
+}
+
+function normalizeModelUsage(value: unknown): OmniRouteModelUsage | null {
+  const entry = recordOf(value);
+  if (!entry) return null;
+  const kind = providerKind(entry.provider) ?? providerKind(entry.model);
+  if (!kind) return null;
+  const model = modelText(entry.model);
+  if (!model) return null;
+  return {
+    model,
+    provider: publicProvider(kind),
+    requests: integer(entry.requests),
+    promptTokens: integer(entry.promptTokens),
+    completionTokens: integer(entry.completionTokens),
+    totalTokens: integer(entry.totalTokens),
+    avgLatencyMs: nonnegativeNumber(entry.avgLatencyMs),
+    successRatePct: percent(entry.successRatePct),
+    cost: nonnegativeNumber(entry.cost),
+    lastUsed: timestamp(entry.lastUsed),
+  };
+}
+
+function normalizeProviderUsage(value: unknown): OmniRouteProviderUsage | null {
+  const entry = recordOf(value);
+  if (!entry) return null;
+  const kind = providerKind(entry.provider);
+  if (!kind) return null;
+  return {
+    provider: publicProvider(kind),
+    requests: integer(entry.requests),
+    promptTokens: integer(entry.promptTokens),
+    completionTokens: integer(entry.completionTokens),
+    totalTokens: integer(entry.totalTokens),
+    avgLatencyMs: nonnegativeNumber(entry.avgLatencyMs),
+    successRatePct: percent(entry.successRatePct),
+    cost: nonnegativeNumber(entry.cost),
+    lastUsed: timestamp(entry.lastUsed),
+  };
+}
+
+function normalizeDailyTrend(value: unknown): OmniRouteDailyTrend | null {
+  const entry = recordOf(value);
+  if (!entry) return null;
+  const date = publicText(entry.date, 32);
+  if (!date || !/^\d{4}-\d{2}-\d{2}(?:[Tt][^\s]+)?$/u.test(date)) return null;
+  return {
+    date,
+    requests: integer(entry.requests),
+    tokens: integer(entry.tokens ?? entry.totalTokens),
+    cost: nonnegativeNumber(entry.cost),
+  };
+}
+
+export function normalizeAnalyticsPayload(payload: unknown): OmniRouteUsageSnapshot {
+  const root = recordOf(payload);
+  if (!root) {
+    return { summary: null, models: [], providers: [], dailyTrend: [] };
+  }
+  const summary = normalizeUsageSummary(root.summary);
+  const models = root.byModel === undefined || root.byModel === null
+    ? []
+    : requiredArray(root.byModel)
+      .map(normalizeModelUsage)
+      .filter((entry): entry is OmniRouteModelUsage => entry !== null)
+      .slice(0, 100);
+  const providers = root.byProvider === undefined || root.byProvider === null
+    ? []
+    : requiredArray(root.byProvider)
+      .map(normalizeProviderUsage)
+      .filter((entry): entry is OmniRouteProviderUsage => entry !== null)
+      .slice(0, 10);
+  const dailyTrend = root.dailyTrend === undefined || root.dailyTrend === null
+    ? []
+    : requiredArray(root.dailyTrend)
+      .map(normalizeDailyTrend)
+      .filter((entry): entry is OmniRouteDailyTrend => entry !== null)
+      .slice(0, 31);
+
+  return { summary, models, providers, dailyTrend };
+}
+
+function normalizeComboConfiguration(payload: unknown): {
+  configuration: {
+    name: string;
+    strategy: string | null;
+    targets: string[];
+    version: number | null;
+    updatedAt: string | null;
+  } | null;
+  routeTargets: InternalRouteTarget[];
+} {
+  const root = recordOf(payload);
+  const combos = root?.combos === undefined || root.combos === null ? null : requiredArray(root.combos);
+  if (!root || !combos) return { configuration: null, routeTargets: [] };
+
+  const configuredCombo = combos
+    .map((value) => recordOf(value))
+    .find((combo) => combo?.name === OMNIROUTE_GEMINI_COMBO_NAME);
+  if (!configuredCombo) return { configuration: null, routeTargets: [] };
+
+  const models = configuredCombo.models === undefined || configuredCombo.models === null
+    ? []
+    : requiredArray(configuredCombo.models)
+      .map((value) => recordOf(value))
+      .filter((value): value is JsonRecord => value !== null);
+  const routeTargets = models.flatMap((value) => {
+    const model = modelText(value.model);
+    const kind = providerKind(value.providerId);
+    return model && kind ? [{ model, provider: kind }] : [];
+  });
+
+  return {
+    configuration: {
+      name: OMNIROUTE_GEMINI_COMBO_NAME,
+      strategy: publicToken(configuredCombo.strategy),
+      targets: routeTargets.map((target) => target.model),
+      version: integer(configuredCombo.version),
+      updatedAt: timestamp(configuredCombo.updatedAt),
+    },
+    routeTargets,
+  };
+}
+
+function normalizeComboModelStats(
+  value: unknown,
+  targets: InternalRouteTarget[],
+): OmniRouteComboModelStats | null {
+  const entry = recordOf(value);
+  if (!entry) return null;
+  const model = modelText(entry.model);
+  if (!model || !targets.some((target) => sameModel(model, target.model))) return null;
+  return {
+    model,
+    requests: integer(entry.requests ?? entry.totalRequests),
+    successes: integer(entry.successes ?? entry.totalSuccesses),
+    failures: integer(entry.failures ?? entry.totalFailures),
+    avgLatencyMs: nonnegativeNumber(entry.avgLatencyMs),
+    lastStatus: publicToken(entry.lastStatus, 60),
+    lastUsedAt: timestamp(entry.lastUsedAt ?? entry.lastUsed),
+  };
+}
+
+function comboModelEntries(value: unknown): unknown[] {
+  if (value === undefined || value === null) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === "object") {
+    return Object.entries(value as JsonRecord).map(([model, stats]) => {
+      const entry = recordOf(stats);
+      return entry ? { ...entry, model: entry.model ?? model } : stats;
+    });
+  }
+  throw new OmniRoutePayloadError();
+}
+
+export function normalizeProviderStatsPayload(
+  payload: unknown,
+  comboConfiguration: ReturnType<typeof normalizeComboConfiguration>["configuration"],
+  routeTargets: InternalRouteTarget[],
+): OmniRouteComboSnapshot | null {
+  if (!comboConfiguration) return null;
+  const root = recordOf(payload);
+  if (!root) return null;
+  const metricsRoot = root.comboMetrics === undefined || root.comboMetrics === null
+    ? null
+    : recordOf(root.comboMetrics);
+  const metrics = metricsRoot && OMNIROUTE_GEMINI_COMBO_NAME in metricsRoot
+    ? recordOf(metricsRoot[OMNIROUTE_GEMINI_COMBO_NAME])
+    : null;
+
+  const models = comboModelEntries(metrics?.byModel)
+    .map((value) => normalizeComboModelStats(value, routeTargets))
+    .filter((value): value is OmniRouteComboModelStats => value !== null)
+    .slice(0, 20);
+
+  return {
+    ...comboConfiguration,
+    productionTraffic: metrics?.productionTraffic === true,
+    requests: integer(metrics?.totalRequests),
+    successes: integer(metrics?.totalSuccesses),
+    failures: integer(metrics?.totalFailures),
+    fallbacks: integer(metrics?.totalFallbacks),
+    avgLatencyMs: nonnegativeNumber(metrics?.avgLatencyMs),
+    successRatePct: percent(metrics?.successRate),
+    fallbackRatePct: percent(metrics?.fallbackRate),
+    lastUsedAt: timestamp(metrics?.lastUsedAt),
+    strategy: publicToken(metrics?.strategy ?? comboConfiguration.strategy),
+    models,
+  };
+}
+
+function aggregateModelHealth(
+  entries: JsonRecord[],
+  target: string,
+): OmniRouteModelHealth {
+  let requests = 0;
+  let successes = 0;
+  let latencyWeight = 0;
+  let avgLatencySum = 0;
+  let hasCounts = false;
+  let isLockedOut = false;
+  let lockoutRemainingMs: number | null = null;
+  let status: string | null = null;
+  let lastStatus: string | null = null;
+  let lastErrorStatus: string | null = null;
+  let lastRequestAt: string | null = null;
+  let lastErrorAt: string | null = null;
+
+  for (const entry of entries) {
+    isLockedOut = isLockedOut || entry.isLockedOut === true;
+    const remaining = integer(entry.lockoutRemainingMs);
+    if (remaining !== null) lockoutRemainingMs = Math.max(lockoutRemainingMs ?? 0, remaining);
+    const entryRequests = integer(entry.requests);
+    const entrySuccesses = integer(entry.successes);
+    const entryLatency = nonnegativeNumber(entry.avgLatencyMs);
+    if (entryRequests !== null) {
+      requests += entryRequests;
+      hasCounts = true;
+      if (entryLatency !== null) {
+        avgLatencySum += entryLatency * entryRequests;
+        latencyWeight += entryRequests;
+      }
+    }
+    if (entrySuccesses !== null) {
+      successes += entrySuccesses;
+      hasCounts = true;
+    }
+
+    const entryLastRequestAt = timestamp(entry.lastRequestAt);
+    if (entryLastRequestAt && (!lastRequestAt || new Date(entryLastRequestAt) >= new Date(lastRequestAt))) {
+      lastRequestAt = entryLastRequestAt;
+      status = publicToken(entry.status, 60);
+      lastStatus = publicToken(entry.lastStatus ?? entry.status, 60);
+    }
+    const entryLastErrorAt = timestamp(entry.lastErrorAt);
+    if (entryLastErrorAt && (!lastErrorAt || new Date(entryLastErrorAt) >= new Date(lastErrorAt))) {
+      lastErrorAt = entryLastErrorAt;
+      lastErrorStatus = publicToken(entry.lastErrorStatus ?? entry.errorCode, 60);
+    }
+  }
+
+  const successRate = hasCounts && requests > 0
+    ? Math.min(100, Math.max(0, (successes / requests) * 100))
+    : null;
+  return {
+    model: target,
+    status,
+    isLockedOut,
+    lockoutRemainingMs,
+    requests: hasCounts ? requests : null,
+    successes: hasCounts ? successes : null,
+    successRatePct: successRate,
+    avgLatencyMs: latencyWeight > 0 ? avgLatencySum / latencyWeight : null,
+    lastStatus,
+    lastErrorStatus,
+    lastRequestAt,
+    lastErrorAt,
+  };
+}
+
+function normalizeProviderHealth(
+  value: unknown,
+  target: string,
+): OmniRouteProviderHealth | null {
+  const provider = recordOf(value);
+  if (!provider) return null;
+  const kind = providerKind(provider.provider);
+  if (!kind) return null;
+
+  const accounts = provider.accounts === undefined || provider.accounts === null
+    ? []
+    : requiredArray(provider.accounts)
+      .map((accountValue) => recordOf(accountValue))
+      .filter((account): account is JsonRecord => account !== null);
+  const matchingModels: JsonRecord[] = [];
+  let cooldownRemainingMs: number | null = null;
+  let rateLimitedUntil: string | null = null;
+  let lastErrorAt: string | null = timestamp(provider.lastErrorAt);
+  let lastErrorType: string | null = null;
+  let lastErrorCode: string | null = null;
+  const connections = typeof provider.connections === "object" && provider.connections !== null
+    ? recordOf(provider.connections)?.total
+    : provider.connections;
+
+  for (const account of accounts) {
+    const accountCooldown = integer(account.cooldownRemainingMs);
+    if (accountCooldown !== null) cooldownRemainingMs = Math.max(cooldownRemainingMs ?? 0, accountCooldown);
+    rateLimitedUntil = latestTimestamp(rateLimitedUntil, timestamp(account.rateLimitedUntil));
+    const accountErrorAt = timestamp(account.lastErrorAt);
+    const providerErrorAt = timestamp(provider.lastErrorAt);
+    const effectiveErrorAt = latestTimestamp(accountErrorAt, providerErrorAt === lastErrorAt ? providerErrorAt : null);
+    if (effectiveErrorAt && (!lastErrorAt || new Date(effectiveErrorAt) >= new Date(lastErrorAt))) {
+      lastErrorAt = effectiveErrorAt;
+      lastErrorType = publicToken(account.lastErrorType, 80);
+      lastErrorCode = publicToken(account.errorCode, 60);
+    }
+    const models = account.models === undefined || account.models === null
+      ? []
+      : requiredArray(account.models)
+        .map((modelValue) => recordOf(modelValue))
+        .filter((model): model is JsonRecord => model !== null);
+    matchingModels.push(...models.filter((model) => {
+      const candidate = modelText(model.model);
+      return candidate !== null && sameModel(candidate, target);
+    }));
+  }
+
+  return {
+    provider: kind,
+    state: publicToken(provider.state, 60),
+    connections: integer(connections),
+    modelLockoutCount: integer(provider.modelLockoutCount),
+    requests: integer(provider.requests),
+    successRatePct: percent(provider.successRate),
+    avgLatencyMs: nonnegativeNumber(provider.avgLatencyMs),
+    cooldownRemainingMs,
+    rateLimitedUntil,
+    lastRequestAt: timestamp(provider.lastRequestAt),
+    lastErrorAt,
+    lastErrorType,
+    lastErrorCode,
+    models: matchingModels.length > 0 ? [aggregateModelHealth(matchingModels, target)] : [],
+  };
+}
+
+export function normalizeHealthMatrixPayload(
+  payload: unknown,
+  routeTargets: InternalRouteTarget[],
+): OmniRouteProviderHealth[] {
+  const root = recordOf(payload);
+  if (!root) return [];
+  const providers = root.providers === undefined || root.providers === null
+    ? []
+    : requiredArray(root.providers);
+  const geminiTarget = routeTargets.find((target) => target.provider === "gemini")?.model
+    ?? "gemini-3.7-flash-high";
+  const openRouterTarget = routeTargets.find((target) => target.provider === "openrouter")?.model;
+  const records = providers
+    .map((value) => ({ value, provider: recordOf(value) }))
+    .filter((entry): entry is { value: unknown; provider: JsonRecord } => entry.provider !== null);
+  const geminiProvider = records
+    .filter((entry) => providerKind(entry.provider.provider) === "gemini")
+    .sort((left, right) => {
+      const score = (entry: { provider: JsonRecord }) => entry.provider.provider === "antigravity" ? 1 : 0;
+      return score(right) - score(left);
+    })[0];
+  const openRouterProvider = records.find((entry) => providerKind(entry.provider.provider) === "openrouter");
+
+  return [
+    geminiProvider ? normalizeProviderHealth(geminiProvider.value, geminiTarget) : null,
+    openRouterProvider && openRouterTarget
+      ? normalizeProviderHealth(openRouterProvider.value, openRouterTarget)
+      : null,
+  ].filter((entry): entry is OmniRouteProviderHealth => entry !== null);
+}
+
+export function normalizeOmniRouteUsagePayloads(input: {
+  providerLimits: unknown;
+  analytics: unknown;
+  providerStats: unknown;
+  healthMatrix: unknown;
+  combos: unknown;
+  range: OmniRouteUsageRange;
+  generatedAt?: string;
+}): Omit<OmniRouteAdminUsageSnapshot, "stale" | "warning"> {
+  const { configuration, routeTargets } = normalizeComboConfiguration(input.combos);
+  const usage = normalizeAnalyticsPayload(input.analytics);
+  return {
+    generatedAt: timestamp(input.generatedAt ?? new Date().toISOString()) ?? new Date().toISOString(),
+    range: input.range,
+    quota: normalizeProviderLimitsPayload(input.providerLimits),
+    usage: {
+      ...usage,
+      models: usage.models.filter((entry) => routeTargets.some((target) => sameModel(entry.model, target.model))),
+    },
+    combo: normalizeProviderStatsPayload(input.providerStats, configuration, routeTargets),
+    providerHealth: normalizeHealthMatrixPayload(input.healthMatrix, routeTargets),
+  };
+}
+
+function serverConfig(): OmniRouteServerConfig {
+  const baseUrlValue = process.env.OMNIROUTE_ADMIN_BASE_URL?.trim() ?? "";
+  const apiKey = process.env.OMNIROUTE_ADMIN_API_KEY?.trim() ?? "";
+  if (!baseUrlValue || !apiKey) {
+    throw new UserVisibleError("OmniRoute ist serverseitig nicht konfiguriert.", 503);
+  }
+
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(baseUrlValue);
+  } catch {
+    throw new UserVisibleError("OmniRoute ist serverseitig nicht konfiguriert.", 503);
+  }
+  if (
+    (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:")
+    || baseUrl.username
+    || baseUrl.password
+    || baseUrl.search
+    || baseUrl.hash
+  ) {
+    throw new UserVisibleError("OmniRoute ist serverseitig nicht konfiguriert.", 503);
+  }
+
+  return { baseUrl: baseUrl.toString().replace(/\/+$/u, ""), apiKey };
+}
+
+async function readBoundedJson(response: Response): Promise<unknown> {
+  const contentLength = Number(response.headers.get("content-length") ?? "");
+  if (Number.isFinite(contentLength) && contentLength > MAX_OMNIROUTE_RESPONSE_BYTES) {
+    throw new Error("OmniRoute request failed.");
+  }
+  if (!response.body) return response.json();
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_OMNIROUTE_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error("OmniRoute request failed.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  return JSON.parse(text);
+}
+
+async function fetchOmniRouteJson(
+  endpoint: string,
+  config: OmniRouteServerConfig,
+  fetcher: typeof fetch,
+): Promise<unknown> {
+  const response = await fetcher(new URL(`${config.baseUrl}${endpoint}`).toString(), {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    cache: "no-store",
+    signal: AbortSignal.timeout(OMNIROUTE_USAGE_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error("OmniRoute request failed.");
+  try {
+    return await readBoundedJson(response);
+  } catch {
+    throw new Error("OmniRoute request failed.");
+  }
+}
+
+async function fetchUsageSnapshot(
+  range: OmniRouteUsageRange,
+  fetcher: typeof fetch,
+): Promise<Omit<OmniRouteAdminUsageSnapshot, "stale" | "warning">> {
+  const config = serverConfig();
+  const [providerLimits, analytics, providerStats, healthMatrix, combos] = await Promise.all([
+    fetchOmniRouteJson("/api/usage/provider-limits", config, fetcher),
+    fetchOmniRouteJson(`/api/usage/analytics?range=${encodeURIComponent(range)}`, config, fetcher),
+    fetchOmniRouteJson("/api/provider-stats", config, fetcher),
+    fetchOmniRouteJson("/api/providers/health-matrix", config, fetcher),
+    fetchOmniRouteJson("/api/combos", config, fetcher),
+  ]);
+
+  return normalizeOmniRouteUsagePayloads({
+    providerLimits,
+    analytics,
+    providerStats,
+    healthMatrix,
+    combos,
+    range,
+  });
+}
+
+export async function getOmniRouteUsageSnapshot(
+  range: OmniRouteUsageRange,
+  options: { refresh?: boolean; fetcher?: typeof fetch } = {},
+): Promise<OmniRouteAdminUsageSnapshot> {
+  const fetcher = options.fetcher ?? globalThis.fetch;
+  const cached = usageCache.get(range);
+  const now = Date.now();
+  if (!options.refresh && cached && now - cached.fetchedAt < OMNIROUTE_USAGE_CACHE_TTL_MS) {
+    return { ...cached.snapshot, stale: false };
+  }
+
+  try {
+    const snapshot = await fetchUsageSnapshot(range, fetcher);
+    usageCache.set(range, {
+      fetchedAt: Date.now(),
+      snapshot,
+    });
+    return { ...snapshot, stale: false };
+  } catch (error) {
+    if (error instanceof UserVisibleError) throw error;
+    if (cached) {
+      return {
+        ...cached.snapshot,
+        stale: true,
+        warning: "OmniRoute ist vorübergehend nicht erreichbar. Es werden zuletzt erfolgreich geladene Werte angezeigt.",
+      };
+    }
+    throw new UserVisibleError("OmniRoute ist derzeit nicht erreichbar.", 503);
+  }
+}

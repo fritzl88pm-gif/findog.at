@@ -11,11 +11,12 @@ const componentSource = readFileSync(
 const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
 describe("Administration UI tabs and scanning settings", () => {
-  it("has exactly five ARIA tabs including the download administration", () => {
+  it("has exactly six ARIA tabs including OmniRoute administration", () => {
     const tabMatches = pageSource.match(/role="tab"/gu);
-    expect(tabMatches).toHaveLength(5);
+    expect(tabMatches).toHaveLength(6);
     expect(pageSource).toContain('id="admin-tab-downloads"');
     expect(pageSource).toContain('id="admin-tab-personalities"');
+    expect(pageSource).toContain('id="admin-tab-omniroute"');
     expect(pageSource).not.toContain('id="admin-tab-bfg-pro"');
   });
 

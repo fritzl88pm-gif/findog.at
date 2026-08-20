@@ -9834,3 +9834,289 @@ textarea:focus {
     width: 54px;
   }
 }
+
+/* OmniRoute administration */
+.admin-omniroute-panel {
+  display: grid;
+  gap: 20px;
+}
+
+.admin-omniroute-card {
+  gap: 22px;
+  border-top-color: var(--accent-yellow);
+  background: #102938;
+  color: #eaf3f8;
+}
+
+.admin-omniroute-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.admin-omniroute-heading h2,
+.admin-omniroute-section h3,
+.admin-omniroute-health h4 {
+  margin: 0;
+  color: #ffffff;
+}
+
+.admin-omniroute-heading p {
+  margin: 7px 0 0;
+  color: #9fb8c8;
+  font-size: 0.88rem;
+}
+
+.admin-omniroute-controls {
+  display: grid;
+  grid-template-columns: auto minmax(150px, 1fr);
+  gap: 8px 10px;
+  align-items: center;
+}
+
+.admin-omniroute-controls label {
+  color: #9fb8c8;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.admin-omniroute-controls select {
+  min-height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
+  background: #173444;
+  color: #eaf3f8;
+}
+
+.admin-omniroute-controls .compact-button {
+  grid-column: 1 / -1;
+  justify-self: end;
+  border-color: rgba(255, 212, 0, 0.5);
+  background: rgba(255, 212, 0, 0.08);
+  color: #ffd400;
+}
+
+.admin-omniroute-card .error-box,
+.admin-omniroute-card .notice-box {
+  margin: 0;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: #eaf3f8;
+}
+
+.admin-omniroute-updated {
+  margin: 0;
+  color: #9fb8c8;
+  font-size: 0.82rem;
+}
+
+.admin-omniroute-section {
+  display: grid;
+  gap: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.admin-omniroute-section h3 {
+  font-size: 1.05rem;
+}
+
+.admin-omniroute-quota {
+  display: grid;
+  gap: 18px;
+}
+
+.admin-omniroute-progress {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-omniroute-progress-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #9fb8c8;
+  font-size: 0.82rem;
+}
+
+.admin-omniroute-progress-label strong {
+  color: #ffd400;
+}
+
+.admin-omniroute-progress > div[role="progressbar"] {
+  overflow: hidden;
+  height: 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.admin-omniroute-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #ffd400, #79c2ff);
+  transition: width 0.25s ease-out;
+}
+
+.admin-omniroute-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.admin-omniroute-metric {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.admin-omniroute-metric dt {
+  color: #9fb8c8;
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.admin-omniroute-metric dd {
+  overflow-wrap: anywhere;
+  margin: 5px 0 0;
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.admin-omniroute-metric small {
+  display: block;
+  margin-top: 4px;
+  color: #9fb8c8;
+  font-size: 0.74rem;
+}
+
+.admin-omniroute-table-wrap {
+  overflow-x: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+}
+
+.admin-omniroute-table-wrap table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-omniroute-table-wrap caption {
+  padding: 10px 12px;
+  color: #9fb8c8;
+  font-size: 0.78rem;
+  text-align: left;
+}
+
+.admin-omniroute-table-wrap th,
+.admin-omniroute-table-wrap td {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding: 10px 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.admin-omniroute-table-wrap thead th,
+.admin-omniroute-table-wrap tbody th {
+  text-align: left;
+}
+
+.admin-omniroute-table-wrap thead th {
+  color: #9fb8c8;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.admin-omniroute-table-wrap tbody th,
+.admin-omniroute-table-wrap td {
+  color: #eaf3f8;
+}
+
+.admin-omniroute-provider-row {
+  background: rgba(40, 111, 156, 0.12);
+}
+
+.admin-omniroute-health-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-omniroute-health {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.admin-omniroute-health dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.admin-omniroute-health dl > div {
+  display: grid;
+  gap: 3px;
+}
+
+.admin-omniroute-health dt {
+  color: #9fb8c8;
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.admin-omniroute-health dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: #ffffff;
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.admin-omniroute-model-health {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 8px;
+}
+
+@media (max-width: 960px) {
+  .admin-omniroute-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-omniroute-health-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .admin-omniroute-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-omniroute-controls {
+    align-items: stretch;
+  }
+
+  .admin-omniroute-controls .compact-button {
+    justify-self: stretch;
+  }
+
+  .admin-omniroute-metrics {
+    grid-template-columns: 1fr;
+  }
+}
