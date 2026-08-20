@@ -234,7 +234,13 @@ function FredSniffingIndicator({ agentName }: { agentName: "Fred" | "QuickFred" 
       role="status"
       aria-label={`${agentName} denkt nach`}
     >
-      <span className="fred-sniff-sprite" aria-hidden="true" />
+      <picture className="fred-sniff-animation">
+        <source
+          media="(prefers-reduced-motion: reduce)"
+          srcSet="/fred-sniff-static.webp"
+        />
+        <img src="/fred-sniff.webp" alt="" width={224} height={166} />
+      </picture>
     </div>
   );
 }

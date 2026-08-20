@@ -89,14 +89,14 @@ describe("Fred native Findog UI", () => {
     expect(cssSource).toMatch(/\.welcome-greeting \{[\s\S]*?color: var\(--bmf-blue-deep\);/u);
   });
 
-  it("renders all 100 sniff frames from a 10 x 10 sheet in a 112 x 112 square viewport", () => {
-    expect(cssSource).toContain('background-image: url("/fred-sniff-sprite.png")');
+  it("renders the optimized sniff animation with a reduced-motion still", () => {
+    expect(viewSource).toContain('src="/fred-sniff.webp"');
+    expect(viewSource).toContain('srcSet="/fred-sniff-static.webp"');
+    expect(viewSource).toContain('media="(prefers-reduced-motion: reduce)"');
+    expect(viewSource).toContain('width={224} height={166}');
     expect(cssSource).toMatch(
-      /\.fred-sniff-sprite \{[\s\S]*?width: 112px;[\s\S]*?height: 112px;[\s\S]*?aspect-ratio: 1 \/ 1;[\s\S]*?background-size: 1120px 1120px;[\s\S]*?fredSniffColumns 800ms steps\(10\) infinite,[\s\S]*?fredSniffRows 8s steps\(10\) infinite;/u,
+      /\.fred-sniff-animation \{[\s\S]*?width: 112px;[\s\S]*?height: auto;/u,
     );
-    expect(cssSource).toMatch(/@keyframes fredSniffColumns \{[\s\S]*?background-position-x: -1120px;/u);
-    expect(cssSource).toMatch(/@keyframes fredSniffRows \{[\s\S]*?background-position-y: -1120px;/u);
-    expect(cssSource).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\.fred-sniff-sprite \{[\s\S]*?background-position: 0 -560px;[\s\S]*?animation: none;/u);
   });
 
   it("uses Findog message bubbles, rich answers and the native composer for live responses", () => {
@@ -106,7 +106,10 @@ describe("Fred native Findog UI", () => {
     expect(viewSource.match(/<FredSniffingIndicator/g)).toHaveLength(2);
     expect(viewSource).toContain('role="status"');
     expect(viewSource).toContain('aria-label={`${agentName} denkt nach`}');
-    expect(viewSource).toContain('<span className="fred-sniff-sprite" aria-hidden="true" />');
+    expect(viewSource).toContain('<picture className="fred-sniff-animation">');
+    expect(viewSource).toContain('src="/fred-sniff.webp"');
+    expect(viewSource).not.toContain('src="/fred-sniff.gif"');
+    expect(viewSource).toContain('className="fred-thinking-indicator"');
     expect(viewSource).not.toContain('<p className="message-body">Fred denkt nach');
     expect(viewSource).toContain('className="composer"');
     expect(viewSource).toContain('className="composer-icon-button"');

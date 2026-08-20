@@ -12,7 +12,8 @@ describe("approved release surface", () => {
   const adminSettingsPath = fileURLToPath(new URL("../app/api/admin/settings/route.ts", import.meta.url));
   const chatRoutePath = fileURLToPath(new URL("../app/api/chat/route.ts", import.meta.url));
   const faviconPath = fileURLToPath(new URL("../../public/favicon.png", import.meta.url));
-  const fredSniffSpritePath = fileURLToPath(new URL("../../public/fred-sniff-sprite.png", import.meta.url));
+  const fredSniffAnimationPath = fileURLToPath(new URL("../../public/fred-sniff.webp", import.meta.url));
+  const fredSniffStaticPath = fileURLToPath(new URL("../../public/fred-sniff-static.webp", import.meta.url));
   const bfgIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-search.png", import.meta.url));
   const bfgProIllustrationPath = fileURLToPath(new URL("../../public/fred-bfg-pro-search.png", import.meta.url));
   const germanSvPensionIllustrationPath = fileURLToPath(new URL("../../public/fred-german-sv-pension.png", import.meta.url));
@@ -67,6 +68,7 @@ describe("approved release surface", () => {
       pageSource.indexOf(') : appView === "bfg-decisions" ? ('),
     );
 
+    expect(bfgProView).not.toContain("fred-sniff.webp");
     expect(bfgProView).not.toContain("<img");
     expect(bfgProView).toContain('<span className="bfg-pro-loading-indicator" aria-hidden="true" />');
     expect(pageSource).toContain("Accept: BFG_PRO_STREAM_CONTENT_TYPE");
@@ -74,9 +76,12 @@ describe("approved release surface", () => {
     expect(pageSource).toContain("setBfgProStatus(bfgProStageLabel(streamEvent))");
   });
 
-  it("ships the supplied Fred sniff sprite unchanged", () => {
-    expect(createHash("sha256").update(readFileSync(fredSniffSpritePath)).digest("hex")).toBe(
-      "6f3c229daae03ba31c4d635b3525840bfbbcb2b0a4821064667e5372a4a7c3b1",
+  it("ships the optimized Fred sniff animation and reduced-motion still unchanged", () => {
+    expect(createHash("sha256").update(readFileSync(fredSniffAnimationPath)).digest("hex")).toBe(
+      "507726303e67fee0084ad55d36577cdbb42c9ada5154dd0649fb39790ff4fc0c",
+    );
+    expect(createHash("sha256").update(readFileSync(fredSniffStaticPath)).digest("hex")).toBe(
+      "a52289c0839b9cf8e2981299de3b72ee1302eaefdb9dd67deaa99761fa9827fb",
     );
   });
 
