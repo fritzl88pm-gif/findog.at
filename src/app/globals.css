@@ -2454,15 +2454,15 @@ textarea:focus {
   display: block;
   flex: 0 0 112px;
   width: 112px;
-  height: 140px;
-  aspect-ratio: 4 / 5;
+  height: 112px;
+  aspect-ratio: 1 / 1;
   background-image: url("/fred-sniff-sprite.png");
   background-position: 0 0;
   background-repeat: no-repeat;
   background-size: 1120px 1120px;
   animation:
     fredSniffColumns 800ms steps(10) infinite,
-    fredSniffRows 6.4s steps(8) infinite;
+    fredSniffRows 8s steps(10) infinite;
 }
 
 @keyframes fredSniffColumns {

@@ -89,6 +89,16 @@ describe("Fred native Findog UI", () => {
     expect(cssSource).toMatch(/\.welcome-greeting \{[\s\S]*?color: var\(--bmf-blue-deep\);/u);
   });
 
+  it("renders all 100 sniff frames from a 10 x 10 sheet in a 112 x 112 square viewport", () => {
+    expect(cssSource).toContain('background-image: url("/fred-sniff-sprite.png")');
+    expect(cssSource).toMatch(
+      /\.fred-sniff-sprite \{[\s\S]*?width: 112px;[\s\S]*?height: 112px;[\s\S]*?aspect-ratio: 1 \/ 1;[\s\S]*?background-size: 1120px 1120px;[\s\S]*?fredSniffColumns 800ms steps\(10\) infinite,[\s\S]*?fredSniffRows 8s steps\(10\) infinite;/u,
+    );
+    expect(cssSource).toMatch(/@keyframes fredSniffColumns \{[\s\S]*?background-position-x: -1120px;/u);
+    expect(cssSource).toMatch(/@keyframes fredSniffRows \{[\s\S]*?background-position-y: -1120px;/u);
+    expect(cssSource).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\.fred-sniff-sprite \{[\s\S]*?background-position: 0 -560px;[\s\S]*?animation: none;/u);
+  });
+
   it("uses Findog message bubbles, rich answers and the native composer for live responses", () => {
     expect(viewSource).toContain('className={`message ${message.role}');
     expect(viewSource).toContain("renderAssistantContent(message.content)");
@@ -98,14 +108,6 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).toContain('aria-label={`${agentName} denkt nach`}');
     expect(viewSource).toContain('<span className="fred-sniff-sprite" aria-hidden="true" />');
     expect(viewSource).not.toContain('<p className="message-body">Fred denkt nach');
-    expect(cssSource).toContain('background-image: url("/fred-sniff-sprite.png")');
-    expect(cssSource).toContain("background-size: 1120px 1120px");
-    expect(cssSource).toContain("fredSniffColumns 800ms steps(10) infinite");
-    expect(cssSource).toContain("fredSniffRows 6.4s steps(8) infinite");
-    expect(cssSource).toMatch(/@keyframes fredSniffColumns \{[\s\S]*?background-position-x: -1120px;/u);
-    expect(cssSource).toMatch(/@keyframes fredSniffRows \{[\s\S]*?background-position-y: -1120px;/u);
-    expect(cssSource).toMatch(/\.fred-sniff-sprite \{[\s\S]*?width: 112px;[\s\S]*?height: 140px;[\s\S]*?aspect-ratio: 4 \/ 5;/u);
-    expect(cssSource).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\.fred-sniff-sprite \{[\s\S]*?background-position: 0 -560px;[\s\S]*?animation: none;/u);
     expect(viewSource).toContain('className="composer"');
     expect(viewSource).toContain('className="composer-icon-button"');
     expect(viewSource).toContain("autosizeComposer(textarea)");
