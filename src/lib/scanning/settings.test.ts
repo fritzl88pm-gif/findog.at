@@ -2,10 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_DOCUMENT_PIPELINE,
+  DEFAULT_FRED_ATTACHMENT_MODE,
   DEFAULT_SCANNING_MODEL_ID,
   DEFAULT_SCANNING_PROMPT,
+  FRED_ATTACHMENT_MODES,
   getScanningSettings,
   isValidDocumentPipeline,
+  isValidFredAttachmentMode,
   isValidModelId,
   updateScanningSettings,
 } from "./settings";
@@ -32,6 +35,7 @@ describe("Scanning settings resolver", () => {
       data: {
         model_id: "openai/gpt-4o",
         document_pipeline: "openrouter_only",
+        fred_attachment_mode: "weknora_native",
         prompt: "Custom prompt text",
         updated_at: "2026-07-19T10:00:00.000Z",
         updated_by: "admin-1",
@@ -43,6 +47,7 @@ describe("Scanning settings resolver", () => {
     expect(result).toEqual({
       modelId: "openai/gpt-4o",
       documentPipeline: "openrouter_only",
+      fredAttachmentMode: "weknora_native",
       prompt: "Custom prompt text",
       updatedAt: "2026-07-19T10:00:00.000Z",
       updatedBy: "admin-1",
@@ -56,9 +61,10 @@ describe("Scanning settings resolver", () => {
     expect(result.modelId).toBe(DEFAULT_SCANNING_MODEL_ID);
     expect(result.prompt).toBe(DEFAULT_SCANNING_PROMPT);
     expect(result.documentPipeline).toBe(DEFAULT_DOCUMENT_PIPELINE);
+    expect(result.fredAttachmentMode).toBe(DEFAULT_FRED_ATTACHMENT_MODE);
     expect(result.updatedBy).toBeNull();
     expect(supabase.select).toHaveBeenCalledWith(
-      "model_id,document_pipeline,prompt,updated_at,updated_by",
+      "model_id,document_pipeline,fred_attachment_mode,prompt,updated_at,updated_by",
     );
   });
 
@@ -67,6 +73,7 @@ describe("Scanning settings resolver", () => {
       data: {
         model_id: "openai/gpt-4o",
         document_pipeline: "local_ocr",
+        fred_attachment_mode: "findog_preprocess",
         prompt: "Custom prompt text",
         updated_at: "2026-07-19T10:00:00.000Z",
         updated_by: "admin-1",
@@ -84,6 +91,32 @@ describe("Scanning settings resolver", () => {
     expect(isValidDocumentPipeline("openrouter_only")).toBe(true);
     expect(isValidDocumentPipeline("local_ocr")).toBe(false);
     expect(isValidDocumentPipeline("")).toBe(false);
+  });
+
+  it("rejects a persisted Fred attachment mode outside the database allow-list", async () => {
+    supabase.maybeSingle.mockResolvedValue({
+      data: {
+        model_id: "openai/gpt-4o",
+        document_pipeline: "openrouter_only",
+        fred_attachment_mode: "browser_choice",
+        prompt: "Custom prompt text",
+        updated_at: "2026-07-19T10:00:00.000Z",
+        updated_by: "admin-1",
+      },
+      error: null,
+    });
+
+    await expect(getScanningSettings(supabase as never)).rejects.toThrow(
+      "Die Scanning-Konfiguration ist ungültig.",
+    );
+  });
+
+  it("validates Fred attachment modes", () => {
+    expect(FRED_ATTACHMENT_MODES).toEqual(["findog_preprocess", "weknora_native"]);
+    expect(isValidFredAttachmentMode(DEFAULT_FRED_ATTACHMENT_MODE)).toBe(true);
+    expect(isValidFredAttachmentMode("weknora_native")).toBe(true);
+    expect(isValidFredAttachmentMode("browser_choice")).toBe(false);
+    expect(isValidFredAttachmentMode("")).toBe(false);
   });
 
   it("throws when the database query errors", async () => {
@@ -108,6 +141,7 @@ describe("Scanning settings resolver", () => {
       data: {
         model_id: "anthropic/claude-sonnet-4-20250514",
         document_pipeline: "openrouter_only",
+        fred_attachment_mode: "weknora_native",
         prompt: "New scanning prompt",
         updated_at: "2026-07-19T12:00:00.000Z",
         updated_by: "admin-1",
@@ -121,12 +155,14 @@ describe("Scanning settings resolver", () => {
       "anthropic/claude-sonnet-4-20250514",
       "New scanning prompt",
       "openrouter_only",
+      "weknora_native",
     );
     expect(result.modelId).toBe("anthropic/claude-sonnet-4-20250514");
     expect(result.documentPipeline).toBe("openrouter_only");
     expect(result.prompt).toBe("New scanning prompt");
     expect(supabase.upsert).toHaveBeenCalledWith(expect.objectContaining({
       document_pipeline: "openrouter_only",
+      fred_attachment_mode: "weknora_native",
     }), expect.anything());
   });
 
@@ -138,6 +174,7 @@ describe("Scanning settings resolver", () => {
         "model/x",
         "prompt",
         "local_ocr" as unknown as Parameters<typeof updateScanningSettings>[4],
+        "findog_preprocess",
       ),
     ).rejects.toThrow("Dokument-Pipeline ist ungültig.");
     expect(supabase.upsert).not.toHaveBeenCalled();
@@ -145,19 +182,33 @@ describe("Scanning settings resolver", () => {
 
   it("rejects invalid model IDs on update", async () => {
     await expect(
-      updateScanningSettings(supabase as never, "admin-1", "", "prompt", DEFAULT_DOCUMENT_PIPELINE),
+      updateScanningSettings(supabase as never, "admin-1", "", "prompt", DEFAULT_DOCUMENT_PIPELINE, DEFAULT_FRED_ATTACHMENT_MODE),
     ).rejects.toThrow("OpenRouter-Modell-ID ist ungültig.");
     await expect(
-      updateScanningSettings(supabase as never, "admin-1", "bad model", "prompt", DEFAULT_DOCUMENT_PIPELINE),
+      updateScanningSettings(supabase as never, "admin-1", "bad model", "prompt", DEFAULT_DOCUMENT_PIPELINE, DEFAULT_FRED_ATTACHMENT_MODE),
     ).rejects.toThrow("OpenRouter-Modell-ID ist ungültig.");
   });
 
   it("rejects empty or oversized prompts on update", async () => {
     await expect(
-      updateScanningSettings(supabase as never, "admin-1", "model/x", "", DEFAULT_DOCUMENT_PIPELINE),
+      updateScanningSettings(supabase as never, "admin-1", "model/x", "", DEFAULT_DOCUMENT_PIPELINE, DEFAULT_FRED_ATTACHMENT_MODE),
     ).rejects.toThrow("Scanning-Prompt ist ungültig");
     await expect(
-      updateScanningSettings(supabase as never, "admin-1", "model/x", "x".repeat(40001), DEFAULT_DOCUMENT_PIPELINE),
+      updateScanningSettings(supabase as never, "admin-1", "model/x", "x".repeat(40001), DEFAULT_DOCUMENT_PIPELINE, DEFAULT_FRED_ATTACHMENT_MODE),
     ).rejects.toThrow("Scanning-Prompt ist ungültig");
+  });
+
+  it("rejects an invalid Fred attachment mode on update", async () => {
+    await expect(
+      updateScanningSettings(
+        supabase as never,
+        "admin-1",
+        "model/x",
+        "prompt",
+        DEFAULT_DOCUMENT_PIPELINE,
+        "browser_choice" as unknown as Parameters<typeof updateScanningSettings>[5],
+      ),
+    ).rejects.toThrow("Fred-Dateiverarbeitung ist ungültig.");
+    expect(supabase.upsert).not.toHaveBeenCalled();
   });
 });

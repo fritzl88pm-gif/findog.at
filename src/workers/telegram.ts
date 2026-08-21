@@ -334,6 +334,7 @@ function buildTurnUpstream(fetchImpl: typeof fetch): TurnServiceUpstreamDeps {
           knowledgeBaseIds: params.knowledgeBaseIds,
           allowWebSearch: params.webSearchEnabled,
           allowFileUpload: false,
+          allowImageUpload: false,
         },
         upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
         visitorId: params.visitorId,

@@ -52,6 +52,7 @@ function makeUpstreamDeps(overrides: Partial<TurnServiceUpstreamDeps> = {}): Tur
       knowledgeBaseIds: ["kb-1"],
       allowWebSearch: false,
       allowFileUpload: true,
+      allowImageUpload: true,
     }),
     createSession: vi.fn().mockResolvedValue({
       id: "session-1",
@@ -246,6 +247,7 @@ describe("executeFredTurn", () => {
       knowledgeBaseIds: [],
       allowWebSearch: false,
       allowFileUpload: false,
+      allowImageUpload: false,
     });
 
     const gen = executeFredTurn(

@@ -93,3 +93,18 @@ describe("Administration UI tabs and scanning settings", () => {
     expect(pageSource).not.toMatch(/API[_ -]?Key|Api[_ -]?Key|Secret/i);
   });
 });
+
+describe("Administration Fred attachment mode", () => {
+  it("loads, validates, saves and renders the native Fred attachment mode selector", () => {
+    expect(pageSource).toContain('<label htmlFor="fred-attachment-mode">Fred-Dateiverarbeitung</label>');
+    expect(pageSource).toContain('id="fred-attachment-mode"');
+    expect(pageSource).toContain('value="findog_preprocess"');
+    expect(pageSource).toContain("Findog-Vorverarbeitung");
+    expect(pageSource).toContain('value="weknora_native"');
+    expect(pageSource).toContain("WeKnora nativ");
+    expect(pageSource).toContain("Findog liest Anhänge selbst aus; nativ übergibt sie direkt an WeKnora.");
+    expect(pageSource).toMatch(/payload\.fredAttachmentMode !== "findog_preprocess"[\s\S]*?payload\.fredAttachmentMode !== "weknora_native"/u);
+    expect(pageSource).toContain("setFredAttachmentMode(payload.fredAttachmentMode)");
+    expect(pageSource).toContain("fredAttachmentMode,");
+  });
+});

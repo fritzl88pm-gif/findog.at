@@ -11,6 +11,7 @@ import {
   readQuickFredEmbedServerConfig,
 } from "@/lib/weknora/fred-embed";
 import {
+  assertFredNativeAttachmentTotalSize,
   createFredUpstreamSession,
   deriveFredSessionSignature,
   fetchFredUpstreamConfig,
@@ -74,6 +75,7 @@ vi.mock("@/lib/weknora/fred-native", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/weknora/fred-native")>();
   return {
     ...original,
+    assertFredNativeAttachmentTotalSize: vi.fn(),
     createFredUpstreamSession: vi.fn(),
     deriveFredSessionSignature: vi.fn(),
     fetchFredUpstreamConfig: vi.fn(),
@@ -115,12 +117,16 @@ function multipartRequest(options: {
   image?: File;
   attachment?: File;
   signal?: AbortSignal;
+  browserAttachmentMode?: string;
 }): Request {
   const formData = new FormData();
   formData.append("payload", JSON.stringify({
     query: options.query,
     webSearchEnabled: options.webSearchEnabled ?? false,
     ...(options.proModeEnabled !== undefined ? { proModeEnabled: options.proModeEnabled } : {}),
+    ...(options.browserAttachmentMode !== undefined
+      ? { fredAttachmentMode: options.browserAttachmentMode }
+      : {}),
   }));
   if (options.image) formData.append("image", options.image, options.image.name);
   if (options.attachment) formData.append("attachment", options.attachment, options.attachment.name);
@@ -148,6 +154,12 @@ function pdfFile(name = "Beleg.pdf"): File {
   return new File([new TextEncoder().encode("%PDF-1.7\nfixture")], name, {
     type: "application/pdf",
   });
+}
+
+function pngFile(name = "Bild.png"): File {
+  return new File([new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13,
+  ])], name, { type: "image/png" });
 }
 
 function responseFromReader(reader: {
@@ -204,6 +216,7 @@ describe("POST /api/fred/chat", () => {
       knowledgeBaseIds: ["kb-1"],
       allowWebSearch: false,
       allowFileUpload: true,
+      allowImageUpload: true,
     });
     vi.mocked(createFredUpstreamSession).mockResolvedValue({
       id: "session-1",
@@ -217,6 +230,7 @@ describe("POST /api/fred/chat", () => {
     vi.mocked(buildAttachmentContext).mockImplementation(async (question) => `${question}\n\nEXTRACTED`);
     vi.mocked(getScanningSettings).mockResolvedValue({
       documentPipeline: "mineru_with_openrouter_fallback",
+      fredAttachmentMode: "findog_preprocess",
       modelId: "google/gemini-3.5-flash",
       prompt: "Configured scanning prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -718,6 +732,7 @@ describe("POST /api/fred/chat", () => {
       knowledgeBaseIds: ["kb-1"],
       allowWebSearch: true,
       allowFileUpload: true,
+      allowImageUpload: true,
     });
     const pdf = pdfFile();
 
@@ -734,6 +749,7 @@ describe("POST /api/fred/chat", () => {
       query: "Bitte prüfe den Beleg\n\nEXTRACTED",
     }));
     expect(vi.mocked(openFredUpstreamStream).mock.calls[0][0]).not.toHaveProperty("attachments");
+    expect(vi.mocked(openFredUpstreamStream).mock.calls[0][0]).not.toHaveProperty("nativeAttachments");
     expect(rpc).toHaveBeenNthCalledWith(1, "record_fred_native_event", {
       payload: expect.objectContaining({
         content: "Bitte prüfe den Beleg",
@@ -749,12 +765,274 @@ describe("POST /api/fred/chat", () => {
     });
   });
 
+  it("sends validated attachments natively and skips every Findog preprocessing provider", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "44444444-4444-4444-8444-444444444444",
+    });
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "mineru_with_openrouter_fallback",
+      fredAttachmentMode: "weknora_native",
+      modelId: "model/x",
+      prompt: "Scanning-specific prompt must not be used",
+      updatedAt: "2026-07-19T10:00:00.000Z",
+      updatedBy: userId,
+    });
+    const image = pngFile();
+    const pdf = pdfFile();
+
+    const response = await POST(multipartRequest({
+      query: "Bitte prüfe Bild und Beleg",
+      image,
+      attachment: pdf,
+    }));
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(buildAttachmentContext).not.toHaveBeenCalled();
+    expect(createConfiguredDocumentProvider).not.toHaveBeenCalled();
+    expect(extractDocumentsWithConfiguredModel).not.toHaveBeenCalled();
+    expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+      query: "Bitte prüfe Bild und Beleg",
+      nativeAttachments: [
+        expect.objectContaining({ kind: "image", mimeType: "image/png", bytes: expect.any(Uint8Array) }),
+        expect.objectContaining({ kind: "file", name: "Beleg.pdf", sizeBytes: pdf.size }),
+      ],
+    }));
+    expect(rpc).toHaveBeenNthCalledWith(1, "record_fred_native_event", {
+      payload: expect.objectContaining({
+        attachments: [
+          expect.objectContaining({ kind: "image", name: "Bild.png", mime_type: "image/png" }),
+          expect.objectContaining({ kind: "file", name: "Beleg.pdf", mime_type: "application/pdf" }),
+        ],
+      }),
+    });
+  });
+
+  it("rejects a native aggregate attachment overflow with 413 before runs, persistence, providers, and WeKnora", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "12121212-1212-4121-8121-121212121212",
+    });
+    const rpc = vi.fn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "mineru_with_openrouter_fallback",
+      fredAttachmentMode: "weknora_native",
+      modelId: "model/x",
+      prompt: "prompt",
+      updatedAt: "2026-07-19T10:00:00.000Z",
+      updatedBy: userId,
+    });
+    vi.mocked(assertFredNativeAttachmentTotalSize).mockImplementation(() => {
+      throw new UserVisibleError(
+        "Die Fred-Anhänge sind zusammen zu groß. Bitte reduziere die Gesamtgröße.",
+        413,
+      );
+    });
+
+    const response = await POST(multipartRequest({
+      query: "Bitte prüfe den Beleg",
+      attachment: pdfFile(),
+    }));
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({
+      error: "Die Fred-Anhänge sind zusammen zu groß. Bitte reduziere die Gesamtgröße.",
+    });
+    expect(assertFredNativeAttachmentTotalSize).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(assertFredNativeAttachmentTotalSize).mock.calls[0][0])
+      .toEqual([expect.objectContaining({ kind: "file", bytes: expect.any(Uint8Array) })]);
+    expect(readFredEmbedServerConfig).not.toHaveBeenCalled();
+    expect(buildAttachmentContext).not.toHaveBeenCalled();
+    expect(createConfiguredDocumentProvider).not.toHaveBeenCalled();
+    expect(mintFredEmbedSession).not.toHaveBeenCalled();
+    expect(fetchFredUpstreamConfig).not.toHaveBeenCalled();
+    expect(createFredUpstreamSession).not.toHaveBeenCalled();
+    expect(openFredUpstreamStream).not.toHaveBeenCalled();
+    expect(relayFredWebhookEvent).not.toHaveBeenCalled();
+    expect(stopFredUpstreamSession).not.toHaveBeenCalled();
+    expect(mockRecordAdminRequest).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("leaves the larger Findog preprocessing aggregate behavior in default mode unchanged", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "99999999-9999-4999-8999-999999999999",
+    });
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    vi.mocked(assertFredNativeAttachmentTotalSize).mockImplementation(() => {
+      throw new UserVisibleError(
+        "Die Fred-Anhänge sind zusammen zu groß. Bitte reduziere die Gesamtgröße.",
+        413,
+      );
+    });
+
+    const response = await POST(multipartRequest({
+      query: "Bitte prüfe den Beleg",
+      attachment: pdfFile(),
+    }));
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(assertFredNativeAttachmentTotalSize).not.toHaveBeenCalled();
+    expect(buildAttachmentContext).toHaveBeenCalledOnce();
+    expect(vi.mocked(openFredUpstreamStream).mock.calls[0][0])
+      .not.toHaveProperty("nativeAttachments");
+  });
+
+  it("accepts native document uploads when only agent image upload is disabled", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "77777777-7777-4777-8777-777777777777",
+    });
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "mineru_with_openrouter_fallback",
+      fredAttachmentMode: "weknora_native",
+      modelId: "model/x",
+      prompt: "prompt",
+      updatedAt: "2026-07-19T10:00:00.000Z",
+      updatedBy: userId,
+    });
+    vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
+      agentId: "agent-1",
+      knowledgeBaseIds: ["kb-1"],
+      allowWebSearch: true,
+      allowFileUpload: true,
+      allowImageUpload: false,
+    });
+
+    const response = await POST(multipartRequest({
+      query: "Bitte prüfe nur den Beleg",
+      attachment: pdfFile(),
+    }));
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(buildAttachmentContext).not.toHaveBeenCalled();
+    expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+      nativeAttachments: [expect.objectContaining({ kind: "file" })],
+    }));
+  });
+
+  it("rejects native image uploads before opening the stream when agent image upload is disabled", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "88888888-8888-4888-8888-888888888888",
+    });
+    const rpc = vi.fn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "mineru_with_openrouter_fallback",
+      fredAttachmentMode: "weknora_native",
+      modelId: "model/x",
+      prompt: "prompt",
+      updatedAt: "2026-07-19T10:00:00.000Z",
+      updatedBy: userId,
+    });
+    vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
+      agentId: "agent-1",
+      knowledgeBaseIds: ["kb-1"],
+      allowWebSearch: true,
+      allowFileUpload: true,
+      allowImageUpload: false,
+    });
+
+    const response = await POST(multipartRequest({
+      query: "Bitte prüfe das Bild",
+      image: pngFile(),
+    }));
+    const events = (await response.text())
+      .split("\n")
+      .map(parseFredNativeStreamLine)
+      .filter(Boolean);
+
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      error: "Bild-Upload ist für Fred derzeit nicht freigeschaltet.",
+    });
+    expect(openFredUpstreamStream).not.toHaveBeenCalled();
+    expect(relayFredWebhookEvent).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("ignores a browser-provided attachment mode and uses the persisted server mode", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "66666666-6666-4666-8666-666666666666",
+    });
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "mineru_with_openrouter_fallback",
+      fredAttachmentMode: "weknora_native",
+      modelId: "model/x",
+      prompt: "prompt",
+      updatedAt: "2026-07-19T10:00:00.000Z",
+      updatedBy: userId,
+    });
+
+    const response = await POST(multipartRequest({
+      query: "Browser darf nicht entscheiden",
+      attachment: pdfFile(),
+      browserAttachmentMode: "findog_preprocess",
+    }));
+    await response.text();
+
+    expect(buildAttachmentContext).not.toHaveBeenCalled();
+    expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+      nativeAttachments: [expect.objectContaining({ kind: "file" })],
+    }));
+  });
+
+  it("rejects a native attachment turn after live config disallows upload and before opening the stream", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "55555555-5555-4555-8555-555555555555",
+    });
+    const rpc = vi.fn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "mineru_with_openrouter_fallback",
+      fredAttachmentMode: "weknora_native",
+      modelId: "model/x",
+      prompt: "prompt",
+      updatedAt: "2026-07-19T10:00:00.000Z",
+      updatedBy: userId,
+    });
+    vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
+      agentId: "agent-1",
+      knowledgeBaseIds: ["kb-1"],
+      allowWebSearch: true,
+      allowFileUpload: false,
+      allowImageUpload: false,
+    });
+
+    const response = await POST(multipartRequest({
+      query: "Bitte prüfe den Beleg",
+      attachment: pdfFile(),
+    }));
+    const events = (await response.text())
+      .split("\n")
+      .map(parseFredNativeStreamLine)
+      .filter(Boolean);
+
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      error: "Datei-Upload ist für Fred derzeit nicht freigeschaltet.",
+    });
+    expect(fetchFredUpstreamConfig).toHaveBeenCalledTimes(1);
+    expect(openFredUpstreamStream).not.toHaveBeenCalled();
+    expect(relayFredWebhookEvent).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
   it("wires document preprocessing through the shared configured provider", async () => {
     const rpc = rpcForTurn();
     const supabase = { rpc };
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase as never);
     vi.mocked(getScanningSettings).mockResolvedValue({
       documentPipeline: "openrouter_only",
+      fredAttachmentMode: "findog_preprocess",
       modelId: "google/gemini-3.5-flash:online",
       prompt: "Scanning-specific prompt must not be used for Fred extraction",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -849,6 +1127,7 @@ describe("POST /api/fred/chat", () => {
         knowledgeBaseIds: ["kb-quick"],
         allowWebSearch: false,
         allowFileUpload: true,
+        allowImageUpload: true,
       });
 
       const response = await POST(request({
@@ -968,6 +1247,7 @@ describe("POST /api/fred/chat", () => {
         knowledgeBaseIds: ["kb-quick"],
         allowWebSearch: false,
         allowFileUpload: true,
+        allowImageUpload: true,
       });
       vi.mocked(deriveFredSessionSignature).mockReturnValue("quick-signature");
 
@@ -998,6 +1278,7 @@ describe("POST /api/fred/chat", () => {
         knowledgeBaseIds: ["kb-wrong"],
         allowWebSearch: false,
         allowFileUpload: true,
+        allowImageUpload: true,
       });
 
       const response = await POST(request({
@@ -1032,6 +1313,7 @@ describe("POST /api/fred/chat", () => {
         knowledgeBaseIds: ["kb-quick"],
         allowWebSearch: false,
         allowFileUpload: true,
+        allowImageUpload: true,
       });
       vi.mocked(openFredUpstreamStream).mockRejectedValue(new Error("provider unavailable"));
 
@@ -1150,6 +1432,7 @@ describe("POST /api/fred/chat", () => {
         knowledgeBaseIds: ["kb-1"],
         allowWebSearch: true,
         allowFileUpload: true,
+        allowImageUpload: true,
       });
 
       const response = await POST(request({ query: "Pro Web", proModeEnabled: true, webSearchEnabled: true }));
@@ -1492,6 +1775,34 @@ describe("POST /api/fred/chat", () => {
           event_type: "message_sent",
         }),
       });
+    });
+
+    it("keeps native attachment queries to the original question plus personalization", async () => {
+      const mock = supabaseWithPreferences(prefRow);
+      vi.mocked(getSupabaseServerClient).mockReturnValue(mock);
+      vi.mocked(getScanningSettings).mockResolvedValue({
+        documentPipeline: "mineru_with_openrouter_fallback",
+        fredAttachmentMode: "weknora_native",
+        modelId: "model/x",
+        prompt: "prompt",
+        updatedAt: "2026-07-19T10:00:00.000Z",
+        updatedBy: PERS_USER_ID,
+      });
+
+      const response = await POST(multipartRequest({
+        query: "Was steht im Beleg?",
+        attachment: pdfFile(),
+      }));
+      await response.text();
+
+      const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
+      expect(callQuery).toContain("Was steht im Beleg?");
+      expect(callQuery).toContain("<user_personalization>");
+      expect(callQuery).not.toContain("EXTRACTED");
+      expect(callQuery).not.toContain("BEGINN DER ANHÄNGE");
+      expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+        nativeAttachments: [expect.objectContaining({ kind: "file" })],
+      }));
     });
 
     it("returns no personalization when profile definition is missing (null data, null error)", async () => {

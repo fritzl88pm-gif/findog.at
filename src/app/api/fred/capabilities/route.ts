@@ -8,6 +8,7 @@ import {
   FredEmbedUpstreamError,
   readFredProModelId,
 } from "@/lib/weknora/fred-embed";
+import { getScanningSettings } from "@/lib/scanning/settings";
 
 import { getDerivedFredCapabilities } from "./cache";
 
@@ -46,10 +47,20 @@ export async function GET(request: Request) {
     if (request.headers.get("sec-fetch-site")?.toLowerCase() === "cross-site") {
       throw new UserVisibleError("Diese Fred-Anfrage ist nicht erlaubt.", 403);
     }
-    const capabilities = await getDerivedFredCapabilities();
+    const [settings, capabilities] = await Promise.all([
+      getScanningSettings(supabase),
+      getDerivedFredCapabilities(),
+    ]);
+    const findogUploadEnabled = findogFileUploadEnabled();
+    const nativeUploadEnabled = settings.fredAttachmentMode === "weknora_native";
     return json({
       webSearch: capabilities.webSearch,
-      fileUpload: findogFileUploadEnabled(),
+      fileUpload: nativeUploadEnabled
+        ? capabilities.fileUpload
+        : findogUploadEnabled,
+      imageUpload: nativeUploadEnabled
+        ? capabilities.imageUpload
+        : findogUploadEnabled,
       proMode: fredProModeEnabled(),
       quickFred: capabilities.quickFred,
     });

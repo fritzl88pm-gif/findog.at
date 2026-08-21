@@ -78,7 +78,9 @@ import L17bCountrySelect from "@/components/l17b-country-select";
 import ScanningView from "@/components/scanning-view";
 import {
   DEFAULT_DOCUMENT_PIPELINE,
+  DEFAULT_FRED_ATTACHMENT_MODE,
   type DocumentPipeline,
+  type FredAttachmentMode,
 } from "@/lib/scanning/settings";
 import KnowledgeLandscapeView from "@/components/knowledge-landscape-view";
 import QuizView from "@/components/quiz-view";
@@ -1222,6 +1224,7 @@ export default function Home() {
   const [isAdminUserMutationRunning, setIsAdminUserMutationRunning] = useState(false);
   const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "omniroute" | "personalities">("scanning");
   const [scanningDocumentPipeline, setScanningDocumentPipeline] = useState<DocumentPipeline>(DEFAULT_DOCUMENT_PIPELINE);
+  const [fredAttachmentMode, setFredAttachmentMode] = useState<FredAttachmentMode>(DEFAULT_FRED_ATTACHMENT_MODE);
   const [scanningModelId, setScanningModelId] = useState("");
   const [scanningPrompt, setScanningPrompt] = useState("");
   const [isScanningSettingsLoading, setIsScanningSettingsLoading] = useState(false);
@@ -1480,6 +1483,7 @@ export default function Home() {
         setAdminTab("scanning");
         setScanningModelId("");
         setScanningPrompt("");
+        setFredAttachmentMode(DEFAULT_FRED_ATTACHMENT_MODE);
         return;
       }
 
@@ -2113,6 +2117,10 @@ export default function Home() {
           payload.documentPipeline !== "mineru_with_openrouter_fallback"
           && payload.documentPipeline !== "openrouter_only"
         )
+        || (
+          payload.fredAttachmentMode !== "findog_preprocess"
+          && payload.fredAttachmentMode !== "weknora_native"
+        )
         || typeof payload.prompt !== "string"
         || !payload.prompt.trim()
         || typeof payload.updatedAt !== "string"
@@ -2124,6 +2132,7 @@ export default function Home() {
         );
       }
       setScanningDocumentPipeline(payload.documentPipeline);
+      setFredAttachmentMode(payload.fredAttachmentMode);
       setScanningModelId(payload.modelId);
       setScanningPrompt(payload.prompt);
     } catch (settingsError) {
@@ -2158,6 +2167,7 @@ export default function Home() {
         },
         body: JSON.stringify({
           documentPipeline: scanningDocumentPipeline,
+          fredAttachmentMode,
           modelId: scanningModelId.trim(),
           prompt: scanningPrompt.trim(),
         }),
@@ -2171,6 +2181,10 @@ export default function Home() {
           payload.documentPipeline !== "mineru_with_openrouter_fallback"
           && payload.documentPipeline !== "openrouter_only"
         )
+        || (
+          payload.fredAttachmentMode !== "findog_preprocess"
+          && payload.fredAttachmentMode !== "weknora_native"
+        )
         || typeof payload.prompt !== "string"
         || !payload.prompt.trim()
         || typeof payload.updatedAt !== "string"
@@ -2182,6 +2196,7 @@ export default function Home() {
         );
       }
       setScanningDocumentPipeline(payload.documentPipeline);
+      setFredAttachmentMode(payload.fredAttachmentMode);
       setScanningModelId(payload.modelId);
       setScanningPrompt(payload.prompt);
       setAdminNotice("Die Scanning-Konfiguration wurde gespeichert und gilt für neue Auswertungen.");
@@ -4125,6 +4140,29 @@ export default function Home() {
                     {scanningDocumentPipeline === "mineru_with_openrouter_fallback"
                       ? "MinerU wird zuerst genutzt; bei Fehler folgt OpenRouter."
                       : "Dokumente werden ausschließlich über OpenRouter verarbeitet."}
+                  </p>
+                </div>
+                <div className="field-group">
+                  <label htmlFor="fred-attachment-mode">Fred-Dateiverarbeitung</label>
+                  <select
+                    id="fred-attachment-mode"
+                    value={fredAttachmentMode}
+                    aria-describedby="fred-attachment-mode-description"
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (value === "findog_preprocess" || value === "weknora_native") {
+                        setFredAttachmentMode(value);
+                        setAdminError("");
+                        setAdminNotice("");
+                      }
+                    }}
+                    disabled={isScanningSettingsLoading || isScanningSettingsSaving}
+                  >
+                    <option value="findog_preprocess">Findog-Vorverarbeitung</option>
+                    <option value="weknora_native">WeKnora nativ</option>
+                  </select>
+                  <p id="fred-attachment-mode-description" className="admin-model-hint">
+                    Findog liest Anhänge selbst aus; nativ übergibt sie direkt an WeKnora.
                   </p>
                 </div>
                 <div className="field-group">

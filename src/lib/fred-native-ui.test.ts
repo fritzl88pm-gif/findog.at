@@ -129,6 +129,12 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).toContain("ref={composerRef}");
     expect(viewSource).toContain("Bild anhängen");
     expect(viewSource).toContain("Datei anhängen");
+    expect(viewSource).toContain("imageUpload: boolean");
+    expect(viewSource).toContain("capabilities.fileUpload || capabilities.imageUpload");
+    expect(viewSource).toContain("{capabilities.imageUpload ? (");
+    expect(viewSource).toContain("{capabilities.fileUpload ? (");
+    expect(viewSource).toContain("if (!capabilities.imageUpload)");
+    expect(viewSource).toContain("Bild-Uploads sind derzeit nicht verfügbar.");
     expect(viewSource).toContain("max. {MAX_IMAGE_UPLOADS} · je 10 MB");
     expect(viewSource).toContain("max. {MAX_FILE_UPLOADS} · je 20 MB");
     expect(viewSource).toContain('className="fred-pro-icon"');

@@ -2,12 +2,17 @@ import { createHmac } from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { UserVisibleError } from "../errors";
+
 import {
+  assertFredNativeAttachmentTotalSize,
   createFredUpstreamSession,
   deriveFredSessionSignature,
   fetchFredUpstreamConfig,
   fredVisitorId,
+  MAX_NATIVE_ATTACHMENT_TOTAL_BYTES,
   openFredUpstreamStream,
+  type FredNativeAttachmentUpload,
 } from "./fred-native";
 
 const config = {
@@ -23,6 +28,38 @@ const session = {
 };
 
 describe("Fred native WeKnora client", () => {
+  it("accepts the native attachment total boundary and rejects one additional raw byte", () => {
+    expect(() => assertFredNativeAttachmentTotalSize([
+      { byteLength: MAX_NATIVE_ATTACHMENT_TOTAL_BYTES },
+      { byteLength: 0 },
+    ])).not.toThrow();
+
+    expect(() => assertFredNativeAttachmentTotalSize([
+      { byteLength: MAX_NATIVE_ATTACHMENT_TOTAL_BYTES + 1 },
+    ])).toThrowError(UserVisibleError);
+
+    try {
+      assertFredNativeAttachmentTotalSize([
+        { byteLength: MAX_NATIVE_ATTACHMENT_TOTAL_BYTES + 1 },
+      ]);
+    } catch (error) {
+      expect(error).toBeInstanceOf(UserVisibleError);
+      expect((error as UserVisibleError).status).toBe(413);
+      expect((error as UserVisibleError).message).toBe(
+        "Die Fred-Anhänge sind zusammen zu groß. Bitte reduziere die Gesamtgröße.",
+      );
+    }
+  });
+
+  it("uses validated buffer byte lengths rather than attachment size metadata", () => {
+    const attachment = {
+      kind: "file",
+      name: "Beleg.pdf",
+      sizeBytes: -1,
+      bytes: new Uint8Array(3),
+    } satisfies FredNativeAttachmentUpload;
+    expect(() => assertFredNativeAttachmentTotalSize([attachment])).not.toThrow();
+  });
   it("derives the signed session handle exactly like WeKnora", () => {
     const expected = createHmac("sha256", config.publishToken)
       .update("fred-channel|session-123")
@@ -101,6 +138,46 @@ describe("Fred native WeKnora client", () => {
     expect(body).not.toHaveProperty("attachment_uploads");
   });
 
+  it("serializes native image and file attachments exactly as WeKnora expects", async () => {
+    const streamFetch = vi.fn<typeof fetch>(async () => new Response("data: {}\n\n", { status: 200 }));
+    const signature = deriveFredSessionSignature(config, "session-123");
+    const imageBytes = new Uint8Array([1, 2, 3, 4]);
+    const fileBytes = new Uint8Array([5, 6, 7]);
+
+    await openFredUpstreamStream({
+      session,
+      config,
+      upstreamConfig: {
+        agentId: "agent-123",
+        knowledgeBaseIds: [],
+        allowWebSearch: false,
+        allowFileUpload: true,
+        allowImageUpload: true,
+      },
+      upstreamSession: { id: "session-123", signature },
+      visitorId: "visitor-hash",
+      query: "Bitte prüfe die Anhänge",
+      webSearchEnabled: false,
+      summaryModelId: "",
+      signal: new AbortController().signal,
+      fetchImpl: streamFetch,
+      nativeAttachments: [
+        { kind: "image", mimeType: "image/png", bytes: imageBytes },
+        { kind: "file", name: "Beleg.pdf", sizeBytes: fileBytes.byteLength, bytes: fileBytes },
+      ],
+    });
+
+    const body = JSON.parse(String(streamFetch.mock.calls[0][1]?.body));
+    expect(body.images).toEqual([
+      { data: `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}` },
+    ]);
+    expect(body.attachment_uploads).toEqual([{
+      data: Buffer.from(fileBytes).toString("base64"),
+      file_name: "Beleg.pdf",
+      file_size: fileBytes.byteLength,
+    }]);
+  });
+
   it("sends the resolved Pro model ID as summary_model_id when provided", async () => {
     const configFetch = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       success: true,
@@ -139,7 +216,7 @@ describe("Fred native WeKnora client", () => {
     expect(body.summary_model_id).toBe("a1b2c3d4-e5f6-4789-abcd-ef0123456789");
   });
 
-  it("keeps upstream config parsing compatible even when allowFileUpload is false for WeKnora", async () => {
+  it("derives channel file upload and agent image upload flags separately", async () => {
     const configFetch = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       success: true,
       data: {
@@ -147,7 +224,7 @@ describe("Fred native WeKnora client", () => {
         knowledge_base_ids: [],
         allow_web_search: false,
         agent_web_search_enabled: false,
-        allow_file_upload: false,
+        allow_file_upload: true,
         agent_image_upload_enabled: false,
       },
     }), { status: 200 }));
@@ -157,7 +234,12 @@ describe("Fred native WeKnora client", () => {
       signal: new AbortController().signal,
       fetchImpl: configFetch,
     });
-    expect(upstreamConfig.allowWebSearch).toBe(false);
-    expect(upstreamConfig.allowFileUpload).toBe(false);
+    expect(upstreamConfig).toEqual({
+      agentId: "agent-123",
+      knowledgeBaseIds: [],
+      allowWebSearch: false,
+      allowFileUpload: true,
+      allowImageUpload: false,
+    });
   });
 });

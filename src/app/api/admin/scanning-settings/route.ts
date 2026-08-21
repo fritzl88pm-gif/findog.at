@@ -6,6 +6,7 @@ import { UserVisibleError } from "@/lib/errors";
 import {
   getScanningSettings,
   isValidDocumentPipeline,
+  isValidFredAttachmentMode,
   isValidModelId,
   updateScanningSettings,
 } from "@/lib/scanning/settings";
@@ -26,6 +27,7 @@ async function readSettings(supabase: ServerClient) {
   const record = await getScanningSettings(supabase);
   return {
     documentPipeline: record.documentPipeline,
+    fredAttachmentMode: record.fredAttachmentMode,
     modelId: record.modelId,
     prompt: record.prompt,
     updatedAt: record.updatedAt,
@@ -72,24 +74,28 @@ export async function PUT(request: Request) {
       throw new UserVisibleError("Die Anfrage ist ungültig.", 400);
     }
     const fields = body as Record<string, unknown>;
-    if (Object.keys(fields).length !== 3) {
+    if (Object.keys(fields).length !== 4) {
       throw new UserVisibleError(
-        "Die Anfrage muss genau die Felder documentPipeline, modelId und prompt enthalten.",
+        "Die Anfrage muss genau die Felder documentPipeline, fredAttachmentMode, modelId und prompt enthalten.",
         400,
       );
     }
     if (
       typeof fields.documentPipeline !== "string"
+      || typeof fields.fredAttachmentMode !== "string"
       || typeof fields.modelId !== "string"
       || typeof fields.prompt !== "string"
     ) {
       throw new UserVisibleError(
-        "Die Anfrage muss genau die Felder documentPipeline, modelId und prompt enthalten.",
+        "Die Anfrage muss genau die Felder documentPipeline, fredAttachmentMode, modelId und prompt enthalten.",
         400,
       );
     }
     if (!isValidDocumentPipeline(fields.documentPipeline)) {
       throw new UserVisibleError("Die Dokument-Pipeline ist ungültig.", 400);
+    }
+    if (!isValidFredAttachmentMode(fields.fredAttachmentMode)) {
+      throw new UserVisibleError("Die Fred-Dateiverarbeitung ist ungültig.", 400);
     }
     if (!isValidModelId(fields.modelId)) {
       throw new UserVisibleError("Die OpenRouter-Modell-ID ist ungültig.", 400);
@@ -106,9 +112,11 @@ export async function PUT(request: Request) {
       fields.modelId,
       fields.prompt,
       fields.documentPipeline,
+      fields.fredAttachmentMode,
     );
     return json({
       documentPipeline: record.documentPipeline,
+      fredAttachmentMode: record.fredAttachmentMode,
       modelId: record.modelId,
       prompt: record.prompt,
       updatedAt: record.updatedAt,

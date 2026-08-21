@@ -184,6 +184,7 @@ describe("buildPreprocessorProviders", () => {
   it("reads current scanning settings without caching them at worker startup", async () => {
     vi.mocked(getScanningSettings).mockResolvedValue({
       documentPipeline: "openrouter_only",
+      fredAttachmentMode: "findog_preprocess",
       modelId: "vendor/model",
       prompt: "prompt",
       updatedAt: "2026-08-18T00:00:00.000Z",

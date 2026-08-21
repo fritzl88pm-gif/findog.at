@@ -44,7 +44,7 @@ import {
 } from "@/lib/fred/turn-service";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { recordAdminRequest } from "@/lib/admin-request-history";
-import { getScanningSettings } from "@/lib/scanning/settings";
+import { DEFAULT_FRED_ATTACHMENT_MODE, getScanningSettings } from "@/lib/scanning/settings";
 import {
   FredEmbedConfigurationError,
   FredEmbedUpstreamError,
@@ -60,6 +60,7 @@ import {
 } from "@/lib/weknora/fred-agent";
 import { parseFredConversationSummary } from "@/lib/weknora/fred-history";
 import {
+  assertFredNativeAttachmentTotalSize,
   createFredUpstreamSession,
   deriveFredSessionSignature,
   fetchFredUpstreamConfig,
@@ -67,6 +68,7 @@ import {
   openFredUpstreamStream,
   relayFredWebhookEvent,
   stopFredUpstreamSession,
+  type FredNativeAttachmentUpload,
   type FredUpstreamSession,
 } from "@/lib/weknora/fred-native";
 import { buildUserPersonalizationBlock } from "@/lib/fred/user-personalization";
@@ -551,6 +553,7 @@ function buildWebTurnUpstream(
           knowledgeBaseIds: params.knowledgeBaseIds,
           allowWebSearch: params.webSearchEnabled,
           allowFileUpload: false,
+          allowImageUpload: false,
         },
         upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
         visitorId: params.visitorId,
@@ -834,6 +837,12 @@ export async function POST(request: Request) {
         400,
       );
     }
+    const fredAttachmentMode = body.attachments.length > 0
+      ? (await getScanningSettings(supabase)).fredAttachmentMode
+      : DEFAULT_FRED_ATTACHMENT_MODE;
+    if (fredAttachmentMode === "weknora_native") {
+      assertFredNativeAttachmentTotalSize(body.attachments);
+    }
     if (body.attachments.length === 0) {
       return streamTextOnlyTurn({
         request,
@@ -941,7 +950,9 @@ export async function POST(request: Request) {
             modelRoute,
           });
 
-          if (body.attachments.length > 0) {
+          if (fredAttachmentMode === "weknora_native") {
+            send(controller, { type: "status", label: "Anhänge werden an WeKnora übergeben …" });
+          } else {
             send(controller, { type: "status", label: "Anhänge werden analysiert …" });
             attachmentHeartbeat = setInterval(() => {
               send(controller, { type: "status", label: "Anhänge werden analysiert …" });
@@ -1050,6 +1061,22 @@ export async function POST(request: Request) {
               400,
             );
           }
+          if (fredAttachmentMode === "weknora_native" && !upstreamConfig.allowFileUpload) {
+            throw new UserVisibleError(
+              "Datei-Upload ist für Fred derzeit nicht freigeschaltet.",
+              400,
+            );
+          }
+          if (
+            fredAttachmentMode === "weknora_native"
+            && body.attachments.some((attachment) => attachment.kind === "image")
+            && !upstreamConfig.allowImageUpload
+          ) {
+            throw new UserVisibleError(
+              "Bild-Upload ist für Fred derzeit nicht freigeschaltet.",
+              400,
+            );
+          }
           const summaryModelId = body.proModeEnabled
             ? readFredProModelId()
             : "";
@@ -1110,6 +1137,9 @@ export async function POST(request: Request) {
             webSearchEnabled: body.webSearchEnabled,
             signal: deadline.signal,
             summaryModelId,
+            ...(fredAttachmentMode === "weknora_native"
+              ? { nativeAttachments: body.attachments satisfies readonly FredNativeAttachmentUpload[] }
+              : {}),
           });
           const upstreamReader = upstream.body!.getReader();
           activeUpstreamReader = upstreamReader;

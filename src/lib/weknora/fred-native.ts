@@ -9,18 +9,82 @@ import {
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 const MAX_JSON_BYTES = 64 * 1_024;
+export const MAX_NATIVE_ATTACHMENT_TOTAL_BYTES = 35 * 1024 * 1024;
 
 export type FredUpstreamConfig = {
   agentId: string;
   knowledgeBaseIds: string[];
   allowWebSearch: boolean;
   allowFileUpload: boolean;
+  allowImageUpload: boolean;
 };
 
 export type FredUpstreamSession = {
   id: string;
   signature: string;
 };
+
+export type FredNativeAttachmentUpload =
+  | {
+    kind: "image";
+    mimeType: string;
+    bytes: Uint8Array;
+  }
+  | {
+    kind: "file";
+    name: string;
+    sizeBytes: number;
+    bytes: Uint8Array;
+  };
+
+export type FredNativeAttachmentSize = Pick<FredNativeAttachmentUpload, "bytes"> | {
+  byteLength: number;
+};
+
+export function assertFredNativeAttachmentTotalSize(
+  attachments: readonly FredNativeAttachmentSize[],
+): void {
+  let totalBytes = 0;
+  for (const attachment of attachments) {
+    const rawByteLength = "bytes" in attachment
+      ? attachment.bytes.byteLength
+      : attachment.byteLength;
+    if (!Number.isSafeInteger(rawByteLength) || rawByteLength < 0) {
+      throw new UserVisibleError("Die Fred-Anhänge sind ungültig.", 400);
+    }
+    if (rawByteLength > MAX_NATIVE_ATTACHMENT_TOTAL_BYTES - totalBytes) {
+      throw new UserVisibleError(
+        "Die Fred-Anhänge sind zusammen zu groß. Bitte reduziere die Gesamtgröße.",
+        413,
+      );
+    }
+    totalBytes += rawByteLength;
+  }
+}
+
+function nativeAttachmentPayloads(attachments: readonly FredNativeAttachmentUpload[]): {
+  images?: Array<{ data: string }>;
+  attachment_uploads?: Array<{ data: string; file_name: string; file_size: number }>;
+} {
+  const images: Array<{ data: string }> = [];
+  const attachmentUploads: Array<{ data: string; file_name: string; file_size: number }> = [];
+  for (const attachment of attachments) {
+    const data = Buffer.from(attachment.bytes).toString("base64");
+    if (attachment.kind === "image") {
+      images.push({ data: `data:${attachment.mimeType};base64,${data}` });
+    } else {
+      attachmentUploads.push({
+        data,
+        file_name: attachment.name,
+        file_size: attachment.sizeBytes,
+      });
+    }
+  }
+  return {
+    ...(images.length > 0 ? { images } : {}),
+    ...(attachmentUploads.length > 0 ? { attachment_uploads: attachmentUploads } : {}),
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -123,11 +187,13 @@ export async function fetchFredUpstreamConfig(options: {
   if (!IDENTIFIER_PATTERN.test(agentId)) {
     throw new UserVisibleError("Fred hat eine ungültige Konfiguration geliefert.", 502);
   }
+  const allowFileUpload = payload.data.allow_file_upload === true;
   return {
     agentId,
     knowledgeBaseIds,
     allowWebSearch: payload.data.allow_web_search === true && payload.data.agent_web_search_enabled === true,
-    allowFileUpload: payload.data.allow_file_upload === true && payload.data.agent_image_upload_enabled === true,
+    allowFileUpload,
+    allowImageUpload: allowFileUpload && payload.data.agent_image_upload_enabled === true,
   };
 }
 
@@ -182,6 +248,7 @@ export async function openFredUpstreamStream(options: {
   query: string;
   webSearchEnabled: boolean;
   summaryModelId: string;
+  nativeAttachments?: readonly FredNativeAttachmentUpload[];
   signal: AbortSignal;
   fetchImpl?: typeof fetch;
 }): Promise<Response> {
@@ -212,6 +279,7 @@ export async function openFredUpstreamStream(options: {
         mcp_service_ids: [],
         mentioned_items: [],
         channel: "embed",
+        ...nativeAttachmentPayloads(options.nativeAttachments ?? []),
       }),
       cache: "no-store",
       signal: options.signal,

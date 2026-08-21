@@ -15,6 +15,8 @@ const CAPABILITIES_REFRESH_TIMEOUT_MS = 20_000;
 
 type DerivedFredCapabilities = {
   webSearch: boolean;
+  fileUpload: boolean;
+  imageUpload: boolean;
   quickFred: boolean;
 };
 
@@ -82,6 +84,8 @@ async function refreshDerivedFredCapabilities(): Promise<DerivedFredCapabilities
   );
   return {
     webSearch: fredUpstreamConfig.allowWebSearch,
+    fileUpload: fredUpstreamConfig.allowFileUpload,
+    imageUpload: fredUpstreamConfig.allowImageUpload,
     quickFred,
   };
 }

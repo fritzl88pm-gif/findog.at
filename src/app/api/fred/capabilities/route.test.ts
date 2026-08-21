@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
+import { getScanningSettings } from "@/lib/scanning/settings";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import {
   FredEmbedUpstreamError,
@@ -16,6 +17,7 @@ import { GET } from "./route";
 
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
+vi.mock("@/lib/scanning/settings", () => ({ getScanningSettings: vi.fn() }));
 vi.mock("@/lib/weknora/fred-embed", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/weknora/fred-embed")>();
   return { ...original, mintFredEmbedSession: vi.fn(), readFredEmbedServerConfig: vi.fn(),
@@ -73,6 +75,14 @@ describe("GET /api/fred/capabilities", () => {
     vi.mocked(getSupabaseServerClient).mockReturnValue({ auth: {} } as never);
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "user-1" });
     vi.mocked(readFredEmbedServerConfig).mockReturnValue(fredConfig);
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "mineru_with_openrouter_fallback",
+      fredAttachmentMode: "findog_preprocess",
+      modelId: "google/gemini-3.5-flash",
+      prompt: "prompt",
+      updatedAt: "2026-07-19T10:00:00.000Z",
+      updatedBy: null,
+    });
     vi.mocked(mintFredEmbedSession).mockImplementation(async (options = {}) => {
       return embedSession(options.config?.channelId ?? fredConfig.channelId);
     });
@@ -81,6 +91,7 @@ describe("GET /api/fred/capabilities", () => {
       knowledgeBaseIds: [],
       allowWebSearch: true,
       allowFileUpload: true,
+      allowImageUpload: true,
     });
     vi.stubEnv("MINERU_API_TOKEN", "test-mineru-token");
     vi.stubEnv("OPENROUTER_API_KEY", "test-openrouter-key");
@@ -91,7 +102,7 @@ describe("GET /api/fred/capabilities", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns webSearch from WeKnora and fileUpload from env vars", async () => {
+  it("returns webSearch from WeKnora and custom-mode fileUpload from the OpenRouter prerequisite", async () => {
     const request = new Request("https://findog.at/api/fred/capabilities", {
       headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
     });
@@ -101,6 +112,7 @@ describe("GET /api/fred/capabilities", () => {
     await expect(response.json()).resolves.toEqual({
       webSearch: true,
       fileUpload: true,
+      imageUpload: true,
       proMode: true,
       quickFred: false,
     });
@@ -118,7 +130,7 @@ describe("GET /api/fred/capabilities", () => {
     expect(data.webSearch).toBe(true);
   });
 
-  it("returns fileUpload false when OPENROUTER_API_KEY is missing", async () => {
+  it("returns custom-mode fileUpload false when OPENROUTER_API_KEY is missing", async () => {
     vi.stubEnv("OPENROUTER_API_KEY", "");
     const request = new Request("https://findog.at/api/fred/capabilities", {
       headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
@@ -141,12 +153,70 @@ describe("GET /api/fred/capabilities", () => {
     expect(data.webSearch).toBe(true);
   });
 
+  it("returns native-mode fileUpload true from the live Fred channel upload flag", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "openrouter_only",
+      fredAttachmentMode: "weknora_native",
+      modelId: "model/x",
+      prompt: "prompt",
+      updatedAt: "2026-07-19T10:00:00.000Z",
+      updatedBy: null,
+    });
+    vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
+      agentId: "agent-1",
+      knowledgeBaseIds: [],
+      allowWebSearch: true,
+      allowFileUpload: true,
+      allowImageUpload: false,
+    });
+
+    const response = await GET(capabilityRequest());
+
+    await expect(response.json()).resolves.toEqual({
+      webSearch: true,
+      fileUpload: true,
+      imageUpload: false,
+      proMode: true,
+      quickFred: false,
+    });
+  });
+
+  it("returns native-mode fileUpload false when the live Fred channel disallows upload", async () => {
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "openrouter_only",
+      fredAttachmentMode: "weknora_native",
+      modelId: "model/x",
+      prompt: "prompt",
+      updatedAt: "2026-07-19T10:00:00.000Z",
+      updatedBy: null,
+    });
+    vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
+      agentId: "agent-1",
+      knowledgeBaseIds: [],
+      allowWebSearch: true,
+      allowFileUpload: false,
+      allowImageUpload: false,
+    });
+
+    const response = await GET(capabilityRequest());
+
+    await expect(response.json()).resolves.toEqual({
+      webSearch: true,
+      fileUpload: false,
+      imageUpload: false,
+      proMode: true,
+      quickFred: false,
+    });
+  });
+
   it("returns webSearch false from WeKnora config without breaking fileUpload", async () => {
     vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
       agentId: "agent-1",
       knowledgeBaseIds: [],
       allowWebSearch: false,
       allowFileUpload: false,
+      allowImageUpload: false,
     });
     const request = new Request("https://findog.at/api/fred/capabilities", {
       headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
@@ -155,6 +225,7 @@ describe("GET /api/fred/capabilities", () => {
     await expect(response.json()).resolves.toEqual({
       webSearch: false,
       fileUpload: true,
+      imageUpload: true,
       proMode: true,
       quickFred: false,
     });
@@ -208,12 +279,14 @@ describe("GET /api/fred/capabilities", () => {
         knowledgeBaseIds: [],
         allowWebSearch: true,
         allowFileUpload: true,
+        allowImageUpload: true,
       })
       .mockResolvedValueOnce({
         agentId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
         knowledgeBaseIds: [],
         allowWebSearch: true,
         allowFileUpload: true,
+        allowImageUpload: true,
       });
 
     const response = await GET(new Request("https://findog.at/api/fred/capabilities", {
@@ -237,12 +310,14 @@ describe("GET /api/fred/capabilities", () => {
         knowledgeBaseIds: [],
         allowWebSearch: true,
         allowFileUpload: true,
+        allowImageUpload: true,
       })
       .mockResolvedValueOnce({
         agentId: "wrong-agent",
         knowledgeBaseIds: [],
         allowWebSearch: true,
         allowFileUpload: true,
+        allowImageUpload: true,
       });
 
     const response = await GET(new Request("https://findog.at/api/fred/capabilities", {
@@ -268,6 +343,7 @@ describe("GET /api/fred/capabilities", () => {
       knowledgeBaseIds: [],
       allowWebSearch: true,
       allowFileUpload: true,
+      allowImageUpload: true,
     }));
     const browserController = new AbortController();
     const request = capabilityRequest(browserController.signal);
@@ -298,6 +374,15 @@ describe("GET /api/fred/capabilities", () => {
     vi.mocked(mintFredEmbedSession).mockClear();
     vi.mocked(fetchFredUpstreamConfig).mockClear();
     vi.stubEnv("MINERU_API_TOKEN", "");
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "openrouter_only",
+      fredAttachmentMode: "weknora_native",
+      modelId: "model/x",
+      prompt: "prompt",
+      updatedAt: "2026-07-19T10:00:00.000Z",
+      updatedBy: null,
+    });
     vi.mocked(readFredProModelId).mockImplementation(() => {
       throw new Error("disabled");
     });
@@ -307,6 +392,7 @@ describe("GET /api/fred/capabilities", () => {
     await expect(response.json()).resolves.toEqual({
       webSearch: true,
       fileUpload: true,
+      imageUpload: true,
       proMode: false,
       quickFred: false,
     });

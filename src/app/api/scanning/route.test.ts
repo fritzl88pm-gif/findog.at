@@ -64,6 +64,7 @@ describe("POST /api/scanning", () => {
     );
     vi.mocked(getScanningSettings).mockResolvedValue({
       documentPipeline: "mineru_with_openrouter_fallback",
+      fredAttachmentMode: "findog_preprocess",
       modelId: "google/gemini-3.5-flash",
       prompt: "Default scanning prompt",
       updatedAt: "2026-07-19T08:00:00.000Z",
@@ -101,6 +102,7 @@ describe("POST /api/scanning", () => {
   it("resolves scanning settings from the server and passes them to the adapter", async () => {
     vi.mocked(getScanningSettings).mockResolvedValueOnce({
       documentPipeline: "openrouter_only",
+      fredAttachmentMode: "findog_preprocess",
       modelId: "anthropic/claude-sonnet-4-20250514",
       prompt: "Custom scanning instructions",
       updatedAt: "2026-07-19T09:00:00.000Z",

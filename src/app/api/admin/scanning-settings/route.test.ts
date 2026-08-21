@@ -14,6 +14,7 @@ vi.mock("@/lib/scanning/settings", async (importOriginal) => {
     getScanningSettings: vi.fn(),
     updateScanningSettings: vi.fn(),
     isValidDocumentPipeline: actual.isValidDocumentPipeline,
+    isValidFredAttachmentMode: actual.isValidFredAttachmentMode,
     isValidModelId: actual.isValidModelId,
   };
 });
@@ -35,6 +36,7 @@ describe("Admin scanning-settings API", () => {
     vi.mocked(isAdminUser).mockResolvedValue(true);
     vi.mocked(getScanningSettings).mockResolvedValue({
       documentPipeline: "mineru_with_openrouter_fallback",
+      fredAttachmentMode: "findog_preprocess",
       modelId: "google/gemini-3.5-flash",
       prompt: "Current scanning prompt",
       updatedAt: "2026-07-19T08:00:00.000Z",
@@ -48,6 +50,7 @@ describe("Admin scanning-settings API", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       documentPipeline: "mineru_with_openrouter_fallback",
+      fredAttachmentMode: "findog_preprocess",
       modelId: "google/gemini-3.5-flash",
       prompt: "Current scanning prompt",
       updatedAt: "2026-07-19T08:00:00.000Z",
@@ -64,6 +67,7 @@ describe("Admin scanning-settings API", () => {
   it("updates document pipeline, model and prompt", async () => {
     vi.mocked(updateScanningSettings).mockResolvedValue({
       documentPipeline: "openrouter_only",
+      fredAttachmentMode: "weknora_native",
       modelId: "anthropic/claude-sonnet-4-20250514",
       prompt: "New scanning prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -72,6 +76,7 @@ describe("Admin scanning-settings API", () => {
 
     const response = await PUT(putRequest({
       documentPipeline: "openrouter_only",
+      fredAttachmentMode: "weknora_native",
       modelId: "anthropic/claude-sonnet-4-20250514",
       prompt: "New scanning prompt",
     }));
@@ -83,9 +88,11 @@ describe("Admin scanning-settings API", () => {
       "anthropic/claude-sonnet-4-20250514",
       "New scanning prompt",
       "openrouter_only",
+      "weknora_native",
     );
     await expect(response.json()).resolves.toEqual({
       documentPipeline: "openrouter_only",
+      fredAttachmentMode: "weknora_native",
       modelId: "anthropic/claude-sonnet-4-20250514",
       prompt: "New scanning prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -99,31 +106,55 @@ describe("Admin scanning-settings API", () => {
       documentPipeline: "openrouter_only",
       modelId: "model/x",
       prompt: "prompt",
+      fredAttachmentMode: "findog_preprocess",
     }));
     expect(response.status).toBe(403);
     expect(updateScanningSettings).not.toHaveBeenCalled();
   });
 
   it.each([
-    ["missing pipeline", { modelId: "model/x", prompt: "prompt" }],
-    ["missing model", { documentPipeline: "openrouter_only", prompt: "prompt" }],
-    ["missing prompt", { documentPipeline: "openrouter_only", modelId: "model/x" }],
+    ["missing pipeline", { modelId: "model/x", fredAttachmentMode: "findog_preprocess", prompt: "prompt" }],
+    ["missing model", { documentPipeline: "openrouter_only", fredAttachmentMode: "findog_preprocess", prompt: "prompt" }],
+    ["missing prompt", { documentPipeline: "openrouter_only", modelId: "model/x", fredAttachmentMode: "findog_preprocess" }],
     ["extra field", {
       documentPipeline: "openrouter_only",
       modelId: "model/x",
       prompt: "prompt",
+      fredAttachmentMode: "findog_preprocess",
       extra: "field",
     }],
-    ["invalid pipeline", { documentPipeline: "local_ocr", modelId: "model/x", prompt: "prompt" }],
-    ["invalid model", { documentPipeline: "openrouter_only", modelId: "invalid model", prompt: "prompt" }],
-    ["empty prompt", { documentPipeline: "openrouter_only", modelId: "model/x", prompt: "" }],
+    ["invalid pipeline", { documentPipeline: "local_ocr", fredAttachmentMode: "findog_preprocess", modelId: "model/x", prompt: "prompt" }],
+    ["invalid model", { documentPipeline: "openrouter_only", modelId: "invalid model", fredAttachmentMode: "findog_preprocess", prompt: "prompt" }],
+    ["empty prompt", { documentPipeline: "openrouter_only", modelId: "model/x", fredAttachmentMode: "findog_preprocess", prompt: "" }],
     ["oversized prompt", {
       documentPipeline: "openrouter_only",
       modelId: "model/x",
+      fredAttachmentMode: "findog_preprocess",
       prompt: "x".repeat(40_001),
     }],
   ])("rejects PUT with %s", async (_label, body) => {
     const response = await PUT(putRequest(body));
+    expect(response.status).toBe(400);
+    expect(updateScanningSettings).not.toHaveBeenCalled();
+  });
+
+  it("rejects PUT with an invalid Fred attachment mode", async () => {
+    const response = await PUT(putRequest({
+      documentPipeline: "openrouter_only",
+      modelId: "model/x",
+      prompt: "prompt",
+      fredAttachmentMode: "browser_choice",
+    }));
+    expect(response.status).toBe(400);
+    expect(updateScanningSettings).not.toHaveBeenCalled();
+  });
+
+  it("rejects PUT with a missing Fred attachment mode", async () => {
+    const response = await PUT(putRequest({
+      documentPipeline: "openrouter_only",
+      modelId: "model/x",
+      prompt: "prompt",
+    }));
     expect(response.status).toBe(400);
     expect(updateScanningSettings).not.toHaveBeenCalled();
   });

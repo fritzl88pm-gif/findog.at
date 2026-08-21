@@ -76,6 +76,7 @@ export type FredNativeAttachment = {
 type FredCapabilities = {
   webSearch: boolean;
   fileUpload: boolean;
+  imageUpload: boolean;
   proMode: boolean;
 };
 
@@ -349,6 +350,7 @@ export default function FredNativeChatView({
   const [capabilities, setCapabilities] = useState<FredCapabilities>({
     webSearch: false,
     fileUpload: false,
+    imageUpload: false,
     proMode: false,
   });
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
@@ -529,6 +531,7 @@ export default function FredNativeChatView({
       setCapabilities({
         webSearch: value.webSearch === true,
         fileUpload: value.fileUpload === true,
+        imageUpload: value.imageUpload === true,
         proMode: value.proMode === true,
       });
       if (value.webSearch !== true) setWebSearchEnabled(false);
@@ -958,12 +961,17 @@ export default function FredNativeChatView({
   }
 
   function handleComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    if (isSending || !capabilities.fileUpload) return;
+    if (isSending) return;
     const images = Array.from(event.clipboardData.items).flatMap((item) => {
       if (item.kind !== "file" || !item.type.startsWith("image/")) return [];
       const file = item.getAsFile();
       return file ? [file] : [];
     });
+    if (images.length === 0) return;
+    if (!capabilities.imageUpload) {
+      setError("Bild-Uploads sind derzeit nicht verfügbar.");
+      return;
+    }
     addImageFiles(images);
   }
 
@@ -1695,7 +1703,7 @@ export default function FredNativeChatView({
               rows={1}
             />
             <div className="composer-toolbar">
-              {capabilities.fileUpload ? (
+              {capabilities.fileUpload || capabilities.imageUpload ? (
                 <div className="composer-menu-control" ref={attachmentMenuRef}>
                   <button
                     className="composer-icon-button"
@@ -1716,14 +1724,18 @@ export default function FredNativeChatView({
                       role="menu"
                       aria-label="Anhang auswählen"
                     >
-                      <button type="button" role="menuitem" onClick={() => imageInputRef.current?.click()}>
-                        <span>Bild anhängen</span>
-                        <small className="attachment-menu-limit">max. {MAX_IMAGE_UPLOADS} · je 10 MB</small>
-                      </button>
-                      <button type="button" role="menuitem" onClick={() => fileInputRef.current?.click()}>
-                        <span>Datei anhängen</span>
-                        <small className="attachment-menu-limit">max. {MAX_FILE_UPLOADS} · je 20 MB</small>
-                      </button>
+                      {capabilities.imageUpload ? (
+                        <button type="button" role="menuitem" onClick={() => imageInputRef.current?.click()}>
+                          <span>Bild anhängen</span>
+                          <small className="attachment-menu-limit">max. {MAX_IMAGE_UPLOADS} · je 10 MB</small>
+                        </button>
+                      ) : null}
+                      {capabilities.fileUpload ? (
+                        <button type="button" role="menuitem" onClick={() => fileInputRef.current?.click()}>
+                          <span>Datei anhängen</span>
+                          <small className="attachment-menu-limit">max. {MAX_FILE_UPLOADS} · je 20 MB</small>
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
