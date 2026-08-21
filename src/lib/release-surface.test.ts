@@ -220,7 +220,7 @@ describe("approved release surface", () => {
 
   it("uses Fred without model administration and keeps provider images constrained", () => {
     expect(pageSource).toContain('fetch("/api/settings"');
-    expect(nextConfigSource).toContain("img-src 'self' data: ${supabaseImageSources.join(\" \")}");
+    expect(nextConfigSource).toContain("img-src 'self' data: blob: ${supabaseImageSources.join(\" \")}");
     expect(pageSource).not.toContain('id="admin-model-settings-title"');
     expect(pageSource).not.toContain('id="admin-result-limit-title"');
     expect(pageSource).not.toContain('fetch("/api/admin/models"');

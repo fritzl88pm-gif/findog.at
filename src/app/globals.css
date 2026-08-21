@@ -6836,6 +6836,40 @@ textarea:focus {
   padding: 0.05em 0.25em;
 }
 
+.fred-native-image-container {
+  display: block;
+  margin: 12px 0;
+  max-width: 100%;
+}
+
+.fred-native-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid rgba(40, 111, 156, 0.16);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.fred-native-image-placeholder {
+  display: inline-block;
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  color: var(--bmf-muted, #5f748d);
+  background: #f3f8fb;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px dashed rgba(40, 111, 156, 0.24);
+}
+
+.fred-native-image-loading .fred-native-image-placeholder {
+  opacity: 0.8;
+}
+
+.fred-native-image-error .fred-native-image-placeholder {
+  color: var(--bmf-muted, #718096);
+  background: #f8fafc;
+}
+
 .pdf-download-row {
   display: flex;
   margin-top: 12px;

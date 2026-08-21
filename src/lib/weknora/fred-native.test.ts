@@ -9,6 +9,7 @@ import {
   createFredUpstreamSession,
   deriveFredSessionSignature,
   fetchFredUpstreamConfig,
+  fetchFredRecentEmbedImages,
   fredVisitorId,
   MAX_NATIVE_ATTACHMENT_TOTAL_BYTES,
   openFredUpstreamStream,
@@ -240,6 +241,202 @@ describe("Fred native WeKnora client", () => {
       allowWebSearch: false,
       allowFileUpload: true,
       allowImageUpload: false,
+    });
+  });
+
+  describe("fetchFredRecentEmbedImages", () => {
+    it("loads recent embed messages with exact endpoint, headers, and query limit", async () => {
+      const signature = deriveFredSessionSignature(config, "session-456");
+      const visitorId = "visitor-456";
+      const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+        expect(url).toBe("https://taxdog.cloud/api/v1/embed/fred-channel/messages/session-456/load?limit=2");
+        expect(init?.headers).toEqual({
+          Accept: "application/json",
+          Authorization: `Embed ${session.token}`,
+          Origin: config.exchangeOrigin,
+          "X-Embed-Session": signature,
+          "X-Embed-Visitor": visitorId,
+        });
+        expect(init?.cache).toBe("no-store");
+        return new Response(JSON.stringify({
+          success: true,
+          data: {
+            messages: [
+              {
+                role: "user",
+                images: [
+                  { url: "minio://attachments/img1.jpg", caption: "Photo 1" },
+                ],
+              },
+            ],
+          },
+        }), { status: 200 });
+      });
+
+      const images = await fetchFredRecentEmbedImages({
+        session,
+        config,
+        upstreamSession: { id: "session-456", signature },
+        visitorId,
+        signal: new AbortController().signal,
+        fetchImpl,
+      });
+
+      expect(images).toEqual([
+        { url: "minio://attachments/img1.jpg", caption: "Photo 1" },
+      ]);
+    });
+
+    it("selects the newest user message deterministically when multiple messages are returned", async () => {
+      const signature = deriveFredSessionSignature(config, "session-456");
+      const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+        success: true,
+        data: {
+          messages: [
+            {
+              role: "user",
+              images: [{ url: "minio://old/img.png", caption: "Old" }],
+            },
+            {
+              role: "assistant",
+              images: [{ url: "minio://assistant/img.png" }],
+            },
+            {
+              role: "user",
+              images: [{ url: "s3://newest/img.png", caption: "Newest" }],
+            },
+          ],
+        },
+      }), { status: 200 }));
+
+      const images = await fetchFredRecentEmbedImages({
+        session,
+        config,
+        upstreamSession: { id: "session-456", signature },
+        visitorId: "visitor-123",
+        signal: new AbortController().signal,
+        fetchImpl,
+      });
+
+      expect(images).toEqual([
+        { url: "s3://newest/img.png", caption: "Newest" },
+      ]);
+    });
+
+    it("filters out invalid provider schemes, control characters, traversal paths, and public http urls", async () => {
+      const signature = deriveFredSessionSignature(config, "session-456");
+      const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+        success: true,
+        data: {
+          messages: [
+            {
+              role: "user",
+              images: [
+                { url: "https://evil.com/fake.jpg" },
+                { url: "http://localhost/fake.jpg" },
+                { url: "minio://valid/bucket/pic.jpg" },
+                { url: "local://valid/path/file.png" },
+                { url: "cos://valid/pic.webp" },
+                { url: "tos://valid/pic.gif" },
+                { url: "s3://valid/pic.jpeg" },
+                { url: "oss://valid/pic.jpg" },
+                { url: "ks3://valid/pic.jpg" },
+                { url: "obs://valid/pic.jpg" },
+                { url: "ftp://fake/pic.jpg" },
+                { url: "minio://invalid/../traversal.png" },
+                { url: "minio://invalid/\x00null.png" },
+              ],
+            },
+          ],
+        },
+      }), { status: 200 }));
+
+      const images = await fetchFredRecentEmbedImages({
+        session,
+        config,
+        upstreamSession: { id: "session-456", signature },
+        visitorId: "visitor-123",
+        signal: new AbortController().signal,
+        fetchImpl,
+      });
+
+      // Max 5 allowed trusted images
+      expect(images).toHaveLength(5);
+      expect(images.map((i) => i.url)).toEqual([
+        "minio://valid/bucket/pic.jpg",
+        "local://valid/path/file.png",
+        "cos://valid/pic.webp",
+        "tos://valid/pic.gif",
+        "s3://valid/pic.jpeg",
+      ]);
+    });
+
+    it("rejects malformed envelopes and oversized payloads (> 2 MiB) with controlled 502", async () => {
+      const signature = deriveFredSessionSignature(config, "session-456");
+
+      // Non-JSON response
+      const nonJsonFetch = vi.fn<typeof fetch>(async () => new Response("not json", { status: 200 }));
+      await expect(fetchFredRecentEmbedImages({
+        session,
+        config,
+        upstreamSession: { id: "session-456", signature },
+        visitorId: "visitor-123",
+        signal: new AbortController().signal,
+        fetchImpl: nonJsonFetch,
+      })).rejects.toThrowError(UserVisibleError);
+
+      // Malformed data shape
+      const badDataFetch = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+        success: true,
+        data: "not an object or array",
+      }), { status: 200 }));
+      await expect(fetchFredRecentEmbedImages({
+        session,
+        config,
+        upstreamSession: { id: "session-456", signature },
+        visitorId: "visitor-123",
+        signal: new AbortController().signal,
+        fetchImpl: badDataFetch,
+      })).rejects.toThrowError(UserVisibleError);
+
+      // Oversized (> 2 MiB)
+      const hugeData = "x".repeat(2 * 1024 * 1024 + 100);
+      const hugeFetch = vi.fn<typeof fetch>(async () => new Response(hugeData, {
+        status: 200,
+        headers: { "content-length": String(hugeData.length) },
+      }));
+      await expect(fetchFredRecentEmbedImages({
+        session,
+        config,
+        upstreamSession: { id: "session-456", signature },
+        visitorId: "visitor-123",
+        signal: new AbortController().signal,
+        fetchImpl: hugeFetch,
+      })).rejects.toThrowError(UserVisibleError);
+    });
+
+    it("handles upstream error status codes appropriately", async () => {
+      const signature = deriveFredSessionSignature(config, "session-456");
+
+      const rateLimitFetch = vi.fn<typeof fetch>(async () => new Response("Rate limited", { status: 429 }));
+      await expect(fetchFredRecentEmbedImages({
+        session,
+        config,
+        upstreamSession: { id: "session-456", signature },
+        visitorId: "visitor-123",
+        signal: new AbortController().signal,
+        fetchImpl: rateLimitFetch,
+      })).rejects.toThrowError(/ausgelastet/);
+
+      const authErrorFetch = vi.fn<typeof fetch>(async () => new Response("Unauthorized", { status: 401 }));
+      await expect(fetchFredRecentEmbedImages({
+        session,
+        config,
+        upstreamSession: { id: "session-456", signature },
+        visitorId: "visitor-123",
+        signal: new AbortController().signal,
+        fetchImpl: authErrorFetch,
+      })).rejects.toThrowError(/abgelaufen/);
     });
   });
 });

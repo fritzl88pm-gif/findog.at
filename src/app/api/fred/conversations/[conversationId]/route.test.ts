@@ -261,4 +261,63 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
       title: "BFG RV/1100290/2023: Entscheidung",
     });
   });
+
+  it("preserves rewritten display_content containing findog-artifact markers in message history", async () => {
+    const artifactId = "77777777-7777-4777-8777-777777777777";
+    const conversationQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          id: "33333333-3333-4333-8333-333333333333",
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          title: "Bild-Frage",
+          created_at: "2026-07-18T07:00:00.000Z",
+          updated_at: "2026-07-18T07:01:00.000Z",
+          agent_key: "default",
+          origin: "web",
+          telegram_integration_id: null,
+        },
+        error: null,
+      }),
+    };
+    const messageResult = {
+      data: [{
+        id: "msg-assistant",
+        role: "assistant",
+        content: "Raw: ![Beleg](minio://bucket/beleg.png)",
+        display_content: `Ergebnis: ![Beleg](findog-artifact://${artifactId})`,
+        research_trace: [],
+        source_references: [],
+        provider_created_at: "2026-07-18T07:01:00.000Z",
+        created_at: "2026-07-18T07:01:00.000Z",
+        attachments: [],
+        web_search_enabled: false,
+        pro_mode_enabled: false,
+      }],
+      error: null,
+    };
+    const messagesQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      then: (resolve: (value: typeof messageResult) => unknown) => resolve(messageResult),
+    };
+    vi.mocked(getSupabaseServerClient).mockReturnValue({
+      from: vi.fn((table: string) => (
+        table === "fred_conversations" ? conversationQuery : messagesQuery
+      )),
+    } as never);
+
+    const response = await GET(
+      new Request("https://findog.at/api/fred/conversations/33333333-3333-4333-8333-333333333333", {
+        headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
+      }),
+      { params: Promise.resolve({ conversationId: "33333333-3333-4333-8333-333333333333" }) },
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.messages[0].content).toBe(`Ergebnis: ![Beleg](findog-artifact://${artifactId})`);
+  });
 });

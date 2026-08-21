@@ -157,4 +157,29 @@ Keine Bindungswirkung.
       },
     ]);
   });
+
+  it("parses exact findog-artifact image markers and leaves arbitrary images as text", () => {
+    const artifactId = "33333333-3333-4333-8333-333333333333";
+    const blocks = parseRichAnswer(
+      `Dokument: ![Beleg 1](findog-artifact://${artifactId}) und ![Web](https://example.com/pic.jpg) und ![Minio](minio://bucket/img.png) und ![Bad](findog-artifact://not-a-uuid).`,
+    );
+
+    expect(blocks).toMatchObject([
+      {
+        type: "paragraph",
+        children: [
+          { type: "text", text: "Dokument: " },
+          {
+            type: "image",
+            artifactId,
+            alt: "Beleg 1",
+          },
+          {
+            type: "text",
+            text: " und ![Web](https://example.com/pic.jpg) und ![Minio](minio://bucket/img.png) und ![Bad](findog-artifact://not-a-uuid).",
+          },
+        ],
+      },
+    ]);
+  });
 });

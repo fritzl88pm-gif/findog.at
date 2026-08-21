@@ -86,13 +86,32 @@ function nativeAttachmentPayloads(attachments: readonly FredNativeAttachmentUplo
   };
 }
 
+export const MAX_EMBED_MESSAGES_LOAD_JSON_BYTES = 2 * 1024 * 1024;
+
+export const PROVIDER_URI_PATTERN =
+  /^(?:local|minio|cos|tos|s3|oss|ks3|obs):\/\/[^\x00-\x1f\x7f]+$/u;
+
+export function isAllowedProviderImageUri(uri: string): boolean {
+  if (typeof uri !== "string") return false;
+  const trimmed = uri.trim();
+  if (trimmed.length < 1 || trimmed.length > 2048) return false;
+  if (!PROVIDER_URI_PATTERN.test(trimmed)) return false;
+  if (trimmed.includes("../") || trimmed.includes("/..")) return false;
+  return true;
+}
+
+export type FredTrustedEmbedImage = {
+  url: string;
+  caption?: string;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-async function boundedJson(response: Response): Promise<unknown> {
+async function boundedJson(response: Response, maxBytes = MAX_JSON_BYTES): Promise<unknown> {
   const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_JSON_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     throw new UserVisibleError("Fred hat eine ungültige Antwort geliefert.", 502);
   }
   if (!response.body) {
@@ -107,7 +126,7 @@ async function boundedJson(response: Response): Promise<unknown> {
       const { value, done } = await reader.read();
       if (done) break;
       byteLength += value.byteLength;
-      if (byteLength > MAX_JSON_BYTES) {
+      if (byteLength > maxBytes) {
         await reader.cancel();
         throw new UserVisibleError("Fred hat eine ungültige Antwort geliefert.", 502);
       }
@@ -349,4 +368,62 @@ export function stopFredUpstreamSession(options: {
       signal: options.signal,
     },
   ).then(() => undefined).catch(() => undefined);
+}
+
+export async function fetchFredRecentEmbedImages(options: {
+  session: FredEmbedSession;
+  config: FredEmbedServerConfig;
+  upstreamSession: FredUpstreamSession;
+  visitorId: string;
+  signal: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<FredTrustedEmbedImage[]> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const url = `${FRED_EMBED_ORIGIN}/api/v1/embed/${encodeURIComponent(options.config.channelId)}/messages/${encodeURIComponent(options.upstreamSession.id)}/load?limit=2`;
+  const response = await fetchImpl(url, {
+    method: "GET",
+    headers: {
+      ...embedHeaders(options.session.token, options.config),
+      "X-Embed-Session": options.upstreamSession.signature,
+      "X-Embed-Visitor": options.visitorId,
+    },
+    cache: "no-store",
+    signal: options.signal,
+  });
+  ensureUpstreamOk(response);
+  const payload = await boundedJson(response, MAX_EMBED_MESSAGES_LOAD_JSON_BYTES);
+  if (!isRecord(payload) || payload.success !== true || !payload.data) {
+    throw new UserVisibleError("Fred hat eine ungültige Antwort geliefert.", 502);
+  }
+  let messages: unknown[] = [];
+  if (Array.isArray(payload.data)) {
+    messages = payload.data;
+  } else if (isRecord(payload.data) && Array.isArray(payload.data.messages)) {
+    messages = payload.data.messages;
+  } else {
+    throw new UserVisibleError("Fred hat eine ungültige Antwort geliefert.", 502);
+  }
+
+  const userMessages = messages.filter((msg) => isRecord(msg) && msg.role === "user") as Array<Record<string, unknown>>;
+  if (userMessages.length === 0) {
+    return [];
+  }
+  const latestUserMessage = userMessages[userMessages.length - 1];
+  const rawImages = latestUserMessage.images;
+  if (!Array.isArray(rawImages)) {
+    return [];
+  }
+  const trustedImages: FredTrustedEmbedImage[] = [];
+  for (const item of rawImages) {
+    if (!isRecord(item)) continue;
+    const url = typeof item.url === "string" ? item.url.trim() : "";
+    if (!isAllowedProviderImageUri(url)) continue;
+    const caption = typeof item.caption === "string" ? item.caption.trim().slice(0, 255) : undefined;
+    trustedImages.push({
+      url,
+      ...(caption ? { caption } : {}),
+    });
+    if (trustedImages.length >= 5) break;
+  }
+  return trustedImages;
 }

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("server-only", () => ({}));
+
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { buildAttachmentContext } from "@/lib/attachments/context";
 import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-fallback";
@@ -14,6 +16,7 @@ import {
   assertFredNativeAttachmentTotalSize,
   createFredUpstreamSession,
   deriveFredSessionSignature,
+  fetchFredRecentEmbedImages,
   fetchFredUpstreamConfig,
   openFredUpstreamStream,
   relayFredWebhookEvent,
@@ -78,6 +81,7 @@ vi.mock("@/lib/weknora/fred-native", async (importOriginal) => {
     assertFredNativeAttachmentTotalSize: vi.fn(),
     createFredUpstreamSession: vi.fn(),
     deriveFredSessionSignature: vi.fn(),
+    fetchFredRecentEmbedImages: vi.fn(async () => []),
     fetchFredUpstreamConfig: vi.fn(),
     fredVisitorId: vi.fn(() => "visitor-hash"),
     openFredUpstreamStream: vi.fn(),
@@ -2243,6 +2247,190 @@ describe("POST /api/fred/chat", () => {
         (s) => s === 'cancelled' || s === 'failed' || s === 'completed'
       );
       expect(terminalStatuses[terminalStatuses.length - 1]).toBe('cancelled');
+    });
+  });
+
+  describe("Native upload image discovery and materialization", () => {
+    it("discovers embed images in native image turn and rewrites trusted provider markdown to artifact markers", async () => {
+      const currentUserId = "aaaa1111-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: currentUserId });
+      const artifactId = "99999999-9999-4999-8999-999999999999";
+      const insertMock = vi.fn().mockReturnValue({
+        select: vi.fn().mockResolvedValue({
+          data: [{ id: artifactId, source_uri: "minio://bucket/img1.png" }],
+          error: null,
+        }),
+      });
+      const from = vi.fn((table: string) => {
+        if (table === "fred_native_image_artifacts") {
+          return { insert: insertMock };
+        }
+        return {
+          insert: vi.fn().mockReturnValue({ select: vi.fn().mockResolvedValue({ data: [{ id: "run-1" }], error: null }) }),
+          update: vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ data: null, error: null }) }),
+          select: vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }) }),
+        };
+      });
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+      vi.mocked(getScanningSettings).mockResolvedValue({
+        documentPipeline: "mineru_with_openrouter_fallback",
+        fredAttachmentMode: "weknora_native",
+        modelId: "model/x",
+        prompt: "prompt",
+        updatedAt: "2026-07-19T10:00:00.000Z",
+        updatedBy: currentUserId,
+      });
+      vi.mocked(fetchFredRecentEmbedImages).mockResolvedValue([
+        { url: "minio://bucket/img1.png", caption: "Bild.png" },
+      ]);
+      vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+        'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+        'data: {"response_type":"answer","content":"Hier ist das Bild: ![Beleg](minio://bucket/img1.png)","done":true}\n\n',
+        'data: {"response_type":"complete","data":{}}\n\n',
+      ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+      const response = await POST(multipartRequest({
+        query: "Bitte Bild prüfen",
+        image: pngFile(),
+      }));
+
+      const text = await response.text();
+      const events = text.split("\n").filter(Boolean).map(parseFredNativeStreamLine);
+      const finalEvent = events.find((e) => e?.type === "final");
+
+      expect(fetchFredRecentEmbedImages).toHaveBeenCalledTimes(1);
+      expect(insertMock).toHaveBeenCalledWith([
+        expect.objectContaining({
+          source_uri: "minio://bucket/img1.png",
+          original_name: "Bild.png",
+          mime_type: "image/png",
+        }),
+      ]);
+
+      expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
+        payload: expect.objectContaining({
+          content: "Hier ist das Bild: ![Beleg](minio://bucket/img1.png)",
+          display_content: `Hier ist das Bild: ![Beleg](findog-artifact://${artifactId})`,
+        }),
+      });
+
+      expect(finalEvent).toEqual(expect.objectContaining({
+        type: "final",
+        answer: `Hier ist das Bild: ![Beleg](findog-artifact://${artifactId})`,
+      }));
+    });
+
+    it("fails closed on invented provider URI by stripping markup to alt text without inserting artifacts", async () => {
+      const currentUserId = "bbbb2222-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: currentUserId });
+      const insertMock = vi.fn();
+      const from = vi.fn((table: string) => {
+        if (table === "fred_native_image_artifacts") {
+          return { insert: insertMock };
+        }
+        return {
+          insert: vi.fn().mockReturnValue({ select: vi.fn().mockResolvedValue({ data: [{ id: "run-1" }], error: null }) }),
+          update: vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ data: null, error: null }) }),
+        };
+      });
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+      vi.mocked(getScanningSettings).mockResolvedValue({
+        documentPipeline: "mineru_with_openrouter_fallback",
+        fredAttachmentMode: "weknora_native",
+        modelId: "model/x",
+        prompt: "prompt",
+        updatedAt: "2026-07-19T10:00:00.000Z",
+        updatedBy: currentUserId,
+      });
+      vi.mocked(fetchFredRecentEmbedImages).mockResolvedValue([
+        { url: "minio://bucket/real.png" },
+      ]);
+      vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+        'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+        'data: {"response_type":"answer","content":"Erfundenes Bild: ![Fake](minio://bucket/fake.png)","done":true}\n\n',
+        'data: {"response_type":"complete","data":{}}\n\n',
+      ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+      const response = await POST(multipartRequest({
+        query: "Bitte prüfen",
+        image: pngFile(),
+      }));
+
+      const text = await response.text();
+      const events = text.split("\n").filter(Boolean).map(parseFredNativeStreamLine);
+      const finalEvent = events.find((e) => e?.type === "final");
+
+      expect(insertMock).not.toHaveBeenCalled();
+      expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
+        payload: expect.objectContaining({
+          display_content: "Erfundenes Bild: Fake",
+        }),
+      });
+      expect(finalEvent).toEqual(expect.objectContaining({
+        type: "final",
+        answer: "Erfundenes Bild: Fake",
+      }));
+    });
+
+    it("skips image discovery when fredAttachmentMode is findog_preprocess (custom mode)", async () => {
+      const currentUserId = "cccc3333-cccc-4ccc-8ccc-cccccccccccc";
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: currentUserId });
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+      vi.mocked(getScanningSettings).mockResolvedValue({
+        documentPipeline: "mineru_with_openrouter_fallback",
+        fredAttachmentMode: "findog_preprocess",
+        modelId: "model/x",
+        prompt: "prompt",
+        updatedAt: "2026-07-19T10:00:00.000Z",
+        updatedBy: currentUserId,
+      });
+
+      const response = await POST(multipartRequest({
+        query: "Frage im Custom Mode",
+        image: pngFile(),
+      }));
+      await response.text();
+
+      expect(fetchFredRecentEmbedImages).not.toHaveBeenCalled();
+    });
+
+    it("preserves text answer and strips provider images to alt text when image discovery fails", async () => {
+      const currentUserId = "dddd4444-dddd-4ddd-8ddd-dddddddddddd";
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: currentUserId });
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+      vi.mocked(getScanningSettings).mockResolvedValue({
+        documentPipeline: "mineru_with_openrouter_fallback",
+        fredAttachmentMode: "weknora_native",
+        modelId: "model/x",
+        prompt: "prompt",
+        updatedAt: "2026-07-19T10:00:00.000Z",
+        updatedBy: currentUserId,
+      });
+      vi.mocked(fetchFredRecentEmbedImages).mockRejectedValue(new Error("Network timeout"));
+      vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+        'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+        'data: {"response_type":"answer","content":"Antworttext: ![Graph](local://graph.png)","done":true}\n\n',
+        'data: {"response_type":"complete","data":{}}\n\n',
+      ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+      const response = await POST(multipartRequest({
+        query: "Frage mit Fehler",
+        image: pngFile(),
+      }));
+
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      const events = text.split("\n").filter(Boolean).map(parseFredNativeStreamLine);
+      const finalEvent = events.find((e) => e?.type === "final");
+
+      expect(finalEvent).toEqual(expect.objectContaining({
+        type: "final",
+        answer: "Antworttext: Graph",
+      }));
     });
   });
 });

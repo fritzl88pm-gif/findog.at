@@ -3,7 +3,8 @@ export type RichInline =
   | { type: "strong"; children: RichInline[] }
   | { type: "code"; text: string }
   | { type: "highlight"; children: RichInline[] }
-  | { type: "link"; href: string; children: RichInline[] };
+  | { type: "link"; href: string; children: RichInline[] }
+  | { type: "image"; artifactId: string; alt: string };
 
 export type RichBlock =
   | { type: "paragraph"; children: RichInline[] }
@@ -21,6 +22,7 @@ export type RichTableClipboardContent = {
 export function richInlinePlainText(nodes: RichInline[]): string {
   return nodes.map((node) => {
     if (node.type === "text" || node.type === "code") return node.text;
+    if (node.type === "image") return node.alt;
     return richInlinePlainText(node.children);
   }).join("");
 }
@@ -72,10 +74,14 @@ function pushText(nodes: RichInline[], text: string): void {
   nodes.push({ type: "text", text });
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const ARTIFACT_PREFIX = "findog-artifact://";
+
 type InlineMarker = "`" | "**" | "__" | "==";
 type InlineToken =
   | { type: "marker"; marker: InlineMarker; index: number }
-  | { type: "link"; index: number; label: string; href: string; end: number };
+  | { type: "link"; index: number; label: string; href: string; end: number }
+  | { type: "image"; index: number; alt: string; artifactId: string; end: number };
 
 function isSafeFindokHref(value: string): boolean {
   try {
@@ -102,6 +108,39 @@ function isSafeFindokHref(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function findNextMarkdownImage(text: string, start: number): InlineToken | null {
+  let index = text.indexOf("![", start);
+  while (index >= 0) {
+    const labelEnd = text.indexOf("]", index + 2);
+    if (labelEnd < 0) {
+      return null;
+    }
+    if (text[labelEnd + 1] !== "(") {
+      index = text.indexOf("![", index + 1);
+      continue;
+    }
+
+    const hrefStart = labelEnd + 2;
+    const hrefEnd = text.indexOf(")", hrefStart);
+    if (hrefEnd < 0) {
+      return null;
+    }
+
+    const alt = text.slice(index + 2, labelEnd);
+    const href = text.slice(hrefStart, hrefEnd).trim();
+    if (href.toLowerCase().startsWith(ARTIFACT_PREFIX)) {
+      const artifactId = href.slice(ARTIFACT_PREFIX.length).trim();
+      if (UUID_PATTERN.test(artifactId)) {
+        return { type: "image", index, alt, artifactId, end: hrefEnd + 1 };
+      }
+    }
+
+    index = text.indexOf("![", index + 1);
+  }
+
+  return null;
 }
 
 function findNextMarkdownLink(text: string, start: number): InlineToken | null {
@@ -140,8 +179,10 @@ function findNextToken(text: string, start: number): InlineToken | null {
     .filter((candidate) => candidate.index >= 0)
     .sort((left, right) => left.index - right.index || right.marker.length - left.marker.length);
 
+  const image = findNextMarkdownImage(text, start);
   const link = findNextMarkdownLink(text, start);
-  return [...(link ? [link] : []), ...candidates].sort((left, right) => left.index - right.index)[0] ?? null;
+  const nonMarkers = [image, link].filter((t): t is InlineToken => t !== null);
+  return [...nonMarkers, ...candidates].sort((left, right) => left.index - right.index)[0] ?? null;
 }
 
 export function parseInline(text: string): RichInline[] {
@@ -157,6 +198,12 @@ export function parseInline(text: string): RichInline[] {
 
     if (token.index > cursor) {
       pushText(nodes, text.slice(cursor, token.index));
+    }
+
+    if (token.type === "image") {
+      nodes.push({ type: "image", artifactId: token.artifactId, alt: token.alt });
+      cursor = token.end;
+      continue;
     }
 
     if (token.type === "link") {

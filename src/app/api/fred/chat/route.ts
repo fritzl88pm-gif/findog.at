@@ -63,6 +63,7 @@ import {
   assertFredNativeAttachmentTotalSize,
   createFredUpstreamSession,
   deriveFredSessionSignature,
+  fetchFredRecentEmbedImages,
   fetchFredUpstreamConfig,
   fredVisitorId,
   openFredUpstreamStream,
@@ -71,6 +72,10 @@ import {
   type FredNativeAttachmentUpload,
   type FredUpstreamSession,
 } from "@/lib/weknora/fred-native";
+import {
+  materializeNativeImageArtifacts,
+  sanitizeProviderImageMarkupToAlt,
+} from "@/lib/fred/native-image-artifacts";
 import { buildUserPersonalizationBlock } from "@/lib/fred/user-personalization";
 import {
   FRED_CONTENT_TRANSFORMATION,
@@ -1092,7 +1097,7 @@ export async function POST(request: Request) {
           }
 
           const userOccurredAt = new Date().toISOString();
-          const { conversation } = await recordEvent({
+          const { conversation, messageId: userMessageId } = await recordEvent({
             supabase,
             userId: user.id,
             channelId: config.channelId,
@@ -1320,6 +1325,47 @@ export async function POST(request: Request) {
             [...verifiedCitations.values()],
             { target: "fullText" },
           );
+          let displayAnswer = finalAnswer;
+          const hasImageAttachments = (body.attachments ?? []).some((a) => a.kind === "image");
+          if (
+            fredAttachmentMode === "weknora_native"
+            && hasImageAttachments
+            && userMessageId !== undefined
+          ) {
+            try {
+              const discoveryAbort = new AbortController();
+              const timeoutHandle = setTimeout(() => discoveryAbort.abort(), 5_000);
+              const onDeadlineAbort = () => discoveryAbort.abort();
+              deadline.signal.addEventListener("abort", onDeadlineAbort);
+
+              try {
+                const trustedImages = await fetchFredRecentEmbedImages({
+                  session: embedSession,
+                  config,
+                  upstreamSession,
+                  visitorId: fredVisitorId(config.publishToken, user.id),
+                  signal: discoveryAbort.signal,
+                });
+
+                const materialized = await materializeNativeImageArtifacts({
+                  supabase,
+                  userId: user.id,
+                  conversationId: conversation.id,
+                  userMessageId,
+                  rawContent: finalAnswer,
+                  trustedImages,
+                  userAttachments: body.attachments,
+                });
+
+                displayAnswer = materialized.displayContent;
+              } finally {
+                clearTimeout(timeoutHandle);
+                deadline.signal.removeEventListener("abort", onDeadlineAbort);
+              }
+            } catch {
+              displayAnswer = sanitizeProviderImageMarkupToAlt(finalAnswer);
+            }
+          }
           const { conversation: finalConversation, messageId: assistantMessageId } = await recordEvent({
             supabase,
             userId: user.id,
@@ -1329,7 +1375,7 @@ export async function POST(request: Request) {
             eventType: "message_received",
             content: rawAnswer,
             occurredAt: new Date().toISOString(),
-            displayContent: finalAnswer,
+            displayContent: displayAnswer,
             researchTrace,
             sourceReferences,
             proModeEnabled: false,
@@ -1358,7 +1404,7 @@ export async function POST(request: Request) {
           });
           const finalEvent: Parameters<typeof encodeFredNativeStreamEvent>[0] = {
             type: "final",
-            answer: finalAnswer,
+            answer: displayAnswer,
             conversation: finalConversation,
             researchTrace,
             sourceReferences,
