@@ -21,8 +21,8 @@ describe("Fred native stream", () => {
     }))).toEqual({ type: "conversation", conversation });
     expect(parseFredNativeStreamLine(encodeFredNativeStreamEvent({
       type: "status",
-      label: "Anhänge werden analysiert …",
-    }))).toEqual({ type: "status", label: "Anhänge werden analysiert …" });
+      label: "Dokumente werden analysiert …",
+    }))).toEqual({ type: "status", label: "Dokumente werden analysiert …" });
     expect(parseFredNativeStreamLine(encodeFredNativeStreamEvent({
       type: "delta",
       content: "Hallo",
@@ -64,6 +64,14 @@ describe("Fred native stream", () => {
       researchTrace: [],
       sourceReferences: [],
     });
+  });
+
+  it("parses the explicit status-clear contract without status text", () => {
+    expect(parseFredNativeStreamLine(encodeFredNativeStreamEvent({
+      type: "status_clear",
+    }))).toEqual({ type: "status_clear" });
+    expect(parseFredNativeStreamLine('{"type":"status_clear"}'))
+      .toEqual({ type: "status_clear" });
   });
 
   it("accepts final event with missing assistantMessageId", () => {

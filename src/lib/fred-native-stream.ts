@@ -25,6 +25,7 @@ export type FredNativeStreamEvent =
   | { type: "replace"; answer: string }
   | { type: "research"; step: FredResearchStep }
   | { type: "status"; label: string }
+  | { type: "status_clear" }
   | {
     type: "final";
     answer: string;
@@ -104,6 +105,9 @@ export function parseFredNativeStreamLine(line: string): FredNativeStreamEvent |
       throw new Error("Ungültiges Fred-Streaming-Ereignis.");
     }
     return { type: "status", label: value.label };
+  }
+  if (value.type === "status_clear") {
+    return { type: "status_clear" };
   }
   if (value.type === "final") {
     const conversation = parseConversation(value.conversation);

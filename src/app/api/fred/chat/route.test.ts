@@ -695,8 +695,17 @@ describe("POST /api/fred/chat", () => {
     const removeListener = vi.spyOn(fredRequest.signal, "removeEventListener");
 
     const response = await POST(fredRequest);
-    await response.text();
+    const events = (await response.text())
+      .trim()
+      .split("\n")
+      .map(parseFredNativeStreamLine)
+      .filter(Boolean);
 
+    expect(events).not.toContainEqual({
+      type: "status",
+      label: "Dokumente werden analysiert …",
+    });
+    expect(events).not.toContainEqual({ type: "status_clear" });
     expect(removeListener).toHaveBeenCalledWith("abort", addListener.mock.calls[0][1]);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -723,8 +732,13 @@ describe("POST /api/fred/chat", () => {
     }
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(events.filter((event) => event?.type === "status" && event.label === "Anhänge werden analysiert …"))
+    expect(events.filter((event) => event?.type === "status" && event.label === "Dokumente werden analysiert …"))
       .toHaveLength(2);
+    expect(events).not.toContainEqual({
+      type: "status",
+      label: "Anhänge werden an WeKnora übergeben …",
+    });
+    expect(events).toContainEqual({ type: "status_clear" });
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -785,15 +799,41 @@ describe("POST /api/fred/chat", () => {
     });
     const image = pngFile();
     const pdf = pdfFile();
+    vi.mocked(openFredUpstreamStream).mockImplementationOnce(async () => new Response([
+      'data: {"response_type":"thinking","data":{"done":false}}\n\n',
+      'data: {"response_type":"answer","content":"Analysiert"}\n\n',
+      'data: {"response_type":"complete","data":{}}\n\n',
+    ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
 
     const response = await POST(multipartRequest({
       query: "Bitte prüfe Bild und Beleg",
       image,
       attachment: pdf,
     }));
-    await response.text();
+    const events = (await response.text())
+      .trim()
+      .split("\n")
+      .map(parseFredNativeStreamLine)
+      .filter(Boolean);
 
     expect(response.status).toBe(200);
+    expect(events[0]).toEqual({
+      type: "status",
+      label: "Dokumente werden analysiert …",
+    });
+    expect(events).not.toContainEqual({
+      type: "status",
+      label: "Anhänge werden an WeKnora übergeben …",
+    });
+    const statusIndexes = events
+      .map((event, index) => event?.type === "status" ? index : -1)
+      .filter((index) => index >= 0);
+    const clearIndex = events.findIndex((event) => event?.type === "status_clear");
+    const researchIndex = events.findIndex((event) => event?.type === "research");
+    const deltaIndex = events.findIndex((event) => event?.type === "delta");
+    expect(clearIndex).toBeGreaterThan(statusIndexes.at(-1) ?? -1);
+    expect(clearIndex).toBeLessThan(researchIndex);
+    expect(clearIndex).toBeLessThan(deltaIndex);
     expect(buildAttachmentContext).not.toHaveBeenCalled();
     expect(createConfiguredDocumentProvider).not.toHaveBeenCalled();
     expect(extractDocumentsWithConfiguredModel).not.toHaveBeenCalled();

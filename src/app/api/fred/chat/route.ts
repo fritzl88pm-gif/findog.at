@@ -935,6 +935,7 @@ export async function POST(request: Request) {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         let acceptingCitationUpdates = true;
+        let attachmentStatusPending = false;
         let sawCompleteEvent = false;
         let firstDeltaRecorded = false;
         let errorAlreadyEmitted = false;
@@ -955,12 +956,22 @@ export async function POST(request: Request) {
             modelRoute,
           });
 
-          if (fredAttachmentMode === "weknora_native") {
-            send(controller, { type: "status", label: "Anhänge werden an WeKnora übergeben …" });
-          } else {
-            send(controller, { type: "status", label: "Anhänge werden analysiert …" });
+          const sendAttachmentStatus = () => {
+            attachmentStatusPending = true;
+            send(controller, { type: "status", label: "Dokumente werden analysiert …" });
+          };
+          const clearAttachmentStatus = () => {
+            if (!attachmentStatusPending) return;
+            attachmentStatusPending = false;
+            send(controller, { type: "status_clear" });
+          };
+
+          if (body.attachments.length > 0 && fredAttachmentMode === "weknora_native") {
+            sendAttachmentStatus();
+          } else if (body.attachments.length > 0) {
+            sendAttachmentStatus();
             attachmentHeartbeat = setInterval(() => {
-              send(controller, { type: "status", label: "Anhänge werden analysiert …" });
+              send(controller, { type: "status", label: "Dokumente werden analysiert …" });
             }, ATTACHMENT_HEARTBEAT_INTERVAL_MS);
             try {
               const attachmentInputs = body.attachments.map(attachmentToInput);
@@ -1016,10 +1027,7 @@ export async function POST(request: Request) {
             } finally {
               clearAttachmentHeartbeat();
             }
-            send(controller, {
-              type: "status",
-              label: `${selectedAgentName} bearbeitet die Frage …`,
-            });
+            clearAttachmentStatus();
           }
 
           // Transition to connecting before upstream setup
@@ -1258,6 +1266,7 @@ export async function POST(request: Request) {
             sourceReferences = mergeFredSources(sourceReferences, research.sources);
             if (research.step) {
               researchTrace = mergeFredResearchStep(researchTrace, research.step);
+              clearAttachmentStatus();
               send(controller, { type: "research", step: research.step });
             }
             // Track upstream complete event for EOF detection
@@ -1267,6 +1276,7 @@ export async function POST(request: Request) {
 
             const event = upstreamDelta(parsed);
             if (event.content) {
+              if (isAnswerDelta(parsed)) clearAttachmentStatus();
               answerChunks.push(event.content);
               send(controller, { type: "delta", content: event.content });
               // Record first real answer delta

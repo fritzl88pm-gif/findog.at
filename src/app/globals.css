@@ -7267,21 +7267,33 @@ textarea:focus {
   background: var(--bmf-blue);
   color: #ffffff;
 }
-.composer-model-trigger.fred-pro-toggle.is-active {
-  border-color: var(--bmf-blue-deep);
-  background: var(--bmf-blue-deep);
-  color: #ffffff;
+.composer-model-trigger.composer-icon-toggle.fred-quick-toggle {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
 }
 
-.fred-pro-icon,
+.composer-model-trigger.composer-icon-toggle.fred-quick-toggle.is-active {
+  border-color: #d38b00;
+  background: var(--accent-yellow);
+  color: #5f3b00;
+}
+
+.fred-quick-icon,
 .fred-web-search-icon {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
   stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fred-quick-icon {
+  fill: currentColor;
+  stroke: currentColor;
   stroke-linejoin: round;
 }
 

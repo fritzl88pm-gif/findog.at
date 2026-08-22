@@ -26,6 +26,10 @@ const routeSource = readFileSync(
   fileURLToPath(new URL("../app/api/fred/chat/route.ts", import.meta.url)),
   "utf8",
 );
+const capabilitiesRouteSource = readFileSync(
+  fileURLToPath(new URL("../app/api/fred/capabilities/route.ts", import.meta.url)),
+  "utf8",
+);
 const attachmentValidationSource = readFileSync(
   fileURLToPath(new URL("./attachments/validation.ts", import.meta.url)),
   "utf8",
@@ -99,11 +103,18 @@ describe("Fred native Findog UI", () => {
     );
   });
 
-  it("keeps the sniff animation visible while uploaded documents are analyzed", () => {
-    expect(routeSource).toContain('label: "Anhänge werden analysiert …"');
+  it("uses a neutral document status and clears it without replacing it with agent copy", () => {
+    expect(routeSource).toContain('label: "Dokumente werden analysiert …"');
+    expect(routeSource).not.toContain("Anhänge werden an WeKnora übergeben …");
+    expect(routeSource).not.toContain("Anhänge werden analysiert …");
+    expect(routeSource).not.toContain("bearbeitet die Frage …");
+    expect(routeSource).toContain('type: "status_clear"');
+    expect(routeSource).toContain("if (!attachmentStatusPending) return;");
+    expect(viewSource).toContain("if (!showingStatusRef.current) return;");
     expect(viewSource).toContain('previewContainerRef.current?.classList.add("is-status")');
-    expect(viewSource.match(/previewContainerRef\.current\?\.classList\.remove\("is-status"\)/gu))
-      .toHaveLength(2);
+    expect(viewSource).toContain("clearStatus");
+    expect(viewSource).toContain('streamEvent.type === "status_clear"');
+    expect(viewSource).toContain('previewContainerRef.current?.classList.remove("is-status")');
     expect(viewSource).toContain('className="fred-streaming-preview" ref={previewContainerRef}');
     expect(cssSource).toMatch(
       /\.fred-streaming-preview:not\(\.is-status\)[\s\S]*?\.fred-streaming-preview-text:not\(:empty\)[\s\S]*?\+ \.fred-thinking-indicator \{[\s\S]*?display: none;/u,
@@ -137,7 +148,7 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).toContain("Bild-Uploads sind derzeit nicht verfügbar.");
     expect(viewSource).toContain("max. {MAX_IMAGE_UPLOADS} · je 10 MB");
     expect(viewSource).toContain("max. {MAX_FILE_UPLOADS} · je 20 MB");
-    expect(viewSource).toContain('className="fred-pro-icon"');
+    expect(viewSource).toContain('className="fred-quick-icon"');
     expect(viewSource).toContain('className="fred-web-search-icon"');
     expect(viewSource).toContain('fetch("/api/fred/chat"');
     expect(viewSource).toContain("parseFredNativeStreamLine");
@@ -328,44 +339,45 @@ describe("Fred native Findog UI", () => {
   });
 });
 
-describe("Fred Pro Mode UI", () => {
-  it("includes proMode in FredCapabilities", () => {
-    expect(viewSource).toContain("proMode");
-    expect(pageSource).toContain("proMode");
+describe("Fred composer routing UI", () => {
+  it("includes server capabilities for QuickFred and historical Pro support", () => {
+    expect(capabilitiesRouteSource).toContain("quickFred: capabilities.quickFred");
+    expect(viewSource).toContain("quickFred: boolean");
+    expect(viewSource).toContain("quickFred: value.quickFred === true");
+    expect(viewSource).toContain("proMode: boolean");
+    expect(viewSource).toContain("proMode: value.proMode === true");
   });
 
-  it("renders compact icon-only Pro and Websuche buttons in the requested order", () => {
-    const proIndex = viewSource.indexOf("fred-pro-toggle");
+  it("renders compact icon-only Quickmode and Websuche buttons in the requested order", () => {
+    const quickIndex = viewSource.indexOf("fred-quick-toggle");
     const webSearchIndex = viewSource.indexOf("fred-web-search-toggle");
-    expect(proIndex).toBeGreaterThan(0);
-    expect(proIndex).toBeLessThan(webSearchIndex);
+    expect(quickIndex).toBeGreaterThan(0);
+    expect(quickIndex).toBeLessThan(webSearchIndex);
 
-    const proButton = viewSource.slice(proIndex, viewSource.indexOf("</button>", proIndex));
+    const quickButton = viewSource.slice(quickIndex, viewSource.indexOf("</button>", quickIndex));
     const webSearchButton = viewSource.slice(webSearchIndex, viewSource.indexOf("</button>", webSearchIndex));
-    expect(proButton).toContain('className="fred-pro-icon"');
+    expect(quickButton).toContain('className="fred-quick-icon"');
     expect(webSearchButton).toContain('className="fred-web-search-icon"');
-    expect(proButton).toContain('fill="none" stroke="currentColor"');
-    expect(webSearchButton).toContain('fill="none" stroke="currentColor"');
-    expect(proButton).not.toContain("<span>");
+    expect(quickButton).not.toContain("<span>");
     expect(webSearchButton).not.toContain("<span>");
-    expect(cssSource).toContain(".composer-model-trigger.composer-icon-toggle");
+    expect(cssSource).toMatch(
+      /\.composer-model-trigger\.composer-icon-toggle\.fred-quick-toggle \{[\s\S]*?width: 34px;[\s\S]*?height: 34px;[\s\S]*?min-width: 34px;/u,
+    );
+    expect(cssSource).toContain(
+      ".composer-model-trigger.composer-icon-toggle.fred-quick-toggle.is-active",
+    );
   });
 
-  it("uses the requested tooltip and dynamic aria-label on the Pro button", () => {
-    expect(viewSource).toContain('aria-pressed={proModeEnabled}');
-    expect(viewSource).toContain('title="Thinking"');
-    expect(viewSource).toContain('aria-label={proModeEnabled ? "Pro-Modus aktiv" : "Pro-Modus verwenden"}');
+  it("uses the requested Quickmode tooltip and dynamic accessible name", () => {
+    expect(viewSource).toContain('aria-pressed={quickFredEnabled}');
+    expect(viewSource).toContain('title="Quickmode für schnelle Antworten"');
+    expect(viewSource).toContain('aria-label={quickFredEnabled ? "Quickmode aktiv" : "Quickmode verwenden"}');
   });
 
-  it("uses the requested tooltip and dynamic aria-label on the icon-only Websuche button", () => {
-    expect(viewSource).toContain('title="Websuche"');
-    expect(viewSource).toContain('aria-label={webSearchEnabled ? "Websuche aktiv" : "Websuche verwenden"}');
-  });
-
-  it("shows auto-hiding mobile status popups for Thinking and Websuche toggles", () => {
+  it("shows auto-hiding mobile status popups for Quickmode and Websuche toggles", () => {
     expect(viewSource).toContain('role="status" aria-live="polite" aria-atomic="true"');
-    expect(viewSource).toContain('"Thinking aktiviert"');
-    expect(viewSource).toContain('"Thinking deaktiviert"');
+    expect(viewSource).toContain('"Quickmode aktiviert"');
+    expect(viewSource).toContain('"Quickmode deaktiviert"');
     expect(viewSource).toContain('"Websuche aktiviert"');
     expect(viewSource).toContain('"Websuche deaktiviert"');
     expect(viewSource).toContain('window.setTimeout(() => setModeNotice(""), 1_800)');
@@ -373,121 +385,58 @@ describe("Fred Pro Mode UI", () => {
     expect(cssSource).toContain("@keyframes fredModeNoticeIn");
   });
 
-  it("uses type=button and is disabled while sending", () => {
-    expect(viewSource).toContain('type="button"');
-    expect(viewSource).toContain('disabled={isSending}');
+  it("removes the Pro/Thinking composer control and its control-specific styling", () => {
+    expect(viewSource).not.toContain("fred-pro-toggle");
+    expect(viewSource).not.toContain("fred-pro-icon");
+    expect(viewSource).not.toContain('title="Thinking"');
+    expect(viewSource).not.toContain('"Pro-Modus aktiv"');
+    expect(viewSource).not.toContain('"Pro-Modus verwenden"');
+    expect(viewSource).not.toContain('"Thinking aktiviert"');
+    expect(viewSource).not.toContain('"Thinking deaktiviert"');
+    expect(cssSource).not.toContain(".fred-pro-toggle");
+    expect(cssSource).not.toContain(".fred-pro-icon");
   });
 
-  it("renders the Pro button only when capabilities.proMode is true", () => {
-    expect(viewSource).toContain("capabilities.proMode");
+  it("sends only a boolean QuickFred selection and no routing configuration", () => {
+    expect(viewSource).toContain('quickFredEnabled: agentKey === "quickfred"');
+    expect(viewSource).not.toMatch(/quickFredEnabled:\s*[^,}]+[^=][^,}]*Id/u);
+    expect(viewSource).not.toContain("WEKNORA_QUICKFRED_AGENT_ID");
+    expect(viewSource).not.toContain("WEKNORA_QUICKFRED_PUBLISH_TOKEN");
+    expect(viewSource).not.toMatch(/WEKNORA_QUICKFRED_(?:CHANNEL|AGENT|PUBLISH_TOKEN)_?/u);
+    expect(viewSource).not.toContain("quickfred-channel");
+    expect(viewSource).not.toContain("expectedAgentId");
+    expect(viewSource).not.toContain("publishToken");
   });
 
-  it("keeps Pro and Websuche independent", () => {
-    expect(viewSource).toContain("proModeEnabled");
+  it("locks the conversation agent after the first turn", () => {
+    expect(viewSource).toMatch(/const agentKey: FredAgentKey = conversationAgentKey\n\s*\?\? \(options\.quickFredEnabled === true \? "quickfred" : "fred"\);/u);
+    expect(viewSource).toContain('disabled={isSending || conversationAgentKey !== null || !capabilities.quickFred}');
+    expect(viewSource).toContain('setConversationAgentKey(streamEvent.conversation.agentKey)');
+    expect(viewSource).toContain('setQuickFredEnabled(streamEvent.conversation.agentKey === "quickfred")');
+  });
+
+  it("keeps web search independent of Quickmode", () => {
     expect(viewSource).toContain("webSearchEnabled");
+    expect(viewSource).not.toContain("setWebSearchEnabled(false);\n                      setQuickFredEnabled");
   });
 
-  it("sends proModeEnabled in the request payload for both JSON and multipart", () => {
-    expect(viewSource).toContain("proModeEnabled");
-    const payloadAssignment = /requestPayload\s*=\s*\{[^}]*proModeEnabled[^}]*\}/u;
-    expect(viewSource).toMatch(payloadAssignment);
-  });
-
-  it("does not contain any model UUID or name in the component source", () => {
-    expect(viewSource).not.toContain("8bf35269");
-    expect(viewSource).not.toContain("deepseek-v4-pro");
-    expect(viewSource).not.toContain("summary_model_id");
-    expect(viewSource).not.toContain("WEKNORA_FRED_PRO_MODEL_ID");
-  });
-
-  it("preserves proMode state after sending for later messages", () => {
-    expect(viewSource).toContain("proModeEnabled");
-  });
-
-  it("restores proModeEnabled on edit", () => {
-    expect(viewSource).toContain("proModeEnabled");
-    expect(viewSource).toContain("editQuestion");
-  });
-
-  it("reuses preceding user turn's proModeEnabled on regenerate", () => {
-    expect(viewSource).toContain("regenerateAnswer");
-  });
-
-  it("renders a compact Pro badge on user messages where true", () => {
-    expect(viewSource).toContain("Pro");
-    expect(viewSource).toContain("fred-native-option-badge");
-    expect(viewSource).toContain("proModeEnabled");
-  });
-
-  it("uses scoped CSS class .fred-pro-toggle in globals.css", () => {
-    expect(cssSource).toContain(".fred-pro-toggle");
-    expect(cssSource).toContain(".fred-pro-toggle.is-active");
-  });
-
-  it("includes proModeEnabled in the FredNativeMessage type", () => {
+  it("keeps historical Pro metadata, edit defaults, regeneration and badges outside the composer", () => {
     expect(viewSource).toContain("proModeEnabled?: boolean");
-    expect(pageSource).toContain("proModeEnabled");
-  });
-});
-describe("Fred Pro Mode options.proModeEnabled regression (TDD)", () => {
-  it("submitQuery reads proModeEnabled from options.proModeEnabled (normalised via isProMode), not the closure variable", () => {
-    // MUST use the normalised local variable, not the React closure
-    expect(viewSource).toContain("userMessage.proModeEnabled = isProMode;");
-    // The old buggy pattern using the closure variable directly MUST NOT exist
-    expect(viewSource).not.toMatch(/userMessage\.proModeEnabled\s*=\s*proModeEnabled(?!\s*\.)/u);
-  });
-
-  it("submitQuery reads requestPayload proModeEnabled from normalised isProMode, not the closure variable", () => {
-    // MUST use the normalised local variable in the requestPayload
-    expect(viewSource).toContain("proModeEnabled: isProMode,");
-    // The requestPayload object must NOT contain the old standalone shorthand
-    // "proModeEnabled," that would read from the closure
-    const reqPayloadStart = viewSource.indexOf("requestPayload =");
-    if (reqPayloadStart >= 0) {
-      const reqPayloadBlock = viewSource.slice(reqPayloadStart, viewSource.indexOf("};", reqPayloadStart) + 2);
-      expect(reqPayloadBlock).not.toMatch(/^\s+proModeEnabled,$/mu);
-    }
-  });
-
-  it("submitQuery normalises options.proModeEnabled === true once into isProMode", () => {
-    expect(viewSource).toContain("const isProMode = options.proModeEnabled === true;");
     expect(viewSource).toContain("userMessage.proModeEnabled = isProMode;");
     expect(viewSource).toContain("proModeEnabled: isProMode,");
-  });
-
-  it("sendMessage passes proModeEnabled to submitQuery", () => {
-    expect(viewSource).toMatch(/sendMessage[\s\S]*?submitQuery\s*\(\{[\s\S]*?proModeEnabled[\s\S]*?\}\s*\)/u);
-  });
-
-  it("regenerateAnswer computes gated originalProMode once and passes it to submitQuery", () => {
     expect(viewSource).toContain("const originalProMode = Boolean(question.proModeEnabled && capabilities.proMode);");
     expect(viewSource).toContain("proModeEnabled: originalProMode,");
-    const regenBlock = /regenerateAnswer[\s\S]*?submitQuery\s*\(\{[\s\S]*?proModeEnabled: originalProMode[\s\S]*?\}\s*\)/u.exec(viewSource);
-    expect(regenBlock).not.toBeNull();
-  });
-});
-
-describe("QuickFred removal — composer control absent, attribution preserved", () => {
-  it("does not render the QuickFred lightning toggle in the composer", () => {
-    expect(viewSource).not.toContain("fred-quick-toggle");
-    expect(viewSource).not.toContain("fred-quick-icon");
-    expect(viewSource).not.toContain('title="Fastmode');
-    expect(viewSource).not.toContain('"Fastmode aktiviert"');
-    expect(viewSource).not.toContain('"Fastmode deaktiviert"');
+    expect(viewSource).toContain("message.proModeEnabled ? (");
+    expect(viewSource).toContain('>Pro</span>');
+    const editBlock = /function editQuestion\([\s\S]*?function handleShareAnswer/u.exec(viewSource)?.[0] ?? "";
+    expect(editBlock).not.toContain("message.proModeEnabled");
+    const sendBlock = /async function sendMessage\([\s\S]*?function editQuestion/u.exec(viewSource)?.[0] ?? "";
+    expect(sendBlock).toContain('proModeEnabled: false');
   });
 
   it("keeps QuickFred conversation attribution and scoped badge rendering", () => {
     expect(viewSource).toContain("fredAgentName(message.agentKey)");
     expect(viewSource).toContain(">QuickFred</span>");
-    expect(viewSource).toContain('disabled={isSending || conversationAgentKey === "quickfred"}');
-  });
-
-  it("does not leak WeKnora QuickFred server configuration to the client", () => {
-    expect(viewSource).not.toContain("WEKNORA_QUICKFRED_AGENT_ID");
-    expect(viewSource).not.toContain("WEKNORA_QUICKFRED_PUBLISH_TOKEN");
-  });
-
-  it("preserves the QuickFred agent key in the FredAgentKey union", () => {
     expect(viewSource).toContain('agentName: "Fred" | "QuickFred"');
   });
 });

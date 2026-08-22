@@ -78,6 +78,7 @@ type FredCapabilities = {
   fileUpload: boolean;
   imageUpload: boolean;
   proMode: boolean;
+  quickFred: boolean;
 };
 
 type ReasoningCategoryOption = {
@@ -250,6 +251,7 @@ type StreamingAssistantPreviewHandle = {
   append: (text: string) => void;
   replace: (text: string) => void;
   setStatus: (text: string) => void;
+  clearStatus: () => void;
   flush: () => void;
   cancel: () => void;
 };
@@ -317,6 +319,12 @@ const StreamingAssistantPreview = forwardRef<
       previewContainerRef.current?.classList.add("is-status");
       bufferRef.current?.replace(text);
     },
+    clearStatus: () => {
+      if (!showingStatusRef.current) return;
+      showingStatusRef.current = false;
+      previewContainerRef.current?.classList.remove("is-status");
+      bufferRef.current?.replace("");
+    },
     flush: () => bufferRef.current?.flush(),
     cancel: () => bufferRef.current?.cancel(),
   }), []);
@@ -352,9 +360,12 @@ export default function FredNativeChatView({
     fileUpload: false,
     imageUpload: false,
     proMode: false,
+    quickFred: false,
   });
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
-  const [proModeEnabled, setProModeEnabled] = useState(false);
+  const [quickFredEnabled, setQuickFredEnabled] = useState(
+    conversationId !== "" && initialMessages[0]?.agentKey === "quickfred",
+  );
   const [conversationAgentKey, setConversationAgentKey] = useState<FredAgentKey | null>(
     conversationId ? initialMessages[0]?.agentKey ?? "fred" : null,
   );
@@ -424,7 +435,7 @@ export default function FredNativeChatView({
       ? initialMessages[0]?.agentKey ?? "fred"
       : null;
     setConversationAgentKey(nextAgentKey);
-    setProModeEnabled(false);
+    setQuickFredEnabled(nextAgentKey === "quickfred");
     setSelectedImages([]);
     setSelectedFiles([]);
     setIsAttachmentMenuOpen(false);
@@ -533,8 +544,12 @@ export default function FredNativeChatView({
         fileUpload: value.fileUpload === true,
         imageUpload: value.imageUpload === true,
         proMode: value.proMode === true,
+        quickFred: value.quickFred === true,
       });
       if (value.webSearch !== true) setWebSearchEnabled(false);
+      if (value.quickFred !== true && !activeConversationIdRef.current) {
+        setQuickFredEnabled(false);
+      }
     }).catch(() => undefined);
     return () => controller.abort();
   }, [accessToken, readOnly]);
@@ -578,6 +593,7 @@ export default function FredNativeChatView({
     query: string;
     webSearchEnabled?: boolean;
     proModeEnabled?: boolean;
+    quickFredEnabled?: boolean;
     images: File[];
     files: File[];
     clearDraft: boolean;
@@ -589,7 +605,8 @@ export default function FredNativeChatView({
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    const agentKey: FredAgentKey = conversationAgentKey ?? "fred";
+    const agentKey: FredAgentKey = conversationAgentKey
+      ?? (options.quickFredEnabled === true ? "quickfred" : "fred");
     const agentName = fredAgentName(agentKey);
     const userMessage: FredNativeMessage = {
       role: "user",
@@ -645,6 +662,7 @@ export default function FredNativeChatView({
         conversationId: activeConversationIdRef.current || undefined,
         webSearchEnabled: options.webSearchEnabled,
         proModeEnabled: isProMode,
+        quickFredEnabled: agentKey === "quickfred",
       };
       const hasAttachments = attachedImages.length > 0 || attachedFiles.length > 0;
       const formData = hasAttachments ? new FormData() : null;
@@ -686,9 +704,7 @@ export default function FredNativeChatView({
         if (streamEvent.type === "conversation") {
           activeConversationIdRef.current = streamEvent.conversation.id;
           setConversationAgentKey(streamEvent.conversation.agentKey);
-          if (streamEvent.conversation.agentKey === "quickfred") {
-            setProModeEnabled(false);
-          }
+          setQuickFredEnabled(streamEvent.conversation.agentKey === "quickfred");
           if (!options.rollbackMessages) {
             onConversationUpdated(streamEvent.conversation, baseMessages);
           }
@@ -711,6 +727,10 @@ export default function FredNativeChatView({
           streamingPreviewRef.current?.setStatus(streamEvent.label);
           return;
         }
+        if (streamEvent.type === "status_clear") {
+          streamingPreviewRef.current?.clearStatus();
+          return;
+        }
         if (streamEvent.type === "research") {
           researchTrace = mergeFredResearchStep(researchTrace, streamEvent.step);
           setActiveAssistant((current) => current ? {
@@ -727,6 +747,7 @@ export default function FredNativeChatView({
         receivedFinal = true;
         activeConversationIdRef.current = streamEvent.conversation.id;
         setConversationAgentKey(streamEvent.conversation.agentKey);
+        setQuickFredEnabled(streamEvent.conversation.agentKey === "quickfred");
         const completedMessage: FredNativeMessage = {
           ...assistantMessage,
           content: streamEvent.answer,
@@ -794,7 +815,8 @@ export default function FredNativeChatView({
     await submitQuery({
       query: composer,
       webSearchEnabled,
-      proModeEnabled,
+      proModeEnabled: false,
+      quickFredEnabled,
       images: selectedImages,
       files: selectedFiles,
       clearDraft: true,
@@ -805,7 +827,7 @@ export default function FredNativeChatView({
     if (readOnly || isSending) return;
     setComposer(message.content);
     setWebSearchEnabled(Boolean(message.webSearchEnabled && capabilities.webSearch));
-    setProModeEnabled(Boolean(message.proModeEnabled && capabilities.proMode));
+    setQuickFredEnabled(conversationAgentKey === "quickfred");
     setSelectedImages([]);
     setSelectedFiles([]);
     setError("");
@@ -887,11 +909,11 @@ export default function FredNativeChatView({
     const messagesBeforeQuery = messagesBeforeRegeneratedAnswer(messages, assistantIndex);
     if (!question || !messagesBeforeQuery || isSending) return;
     const originalProMode = Boolean(question.proModeEnabled && capabilities.proMode);
-    setProModeEnabled(originalProMode);
     void submitQuery({
       query: question.content,
       webSearchEnabled: Boolean(question.webSearchEnabled && capabilities.webSearch),
       proModeEnabled: originalProMode,
+      quickFredEnabled: conversationAgentKey === "quickfred",
       images: [],
       files: [],
       clearDraft: false,
@@ -1741,24 +1763,22 @@ export default function FredNativeChatView({
                 </div>
               ) : <span />}
               <div className="composer-actions">
-                {capabilities.proMode ? (
+                {capabilities.quickFred || conversationAgentKey !== null ? (
                   <button
-                    className={`composer-model-trigger composer-icon-toggle fred-pro-toggle${proModeEnabled ? " is-active" : ""}`}
+                    className={`composer-model-trigger composer-icon-toggle fred-quick-toggle${quickFredEnabled ? " is-active" : ""}`}
                     type="button"
-                    aria-pressed={proModeEnabled}
-                    title="Thinking"
-                    aria-label={proModeEnabled ? "Pro-Modus aktiv" : "Pro-Modus verwenden"}
-                    disabled={isSending || conversationAgentKey === "quickfred"}
+                    aria-pressed={quickFredEnabled}
+                    title="Quickmode für schnelle Antworten"
+                    aria-label={quickFredEnabled ? "Quickmode aktiv" : "Quickmode verwenden"}
+                    disabled={isSending || conversationAgentKey !== null || !capabilities.quickFred}
                     onClick={() => {
-                      const nextEnabled = !proModeEnabled;
-                      setProModeEnabled(nextEnabled);
-                      setModeNotice(nextEnabled ? "Thinking aktiviert" : "Thinking deaktiviert");
+                      const nextEnabled = !quickFredEnabled;
+                      setQuickFredEnabled(nextEnabled);
+                      setModeNotice(nextEnabled ? "Quickmode aktiviert" : "Quickmode deaktiviert");
                     }}
                   >
-                    <svg className="fred-pro-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M9.5 4.5A2.5 2.5 0 0 0 7 7v.5a3.5 3.5 0 0 0-1 6.85V15a3 3 0 0 0 6 0V7a2.5 2.5 0 0 0-2.5-2.5Z" />
-                      <path d="M14.5 4.5A2.5 2.5 0 0 1 17 7v.5a3.5 3.5 0 0 1 1 6.85V15a3 3 0 0 1-6 0V7a2.5 2.5 0 0 1 2.5-2.5Z" />
-                      <path d="M8 10h1a3 3 0 0 1 3 3M16 10h-1a3 3 0 0 0-3 3M9 14a3 3 0 0 0 3 3M15 14a3 3 0 0 1-3 3" />
+                    <svg className="fred-quick-icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M13.5 2 5 13h6l-.5 9L19 10h-6l.5-8Z" />
                     </svg>
                   </button>
                 ) : null}
