@@ -18,6 +18,7 @@ import {
   SCANNING_RATE_LIMIT_WINDOW_MS,
 } from "@/lib/scanning/config";
 import { analyzeScanningBatch, ScanningProviderError } from "@/lib/scanning/openrouter";
+import { ScanningRateLimiter } from "@/lib/scanning/rate-limit";
 import { getScanningSettings } from "@/lib/scanning/settings";
 import { encodeScanningStreamEvent, SCANNING_STREAM_CONTENT_TYPE } from "@/lib/scanning/stream";
 import type { ScanningFileStatus, ScanningUpload } from "@/lib/scanning/types";
@@ -25,8 +26,10 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
-type RateEntry = { startedAt: number; count: number };
-const rateLimit = new Map<string, RateEntry>();
+const rateLimit = new ScanningRateLimiter({
+  maxRequests: SCANNING_RATE_LIMIT_REQUESTS,
+  windowMs: SCANNING_RATE_LIMIT_WINDOW_MS,
+});
 
 function json(payload: unknown, status = 200): NextResponse {
   return NextResponse.json(payload, {
@@ -36,16 +39,7 @@ function json(payload: unknown, status = 200): NextResponse {
 }
 
 function enforceRateLimit(userId: string): void {
-  const now = Date.now();
-  const current = rateLimit.get(userId);
-  if (!current || now - current.startedAt >= SCANNING_RATE_LIMIT_WINDOW_MS) {
-    rateLimit.set(userId, { startedAt: now, count: 1 });
-    return;
-  }
-  if (current.count >= SCANNING_RATE_LIMIT_REQUESTS) {
-    throw new UserVisibleError("Zu viele Scanning-Anfragen. Bitte kurz warten.", 429);
-  }
-  current.count += 1;
+  rateLimit.consume(userId);
 }
 
 function validateMultipartHeader(request: Request): string {

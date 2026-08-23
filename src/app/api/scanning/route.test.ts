@@ -5,6 +5,7 @@ import { analyzeScanningBatch, ScanningProviderError } from "@/lib/scanning/open
 import { getScanningSettings } from "@/lib/scanning/settings";
 import { parseScanningStreamLine } from "@/lib/scanning/stream";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { ScanningRateLimiter } from "@/lib/scanning/rate-limit";
 import { POST } from "./route";
 
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
@@ -246,5 +247,47 @@ describe("POST /api/scanning", () => {
       await response.text();
     }
     expect((await POST(multipart([{ field: "pdf", file: pdf("sechs.pdf", 9) }], "rate-user"))).status).toBe(429);
+  });
+});
+
+describe("ScanningRateLimiter", () => {
+  it("reclaims expired foreign users with a bounded sweep", () => {
+    let now = 0;
+    const limiter = new ScanningRateLimiter({
+      now: () => now,
+      maxRequests: 5,
+      windowMs: 300_000,
+      sweepEvery: 2,
+      maxSweepEntries: 2,
+    });
+    limiter.consume("expired-a");
+    limiter.consume("expired-b");
+    limiter.consume("active");
+
+    now = 300_001;
+    limiter.consume("current");
+    limiter.consume("current");
+
+    expect(limiter.has("expired-a")).toBe(false);
+    expect(limiter.has("expired-b")).toBe(false);
+    expect(limiter.has("current")).toBe(true);
+  });
+
+  it("keeps active foreign entries and rate enforcement intact", () => {
+    let now = 0;
+    const limiter = new ScanningRateLimiter({
+      now: () => now,
+      maxRequests: 2,
+      windowMs: 100,
+      sweepEvery: 1,
+      maxSweepEntries: 1,
+    });
+    limiter.consume("active-foreign");
+    now = 50;
+    limiter.consume("current");
+    limiter.consume("active-foreign");
+
+    expect(limiter.has("active-foreign")).toBe(true);
+    expect(() => limiter.consume("active-foreign")).toThrow("Zu viele Scanning-Anfragen");
   });
 });

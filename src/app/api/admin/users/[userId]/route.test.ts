@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateAdminRequest } from "@/lib/admin-users";
+import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { deleteTelegramIntegration } from "@/lib/telegram/settings";
 import { DELETE, GET } from "./route";
 
 vi.mock("@/lib/admin-users", async () => {
@@ -9,6 +11,7 @@ vi.mock("@/lib/admin-users", async () => {
   return { ...actual, authenticateAdminRequest: vi.fn() };
 });
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
+vi.mock("@/lib/telegram/settings", () => ({ deleteTelegramIntegration: vi.fn() }));
 
 const ADMIN_ID = "11111111-1111-4111-8111-111111111111";
 const USER_ID = "22222222-2222-4222-8222-222222222222";
@@ -38,6 +41,7 @@ describe("/api/admin/users/:userId", () => {
     vi.resetAllMocks();
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase as never);
     vi.mocked(authenticateAdminRequest).mockResolvedValue({ id: ADMIN_ID });
+    vi.mocked(deleteTelegramIntegration).mockResolvedValue({ deleted: true });
     orderId.mockResolvedValue({ data: [], error: null });
   });
 
@@ -94,15 +98,58 @@ describe("/api/admin/users/:userId", () => {
     expect(rpc).not.toHaveBeenCalled();
   });
 
-  it("deletes a managed account only through the atomic database RPC", async () => {
+  it("cleans up Telegram before deleting a managed account through the atomic RPC", async () => {
     rpc.mockResolvedValue({ error: null });
 
     const response = await DELETE(request("DELETE"), context());
 
     expect(response.status).toBe(200);
+    expect(deleteTelegramIntegration).toHaveBeenCalledWith(USER_ID);
     expect(rpc).toHaveBeenCalledWith("admin_delete_managed_user", {
       target_user_id: USER_ID,
     });
+    expect(vi.mocked(deleteTelegramIntegration).mock.invocationCallOrder[0]).toBeLessThan(
+      rpc.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("treats an absent Telegram integration as successful cleanup", async () => {
+    vi.mocked(deleteTelegramIntegration).mockRejectedValue(
+      new UserVisibleError("Keine Telegram-Integration gefunden.", 404),
+    );
+    rpc.mockResolvedValue({ error: null });
+
+    const response = await DELETE(request("DELETE"), context());
+
+    expect(response.status).toBe(200);
+    expect(rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed without invoking the RPC when Telegram cleanup throws", async () => {
+    vi.mocked(deleteTelegramIntegration).mockRejectedValue(new Error("secret cleanup detail"));
+
+    const response = await DELETE(request("DELETE"), context());
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "Das Benutzerkonto konnte nicht gelöscht werden.",
+    });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("fails closed without invoking the RPC when Telegram reports deleted false", async () => {
+    vi.mocked(deleteTelegramIntegration).mockResolvedValue({
+      deleted: false,
+      error: "internal Telegram detail",
+    });
+
+    const response = await DELETE(request("DELETE"), context());
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "Das Benutzerkonto konnte nicht gelöscht werden.",
+    });
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it("reports atomic deletion failures", async () => {
@@ -111,6 +158,7 @@ describe("/api/admin/users/:userId", () => {
     const response = await DELETE(request("DELETE"), context());
 
     expect(response.status).toBe(503);
+    expect(deleteTelegramIntegration).toHaveBeenCalledWith(USER_ID);
     await expect(response.json()).resolves.toEqual({
       error: "Das Benutzerkonto konnte nicht gelöscht werden.",
     });

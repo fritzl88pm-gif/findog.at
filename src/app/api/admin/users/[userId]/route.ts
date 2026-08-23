@@ -8,6 +8,7 @@ import {
 } from "@/lib/admin-users";
 import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { deleteTelegramIntegration } from "@/lib/telegram/settings";
 
 export const runtime = "nodejs";
 
@@ -77,6 +78,17 @@ export async function DELETE(
     const userId = parseManagedUserId((await context.params).userId);
     if (userId === administrator.id) {
       throw new UserVisibleError("Das eigene Administratorkonto kann nicht gelöscht werden.", 400);
+    }
+
+    try {
+      const telegramCleanup = await deleteTelegramIntegration(userId);
+      if (!telegramCleanup.deleted) {
+        throw new UserVisibleError("Das Benutzerkonto konnte nicht gelöscht werden.", 503);
+      }
+    } catch (cleanupError) {
+      if (!(cleanupError instanceof UserVisibleError && cleanupError.status === 404)) {
+        throw new UserVisibleError("Das Benutzerkonto konnte nicht gelöscht werden.", 503);
+      }
     }
 
     const { error } = await supabase.rpc("admin_delete_managed_user", {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   FredTurnEvent,
@@ -147,6 +147,10 @@ describe("executeFredTurn", () => {
     config = makeConfigDeps();
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("streams a full answer and persists both sides", async () => {
     const gen = executeFredTurn(baseRequest(), upstream, persistence, config);
     const { events, result } = await collectEvents(gen);
@@ -183,6 +187,40 @@ describe("executeFredTurn", () => {
       content: "Hallo Welt",
       displayContent: "Hallo Welt",
     }));
+  });
+
+  it("emits final upstream and verified citation research steps exactly once", async () => {
+    const gz = "RV/1234567/2099";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      dokumentId: "doc-final",
+      segmentId: "segment-final",
+      indexName: "findok-bfg",
+      dokumentPdfMediaUrl: "findok/resources/pdf/segment-final/doc-final.pdf",
+      dokumentTitel: `BFG 01.01.2099, ${gz}`,
+      titel: "Verifizierte Entscheidung",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
+    upstream.openStream = vi.fn().mockResolvedValue(new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        ctrl.enqueue(new TextEncoder().encode([
+          `data: ${JSON.stringify({ response_type: "answer", content: `Siehe ${gz}.`, done: true })}\n\n`,
+          'data: {"response_type":"references","data":{"event_id":"sources-final","references":[{"document_name":"EStG.md","chunk_id":"chunk-final","kb_id":"kb-final"}]}}',
+        ].join("")));
+        ctrl.close();
+      },
+    }));
+
+    const { events } = await collectEvents(
+      executeFredTurn(baseRequest(), upstream, persistence, config),
+    );
+    const researchStepIds = events.flatMap((event) =>
+      event.type === "research" ? [event.step.id] : []
+    );
+
+    expect(researchStepIds.filter((id) => id === "sources-final")).toHaveLength(1);
+    expect(researchStepIds.filter((id) => id === `findok:${gz}`)).toHaveLength(1);
   });
 
   it("continues an owned stored WeKnora session", async () => {

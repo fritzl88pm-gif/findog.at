@@ -272,6 +272,10 @@ export function chunkTelegramMessage(text: string): string[] {
     return text.length > 0 ? [text] : [];
   }
 
+  if (/<\/?(?:b|i|u|s|code|pre|a)(?:\s[^<>]*?)?>/iu.test(text)) {
+    return chunkTelegramHtml(text);
+  }
+
   const chunks: string[] = [];
   let remaining = text;
 
@@ -283,12 +287,106 @@ export function chunkTelegramMessage(text: string): string[] {
 
     let splitAt = findSplitPoint(remaining, MAX_CHUNK_LENGTH);
     if (splitAt <= 0) splitAt = MAX_CHUNK_LENGTH;
+    splitAt = safePlainTextBoundary(remaining, splitAt);
 
     chunks.push(remaining.slice(0, splitAt).trimEnd());
     remaining = remaining.slice(splitAt).trimStart();
   }
 
   return chunks.filter((chunk) => chunk.length > 0);
+}
+
+type OpenTelegramTag = {
+  opening: string;
+  closing: string;
+};
+
+function chunkTelegramHtml(text: string): string[] {
+  const tokenPattern = /<\/?(?:b|i|u|s|code|pre|a)(?:\s[^<>]*?)?>|&(?:#\d+|#x[\da-f]+|[a-z][a-z0-9]+);|[\s\S]/giu;
+  const chunks: string[] = [];
+  const openTags: OpenTelegramTag[] = [];
+  let chunk = "";
+  let hasRenderedContent = false;
+  let suppressedLinkClosings = 0;
+
+  const closingTags = () => [...openTags].reverse().map((tag) => tag.closing).join("");
+  const openingTags = () => openTags.map((tag) => tag.opening).join("");
+  const flush = () => {
+    if (!hasRenderedContent) return;
+    chunks.push(chunk + closingTags());
+    chunk = openingTags();
+    hasRenderedContent = false;
+  };
+
+  for (const match of text.matchAll(tokenPattern)) {
+    const token = match[0];
+    const closingMatch = /^<\/([a-z]+)>$/iu.exec(token);
+    if (closingMatch) {
+      if (closingMatch[1]?.toLowerCase() === "a" && suppressedLinkClosings > 0) {
+        suppressedLinkClosings -= 1;
+        continue;
+      }
+      chunk += token;
+      openTags.pop();
+      continue;
+    }
+
+    const openingMatch = /^<([a-z]+)(?:\s[^<>]*?)?>$/iu.exec(token);
+    if (openingMatch) {
+      const tagName = openingMatch[1]!.toLowerCase();
+      const tag: OpenTelegramTag = {
+        opening: token,
+        closing: `</${tagName}>`,
+      };
+      const minimumBalancedLength = openingTags().length
+        + token.length
+        + tag.closing.length
+        + closingTags().length;
+      if (tagName === "a" && minimumBalancedLength > MAX_CHUNK_LENGTH) {
+        suppressedLinkClosings += 1;
+        continue;
+      }
+      const requiredLength = token.length + tag.closing.length + closingTags().length;
+      if (chunk.length + requiredLength > MAX_CHUNK_LENGTH) flush();
+      chunk += token;
+      openTags.push(tag);
+      continue;
+    }
+
+    if (chunk.length + token.length + closingTags().length > MAX_CHUNK_LENGTH) {
+      flush();
+    }
+    chunk += token;
+    hasRenderedContent = true;
+  }
+
+  if (hasRenderedContent || chunk.length > 0) {
+    const balanced = chunk + closingTags();
+    if (hasRenderedContent && balanced.length > 0) chunks.push(balanced);
+  }
+  return chunks;
+}
+
+function safePlainTextBoundary(text: string, index: number): number {
+  const entityStart = text.lastIndexOf("&", index - 1);
+  if (entityStart >= 0 && entityStart < index) {
+    const entityEnd = text.indexOf(";", entityStart + 1);
+    const entity = entityEnd >= index ? text.slice(entityStart, entityEnd + 1) : "";
+    if (/^&(?:#\d+|#x[\da-f]+|[a-z][a-z0-9]+);$/iu.test(entity)) {
+      return entityStart;
+    }
+  }
+  if (
+    index > 0
+    && index < text.length
+    && text.charCodeAt(index - 1) >= 0xd800
+    && text.charCodeAt(index - 1) <= 0xdbff
+    && text.charCodeAt(index) >= 0xdc00
+    && text.charCodeAt(index) <= 0xdfff
+  ) {
+    return index - 1;
+  }
+  return index;
 }
 
 function findSplitPoint(text: string, maxLen: number): number {

@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  BfgCitationCache,
   extractBfgGzCandidates,
   extractStreamStableBfgGzCandidates,
   findUnverifiedBfgCitations,
   linkVerifiedBfgCitations,
   resolveBfgCitation,
+  verifyBfgCitations,
 } from "./bfg-citations";
 import { createDeadline } from "../deadline";
 
@@ -56,7 +58,7 @@ describe("Findok BFG citation verification", () => {
 
   it("resolves a valid Findok BFG response to official full-text and PDF URLs", async () => {
     const deadline = createDeadline(240_000);
-    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(validFindokBody));
+    const fetchImpl = vi.fn().mockImplementation(async () => jsonResponse(validFindokBody));
 
     await expect(resolveBfgCitation("RV/7103053/2014", fetchImpl, { deadline })).resolves.toMatchObject({
       status: "verified",
@@ -143,5 +145,152 @@ describe("Findok BFG citation verification", () => {
         [verified],
       ),
     ).toEqual(["RV/7103080/2015", "RS/7100001/2020"]);
+  });
+
+  it("caches verified resolutions until their TTL expires", async () => {
+    let now = 1_000;
+    const cache = new BfgCitationCache({ now: () => now, verifiedTtlMs: 100, negativeTtlMs: 20 });
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(validFindokBody));
+
+    await verifyBfgCitations(["rv/7103053/2014"], fetchImpl, { cache });
+    await verifyBfgCitations([" RV/7103053/2014 "], fetchImpl, { cache });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    now += 101;
+    await verifyBfgCitations(["RV/7103053/2014"], fetchImpl, { cache });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("caches stable negative resolutions only for the shorter TTL", async () => {
+    let now = 2_000;
+    const cache = new BfgCitationCache({ now: () => now, verifiedTtlMs: 1_000, negativeTtlMs: 50 });
+    const fetchImpl = vi.fn().mockResolvedValue(new Response("not found", { status: 404 }));
+
+    await verifyBfgCitations(["RV/7103080/2015"], fetchImpl, { cache });
+    now += 49;
+    await verifyBfgCitations(["RV/7103080/2015"], fetchImpl, { cache });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    now += 2;
+    await verifyBfgCitations(["RV/7103080/2015"], fetchImpl, { cache });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retain transient errors", async () => {
+    const cache = new BfgCitationCache();
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+      .mockResolvedValueOnce(jsonResponse(validFindokBody));
+
+    await expect(verifyBfgCitations(["RV/7103053/2014"], fetchImpl, { cache }))
+      .resolves.toMatchObject({ rejected: [expect.objectContaining({ status: "error" })] });
+    await expect(verifyBfgCitations(["RV/7103053/2014"], fetchImpl, { cache }))
+      .resolves.toMatchObject({ verified: [expect.objectContaining({ status: "verified" })] });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces concurrent normalized GZ resolutions", async () => {
+    let release!: (response: Response) => void;
+    const fetchImpl = vi.fn(() => new Promise<Response>((resolve) => { release = resolve; }));
+    const cache = new BfgCitationCache();
+
+    const first = verifyBfgCitations(["rv/7103053/2014"], fetchImpl, { cache });
+    const second = verifyBfgCitations([" RV/7103053/2014 "], fetchImpl, { cache });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    release(jsonResponse(validFindokBody));
+
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("evicts deterministically when the cache reaches its maximum size", async () => {
+    const cache = new BfgCitationCache({ maxEntries: 2 });
+    const fetchImpl = vi.fn().mockImplementation(async () => jsonResponse(validFindokBody));
+
+    await verifyBfgCitations(["RV/1/2024"], fetchImpl, { cache });
+    await verifyBfgCitations(["RV/2/2024"], fetchImpl, { cache });
+    await verifyBfgCitations(["RV/3/2024"], fetchImpl, { cache });
+    await verifyBfgCitations(["RV/1/2024"], fetchImpl, { cache });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(cache.size).toBe(2);
+  });
+
+  it("does not let an aborted caller poison a coalesced shared resolution", async () => {
+    let release!: (response: Response) => void;
+    const fetchImpl = vi.fn(() => new Promise<Response>((resolve) => { release = resolve; }));
+    const cache = new BfgCitationCache();
+    const controller = new AbortController();
+
+    const aborted = verifyBfgCitations(["RV/7103053/2014"], fetchImpl, {
+      cache,
+      signal: controller.signal,
+    });
+    const survivor = verifyBfgCitations(["RV/7103053/2014"], fetchImpl, { cache });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    controller.abort();
+    release(jsonResponse(validFindokBody));
+
+    await expect(aborted).resolves.toMatchObject({
+      rejected: [expect.objectContaining({ status: "error" })],
+    });
+    await expect(survivor).resolves.toMatchObject({
+      verified: [expect.objectContaining({ status: "verified" })],
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not schedule Findok misses for an already-aborted caller", async () => {
+    const cache = new BfgCitationCache();
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(validFindokBody));
+    const controller = new AbortController();
+    controller.abort(new Error("caller stopped"));
+
+    await verifyBfgCitations(
+      Array.from({ length: 12 }, (_, index) => `RV/${index + 1}/2098`),
+      fetchImpl,
+      { cache, signal: controller.signal },
+    );
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(cache.size).toBe(0);
+  });
+
+  it("reports one structured batch summary with cache and error counts", async () => {
+    let metricsNow = 100;
+    const onMetrics = vi.fn();
+    const cache = new BfgCitationCache();
+    await verifyBfgCitations(["RV/1/2024"], vi.fn().mockResolvedValue(jsonResponse(validFindokBody)), { cache });
+    let release!: (resolution: Awaited<ReturnType<typeof resolveBfgCitation>>) => void;
+    void cache.resolve(
+      "RV/2/2024",
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+
+    const verification = verifyBfgCitations(
+      ["RV/1/2024", "rv/2/2024", "RV/3/2024", "RV/3/2024"],
+      vi.fn().mockResolvedValue(new Response("not found", { status: 404 })),
+      { cache, metricsNow: () => metricsNow, onMetrics },
+    );
+    metricsNow = 142;
+    release({
+      status: "error",
+      gz: "RV/2/2024",
+      reason: "Findok hat nicht rechtzeitig geantwortet.",
+    });
+    await verification;
+
+    expect(onMetrics).toHaveBeenCalledOnce();
+    expect(onMetrics).toHaveBeenCalledWith({
+      candidateCount: 3,
+      verifiedCount: 1,
+      cacheHits: 1,
+      cacheMisses: 1,
+      coalesced: 1,
+      durationMs: 42,
+      timeoutCount: 1,
+      errorCount: 1,
+    });
   });
 });

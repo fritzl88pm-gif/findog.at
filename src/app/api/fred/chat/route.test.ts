@@ -27,7 +27,7 @@ import { getScanningSettings } from "@/lib/scanning/settings";
 import { parseFredNativeStreamLine } from "@/lib/fred-native-stream";
 import {
   extractStreamStableBfgGzCandidates,
-  resolveBfgCitation,
+  verifyBfgCitations,
 } from "@/lib/findok/bfg-citations";
 
 import { UserVisibleError } from "@/lib/errors";
@@ -61,7 +61,7 @@ vi.mock("@/lib/findok/bfg-citations", async (importOriginal) => {
   return {
     ...original,
     extractStreamStableBfgGzCandidates: vi.fn(),
-    resolveBfgCitation: vi.fn(),
+    verifyBfgCitations: vi.fn(),
   };
 });
 vi.mock("@/lib/weknora/fred-embed", async (importOriginal) => {
@@ -375,19 +375,35 @@ describe("POST /api/fred/chat", () => {
   it("forwards many small deltas and resolves BFG citations only during final processing", async () => {
     const rpc = rpcForTurn();
     vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
-    vi.mocked(resolveBfgCitation).mockImplementation(async (gz) => gz === "RV/1100290/2023"
-      ? {
-          status: "verified",
+    vi.mocked(verifyBfgCitations).mockImplementation(async (gzs, _fetch, options) => {
+      const verified = gzs.filter((gz) => gz === "RV/1100290/2023").map((gz) => ({
+          status: "verified" as const,
           gz,
           title: "Kosten eines Fußballtrainers",
           documentTitle: `BFG 03.10.2024, ${gz}`,
           dokumentId: "doc-1",
           segmentId: "segment-1",
-          indexName: "findok-bfg",
+          indexName: "findok-bfg" as const,
           fullTextUrl: "https://findok.bmf.gv.at/findok/volltext?gz=RV%2F1100290%2F2023",
           pdfUrl: "https://findok.bmf.gv.at/findok/resources/pdf/segment/entscheidung.pdf",
-        }
-      : { status: "not_found", gz, reason: "Nicht gefunden." });
+        }));
+      const rejected = gzs.filter((gz) => gz !== "RV/1100290/2023").map((gz) => ({
+        status: "not_found" as const,
+        gz,
+        reason: "Nicht gefunden.",
+      }));
+      options?.onMetrics?.({
+        candidateCount: gzs.length,
+        verifiedCount: verified.length,
+        cacheHits: 0,
+        cacheMisses: gzs.length,
+        coalesced: 0,
+        durationMs: 1,
+        timeoutCount: 0,
+        errorCount: 0,
+      });
+      return { verified, rejected };
+    });
     const rawAnswer = "Siehe RV/1100290/2023 und RV/9999999/2023.";
     vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
       ...[...rawAnswer].map((content, index) => (
@@ -427,7 +443,12 @@ describe("POST /api/fred/chat", () => {
     expect(JSON.stringify(events)).not.toContain("[RV/9999999/2023]");
     expect(extractStreamStableBfgGzCandidates).toHaveBeenCalledTimes(1);
     expect(extractStreamStableBfgGzCandidates).toHaveBeenCalledWith(rawAnswer, true);
-    expect(resolveBfgCitation).toHaveBeenCalledTimes(2);
+    expect(verifyBfgCitations).toHaveBeenCalledTimes(1);
+    expect(verifyBfgCitations).toHaveBeenCalledWith(
+      ["RV/1100290/2023", "RV/9999999/2023"],
+      fetch,
+      expect.objectContaining({ signal: expect.any(AbortSignal), onMetrics: expect.any(Function) }),
+    );
     expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
       payload: expect.objectContaining({
         content: "Siehe RV/1100290/2023 und RV/9999999/2023.",

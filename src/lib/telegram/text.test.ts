@@ -271,6 +271,30 @@ describe("normalizeFredMarkdown", () => {
 });
 
 describe("chunkTelegramMessage", () => {
+  const telegramTags = new Set(["b", "i", "u", "s", "code", "pre", "a"]);
+
+  function expectBalancedTelegramHtml(chunk: string): void {
+    const stack: string[] = [];
+    const tokens = chunk.match(/<[^>]*>|&(?:#\d+|#x[\da-f]+|[a-z]+);/giu) ?? [];
+    for (const token of tokens) {
+      if (!token.startsWith("<")) continue;
+      const closing = /^<\/([a-z]+)>$/iu.exec(token);
+      if (closing) {
+        expect(stack.pop()).toBe(closing[1]?.toLowerCase());
+        continue;
+      }
+      const opening = /^<([a-z]+)(?:\s[^>]*)?>$/iu.exec(token);
+      if (opening && telegramTags.has(opening[1]!.toLowerCase())) {
+        stack.push(opening[1]!.toLowerCase());
+      }
+    }
+    expect(stack).toEqual([]);
+  }
+
+  function renderedContent(chunks: string[]): string {
+    return chunks.join("").replace(/<[^>]*>/gu, "");
+  }
+
   it("returns single chunk for short text", () => {
     expect(chunkTelegramMessage("Hello world")).toEqual(["Hello world"]);
   });
@@ -327,5 +351,79 @@ describe("chunkTelegramMessage", () => {
     const chunks = chunkTelegramMessage(normalized);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length > 0 && chunk.length <= 4000)).toBe(true);
+    expect(chunks.every((chunk) => /^<pre>[\s\S]*<\/pre>$/u.test(chunk))).toBe(true);
+    chunks.forEach(expectBalancedTelegramHtml);
+    expect(renderedContent(chunks)).toBe(normalized.replace(/<[^>]*>/gu, ""));
+  });
+
+  it.each([
+    ["bold", "<b>", "</b>"],
+    ["pre", "<pre>", "</pre>"],
+    ["nested formatting", "<b><i><u><s><code>", "</code></s></u></i></b>"],
+  ])("balances long %s formatting in every chunk", (_name, opening, closing) => {
+    const input = `${opening}${"x".repeat(8_200)}${closing}`;
+    const chunks = chunkTelegramMessage(input);
+
+    expect(chunks.length).toBeGreaterThan(2);
+    expect(chunks.every((chunk) => chunk.length > 0 && chunk.length <= 4000)).toBe(true);
+    chunks.forEach(expectBalancedTelegramHtml);
+    expect(renderedContent(chunks)).toBe("x".repeat(8_200));
+  });
+
+  it("balances and reopens a long link without splitting its HTML tag", () => {
+    const opening = '<a href="https://example.test/path?one=1&amp;two=2">';
+    const input = `${opening}${"linked ".repeat(1_200)}</a>`;
+    const chunks = chunkTelegramMessage(input);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expect(chunks.every((chunk) => chunk.startsWith(opening) && chunk.endsWith("</a>"))).toBe(true);
+    chunks.forEach(expectBalancedTelegramHtml);
+    expect(renderedContent(chunks)).toBe("linked ".repeat(1_200));
+  });
+
+  it("falls back to the complete plain label when a generated link tag cannot fit", () => {
+    const label = `${"Rendered label ".repeat(600)}done`;
+    const url = `https://example.test/${"x".repeat(4_100)}`;
+    const normalized = normalizeFredMarkdown(`[${label}](${url})`);
+    const chunks = chunkTelegramMessage(normalized);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length > 0 && chunk.length <= 4_000)).toBe(true);
+    expect(chunks.every((chunk) => !chunk.includes("<a "))).toBe(true);
+    chunks.forEach(expectBalancedTelegramHtml);
+    expect(renderedContent(chunks)).toBe(label);
+  });
+
+  it("does not split an entity or UTF-16 surrogate pair at a boundary", () => {
+    const input = `<b>${"x".repeat(3_988)}&amp;🌍${"y".repeat(100)}</b>`;
+    const chunks = chunkTelegramMessage(input);
+
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    chunks.forEach((chunk) => {
+      expect(chunk).not.toMatch(/&(?:#\d*|#x[\da-f]*|[a-z]*)$/iu);
+      const finalCodeUnit = chunk.charCodeAt(chunk.length - 1);
+      const firstCodeUnit = chunk.charCodeAt(0);
+      expect(finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff).toBe(false);
+      expect(firstCodeUnit >= 0xdc00 && firstCodeUnit <= 0xdfff).toBe(false);
+      expectBalancedTelegramHtml(chunk);
+    });
+    expect(renderedContent(chunks)).toBe(`${"x".repeat(3_988)}&amp;🌍${"y".repeat(100)}`);
+  });
+
+  it("does not split a surrogate pair in long plain text", () => {
+    const chunks = chunkTelegramMessage(`${"x".repeat(3_999)}🌍tail`);
+
+    expect(chunks[0]?.endsWith("\ud83c")).toBe(false);
+    expect(chunks[1]?.startsWith("\udf0d")).toBe(false);
+    expect(chunks.join("")).toBe(`${"x".repeat(3_999)}🌍tail`);
+  });
+
+  it("uses the full 4,000-character allowance when balancing permits it", () => {
+    const chunks = chunkTelegramMessage(`<b>${"x".repeat(8_000)}</b>`);
+
+    expect(Math.max(...chunks.map((chunk) => chunk.length))).toBe(4000);
+    expect(chunks.every((chunk) => chunk.length > 0 && chunk.length <= 4000)).toBe(true);
+    chunks.forEach(expectBalancedTelegramHtml);
   });
 });

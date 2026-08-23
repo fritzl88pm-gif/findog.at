@@ -4,8 +4,7 @@ import { UserVisibleError } from "@/lib/errors";
 import {
   extractStreamStableBfgGzCandidates,
   linkVerifiedBfgCitations,
-  resolveBfgCitation,
-  type BfgCitationResolution,
+  verifyBfgCitations,
   type VerifiedBfgCitation,
 } from "@/lib/findok/bfg-citations";
 import {
@@ -173,7 +172,6 @@ export interface TurnServiceConfigDeps {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const MAX_CONCURRENT_LIVE_BFG_VERIFICATIONS = 4;
 const MAX_LIVE_BFG_CITATIONS = 20;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -440,67 +438,39 @@ export async function* executeFredTurn(
     let stoppedByCaller = false;
 
     // ── BFG citation pipeline ───────────────────────────────────────────────
-    let activeCitationVerifications = 0;
-    const citationTasks = new Map<string, Promise<void>>();
     const verifiedCitations = new Map<string, VerifiedBfgCitation>();
-    const citationQueue: Array<{
-      gz: string;
-      resolve: (result: BfgCitationResolution) => void;
-    }> = [];
-
-    const pumpCitationQueue = () => {
-      while (
-        activeCitationVerifications < MAX_CONCURRENT_LIVE_BFG_VERIFICATIONS
-        && citationQueue.length > 0
-      ) {
-        const queued = citationQueue.shift();
-        if (!queued) break;
-        activeCitationVerifications += 1;
-        void resolveBfgCitation(queued.gz, fetch, {
-          signal: request.signal ? request.signal : new AbortController().signal,
-        })
-          .then(queued.resolve)
-          .finally(() => {
-            activeCitationVerifications -= 1;
-            pumpCitationQueue();
-          });
-      }
-    };
-
-    const queuedCitationResolution = (gz: string) =>
-      new Promise<BfgCitationResolution>((resolve) => {
-        citationQueue.push({ gz, resolve });
-        pumpCitationQueue();
-      });
-
     const pendingCitationSteps: FredResearchStep[] = [];
 
-    const beginFinalCitationVerification = (text: string) => {
+    const verifyFinalCitations = async (text: string) => {
       const candidates = [
         ...new Set(extractStreamStableBfgGzCandidates(text, true)),
       ].slice(0, MAX_LIVE_BFG_CITATIONS);
-      for (const gz of candidates) {
-        if (citationTasks.has(gz) || citationTasks.size >= MAX_LIVE_BFG_CITATIONS) continue;
-        const task = queuedCitationResolution(gz).then((resolution) => {
-          if (!acceptingCitationUpdates || resolution.status !== "verified") return;
-          verifiedCitations.set(gz, resolution);
-          sourceReferences = mergeFredSources(sourceReferences, [
-            {
-              kind: "web",
-              url: resolution.fullTextUrl,
-              title: `BFG ${resolution.gz}: ${resolution.title}`.slice(0, 512),
-            },
-          ]);
-          const verificationStep: FredResearchStep = {
-            id: `findok:${resolution.gz}`,
-            kind: "sources",
-            status: "completed",
-            label: `BFG-Fundstelle ${resolution.gz} verifiziert`,
-          };
-          researchTrace = mergeFredResearchStep(researchTrace, verificationStep);
-          pendingCitationSteps.push(verificationStep);
-        });
-        citationTasks.set(gz, task);
+      if (candidates.length === 0) return;
+      const verification = await verifyBfgCitations(candidates, fetch, {
+        signal: request.signal,
+        onMetrics: (metrics) => console.info("findok citation verification", {
+          path: "fred_turn_service",
+          ...metrics,
+        }),
+      });
+      for (const resolution of verification.verified) {
+        if (!acceptingCitationUpdates) return;
+        verifiedCitations.set(resolution.gz, resolution);
+        sourceReferences = mergeFredSources(sourceReferences, [
+          {
+            kind: "web",
+            url: resolution.fullTextUrl,
+            title: `BFG ${resolution.gz}: ${resolution.title}`.slice(0, 512),
+          },
+        ]);
+        const verificationStep: FredResearchStep = {
+          id: `findok:${resolution.gz}`,
+          kind: "sources",
+          status: "completed",
+          label: `BFG-Fundstelle ${resolution.gz} verifiziert`,
+        };
+        researchTrace = mergeFredResearchStep(researchTrace, verificationStep);
+        pendingCitationSteps.push(verificationStep);
       }
     };
 
@@ -606,14 +576,25 @@ export async function* executeFredTurn(
       throw new UserVisibleError(`${selectedAgentName} hat keine Antwort geliefert.`, 502);
     }
 
-    beginFinalCitationVerification(plainFinalAnswer);
-    // Flush any pending citation research steps
-    for (const step of researchTrace.slice(-1)) {
-      if (step.id && step.kind) yield { type: "research", step };
+    // A final unterminated SSE frame may have added a research step after the
+    // stream loop's regular flush. Emit any such upstream update before the
+    // citation verification adds its own steps.
+    for (const step of researchTrace) {
+      const signature = JSON.stringify(step);
+      if (step.id && step.kind && yieldedResearchSteps.get(step.id) !== signature) {
+        yieldedResearchSteps.set(step.id, signature);
+        yield { type: "research", step };
+      }
     }
-    await Promise.all(citationTasks.values());
+
+    await verifyFinalCitations(plainFinalAnswer);
+    // Flush any pending citation research steps
     for (const step of pendingCitationSteps) {
-      yield { type: "research", step };
+      const signature = JSON.stringify(step);
+      if (step.id && step.kind && yieldedResearchSteps.get(step.id) !== signature) {
+        yieldedResearchSteps.set(step.id, signature);
+        yield { type: "research", step };
+      }
     }
 
     const finalAnswer = linkVerifiedBfgCitations(
