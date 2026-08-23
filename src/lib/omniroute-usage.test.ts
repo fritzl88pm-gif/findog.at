@@ -8,6 +8,7 @@ import {
   normalizeProviderConnectionsPayload,
   normalizeProviderLimitsPayload,
   normalizeProviderQuotasPayload,
+  OMNIROUTE_FRED_V4_STACK_COMBO_NAME,
   OMNIROUTE_LUNA_MAX_COMBO_NAME,
 } from "./omniroute-usage";
 
@@ -69,6 +70,9 @@ function providersPayload() {
       },
       { id: "antigravity", provider: "agy", label: "secret-account-label", apiKey: "secret-key" },
       { id: "another-gemini", provider: "gemini" },
+      { id: "conn-deepseek-1", provider: "deepseek", apiKey: "secret-deepseek-key" },
+      { id: "conn-openrouter-1", provider: "openrouter", apiKey: "secret-or-key" },
+      { id: "conn-codex-1", provider: "codex", accessToken: "secret-codex-token" },
     ],
     byAccount: [{ email: "secret-account@example.at" }],
     byApiKey: [{ key: "secret-api-key" }],
@@ -178,9 +182,74 @@ function combosPayload() {
         version: 8,
         updatedAt: "2026-08-19T10:00:00.000Z",
       },
+      {
+        name: OMNIROUTE_FRED_V4_STACK_COMBO_NAME,
+        strategy: "priority",
+        models: [
+          { model: "deepseek/deepseek-v4-flash", providerId: "conn-deepseek-1" },
+          { model: "openai/gpt-5.6-luna-pro", providerId: "conn-openrouter-1" },
+          { model: "google/gemini-3.7-flash", providerId: "conn-openrouter-1" },
+          { model: "codex/gpt-5.6-luna", providerId: "conn-codex-1" },
+        ],
+        version: 4,
+        updatedAt: "2026-08-20T00:00:00.000Z",
+      },
       { name: "omniroute-gemini-3.7-flash-high", models: [] },
     ],
   };
+}
+
+function callLogsPayload() {
+  return [
+    {
+      timestamp: "2026-08-20T11:50:00.000Z",
+      status: 200,
+      model: "deepseek/deepseek-v4-flash",
+      requestedModel: "deepseek/deepseek-v4-flash",
+      provider: "deepseek",
+      duration: 400,
+      tokens: { in: 100, out: 200, cacheRead: 50, cacheWrite: 0, reasoning: 10, compressed: 0 },
+      comboName: "fred-v4-stack",
+      comboStepId: "model-1",
+      correlationId: "secret-corr-1",
+      comboExecutionKey: "secret-exec-1",
+      account: "secret-acc",
+      apiKeyId: "secret-key-id",
+    },
+    {
+      timestamp: "2026-08-20T11:45:00.000Z",
+      status: 500,
+      model: "deepseek/deepseek-v4-flash",
+      requestedModel: "deepseek/deepseek-v4-flash",
+      provider: "deepseek",
+      duration: 1000,
+      tokens: { in: 50, out: 0 },
+      comboName: "fred-v4-stack",
+      comboStepId: "model-1",
+      correlationId: "secret-corr-2",
+      error: "secret error text",
+    },
+    {
+      timestamp: "2026-08-20T11:45:01.000Z",
+      status: 200,
+      model: "openai/gpt-5.6-luna-pro",
+      requestedModel: "openai/gpt-5.6-luna-pro",
+      provider: "openrouter",
+      duration: 600,
+      tokens: { in: 50, out: 150 },
+      comboName: "fred-v4-stack",
+      comboStepId: "model-2",
+      correlationId: "secret-corr-2",
+      requestSummary: "secret summary",
+    },
+    {
+      timestamp: "2026-08-20T11:40:00.000Z",
+      status: 200,
+      model: "gpt-5.6-luna-max",
+      comboName: "omniroute-luna-max-gemini-3.7-flash-high",
+      comboStepId: "model-1",
+    },
+  ];
 }
 
 function providerStatsPayload() {
@@ -407,12 +476,13 @@ describe("OmniRoute usage normalization", () => {
       providerStats: providerStatsPayload(),
       healthMatrix: healthMatrixPayload(),
       combos: combosPayload(),
+      callLogs: callLogsPayload(),
       range: "7d",
       generatedAt: "2026-08-20T12:00:00.000Z",
     });
 
     expect(Object.keys(snapshot).sort()).toEqual([
-      "codexQuota", "combo", "generatedAt", "providerHealth", "quota", "range", "usage",
+      "codexQuota", "combo", "generatedAt", "providerHealth", "quota", "range", "routeStack", "usage",
     ]);
     expect(snapshot.combo).toMatchObject({
       name: OMNIROUTE_LUNA_MAX_COMBO_NAME,
@@ -429,6 +499,80 @@ describe("OmniRoute usage normalization", () => {
         expect.objectContaining({ model: "codex/gpt-5.6-luna-max", requests: 200 }),
         expect.objectContaining({ model: "gemini-3.7-flash-high", requests: 40 }),
       ],
+    });
+    expect(snapshot.routeStack).toMatchObject({
+      name: OMNIROUTE_FRED_V4_STACK_COMBO_NAME,
+      strategy: "priority",
+      modelCalls: 3,
+      successes: 2,
+      failures: 1,
+      fallbackCalls: 1,
+      promptTokens: 200,
+      completionTokens: 350,
+      totalTokens: 550,
+      lastUsedAt: "2026-08-20T11:50:00.000Z",
+      historyTruncated: false,
+    });
+    expect(snapshot.routeStack?.targets).toHaveLength(4);
+    expect(snapshot.routeStack?.targets[0]).toEqual({
+      position: 1,
+      model: "deepseek/deepseek-v4-flash",
+      provider: "DeepSeek",
+      modelCalls: 2,
+      successes: 1,
+      failures: 1,
+      promptTokens: 150,
+      completionTokens: 200,
+      totalTokens: 350,
+      avgLatencyMs: 700,
+      successRatePct: 50,
+      lastStatus: "200",
+      lastUsedAt: "2026-08-20T11:50:00.000Z",
+    });
+    expect(snapshot.routeStack?.targets[1]).toEqual({
+      position: 2,
+      model: "openai/gpt-5.6-luna-pro",
+      provider: "OpenRouter",
+      modelCalls: 1,
+      successes: 1,
+      failures: 0,
+      promptTokens: 50,
+      completionTokens: 150,
+      totalTokens: 200,
+      avgLatencyMs: 600,
+      successRatePct: 100,
+      lastStatus: "200",
+      lastUsedAt: "2026-08-20T11:45:01.000Z",
+    });
+    expect(snapshot.routeStack?.targets[2]).toEqual({
+      position: 3,
+      model: "google/gemini-3.7-flash",
+      provider: "OpenRouter",
+      modelCalls: 0,
+      successes: 0,
+      failures: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      avgLatencyMs: null,
+      successRatePct: null,
+      lastStatus: null,
+      lastUsedAt: null,
+    });
+    expect(snapshot.routeStack?.targets[3]).toEqual({
+      position: 4,
+      model: "codex/gpt-5.6-luna",
+      provider: "OpenAI Codex",
+      modelCalls: 0,
+      successes: 0,
+      failures: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      avgLatencyMs: null,
+      successRatePct: null,
+      lastStatus: null,
+      lastUsedAt: null,
     });
     expect(snapshot.providerHealth.map((provider) => provider.provider)).toEqual(["codex", "gemini"]);
     expect(snapshot.providerHealth[0]).toMatchObject({
@@ -465,6 +609,10 @@ describe("OmniRoute usage normalization", () => {
       "apiKey",
       "accessToken",
       "email",
+      "correlationId",
+      "comboExecutionKey",
+      "comboStepId",
+      "requestSummary",
     ]) {
       expect(serializedSnapshot).not.toContain(forbidden);
     }
@@ -501,6 +649,160 @@ describe("OmniRoute usage normalization", () => {
       range: "24h",
     })).toThrow();
   });
+
+  it("matches targets by basename and comboStepId ordinal and handles malformed row data safely", () => {
+    const logs = [
+      {
+        timestamp: "2026-08-20T11:55:00.000Z",
+        status: 201,
+        requestedModel: "deepseek-v4-flash", // basename match for target 1
+        duration: 250,
+        tokens: null, // missing tokens
+        comboName: "fred-v4-stack",
+        comboStepId: "model-1",
+      },
+      {
+        timestamp: "2026-08-20T11:50:00.000Z",
+        status: "502 Bad Gateway", // string status
+        requestedModel: "unmatched-model",
+        comboStepId: "prefix-model-3-suffix", // ordinal fallback -> target 3 (gemini-3.7-flash)
+        duration: -50, // negative duration -> ignored for avgLatencyMs
+        tokens: { in: 30, out: 5, total: 999 }, // total must be recomputed from input and output
+        comboName: "fred-v4-stack",
+      },
+      {
+        timestamp: "2026-08-20T11:40:00.000Z",
+        status: 200,
+        requestedModel: "unmatched-model",
+        comboStepId: "model-99", // out of bounds ordinal -> ignored
+        comboName: "fred-v4-stack",
+      },
+    ];
+
+    const snapshot = normalizeOmniRouteUsagePayloads({
+      providerLimits: {},
+      providerConnections: providersPayload(),
+      analytics: {},
+      providerStats: {},
+      healthMatrix: {},
+      combos: combosPayload(),
+      callLogs: logs,
+      range: "7d",
+      generatedAt: "2026-08-20T12:00:00.000Z",
+    });
+
+    expect(snapshot.routeStack).toMatchObject({
+      name: "fred-v4-stack",
+      modelCalls: 2,
+      successes: 1,
+      failures: 1,
+      fallbackCalls: 1, // target 3 is pos > 1
+      promptTokens: 30,
+      completionTokens: 5,
+      totalTokens: 35,
+      avgLatencyMs: 250,
+      successRatePct: 50,
+      fallbackRatePct: 50,
+    });
+    expect(snapshot.routeStack?.targets[0]).toMatchObject({
+      position: 1,
+      model: "deepseek/deepseek-v4-flash",
+      modelCalls: 1,
+      successes: 1,
+      failures: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      avgLatencyMs: 250,
+      lastStatus: "201",
+    });
+    expect(snapshot.routeStack?.targets[2]).toMatchObject({
+      position: 3,
+      model: "google/gemini-3.7-flash",
+      modelCalls: 1,
+      successes: 0,
+      failures: 1,
+      promptTokens: 30,
+      completionTokens: 5,
+      totalTokens: 35,
+      avgLatencyMs: null,
+      lastStatus: "502",
+    });
+  });
+
+  it("ignores malformed token containers without failing the route-stack snapshot", () => {
+    const snapshot = normalizeOmniRouteUsagePayloads({
+      providerLimits: {},
+      providerConnections: providersPayload(),
+      analytics: {},
+      providerStats: {},
+      healthMatrix: {},
+      combos: combosPayload(),
+      callLogs: [{
+        timestamp: "2026-08-20T11:55:00.000Z",
+        status: 200,
+        requestedModel: "deepseek/deepseek-v4-flash",
+        tokens: "invalid-sensitive-container",
+        comboName: "fred-v4-stack",
+      }],
+      range: "24h",
+      generatedAt: "2026-08-20T12:00:00.000Z",
+    });
+
+    expect(snapshot.routeStack).toMatchObject({
+      modelCalls: 1,
+      successes: 1,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+    });
+    expect(JSON.stringify(snapshot)).not.toContain("invalid-sensitive-container");
+  });
+
+  it("preserves all configured targets even when zero calls exist in the period", () => {
+    const snapshot = normalizeOmniRouteUsagePayloads({
+      providerLimits: {},
+      providerConnections: providersPayload(),
+      analytics: {},
+      providerStats: {},
+      healthMatrix: {},
+      combos: combosPayload(),
+      callLogs: [],
+      range: "24h",
+      generatedAt: "2026-08-20T12:00:00.000Z",
+    });
+
+    expect(snapshot.routeStack).toMatchObject({
+      name: "fred-v4-stack",
+      modelCalls: 0,
+      successes: 0,
+      failures: 0,
+      fallbackCalls: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      avgLatencyMs: null,
+      successRatePct: null,
+      fallbackRatePct: null,
+      lastUsedAt: null,
+      historyTruncated: false,
+    });
+    expect(snapshot.routeStack?.targets).toHaveLength(4);
+    for (const target of snapshot.routeStack?.targets ?? []) {
+      expect(target).toMatchObject({
+        modelCalls: 0,
+        successes: 0,
+        failures: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        avgLatencyMs: null,
+        successRatePct: null,
+        lastStatus: null,
+        lastUsedAt: null,
+      });
+    }
+  });
 });
 
 describe("OmniRoute usage cache", () => {
@@ -520,7 +822,7 @@ describe("OmniRoute usage cache", () => {
     vi.restoreAllMocks();
   });
 
-  function successfulFetcher() {
+  function successfulFetcher(callLogs: unknown[] = callLogsPayload()) {
     return vi.fn(async (input: URL | Request | string, init?: RequestInit) => {
       void init;
       const url = String(input);
@@ -530,16 +832,24 @@ describe("OmniRoute usage cache", () => {
       if (url.endsWith("/api/provider-stats")) return Response.json(providerStatsPayload());
       if (url.endsWith("/api/providers/health-matrix")) return Response.json(healthMatrixPayload());
       if (url.endsWith("/api/combos")) return Response.json(combosPayload());
+      if (url.includes("/api/usage/call-logs")) {
+        const parsed = new URL(url);
+        const offset = Number(parsed.searchParams.get("offset") ?? "0");
+        if (offset === 0) return Response.json(callLogs);
+        return Response.json([]);
+      }
       throw new Error(`Unexpected URL: ${url}`);
     });
   }
 
-  it("makes six authenticated bounded requests and never emits the provider payload", async () => {
+  it("makes authenticated bounded requests including call logs and never emits the provider payload", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(new Date("2026-08-20T12:00:00.000Z").getTime());
     const fetcher = successfulFetcher();
     const snapshot = await getOmniRouteUsageSnapshot("24h", { fetcher: fetcher as unknown as typeof fetch });
 
-    expect(fetcher).toHaveBeenCalledTimes(6);
+    expect(fetcher).toHaveBeenCalledTimes(7);
     expect(String(fetcher.mock.calls[1]?.[0])).toBe("https://omniroute.example/sub/api/providers");
+    expect(String(fetcher.mock.calls[6]?.[0])).toContain("/api/usage/call-logs?limit=1000&offset=0");
     for (const call of fetcher.mock.calls) {
       const url = String(call[0]);
       expect(url.startsWith("https://omniroute.example/sub/api/")).toBe(true);
@@ -552,8 +862,100 @@ describe("OmniRoute usage cache", () => {
     }
     expect(snapshot.stale).toBe(false);
     expect(snapshot.codexQuota).toMatchObject({ quotaLabel: "Weekly", remainingPercent: 80 });
+    expect(snapshot.routeStack).toMatchObject({
+      name: "fred-v4-stack",
+      modelCalls: 3,
+      historyTruncated: false,
+    });
     expect(JSON.stringify(snapshot)).not.toContain("opaque-cache");
     expect(JSON.stringify(snapshot)).not.toContain("secret-access-token");
+  });
+
+  it("paginates call logs and stops when oldest row in a page is before range start", async () => {
+    const now = new Date("2026-08-20T12:00:00.000Z").getTime();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+
+    const page1 = Array.from({ length: 1000 }, (_, i) => ({
+      timestamp: new Date(now - i * 60 * 1000).toISOString(),
+      status: 200,
+      comboName: "fred-v4-stack",
+      model: "deepseek/deepseek-v4-flash",
+      duration: 100,
+      tokens: { in: 10, out: 20 },
+    }));
+    // Page 2 crosses the 24h boundary (24 * 60 = 1440 minutes)
+    const page2 = Array.from({ length: 1000 }, (_, i) => ({
+      timestamp: new Date(now - (1000 + i) * 60 * 1000).toISOString(),
+      status: 200,
+      comboName: "fred-v4-stack",
+      model: "deepseek/deepseek-v4-flash",
+      duration: 100,
+      tokens: { in: 10, out: 20 },
+    }));
+
+    const fetcher = vi.fn(async (input: URL | Request | string) => {
+      const url = String(input);
+      if (url.endsWith("/api/usage/provider-limits")) return Response.json(providerLimitsPayload());
+      if (url.endsWith("/api/providers")) return Response.json(providersPayload());
+      if (url.includes("/api/usage/analytics?range=")) return Response.json(analyticsPayload());
+      if (url.endsWith("/api/provider-stats")) return Response.json(providerStatsPayload());
+      if (url.endsWith("/api/providers/health-matrix")) return Response.json(healthMatrixPayload());
+      if (url.endsWith("/api/combos")) return Response.json(combosPayload());
+      if (url.includes("/api/usage/call-logs")) {
+        const parsed = new URL(url);
+        const offset = Number(parsed.searchParams.get("offset") ?? "0");
+        if (offset === 0) return Response.json(page1);
+        if (offset === 1000) return Response.json(page2);
+        return Response.json([]);
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+
+    const snapshot = await getOmniRouteUsageSnapshot("24h", { fetcher: fetcher as unknown as typeof fetch });
+    // 6 base fetches + 2 call-log pages (page 1 full, page 2 crosses boundary -> stops)
+    expect(fetcher).toHaveBeenCalledTimes(8);
+    expect(snapshot.routeStack?.historyTruncated).toBe(false);
+    // Exactly 1441 items within 24 hours (0..1440 minutes)
+    expect(snapshot.routeStack?.modelCalls).toBe(1441);
+  });
+
+  it("sets historyTruncated to true when reaching 10,000 rows before range boundary", async () => {
+    const now = new Date("2026-08-20T12:00:00.000Z").getTime();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+
+    const makeFullPage = (pageIndex: number) => Array.from({ length: 1000 }, (_, i) => ({
+      // All within 7d range (10,000 minutes = ~6.94 days < 7 days)
+      timestamp: new Date(now - (pageIndex * 1000 + i) * 60 * 1000).toISOString(),
+      status: 200,
+      comboName: "fred-v4-stack",
+      model: "deepseek/deepseek-v4-flash",
+      duration: 100,
+      tokens: { in: 10, out: 20 },
+    }));
+
+    const fetcher = vi.fn(async (input: URL | Request | string) => {
+      const url = String(input);
+      if (url.endsWith("/api/usage/provider-limits")) return Response.json(providerLimitsPayload());
+      if (url.endsWith("/api/providers")) return Response.json(providersPayload());
+      if (url.includes("/api/usage/analytics?range=")) return Response.json(analyticsPayload());
+      if (url.endsWith("/api/provider-stats")) return Response.json(providerStatsPayload());
+      if (url.endsWith("/api/providers/health-matrix")) return Response.json(healthMatrixPayload());
+      if (url.endsWith("/api/combos")) return Response.json(combosPayload());
+      if (url.includes("/api/usage/call-logs")) {
+        const parsed = new URL(url);
+        const offset = Number(parsed.searchParams.get("offset") ?? "0");
+        const pageIndex = offset / 1000;
+        if (pageIndex < 10) return Response.json(makeFullPage(pageIndex));
+        return Response.json([]);
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+
+    const snapshot = await getOmniRouteUsageSnapshot("7d", { fetcher: fetcher as unknown as typeof fetch });
+    // 6 base fetches + 10 call-log pages
+    expect(fetcher).toHaveBeenCalledTimes(16);
+    expect(snapshot.routeStack?.historyTruncated).toBe(true);
+    expect(snapshot.routeStack?.modelCalls).toBe(10_000);
   });
 
   it("serves a fresh snapshot without another upstream call", async () => {
@@ -561,7 +963,7 @@ describe("OmniRoute usage cache", () => {
     await getOmniRouteUsageSnapshot("7d", { fetcher: fetcher as unknown as typeof fetch });
     const cached = await getOmniRouteUsageSnapshot("7d", { fetcher: fetcher as unknown as typeof fetch });
 
-    expect(fetcher).toHaveBeenCalledTimes(6);
+    expect(fetcher).toHaveBeenCalledTimes(7);
     expect(cached.stale).toBe(false);
   });
 
@@ -574,8 +976,8 @@ describe("OmniRoute usage cache", () => {
       fetcher: failingFetcher as unknown as typeof fetch,
     });
 
-    expect(fetcher).toHaveBeenCalledTimes(6);
-    expect(failingFetcher).toHaveBeenCalledTimes(6);
+    expect(fetcher).toHaveBeenCalledTimes(7);
+    expect(failingFetcher).toHaveBeenCalled();
     expect(first.stale).toBe(false);
     expect(refreshed.stale).toBe(true);
     expect(refreshed.generatedAt).toBe(first.generatedAt);

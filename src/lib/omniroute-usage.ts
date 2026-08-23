@@ -9,6 +9,8 @@ import type {
   OmniRouteProviderHealth,
   OmniRouteProviderUsage,
   OmniRouteQuotaSnapshot,
+  OmniRouteRouteStackSnapshot,
+  OmniRouteRouteStackTargetStats,
   OmniRouteUsageRange,
   OmniRouteUsageSnapshot,
   OmniRouteUsageSummary,
@@ -18,9 +20,10 @@ export const OMNIROUTE_USAGE_CACHE_TTL_MS = 5 * 60 * 1_000;
 export const OMNIROUTE_USAGE_TIMEOUT_MS = 10_000;
 const MAX_OMNIROUTE_RESPONSE_BYTES = 2 * 1_024 * 1_024;
 export const OMNIROUTE_LUNA_MAX_COMBO_NAME = "omniroute-luna-max-gemini-3.7-flash-high";
+export const OMNIROUTE_FRED_V4_STACK_COMBO_NAME = "fred-v4-stack";
 
 type JsonRecord = Record<string, unknown>;
-type ProviderKind = "codex" | "gemini" | "openrouter";
+type ProviderKind = "codex" | "gemini" | "openrouter" | "deepseek";
 type ProviderConnectionMap = Map<string, ProviderKind>;
 
 type InternalRouteTarget = {
@@ -119,6 +122,7 @@ function modelText(value: unknown): string | null {
 
 function providerKind(value: unknown): ProviderKind | null {
   const text = typeof value === "string" ? value.toLowerCase() : "";
+  if (text.includes("deepseek")) return "deepseek";
   if (text.includes("codex")) return "codex";
   if (text.includes("antigravity") || text.includes("agy") || text.includes("gemini")) return "gemini";
   if (text.includes("openrouter")) return "openrouter";
@@ -126,6 +130,7 @@ function providerKind(value: unknown): ProviderKind | null {
 }
 
 function publicProvider(kind: ProviderKind): string {
+  if (kind === "deepseek") return "DeepSeek";
   if (kind === "codex") return "OpenAI Codex";
   return kind === "gemini" ? "Gemini / Antigravity" : "OpenRouter";
 }
@@ -378,7 +383,10 @@ export function normalizeAnalyticsPayload(payload: unknown): OmniRouteUsageSnaps
   return { summary, models, providers, dailyTrend };
 }
 
-function normalizeComboConfiguration(payload: unknown): {
+function normalizeComboConfiguration(
+  payload: unknown,
+  connections?: ProviderConnectionMap,
+): {
   configuration: {
     name: string;
     strategy: string | null;
@@ -404,7 +412,8 @@ function normalizeComboConfiguration(payload: unknown): {
       .filter((value): value is JsonRecord => value !== null);
   const routeTargets = models.flatMap((value) => {
     const model = modelText(value.model);
-    const kind = providerKind(value.providerId);
+    const providerId = publicText(value.providerId, 200);
+    const kind = (providerId && connections ? connections.get(providerId) : null) ?? providerKind(value.providerId);
     return model && kind ? [{ model, provider: kind }] : [];
   });
 
@@ -417,6 +426,291 @@ function normalizeComboConfiguration(payload: unknown): {
       updatedAt: timestamp(configuredCombo.updatedAt),
     },
     routeTargets,
+  };
+}
+
+type ConfiguredRouteStackTarget = {
+  position: number;
+  model: string;
+  providerKind: ProviderKind;
+  provider: string;
+};
+
+function normalizeRouteStackConfiguration(
+  payload: unknown,
+  connections: ProviderConnectionMap,
+): {
+  name: string;
+  strategy: string | null;
+  targets: ConfiguredRouteStackTarget[];
+} | null {
+  const root = recordOf(payload);
+  const combos = root?.combos === undefined || root.combos === null ? null : requiredArray(root.combos);
+  if (!root || !combos) return null;
+
+  const configuredCombo = combos
+    .map((value) => recordOf(value))
+    .find((combo) => combo?.name === OMNIROUTE_FRED_V4_STACK_COMBO_NAME);
+  if (!configuredCombo) return null;
+
+  const rawModels = configuredCombo.models === undefined || configuredCombo.models === null
+    ? []
+    : requiredArray(configuredCombo.models)
+      .map((value) => recordOf(value))
+      .filter((value): value is JsonRecord => value !== null);
+
+  const targets: ConfiguredRouteStackTarget[] = [];
+  for (let i = 0; i < rawModels.length; i++) {
+    const modelVal = rawModels[i];
+    if (!modelVal) continue;
+    const model = modelText(modelVal.model);
+    const providerId = publicText(modelVal.providerId, 200);
+    const kind = (providerId ? connections.get(providerId) : null) ?? providerKind(providerId);
+    if (model && kind) {
+      targets.push({
+        position: targets.length + 1,
+        model,
+        providerKind: kind,
+        provider: publicProvider(kind),
+      });
+    }
+  }
+
+  return {
+    name: OMNIROUTE_FRED_V4_STACK_COMBO_NAME,
+    strategy: publicToken(configuredCombo.strategy),
+    targets,
+  };
+}
+
+function matchTarget(
+  row: JsonRecord,
+  targets: ConfiguredRouteStackTarget[],
+): ConfiguredRouteStackTarget | null {
+  const requestedModel = modelText(row.requestedModel);
+  const model = modelText(row.model);
+
+  if (requestedModel) {
+    const exact = targets.find((t) => t.model === requestedModel);
+    if (exact) return exact;
+  }
+  if (requestedModel) {
+    const base = targets.find((t) => sameModel(requestedModel, t.model));
+    if (base) return base;
+  }
+  if (model) {
+    const exact = targets.find((t) => t.model === model);
+    if (exact) return exact;
+  }
+  if (model) {
+    const base = targets.find((t) => sameModel(model, t.model));
+    if (base) return base;
+  }
+
+  const stepId = typeof row.comboStepId === "string" ? row.comboStepId : "";
+  const stepMatch = /model-(\d+)/iu.exec(stepId);
+  if (stepMatch && stepMatch[1]) {
+    const ordinal = parseInt(stepMatch[1], 10);
+    if (Number.isInteger(ordinal) && ordinal >= 1 && ordinal <= targets.length) {
+      return targets[ordinal - 1] ?? null;
+    }
+  }
+  return null;
+}
+
+function parseRowStatus(value: unknown): { isSuccess: boolean; isFailure: boolean; label: string | null } {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const code = Math.trunc(value);
+    const isSuccess = code >= 200 && code < 300;
+    return { isSuccess, isFailure: !isSuccess, label: String(code) };
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    const match = /^(\d{3})\b/u.exec(trimmed);
+    if (match && match[1]) {
+      const code = Number(match[1]);
+      const isSuccess = code >= 200 && code < 300;
+      return { isSuccess, isFailure: !isSuccess, label: String(code) };
+    }
+    const lower = trimmed.toLowerCase();
+    if (lower === "ok" || lower === "success") {
+      return { isSuccess: true, isFailure: false, label: publicToken(trimmed, 60) };
+    }
+    if (trimmed.length > 0) {
+      return { isSuccess: false, isFailure: true, label: publicToken(trimmed, 60) };
+    }
+  }
+  return { isSuccess: false, isFailure: true, label: null };
+}
+
+function parseRowTokens(row: JsonRecord): { promptTokens: number; completionTokens: number; totalTokens: number } {
+  const tokensObj = row.tokens !== null && typeof row.tokens === "object" && !Array.isArray(row.tokens)
+    ? row.tokens as JsonRecord
+    : null;
+  const prompt = integer(tokensObj?.in ?? row.promptTokens) ?? 0;
+  const completion = integer(tokensObj?.out ?? row.completionTokens) ?? 0;
+  return {
+    promptTokens: prompt,
+    completionTokens: completion,
+    totalTokens: prompt + completion,
+  };
+}
+
+function rangeStartTimestamp(range: OmniRouteUsageRange, generatedAt: string | Date): number {
+  const now = new Date(generatedAt).getTime();
+  if (range === "24h") return now - 24 * 60 * 60 * 1000;
+  if (range === "7d") return now - 7 * 24 * 60 * 60 * 1000;
+  if (range === "30d") return now - 30 * 24 * 60 * 60 * 1000;
+  return now - 24 * 60 * 60 * 1000;
+}
+
+export function normalizeRouteStackPayload(
+  combosPayload: unknown,
+  connections: ProviderConnectionMap,
+  callLogs: JsonRecord[],
+  historyTruncated: boolean,
+  range?: OmniRouteUsageRange,
+  generatedAt?: string,
+): OmniRouteRouteStackSnapshot | null {
+  const config = normalizeRouteStackConfiguration(combosPayload, connections);
+  if (!config) return null;
+
+  type TargetAccumulator = {
+    position: number;
+    model: string;
+    provider: string;
+    modelCalls: number;
+    successes: number;
+    failures: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    latencySum: number;
+    latencyCount: number;
+    lastStatus: string | null;
+    lastUsedAt: string | null;
+  };
+
+  const targetAccumulators: TargetAccumulator[] = config.targets.map((t) => ({
+    position: t.position,
+    model: t.model,
+    provider: t.provider,
+    modelCalls: 0,
+    successes: 0,
+    failures: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    latencySum: 0,
+    latencyCount: 0,
+    lastStatus: null,
+    lastUsedAt: null,
+  }));
+
+  let overallCalls = 0;
+  let overallSuccesses = 0;
+  let overallFailures = 0;
+  let overallFallbackCalls = 0;
+  let overallPromptTokens = 0;
+  let overallCompletionTokens = 0;
+  let overallTotalTokens = 0;
+  let overallLatencySum = 0;
+  let overallLatencyCount = 0;
+  let overallLastUsedAt: string | null = null;
+
+  const rangeStartMs = range && generatedAt ? rangeStartTimestamp(range, generatedAt) : null;
+
+  for (const row of callLogs) {
+    if (row.comboName !== OMNIROUTE_FRED_V4_STACK_COMBO_NAME) continue;
+
+    const rowTime = timestamp(row.timestamp);
+    if (rowTime && rangeStartMs !== null) {
+      const timeMs = new Date(rowTime).getTime();
+      if (timeMs < rangeStartMs) continue;
+    }
+
+    const target = matchTarget(row, config.targets);
+    if (!target) continue;
+
+    const acc = targetAccumulators[target.position - 1];
+    if (!acc) continue;
+
+    const rowStatus = parseRowStatus(row.status);
+    const tokens = parseRowTokens(row);
+    const duration = nonnegativeNumber(row.duration);
+
+    acc.modelCalls += 1;
+    overallCalls += 1;
+
+    if (target.position > 1) {
+      overallFallbackCalls += 1;
+    }
+
+    if (rowStatus.isSuccess) {
+      acc.successes += 1;
+      overallSuccesses += 1;
+    } else if (rowStatus.isFailure) {
+      acc.failures += 1;
+      overallFailures += 1;
+    }
+
+    acc.promptTokens += tokens.promptTokens;
+    acc.completionTokens += tokens.completionTokens;
+    acc.totalTokens += tokens.totalTokens;
+    overallPromptTokens += tokens.promptTokens;
+    overallCompletionTokens += tokens.completionTokens;
+    overallTotalTokens += tokens.totalTokens;
+
+    if (duration !== null) {
+      acc.latencySum += duration;
+      acc.latencyCount += 1;
+      overallLatencySum += duration;
+      overallLatencyCount += 1;
+    }
+
+    if (rowTime) {
+      if (!acc.lastUsedAt || new Date(rowTime).getTime() >= new Date(acc.lastUsedAt).getTime()) {
+        acc.lastUsedAt = rowTime;
+        acc.lastStatus = rowStatus.label;
+      }
+      if (!overallLastUsedAt || new Date(rowTime).getTime() >= new Date(overallLastUsedAt).getTime()) {
+        overallLastUsedAt = rowTime;
+      }
+    }
+  }
+
+  const targetStats: OmniRouteRouteStackTargetStats[] = targetAccumulators.map((acc) => ({
+    position: acc.position,
+    model: acc.model,
+    provider: acc.provider,
+    modelCalls: acc.modelCalls,
+    successes: acc.successes,
+    failures: acc.failures,
+    promptTokens: acc.promptTokens,
+    completionTokens: acc.completionTokens,
+    totalTokens: acc.totalTokens,
+    avgLatencyMs: acc.latencyCount > 0 ? acc.latencySum / acc.latencyCount : null,
+    successRatePct: acc.modelCalls > 0 ? Math.min(100, Math.max(0, (acc.successes / acc.modelCalls) * 100)) : null,
+    lastStatus: acc.lastStatus,
+    lastUsedAt: acc.lastUsedAt,
+  }));
+
+  return {
+    name: config.name,
+    strategy: config.strategy,
+    targets: targetStats,
+    modelCalls: overallCalls,
+    successes: overallSuccesses,
+    failures: overallFailures,
+    fallbackCalls: overallFallbackCalls,
+    promptTokens: overallPromptTokens,
+    completionTokens: overallCompletionTokens,
+    totalTokens: overallTotalTokens,
+    avgLatencyMs: overallLatencyCount > 0 ? overallLatencySum / overallLatencyCount : null,
+    successRatePct: overallCalls > 0 ? Math.min(100, Math.max(0, (overallSuccesses / overallCalls) * 100)) : null,
+    fallbackRatePct: overallCalls > 0 ? Math.min(100, Math.max(0, (overallFallbackCalls / overallCalls) * 100)) : null,
+    lastUsedAt: overallLastUsedAt,
+    historyTruncated,
   };
 }
 
@@ -657,19 +951,40 @@ export function normalizeOmniRouteUsagePayloads(input: {
   providerStats: unknown;
   healthMatrix: unknown;
   combos: unknown;
+  callLogs?: unknown;
+  historyTruncated?: boolean;
   range: OmniRouteUsageRange;
   generatedAt?: string;
 }): Omit<OmniRouteAdminUsageSnapshot, "stale" | "warning"> {
-  const { configuration, routeTargets } = normalizeComboConfiguration(input.combos);
+  const connections = normalizeProviderConnectionsPayload(input.providerConnections);
+  const { configuration, routeTargets } = normalizeComboConfiguration(input.combos, connections);
   const usage = normalizeAnalyticsPayload(input.analytics);
   const quotas = normalizeProviderQuotasPayload(input.providerLimits, input.providerConnections);
+  const generatedAt = timestamp(input.generatedAt ?? new Date(Date.now()).toISOString()) ?? new Date(Date.now()).toISOString();
+
+  const rawLogs = input.callLogs === undefined || input.callLogs === null
+    ? []
+    : Array.isArray(input.callLogs)
+      ? input.callLogs.map((item) => recordOf(item)).filter((item): item is JsonRecord => item !== null)
+      : [];
+
+  const routeStack = normalizeRouteStackPayload(
+    input.combos,
+    connections,
+    rawLogs,
+    input.historyTruncated ?? false,
+    input.range,
+    generatedAt,
+  );
+
   return {
-    generatedAt: timestamp(input.generatedAt ?? new Date().toISOString()) ?? new Date().toISOString(),
+    generatedAt,
     range: input.range,
     quota: quotas.quota,
     codexQuota: quotas.codexQuota,
     usage,
     combo: normalizeProviderStatsPayload(input.providerStats, configuration, routeTargets),
+    routeStack,
     providerHealth: normalizeHealthMatrixPayload(input.healthMatrix, routeTargets),
   };
 }
@@ -757,18 +1072,75 @@ async function fetchOmniRouteJson(
   }
 }
 
+async function fetchCallLogs(
+  range: OmniRouteUsageRange,
+  generatedAt: string,
+  config: OmniRouteServerConfig,
+  fetcher: typeof fetch,
+): Promise<{ callLogs: JsonRecord[]; historyTruncated: boolean }> {
+  const PAGE_SIZE = 1000;
+  const MAX_ROWS = 10_000;
+  const rangeStartMs = rangeStartTimestamp(range, generatedAt);
+  const callLogs: JsonRecord[] = [];
+  let historyTruncated = false;
+
+  for (let offset = 0; offset < MAX_ROWS; offset += PAGE_SIZE) {
+    const payload = await fetchOmniRouteJson(
+      `/api/usage/call-logs?limit=${PAGE_SIZE}&offset=${offset}`,
+      config,
+      fetcher,
+    );
+    const rows = requiredArray(payload);
+    if (rows.length === 0) break;
+
+    let reachedBoundary = false;
+    for (const item of rows) {
+      const record = recordOf(item);
+      if (!record) continue;
+      const ts = timestamp(record.timestamp);
+      if (!ts) continue;
+      const timeMs = new Date(ts).getTime();
+      if (timeMs < rangeStartMs) {
+        reachedBoundary = true;
+        break;
+      }
+      callLogs.push(record);
+    }
+
+    if (rows.length < PAGE_SIZE || reachedBoundary) {
+      break;
+    }
+
+    if (offset + PAGE_SIZE >= MAX_ROWS) {
+      historyTruncated = true;
+    }
+  }
+
+  return { callLogs, historyTruncated };
+}
+
 async function fetchUsageSnapshot(
   range: OmniRouteUsageRange,
   fetcher: typeof fetch,
 ): Promise<Omit<OmniRouteAdminUsageSnapshot, "stale" | "warning">> {
   const config = serverConfig();
-  const [providerLimits, providerConnections, analytics, providerStats, healthMatrix, combos] = await Promise.all([
+  const generatedAt = new Date(Date.now()).toISOString();
+  const [
+    providerLimits,
+    providerConnections,
+    analytics,
+    providerStats,
+    healthMatrix,
+    combos,
+    callLogsResult,
+  ] = await Promise.all([
     fetchOmniRouteJson("/api/usage/provider-limits", config, fetcher),
     fetchOmniRouteJson("/api/providers", config, fetcher),
     fetchOmniRouteJson(`/api/usage/analytics?range=${encodeURIComponent(range)}`, config, fetcher),
     fetchOmniRouteJson("/api/provider-stats", config, fetcher),
     fetchOmniRouteJson("/api/providers/health-matrix", config, fetcher),
     fetchOmniRouteJson("/api/combos", config, fetcher),
+    fetchCallLogs(range, generatedAt, config, fetcher),
   ]);
 
   return normalizeOmniRouteUsagePayloads({
@@ -778,7 +1150,10 @@ async function fetchUsageSnapshot(
     providerStats,
     healthMatrix,
     combos,
+    callLogs: callLogsResult.callLogs,
+    historyTruncated: callLogsResult.historyTruncated,
     range,
+    generatedAt,
   });
 }
 

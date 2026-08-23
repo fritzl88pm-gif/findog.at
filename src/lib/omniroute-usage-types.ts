@@ -126,6 +126,40 @@ export type OmniRouteProviderHealth = {
   models: OmniRouteModelHealth[];
 };
 
+export type OmniRouteRouteStackTargetStats = {
+  position: number;
+  model: string;
+  provider: string;
+  modelCalls: number;
+  successes: number;
+  failures: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  avgLatencyMs: number | null;
+  successRatePct: number | null;
+  lastStatus: string | null;
+  lastUsedAt: string | null;
+};
+
+export type OmniRouteRouteStackSnapshot = {
+  name: string;
+  strategy: string | null;
+  targets: OmniRouteRouteStackTargetStats[];
+  modelCalls: number;
+  successes: number;
+  failures: number;
+  fallbackCalls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  avgLatencyMs: number | null;
+  successRatePct: number | null;
+  fallbackRatePct: number | null;
+  lastUsedAt: string | null;
+  historyTruncated: boolean;
+};
+
 export type OmniRouteAdminUsageSnapshot = {
   generatedAt: string;
   stale: boolean;
@@ -134,6 +168,7 @@ export type OmniRouteAdminUsageSnapshot = {
   codexQuota: OmniRouteQuotaSnapshot | null;
   usage: OmniRouteUsageSnapshot;
   combo: OmniRouteComboSnapshot | null;
+  routeStack: OmniRouteRouteStackSnapshot | null;
   providerHealth: OmniRouteProviderHealth[];
   warning?: string;
 };

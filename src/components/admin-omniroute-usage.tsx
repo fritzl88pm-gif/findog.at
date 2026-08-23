@@ -37,6 +37,7 @@ function snapshotFromPayload(value: unknown): OmniRouteAdminUsageSnapshot | null
     || !("codexQuota" in payload)
     || !("usage" in payload)
     || !("combo" in payload)
+    || !("routeStack" in payload)
     || !Array.isArray(payload.providerHealth)
     || (payload.warning !== undefined && typeof payload.warning !== "string")
   ) {
@@ -252,6 +253,7 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
   const quota = snapshot?.quota ?? null;
   const summary = snapshot?.usage.summary ?? null;
   const combo = snapshot?.combo ?? null;
+  const routeStack = snapshot?.routeStack ?? null;
   const codexQuota = snapshot?.codexQuota ?? null;
   const codexHealth = snapshot?.providerHealth.find((provider) => provider.provider === "codex");
   const geminiHealth = snapshot?.providerHealth.find((provider) => provider.provider === "gemini");
@@ -389,6 +391,71 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
                 </>
               ) : (
                 <p className="admin-empty-state">Keine aktive Codex/Gemini-Combo gefunden.</p>
+              )}
+            </section>
+
+            <section className="admin-omniroute-section" aria-labelledby="admin-omniroute-stack-title">
+              <h3 id="admin-omniroute-stack-title">Fred V4 Stack</h3>
+              {routeStack ? (
+                <>
+                  {routeStack.historyTruncated ? (
+                    <div className="notice-box" role="status">
+                      Der Abfragezeitraum enthält mehr als 10.000 Einträge. Die Statistik basiert auf den neuesten 10.000 Modellaufrufen und ist möglicherweise unvollständig.
+                    </div>
+                  ) : null}
+                  <dl className="admin-omniroute-metrics">
+                    <Metric label="Modellaufrufe" value={formatNumber(routeStack.modelCalls)} />
+                    <Metric
+                      label="Fallback-Aufrufe"
+                      value={formatNumber(routeStack.fallbackCalls)}
+                      detail={routeStack.fallbackRatePct !== null ? formatPercent(routeStack.fallbackRatePct) : undefined}
+                    />
+                    <Metric label="Erfolgsquote" value={formatPercent(routeStack.successRatePct)} />
+                    <Metric label="Fehler" value={formatNumber(routeStack.failures)} />
+                    <Metric label="Eingabe-Tokens" value={formatNumber(routeStack.promptTokens)} detail="Token" />
+                    <Metric label="Ausgabe-Tokens" value={formatNumber(routeStack.completionTokens)} detail="Token" />
+                    <Metric label="Tokens insgesamt" value={formatNumber(routeStack.totalTokens)} detail="Token" />
+                    <Metric label="Durchschnittliche Latenz" value={formatDuration(routeStack.avgLatencyMs)} />
+                    <Metric label="Letzte Nutzung" value={formatDateTime(routeStack.lastUsedAt)} />
+                  </dl>
+                  <div className="admin-omniroute-table-wrap">
+                    <table>
+                      <caption>Fred V4 Stack – Zielmodelle</caption>
+                      <thead>
+                        <tr>
+                          <th scope="col">Pos.</th>
+                          <th scope="col">Provider</th>
+                          <th scope="col">Modell</th>
+                          <th scope="col">Modellaufrufe</th>
+                          <th scope="col">Erfolgsquote</th>
+                          <th scope="col">Fehler</th>
+                          <th scope="col">Tokens</th>
+                          <th scope="col">Latenz</th>
+                          <th scope="col">Letzter Status</th>
+                          <th scope="col">Letzte Nutzung</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {routeStack.targets.map((target) => (
+                          <tr key={`${target.position}-${target.model}`}>
+                            <th scope="row">{target.position}</th>
+                            <td>{target.provider}</td>
+                            <td>{target.model}</td>
+                            <td>{formatNumber(target.modelCalls)}</td>
+                            <td>{formatPercent(target.successRatePct)}</td>
+                            <td>{formatNumber(target.failures)}</td>
+                            <td>{formatNumber(target.totalTokens)}</td>
+                            <td>{formatDuration(target.avgLatencyMs)}</td>
+                            <td>{target.lastStatus ?? "–"}</td>
+                            <td>{formatDateTime(target.lastUsedAt)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : (
+                <p className="admin-empty-state">Keine Fred-V4-Stack-Konfiguration gefunden.</p>
               )}
             </section>
 

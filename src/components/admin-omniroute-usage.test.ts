@@ -39,6 +39,7 @@ describe("Admin Codex, Gemini & OmniRoute UI", () => {
     expect(componentSource).toContain('"Aktualisieren"');
     expect(componentSource).toContain("new AbortController()");
     expect(componentSource).toContain('|| !("codexQuota" in payload)');
+    expect(componentSource).toContain('|| !("routeStack" in payload)');
   });
 
   it("renders loading, error, stale and empty states with required German labels", () => {
@@ -55,11 +56,17 @@ describe("Admin Codex, Gemini & OmniRoute UI", () => {
       "Aktiver Cooldown / Rate-Limit",
       "OmniRoute-Daten werden geladen …",
       "OmniRoute-Nutzung",
+      "Fred V4 Stack",
+      "Modellaufrufe",
+      "Fallback-Aufrufe",
       "Eingabe-Tokens",
       "Ausgabe-Tokens",
       "Tokens insgesamt",
+      "Erfolgsquote",
+      "Fehler",
       "Durchschnittliche Latenz",
       "Letzte Anfrage",
+      "Letzte Nutzung",
       "Aktive Route",
       "Primäres Ziel (Luna Max via Codex OAuth)",
       "Fallback-Ziel (Gemini 3.7 Flash High)",
@@ -84,6 +91,7 @@ describe("Admin Codex, Gemini & OmniRoute UI", () => {
     expect(componentSource).toContain("aria-valuemax={100}");
     expect(componentSource).toContain("aria-valuenow={progressValue");
     expect(componentSource).toMatch(/<table>/u);
+    expect(componentSource).toContain("<caption>Fred V4 Stack – Zielmodelle</caption>");
     expect(componentSource).toContain("<caption>Nutzung nach Provider und Modell</caption>");
     expect(componentSource).toContain("<caption>Tagesverlauf im ausgewählten Zeitraum</caption>");
     expect(cssSource).toContain(".admin-omniroute-panel");

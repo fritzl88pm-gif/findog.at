@@ -48,6 +48,8 @@ function usagePayloads() {
       connections: [
         { id: "secret-codex-connection-id", provider: "codex", accessToken: "secret-access-token" },
         { id: "secret-connection-id", provider: "agy", apiKey: "secret-api-key" },
+        { id: "secret-deepseek-connection-id", provider: "deepseek", apiKey: "secret-deepseek-key" },
+        { id: "secret-or-connection-id", provider: "openrouter", apiKey: "secret-or-key" },
       ],
       byAccount: [{ email: "secret-account@example.at" }],
       byApiKey: [{ key: "secret-key" }],
@@ -133,17 +135,45 @@ function usagePayloads() {
       }],
     },
     combos: {
-      combos: [{
-        name: "omniroute-luna-max-gemini-3.7-flash-high",
-        strategy: "priority",
-        models: [
-          { model: "codex/gpt-5.6-luna-max", providerId: "codex" },
-          { model: "gemini-3.7-flash-high", providerId: "agy" },
-        ],
-        version: 1,
-        updatedAt: "2026-08-18T00:00:00.000Z",
-      }],
+      combos: [
+        {
+          name: "omniroute-luna-max-gemini-3.7-flash-high",
+          strategy: "priority",
+          models: [
+            { model: "codex/gpt-5.6-luna-max", providerId: "codex" },
+            { model: "gemini-3.7-flash-high", providerId: "agy" },
+          ],
+          version: 1,
+          updatedAt: "2026-08-18T00:00:00.000Z",
+        },
+        {
+          name: "fred-v4-stack",
+          strategy: "priority",
+          models: [
+            { model: "deepseek/deepseek-v4-flash", providerId: "secret-deepseek-connection-id" },
+            { model: "openai/gpt-5.6-luna-pro", providerId: "secret-or-connection-id" },
+            { model: "google/gemini-3.7-flash", providerId: "secret-or-connection-id" },
+            { model: "codex/gpt-5.6-luna", providerId: "secret-codex-connection-id" },
+          ],
+          version: 2,
+          updatedAt: "2026-08-20T00:00:00.000Z",
+        },
+      ],
     },
+    callLogs: [
+      {
+        timestamp: "2026-08-20T09:00:00.000Z",
+        status: 200,
+        model: "deepseek/deepseek-v4-flash",
+        requestedModel: "deepseek/deepseek-v4-flash",
+        provider: "deepseek",
+        duration: 350,
+        tokens: { in: 100, out: 200 },
+        comboName: "fred-v4-stack",
+        comboStepId: "model-1",
+        account: "secret-account",
+      },
+    ],
   };
 }
 
@@ -154,6 +184,7 @@ function jsonResponse(url: string): Response {
   if (url.endsWith("/api/provider-stats")) return Response.json(payloads.providerStats);
   if (url.endsWith("/api/providers")) return Response.json(payloads.providers);
   if (url.endsWith("/api/providers/health-matrix")) return Response.json(payloads.healthMatrix);
+  if (url.includes("/api/usage/call-logs")) return Response.json(payloads.callLogs);
   return Response.json(payloads.combos);
 }
 
@@ -220,7 +251,7 @@ describe("GET /api/admin/omniroute-usage", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store, max-age=0");
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
     expect(String(fetchMock.mock.calls[1]?.[0])).toBe("https://omniroute.example/api/providers");
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain("/api/usage/analytics?range=7d");
     expect(payload).toMatchObject({
@@ -230,16 +261,48 @@ describe("GET /api/admin/omniroute-usage", () => {
       codexQuota: { used: 10, total: 50, remainingPercent: 80, quotaLabel: "Weekly" },
       usage: { summary: { totalRequests: 20 } },
       combo: { name: "omniroute-luna-max-gemini-3.7-flash-high", productionTraffic: true },
+      routeStack: {
+        name: "fred-v4-stack",
+        strategy: "priority",
+        modelCalls: 1,
+        successes: 1,
+        failures: 0,
+        fallbackCalls: 0,
+        promptTokens: 100,
+        completionTokens: 200,
+        totalTokens: 300,
+        avgLatencyMs: 350,
+        successRatePct: 100,
+        fallbackRatePct: 0,
+        lastUsedAt: "2026-08-20T09:00:00.000Z",
+        historyTruncated: false,
+      },
       providerHealth: [
         { provider: "codex", models: [{ model: "codex/gpt-5.6-luna-max" }] },
         { provider: "gemini", models: [{ model: "gemini-3.7-flash-high" }] },
       ],
     });
+    expect(payload.routeStack.targets).toHaveLength(4);
+    expect(payload.routeStack.targets[0]).toEqual({
+      position: 1,
+      model: "deepseek/deepseek-v4-flash",
+      provider: "DeepSeek",
+      modelCalls: 1,
+      successes: 1,
+      failures: 0,
+      promptTokens: 100,
+      completionTokens: 200,
+      totalTokens: 300,
+      avgLatencyMs: 350,
+      successRatePct: 100,
+      lastStatus: "200",
+      lastUsedAt: "2026-08-20T09:00:00.000Z",
+    });
     expect(payload.usage.models).toEqual(expect.arrayContaining([
       expect.objectContaining({ provider: "OpenAI Codex", model: "gpt-5.6-luna-max", successRatePct: 100 }),
     ]));
     expect(Object.keys(payload).sort()).toEqual([
-      "codexQuota", "combo", "generatedAt", "providerHealth", "quota", "range", "stale", "usage",
+      "codexQuota", "combo", "generatedAt", "providerHealth", "quota", "range", "routeStack", "stale", "usage",
     ]);
     const serialized = JSON.stringify(payload);
     expect(serialized).not.toContain("secret");
