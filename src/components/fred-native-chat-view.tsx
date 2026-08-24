@@ -848,13 +848,15 @@ export default function FredNativeChatView({
       }
       if (options.rollbackMessages) {
         setMessages(options.rollbackMessages);
-      } else if (hasAnswerContent) {
-        const partialAnswer = answerChunks.join("");
+      } else if (hasAnswerContent || (
+        researchDisplayMode === "advanced"
+        && (executionTrace.length > 0 || researchTrace.length > 0 || sourceReferences.length > 0)
+      )) {
         setMessages([
           ...baseMessages,
           {
             ...assistantMessage,
-            content: partialAnswer,
+            content: answerChunks.join(""),
             researchTrace,
             executionTrace,
             sourceReferences,
@@ -1582,13 +1584,13 @@ export default function FredNativeChatView({
                         {renderAssistantContent(message.content)}
                       </div>
                     )
-                    : (
+                    : (isSending && index === messages.length - 1 ? (
                       <FredSniffingIndicator
                         agentName={fredAgentName(message.agentKey)}
                       />
-                    ))
+                    ) : null))
                   : renderUserContent(message.content)}
-                {message.role === "assistant" && message.content ? (
+                {message.role === "assistant" ? (
                   <ResearchTrace
                     steps={message.researchTrace ?? []}
                     executionSteps={message.executionTrace}

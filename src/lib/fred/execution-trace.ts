@@ -1,3 +1,9 @@
+export const MAX_EXECUTION_STEPS = 200;
+export const MAX_EXECUTION_DETAIL_CHARS = 2000;
+export const MAX_EXECUTION_LABEL_CHARS = 200;
+export const MAX_PLANNING_TODOS_COUNT = 50;
+export const MAX_PLANNING_TASK_CHARS = 200;
+
 export type FredExecutionStepKind =
   | "analysis"
   | "planning"
@@ -52,6 +58,48 @@ function durationMs(value: unknown): number | undefined {
   return Math.min(Math.round(duration), 3_600_000);
 }
 
+function sanitizeControlCharacters(input: string): string {
+  return input
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+}
+
+function redactSensitiveText(input: string): string {
+  return input
+    // Bearer / Authorization tokens
+    .replace(/\bBearer\s+[A-Za-z0-9_\-\.~+/]+=*/gi, "Bearer [REDACTED]")
+    // API keys with standard prefixes
+    .replace(/\b(?:sk|key|glpat|xox[baprs])-[A-Za-z0-9_\-]{8,}/gi, "[REDACTED_API_KEY]")
+    .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AIzaSy[A-Za-z0-9_-]{20,})/g, "[REDACTED_API_KEY]")
+    .replace(/\bsk-[A-Za-z0-9_\-]{8,}/gi, "[REDACTED_API_KEY]")
+    .replace(/\b(?:sk_live|sk_test)_[A-Za-z0-9]{16,}/gi, "[REDACTED_API_KEY]")
+    // Secret / password / credential key-value assignments
+    .replace(/\b(?:api[_-]?key|secret(?:[_-]?key)?|password|passwd|auth[_-]?token|access[_-]?token)[A-Za-z0-9_]*\s*[:=]\s*['"]?[^\s,'">]+['"]?/gi, "[REDACTED]")
+    // JWT tokens
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+/g, "[REDACTED_TOKEN]")
+    // Database connection strings
+    .replace(/\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|mssql|cockroachdb):\/\/[^\s]+/gi, "[REDACTED_CONNECTION]")
+    // Private storage URIs
+    .replace(/\b(?:s3|gs|gcs|azure|blob|oss|cos|minio):\/\/[^\s]+/gi, "[REDACTED_STORAGE_URI]")
+    // Local filesystem paths
+    .replace(/(?:\/(?:var|tmp|etc|proc|sys|opt|home|root|usr|private|Users)\/[^\s'"]+)/gi, "[REDACTED_PATH]")
+    .replace(/\b[A-Za-z]:\\[^\s'"]+/g, "[REDACTED_PATH]")
+    // Internal/corporate URLs
+    .replace(/\bhttps?:\/\/(?:[^\s/$.?#]*\.(?:local|internal|corp|lan|service|intra)|localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[0-1])\.\d+\.\d+)[^\s]*/gi, "[REDACTED_INTERNAL_URL]")
+    // URLs with sensitive query parameters
+    .replace(/\bhttps?:\/\/[^\s]*[?&](?:token|secret|password|key|api_key|access_token|auth)=[^&\s]+/gi, "[REDACTED_URL]");
+}
+
+export function sanitizeAndRedactDetail(value: unknown, maxLength = MAX_EXECUTION_DETAIL_CHARS): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const sanitized = sanitizeControlCharacters(value);
+  if (!sanitized.trim()) return undefined;
+  const redacted = redactSensitiveText(sanitized);
+  const bounded = redacted.slice(0, maxLength);
+  return bounded || undefined;
+}
+
 function eventId(event: Record<string, unknown>, data: Record<string, unknown>, prefix: string): string {
   const upstreamId = boundedText(
     data.tool_call_id ?? data.event_id ?? event.event_id ?? event.id,
@@ -78,10 +126,12 @@ function parseTodosFromUnknown(source: unknown): Array<Record<string, unknown>> 
   }
   const record = recordOf(source);
   if (!record) return null;
-  if (Array.isArray(record.todos)) return parseTodosFromUnknown(record.todos);
-  if (Array.isArray(record.tasks)) return parseTodosFromUnknown(record.tasks);
-  if (Array.isArray(record.items)) return parseTodosFromUnknown(record.items);
-  if (Array.isArray(record.plan)) return parseTodosFromUnknown(record.plan);
+  if (record.todos !== undefined) return parseTodosFromUnknown(record.todos);
+  if (record.tasks !== undefined) return parseTodosFromUnknown(record.tasks);
+  if (record.items !== undefined) return parseTodosFromUnknown(record.items);
+  if (record.plan !== undefined) return parseTodosFromUnknown(record.plan);
+  if (record.todo_list !== undefined) return parseTodosFromUnknown(record.todo_list);
+  if (record.todoList !== undefined) return parseTodosFromUnknown(record.todoList);
   return null;
 }
 
@@ -108,8 +158,8 @@ function extractPlanningCounts(
 
       for (const item of items) {
         const status = boundedText(item.status ?? item.state, 40).toLowerCase();
-        const isDone = item.completed === true || ["completed", "done", "finished", "success"].includes(status);
-        const isInProgress = ["in_progress", "in-progress", "running", "active"].includes(status);
+        const isDone = item.completed === true || ["completed", "done", "finished", "success", "closed", "resolved"].includes(status);
+        const isInProgress = ["in_progress", "in-progress", "running", "active", "in_bearbeitung", "in bearbeitung", "started"].includes(status);
 
         if (isDone) {
           completed += 1;
@@ -142,6 +192,88 @@ function formatPlanningDetail(counts: FredPlanningCounts): string | undefined {
   if (open > 0) parts.push(`${open} offen`);
 
   return parts.join(" · ");
+}
+
+function extractPlanningItems(
+  data: Record<string, unknown>,
+  event: Record<string, unknown>,
+): Array<Record<string, unknown>> | null {
+  const candidates = [
+    data.arguments,
+    data.result,
+    data.todos,
+    data.tasks,
+    event.arguments,
+    event.result,
+    event.todos,
+  ];
+
+  for (const candidate of candidates) {
+    const items = parseTodosFromUnknown(candidate);
+    if (items && items.length > 0) {
+      return items;
+    }
+  }
+  return null;
+}
+
+function formatPlanningDetailWithItems(
+  counts: FredPlanningCounts,
+  items: Array<Record<string, unknown>> | null,
+): string | undefined {
+  const summary = formatPlanningDetail(counts);
+  if (!items || items.length === 0) {
+    return summary ? summary.slice(0, MAX_EXECUTION_DETAIL_CHARS) : undefined;
+  }
+
+  const lines: string[] = [];
+  let currentLength = 0;
+
+  if (summary) {
+    const boundedSummary = summary.slice(0, MAX_EXECUTION_DETAIL_CHARS);
+    lines.push(boundedSummary);
+    currentLength = boundedSummary.length;
+  }
+
+  const cappedItems = items.slice(0, MAX_PLANNING_TODOS_COUNT);
+  for (const item of cappedItems) {
+    const rawTask = boundedText(
+      item.task ?? item.title ?? item.label ?? item.description ?? item.text ?? item.content ?? item.name,
+      MAX_PLANNING_TASK_CHARS,
+    );
+    const sanitizedTask = sanitizeAndRedactDetail(rawTask, MAX_PLANNING_TASK_CHARS);
+    if (!sanitizedTask) continue;
+
+    const status = boundedText(item.status ?? item.state, 40).toLowerCase();
+    const isDone = item.completed === true || ["completed", "done", "finished", "success", "closed", "resolved"].includes(status);
+    const isInProgress = ["in_progress", "in-progress", "running", "active", "in_bearbeitung", "in bearbeitung", "started"].includes(status);
+
+    let prefix = "- [ ]";
+    if (isDone) {
+      prefix = "- [x]";
+    } else if (isInProgress) {
+      prefix = "- [/]";
+    }
+
+    const line = `${prefix} ${sanitizedTask}`;
+    const addedLength = lines.length > 0 ? 1 + line.length : line.length;
+
+    if (currentLength + addedLength <= MAX_EXECUTION_DETAIL_CHARS) {
+      lines.push(line);
+      currentLength += addedLength;
+    } else {
+      break;
+    }
+  }
+
+  if (lines.length > 0) {
+    const joined = lines.join("\n");
+    return joined.length <= MAX_EXECUTION_DETAIL_CHARS
+      ? joined
+      : joined.slice(0, MAX_EXECUTION_DETAIL_CHARS);
+  }
+
+  return summary ? summary.slice(0, MAX_EXECUTION_DETAIL_CHARS) : undefined;
 }
 
 type ToolConfig = {
@@ -186,6 +318,122 @@ function resolveToolConfig(toolName: string): ToolConfig {
   };
 }
 
+function extractSafeSearchQuery(data: Record<string, unknown>, event: Record<string, unknown>): string | undefined {
+  const args = recordOf(data.arguments) ?? recordOf(event.arguments) ?? (typeof data.arguments === "string" ? (() => {
+    try { return recordOf(JSON.parse(data.arguments)); } catch { return null; }
+  })() : null);
+
+  const rawQuery = boundedText(
+    args?.query ?? args?.search_query ?? args?.q ?? args?.text ?? args?.search_term ?? args?.keyword ?? args?.keywords ?? data.query ?? event.query,
+    300,
+  );
+  if (!rawQuery) return undefined;
+
+  // Check if query is an internal URL, storage URI, or local path
+  if (
+    /^https?:\/\/(?:[^\s/$.?#]*\.(?:local|internal|corp|lan|service|intra)|localhost|127\.0\.0\.1|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[0-1]))/i.test(rawQuery)
+    || /^(?:s3|gs|gcs|azure|blob|file|minio):\/\//i.test(rawQuery)
+    || /^(?:\/(?:var|tmp|etc|proc|sys|opt|home|root|usr|private)\/|[A-Za-z]:\\)/i.test(rawQuery)
+  ) {
+    return undefined;
+  }
+
+  // Check for credential assignments or tokens
+  if (
+    /(?:api[_-]?key|secret|password|passwd|auth[_-]?token|access[_-]?token)\s*[:=]/i.test(rawQuery)
+    || /\b(?:sk|ghp|gho|AIza)-[A-Za-z0-9_\-]{8,}/i.test(rawQuery)
+    || /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AIzaSy[A-Za-z0-9_-]{20,})/.test(rawQuery)
+    || /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+/i.test(rawQuery)
+  ) {
+    return undefined;
+  }
+
+  const sanitized = sanitizeAndRedactDetail(rawQuery, 150);
+  if (!sanitized || sanitized.includes("[REDACTED")) {
+    return undefined;
+  }
+
+  return sanitized;
+}
+
+function extractSearchResultSummary(data: Record<string, unknown>, event: Record<string, unknown>): string | undefined {
+  const resultRecord = recordOf(data.result) ?? recordOf(event.result);
+  let count: number | undefined;
+
+  if (resultRecord) {
+    if (Array.isArray(resultRecord.matches)) count = resultRecord.matches.length;
+    else if (Array.isArray(resultRecord.results)) count = resultRecord.results.length;
+    else if (Array.isArray(resultRecord.references)) count = resultRecord.references.length;
+    else if (Array.isArray(resultRecord.documents)) count = resultRecord.documents.length;
+    else if (Array.isArray(resultRecord.chunks)) count = resultRecord.chunks.length;
+    else if (Array.isArray(resultRecord.items)) count = resultRecord.items.length;
+    else if (typeof resultRecord.total === "number" && Number.isFinite(resultRecord.total) && resultRecord.total >= 0) {
+      count = Math.round(resultRecord.total);
+    } else if (typeof resultRecord.count === "number" && Number.isFinite(resultRecord.count) && resultRecord.count >= 0) {
+      count = Math.round(resultRecord.count);
+    } else if (typeof resultRecord.matches_count === "number" && Number.isFinite(resultRecord.matches_count) && resultRecord.matches_count >= 0) {
+      count = Math.round(resultRecord.matches_count);
+    }
+  } else if (Array.isArray(data.result)) {
+    count = data.result.length;
+  } else if (Array.isArray(event.result)) {
+    count = event.result.length;
+  } else if (Array.isArray(data.matches)) {
+    count = data.matches.length;
+  } else if (Array.isArray(event.matches)) {
+    count = event.matches.length;
+  } else if (typeof data.count === "number" && Number.isFinite(data.count) && data.count >= 0) {
+    count = Math.round(data.count);
+  }
+
+  if (count === undefined) return undefined;
+  return count === 1 ? "1 Treffer" : `${count} Treffer`;
+}
+
+function extractProviderReasoningContent(event: Record<string, unknown>, data: Record<string, unknown>): string | undefined {
+  // Prefer canonical top-level SSE content
+  if (typeof event.content === "string" && event.content.length > 0) {
+    return event.content;
+  }
+
+  // Documented bounded fallbacks in order of preference
+  const fallbacks: unknown[] = [
+    event.reasoning_content,
+    event.thought,
+    event.reasoning,
+    event.reflection,
+    data.content,
+    data.reasoning_content,
+    data.thought,
+    data.reasoning,
+    data.reflection,
+  ];
+
+  for (const fallback of fallbacks) {
+    if (typeof fallback === "string" && fallback.trim().length > 0) {
+      return fallback;
+    }
+  }
+
+  const thinkingData = recordOf(data.thinking) ?? recordOf(event.thinking);
+  if (thinkingData) {
+    const text = thinkingData.content ?? thinkingData.text;
+    if (typeof text === "string" && text.trim().length > 0) {
+      return text;
+    }
+  }
+
+  const reflectionData = recordOf(data.reflection) ?? recordOf(event.reflection);
+  if (reflectionData) {
+    const text = reflectionData.content ?? reflectionData.text;
+    if (typeof text === "string" && text.trim().length > 0) {
+      return text;
+    }
+  }
+
+  return undefined;
+}
+
 export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate {
   const event = recordOf(value);
   if (!event) return { fatalError: false, unsupported: false };
@@ -202,6 +450,8 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
 
   if (responseType === "thinking") {
     const done = data.done === true || event.done === true;
+    const rawContent = extractProviderReasoningContent(event, data);
+    const detail = rawContent ? sanitizeAndRedactDetail(rawContent) : undefined;
     return {
       fatalError: false,
       unsupported: false,
@@ -210,12 +460,15 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
         kind: "analysis",
         status: done ? "completed" : "running",
         label: done ? "Anfrage analysiert" : "Anfrage wird analysiert",
+        ...(detail ? { detail } : {}),
       },
     };
   }
 
   if (responseType === "reflection") {
     const done = data.done === true || event.done === true;
+    const rawContent = extractProviderReasoningContent(event, data);
+    const detail = rawContent ? sanitizeAndRedactDetail(rawContent) : undefined;
     return {
       fatalError: false,
       unsupported: false,
@@ -224,6 +477,7 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
         kind: "evaluation",
         status: done ? "completed" : "running",
         label: done ? "Rechercheergebnisse bewertet" : "Rechercheergebnisse werden bewertet",
+        ...(detail ? { detail } : {}),
       },
     };
   }
@@ -261,9 +515,22 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
       label = config.failed;
     }
 
-    const duration = durationMs(data.duration_ms ?? data.duration);
-    const counts = config.isPlanning ? extractPlanningCounts(data, event) : null;
-    const detail = counts ? formatPlanningDetail(counts) : undefined;
+    const duration = durationMs(data.duration_ms ?? data.duration ?? event.duration_ms ?? event.duration);
+    let detail: string | undefined;
+    let counts: FredPlanningCounts | null = null;
+
+    if (config.isPlanning) {
+      counts = extractPlanningCounts(data, event);
+      const items = extractPlanningItems(data, event);
+      detail = counts ? formatPlanningDetailWithItems(counts, items) : undefined;
+    } else if (config.kind === "knowledge" || config.kind === "web") {
+      if (responseType === "tool_call") {
+        const query = extractSafeSearchQuery(data, event);
+        detail = query ? `Suche: ${query}` : undefined;
+      } else if (responseType === "tool_result" && successful) {
+        detail = extractSearchResultSummary(data, event);
+      }
+    }
 
     return {
       fatalError: false,
@@ -288,9 +555,37 @@ export function mergeFredExecutionStep(
   update: FredExecutionStep,
 ): FredExecutionStep[] {
   const existingIndex = steps.findIndex((step) => step.id === update.id);
-  if (existingIndex < 0) return [...steps, update].slice(-200);
+  if (existingIndex < 0) {
+    return [...steps, update].slice(-MAX_EXECUTION_STEPS);
+  }
+
+  const existing = steps[existingIndex];
+  let detail = existing.detail;
+  if (update.detail !== undefined && update.detail !== "") {
+    if (!existing.detail) {
+      detail = update.detail;
+    } else if (update.detail.startsWith(existing.detail)) {
+      detail = update.detail;
+    } else if (existing.detail.startsWith(update.detail)) {
+      detail = existing.detail;
+    } else if (existing.kind === "analysis" || existing.kind === "evaluation") {
+      detail = sanitizeAndRedactDetail(existing.detail + update.detail, MAX_EXECUTION_DETAIL_CHARS);
+    } else {
+      detail = update.detail;
+    }
+  }
+
+  const merged: FredExecutionStep = {
+    ...existing,
+    ...update,
+    ...(detail !== undefined ? { detail } : {}),
+  };
+  if (detail === undefined) {
+    delete merged.detail;
+  }
+
   const next = [...steps];
-  next[existingIndex] = { ...next[existingIndex], ...update };
+  next[existingIndex] = merged;
   return next;
 }
 
@@ -299,29 +594,32 @@ export function parseStoredFredExecutionTrace(value: unknown): FredExecutionStep
   const validKinds = new Set(["analysis", "planning", "knowledge", "web", "tool", "evaluation", "sources"]);
   const validStatuses = new Set(["running", "completed", "failed"]);
 
-  return value.slice(0, 200).flatMap((candidate) => {
+  return value.slice(0, MAX_EXECUTION_STEPS).flatMap((candidate) => {
     const item = recordOf(candidate);
     if (!item) return [];
 
     const id = boundedText(item.id, 180);
     const kind = boundedText(item.kind, 30) as FredExecutionStepKind;
     const status = boundedText(item.status, 30) as FredExecutionStepStatus;
-    const label = boundedText(item.label, 200);
+    const label = boundedText(item.label, MAX_EXECUTION_LABEL_CHARS);
 
     if (!id || !validKinds.has(kind) || !validStatuses.has(status) || !label) {
       return [];
     }
 
-    const detail = boundedText(item.detail, 500);
+    const rawDetail = typeof item.detail === "string" ? item.detail : undefined;
+    const detail = rawDetail
+      ? sanitizeAndRedactDetail(rawDetail, MAX_EXECUTION_DETAIL_CHARS)
+      : undefined;
     const duration = durationMs(item.durationMs);
 
     let counts: FredPlanningCounts | undefined;
     const rawCounts = recordOf(item.counts);
     if (rawCounts) {
-      const total = typeof rawCounts.total === "number" ? rawCounts.total : undefined;
-      const completed = typeof rawCounts.completed === "number" ? rawCounts.completed : undefined;
-      const inProgress = typeof rawCounts.inProgress === "number" ? rawCounts.inProgress : undefined;
-      const open = typeof rawCounts.open === "number" ? rawCounts.open : undefined;
+      const total = typeof rawCounts.total === "number" && Number.isFinite(rawCounts.total) && rawCounts.total >= 0 ? Math.round(rawCounts.total) : undefined;
+      const completed = typeof rawCounts.completed === "number" && Number.isFinite(rawCounts.completed) && rawCounts.completed >= 0 ? Math.round(rawCounts.completed) : undefined;
+      const inProgress = typeof rawCounts.inProgress === "number" && Number.isFinite(rawCounts.inProgress) && rawCounts.inProgress >= 0 ? Math.round(rawCounts.inProgress) : undefined;
+      const open = typeof rawCounts.open === "number" && Number.isFinite(rawCounts.open) && rawCounts.open >= 0 ? Math.round(rawCounts.open) : undefined;
       if (total !== undefined || completed !== undefined || inProgress !== undefined || open !== undefined) {
         counts = {
           ...(total !== undefined ? { total } : {}),

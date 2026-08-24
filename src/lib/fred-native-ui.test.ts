@@ -606,6 +606,12 @@ describe("Fred ResearchTrace rendering", () => {
     expect(viewSource).toContain("className=\"fred-execution-detail\"");
   });
 
+  it("retains an advanced trace when a turn fails before the first answer delta", () => {
+    expect(viewSource).toMatch(/hasAnswerContent \|\| \(\s*researchDisplayMode === "advanced"/u);
+    expect(viewSource).toContain("executionTrace.length > 0 || researchTrace.length > 0 || sourceReferences.length > 0");
+    expect(viewSource).toContain("content: answerChunks.join(\"\")");
+  });
+
   it("defines consistent CSS styles for execution steps in globals.css", () => {
     expect(cssSource).toContain(".fred-execution-steps");
     expect(cssSource).toContain(".fred-execution-status");
