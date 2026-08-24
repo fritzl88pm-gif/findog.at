@@ -18,7 +18,11 @@ import {
   type FredResearchStep,
   type FredSourceReference,
 } from "@/lib/weknora/fred-research";
-
+import {
+  mergeFredExecutionStep,
+  parseWeKnoraExecutionEvent,
+  type FredExecutionStep,
+} from "./execution-trace";
 
 import type {
   FredTurnAttachmentMeta,
@@ -124,6 +128,7 @@ export interface TurnServicePersistenceDeps {
     weknoraAgentId: string;
     displayContent?: string;
     researchTrace?: FredResearchStep[];
+    executionTrace?: FredExecutionStep[];
     sourceReferences?: FredSourceReference[];
   }): Promise<{
     conversation: { id: string; title: string; createdAt: string; updatedAt: string; agentKey: FredAgentKey };
@@ -249,8 +254,10 @@ export async function* executeFredTurn(
 
   // Hoisted above the try block so the explicit-stop path (and the catch
   // block) can see whatever was accumulated/persisted so far.
+  const isAdvanced = request.researchDisplayMode === "advanced";
   const answerChunks: string[] = [];
   let researchTrace: FredResearchStep[] = [];
+  let executionTrace: FredExecutionStep[] = [];
   let sourceReferences: FredSourceReference[] = [];
 
   let acceptingCitationUpdates = true;
@@ -440,6 +447,7 @@ export async function* executeFredTurn(
     // ── BFG citation pipeline ───────────────────────────────────────────────
     const verifiedCitations = new Map<string, VerifiedBfgCitation>();
     const pendingCitationSteps: FredResearchStep[] = [];
+    const pendingExecCitationSteps: FredExecutionStep[] = [];
 
     const verifyFinalCitations = async (text: string) => {
       const candidates = [
@@ -471,6 +479,17 @@ export async function* executeFredTurn(
         };
         researchTrace = mergeFredResearchStep(researchTrace, verificationStep);
         pendingCitationSteps.push(verificationStep);
+
+        if (isAdvanced) {
+          const execVerificationStep: FredExecutionStep = {
+            id: `findok:${resolution.gz}`,
+            kind: "sources",
+            status: "completed",
+            label: `BFG-Fundstelle ${resolution.gz} verifiziert`,
+          };
+          executionTrace = mergeFredExecutionStep(executionTrace, execVerificationStep);
+          pendingExecCitationSteps.push(execVerificationStep);
+        }
       }
     };
 
@@ -511,6 +530,13 @@ export async function* executeFredTurn(
         researchTrace = mergeFredResearchStep(researchTrace, research.step);
         // yield is handled by caller
       }
+      if (isAdvanced) {
+        const exec = parseWeKnoraExecutionEvent(parsed);
+        if (exec.step) {
+          executionTrace = mergeFredExecutionStep(executionTrace, exec.step);
+          // yield is handled by caller
+        }
+      }
       const event = upstreamDelta(parsed);
       if (event.content) {
         answerChunks.push(event.content);
@@ -520,6 +546,7 @@ export async function* executeFredTurn(
 
     // ── Stream processing loop ──────────────────────────────────────────────
     const yieldedResearchSteps = new Map<string, string>();
+    const yieldedExecutionSteps = new Map<string, string>();
     let yieldedChunkCount = 0;
     while (true) {
       const readResult = request.signal
@@ -547,6 +574,15 @@ export async function* executeFredTurn(
             yield { type: "research", step };
           }
         }
+        if (isAdvanced) {
+          for (const step of executionTrace) {
+            const signature = JSON.stringify(step);
+            if (step.id && step.kind && yieldedExecutionSteps.get(step.id) !== signature) {
+              yieldedExecutionSteps.set(step.id, signature);
+              yield { type: "execution", step };
+            }
+          }
+        }
         // Yield any new content chunks from this frame
         for (const chunk of answerChunks.slice(yieldedChunkCount)) {
           yield { type: "delta", content: chunk };
@@ -562,6 +598,7 @@ export async function* executeFredTurn(
         rawAnswer: answerChunks.join(""),
         conversation,
         researchTrace,
+        executionTrace: isAdvanced ? executionTrace : undefined,
         sourceReferences,
         stopped: true,
       };
@@ -586,6 +623,15 @@ export async function* executeFredTurn(
         yield { type: "research", step };
       }
     }
+    if (isAdvanced) {
+      for (const step of executionTrace) {
+        const signature = JSON.stringify(step);
+        if (step.id && step.kind && yieldedExecutionSteps.get(step.id) !== signature) {
+          yieldedExecutionSteps.set(step.id, signature);
+          yield { type: "execution", step };
+        }
+      }
+    }
 
     await verifyFinalCitations(plainFinalAnswer);
     // Flush any pending citation research steps
@@ -594,6 +640,15 @@ export async function* executeFredTurn(
       if (step.id && step.kind && yieldedResearchSteps.get(step.id) !== signature) {
         yieldedResearchSteps.set(step.id, signature);
         yield { type: "research", step };
+      }
+    }
+    if (isAdvanced) {
+      for (const step of pendingExecCitationSteps) {
+        const signature = JSON.stringify(step);
+        if (step.id && step.kind && yieldedExecutionSteps.get(step.id) !== signature) {
+          yieldedExecutionSteps.set(step.id, signature);
+          yield { type: "execution", step };
+        }
       }
     }
 
@@ -615,6 +670,7 @@ export async function* executeFredTurn(
       webSearchEnabled: false,
       displayContent: finalAnswer,
       researchTrace,
+      executionTrace: isAdvanced ? executionTrace : [],
       sourceReferences,
       proModeEnabled: false,
       agentKey,
@@ -634,6 +690,7 @@ export async function* executeFredTurn(
       assistantMessageId,
       conversation: finalConversation,
       researchTrace,
+      executionTrace: isAdvanced ? executionTrace : undefined,
       sourceReferences,
     };
 
@@ -643,6 +700,7 @@ export async function* executeFredTurn(
       conversation: finalConversation,
       assistantMessageId,
       researchTrace,
+      executionTrace: isAdvanced ? executionTrace : undefined,
       sourceReferences,
       stopped: stopRequested,
     };

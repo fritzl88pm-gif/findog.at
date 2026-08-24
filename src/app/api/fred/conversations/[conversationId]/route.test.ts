@@ -320,4 +320,94 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
     const payload = await response.json();
     expect(payload.messages[0].content).toBe(`Ergebnis: ![Beleg](findog-artifact://${artifactId})`);
   });
+
+  it("selects and parses execution_trace in conversation message history", async () => {
+    const conversationQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          id: "33333333-3333-4333-8333-333333333333",
+          title: "Ausführungsverlauf",
+          created_at: "2026-07-18T07:00:00.000Z",
+          updated_at: "2026-07-18T07:01:00.000Z",
+          agent_key: "fred",
+          origin: "web",
+          telegram_integration_id: null,
+        },
+        error: null,
+      }),
+    };
+    const messageResult = {
+      data: [{
+        id: 1,
+        role: "user",
+        content: "Frage",
+        provider_created_at: "2026-07-18T07:00:00.000Z",
+        created_at: "2026-07-18T07:00:01.000Z",
+        attachments: [],
+        web_search_enabled: false,
+        pro_mode_enabled: false,
+        display_content: null,
+        research_trace: [],
+        execution_trace: [],
+        source_references: [],
+      }, {
+        id: 2,
+        role: "assistant",
+        content: "Antwort",
+        display_content: null,
+        research_trace: [{
+          id: "step-1",
+          kind: "knowledge",
+          status: "completed",
+          label: "Wissensbasis durchsucht",
+        }],
+        execution_trace: [{
+          id: "exec-1",
+          kind: "planning",
+          status: "completed",
+          label: "Rechercheplan aktualisiert",
+          detail: "3 Aufgaben geplant",
+          counts: { total: 3, completed: 3, inProgress: 0, open: 0 },
+        }],
+        source_references: [],
+        provider_created_at: "2026-07-18T07:00:02.000Z",
+        created_at: "2026-07-18T07:00:02.000Z",
+        attachments: [],
+        web_search_enabled: false,
+        pro_mode_enabled: false,
+      }],
+      error: null,
+    };
+    const messagesQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      then: (resolve: (value: typeof messageResult) => unknown) => resolve(messageResult),
+    };
+    vi.mocked(getSupabaseServerClient).mockReturnValue({
+      from: vi.fn((table: string) => (
+        table === "fred_conversations" ? conversationQuery : messagesQuery
+      )),
+    } as never);
+
+    const response = await GET(
+      new Request("https://findog.at/api/fred/conversations/33333333-3333-4333-8333-333333333333", {
+        headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
+      }),
+      { params: Promise.resolve({ conversationId: "33333333-3333-4333-8333-333333333333" }) },
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.messages[1].executionTrace).toEqual([{
+      id: "exec-1",
+      kind: "planning",
+      status: "completed",
+      label: "Rechercheplan aktualisiert",
+      detail: "3 Aufgaben geplant",
+      counts: { total: 3, completed: 3, inProgress: 0, open: 0 },
+    }]);
+  });
 });

@@ -1870,11 +1870,31 @@ describe("POST /api/fred/chat", () => {
       }));
     });
 
-    it("returns no personalization when profile definition is missing (null data, null error)", async () => {
+    it("leaves the upstream query unchanged when preferences are standard + empty name", async () => {
+      const mock = supabaseWithPreferences({ preferred_name: null, personality: "standard" });
+      vi.mocked(getSupabaseServerClient).mockReturnValue(mock);
+
+      const response = await POST(request({ query: "Test" }));
+      await response.text();
+
+      expect(openFredUpstreamStream).toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: "Test",
+        }),
+      );
+      const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
+      expect(callQuery).not.toContain("<user_personalization>");
+      expect(callQuery).not.toContain("name");
+    });
+
+    it("ignores missing profile and leaves upstream query unpersonalized without failing the turn", async () => {
       const rpc = rpcForTurn();
 
-      // Preferences: user has name and a personality ID
-      const prefMaybeSingle = vi.fn().mockResolvedValue({ data: { preferred_name: "Heinz", personality: "deleted-profile" }, error: null });
+      // Preferences point to a non-existent personality profile 'unknown-xyz'
+      const prefMaybeSingle = vi.fn().mockResolvedValue({
+        data: { preferred_name: "Heinz", personality: "unknown-xyz" },
+        error: null,
+      });
       const prefChain = { select: vi.fn(), eq: vi.fn(), maybeSingle: prefMaybeSingle };
       prefChain.select.mockReturnValue(prefChain);
       prefChain.eq.mockReturnValue(prefChain);
@@ -1885,10 +1905,17 @@ describe("POST /api/fred/chat", () => {
       profileChain.select.mockReturnValue(profileChain);
       profileChain.eq.mockReturnValue(profileChain);
 
+      const convChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+      };
+
       const from = vi.fn((table: string) => {
         if (table === "fred_user_preferences") return prefChain;
         if (table === "fred_personality_profiles") return profileChain;
-        return prefChain;
+        if (table === "fred_conversations") return convChain;
+        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }), insert: vi.fn().mockResolvedValue({ error: null }) };
       }) as never;
       vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
 
@@ -1901,6 +1928,149 @@ describe("POST /api/fred/chat", () => {
       const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
       expect(callQuery).not.toContain("<user_personalization>");
       expect(callQuery).not.toContain("Heinz");
+    });
+  });
+
+  describe("research display mode preference", () => {
+    const DISP_USER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+    beforeEach(() => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: DISP_USER_ID });
+    });
+
+    function upstreamStreamWithToolCall(): Response {
+      return new Response([
+        'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+        'data: {"response_type":"tool_call","data":{"tool_name":"web_search","tool_call_id":"tc-1","arguments":{"query":"test"}}}\n\n',
+        'data: {"response_type":"tool_result","data":{"tool_name":"web_search","tool_call_id":"tc-1","result":{"status":"ok"},"duration_ms":250}}\n\n',
+        'data: {"response_type":"answer","content":"Ergebnis","done":true}\n\n',
+        'data: {"response_type":"complete","data":{}}\n\n',
+      ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    }
+
+    it("emits execution events and persists execution trace when user preference is advanced", async () => {
+      const rpc = rpcForTurn();
+      vi.mocked(openFredUpstreamStream).mockImplementation(async () => upstreamStreamWithToolCall());
+
+      const prefChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({
+          data: { preferred_name: null, personality: "standard", research_display_mode: "advanced" },
+          error: null,
+        }),
+      };
+      const profileChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({
+          data: { prompt_text: "" },
+          error: null,
+        }),
+      };
+      const convChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+      };
+      const from = vi.fn((table: string) => {
+        if (table === "fred_user_preferences") return prefChain;
+        if (table === "fred_personality_profiles") return profileChain;
+        if (table === "fred_conversations") return convChain;
+        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }), insert: vi.fn().mockResolvedValue({ error: null }) };
+      }) as never;
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+
+      const response = await POST(request({ query: "Wie ist die Rechtslage?" }));
+      const events = (await response.text())
+        .split("\n")
+        .map(parseFredNativeStreamLine)
+        .filter(Boolean);
+
+      const executionEvents = events.filter((e) => e?.type === "execution");
+      expect(executionEvents.length).toBeGreaterThan(0);
+      expect(executionEvents[0]).toMatchObject({
+        type: "execution",
+        step: expect.objectContaining({
+          id: expect.stringMatching(/^web:/u),
+          kind: "web",
+        }),
+      });
+
+      const finalEvent = events.find((e) => e?.type === "final");
+      expect(finalEvent).toMatchObject({
+        type: "final",
+        executionTrace: expect.arrayContaining([
+          expect.objectContaining({ id: expect.stringMatching(/^web:/u), kind: "web", status: "completed" }),
+        ]),
+      });
+
+      expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
+        payload: expect.objectContaining({
+          event_type: "message_received",
+          execution_trace: expect.arrayContaining([
+            expect.objectContaining({ id: expect.stringMatching(/^web:/u), kind: "web", status: "completed" }),
+          ]),
+        }),
+      });
+    });
+
+    it("does not emit execution events when user preference is simple even if client requested otherwise", async () => {
+      const rpc = rpcForTurn();
+      vi.mocked(openFredUpstreamStream).mockImplementation(async () => upstreamStreamWithToolCall());
+
+      const prefChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({
+          data: { preferred_name: null, personality: "standard", research_display_mode: "simple" },
+          error: null,
+        }),
+      };
+      const profileChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({
+          data: { prompt_text: "" },
+          error: null,
+        }),
+      };
+      const convChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+      };
+      const from = vi.fn((table: string) => {
+        if (table === "fred_user_preferences") return prefChain;
+        if (table === "fred_personality_profiles") return profileChain;
+        if (table === "fred_conversations") return convChain;
+        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }), insert: vi.fn().mockResolvedValue({ error: null }) };
+      }) as never;
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+
+      const response = await POST(request({ query: "Wie ist die Rechtslage?", researchDisplayMode: "advanced" }));
+      const events = (await response.text())
+        .split("\n")
+        .map(parseFredNativeStreamLine)
+        .filter(Boolean);
+
+      const executionEvents = events.filter((e) => e?.type === "execution");
+      expect(executionEvents).toHaveLength(0);
+
+      const finalEvent = events.find((e) => e?.type === "final");
+      expect(finalEvent).toMatchObject({
+        type: "final",
+      });
+      if (finalEvent && "executionTrace" in finalEvent) {
+        expect(finalEvent.executionTrace).toBeUndefined();
+      }
+
+      expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
+        payload: expect.objectContaining({
+          event_type: "message_received",
+          execution_trace: [],
+        }),
+      });
     });
   });
 

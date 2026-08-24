@@ -49,6 +49,10 @@ import {
   type FredSourceReference,
 } from "@/lib/weknora/fred-research";
 import {
+  mergeFredExecutionStep,
+  type FredExecutionStep,
+} from "@/lib/fred/execution-trace";
+import {
   fredAgentName,
   type FredAgentKey,
 } from "@/lib/weknora/fred-agent";
@@ -63,6 +67,7 @@ export type FredNativeMessage = {
   webSearchEnabled?: boolean;
   proModeEnabled?: boolean;
   researchTrace?: FredResearchStep[];
+  executionTrace?: FredExecutionStep[];
   sourceReferences?: FredSourceReference[];
 };
 export type FredNativeAttachment = {
@@ -118,6 +123,7 @@ type FredNativeChatViewProps = {
   readOnly?: boolean;
   readOnlyNotice?: string;
   telegramBotUrl?: string;
+  researchDisplayMode?: "simple" | "advanced";
   renderAssistantContent: (content: string) => ReactNode;
   renderUserContent: (content: string) => ReactNode;
   onConversationUpdated: (
@@ -179,36 +185,74 @@ function ResearchTrace({
   sources,
   active,
   agentName,
+  executionSteps,
+  displayMode = "simple",
 }: {
   steps: FredResearchStep[];
   sources: FredSourceReference[];
   active: boolean;
   agentName: "Fred" | "QuickFred";
+  executionSteps?: FredExecutionStep[];
+  displayMode?: "simple" | "advanced";
 }) {
-  if (steps.length === 0 && sources.length === 0) return null;
-  const completed = steps.filter((step) => step.status === "completed").length;
-  const summary = active
-    ? `${agentName} recherchiert …`
-    : `Rechercheverlauf${completed > 0 ? ` · ${completed} Schritte` : ""}`;
+  const isAdvanced = displayMode === "advanced" && Boolean(executionSteps && executionSteps.length > 0);
+  if (!isAdvanced && steps.length === 0 && sources.length === 0) return null;
+  if (isAdvanced && (!executionSteps || executionSteps.length === 0) && sources.length === 0) return null;
+
+  const completed = isAdvanced
+    ? (executionSteps?.filter((step) => step.status === "completed").length ?? 0)
+    : steps.filter((step) => step.status === "completed").length;
+
+  const summary = isAdvanced
+    ? (active
+        ? `${agentName} führt Recherche aus …`
+        : `Ausführungsverlauf${completed > 0 ? ` · ${completed} Schritte` : ""}`)
+    : (active
+        ? `${agentName} recherchiert …`
+        : `Rechercheverlauf${completed > 0 ? ` · ${completed} Schritte` : ""}`);
+
   return (
     <details className="fred-research-trace" open={active}>
       <summary>
         <span className={active ? "fred-research-pulse" : "fred-research-check"} aria-hidden="true" />
         {summary}
       </summary>
-      <ol className="fred-research-steps">
-        {steps.map((step) => (
-          <li className={`is-${step.status}`} key={step.id}>
-            <span className="fred-research-status" aria-hidden="true" />
-            <span>
-              {step.label}
-              {step.durationMs !== undefined ? (
-                <small>{(step.durationMs / 1_000).toLocaleString("de-AT", { maximumFractionDigits: 1 })} s</small>
-              ) : null}
-            </span>
-          </li>
-        ))}
-      </ol>
+      {isAdvanced && executionSteps ? (
+        <ol className="fred-execution-steps">
+          {executionSteps.map((step) => (
+            <li className={`is-${step.status} kind-${step.kind}`} key={step.id}>
+              <span className="fred-execution-status" aria-hidden="true" />
+              <div className="fred-execution-body">
+                <div className="fred-execution-header">
+                  <span className="fred-execution-label">{step.label}</span>
+                  {step.durationMs !== undefined ? (
+                    <small className="fred-execution-duration">
+                      {(step.durationMs / 1_000).toLocaleString("de-AT", { maximumFractionDigits: 1 })} s
+                    </small>
+                  ) : null}
+                </div>
+                {step.detail ? (
+                  <div className="fred-execution-detail">{step.detail}</div>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <ol className="fred-research-steps">
+          {steps.map((step) => (
+            <li className={`is-${step.status}`} key={step.id}>
+              <span className="fred-research-status" aria-hidden="true" />
+              <span>
+                {step.label}
+                {step.durationMs !== undefined ? (
+                  <small>{(step.durationMs / 1_000).toLocaleString("de-AT", { maximumFractionDigits: 1 })} s</small>
+                ) : null}
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
       {sources.length > 0 ? (
         <div className="fred-research-sources">
           <strong>Gefundene Quellen</strong>
@@ -345,6 +389,7 @@ export default function FredNativeChatView({
   readOnly = false,
   readOnlyNotice,
   telegramBotUrl,
+  researchDisplayMode = "simple",
   renderAssistantContent,
   renderUserContent,
   onConversationUpdated,
@@ -654,6 +699,7 @@ export default function FredNativeChatView({
     let answerChunks: string[] = [];
     let hasAnswerContent = false;
     let researchTrace: FredResearchStep[] = [];
+    let executionTrace: FredExecutionStep[] = [];
     let sourceReferences: FredSourceReference[] = [];
     let receivedFinal = false;
     try {
@@ -735,6 +781,17 @@ export default function FredNativeChatView({
           researchTrace = mergeFredResearchStep(researchTrace, streamEvent.step);
           setActiveAssistant((current) => current ? {
             ...current,
+            executionTrace,
+            researchTrace,
+            sourceReferences,
+          } : current);
+          return;
+        }
+        if (streamEvent.type === "execution") {
+          executionTrace = mergeFredExecutionStep(executionTrace, streamEvent.step);
+          setActiveAssistant((current) => current ? {
+            ...current,
+            executionTrace,
             researchTrace,
             sourceReferences,
           } : current);
@@ -743,6 +800,7 @@ export default function FredNativeChatView({
         answerChunks = [streamEvent.answer];
         hasAnswerContent = streamEvent.answer.trim() !== "";
         researchTrace = streamEvent.researchTrace ?? researchTrace;
+        executionTrace = streamEvent.executionTrace ?? executionTrace;
         sourceReferences = streamEvent.sourceReferences ?? sourceReferences;
         receivedFinal = true;
         activeConversationIdRef.current = streamEvent.conversation.id;
@@ -752,6 +810,7 @@ export default function FredNativeChatView({
           ...assistantMessage,
           content: streamEvent.answer,
           researchTrace,
+          executionTrace,
           sourceReferences,
         };
         if (streamEvent.assistantMessageId !== undefined) {
@@ -797,6 +856,7 @@ export default function FredNativeChatView({
             ...assistantMessage,
             content: partialAnswer,
             researchTrace,
+            executionTrace,
             sourceReferences,
           },
         ]);
@@ -1531,6 +1591,8 @@ export default function FredNativeChatView({
                 {message.role === "assistant" && message.content ? (
                   <ResearchTrace
                     steps={message.researchTrace ?? []}
+                    executionSteps={message.executionTrace}
+                    displayMode={researchDisplayMode}
                     sources={message.sourceReferences ?? []}
                     active={false}
                     agentName={fredAgentName(message.agentKey)}
@@ -1675,6 +1737,8 @@ export default function FredNativeChatView({
                 />
                 <ResearchTrace
                   steps={activeAssistant.researchTrace ?? []}
+                  executionSteps={activeAssistant.executionTrace}
+                  displayMode={researchDisplayMode}
                   sources={activeAssistant.sourceReferences ?? []}
                   active
                   agentName={fredAgentName(activeAssistant.agentKey)}

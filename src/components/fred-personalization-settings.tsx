@@ -37,12 +37,15 @@ function resolvePersonality(
 
 export default function FredPersonalizationSettings({
   accessToken,
+  onResearchDisplayModeChange,
 }: {
   accessToken: string;
+  onResearchDisplayModeChange?: (mode: "simple" | "advanced") => void;
 }) {
   const [preferredName, setPreferredName] = useState("");
   const [personality, setPersonality] = useState<string>("");
   const [personalities, setPersonalities] = useState<PersonalityOption[]>([]);
+  const [researchDisplayMode, setResearchDisplayMode] = useState<"simple" | "advanced">("simple");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
@@ -86,10 +89,13 @@ export default function FredPersonalizationSettings({
 
       const name = typeof payload.preferredName === "string" ? payload.preferredName : "";
       const options = normalizePersonalityOptions(payload.personalities);
+      const mode = payload.researchDisplayMode === "advanced" ? "advanced" : "simple";
 
       setPreferredName(name);
       setPersonalities(options);
       setPersonality(resolvePersonality(payload.personality, options));
+      setResearchDisplayMode(mode);
+      onResearchDisplayModeChange?.(mode);
     } catch {
       if (mountedRef.current && !controller.signal.aborted && sequence === requestSequenceRef.current) {
         setError("Fred-Personalisierung konnte nicht geladen werden.");
@@ -100,7 +106,7 @@ export default function FredPersonalizationSettings({
         setIsLoading(false);
       }
     }
-  }, [accessToken]);
+  }, [accessToken, onResearchDisplayModeChange]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -136,7 +142,7 @@ export default function FredPersonalizationSettings({
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ preferredName, personality }),
+        body: JSON.stringify({ preferredName, personality, researchDisplayMode }),
         signal: controller.signal,
       });
       const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -151,10 +157,13 @@ export default function FredPersonalizationSettings({
       const name = typeof payload.preferredName === "string" ? payload.preferredName : preferredName;
       const options = normalizePersonalityOptions(payload.personalities);
       const pers = resolvePersonality(payload.personality, options);
+      const mode = payload.researchDisplayMode === "advanced" ? "advanced" : "simple";
 
       setPreferredName(name);
       setPersonalities(options);
       setPersonality(pers);
+      setResearchDisplayMode(mode);
+      onResearchDisplayModeChange?.(mode);
       setNotice("Personalisierung gespeichert.");
     } catch {
       if (mountedRef.current && !controller.signal.aborted) {
@@ -164,7 +173,7 @@ export default function FredPersonalizationSettings({
       controllersRef.current.delete(controller);
       if (mountedRef.current) setIsSaving(false);
     }
-  }, [accessToken, preferredName, personality, canSave]);
+  }, [accessToken, preferredName, personality, researchDisplayMode, canSave, onResearchDisplayModeChange]);
 
   if (isLoading) {
     return (
@@ -226,6 +235,44 @@ export default function FredPersonalizationSettings({
             </span>
           </label>
         ))}
+      </fieldset>
+
+      <fieldset className="fred-personality-fieldset" disabled={isSaving || !accessToken}>
+        <legend>Rechercheanzeige</legend>
+        <label className="fred-personality-radio-label">
+          <input
+            type="radio"
+            name="fred-research-display-mode"
+            value="simple"
+            checked={researchDisplayMode === "simple"}
+            onChange={() => {
+              setResearchDisplayMode("simple");
+              setError("");
+              setNotice("");
+            }}
+          />
+          <span className="fred-personality-radio-text">
+            <strong>Einfach</strong>
+            <small className="field-help">Kompakter Rechercheverlauf</small>
+          </span>
+        </label>
+        <label className="fred-personality-radio-label">
+          <input
+            type="radio"
+            name="fred-research-display-mode"
+            value="advanced"
+            checked={researchDisplayMode === "advanced"}
+            onChange={() => {
+              setResearchDisplayMode("advanced");
+              setError("");
+              setNotice("");
+            }}
+          />
+          <span className="fred-personality-radio-text">
+            <strong>Erweitert</strong>
+            <small className="field-help">Ausführungsverlauf mit Planung, Suche und Bewertung</small>
+          </span>
+        </label>
       </fieldset>
 
       <button

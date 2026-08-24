@@ -85,6 +85,11 @@ import {
   type FredSourceReference,
 } from "@/lib/weknora/fred-research";
 import {
+  mergeFredExecutionStep,
+  parseWeKnoraExecutionEvent,
+  type FredExecutionStep,
+} from "@/lib/fred/execution-trace";
+import {
   createGenerationRun,
   updateGenerationRun,
   formatExactModelRoute,
@@ -381,6 +386,7 @@ async function recordEvent(options: {
   weknoraAgentId: string;
   displayContent?: string;
   researchTrace?: FredResearchStep[];
+  executionTrace?: FredExecutionStep[];
   sourceReferences?: FredSourceReference[];
 }) {
   const payload = {
@@ -399,6 +405,7 @@ async function recordEvent(options: {
     ...(options.displayContent !== undefined ? {
       display_content: options.displayContent,
       research_trace: options.researchTrace ?? [],
+      execution_trace: options.executionTrace ?? [],
       source_references: options.sourceReferences ?? [],
       content_transformation: FRED_CONTENT_TRANSFORMATION,
     } : {}),
@@ -624,6 +631,7 @@ function buildWebTurnPersistence(
         weknoraAgentId: params.weknoraAgentId,
         displayContent: params.displayContent,
         researchTrace: params.researchTrace,
+        executionTrace: params.executionTrace,
         sourceReferences: params.sourceReferences,
       });
     },
@@ -667,21 +675,27 @@ function buildWebTurnConfig(
   };
 }
 
-async function loadUserPersonalizationBlock(
+async function loadUserPreferences(
   supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
   userId: string,
-): Promise<string> {
+): Promise<{ personalizationBlock: string; researchDisplayMode: "simple" | "advanced" }> {
   try {
     const { data: prefData, error: prefError } = await supabase
       .from("fred_user_preferences")
-      .select("preferred_name,personality")
+      .select("preferred_name,personality,research_display_mode")
       .eq("user_id", userId)
       .maybeSingle();
 
-    if (prefError) return "";
+    const researchDisplayMode: "simple" | "advanced" = prefData?.research_display_mode === "advanced"
+      ? "advanced"
+      : "simple";
 
-    const personalityId: string = prefData?.personality ?? "standard";
-    const preferredName: string | null = prefData?.preferred_name ?? null;
+    if (prefError || !prefData) {
+      return { personalizationBlock: "", researchDisplayMode };
+    }
+
+    const personalityId: string = prefData.personality ?? "standard";
+    const preferredName: string | null = prefData.preferred_name ?? null;
 
     // Look up the admin-managed prompt text for this personality.
     const { data: profileData, error: profileError } = await supabase
@@ -693,22 +707,24 @@ async function loadUserPersonalizationBlock(
     if (profileError) {
       // Log a bounded diagnostic — do not leak internal details.
       console.error("fred personalization: failed to load profile prompt_text", personalityId);
-      return "";
+      return { personalizationBlock: "", researchDisplayMode };
     }
 
     if (!profileData) {
       console.error("fred personalization: profile definition missing", personalityId);
-      return "";
+      return { personalizationBlock: "", researchDisplayMode };
     }
 
     const promptText: string = profileData.prompt_text ?? "";
 
-    return buildUserPersonalizationBlock({
+    const personalizationBlock = buildUserPersonalizationBlock({
       promptText,
       preferredName,
     });
+
+    return { personalizationBlock, researchDisplayMode };
   } catch {
-    return "";
+    return { personalizationBlock: "", researchDisplayMode: "simple" };
   }
 }
 
@@ -719,6 +735,7 @@ function streamTextOnlyTurn(options: {
   body: ParsedFredChatRequest;
   agentKey: FredAgentKey;
   personalizationBlock: string;
+  researchDisplayMode: "simple" | "advanced";
 }): Response {
   const encoder = new TextEncoder();
   const registeredConfigs = new Map<string, FredServerConfig>();
@@ -755,6 +772,7 @@ function streamTextOnlyTurn(options: {
             agentKey: options.agentKey,
             webSearchEnabled: options.body.webSearchEnabled,
             proModeEnabled: options.body.proModeEnabled,
+            researchDisplayMode: options.researchDisplayMode,
             signal: streamAbort.signal,
           },
           buildWebTurnUpstream(registeredConfigs),
@@ -813,7 +831,7 @@ export async function POST(request: Request) {
     requireSameSiteRequest(request);
     enforceRateLimit(user.id);
     const body = await readRequestBody(request);
-    const personalizationBlock = await loadUserPersonalizationBlock(supabase, user.id);
+    const { personalizationBlock, researchDisplayMode } = await loadUserPreferences(supabase, user.id);
     const storedConversation = await loadOwnedConversation({
       supabase,
       userId: user.id,
@@ -854,6 +872,7 @@ export async function POST(request: Request) {
         body,
         agentKey,
         personalizationBlock,
+        researchDisplayMode,
       });
     }
     let config: ReturnType<typeof readFredEmbedServerConfig>;
@@ -1174,8 +1193,10 @@ export async function POST(request: Request) {
           };
 
           let buffer = "";
+          const isAdvanced = researchDisplayMode === "advanced";
           const answerChunks: string[] = [];
           let researchTrace: FredResearchStep[] = [];
+          let executionTrace: FredExecutionStep[] = [];
           let sourceReferences: FredSourceReference[] = [];
           const verifiedCitations = new Map<string, VerifiedBfgCitation>();
           const verifyFinalCitations = async (text: string) => {
@@ -1206,6 +1227,17 @@ export async function POST(request: Request) {
               };
               researchTrace = mergeFredResearchStep(researchTrace, verificationStep);
               send(controller, { type: "research", step: verificationStep });
+
+              if (isAdvanced) {
+                const execVerificationStep: FredExecutionStep = {
+                  id: `findok:${resolution.gz}`,
+                  kind: "sources",
+                  status: "completed",
+                  label: `BFG-Fundstelle ${resolution.gz} verifiziert`,
+                };
+                executionTrace = mergeFredExecutionStep(executionTrace, execVerificationStep);
+                send(controller, { type: "execution", step: execVerificationStep });
+              }
             }
           };
           const processFrame = (frame: string) => {
@@ -1241,6 +1273,14 @@ export async function POST(request: Request) {
               researchTrace = mergeFredResearchStep(researchTrace, research.step);
               clearAttachmentStatus();
               send(controller, { type: "research", step: research.step });
+            }
+            if (isAdvanced) {
+              const exec = parseWeKnoraExecutionEvent(parsed);
+              if (exec.step) {
+                executionTrace = mergeFredExecutionStep(executionTrace, exec.step);
+                clearAttachmentStatus();
+                send(controller, { type: "execution", step: exec.step });
+              }
             }
             // Track upstream complete event for EOF detection
             if (isUpstreamCompleteEvent(parsed)) {
@@ -1359,6 +1399,7 @@ export async function POST(request: Request) {
             occurredAt: new Date().toISOString(),
             displayContent: displayAnswer,
             researchTrace,
+            executionTrace: isAdvanced ? executionTrace : [],
             sourceReferences,
             proModeEnabled: false,
             agentKey,
@@ -1389,6 +1430,7 @@ export async function POST(request: Request) {
             answer: displayAnswer,
             conversation: finalConversation,
             researchTrace,
+            executionTrace: isAdvanced ? executionTrace : undefined,
             sourceReferences,
           };
           if (assistantMessageId !== undefined) {

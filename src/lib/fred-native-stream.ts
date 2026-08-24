@@ -8,6 +8,10 @@ import {
   type FredResearchStep,
   type FredSourceReference,
 } from "./weknora/fred-research";
+import {
+  parseStoredFredExecutionTrace,
+  type FredExecutionStep,
+} from "./fred/execution-trace";
 
 export const FRED_NATIVE_STREAM_CONTENT_TYPE = "application/x-ndjson";
 
@@ -24,6 +28,7 @@ export type FredNativeStreamEvent =
   | { type: "delta"; content: string }
   | { type: "replace"; answer: string }
   | { type: "research"; step: FredResearchStep }
+  | { type: "execution"; step: FredExecutionStep }
   | { type: "status"; label: string }
   | { type: "status_clear" }
   | {
@@ -32,6 +37,7 @@ export type FredNativeStreamEvent =
     assistantMessageId?: number;
     conversation: FredNativeConversation;
     researchTrace?: FredResearchStep[];
+    executionTrace?: FredExecutionStep[];
     sourceReferences?: FredSourceReference[];
   }
   | { type: "error"; error: string };
@@ -100,6 +106,11 @@ export function parseFredNativeStreamLine(line: string): FredNativeStreamEvent |
     if (!step) throw new Error("Ungültiges Fred-Streaming-Ereignis.");
     return { type: "research", step };
   }
+  if (value.type === "execution") {
+    const step = parseStoredFredExecutionTrace([value.step])[0];
+    if (!step) throw new Error("Ungültiges Fred-Streaming-Ereignis.");
+    return { type: "execution", step };
+  }
   if (value.type === "status") {
     if (typeof value.label !== "string" || !value.label) {
       throw new Error("Ungültiges Fred-Streaming-Ereignis.");
@@ -134,6 +145,9 @@ export function parseFredNativeStreamLine(line: string): FredNativeStreamEvent |
       assistantMessageId,
       conversation,
       researchTrace: parseStoredFredResearchTrace(value.researchTrace),
+      ...(value.executionTrace !== undefined ? {
+        executionTrace: parseStoredFredExecutionTrace(value.executionTrace),
+      } : {}),
       sourceReferences: parseStoredFredSources(value.sourceReferences),
     };
   }

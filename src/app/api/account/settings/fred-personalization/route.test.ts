@@ -116,6 +116,7 @@ describe("GET /api/account/settings/fred-personalization", () => {
     await expect(response.json()).resolves.toEqual({
       preferredName: "",
       personality: "standard",
+      researchDisplayMode: "simple",
       personalities: [
         { id: "standard", title: "Standard" },
         { id: "friendly", title: "Freundlich" },
@@ -129,7 +130,7 @@ describe("GET /api/account/settings/fred-personalization", () => {
 
   it("returns stored preferences when a row exists", async () => {
     const supabase = supabaseClient(
-      { preferred_name: "Alina", personality: "friendly" },
+      { preferred_name: "Alina", personality: "friendly", research_display_mode: "advanced" },
       null,
       BUILTIN_PROFILES,
     );
@@ -141,6 +142,7 @@ describe("GET /api/account/settings/fred-personalization", () => {
     await expect(response.json()).resolves.toEqual({
       preferredName: "Alina",
       personality: "friendly",
+      researchDisplayMode: "advanced",
       personalities: [
         { id: "standard", title: "Standard" },
         { id: "friendly", title: "Freundlich" },
@@ -219,16 +221,21 @@ describe("PUT /api/account/settings/fred-personalization", () => {
     });
   });
 
-  it("upserts preferences and returns them with the personality list", async () => {
+  it("upserts preferences and returns them with the personality list and research display mode", async () => {
     const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
-    const response = await PUT(putRequest({ preferredName: "Alina", personality: "friendly" }));
+    const response = await PUT(putRequest({
+      preferredName: "Alina",
+      personality: "friendly",
+      researchDisplayMode: "advanced",
+    }));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       preferredName: "Alina",
       personality: "friendly",
+      researchDisplayMode: "advanced",
       personalities: [
         { id: "standard", title: "Standard" },
         { id: "friendly", title: "Freundlich" },
@@ -243,6 +250,7 @@ describe("PUT /api/account/settings/fred-personalization", () => {
         user_id: USER_ID,
         preferred_name: "Alina",
         personality: "friendly",
+        research_display_mode: "advanced",
         updated_at: expect.any(String),
       },
       { onConflict: "user_id" },
@@ -253,16 +261,21 @@ describe("PUT /api/account/settings/fred-personalization", () => {
     const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
-    const response = await PUT(putRequest({ preferredName: "  Alina   Marie  ", personality: "standard" }));
+    const response = await PUT(putRequest({
+      preferredName: "  Alina   Marie  ",
+      personality: "standard",
+      researchDisplayMode: "simple",
+    }));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       preferredName: "Alina Marie",
       personality: "standard",
+      researchDisplayMode: "simple",
       personalities: BUILTIN_PROFILES,
     });
     expect(supabase.prefUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({ preferred_name: "Alina Marie" }),
+      expect.objectContaining({ preferred_name: "Alina Marie", research_display_mode: "simple" }),
       expect.anything(),
     );
   });
@@ -271,27 +284,35 @@ describe("PUT /api/account/settings/fred-personalization", () => {
     const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
-    const response = await PUT(putRequest({ preferredName: "   ", personality: "friendly" }));
+    const response = await PUT(putRequest({
+      preferredName: "   ",
+      personality: "friendly",
+      researchDisplayMode: "simple",
+    }));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       preferredName: "",
       personality: "friendly",
+      researchDisplayMode: "simple",
       personalities: BUILTIN_PROFILES,
     });
     expect(supabase.prefUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({ preferred_name: null }),
+      expect.objectContaining({ preferred_name: null, research_display_mode: "simple" }),
       expect.anything(),
     );
   });
 
   it("rejects unknown personality IDs", async () => {
     const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
-    // Simulate profile existence check returning null (not found)
     supabase.profileMaybeSingle.mockResolvedValue({ data: null, error: null });
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
-    const response = await PUT(putRequest({ preferredName: "Alina", personality: "evil" }));
+    const response = await PUT(putRequest({
+      preferredName: "Alina",
+      personality: "evil",
+      researchDisplayMode: "simple",
+    }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
@@ -305,7 +326,10 @@ describe("PUT /api/account/settings/fred-personalization", () => {
     const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
-    const response = await PUT(putRequest({ personality: "friendly" }));
+    const response = await PUT(putRequest({
+      personality: "friendly",
+      researchDisplayMode: "simple",
+    }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
@@ -318,7 +342,10 @@ describe("PUT /api/account/settings/fred-personalization", () => {
     const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
-    const response = await PUT(putRequest({ preferredName: "Alina" }));
+    const response = await PUT(putRequest({
+      preferredName: "Alina",
+      researchDisplayMode: "simple",
+    }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
@@ -327,11 +354,66 @@ describe("PUT /api/account/settings/fred-personalization", () => {
     expect(supabase.prefUpsert).not.toHaveBeenCalled();
   });
 
+  it("rejects missing researchDisplayMode field", async () => {
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
+
+    const response = await PUT(putRequest({
+      preferredName: "Alina",
+      personality: "friendly",
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Ungültiger Request-Body.",
+    });
+    expect(supabase.prefUpsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid researchDisplayMode values", async () => {
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
+
+    const response = await PUT(putRequest({
+      preferredName: "Alina",
+      personality: "friendly",
+      researchDisplayMode: "verbose_debug",
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Ungültiger Rechercheanzeige-Modus.",
+    });
+    expect(supabase.prefUpsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-string researchDisplayMode", async () => {
+    const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
+
+    const response = await PUT(putRequest({
+      preferredName: "Alina",
+      personality: "friendly",
+      researchDisplayMode: 123,
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Ungültiger Rechercheanzeige-Modus.",
+    });
+    expect(supabase.prefUpsert).not.toHaveBeenCalled();
+  });
+
   it("rejects unknown extra field", async () => {
     const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
-    const response = await PUT(putRequest({ preferredName: "Alina", personality: "friendly", hacker: "yes" }));
+    const response = await PUT(putRequest({
+      preferredName: "Alina",
+      personality: "friendly",
+      researchDisplayMode: "simple",
+      hacker: "yes",
+    }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
@@ -344,7 +426,11 @@ describe("PUT /api/account/settings/fred-personalization", () => {
     const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
-    const response = await PUT(putRequest({ preferredName: 123, personality: "friendly" }));
+    const response = await PUT(putRequest({
+      preferredName: 123,
+      personality: "friendly",
+      researchDisplayMode: "simple",
+    }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
@@ -357,7 +443,11 @@ describe("PUT /api/account/settings/fred-personalization", () => {
     const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
-    const response = await PUT(putRequest({ preferredName: "Alina", personality: 123 }));
+    const response = await PUT(putRequest({
+      preferredName: "Alina",
+      personality: 123,
+      researchDisplayMode: "simple",
+    }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
@@ -374,7 +464,11 @@ describe("PUT /api/account/settings/fred-personalization", () => {
     const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
-    const response = await PUT(putRequest({ preferredName: "Alina", personality: "friendly" }));
+    const response = await PUT(putRequest({
+      preferredName: "Alina",
+      personality: "friendly",
+      researchDisplayMode: "simple",
+    }));
 
     expect(response.status).toBe(401);
     expect(supabase.prefUpsert).not.toHaveBeenCalled();
@@ -383,7 +477,11 @@ describe("PUT /api/account/settings/fred-personalization", () => {
   it("fails safely when Supabase is unavailable", async () => {
     vi.mocked(getSupabaseServerClient).mockReturnValue(null);
 
-    const response = await PUT(putRequest({ preferredName: "Alina", personality: "friendly" }));
+    const response = await PUT(putRequest({
+      preferredName: "Alina",
+      personality: "friendly",
+      researchDisplayMode: "simple",
+    }));
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({
@@ -392,12 +490,15 @@ describe("PUT /api/account/settings/fred-personalization", () => {
   });
 
   it("fails safely on personality lookup error", async () => {
-    // Simulate profile existence check returning error
     const supabase = supabaseClient(null, null, BUILTIN_PROFILES);
     supabase.profileMaybeSingle.mockResolvedValue({ data: null, error: new Error("db-down") });
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client);
 
-    const response = await PUT(putRequest({ preferredName: "Alina", personality: "friendly" }));
+    const response = await PUT(putRequest({
+      preferredName: "Alina",
+      personality: "friendly",
+      researchDisplayMode: "simple",
+    }));
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({

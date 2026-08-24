@@ -78,6 +78,31 @@ describe("FredPersonalizationSettings component", () => {
 
   // ── PUT contract ──────────────────────────────────────────────────────
 
+  // ── Research display mode ───────────────────────────────────────────────
+
+  it("renders an accessible fieldset for Rechercheanzeige with Einfach and Erweitert options", () => {
+    expect(componentSource).toContain("Rechercheanzeige");
+    expect(componentSource).toContain("Einfach");
+    expect(componentSource).toContain("Erweitert");
+    expect(componentSource).toContain('name="fred-research-display-mode"');
+    expect(componentSource).toContain('value="simple"');
+    expect(componentSource).toContain('value="advanced"');
+  });
+
+  it("has concise explanations for simple and advanced modes", () => {
+    expect(componentSource).toMatch(/Kompakter Rechercheverlauf/i);
+    expect(componentSource).toMatch(/Ausführungsverlauf|Planung/i);
+  });
+
+  it("manages researchDisplayMode state with fallback to simple", () => {
+    expect(componentSource).toContain("researchDisplayMode");
+    expect(componentSource).toContain('"simple"');
+    expect(componentSource).toContain('"advanced"');
+    expect((componentSource.match(/onResearchDisplayModeChange\?\.\(/gu) ?? []).length).toBe(2);
+  });
+
+  // ── PUT contract ──────────────────────────────────────────────────────
+
   it("has an explicit submit button labeled Personalisierung speichern", () => {
     expect(componentSource).toContain("Personalisierung speichern");
   });
@@ -89,9 +114,11 @@ describe("FredPersonalizationSettings component", () => {
     expect(componentSource).toMatch(/disabled\s*=\s*\{[^}]*!accessToken[^}]*\}/);
   });
 
-  it("PUT saves exactly preferredName and personality, nothing else", () => {
+  it("PUT saves preferredName, personality, and researchDisplayMode", () => {
     expect(componentSource).toContain('method: "PUT"');
-    expect(componentSource).toContain("JSON.stringify({ preferredName, personality })");
+    expect(componentSource).toContain("preferredName");
+    expect(componentSource).toContain("personality");
+    expect(componentSource).toContain("researchDisplayMode");
     expect(componentSource).not.toContain('"prompt"');
   });
 
@@ -124,6 +151,7 @@ describe("FredPersonalizationSettings component", () => {
     expect(componentSource).toContain("setPersonality(pers)");
     expect(componentSource).toContain("payload.preferredName");
     expect(componentSource).toContain("payload.personality");
+    expect(componentSource).toContain("payload.researchDisplayMode");
   });
 
   it("aborts in-flight requests on unmount and prevents stale state updates", () => {

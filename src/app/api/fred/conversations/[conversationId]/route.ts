@@ -16,6 +16,7 @@ import {
   parseStoredFredSources,
   transformWeKnoraAnswer,
 } from "@/lib/weknora/fred-research";
+import { parseStoredFredExecutionTrace } from "@/lib/fred/execution-trace";
 
 export const runtime = "nodejs";
 
@@ -38,6 +39,7 @@ type FredMessageRow = {
   content: string;
   display_content: string | null;
   research_trace: unknown;
+  execution_trace?: unknown;
   source_references: unknown;
   provider_created_at: string | null;
   created_at: string;
@@ -122,7 +124,7 @@ export async function GET(
     }
     const { data: messages, error: messagesError } = await supabase
       .from("fred_messages")
-      .select("id,role,content,display_content,research_trace,source_references,provider_created_at,created_at,attachments,web_search_enabled,pro_mode_enabled")
+      .select("id,role,content,display_content,research_trace,execution_trace,source_references,provider_created_at,created_at,attachments,web_search_enabled,pro_mode_enabled")
       .eq("conversation_id", conversationId)
       .eq("client_id", user.id)
       .order("provider_created_at", { ascending: true, nullsFirst: false })
@@ -183,6 +185,7 @@ export async function GET(
           webSearchEnabled: message.web_search_enabled,
           proModeEnabled: message.pro_mode_enabled,
           researchTrace: parseStoredFredResearchTrace(message.research_trace),
+          executionTrace: parseStoredFredExecutionTrace(message.execution_trace),
           sourceReferences: mergeFredSources(
             parseStoredFredSources(message.source_references),
             message.rawTransformation.sources,

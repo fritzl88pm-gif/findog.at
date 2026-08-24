@@ -585,4 +585,34 @@ describe("Fred ResearchTrace rendering", () => {
     expect(viewSource).toMatch(/steps=\{message\.researchTrace \?\? \[\]\}[\s\S]*?active=\{false\}/u);
     expect(viewSource).toMatch(/steps=\{activeAssistant\.researchTrace \?\? \[\]\}[\s\S]*?\n\s+active\n/u);
   });
+
+  it("passes researchDisplayMode from page state to FredPersonalizationSettings and FredNativeChatView", () => {
+    expect(pageSource).toContain("const [researchDisplayMode, setResearchDisplayMode] = useState<\"simple\" | \"advanced\">(\"simple\");");
+    expect(pageSource).toContain("onResearchDisplayModeChange={setResearchDisplayMode}");
+    expect(pageSource).toContain("researchDisplayMode={researchDisplayMode}");
+    expect(pageSource).toContain('fetch("/api/account/settings/fred-personalization"');
+    expect(pageSource).toContain('setResearchDisplayMode(payload.researchDisplayMode === "advanced" ? "advanced" : "simple")');
+    expect(viewSource).toContain("researchDisplayMode?: \"simple\" | \"advanced\";");
+    expect(viewSource).toMatch(/displayMode=\{researchDisplayMode\}/u);
+  });
+
+  it("renders advanced execution steps when displayMode is advanced and executionSteps exist", () => {
+    expect(viewSource).toContain("className=\"fred-execution-steps\"");
+    expect(viewSource).toContain("className=\"fred-execution-status\"");
+    expect(viewSource).toContain("className=\"fred-execution-body\"");
+    expect(viewSource).toContain("className=\"fred-execution-header\"");
+    expect(viewSource).toContain("className=\"fred-execution-label\"");
+    expect(viewSource).toContain("className=\"fred-execution-duration\"");
+    expect(viewSource).toContain("className=\"fred-execution-detail\"");
+  });
+
+  it("defines consistent CSS styles for execution steps in globals.css", () => {
+    expect(cssSource).toContain(".fred-execution-steps");
+    expect(cssSource).toContain(".fred-execution-status");
+    expect(cssSource).toContain(".fred-execution-body");
+    expect(cssSource).toContain(".fred-execution-header");
+    expect(cssSource).toContain(".fred-execution-label");
+    expect(cssSource).toContain(".fred-execution-duration");
+    expect(cssSource).toContain(".fred-execution-detail");
+  });
 });

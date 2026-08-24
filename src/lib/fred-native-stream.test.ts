@@ -52,16 +52,49 @@ describe("Fred native stream", () => {
       },
     });
     expect(parseFredNativeStreamLine(encodeFredNativeStreamEvent({
+      type: "execution",
+      step: {
+        id: "exec-1",
+        kind: "planning",
+        status: "running",
+        label: "Rechercheplan wird aktualisiert",
+        detail: "3 Aufgaben geplant",
+        counts: { total: 3, completed: 0, inProgress: 1, open: 2 },
+      },
+    }))).toEqual({
+      type: "execution",
+      step: {
+        id: "exec-1",
+        kind: "planning",
+        status: "running",
+        label: "Rechercheplan wird aktualisiert",
+        detail: "3 Aufgaben geplant",
+        counts: { total: 3, completed: 0, inProgress: 1, open: 2 },
+      },
+    });
+    expect(parseFredNativeStreamLine(encodeFredNativeStreamEvent({
       type: "final",
       answer: "Hallo!",
       assistantMessageId: 42,
       conversation,
+      executionTrace: [{
+        id: "exec-1",
+        kind: "planning",
+        status: "completed",
+        label: "Rechercheplan aktualisiert",
+      }],
     }))).toEqual({
       type: "final",
       answer: "Hallo!",
       assistantMessageId: 42,
       conversation,
       researchTrace: [],
+      executionTrace: [{
+        id: "exec-1",
+        kind: "planning",
+        status: "completed",
+        label: "Rechercheplan aktualisiert",
+      }],
       sourceReferences: [],
     });
   });
@@ -119,6 +152,12 @@ describe("Fred native stream", () => {
       "Ungültiges Fred-Streaming-Ereignis.",
     );
     expect(() => parseFredNativeStreamLine('{"type":"status"}')).toThrow(
+      "Ungültiges Fred-Streaming-Ereignis.",
+    );
+    expect(() => parseFredNativeStreamLine('{"type":"execution"}')).toThrow(
+      "Ungültiges Fred-Streaming-Ereignis.",
+    );
+    expect(() => parseFredNativeStreamLine('{"type":"execution","step":{"id":"1"}}')).toThrow(
       "Ungültiges Fred-Streaming-Ereignis.",
     );
     expect(() => parseFredNativeStreamLine('{"type":"other"}')).toThrow(

@@ -97,7 +97,7 @@ export async function GET(request: Request) {
     const [{ data: prefData, error: prefError }, personalities] = await Promise.all([
       supabase
         .from("fred_user_preferences")
-        .select("preferred_name,personality")
+        .select("preferred_name,personality,research_display_mode")
         .eq("user_id", user.id)
         .maybeSingle(),
       loadPersonalityOptions(supabase),
@@ -110,9 +110,12 @@ export async function GET(request: Request) {
       );
     }
 
+    const researchDisplayMode = prefData?.research_display_mode === "advanced" ? "advanced" : "simple";
+
     return json({
       preferredName: prefData?.preferred_name ?? "",
       personality: prefData?.personality ?? "standard",
+      researchDisplayMode,
       personalities,
     });
   } catch (error) {
@@ -128,7 +131,7 @@ export async function GET(request: Request) {
 
 // ── PUT ──────────────────────────────────────────────────────────────────
 
-const EXPECTED_PUT_KEYS = new Set(["preferredName", "personality"]);
+const EXPECTED_PUT_KEYS = new Set(["preferredName", "personality", "researchDisplayMode"]);
 
 export async function PUT(request: Request) {
   try {
@@ -154,7 +157,7 @@ export async function PUT(request: Request) {
 
     const record = body as Record<string, unknown>;
 
-    // Strict: exactly the two expected keys, no missing, no extras.
+    // Strict: exactly the three expected keys, no missing, no extras.
     const receivedKeys = Object.keys(record);
     if (receivedKeys.length !== EXPECTED_PUT_KEYS.size) {
       throw new UserVisibleError("Ungültiger Request-Body.", 400);
@@ -198,6 +201,13 @@ export async function PUT(request: Request) {
     }
     const personality = rawPersonality;
 
+    // Validate researchDisplayMode — must be 'simple' or 'advanced'
+    const rawMode: unknown = record.researchDisplayMode;
+    if (typeof rawMode !== "string" || (rawMode !== "simple" && rawMode !== "advanced")) {
+      throw new UserVisibleError("Ungültiger Rechercheanzeige-Modus.", 400);
+    }
+    const researchDisplayMode = rawMode as "simple" | "advanced";
+
     // Verify the requested profile exists AND load the option list
     const [exists, personalities] = await Promise.all([
       verifyPersonalityExists(supabase, personality),
@@ -215,6 +225,7 @@ export async function PUT(request: Request) {
           user_id: user.id,
           preferred_name: storageName,
           personality,
+          research_display_mode: researchDisplayMode,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "user_id" },
@@ -230,6 +241,7 @@ export async function PUT(request: Request) {
     return json({
       preferredName: responseName,
       personality,
+      researchDisplayMode,
       personalities,
     });
   } catch (error) {

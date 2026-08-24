@@ -4,6 +4,7 @@ import type {
   FredSourceReference,
 } from "@/lib/weknora/fred-research";
 import type { FredNativeConversation } from "@/lib/fred-native-stream";
+import type { FredExecutionStep } from "@/lib/fred/execution-trace";
 
 /** Attachment metadata for persistence – never carries raw bytes. */
 export interface FredTurnAttachmentMeta {
@@ -39,6 +40,8 @@ export interface FredTurnRequest {
   webSearchEnabled: boolean;
   /** Whether Pro mode is active. */
   proModeEnabled: boolean;
+  /** Research display mode resolved by server from user preferences. */
+  researchDisplayMode?: "simple" | "advanced";
   /** Attachment metadata for persistence. */
   attachments?: FredTurnAttachmentMeta[];
   /**
@@ -71,6 +74,7 @@ export type FredTurnEvent =
   | { type: "conversation"; conversation: FredNativeConversation }
   | { type: "delta"; content: string }
   | { type: "research"; step: FredResearchStep }
+  | { type: "execution"; step: FredExecutionStep }
   | { type: "status"; label: string }
   | {
       type: "final";
@@ -78,6 +82,7 @@ export type FredTurnEvent =
       assistantMessageId?: number;
       conversation: FredNativeConversation;
       researchTrace?: FredResearchStep[];
+      executionTrace?: FredExecutionStep[];
       sourceReferences?: FredSourceReference[];
     }
   | { type: "cancelled"; conversation: FredNativeConversation }
@@ -95,6 +100,8 @@ export interface FredTurnResult {
   assistantMessageId?: number;
   /** Research trace steps. */
   researchTrace: FredResearchStep[];
+  /** Execution trace steps (advanced mode only). */
+  executionTrace?: FredExecutionStep[];
   /** Source references. */
   sourceReferences: FredSourceReference[];
   /** Whether the upstream was explicitly stopped (via `request.signal`). */

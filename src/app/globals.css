@@ -2406,6 +2406,81 @@ textarea:focus {
   font-size: 0.72rem;
 }
 
+.fred-execution-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 2px 12px 12px 30px;
+  list-style: none;
+}
+
+.fred-execution-steps li {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--ink);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.fred-execution-status {
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border: 2px solid rgba(40, 111, 156, 0.4);
+  border-radius: 50%;
+}
+
+.fred-execution-steps li.is-running .fred-execution-status {
+  border-color: var(--bmf-blue);
+  background: var(--bmf-blue);
+  animation: fredResearchPulse 1.2s ease-in-out infinite;
+}
+
+.fred-execution-steps li.is-completed .fred-execution-status {
+  border-color: #25834a;
+  background: #25834a;
+}
+
+.fred-execution-steps li.is-failed .fred-execution-status {
+  border-color: #b33a3a;
+  background: #b33a3a;
+}
+
+.fred-execution-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.fred-execution-header {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.fred-execution-label {
+  font-weight: 550;
+  color: var(--ink);
+}
+
+.fred-execution-duration {
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.fred-execution-detail {
+  font-size: 0.74rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
 .fred-research-sources {
   padding: 10px 12px 12px;
   border-top: 1px solid rgba(40, 111, 156, 0.12);

@@ -455,3 +455,117 @@ describe("upstreamQuery", () => {
     );
   });
 });
+
+describe("researchDisplayMode", () => {
+  it("simple mode emits no execution events and persists empty execution trace", async () => {
+    const upstream = makeUpstreamDeps({
+      openStream: vi.fn().mockImplementation(async () => {
+        return new ReadableStream<Uint8Array>({
+          start(ctrl) {
+            const frames = [
+              'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+              'data: {"response_type":"thinking","data":{"event_id":"t1","content":"secret"}}\n\n',
+              'data: {"response_type":"tool_call","data":{"tool_call_id":"c1","tool_name":"knowledge_search"}}\n\n',
+              'data: {"response_type":"answer","content":"Hallo","done":true}\n\n',
+              'data: {"response_type":"complete","data":{}}\n\n',
+            ];
+            ctrl.enqueue(new TextEncoder().encode(frames.join("")));
+            ctrl.close();
+          },
+        });
+      }),
+    });
+    const persistence = makePersistenceDeps();
+    const config = makeConfigDeps();
+
+    const gen = executeFredTurn(
+      baseRequest({
+        query: "Frage",
+        researchDisplayMode: "simple",
+      }),
+      upstream,
+      persistence,
+      config,
+    );
+    const { events } = await collectEvents(gen);
+
+    const execEvents = events.filter((e) => e.type === "execution");
+    expect(execEvents).toHaveLength(0);
+
+    const researchEvents = events.filter((e) => e.type === "research");
+    expect(researchEvents.length).toBeGreaterThan(0);
+
+    expect(persistence.recordEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      eventType: "message_received",
+      executionTrace: [],
+    }));
+  });
+
+  it("advanced mode emits typed sanitized execution events and persists execution trace", async () => {
+    const upstream = makeUpstreamDeps({
+      openStream: vi.fn().mockImplementation(async () => {
+        return new ReadableStream<Uint8Array>({
+          start(ctrl) {
+            const frames = [
+              'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+              'data: {"response_type":"thinking","data":{"event_id":"t1","content":"secret reasoning"}}\n\n',
+              'data: {"response_type":"tool_call","data":{"tool_call_id":"c1","tool_name":"todo_write","arguments":{"todos":[{"id":"1","task":"Task A","status":"in_progress"}]}}}\n\n',
+              'data: {"response_type":"answer","content":"Ergebnis","done":true}\n\n',
+              'data: {"response_type":"complete","data":{}}\n\n',
+            ];
+            ctrl.enqueue(new TextEncoder().encode(frames.join("")));
+            ctrl.close();
+          },
+        });
+      }),
+    });
+    const persistence = makePersistenceDeps();
+    const config = makeConfigDeps();
+
+    const gen = executeFredTurn(
+      baseRequest({
+        query: "Frage",
+        researchDisplayMode: "advanced",
+      }),
+      upstream,
+      persistence,
+      config,
+    );
+    const { events } = await collectEvents(gen);
+
+    const execEvents = events.filter((e) => e.type === "execution");
+    expect(execEvents.length).toBeGreaterThanOrEqual(2);
+    expect(execEvents[0]).toMatchObject({
+      type: "execution",
+      step: {
+        id: expect.stringMatching(/^analysis:[a-z0-9]+$/u),
+        kind: "analysis",
+        label: "Anfrage wird analysiert",
+      },
+    });
+    expect(execEvents[1]).toMatchObject({
+      type: "execution",
+      step: {
+        id: expect.stringMatching(/^planning:[a-z0-9]+$/u),
+        kind: "planning",
+        label: "Rechercheplan wird aktualisiert",
+      },
+    });
+
+    const finalEvent = events.find((e) => e.type === "final");
+    expect(finalEvent).toMatchObject({
+      type: "final",
+      executionTrace: expect.arrayContaining([
+        expect.objectContaining({ id: expect.stringMatching(/^analysis:/u), kind: "analysis" }),
+        expect.objectContaining({ id: expect.stringMatching(/^planning:/u), kind: "planning" }),
+      ]),
+    });
+
+    expect(persistence.recordEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      eventType: "message_received",
+      executionTrace: expect.arrayContaining([
+        expect.objectContaining({ id: expect.stringMatching(/^analysis:/u), kind: "analysis" }),
+      ]),
+    }));
+  });
+});

@@ -1229,6 +1229,7 @@ export default function Home() {
   const [scanningPrompt, setScanningPrompt] = useState("");
   const [isScanningSettingsLoading, setIsScanningSettingsLoading] = useState(false);
   const [isScanningSettingsSaving, setIsScanningSettingsSaving] = useState(false);
+  const [researchDisplayMode, setResearchDisplayMode] = useState<"simple" | "advanced">("simple");
 
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthLoaded, setIsAuthLoaded] = useState(false);
@@ -1536,6 +1537,35 @@ export default function Home() {
       isActive = false;
     };
   }, [isAuthLoaded, isLoaded, session?.access_token, user?.id]);
+
+  useEffect(() => {
+    const accessToken = session?.access_token;
+    if (!accessToken || !user?.id) {
+      queueMicrotask(() => setResearchDisplayMode("simple"));
+      return;
+    }
+
+    const controller = new AbortController();
+    void fetch("/api/account/settings/fred-personalization", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return await response.json() as Record<string, unknown>;
+      })
+      .then((payload) => {
+        if (!controller.signal.aborted && payload) {
+          setResearchDisplayMode(payload.researchDisplayMode === "advanced" ? "advanced" : "simple");
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setResearchDisplayMode("simple");
+      });
+
+    return () => controller.abort();
+  }, [session?.access_token, user?.id]);
 
   useEffect(() => {
     const accessToken = session?.access_token;
@@ -3396,6 +3426,7 @@ export default function Home() {
             <div className="account-settings-content">
               <FredPersonalizationSettings
                 accessToken={session?.access_token ?? ""}
+                onResearchDisplayModeChange={setResearchDisplayMode}
               />
               <section className="account-settings-section" aria-labelledby="password-settings-title">
                 <h3 id="password-settings-title">Passwort ändern</h3>
@@ -3501,6 +3532,7 @@ export default function Home() {
           externalError={error}
           readOnly={activeConversationOrigin === "telegram"}
           readOnlyNotice="Diese Unterhaltung wird in Telegram fortgesetzt."
+          researchDisplayMode={researchDisplayMode}
           telegramBotUrl={
             activeConversationOrigin === "telegram"
             && telegramIntegration?.status === "active"
