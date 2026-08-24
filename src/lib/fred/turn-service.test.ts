@@ -568,4 +568,192 @@ describe("researchDisplayMode", () => {
       ]),
     }));
   });
+
+  it("extracts direct native tool results into sourceReferences and persists them in final event and storage", async () => {
+    const upstream = makeUpstreamDeps({
+      openStream: vi.fn().mockImplementation(async () => {
+        return new ReadableStream<Uint8Array>({
+          start(ctrl) {
+            const frames = [
+              'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+              'data: {"response_type":"tool_result","data":{"tool_call_id":"web-1","tool_name":"web_search","results":[{"url":"https://www.bmf.gv.at/tax","title":"BMF Tax"}]}}\n\n',
+              'data: {"response_type":"tool_result","data":{"tool_call_id":"kb-1","tool_name":"search_knowledge","results":[{"knowledge_title":"EStG 2025","chunk_id":"chk-1","knowledge_base_id":"kb-at"}]}}\n\n',
+              'data: {"response_type":"answer","content":"Hier ist die Antwort.","done":true}\n\n',
+              'data: {"response_type":"complete","data":{}}\n\n',
+            ];
+            ctrl.enqueue(new TextEncoder().encode(frames.join("")));
+            ctrl.close();
+          },
+        });
+      }),
+    });
+    const persistence = makePersistenceDeps();
+    const config = makeConfigDeps();
+
+    const gen = executeFredTurn(
+      baseRequest({
+        query: "Frage zu Steuern",
+        researchDisplayMode: "advanced",
+      }),
+      upstream,
+      persistence,
+      config,
+    );
+    const { events } = await collectEvents(gen);
+
+    const finalEvent = events.find((e) => e.type === "final");
+    expect(finalEvent).toMatchObject({
+      type: "final",
+      sourceReferences: [
+        { kind: "web", url: "https://www.bmf.gv.at/tax", title: "BMF Tax" },
+        { kind: "knowledge", doc: "EStG 2025", chunkId: "chk-1", knowledgeBaseId: "kb-at" },
+      ],
+    });
+
+    expect(persistence.recordEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      eventType: "message_received",
+      sourceReferences: [
+        { kind: "web", url: "https://www.bmf.gv.at/tax", title: "BMF Tax" },
+        { kind: "knowledge", doc: "EStG 2025", chunkId: "chk-1", knowledgeBaseId: "kb-at" },
+      ],
+    }));
+  });
+
+  it("yields NO direct-result sourceReferences in simple/default mode for the same native direct-result stream", async () => {
+    const upstream = makeUpstreamDeps({
+      openStream: vi.fn().mockImplementation(async () => {
+        return new ReadableStream<Uint8Array>({
+          start(ctrl) {
+            const frames = [
+              'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+              'data: {"response_type":"tool_result","data":{"tool_call_id":"web-1","tool_name":"web_search","results":[{"url":"https://www.bmf.gv.at/tax","title":"BMF Tax"}]}}\n\n',
+              'data: {"response_type":"tool_result","data":{"tool_call_id":"kb-1","tool_name":"search_knowledge","results":[{"knowledge_title":"EStG 2025","chunk_id":"chk-1","knowledge_base_id":"kb-at"}]}}\n\n',
+              'data: {"response_type":"answer","content":"Hier ist die einfache Antwort.","done":true}\n\n',
+              'data: {"response_type":"complete","data":{}}\n\n',
+            ];
+            ctrl.enqueue(new TextEncoder().encode(frames.join("")));
+            ctrl.close();
+          },
+        });
+      }),
+    });
+    const persistence = makePersistenceDeps();
+    const config = makeConfigDeps();
+
+    const gen = executeFredTurn(
+      baseRequest({
+        query: "Einfache Frage",
+        researchDisplayMode: "simple",
+      }),
+      upstream,
+      persistence,
+      config,
+    );
+    const { events } = await collectEvents(gen);
+
+    const finalEvent = events.find((e) => e.type === "final");
+    expect(finalEvent).toMatchObject({
+      type: "final",
+      sourceReferences: [],
+    });
+
+    expect(persistence.recordEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      eventType: "message_received",
+      sourceReferences: [],
+    }));
+  });
+
+  it("keeps explicit references available in simple mode", async () => {
+    const upstream = makeUpstreamDeps({
+      openStream: vi.fn().mockImplementation(async () => {
+        return new ReadableStream<Uint8Array>({
+          start(ctrl) {
+            const frames = [
+              'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+              'data: {"response_type":"references","data":{"references":[{"document_name":"EStG.md","chunk_id":"chk-1","kb_id":"kb-1"}]}}\n\n',
+              'data: {"response_type":"answer","content":"Antwort mit Quellen.","done":true}\n\n',
+              'data: {"response_type":"complete","data":{}}\n\n',
+            ];
+            ctrl.enqueue(new TextEncoder().encode(frames.join("")));
+            ctrl.close();
+          },
+        });
+      }),
+    });
+    const persistence = makePersistenceDeps();
+    const config = makeConfigDeps();
+
+    const gen = executeFredTurn(
+      baseRequest({
+        query: "Frage mit expliziten Quellen",
+        researchDisplayMode: "simple",
+      }),
+      upstream,
+      persistence,
+      config,
+    );
+    const { events } = await collectEvents(gen);
+
+    const finalEvent = events.find((e) => e.type === "final");
+    expect(finalEvent).toMatchObject({
+      type: "final",
+      sourceReferences: [
+        { kind: "knowledge", doc: "EStG.md", chunkId: "chk-1", knowledgeBaseId: "kb-1" },
+      ],
+    });
+
+    expect(persistence.recordEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      eventType: "message_received",
+      sourceReferences: [
+        { kind: "knowledge", doc: "EStG.md", chunkId: "chk-1", knowledgeBaseId: "kb-1" },
+      ],
+    }));
+  });
+
+  it("Telegram/default path remains final-only and does not gain direct-result metadata", async () => {
+    const upstream = makeUpstreamDeps({
+      openStream: vi.fn().mockImplementation(async () => {
+        return new ReadableStream<Uint8Array>({
+          start(ctrl) {
+            const frames = [
+              'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+              'data: {"response_type":"tool_result","data":{"tool_call_id":"web-1","tool_name":"web_search","results":[{"url":"https://www.bmf.gv.at/tax","title":"BMF Tax"}]}}\n\n',
+              'data: {"response_type":"answer","content":"Telegram Antwort.","done":true}\n\n',
+              'data: {"response_type":"complete","data":{}}\n\n',
+            ];
+            ctrl.enqueue(new TextEncoder().encode(frames.join("")));
+            ctrl.close();
+          },
+        });
+      }),
+    });
+    const persistence = makePersistenceDeps();
+    const config = makeConfigDeps();
+
+    const gen = executeFredTurn(
+      baseRequest({
+        query: "Telegram Anfrage",
+        origin: "telegram",
+        telegramIntegrationId: "tele-1",
+        // researchDisplayMode is omitted in Telegram requests
+      }),
+      upstream,
+      persistence,
+      config,
+    );
+    const { events, result } = await collectEvents(gen);
+
+    expect(result.answer).toBe("Telegram Antwort.");
+    const finalEvent = events.find((e) => e.type === "final");
+    expect(finalEvent).toMatchObject({
+      type: "final",
+      answer: "Telegram Antwort.",
+      sourceReferences: [],
+    });
+
+    expect(persistence.recordEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      eventType: "message_received",
+      sourceReferences: [],
+    }));
+  });
 });

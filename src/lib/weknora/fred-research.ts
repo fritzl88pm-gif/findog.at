@@ -51,6 +51,29 @@ const TOOL_HINTS: Array<{ pattern: RegExp; kind: FredResearchStepKind; running: 
   },
 ];
 
+import {
+  sanitizePublicSourceUrl,
+  sanitizeSafeId,
+  sanitizeSafeLabel,
+} from "@/lib/fred/safe-research-display";
+
+export {
+  sanitizePublicSourceUrl,
+  sanitizeSafeId,
+  sanitizeSafeLabel,
+};
+
+
+function firstValidId(value: unknown, maxLength = 128): string | undefined {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const text = sanitizeSafeId(entry, maxLength);
+      if (text) return text;
+    }
+  }
+  return undefined;
+}
+
 function recordOf(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -93,10 +116,13 @@ export function mergeFredSources(...groups: FredSourceReference[][]): FredSource
 function citationSource(kind: string, rawAttributes: string): FredSourceReference | null {
   const values = attributes(rawAttributes);
   if (kind.toLowerCase() === "kb") {
-    const doc = boundedText(values.doc, 512);
+    const doc = sanitizeSafeLabel(values.doc, 512);
     if (!doc) return null;
-    const chunkId = boundedText(values.chunk_id, 128);
-    const knowledgeBaseId = boundedText(values.kb_id, 128);
+    const chunkId = sanitizeSafeId(values.chunk_id ?? values.faq_id, 128);
+    const knowledgeBaseId = sanitizeSafeId(
+      values.kb_id ?? values.knowledge_base_id ?? values.knowledge_base,
+      128,
+    );
     return {
       kind: "knowledge",
       doc,
@@ -104,16 +130,10 @@ function citationSource(kind: string, rawAttributes: string): FredSourceReferenc
       ...(knowledgeBaseId ? { knowledgeBaseId } : {}),
     };
   }
-  const urlValue = boundedText(values.url, 2_048);
-  let url: URL;
-  try {
-    url = new URL(urlValue);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-  const title = boundedText(values.title, 512);
-  return { kind: "web", url: url.toString(), ...(title ? { title } : {}) };
+  const url = sanitizePublicSourceUrl(values.url, 2_048);
+  if (!url) return null;
+  const title = sanitizeSafeLabel(values.title, 512);
+  return { kind: "web", url, ...(title ? { title } : {}) };
 }
 
 function incompleteCitationStart(value: string): number {
@@ -143,18 +163,72 @@ export function transformWeKnoraAnswer(
   return { text, sources: mergeFredSources(sources) };
 }
 
-function sourceFromObject(value: unknown): FredSourceReference | null {
+function sourceFromObject(
+  value: unknown,
+  parentData?: Record<string, unknown> | null,
+): FredSourceReference | null {
   const item = recordOf(value);
   if (!item) return null;
-  const url = boundedText(item.url ?? item.link, 2_048);
-  if (url) return citationSource("web", `url="${url.replaceAll('"', "&quot;")}" title="${boundedText(item.title, 512).replaceAll('"', "&quot;")}"`);
-  const doc = boundedText(
-    item.doc ?? item.document_name ?? item.file_name ?? item.filename ?? item.title,
-    512,
-  );
+
+  // 1. Check Web source
+  const rawUrl = item.url ?? item.link;
+  if (rawUrl !== undefined && rawUrl !== null) {
+    const url = sanitizePublicSourceUrl(rawUrl, 2_048);
+    if (!url) return null;
+    const title = sanitizeSafeLabel(item.title ?? item.source ?? item.name, 512);
+    return {
+      kind: "web",
+      url,
+      ...(title ? { title } : {}),
+    };
+  }
+
+  // 2. Check Knowledge source
+  const rawDoc = item.faq_standard_question
+    ?? item.faq_question
+    ?? item.doc
+    ?? item.document_name
+    ?? item.file_name
+    ?? item.filename
+    ?? item.title
+    ?? item.knowledge_title
+    ?? parentData?.faq_standard_question
+    ?? parentData?.faq_question
+    ?? parentData?.knowledge_title
+    ?? parentData?.title
+    ?? parentData?.doc;
+
+  const doc = sanitizeSafeLabel(rawDoc, 512);
   if (!doc) return null;
-  const chunkId = boundedText(item.chunk_id ?? item.chunkId ?? item.id, 128);
-  const knowledgeBaseId = boundedText(item.kb_id ?? item.knowledge_base_id ?? item.knowledgeBaseId, 128);
+
+  const rawChunkId = item.chunk_id
+    ?? item.chunkId
+    ?? item.faq_id
+    ?? item.faqId
+    ?? (Array.isArray(item.chunks) && item.chunks.length > 0 && recordOf(item.chunks[0])
+      ? (recordOf(item.chunks[0])?.chunk_id ?? recordOf(item.chunks[0])?.faq_id ?? recordOf(item.chunks[0])?.id)
+      : undefined)
+    ?? item.id;
+
+  const chunkId = sanitizeSafeId(rawChunkId, 128);
+
+  const rawKnowledgeBaseId = item.kb_id
+    ?? item.knowledge_base_id
+    ?? item.knowledgeBaseId
+    ?? item.knowledge_base
+    ?? item.knowledgeBase
+    ?? parentData?.knowledge_base_id
+    ?? parentData?.kb_id
+    ?? parentData?.knowledgeBaseId
+    ?? parentData?.knowledge_base
+    ?? parentData?.knowledgeBase
+    ?? firstValidId(item.knowledge_base_ids)
+    ?? firstValidId(item.kb_ids)
+    ?? firstValidId(parentData?.knowledge_base_ids)
+    ?? firstValidId(parentData?.kb_ids);
+
+  const knowledgeBaseId = sanitizeSafeId(rawKnowledgeBaseId, 128);
+
   return {
     kind: "knowledge",
     doc,
@@ -163,20 +237,123 @@ function sourceFromObject(value: unknown): FredSourceReference | null {
   };
 }
 
-function sourcesFromUnknown(value: unknown): FredSourceReference[] {
+function sourcesFromUnknown(value: unknown, parentData?: Record<string, unknown> | null): FredSourceReference[] {
   if (Array.isArray(value)) {
     return mergeFredSources(value.flatMap((item) => {
-      const direct = sourceFromObject(item);
+      const direct = sourceFromObject(item, parentData);
       if (direct) return [direct];
       const record = recordOf(item);
-      return record ? sourcesFromUnknown(record.references ?? record.sources ?? record.chunks) : [];
+      return record ? sourcesFromUnknown(record.references ?? record.sources ?? record.chunks, record) : [];
     }));
   }
   const record = recordOf(value);
   if (!record) return [];
-  const direct = sourceFromObject(record);
+  const direct = sourceFromObject(record, parentData);
   if (direct) return [direct];
-  return sourcesFromUnknown(record.references ?? record.sources ?? record.chunks);
+  return sourcesFromUnknown(record.references ?? record.sources ?? record.chunks, record);
+}
+
+const NATIVE_RESULTS_TOOLS = new Set([
+  "web_search",
+  "web_fetch",
+  "search_knowledge",
+  "knowledge_search",
+  "grep_chunks",
+  "list_knowledge_chunks",
+  "wiki_read_source_doc",
+]);
+
+const NATIVE_GREP_TOOLS = new Set([
+  "grep_chunks",
+  "search_knowledge",
+  "knowledge_search",
+  "wiki_read_source_doc",
+]);
+
+const NATIVE_CHUNKS_TOOLS = new Set([
+  "list_knowledge_chunks",
+  "grep_chunks",
+  "search_knowledge",
+  "knowledge_search",
+  "wiki_read_source_doc",
+]);
+
+export type ParseWeKnoraResearchEventOptions = {
+  includeDirectSources?: boolean;
+  researchDisplayMode?: "simple" | "advanced" | string;
+};
+
+function extractToolSources(
+  toolName: string,
+  data: Record<string, unknown>,
+  event: Record<string, unknown>,
+  options?: ParseWeKnoraResearchEventOptions,
+): FredSourceReference[] {
+  const resultRecord = recordOf(data.result) ?? recordOf(event.result);
+  const sources: FredSourceReference[] = [];
+
+  // 1. Direct references / sources envelope (enabled in all modes)
+  const envelopeSources = sourcesFromUnknown(data.references ?? data.sources ?? event.references, data);
+  sources.push(...envelopeSources);
+
+  const includeDirect = options?.includeDirectSources === true;
+  if (!includeDirect) {
+    return mergeFredSources(sources);
+  }
+
+  const normalizedTool = boundedText(toolName, 180).toLowerCase();
+
+  // 2. Direct results from tool payloads (web_search, search_knowledge, etc.)
+  if (NATIVE_RESULTS_TOOLS.has(normalizedTool)) {
+    const resultsArray = (Array.isArray(data.results) ? data.results : undefined)
+      ?? (resultRecord && Array.isArray(resultRecord.results) ? resultRecord.results : undefined)
+      ?? (Array.isArray(event.results) ? event.results : undefined);
+
+    if (resultsArray) {
+      for (const item of resultsArray) {
+        const src = sourceFromObject(item, data);
+        if (src) sources.push(src);
+      }
+    }
+  }
+
+  // 3. grep_chunks (chunk_results and knowledge_results)
+  if (NATIVE_GREP_TOOLS.has(normalizedTool)) {
+    const chunkResults = (Array.isArray(data.chunk_results) ? data.chunk_results : undefined)
+      ?? (resultRecord && Array.isArray(resultRecord.chunk_results) ? resultRecord.chunk_results : undefined)
+      ?? (Array.isArray(event.chunk_results) ? event.chunk_results : undefined);
+    if (chunkResults) {
+      for (const item of chunkResults) {
+        const src = sourceFromObject(item, data);
+        if (src) sources.push(src);
+      }
+    }
+
+    const knowledgeResults = (Array.isArray(data.knowledge_results) ? data.knowledge_results : undefined)
+      ?? (resultRecord && Array.isArray(resultRecord.knowledge_results) ? resultRecord.knowledge_results : undefined)
+      ?? (Array.isArray(event.knowledge_results) ? event.knowledge_results : undefined);
+    if (knowledgeResults) {
+      for (const item of knowledgeResults) {
+        const src = sourceFromObject(item, data);
+        if (src) sources.push(src);
+      }
+    }
+  }
+
+  // 4. list_knowledge_chunks (chunks)
+  if (NATIVE_CHUNKS_TOOLS.has(normalizedTool)) {
+    const chunks = (Array.isArray(data.chunks) ? data.chunks : undefined)
+      ?? (resultRecord && Array.isArray(resultRecord.chunks) ? resultRecord.chunks : undefined)
+      ?? (Array.isArray(event.chunks) ? event.chunks : undefined);
+    if (chunks) {
+      for (const item of chunks) {
+        const src = sourceFromObject(item, data);
+        if (src) sources.push(src);
+      }
+    }
+  }
+
+  return mergeFredSources(sources);
 }
 
 function eventId(event: Record<string, unknown>, data: Record<string, unknown>, prefix: string): string {
@@ -204,14 +381,16 @@ function durationMs(value: unknown): number | undefined {
   return Math.min(Math.round(duration), 3_600_000);
 }
 
-export function parseWeKnoraResearchEvent(value: unknown): FredResearchUpdate {
+export function parseWeKnoraResearchEvent(
+  value: unknown,
+  options?: ParseWeKnoraResearchEventOptions,
+): FredResearchUpdate {
   const event = recordOf(value);
   if (!event) return { sources: [], fatalError: false, unsupported: false };
   const responseType = boundedText(event.response_type ?? event.type, 80).toLowerCase();
   const data = recordOf(event.data) ?? {};
-  const sources = mergeFredSources(
-    sourcesFromUnknown(data.references ?? data.sources ?? event.references),
-  );
+  const toolName = boundedText(data.tool_name ?? event.tool_name, 180);
+  const sources = extractToolSources(toolName, data, event, options);
 
   if (responseType === "tool_approval_required" || responseType === "mcp_oauth_required") {
     return { sources, fatalError: false, unsupported: true };
@@ -261,7 +440,6 @@ export function parseWeKnoraResearchEvent(value: unknown): FredResearchUpdate {
     };
   }
   if (responseType === "tool_call" || responseType === "tool_result" || responseType === "error") {
-    const toolName = boundedText(data.tool_name ?? event.tool_name, 180);
     const presentation = toolPresentation(toolName);
     const successful = responseType !== "error" && data.success !== false && event.success !== false;
     const finished = responseType !== "tool_call";
@@ -290,7 +468,24 @@ export function mergeFredResearchStep(
   update: FredResearchStep,
 ): FredResearchStep[] {
   const existingIndex = steps.findIndex((step) => step.id === update.id);
-  if (existingIndex < 0) return [...steps, update].slice(-200);
+  if (existingIndex < 0) {
+    if (steps.length > 0 && update.kind === "analysis") {
+      const lastIndex = steps.length - 1;
+      const lastStep = steps[lastIndex];
+      if (lastStep.kind === "analysis") {
+        const merged: FredResearchStep = {
+          ...lastStep,
+          status: update.status,
+          label: update.label,
+          ...(update.durationMs !== undefined ? { durationMs: update.durationMs } : (lastStep.durationMs !== undefined ? { durationMs: lastStep.durationMs } : {})),
+        };
+        const next = [...steps];
+        next[lastIndex] = merged;
+        return next;
+      }
+    }
+    return [...steps, update].slice(-200);
+  }
   const next = [...steps];
   next[existingIndex] = { ...next[existingIndex], ...update };
   return next;
@@ -326,20 +521,29 @@ export function parseStoredFredResearchTrace(value: unknown): FredResearchStep[]
 
 export function parseStoredFredSources(value: unknown): FredSourceReference[] {
   if (!Array.isArray(value)) return [];
-  return mergeFredSources(value.flatMap((candidate) => {
+  return mergeFredSources(value.flatMap((candidate): FredSourceReference[] => {
     const item = recordOf(candidate);
     if (!item) return [];
     if (item.kind === "web") {
-      const url = boundedText(item.url, 2_048);
-      return url ? [citationSource("web", `url="${url.replaceAll('"', "&quot;")}" title="${boundedText(item.title, 512).replaceAll('"', "&quot;")}"`)].filter((source): source is FredSourceReference => source !== null) : [];
+      const url = sanitizePublicSourceUrl(item.url, 2_048);
+      if (!url) return [];
+      const title = sanitizeSafeLabel(item.title, 512);
+      return [{
+        kind: "web",
+        url,
+        ...(title ? { title } : {}),
+      }];
     }
     if (item.kind !== "knowledge") return [];
-    const doc = boundedText(item.doc, 512);
+    const doc = sanitizeSafeLabel(item.doc, 512);
     if (!doc) return [];
-    const chunkId = boundedText(item.chunkId, 128);
-    const knowledgeBaseId = boundedText(item.knowledgeBaseId, 128);
+    const chunkId = sanitizeSafeId(item.chunkId ?? item.chunk_id ?? item.faqId ?? item.faq_id, 128);
+    const knowledgeBaseId = sanitizeSafeId(
+      item.knowledgeBaseId ?? item.knowledge_base_id ?? item.kb_id ?? item.knowledge_base ?? item.knowledgeBase,
+      128,
+    );
     return [{
-      kind: "knowledge" as const,
+      kind: "knowledge",
       doc,
       ...(chunkId ? { chunkId } : {}),
       ...(knowledgeBaseId ? { knowledgeBaseId } : {}),

@@ -180,6 +180,61 @@ function fileExtension(name: string): string {
   return /\.[^.]+$/u.exec(name.toLowerCase())?.[0] ?? "";
 }
 
+export type ResearchTraceDisplayState = {
+  shouldRender: boolean;
+  isAdvanced: boolean;
+  summary: string;
+};
+
+export function resolveResearchTraceDisplay({
+  steps = [],
+  sources = [],
+  executionSteps = [],
+  displayMode = "simple",
+  active = false,
+  agentName = "Fred",
+}: {
+  steps?: FredResearchStep[];
+  sources?: FredSourceReference[];
+  executionSteps?: FredExecutionStep[];
+  displayMode?: "simple" | "advanced";
+  active?: boolean;
+  agentName?: "Fred" | "QuickFred";
+}): ResearchTraceDisplayState {
+  const hasExecutionSteps = Boolean(executionSteps && executionSteps.length > 0);
+  const hasSimpleSteps = Boolean(steps && steps.length > 0);
+  const hasSources = Boolean(sources && sources.length > 0);
+
+  if (displayMode === "advanced") {
+    if (hasExecutionSteps) {
+      const completed = executionSteps?.filter((step) => step.status === "completed").length ?? 0;
+      const summary = active
+        ? `${agentName} führt Recherche aus …`
+        : `Ausführungsverlauf${completed > 0 ? ` · ${completed} Schritte` : ""}`;
+      return { shouldRender: true, isAdvanced: true, summary };
+    }
+    if (hasSimpleSteps || hasSources) {
+      const completed = steps?.filter((step) => step.status === "completed").length ?? 0;
+      const summary = active
+        ? `${agentName} recherchiert …`
+        : `Rechercheverlauf${completed > 0 ? ` · ${completed} Schritte` : ""}`;
+      return { shouldRender: true, isAdvanced: false, summary };
+    }
+    return { shouldRender: false, isAdvanced: false, summary: "" };
+  }
+
+  // Simple mode: execution-only data must remain invisible as before
+  if (hasSimpleSteps || hasSources) {
+    const completed = steps?.filter((step) => step.status === "completed").length ?? 0;
+    const summary = active
+      ? `${agentName} recherchiert …`
+      : `Rechercheverlauf${completed > 0 ? ` · ${completed} Schritte` : ""}`;
+    return { shouldRender: true, isAdvanced: false, summary };
+  }
+
+  return { shouldRender: false, isAdvanced: false, summary: "" };
+}
+
 function ResearchTrace({
   steps,
   sources,
@@ -195,29 +250,24 @@ function ResearchTrace({
   executionSteps?: FredExecutionStep[];
   displayMode?: "simple" | "advanced";
 }) {
-  const isAdvanced = displayMode === "advanced" && Boolean(executionSteps && executionSteps.length > 0);
-  if (!isAdvanced && steps.length === 0 && sources.length === 0) return null;
-  if (isAdvanced && (!executionSteps || executionSteps.length === 0) && sources.length === 0) return null;
+  const displayState = resolveResearchTraceDisplay({
+    steps,
+    sources,
+    executionSteps,
+    displayMode,
+    active,
+    agentName,
+  });
 
-  const completed = isAdvanced
-    ? (executionSteps?.filter((step) => step.status === "completed").length ?? 0)
-    : steps.filter((step) => step.status === "completed").length;
-
-  const summary = isAdvanced
-    ? (active
-        ? `${agentName} führt Recherche aus …`
-        : `Ausführungsverlauf${completed > 0 ? ` · ${completed} Schritte` : ""}`)
-    : (active
-        ? `${agentName} recherchiert …`
-        : `Rechercheverlauf${completed > 0 ? ` · ${completed} Schritte` : ""}`);
+  if (!displayState.shouldRender) return null;
 
   return (
     <details className="fred-research-trace" open={active}>
       <summary>
         <span className={active ? "fred-research-pulse" : "fred-research-check"} aria-hidden="true" />
-        {summary}
+        {displayState.summary}
       </summary>
-      {isAdvanced && executionSteps ? (
+      {displayState.isAdvanced && executionSteps ? (
         <ol className="fred-execution-steps">
           {executionSteps.map((step) => (
             <li className={`is-${step.status} kind-${step.kind}`} key={step.id}>

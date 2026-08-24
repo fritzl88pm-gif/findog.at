@@ -2664,4 +2664,132 @@ describe("POST /api/fred/chat", () => {
       }));
     });
   });
+
+  describe("direct-result source gating vertical route behavior", () => {
+    it("projects direct tool results into source_references in advanced mode", async () => {
+      const currentUserId = "eeee5555-eeee-4eee-8eee-eeeeeeeeeeee";
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: currentUserId });
+      const rpc = rpcForTurn();
+      const prefChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({
+          data: { preferred_name: null, personality: "standard", research_display_mode: "advanced" },
+          error: null,
+        }),
+      };
+      const profileChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({
+          data: { prompt_text: "" },
+          error: null,
+        }),
+      };
+      const convChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+      };
+      const from = vi.fn((table: string) => {
+        if (table === "fred_user_preferences") return prefChain;
+        if (table === "fred_personality_profiles") return profileChain;
+        if (table === "fred_conversations") return convChain;
+        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }), insert: vi.fn().mockResolvedValue({ error: null }) };
+      }) as never;
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+      vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+        'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+        'data: {"response_type":"tool_result","data":{"tool_call_id":"web-adv-1","tool_name":"web_search","results":[{"url":"https://www.bmf.gv.at/tax","title":"BMF Tax"}]}}\n\n',
+        'data: {"response_type":"answer","content":"Ergebnis in Advanced.","done":true}\n\n',
+        'data: {"response_type":"complete","data":{}}\n\n',
+      ].join(""), { headers: { "Content-Type": "text/event-stream" } }));
+
+      const response = await POST(request({
+        query: "Frage im Advanced Mode",
+        researchDisplayMode: "advanced",
+      }));
+      const events = (await response.text())
+        .split("\n")
+        .map(parseFredNativeStreamLine)
+        .filter(Boolean);
+
+      const finalEvent = events.find((e) => e?.type === "final");
+      expect(finalEvent).toMatchObject({
+        type: "final",
+        sourceReferences: [
+          { kind: "web", url: "https://www.bmf.gv.at/tax", title: "BMF Tax" },
+        ],
+      });
+
+      expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
+        payload: expect.objectContaining({
+          source_references: [
+            { kind: "web", url: "https://www.bmf.gv.at/tax", title: "BMF Tax" },
+          ],
+        }),
+      });
+    });
+
+    it("does NOT project direct tool results into source_references in simple mode", async () => {
+      const currentUserId = "ffff6666-ffff-4fff-8fff-ffffffffffff";
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: currentUserId });
+      const rpc = rpcForTurn();
+      const prefChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({
+          data: { preferred_name: null, personality: "standard", research_display_mode: "simple" },
+          error: null,
+        }),
+      };
+      const profileChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({
+          data: { prompt_text: "" },
+          error: null,
+        }),
+      };
+      const convChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+      };
+      const from = vi.fn((table: string) => {
+        if (table === "fred_user_preferences") return prefChain;
+        if (table === "fred_personality_profiles") return profileChain;
+        if (table === "fred_conversations") return convChain;
+        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }), insert: vi.fn().mockResolvedValue({ error: null }) };
+      }) as never;
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+      vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+        'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+        'data: {"response_type":"tool_result","data":{"tool_call_id":"web-sim-1","tool_name":"web_search","results":[{"url":"https://www.bmf.gv.at/tax","title":"BMF Tax"}]}}\n\n',
+        'data: {"response_type":"answer","content":"Ergebnis in Simple.","done":true}\n\n',
+        'data: {"response_type":"complete","data":{}}\n\n',
+      ].join(""), { headers: { "Content-Type": "text/event-stream" } }));
+
+      const response = await POST(request({
+        query: "Frage im Simple Mode",
+        researchDisplayMode: "simple",
+      }));
+      const events = (await response.text())
+        .split("\n")
+        .map(parseFredNativeStreamLine)
+        .filter(Boolean);
+
+      const finalEvent = events.find((e) => e?.type === "final");
+      expect(finalEvent).toMatchObject({
+        type: "final",
+        sourceReferences: [],
+      });
+
+      expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
+        payload: expect.objectContaining({
+          source_references: [],
+        }),
+      });
+    });
+  });
 });

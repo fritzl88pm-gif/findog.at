@@ -58,47 +58,14 @@ function durationMs(value: unknown): number | undefined {
   return Math.min(Math.round(duration), 3_600_000);
 }
 
-function sanitizeControlCharacters(input: string): string {
-  return input
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
-}
+import {
+  sanitizeAndRedactDetail,
+} from "./safe-research-display";
 
-function redactSensitiveText(input: string): string {
-  return input
-    // Bearer / Authorization tokens
-    .replace(/\bBearer\s+[A-Za-z0-9_\-\.~+/]+=*/gi, "Bearer [REDACTED]")
-    // API keys with standard prefixes
-    .replace(/\b(?:sk|key|glpat|xox[baprs])-[A-Za-z0-9_\-]{8,}/gi, "[REDACTED_API_KEY]")
-    .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AIzaSy[A-Za-z0-9_-]{20,})/g, "[REDACTED_API_KEY]")
-    .replace(/\bsk-[A-Za-z0-9_\-]{8,}/gi, "[REDACTED_API_KEY]")
-    .replace(/\b(?:sk_live|sk_test)_[A-Za-z0-9]{16,}/gi, "[REDACTED_API_KEY]")
-    // Secret / password / credential key-value assignments
-    .replace(/\b(?:api[_-]?key|secret(?:[_-]?key)?|password|passwd|auth[_-]?token|access[_-]?token)[A-Za-z0-9_]*\s*[:=]\s*['"]?[^\s,'">]+['"]?/gi, "[REDACTED]")
-    // JWT tokens
-    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+/g, "[REDACTED_TOKEN]")
-    // Database connection strings
-    .replace(/\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|mssql|cockroachdb):\/\/[^\s]+/gi, "[REDACTED_CONNECTION]")
-    // Private storage URIs
-    .replace(/\b(?:s3|gs|gcs|azure|blob|oss|cos|minio):\/\/[^\s]+/gi, "[REDACTED_STORAGE_URI]")
-    // Local filesystem paths
-    .replace(/(?:\/(?:var|tmp|etc|proc|sys|opt|home|root|usr|private|Users)\/[^\s'"]+)/gi, "[REDACTED_PATH]")
-    .replace(/\b[A-Za-z]:\\[^\s'"]+/g, "[REDACTED_PATH]")
-    // Internal/corporate URLs
-    .replace(/\bhttps?:\/\/(?:[^\s/$.?#]*\.(?:local|internal|corp|lan|service|intra)|localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[0-1])\.\d+\.\d+)[^\s]*/gi, "[REDACTED_INTERNAL_URL]")
-    // URLs with sensitive query parameters
-    .replace(/\bhttps?:\/\/[^\s]*[?&](?:token|secret|password|key|api_key|access_token|auth)=[^&\s]+/gi, "[REDACTED_URL]");
-}
+export {
+  sanitizeAndRedactDetail,
+};
 
-export function sanitizeAndRedactDetail(value: unknown, maxLength = MAX_EXECUTION_DETAIL_CHARS): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const sanitized = sanitizeControlCharacters(value);
-  if (!sanitized.trim()) return undefined;
-  const redacted = redactSensitiveText(sanitized);
-  const bounded = redacted.slice(0, maxLength);
-  return bounded || undefined;
-}
 
 function eventId(event: Record<string, unknown>, data: Record<string, unknown>, prefix: string): string {
   const upstreamId = boundedText(
@@ -126,12 +93,18 @@ function parseTodosFromUnknown(source: unknown): Array<Record<string, unknown>> 
   }
   const record = recordOf(source);
   if (!record) return null;
+  if (record.steps !== undefined) return parseTodosFromUnknown(record.steps);
   if (record.todos !== undefined) return parseTodosFromUnknown(record.todos);
   if (record.tasks !== undefined) return parseTodosFromUnknown(record.tasks);
   if (record.items !== undefined) return parseTodosFromUnknown(record.items);
   if (record.plan !== undefined) return parseTodosFromUnknown(record.plan);
   if (record.todo_list !== undefined) return parseTodosFromUnknown(record.todo_list);
   if (record.todoList !== undefined) return parseTodosFromUnknown(record.todoList);
+  if (record.arguments !== undefined) return parseTodosFromUnknown(record.arguments);
+  if (record.result !== undefined) return parseTodosFromUnknown(record.result);
+  if (typeof record.task === "string" && record.task.trim()) {
+    return [{ task: record.task.trim(), status: (typeof record.status === "string" ? record.status : undefined) ?? "in_progress" }];
+  }
   return null;
 }
 
@@ -140,13 +113,20 @@ function extractPlanningCounts(
   event: Record<string, unknown>,
 ): FredPlanningCounts | null {
   const candidates = [
-    data.arguments,
-    data.result,
+    data.steps,
     data.todos,
     data.tasks,
+    data.plan,
+    data.arguments,
+    data.result,
+    data,
+    event.steps,
+    event.todos,
+    event.tasks,
+    event.plan,
     event.arguments,
     event.result,
-    event.todos,
+    event,
   ];
 
   for (const candidate of candidates) {
@@ -194,18 +174,41 @@ function formatPlanningDetail(counts: FredPlanningCounts): string | undefined {
   return parts.join(" · ");
 }
 
+function extractPlanningTask(
+  data: Record<string, unknown>,
+  event: Record<string, unknown>,
+): string | undefined {
+  const args = recordOf(data.arguments) ?? recordOf(event.arguments) ?? (typeof data.arguments === "string" ? (() => {
+    try { return recordOf(JSON.parse(data.arguments)); } catch { return null; }
+  })() : null);
+
+  const raw = boundedText(
+    data.task ?? data.current_task ?? data.currentTask ?? args?.task ?? args?.current_task ?? args?.currentTask ?? event.task ?? event.current_task,
+    MAX_PLANNING_TASK_CHARS,
+  );
+  if (!raw) return undefined;
+  return sanitizeAndRedactDetail(raw, MAX_PLANNING_TASK_CHARS);
+}
+
 function extractPlanningItems(
   data: Record<string, unknown>,
   event: Record<string, unknown>,
 ): Array<Record<string, unknown>> | null {
   const candidates = [
-    data.arguments,
-    data.result,
+    data.steps,
     data.todos,
     data.tasks,
+    data.plan,
+    data.arguments,
+    data.result,
+    data,
+    event.steps,
+    event.todos,
+    event.tasks,
+    event.plan,
     event.arguments,
     event.result,
-    event.todos,
+    event,
   ];
 
   for (const candidate of candidates) {
@@ -220,49 +223,57 @@ function extractPlanningItems(
 function formatPlanningDetailWithItems(
   counts: FredPlanningCounts,
   items: Array<Record<string, unknown>> | null,
+  currentTask?: string,
 ): string | undefined {
-  const summary = formatPlanningDetail(counts);
-  if (!items || items.length === 0) {
-    return summary ? summary.slice(0, MAX_EXECUTION_DETAIL_CHARS) : undefined;
-  }
-
   const lines: string[] = [];
   let currentLength = 0;
 
-  if (summary) {
-    const boundedSummary = summary.slice(0, MAX_EXECUTION_DETAIL_CHARS);
-    lines.push(boundedSummary);
-    currentLength = boundedSummary.length;
+  if (currentTask) {
+    const taskLine = `Aktuelle Aufgabe: ${currentTask}`.slice(0, MAX_PLANNING_TASK_CHARS + 25);
+    lines.push(taskLine);
+    currentLength = taskLine.length;
   }
 
-  const cappedItems = items.slice(0, MAX_PLANNING_TODOS_COUNT);
-  for (const item of cappedItems) {
-    const rawTask = boundedText(
-      item.task ?? item.title ?? item.label ?? item.description ?? item.text ?? item.content ?? item.name,
-      MAX_PLANNING_TASK_CHARS,
-    );
-    const sanitizedTask = sanitizeAndRedactDetail(rawTask, MAX_PLANNING_TASK_CHARS);
-    if (!sanitizedTask) continue;
-
-    const status = boundedText(item.status ?? item.state, 40).toLowerCase();
-    const isDone = item.completed === true || ["completed", "done", "finished", "success", "closed", "resolved"].includes(status);
-    const isInProgress = ["in_progress", "in-progress", "running", "active", "in_bearbeitung", "in bearbeitung", "started"].includes(status);
-
-    let prefix = "- [ ]";
-    if (isDone) {
-      prefix = "- [x]";
-    } else if (isInProgress) {
-      prefix = "- [/]";
-    }
-
-    const line = `${prefix} ${sanitizedTask}`;
-    const addedLength = lines.length > 0 ? 1 + line.length : line.length;
-
+  const summary = formatPlanningDetail(counts);
+  if (summary) {
+    const boundedSummary = summary.slice(0, MAX_EXECUTION_DETAIL_CHARS);
+    const addedLength = lines.length > 0 ? 1 + boundedSummary.length : boundedSummary.length;
     if (currentLength + addedLength <= MAX_EXECUTION_DETAIL_CHARS) {
-      lines.push(line);
+      lines.push(boundedSummary);
       currentLength += addedLength;
-    } else {
-      break;
+    }
+  }
+
+  if (items && items.length > 0) {
+    const cappedItems = items.slice(0, MAX_PLANNING_TODOS_COUNT);
+    for (const item of cappedItems) {
+      const rawTask = boundedText(
+        item.task ?? item.title ?? item.label ?? item.description ?? item.text ?? item.content ?? item.name,
+        MAX_PLANNING_TASK_CHARS,
+      );
+      const sanitizedTask = sanitizeAndRedactDetail(rawTask, MAX_PLANNING_TASK_CHARS);
+      if (!sanitizedTask) continue;
+
+      const status = boundedText(item.status ?? item.state, 40).toLowerCase();
+      const isDone = item.completed === true || ["completed", "done", "finished", "success", "closed", "resolved"].includes(status);
+      const isInProgress = ["in_progress", "in-progress", "running", "active", "in_bearbeitung", "in bearbeitung", "started"].includes(status);
+
+      let prefix = "- [ ]";
+      if (isDone) {
+        prefix = "- [x]";
+      } else if (isInProgress) {
+        prefix = "- [/]";
+      }
+
+      const line = `${prefix} ${sanitizedTask}`;
+      const addedLength = lines.length > 0 ? 1 + line.length : line.length;
+
+      if (currentLength + addedLength <= MAX_EXECUTION_DETAIL_CHARS) {
+        lines.push(line);
+        currentLength += addedLength;
+      } else {
+        break;
+      }
     }
   }
 
@@ -273,7 +284,7 @@ function formatPlanningDetailWithItems(
       : joined.slice(0, MAX_EXECUTION_DETAIL_CHARS);
   }
 
-  return summary ? summary.slice(0, MAX_EXECUTION_DETAIL_CHARS) : undefined;
+  return undefined;
 }
 
 type ToolConfig = {
@@ -282,9 +293,19 @@ type ToolConfig = {
   completed: string;
   failed: string;
   isPlanning?: boolean;
+  isThinkingTool?: boolean;
 };
 
 function resolveToolConfig(toolName: string): ToolConfig {
+  if (toolName.toLowerCase() === "thinking") {
+    return {
+      kind: "analysis",
+      running: "Anfrage wird analysiert",
+      completed: "Anfrage analysiert",
+      failed: "Anfrage konnte nicht analysiert werden",
+      isThinkingTool: true,
+    };
+  }
   if (PLANNING_TOOL_PATTERN.test(toolName)) {
     return {
       kind: "planning",
@@ -316,6 +337,46 @@ function resolveToolConfig(toolName: string): ToolConfig {
     completed: "Recherchewerkzeug ausgeführt",
     failed: "Recherchewerkzeug fehlgeschlagen",
   };
+}
+
+function extractThoughtProgress(data: Record<string, unknown>, event: Record<string, unknown>): string | undefined {
+  const args = recordOf(data.arguments) ?? recordOf(event.arguments) ?? (typeof data.arguments === "string" ? (() => {
+    try { return recordOf(JSON.parse(data.arguments)); } catch { return null; }
+  })() : null);
+
+  const numVal = data.thought_number ?? data.thoughtNumber ?? args?.thought_number ?? args?.thoughtNumber ?? event.thought_number ?? event.thoughtNumber;
+  const totalVal = data.total_thoughts ?? data.totalThoughts ?? args?.total_thoughts ?? args?.totalThoughts ?? event.total_thoughts ?? event.totalThoughts;
+
+  const num = typeof numVal === "number" && Number.isFinite(numVal) && numVal > 0 && numVal <= 999
+    ? Math.round(numVal)
+    : (typeof numVal === "string" && /^\d{1,3}$/.test(numVal) ? parseInt(numVal, 10) : undefined);
+  const total = typeof totalVal === "number" && Number.isFinite(totalVal) && totalVal > 0 && totalVal <= 999
+    ? Math.round(totalVal)
+    : (typeof totalVal === "string" && /^\d{1,3}$/.test(totalVal) ? parseInt(totalVal, 10) : undefined);
+
+  if (num !== undefined && total !== undefined) {
+    return `${num}/${total}`;
+  }
+  if (num !== undefined) {
+    return `${num}`;
+  }
+  return undefined;
+}
+
+function extractThinkingToolContent(data: Record<string, unknown>, event: Record<string, unknown>): string | undefined {
+  const candidates: unknown[] = [
+    data.thought,
+    data.output,
+    event.output,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate;
+    }
+  }
+
+  return undefined;
 }
 
 function extractSafeSearchQuery(data: Record<string, unknown>, event: Record<string, unknown>): string | undefined {
@@ -356,34 +417,119 @@ function extractSafeSearchQuery(data: Record<string, unknown>, event: Record<str
   return sanitized;
 }
 
+function extractCountFromObject(obj: Record<string, unknown> | null): number | undefined {
+  if (!obj) return undefined;
+
+  // 1. Total matches for grep
+  if (typeof obj.total_matches === "number" && Number.isFinite(obj.total_matches) && obj.total_matches >= 0) {
+    return Math.round(obj.total_matches);
+  }
+
+  // 2. Direct results array length (native precedence: results?.length ?? count)
+  if (Array.isArray(obj.results)) {
+    return obj.results.length;
+  }
+
+  // 3. Other result arrays
+  const otherArrays = [
+    obj.chunk_results,
+    obj.knowledge_results,
+    obj.chunks,
+    obj.matches,
+    obj.references,
+    obj.documents,
+    obj.items,
+  ];
+  for (const arr of otherArrays) {
+    if (Array.isArray(arr)) {
+      return arr.length;
+    }
+  }
+
+  // 4. Numeric fallback count properties
+  const numProps = [
+    obj.result_count,
+    obj.matches_count,
+    obj.count,
+    obj.total,
+  ];
+  for (const num of numProps) {
+    if (typeof num === "number" && Number.isFinite(num) && num >= 0) {
+      return Math.round(num);
+    }
+  }
+
+  // 5. Fallback: if any arrayProp itself was a number
+  const allArrayProps = [obj.results, ...otherArrays];
+  for (const arr of allArrayProps) {
+    if (typeof arr === "number" && Number.isFinite(arr) && arr >= 0) {
+      return Math.round(arr);
+    }
+  }
+
+  return undefined;
+}
+
+function extractKnowledgeChunksListSummary(
+  data: Record<string, unknown>,
+  event: Record<string, unknown>,
+): string | undefined {
+  const resultRecord = recordOf(data.result) ?? recordOf(event.result) ?? (typeof data.result === "string" ? (() => {
+    try { return recordOf(JSON.parse(data.result)); } catch { return null; }
+  })() : null);
+
+  const fetchedVal = data.fetched_chunks ?? resultRecord?.fetched_chunks ?? event.fetched_chunks;
+  if (fetchedVal === undefined) return undefined;
+
+  const fetched = Math.max(0, Math.round(Number(fetchedVal) || 0));
+  const totalVal = data.total_chunks ?? resultRecord?.total_chunks ?? event.total_chunks;
+  const total = totalVal !== undefined ? Math.max(0, Math.round(Number(totalVal) || 0)) : undefined;
+
+  const parts: string[] = [];
+  if (total !== undefined) {
+    parts.push(`${fetched} von ${total} ${total === 1 ? "Abschnitt" : "Abschnitten"} geladen`);
+  } else {
+    parts.push(`${fetched} ${fetched === 1 ? "Abschnitt" : "Abschnitte"} geladen`);
+  }
+
+  const pageSizeVal = data.page_size ?? resultRecord?.page_size ?? event.page_size;
+  const pageSize = Number(pageSizeVal || 0);
+  if (total !== undefined && pageSize > 0 && total > pageSize) {
+    const pageVal = data.page ?? resultRecord?.page ?? event.page;
+    const page = Math.max(1, Math.round(Number(pageVal) || 1));
+    parts.push(`Seite ${page}`);
+  }
+
+  return parts.join(" · ");
+}
+
 function extractSearchResultSummary(data: Record<string, unknown>, event: Record<string, unknown>): string | undefined {
-  const resultRecord = recordOf(data.result) ?? recordOf(event.result);
+  const resultRecord = recordOf(data.result) ?? recordOf(event.result) ?? (typeof data.result === "string" ? (() => {
+    try { return recordOf(JSON.parse(data.result)); } catch { return null; }
+  })() : null);
+
   let count: number | undefined;
 
-  if (resultRecord) {
-    if (Array.isArray(resultRecord.matches)) count = resultRecord.matches.length;
-    else if (Array.isArray(resultRecord.results)) count = resultRecord.results.length;
-    else if (Array.isArray(resultRecord.references)) count = resultRecord.references.length;
-    else if (Array.isArray(resultRecord.documents)) count = resultRecord.documents.length;
-    else if (Array.isArray(resultRecord.chunks)) count = resultRecord.chunks.length;
-    else if (Array.isArray(resultRecord.items)) count = resultRecord.items.length;
-    else if (typeof resultRecord.total === "number" && Number.isFinite(resultRecord.total) && resultRecord.total >= 0) {
-      count = Math.round(resultRecord.total);
-    } else if (typeof resultRecord.count === "number" && Number.isFinite(resultRecord.count) && resultRecord.count >= 0) {
-      count = Math.round(resultRecord.count);
-    } else if (typeof resultRecord.matches_count === "number" && Number.isFinite(resultRecord.matches_count) && resultRecord.matches_count >= 0) {
-      count = Math.round(resultRecord.matches_count);
+  // Check direct on data
+  count = extractCountFromObject(data);
+
+  // Check in resultRecord (data.result or event.result)
+  if (count === undefined && resultRecord) {
+    count = extractCountFromObject(resultRecord);
+  }
+
+  // Check on event
+  if (count === undefined) {
+    count = extractCountFromObject(event);
+  }
+
+  // Check if data.result or event.result itself is an array
+  if (count === undefined) {
+    if (Array.isArray(data.result)) {
+      count = data.result.length;
+    } else if (Array.isArray(event.result)) {
+      count = event.result.length;
     }
-  } else if (Array.isArray(data.result)) {
-    count = data.result.length;
-  } else if (Array.isArray(event.result)) {
-    count = event.result.length;
-  } else if (Array.isArray(data.matches)) {
-    count = data.matches.length;
-  } else if (Array.isArray(event.matches)) {
-    count = event.matches.length;
-  } else if (typeof data.count === "number" && Number.isFinite(data.count) && data.count >= 0) {
-    count = Math.round(data.count);
   }
 
   if (count === undefined) return undefined;
@@ -452,6 +598,7 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
     const done = data.done === true || event.done === true;
     const rawContent = extractProviderReasoningContent(event, data);
     const detail = rawContent ? sanitizeAndRedactDetail(rawContent) : undefined;
+    const duration = durationMs(data.duration_ms ?? data.duration ?? event.duration_ms ?? event.duration);
     return {
       fatalError: false,
       unsupported: false,
@@ -461,6 +608,7 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
         status: done ? "completed" : "running",
         label: done ? "Anfrage analysiert" : "Anfrage wird analysiert",
         ...(detail ? { detail } : {}),
+        ...(duration !== undefined ? { durationMs: duration } : {}),
       },
     };
   }
@@ -469,6 +617,7 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
     const done = data.done === true || event.done === true;
     const rawContent = extractProviderReasoningContent(event, data);
     const detail = rawContent ? sanitizeAndRedactDetail(rawContent) : undefined;
+    const duration = durationMs(data.duration_ms ?? data.duration ?? event.duration_ms ?? event.duration);
     return {
       fatalError: false,
       unsupported: false,
@@ -478,6 +627,7 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
         status: done ? "completed" : "running",
         label: done ? "Rechercheergebnisse bewertet" : "Rechercheergebnisse werden bewertet",
         ...(detail ? { detail } : {}),
+        ...(duration !== undefined ? { durationMs: duration } : {}),
       },
     };
   }
@@ -519,18 +669,38 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
     let detail: string | undefined;
     let counts: FredPlanningCounts | null = null;
 
-    if (config.isPlanning) {
+    if (config.isThinkingTool) {
+      const progress = extractThoughtProgress(data, event);
+      if (progress) {
+        if (status === "running") {
+          label = `Anfrage wird analysiert (${progress})`;
+        } else if (status === "completed") {
+          label = `Anfrage analysiert (${progress})`;
+        }
+      }
+      if (finished) {
+        const rawThought = extractThinkingToolContent(data, event);
+        detail = rawThought ? sanitizeAndRedactDetail(rawThought) : undefined;
+      }
+    } else if (config.isPlanning) {
       counts = extractPlanningCounts(data, event);
       const items = extractPlanningItems(data, event);
-      detail = counts ? formatPlanningDetailWithItems(counts, items) : undefined;
+      const currentTask = extractPlanningTask(data, event);
+      detail = counts || currentTask ? formatPlanningDetailWithItems(counts ?? { total: 0 }, items, currentTask) : undefined;
     } else if (config.kind === "knowledge" || config.kind === "web") {
       if (responseType === "tool_call") {
         const query = extractSafeSearchQuery(data, event);
         detail = query ? `Suche: ${query}` : undefined;
       } else if (responseType === "tool_result" && successful) {
-        detail = extractSearchResultSummary(data, event);
+        if (toolName.toLowerCase() === "list_knowledge_chunks") {
+          detail = extractKnowledgeChunksListSummary(data, event) ?? extractSearchResultSummary(data, event);
+        } else {
+          detail = extractSearchResultSummary(data, event);
+        }
       }
     }
+
+    label = boundedText(label, MAX_EXECUTION_LABEL_CHARS);
 
     return {
       fatalError: false,
@@ -556,6 +726,41 @@ export function mergeFredExecutionStep(
 ): FredExecutionStep[] {
   const existingIndex = steps.findIndex((step) => step.id === update.id);
   if (existingIndex < 0) {
+    // Merge consecutive analysis steps (mirroring native WeKnora buildFullEventList)
+    if (steps.length > 0 && update.kind === "analysis") {
+      const lastIndex = steps.length - 1;
+      const lastStep = steps[lastIndex];
+      if (lastStep.kind === "analysis") {
+        const prevDetail = lastStep.detail || "";
+        const curDetail = update.detail || "";
+
+        let mergedDetail: string | undefined;
+        if (curDetail && prevDetail && prevDetail.includes(curDetail)) {
+          mergedDetail = prevDetail;
+        } else if (curDetail && prevDetail && curDetail.includes(prevDetail)) {
+          mergedDetail = curDetail;
+        } else if (curDetail && prevDetail) {
+          mergedDetail = sanitizeAndRedactDetail(`${prevDetail}\n\n${curDetail}`, MAX_EXECUTION_DETAIL_CHARS);
+        } else {
+          mergedDetail = curDetail || prevDetail || undefined;
+        }
+
+        const merged: FredExecutionStep = {
+          ...lastStep,
+          status: update.status,
+          label: update.label,
+          ...(mergedDetail !== undefined ? { detail: mergedDetail } : {}),
+          ...(update.durationMs !== undefined ? { durationMs: update.durationMs } : (lastStep.durationMs !== undefined ? { durationMs: lastStep.durationMs } : {})),
+        };
+        if (mergedDetail === undefined) {
+          delete merged.detail;
+        }
+
+        const next = [...steps];
+        next[lastIndex] = merged;
+        return next;
+      }
+    }
     return [...steps, update].slice(-MAX_EXECUTION_STEPS);
   }
 

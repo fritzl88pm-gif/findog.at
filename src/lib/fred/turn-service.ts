@@ -512,7 +512,7 @@ export async function* executeFredTurn(
           upstreamMsgId = upstreamEvent.assistant_message_id;
         }
       }
-      const research = parseWeKnoraResearchEvent(parsed);
+      const research = parseWeKnoraResearchEvent(parsed, { includeDirectSources: isAdvanced });
       if (research.fatalError) {
         throw new UserVisibleError(
           `${selectedAgentName} konnte die Anfrage nicht abschließen.`,

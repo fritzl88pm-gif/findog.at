@@ -621,4 +621,773 @@ describe("WeKnora execution trace projection and parser", () => {
     expect(serializedResults).not.toContain("auth.internal.corp");
     expect(serializedResults).not.toContain("custom_fetch");
   });
+
+  it("parses native WeKnora todo_write envelopes with direct data.steps and data.task", () => {
+    const nativeCall = parseWeKnoraExecutionEvent({
+      response_type: "tool_call",
+      data: {
+        tool_call_id: "native-todo-call-99",
+        tool_name: "todo_write",
+        arguments: {
+          task: "Prüfung der Pendlerpauschale",
+          steps: [
+            { task: "Gesetzeslage in § 16 EStG analysieren", status: "completed" },
+            { task: "VwGH-Rechtsprechung recherchieren", status: "in_progress" },
+            { task: "Zusammenfassung formulieren", status: "pending" },
+          ],
+        },
+      },
+    });
+
+    expect(nativeCall.step).toEqual({
+      id: expect.stringMatching(/^planning:[a-z0-9]+$/u),
+      kind: "planning",
+      status: "running",
+      label: "Rechercheplan wird aktualisiert",
+      detail: "Aktuelle Aufgabe: Prüfung der Pendlerpauschale\n3 Aufgaben geplant · 1 abgeschlossen · 1 in Bearbeitung · 1 offen\n- [x] Gesetzeslage in § 16 EStG analysieren\n- [/] VwGH-Rechtsprechung recherchieren\n- [ ] Zusammenfassung formulieren",
+      counts: {
+        total: 3,
+        completed: 1,
+        inProgress: 1,
+        open: 1,
+      },
+    });
+
+    // Native tool_result with direct data.steps and data.task
+    const nativeResult = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "native-todo-call-99",
+        tool_name: "todo_write",
+        success: true,
+        duration_ms: 180,
+        task: "Prüfung der Pendlerpauschale",
+        steps: [
+          { task: "Gesetzeslage in § 16 EStG analysieren", status: "completed" },
+          { task: "VwGH-Rechtsprechung recherchieren", status: "completed" },
+          { task: "Zusammenfassung formulieren", status: "completed" },
+        ],
+      },
+    });
+
+    expect(nativeResult.step).toEqual({
+      id: nativeCall.step?.id,
+      kind: "planning",
+      status: "completed",
+      label: "Rechercheplan aktualisiert",
+      detail: "Aktuelle Aufgabe: Prüfung der Pendlerpauschale\n3 Aufgaben geplant · 3 abgeschlossen\n- [x] Gesetzeslage in § 16 EStG analysieren\n- [x] VwGH-Rechtsprechung recherchieren\n- [x] Zusammenfassung formulieren",
+      durationMs: 180,
+      counts: {
+        total: 3,
+        completed: 3,
+        inProgress: 0,
+        open: 0,
+      },
+    });
+
+    let merged = mergeFredExecutionStep([], nativeCall.step!);
+    merged = mergeFredExecutionStep(merged, nativeResult.step!);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toEqual(nativeResult.step);
+  });
+
+  it("parses native thinking tool as analysis with thought progress, redactions, and merge", () => {
+    const thinkCall = parseWeKnoraExecutionEvent({
+      response_type: "tool_call",
+      data: {
+        tool_call_id: "think-call-42",
+        tool_name: "thinking",
+        arguments: {
+          thought: "Analysiere Voraussetzungen nach EStG § 16",
+          thought_number: 1,
+          total_thoughts: 3,
+        },
+      },
+    });
+
+    expect(thinkCall.step).toEqual({
+      id: expect.stringMatching(/^analysis:[a-z0-9]+$/u),
+      kind: "analysis",
+      status: "running",
+      label: "Anfrage wird analysiert (1/3)",
+    });
+
+    const thinkResult = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "think-call-42",
+        tool_name: "thinking",
+        thought: "Analysiere Voraussetzungen nach EStG § 16. Keine Ausnahme ersichtlich.",
+        thought_number: 1,
+        total_thoughts: 3,
+        duration_ms: 320,
+        success: true,
+      },
+    });
+
+    expect(thinkResult.step).toEqual({
+      id: thinkCall.step?.id,
+      kind: "analysis",
+      status: "completed",
+      label: "Anfrage analysiert (1/3)",
+      detail: "Analysiere Voraussetzungen nach EStG § 16. Keine Ausnahme ersichtlich.",
+      durationMs: 320,
+    });
+
+    let merged = mergeFredExecutionStep([], thinkCall.step!);
+    merged = mergeFredExecutionStep(merged, thinkResult.step!);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toEqual(thinkResult.step);
+  });
+
+  it("parses native direct result shapes for retrieval tools (data.results, data.chunk_results, data.total_matches, etc.)", () => {
+    // 1. Direct data.results on knowledge_search
+    const directResults = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "kb-direct-1",
+        tool_name: "search_knowledge",
+        success: true,
+        duration_ms: 150,
+        results: [
+          { document_id: "doc-123", chunk_id: "chk-456", text: "Raw confidential chunk text" },
+          { document_id: "doc-124", chunk_id: "chk-457", text: "Another chunk text" },
+        ],
+      },
+    });
+
+    expect(directResults.step).toEqual({
+      id: expect.stringMatching(/^knowledge:[a-z0-9]+$/u),
+      kind: "knowledge",
+      status: "completed",
+      label: "Wissensbasis durchsucht",
+      detail: "2 Treffer",
+      durationMs: 150,
+    });
+    expect(JSON.stringify(directResults)).not.toContain("Raw confidential");
+    expect(JSON.stringify(directResults)).not.toContain("chk-456");
+    expect(JSON.stringify(directResults)).not.toContain("doc-123");
+
+    // 2. Direct data.total_matches and data.chunk_results on grep_chunks
+    const grepResult = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "grep-1",
+        tool_name: "grep_chunks",
+        success: true,
+        duration_ms: 220,
+        total_matches: 7,
+        chunk_results: [
+          { chunk_id: "c1", matches: ["match 1", "match 2"] },
+        ],
+      },
+    });
+
+    expect(grepResult.step).toEqual({
+      id: expect.stringMatching(/^knowledge:[a-z0-9]+$/u),
+      kind: "knowledge",
+      status: "completed",
+      label: "Wissensbasis durchsucht",
+      detail: "7 Treffer",
+      durationMs: 220,
+    });
+
+    // 3. Direct data.knowledge_results
+    const kbResults = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "kb-res-1",
+        tool_name: "knowledge_search",
+        success: true,
+        knowledge_results: [{ id: "k1" }, { id: "k2" }, { id: "k3" }],
+      },
+    });
+    expect(kbResults.step?.detail).toBe("3 Treffer");
+
+    // 4. Direct data.chunks on list_knowledge_chunks
+    const chunksResult = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "chunks-1",
+        tool_name: "list_knowledge_chunks",
+        success: true,
+        chunks: [{ id: "ch1" }],
+      },
+    });
+    expect(chunksResult.step?.detail).toBe("1 Treffer");
+
+    // 5. Direct data.result_count
+    const resultCountRes = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "count-1",
+        tool_name: "web_search",
+        success: true,
+        result_count: 5,
+      },
+    });
+    expect(resultCountRes.step?.detail).toBe("5 Treffer");
+
+    // 6. Zero results with direct count 0
+    const zeroResults = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "zero-1",
+        tool_name: "knowledge_search",
+        success: true,
+        total_matches: 0,
+      },
+    });
+    expect(zeroResults.step?.detail).toBe("0 Treffer");
+  });
+
+  it("preserves provider thinking and reflection lifecycle and parses completion duration_ms", () => {
+    // 1. Streaming thinking chunks
+    const chunk1 = parseWeKnoraExecutionEvent({
+      response_type: "thinking",
+      content: "Erster Gedanke: ",
+      data: {
+        event_id: "think-lifecycle-1",
+      },
+    });
+
+    const chunk2 = parseWeKnoraExecutionEvent({
+      response_type: "thinking",
+      content: "Zweiter Gedanke.",
+      data: {
+        event_id: "think-lifecycle-1",
+      },
+    });
+
+    let steps = mergeFredExecutionStep([], chunk1.step!);
+    steps = mergeFredExecutionStep(steps, chunk2.step!);
+    expect(steps[0]?.detail).toBe("Erster Gedanke: Zweiter Gedanke.");
+    expect(steps[0]?.status).toBe("running");
+
+    // Native completion event with duration_ms and no text content
+    const thinkDone = parseWeKnoraExecutionEvent({
+      response_type: "thinking",
+      done: true,
+      data: {
+        event_id: "think-lifecycle-1",
+        done: true,
+        duration_ms: 1450,
+      },
+    });
+
+    expect(thinkDone.step).toEqual({
+      id: chunk1.step?.id,
+      kind: "analysis",
+      status: "completed",
+      label: "Anfrage analysiert",
+      durationMs: 1450,
+    });
+
+    steps = mergeFredExecutionStep(steps, thinkDone.step!);
+    expect(steps[0]).toEqual({
+      id: chunk1.step?.id,
+      kind: "analysis",
+      status: "completed",
+      label: "Anfrage analysiert",
+      detail: "Erster Gedanke: Zweiter Gedanke.",
+      durationMs: 1450,
+    });
+
+    // 2. Reflection completion with duration_ms
+    const reflectionDone = parseWeKnoraExecutionEvent({
+      response_type: "reflection",
+      data: {
+        event_id: "refl-lifecycle-1",
+        done: true,
+        duration_ms: 680,
+      },
+    });
+
+    expect(reflectionDone.step).toEqual({
+      id: expect.stringMatching(/^evaluation:[a-z0-9]+$/u),
+      kind: "evaluation",
+      status: "completed",
+      label: "Rechercheergebnisse bewertet",
+      durationMs: 680,
+    });
+  });
+
+  it("ensures secrets and raw payloads are absent from native thinking tool and direct result envelopes", () => {
+    const sensitiveThinkingTool = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "think-secret-1",
+        tool_name: "thinking",
+        thought: "Verwende sk_live_1234567890abcdef und internen Pfad /etc/secrets/key.pem",
+        duration_ms: 100,
+        success: true,
+      },
+    });
+
+    expect(sensitiveThinkingTool.step?.detail).not.toContain("sk_live_1234567890abcdef");
+    expect(sensitiveThinkingTool.step?.detail).not.toContain("/etc/secrets");
+    expect(sensitiveThinkingTool.step?.detail).toContain("[REDACTED_API_KEY]");
+    expect(sensitiveThinkingTool.step?.detail).toContain("[REDACTED_PATH]");
+
+    const sensitiveKbResult = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "kb-secret-1",
+        tool_name: "search_knowledge",
+        results: [
+          { secret_content: "super-secret", raw_tokens: [1, 2, 3] },
+        ],
+        success: true,
+      },
+    });
+
+    expect(sensitiveKbResult.step?.detail).toBe("1 Treffer");
+    expect(JSON.stringify(sensitiveKbResult)).not.toContain("super-secret");
+    expect(JSON.stringify(sensitiveKbResult)).not.toContain("raw_tokens");
+  });
+
+  it("strictly restricts thinking-tool detail to data.thought or data.output and rejects reasoning, content, or nested results", () => {
+    // 1. data.reasoning must NOT be exposed
+    const reasoningEvent = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "think-reasoning-1",
+        tool_name: "thinking",
+        reasoning: "private reasoning not shown natively",
+        success: true,
+      },
+    });
+    expect(reasoningEvent.step?.detail).toBeUndefined();
+
+    // 2. nested result.content must NOT be exposed
+    const nestedContentEvent = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "think-nested-1",
+        tool_name: "thinking",
+        result: {
+          content: "nested arbitrary content not shown natively",
+        },
+        success: true,
+      },
+    });
+    expect(nestedContentEvent.step?.detail).toBeUndefined();
+
+    // 3. pending tool_call arguments must NOT be exposed as detail
+    const pendingCall = parseWeKnoraExecutionEvent({
+      response_type: "tool_call",
+      data: {
+        tool_call_id: "think-pending-1",
+        tool_name: "thinking",
+        arguments: {
+          thought: "pending argument thought should not be exposed",
+          reasoning: "pending argument reasoning",
+        },
+      },
+    });
+    expect(pendingCall.step?.detail).toBeUndefined();
+
+    // 4. direct data.thought IS exposed
+    const validThought = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "think-valid-1",
+        tool_name: "thinking",
+        thought: "Gültiger Analyseschritt für den Benutzer sichtbar",
+        success: true,
+      },
+    });
+    expect(validThought.step?.detail).toBe("Gültiger Analyseschritt für den Benutzer sichtbar");
+
+    // 5. direct data.output IS exposed
+    const validOutput = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "think-output-1",
+        tool_name: "thinking",
+        output: "Gültige Ausgabe des Analyse-Tools",
+        success: true,
+      },
+    });
+    expect(validOutput.step?.detail).toBe("Gültige Ausgabe des Analyse-Tools");
+  });
+
+  it("prioritizes results array length over numeric count when both exist ({count:5, results:[2]} => 2 Treffer)", () => {
+    const conflictResult = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "web-conflict-1",
+        tool_name: "web_search",
+        count: 5,
+        results: [
+          { url: "https://example.com/1", title: "Result 1" },
+          { url: "https://example.com/2", title: "Result 2" },
+        ],
+        success: true,
+      },
+    });
+
+    expect(conflictResult.step?.detail).toBe("2 Treffer");
+  });
+
+  it("rejects or clamps huge thought numbers and bounds generated labels to MAX_EXECUTION_LABEL_CHARS", () => {
+    const hugeNumberEvent = parseWeKnoraExecutionEvent({
+      response_type: "tool_call",
+      data: {
+        tool_call_id: "think-huge-1",
+        tool_name: "thinking",
+        thought_number: 999999999999999,
+        total_thoughts: 999999999999999,
+      },
+    });
+
+    expect(hugeNumberEvent.step?.label).toBe("Anfrage wird analysiert");
+    expect(hugeNumberEvent.step?.label.length).toBeLessThanOrEqual(200);
+
+    const normalProgress = parseWeKnoraExecutionEvent({
+      response_type: "tool_call",
+      data: {
+        tool_call_id: "think-progress-1",
+        tool_name: "thinking",
+        thought_number: 2,
+        total_thoughts: 5,
+      },
+    });
+
+    expect(normalProgress.step?.label).toBe("Anfrage wird analysiert (2/5)");
+  });
+
+  it("formats list_knowledge_chunks summary with German chunk range and paging", () => {
+    const listResultWithPaging = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "list-kc-1",
+        tool_name: "list_knowledge_chunks",
+        fetched_chunks: 5,
+        total_chunks: 12,
+        page: 1,
+        page_size: 5,
+        chunks: [{ chunk_id: "c1" }, { chunk_id: "c2" }],
+        success: true,
+      },
+    });
+
+    expect(listResultWithPaging.step?.detail).toBe("5 von 12 Abschnitten geladen · Seite 1");
+
+    const listResultNoPaging = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "list-kc-2",
+        tool_name: "list_knowledge_chunks",
+        fetched_chunks: 3,
+        total_chunks: 3,
+        chunks: [{ chunk_id: "c1" }],
+        success: true,
+      },
+    });
+
+    expect(listResultNoPaging.step?.detail).toBe("3 von 3 Abschnitten geladen");
+
+    const listResultFallback = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "list-kc-3",
+        tool_name: "list_knowledge_chunks",
+        chunks: [{ chunk_id: "c1" }, { chunk_id: "c2" }],
+        success: true,
+      },
+    });
+
+    expect(listResultFallback.step?.detail).toBe("2 Treffer");
+  });
+
+  it("merges and deduplicates consecutive thinking and thinking-tool events", () => {
+    // 1. Equal / contained content deduplication
+    const sseThink = parseWeKnoraExecutionEvent({
+      response_type: "thinking",
+      content: "Analyse der Rechtslage nach EStG § 16.",
+      done: true,
+      data: { event_id: "think-sse-1" },
+    });
+
+    const toolThinkSame = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "think-tool-call-1",
+        tool_name: "thinking",
+        thought: "Analyse der Rechtslage nach EStG § 16.",
+        success: true,
+      },
+    });
+
+    let steps: FredExecutionStep[] = [];
+    steps = mergeFredExecutionStep(steps, sseThink.step!);
+    expect(steps).toHaveLength(1);
+
+    // Consecutive tool thinking with same content merges into the single analysis step
+    steps = mergeFredExecutionStep(steps, toolThinkSame.step!);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].detail).toBe("Analyse der Rechtslage nach EStG § 16.");
+
+    // 2. Contained content replacement
+    const toolThinkExpanded = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "think-tool-call-2",
+        tool_name: "thinking",
+        thought: "Analyse der Rechtslage nach EStG § 16. Ergänzung: Prüfung der Ausnahmetatbestände.",
+        success: true,
+      },
+    });
+
+    steps = mergeFredExecutionStep(steps, toolThinkExpanded.step!);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].detail).toBe("Analyse der Rechtslage nach EStG § 16. Ergänzung: Prüfung der Ausnahmetatbestände.");
+
+    // 3. Non-overlapping content combining
+    const toolThinkAdditional = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "think-tool-call-3",
+        tool_name: "thinking",
+        thought: "Zusätzliche Betrachtung der Judikatur des VwGH.",
+        success: true,
+      },
+    });
+
+    steps = mergeFredExecutionStep(steps, toolThinkAdditional.step!);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].detail).toBe("Analyse der Rechtslage nach EStG § 16. Ergänzung: Prüfung der Ausnahmetatbestände.\n\nZusätzliche Betrachtung der Judikatur des VwGH.");
+  });
+
+  it("does not merge thinking events across an intervening non-analysis step", () => {
+    const think1 = parseWeKnoraExecutionEvent({
+      response_type: "thinking",
+      content: "Erster Analyseschritt",
+      done: true,
+      data: { event_id: "think-first" },
+    });
+
+    const planStep = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "plan-1",
+        tool_name: "todo_write",
+        task: "Hauptaufgabe",
+        steps: [{ task: "Schritt 1", status: "completed" }],
+        success: true,
+      },
+    });
+
+    const think2 = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "think-second",
+        tool_name: "thinking",
+        thought: "Zweiter Analyseschritt nach Planung",
+        success: true,
+      },
+    });
+
+    let steps: FredExecutionStep[] = [];
+    steps = mergeFredExecutionStep(steps, think1.step!);
+    expect(steps).toHaveLength(1);
+
+    steps = mergeFredExecutionStep(steps, planStep.step!);
+    expect(steps).toHaveLength(2);
+    expect(steps[1].kind).toBe("planning");
+
+    // think2 is separated from think1 by planStep, so it must NOT merge into think1
+    steps = mergeFredExecutionStep(steps, think2.step!);
+    expect(steps).toHaveLength(3);
+    expect(steps[0].kind).toBe("analysis");
+    expect(steps[0].detail).toBe("Erster Analyseschritt");
+    expect(steps[1].kind).toBe("planning");
+    expect(steps[2].kind).toBe("analysis");
+    expect(steps[2].detail).toBe("Zweiter Analyseschritt nach Planung");
+  });
+
+  it("handles adjacent analysis merge lifecycle: completed -> running -> completed and failed -> running -> completed", () => {
+    const think1Running = parseWeKnoraExecutionEvent({
+      response_type: "tool_call",
+      data: {
+        tool_call_id: "think-1",
+        tool_name: "thinking",
+      },
+    });
+    const think1Done = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "think-1",
+        tool_name: "thinking",
+        thought: "Erste Analyse abgeschlossen.",
+        success: true,
+      },
+    });
+
+    let steps = mergeFredExecutionStep([], think1Running.step!);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].status).toBe("running");
+
+    steps = mergeFredExecutionStep(steps, think1Done.step!);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].status).toBe("completed");
+    expect(steps[0].label).toBe("Anfrage analysiert");
+
+    // Second distinct analysis step immediately following completed first step
+    const think2Running = parseWeKnoraExecutionEvent({
+      response_type: "tool_call",
+      data: {
+        tool_call_id: "think-2",
+        tool_name: "thinking",
+      },
+    });
+    steps = mergeFredExecutionStep(steps, think2Running.step!);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].status).toBe("running");
+    expect(steps[0].label).toBe("Anfrage wird analysiert");
+
+    // Second analysis step completes
+    const think2Done = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "think-2",
+        tool_name: "thinking",
+        thought: "Zweite Analyse abgeschlossen.",
+        success: true,
+      },
+    });
+    steps = mergeFredExecutionStep(steps, think2Done.step!);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].status).toBe("completed");
+    expect(steps[0].label).toBe("Anfrage analysiert");
+
+    // Failed analysis followed by new running analysis
+    const think3Failed = parseWeKnoraExecutionEvent({
+      response_type: "error",
+      data: {
+        tool_call_id: "think-3",
+        tool_name: "thinking",
+        success: false,
+      },
+    });
+    let failedSteps = mergeFredExecutionStep([], think3Failed.step!);
+    expect(failedSteps[0].status).toBe("failed");
+
+    const think4Running = parseWeKnoraExecutionEvent({
+      response_type: "tool_call",
+      data: {
+        tool_call_id: "think-4",
+        tool_name: "thinking",
+      },
+    });
+    failedSteps = mergeFredExecutionStep(failedSteps, think4Running.step!);
+    expect(failedSteps).toHaveLength(1);
+    expect(failedSteps[0].status).toBe("running");
+  });
+
+  it("redacts IPv6, trailing-dot internal URLs, and sensitive query keys in provider thinking while preserving German text and safe public URLs", () => {
+    const rawThinking = [
+      "Prüfe IPv6-URL http://[::1]/internal und http://[fe80::1]/service für interne Konfiguration.",
+      "Prüfe trailing-dot URL http://localhost.:8080/admin sowie http://metadata.google.internal./computeMetadata.",
+      "Prüfe API-Zugriff über https://example.com/oauth?accessToken=secret_tok_123.",
+      "Prüfe Client-Secret über https://example.com/api?clientSecret=my_secret_key&page=1.",
+      "Prüfe Nested-Auth über https://example.com/auth?auth[token]=nested_val.",
+      "Sichere öffentliche Quelle: https://ris.bka.gv.at/Dokument.wxe?id=123.",
+      "Die Pendlerpauschale steht Arbeitnehmern unter den Voraussetzungen des § 16 EStG 1988 zu.",
+    ].join("\n");
+
+    const thinkingEvent = parseWeKnoraExecutionEvent({
+      response_type: "thinking",
+      content: rawThinking,
+      data: { event_id: "think-security-consolidated" },
+    });
+
+    const detail = thinkingEvent.step?.detail;
+    expect(detail).toBeDefined();
+
+    // Sensitive / internal URLs must be replaced with [REDACTED_URL]
+    expect(detail).not.toContain("http://[::1]");
+    expect(detail).not.toContain("http://[fe80::1]");
+    expect(detail).not.toContain("http://localhost.");
+    expect(detail).not.toContain("http://metadata.google.internal.");
+    expect(detail).not.toContain("accessToken=");
+    expect(detail).not.toContain("clientSecret=");
+    expect(detail).not.toContain("auth[token]=");
+    expect(detail).not.toContain("secret_tok_123");
+    expect(detail).not.toContain("my_secret_key");
+    expect(detail).not.toContain("nested_val");
+
+    // Redacted markers present
+    expect(detail).toContain("[REDACTED_URL]");
+
+    // Safe public URL preserved
+    expect(detail).toContain("https://ris.bka.gv.at/Dokument.wxe?id=123");
+
+    // German text preserved
+    expect(detail).toContain("Die Pendlerpauschale steht Arbeitnehmern unter den Voraussetzungen des § 16 EStG 1988 zu.");
+  });
+
+  it("redacts / suppresses search query details containing IPv6, trailing-dot internal URLs, or sensitive query keys while preserving German query and safe public URL", () => {
+    // 1. IPv6 localhost / private URLs in query
+    const ipv6Query = parseWeKnoraExecutionEvent({
+      response_type: "tool_call",
+      data: {
+        tool_call_id: "search-ipv6",
+        tool_name: "web_search",
+        arguments: { query: "http://[::1]/api/v1" },
+      },
+    });
+    expect(ipv6Query.step?.detail).toBeUndefined();
+
+    // 2. Trailing-dot internal URL in query
+    const trailingDotQuery = parseWeKnoraExecutionEvent({
+      response_type: "tool_call",
+      data: {
+        tool_call_id: "search-trailing-dot",
+        tool_name: "web_search",
+        arguments: { query: "http://service.local./search?q=test" },
+      },
+    });
+    expect(trailingDotQuery.step?.detail).toBeUndefined();
+
+    // 3. Sensitive query parameters in URL query
+    for (const url of [
+      "https://example.com/oauth?accessToken=sec123",
+      "https://example.com/api?clientSecret=sec456",
+      "https://example.com/auth?auth[token]=sec789",
+    ]) {
+      const sensitiveQuery = parseWeKnoraExecutionEvent({
+        response_type: "tool_call",
+        data: {
+          tool_call_id: "search-sensitive",
+          tool_name: "web_search",
+          arguments: { query: url },
+        },
+      });
+      expect(sensitiveQuery.step?.detail).toBeUndefined();
+    }
+
+    // 4. Safe German search query preserved
+    const germanQuery = parseWeKnoraExecutionEvent({
+      response_type: "tool_call",
+      data: {
+        tool_call_id: "search-german",
+        tool_name: "web_search",
+        arguments: { query: "Pendlerpauschale Voraussetzungen 2025" },
+      },
+    });
+    expect(germanQuery.step?.detail).toBe("Suche: Pendlerpauschale Voraussetzungen 2025");
+
+    // 5. Safe public URL search query preserved
+    const safeUrlQuery = parseWeKnoraExecutionEvent({
+      response_type: "tool_call",
+      data: {
+        tool_call_id: "search-safe-url",
+        tool_name: "web_search",
+        arguments: { query: "https://ris.bka.gv.at/Dokument.wxe?id=123" },
+      },
+    });
+    expect(safeUrlQuery.step?.detail).toBe("Suche: https://ris.bka.gv.at/Dokument.wxe?id=123");
+  });
 });

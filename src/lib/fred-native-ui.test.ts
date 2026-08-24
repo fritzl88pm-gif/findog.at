@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { resolveResearchTraceDisplay } from "@/components/fred-native-chat-view";
 import { createStreamingTextBuffer } from "@/lib/chat/streaming-text-buffer";
 
 const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.meta.url)), "utf8");
@@ -620,5 +621,131 @@ describe("Fred ResearchTrace rendering", () => {
     expect(cssSource).toContain(".fred-execution-label");
     expect(cssSource).toContain(".fred-execution-duration");
     expect(cssSource).toContain(".fred-execution-detail");
+  });
+
+  it("strictly hides execution-only traces in simple mode while supporting advanced mode with simple fallbacks", () => {
+    const execStep = {
+      id: "exec-1",
+      kind: "analysis" as const,
+      status: "completed" as const,
+      label: "Anfrage analysiert",
+    };
+    const simpleStep = {
+      id: "simple-1",
+      kind: "knowledge" as const,
+      status: "completed" as const,
+      label: "Wissensbasis durchsucht",
+    };
+    const sourceRef = {
+      kind: "web" as const,
+      url: "https://example.com",
+      title: "Beispiel",
+    };
+
+    // 1. Simple mode with only executionSteps: must remain invisible
+    expect(resolveResearchTraceDisplay({
+      displayMode: "simple",
+      executionSteps: [execStep],
+      steps: [],
+      sources: [],
+    })).toEqual({
+      shouldRender: false,
+      isAdvanced: false,
+      summary: "",
+    });
+
+    // 2. Simple mode with simple steps: visible as simple
+    expect(resolveResearchTraceDisplay({
+      displayMode: "simple",
+      steps: [simpleStep],
+      sources: [],
+    })).toEqual({
+      shouldRender: true,
+      isAdvanced: false,
+      summary: "Rechercheverlauf · 1 Schritte",
+    });
+
+    // 3. Simple mode with sources: visible as simple
+    expect(resolveResearchTraceDisplay({
+      displayMode: "simple",
+      steps: [],
+      sources: [sourceRef],
+    })).toEqual({
+      shouldRender: true,
+      isAdvanced: false,
+      summary: "Rechercheverlauf",
+    });
+
+    // 4. Simple mode with both simple steps and executionSteps: renders simple
+    expect(resolveResearchTraceDisplay({
+      displayMode: "simple",
+      steps: [simpleStep],
+      executionSteps: [execStep],
+      sources: [],
+    })).toEqual({
+      shouldRender: true,
+      isAdvanced: false,
+      summary: "Rechercheverlauf · 1 Schritte",
+    });
+
+    // 5. Advanced mode with executionSteps: renders advanced
+    expect(resolveResearchTraceDisplay({
+      displayMode: "advanced",
+      executionSteps: [execStep],
+      steps: [],
+      sources: [],
+    })).toEqual({
+      shouldRender: true,
+      isAdvanced: true,
+      summary: "Ausführungsverlauf · 1 Schritte",
+    });
+
+    // 6. Advanced mode with executionSteps AND simple steps: renders advanced
+    expect(resolveResearchTraceDisplay({
+      displayMode: "advanced",
+      executionSteps: [execStep],
+      steps: [simpleStep],
+      sources: [],
+    })).toEqual({
+      shouldRender: true,
+      isAdvanced: true,
+      summary: "Ausführungsverlauf · 1 Schritte",
+    });
+
+    // 7. Advanced mode without executionSteps, but with simple steps: fallback to simple
+    expect(resolveResearchTraceDisplay({
+      displayMode: "advanced",
+      executionSteps: [],
+      steps: [simpleStep],
+      sources: [],
+    })).toEqual({
+      shouldRender: true,
+      isAdvanced: false,
+      summary: "Rechercheverlauf · 1 Schritte",
+    });
+
+    // 8. Advanced mode without executionSteps, but with sources: fallback to simple
+    expect(resolveResearchTraceDisplay({
+      displayMode: "advanced",
+      executionSteps: [],
+      steps: [],
+      sources: [sourceRef],
+    })).toEqual({
+      shouldRender: true,
+      isAdvanced: false,
+      summary: "Rechercheverlauf",
+    });
+
+    // 9. Advanced mode with nothing: hidden
+    expect(resolveResearchTraceDisplay({
+      displayMode: "advanced",
+      executionSteps: [],
+      steps: [],
+      sources: [],
+    })).toEqual({
+      shouldRender: false,
+      isAdvanced: false,
+      summary: "",
+    });
   });
 });
