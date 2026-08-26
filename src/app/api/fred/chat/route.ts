@@ -995,9 +995,8 @@ export async function POST(request: Request) {
               const configuredDocumentProvider = createConfiguredDocumentProvider({
                 getSettings: () => getScanningSettings(supabase),
                 mineruProvider: (files, options = {}) => processMineruBatch(files, options),
-                openrouterProvider: (files, options) => extractDocumentsWithConfiguredModel(files, {
-                  model: options.model,
-                  signal: options.signal,
+                omnirouteProvider: (files, options) => extractDocumentsWithConfiguredModel(files, {
+                  signal: options?.signal,
                 }),
               });
               const combined = await runWithTimeout(

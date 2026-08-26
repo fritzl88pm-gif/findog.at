@@ -124,9 +124,8 @@ export function buildPreprocessorProviders(supabase: Supabase): AttachmentPrepro
     document: createConfiguredDocumentProvider({
       getSettings: () => getScanningSettings(supabase),
       mineruProvider: (files, options = {}) => processMineruBatch(files, options),
-      openrouterProvider: (files, options) => extractDocumentsWithConfiguredModel(files, {
-        model: options.model,
-        signal: options.signal,
+      omnirouteProvider: (files, options) => extractDocumentsWithConfiguredModel(files, {
+        signal: options?.signal,
       }),
     }),
     gemini: (uri, options = {}) => describeImage(uri, options),

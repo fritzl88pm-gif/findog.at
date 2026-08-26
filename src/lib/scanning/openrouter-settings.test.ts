@@ -55,7 +55,7 @@ describe("Scanning adapter with explicit model and prompt", () => {
     const customModel = "anthropic/claude-sonnet-4-20250514";
     const customPrompt = "Custom static scanning instructions for testing.";
 
-    await analyzeScanningBatch([upload()], undefined, "", customModel, customPrompt);
+    await analyzeScanningBatch([upload()], undefined, "", customModel, customPrompt, "openrouter");
 
     expect(fetch).toHaveBeenCalledTimes(1);
     const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
@@ -69,7 +69,7 @@ describe("Scanning adapter with explicit model and prompt", () => {
     vi.mocked(fetch).mockResolvedValue(providerResponse(report));
 
     const customModel = "openai/gpt-4o";
-    await analyzeScanningBatch([upload()], undefined, "", customModel, "Static prompt");
+    await analyzeScanningBatch([upload()], undefined, "", customModel, "Static prompt", "openrouter");
 
     const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
     expect(body.model).toBe("openai/gpt-4o");
@@ -81,7 +81,7 @@ describe("Scanning adapter with explicit model and prompt", () => {
     vi.mocked(fetch).mockResolvedValue(providerResponse(report));
 
     const customPrompt = "Benutze eine vereinfachte Kategorisierung.";
-    await analyzeScanningBatch([upload()], undefined, "", DEFAULT_SCANNING_MODEL_ID, customPrompt);
+    await analyzeScanningBatch([upload()], undefined, "", DEFAULT_SCANNING_MODEL_ID, customPrompt, "openrouter");
 
     const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
     const serialized = JSON.stringify(body);

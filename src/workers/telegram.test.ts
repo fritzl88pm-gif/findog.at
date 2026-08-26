@@ -173,7 +173,7 @@ describe("buildPreprocessorProviders", () => {
     expect(createConfiguredDocumentProvider).toHaveBeenCalledWith(expect.objectContaining({
       getSettings: expect.any(Function),
       mineruProvider: expect.any(Function),
-      openrouterProvider: expect.any(Function),
+      omnirouteProvider: expect.any(Function),
     }));
     const dependencies = vi.mocked(createConfiguredDocumentProvider).mock.calls[0][0];
     expect(dependencies.getSettings).toBeDefined();
@@ -183,8 +183,9 @@ describe("buildPreprocessorProviders", () => {
 
   it("reads current scanning settings without caching them at worker startup", async () => {
     vi.mocked(getScanningSettings).mockResolvedValue({
-      documentPipeline: "openrouter_only",
+      documentPipeline: "omniroute_luna_only",
       fredAttachmentMode: "findog_preprocess",
+      scanningProvider: "omniroute_luna",
       modelId: "vendor/model",
       prompt: "prompt",
       updatedAt: "2026-08-18T00:00:00.000Z",

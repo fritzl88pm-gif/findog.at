@@ -8,6 +8,7 @@ import {
   isValidDocumentPipeline,
   isValidFredAttachmentMode,
   isValidModelId,
+  isValidScanningProvider,
   updateScanningSettings,
 } from "@/lib/scanning/settings";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
@@ -28,6 +29,7 @@ async function readSettings(supabase: ServerClient) {
   return {
     documentPipeline: record.documentPipeline,
     fredAttachmentMode: record.fredAttachmentMode,
+    scanningProvider: record.scanningProvider,
     modelId: record.modelId,
     prompt: record.prompt,
     updatedAt: record.updatedAt,
@@ -74,20 +76,21 @@ export async function PUT(request: Request) {
       throw new UserVisibleError("Die Anfrage ist ungültig.", 400);
     }
     const fields = body as Record<string, unknown>;
-    if (Object.keys(fields).length !== 4) {
+    if (Object.keys(fields).length !== 5) {
       throw new UserVisibleError(
-        "Die Anfrage muss genau die Felder documentPipeline, fredAttachmentMode, modelId und prompt enthalten.",
+        "Die Anfrage muss genau die Felder documentPipeline, fredAttachmentMode, scanningProvider, modelId und prompt enthalten.",
         400,
       );
     }
     if (
       typeof fields.documentPipeline !== "string"
       || typeof fields.fredAttachmentMode !== "string"
+      || typeof fields.scanningProvider !== "string"
       || typeof fields.modelId !== "string"
       || typeof fields.prompt !== "string"
     ) {
       throw new UserVisibleError(
-        "Die Anfrage muss genau die Felder documentPipeline, fredAttachmentMode, modelId und prompt enthalten.",
+        "Die Anfrage muss genau die Felder documentPipeline, fredAttachmentMode, scanningProvider, modelId und prompt enthalten.",
         400,
       );
     }
@@ -96,6 +99,9 @@ export async function PUT(request: Request) {
     }
     if (!isValidFredAttachmentMode(fields.fredAttachmentMode)) {
       throw new UserVisibleError("Die Fred-Dateiverarbeitung ist ungültig.", 400);
+    }
+    if (!isValidScanningProvider(fields.scanningProvider)) {
+      throw new UserVisibleError("Der Scanning-Provider ist ungültig.", 400);
     }
     if (!isValidModelId(fields.modelId)) {
       throw new UserVisibleError("Die OpenRouter-Modell-ID ist ungültig.", 400);
@@ -113,10 +119,12 @@ export async function PUT(request: Request) {
       fields.prompt,
       fields.documentPipeline,
       fields.fredAttachmentMode,
+      fields.scanningProvider,
     );
     return json({
       documentPipeline: record.documentPipeline,
       fredAttachmentMode: record.fredAttachmentMode,
+      scanningProvider: record.scanningProvider,
       modelId: record.modelId,
       prompt: record.prompt,
       updatedAt: record.updatedAt,

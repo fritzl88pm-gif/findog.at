@@ -17,7 +17,7 @@ import {
   SCANNING_RATE_LIMIT_REQUESTS,
   SCANNING_RATE_LIMIT_WINDOW_MS,
 } from "@/lib/scanning/config";
-import { analyzeScanningBatch, ScanningProviderError } from "@/lib/scanning/openrouter";
+import { analyzeScanningBatch, ScanningProviderError, scanningModelForProvider } from "@/lib/scanning/openrouter";
 import { ScanningRateLimiter } from "@/lib/scanning/rate-limit";
 import { getScanningSettings } from "@/lib/scanning/settings";
 import { encodeScanningStreamEvent, SCANNING_STREAM_CONTENT_TYPE } from "@/lib/scanning/stream";
@@ -238,6 +238,7 @@ export async function POST(request: Request) {
             parsed.instructions,
             settings.modelId,
             settings.prompt,
+            settings.scanningProvider,
           );
           const completedIds = new Set(parsed.uploads.map((upload) => upload.id));
           const statuses = parsed.statuses.map((status): ScanningFileStatus => (
@@ -257,7 +258,7 @@ export async function POST(request: Request) {
             completed: parsed.uploads.length,
             total: parsed.uploads.length,
           });
-          send({ type: "final", report, files: statuses, model: settings.modelId });
+          send({ type: "final", report, files: statuses, model: scanningModelForProvider(settings.scanningProvider, settings.modelId) });
           controller.close();
         } catch (error) {
           if (!lifetime.signal.aborted) {

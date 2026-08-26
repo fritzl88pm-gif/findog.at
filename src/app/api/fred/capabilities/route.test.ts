@@ -76,8 +76,9 @@ describe("GET /api/fred/capabilities", () => {
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "user-1" });
     vi.mocked(readFredEmbedServerConfig).mockReturnValue(fredConfig);
     vi.mocked(getScanningSettings).mockResolvedValue({
-      documentPipeline: "mineru_with_openrouter_fallback",
+      documentPipeline: "mineru_with_omniroute_luna_fallback",
       fredAttachmentMode: "findog_preprocess",
+      scanningProvider: "omniroute_luna",
       modelId: "google/gemini-3.5-flash",
       prompt: "prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -156,8 +157,9 @@ describe("GET /api/fred/capabilities", () => {
   it("returns native-mode fileUpload true from the live Fred channel upload flag", async () => {
     vi.stubEnv("OPENROUTER_API_KEY", "");
     vi.mocked(getScanningSettings).mockResolvedValue({
-      documentPipeline: "openrouter_only",
+      documentPipeline: "omniroute_luna_only",
       fredAttachmentMode: "weknora_native",
+      scanningProvider: "omniroute_luna",
       modelId: "model/x",
       prompt: "prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -184,8 +186,9 @@ describe("GET /api/fred/capabilities", () => {
 
   it("returns native-mode fileUpload false when the live Fred channel disallows upload", async () => {
     vi.mocked(getScanningSettings).mockResolvedValue({
-      documentPipeline: "openrouter_only",
+      documentPipeline: "omniroute_luna_only",
       fredAttachmentMode: "weknora_native",
+      scanningProvider: "omniroute_luna",
       modelId: "model/x",
       prompt: "prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -376,8 +379,9 @@ describe("GET /api/fred/capabilities", () => {
     vi.stubEnv("MINERU_API_TOKEN", "");
     vi.stubEnv("OPENROUTER_API_KEY", "");
     vi.mocked(getScanningSettings).mockResolvedValue({
-      documentPipeline: "openrouter_only",
+      documentPipeline: "omniroute_luna_only",
       fredAttachmentMode: "weknora_native",
+      scanningProvider: "omniroute_luna",
       modelId: "model/x",
       prompt: "prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",

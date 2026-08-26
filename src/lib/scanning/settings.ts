@@ -7,6 +7,7 @@ type ServerSupabaseClient = Pick<SupabaseClient, "from">;
 export type ScanningSettingsRecord = {
   documentPipeline: DocumentPipeline;
   fredAttachmentMode: FredAttachmentMode;
+  scanningProvider: ScanningProvider;
   modelId: string;
   prompt: string;
   updatedAt: string;
@@ -14,13 +15,13 @@ export type ScanningSettingsRecord = {
 };
 
 export type DocumentPipeline =
-  | "mineru_with_openrouter_fallback"
-  | "openrouter_only";
+  | "mineru_with_omniroute_luna_fallback"
+  | "omniroute_luna_only";
 
-export const DEFAULT_DOCUMENT_PIPELINE: DocumentPipeline = "mineru_with_openrouter_fallback";
+export const DEFAULT_DOCUMENT_PIPELINE: DocumentPipeline = "mineru_with_omniroute_luna_fallback";
 export const DOCUMENT_PIPELINES = [
   DEFAULT_DOCUMENT_PIPELINE,
-  "openrouter_only",
+  "omniroute_luna_only",
 ] as const;
 
 export type FredAttachmentMode = "findog_preprocess" | "weknora_native";
@@ -29,6 +30,17 @@ export const FRED_ATTACHMENT_MODES = [
   DEFAULT_FRED_ATTACHMENT_MODE,
   "weknora_native",
 ] as const;
+
+export type ScanningProvider = "omniroute_luna" | "openrouter";
+export const DEFAULT_SCANNING_PROVIDER: ScanningProvider = "omniroute_luna";
+export const SCANNING_PROVIDERS = [
+  DEFAULT_SCANNING_PROVIDER,
+  "openrouter",
+] as const;
+
+export function isValidScanningProvider(value: unknown): value is ScanningProvider {
+  return typeof value === "string" && SCANNING_PROVIDERS.includes(value as ScanningProvider);
+}
 
 export function isValidFredAttachmentMode(value: unknown): value is FredAttachmentMode {
   return typeof value === "string"
@@ -40,6 +52,7 @@ export function isValidDocumentPipeline(value: unknown): value is DocumentPipeli
 }
 
 export const DEFAULT_SCANNING_MODEL_ID = "google/gemini-3.5-flash";
+export const OMNIROUTE_LUNA_MODEL_ID = "codex/gpt-5.6-luna";
 
 export const DEFAULT_SCANNING_PROMPT = [
   "Du darfst die Dokumente intern gründlich analysieren und prüfen.",
@@ -109,6 +122,7 @@ function parseScanningSettingsRecord(value: unknown): ScanningSettingsRecord | n
     || !row.model_id.trim()
     || !isValidDocumentPipeline(row.document_pipeline)
     || !isValidFredAttachmentMode(row.fred_attachment_mode)
+    || !isValidScanningProvider(row.scanning_provider)
     || typeof row.prompt !== "string"
     || !row.prompt.trim()
     || typeof row.updated_at !== "string"
@@ -119,6 +133,7 @@ function parseScanningSettingsRecord(value: unknown): ScanningSettingsRecord | n
   return {
     documentPipeline: row.document_pipeline,
     fredAttachmentMode: row.fred_attachment_mode,
+    scanningProvider: row.scanning_provider,
     modelId: row.model_id,
     prompt: row.prompt,
     updatedAt: row.updated_at,
@@ -131,7 +146,7 @@ export async function getScanningSettings(
 ): Promise<ScanningSettingsRecord> {
   const { data, error } = await supabase
     .from("scanning_settings")
-    .select("model_id,document_pipeline,fred_attachment_mode,prompt,updated_at,updated_by")
+    .select("model_id,document_pipeline,fred_attachment_mode,scanning_provider,prompt,updated_at,updated_by")
     .eq("id", true)
     .maybeSingle();
 
@@ -146,6 +161,7 @@ export async function getScanningSettings(
     return {
       documentPipeline: DEFAULT_DOCUMENT_PIPELINE,
       fredAttachmentMode: DEFAULT_FRED_ATTACHMENT_MODE,
+      scanningProvider: DEFAULT_SCANNING_PROVIDER,
       modelId: DEFAULT_SCANNING_MODEL_ID,
       prompt: DEFAULT_SCANNING_PROMPT,
       updatedAt: new Date(0).toISOString(),
@@ -169,12 +185,16 @@ export async function updateScanningSettings(
   prompt: string,
   documentPipeline: DocumentPipeline,
   fredAttachmentMode: FredAttachmentMode,
+  scanningProvider: ScanningProvider,
 ): Promise<ScanningSettingsRecord> {
   if (!isValidDocumentPipeline(documentPipeline)) {
     throw new UserVisibleError("Die Dokument-Pipeline ist ungültig.", 400);
   }
   if (!isValidFredAttachmentMode(fredAttachmentMode)) {
     throw new UserVisibleError("Die Fred-Dateiverarbeitung ist ungültig.", 400);
+  }
+  if (!isValidScanningProvider(scanningProvider)) {
+    throw new UserVisibleError("Der Scanning-Provider ist ungültig.", 400);
   }
   if (!isValidModelId(modelId)) {
     throw new UserVisibleError("Die OpenRouter-Modell-ID ist ungültig.", 400);
@@ -193,12 +213,13 @@ export async function updateScanningSettings(
       id: true,
       document_pipeline: documentPipeline,
       fred_attachment_mode: fredAttachmentMode,
+      scanning_provider: scanningProvider,
       model_id: modelId.trim(),
       prompt: prompt.trim(),
       updated_at: updatedAt,
       updated_by: userId,
     }, { onConflict: "id" })
-    .select("model_id,document_pipeline,fred_attachment_mode,prompt,updated_at,updated_by")
+    .select("model_id,document_pipeline,fred_attachment_mode,scanning_provider,prompt,updated_at,updated_by")
     .maybeSingle();
 
   const record = parseScanningSettingsRecord(data);

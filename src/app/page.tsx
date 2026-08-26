@@ -79,8 +79,10 @@ import ScanningView from "@/components/scanning-view";
 import {
   DEFAULT_DOCUMENT_PIPELINE,
   DEFAULT_FRED_ATTACHMENT_MODE,
+  DEFAULT_SCANNING_PROVIDER,
   type DocumentPipeline,
   type FredAttachmentMode,
+  type ScanningProvider,
 } from "@/lib/scanning/settings";
 import KnowledgeLandscapeView from "@/components/knowledge-landscape-view";
 import QuizView from "@/components/quiz-view";
@@ -1225,6 +1227,7 @@ export default function Home() {
   const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "omniroute" | "personalities">("scanning");
   const [scanningDocumentPipeline, setScanningDocumentPipeline] = useState<DocumentPipeline>(DEFAULT_DOCUMENT_PIPELINE);
   const [fredAttachmentMode, setFredAttachmentMode] = useState<FredAttachmentMode>(DEFAULT_FRED_ATTACHMENT_MODE);
+  const [scanningProvider, setScanningProvider] = useState<ScanningProvider>(DEFAULT_SCANNING_PROVIDER);
   const [scanningModelId, setScanningModelId] = useState("");
   const [scanningPrompt, setScanningPrompt] = useState("");
   const [isScanningSettingsLoading, setIsScanningSettingsLoading] = useState(false);
@@ -2144,12 +2147,16 @@ export default function Home() {
         || typeof payload.modelId !== "string"
         || !payload.modelId.trim()
         || (
-          payload.documentPipeline !== "mineru_with_openrouter_fallback"
-          && payload.documentPipeline !== "openrouter_only"
+          payload.documentPipeline !== "mineru_with_omniroute_luna_fallback"
+          && payload.documentPipeline !== "omniroute_luna_only"
         )
         || (
           payload.fredAttachmentMode !== "findog_preprocess"
           && payload.fredAttachmentMode !== "weknora_native"
+        )
+        || (
+          payload.scanningProvider !== "omniroute_luna"
+          && payload.scanningProvider !== "openrouter"
         )
         || typeof payload.prompt !== "string"
         || !payload.prompt.trim()
@@ -2163,6 +2170,7 @@ export default function Home() {
       }
       setScanningDocumentPipeline(payload.documentPipeline);
       setFredAttachmentMode(payload.fredAttachmentMode);
+      setScanningProvider(payload.scanningProvider);
       setScanningModelId(payload.modelId);
       setScanningPrompt(payload.prompt);
     } catch (settingsError) {
@@ -2198,6 +2206,7 @@ export default function Home() {
         body: JSON.stringify({
           documentPipeline: scanningDocumentPipeline,
           fredAttachmentMode,
+          scanningProvider: scanningProvider,
           modelId: scanningModelId.trim(),
           prompt: scanningPrompt.trim(),
         }),
@@ -2208,12 +2217,16 @@ export default function Home() {
         || typeof payload.modelId !== "string"
         || !payload.modelId.trim()
         || (
-          payload.documentPipeline !== "mineru_with_openrouter_fallback"
-          && payload.documentPipeline !== "openrouter_only"
+          payload.documentPipeline !== "mineru_with_omniroute_luna_fallback"
+          && payload.documentPipeline !== "omniroute_luna_only"
         )
         || (
           payload.fredAttachmentMode !== "findog_preprocess"
           && payload.fredAttachmentMode !== "weknora_native"
+        )
+        || (
+          payload.scanningProvider !== "omniroute_luna"
+          && payload.scanningProvider !== "openrouter"
         )
         || typeof payload.prompt !== "string"
         || !payload.prompt.trim()
@@ -2227,6 +2240,7 @@ export default function Home() {
       }
       setScanningDocumentPipeline(payload.documentPipeline);
       setFredAttachmentMode(payload.fredAttachmentMode);
+      setScanningProvider(payload.scanningProvider);
       setScanningModelId(payload.modelId);
       setScanningPrompt(payload.prompt);
       setAdminNotice("Die Scanning-Konfiguration wurde gespeichert und gilt für neue Auswertungen.");
@@ -4143,7 +4157,7 @@ export default function Home() {
                 <div className="form-generator-heading">
                   <h2>Scanning-Einstellungen</h2>
                   <p>
-                    Konfiguriert die Dokument-OCR und das OpenRouter-Modell.
+                    Konfiguriert Dokument-OCR, Scanning-Provider und OpenRouter-Modell.
                     Der statische Prompt gilt nur für die Belegauswertung.
                   </p>
                 </div>
@@ -4155,7 +4169,7 @@ export default function Home() {
                     aria-describedby="scanning-document-pipeline-description"
                     onChange={(event) => {
                       const value = event.target.value;
-                      if (value === "mineru_with_openrouter_fallback" || value === "openrouter_only") {
+                      if (value === "mineru_with_omniroute_luna_fallback" || value === "omniroute_luna_only") {
                         setScanningDocumentPipeline(value);
                         setAdminError("");
                         setAdminNotice("");
@@ -4163,15 +4177,15 @@ export default function Home() {
                     }}
                     disabled={isScanningSettingsLoading || isScanningSettingsSaving}
                   >
-                    <option value="mineru_with_openrouter_fallback">
-                      MinerU mit OpenRouter-Fallback
+                    <option value="mineru_with_omniroute_luna_fallback">
+                      MinerU mit Luna-Fallback
                     </option>
-                    <option value="openrouter_only">Nur OpenRouter</option>
+                    <option value="omniroute_luna_only">Nur Luna via OmniRoute</option>
                   </select>
                   <p id="scanning-document-pipeline-description" className="admin-model-hint">
-                    {scanningDocumentPipeline === "mineru_with_openrouter_fallback"
-                      ? "MinerU wird zuerst genutzt; bei Fehler folgt OpenRouter."
-                      : "Dokumente werden ausschließlich über OpenRouter verarbeitet."}
+                    {scanningDocumentPipeline === "mineru_with_omniroute_luna_fallback"
+                      ? "MinerU wird zuerst genutzt; bei Fehler folgt Luna via OmniRoute."
+                      : "Dokumente werden ausschließlich über Luna via OmniRoute verarbeitet."}
                   </p>
                 </div>
                 <div className="field-group">
@@ -4197,6 +4211,32 @@ export default function Home() {
                     Findog liest Anhänge selbst aus; nativ übergibt sie direkt an WeKnora.
                   </p>
                 </div>
+
+                <div className="field-group">
+                  <label htmlFor="scanning-provider">Scanning-Provider</label>
+                  <select
+                    id="scanning-provider"
+                    value={scanningProvider}
+                    aria-describedby="scanning-provider-description"
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (value === "omniroute_luna" || value === "openrouter") {
+                        setScanningProvider(value);
+                        setAdminError("");
+                        setAdminNotice("");
+                      }
+                    }}
+                    disabled={isScanningSettingsLoading || isScanningSettingsSaving}
+                  >
+                    <option value="omniroute_luna">Luna via OmniRoute</option>
+                    <option value="openrouter">OpenRouter</option>
+                  </select>
+                  <p id="scanning-provider-description" className="admin-model-hint">
+                    {scanningProvider === "omniroute_luna"
+                      ? "Scanning nutzt fest Luna via OmniRoute."
+                      : "Scanning nutzt die unten eingetragene OpenRouter-Modell-ID."}
+                  </p>
+                </div>
                 <div className="field-group">
                   <label htmlFor="scanning-model-id">OpenRouter-Modell-ID</label>
                   <input
@@ -4209,7 +4249,7 @@ export default function Home() {
                       setAdminNotice("");
                     }}
                     spellCheck={false}
-                    disabled={isScanningSettingsLoading || isScanningSettingsSaving}
+                    disabled={isScanningSettingsLoading || isScanningSettingsSaving || scanningProvider !== "openrouter"}
                     placeholder="z. B. google/gemini-3.5-flash"
                   />
                 </div>

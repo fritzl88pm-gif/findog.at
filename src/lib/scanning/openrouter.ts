@@ -1,7 +1,12 @@
 import { runWithTimeout } from "../deadline";
 import { UserVisibleError } from "../errors";
 import { MAX_SCANNING_REPORT_CHARS } from "./config";
-import { OPENROUTER_SCANNING_URL } from "./settings";
+import {
+  DEFAULT_SCANNING_PROVIDER,
+  OMNIROUTE_LUNA_MODEL_ID,
+  OPENROUTER_SCANNING_URL,
+  type ScanningProvider,
+} from "./settings";
 import type { ScanningUpload } from "./types";
 
 export const SCANNING_OPENROUTER_TIMEOUT_MS = 270_000;
@@ -26,8 +31,8 @@ function recordOf(value: unknown): JsonRecord | null {
     : null;
 }
 
-function apiKey(): string {
-  const value = process.env.OPENROUTER_API_KEY?.trim() ?? "";
+function requiredEnv(name: "OPENROUTER_API_KEY" | "OMNIROUTE_API_KEY" | "OMNIROUTE_BASE_URL"): string {
+  const value = process.env[name]?.trim() ?? "";
   if (!value) {
     throw new ScanningProviderError(
       "Scanning ist serverseitig nicht konfiguriert. Bitte Administrator kontaktieren.",
@@ -36,6 +41,36 @@ function apiKey(): string {
     );
   }
   return value;
+}
+
+function omnirouteChatCompletionsUrl(): string {
+  return `${requiredEnv("OMNIROUTE_BASE_URL").replace(/\/+$/u, "")}/v1/chat/completions`;
+}
+
+function providerRequestConfig(provider: ScanningProvider, configuredModel: string): {
+  url: string;
+  key: string;
+  model: string;
+  reasoning: { effort: "minimal"; exclude?: true };
+} {
+  if (provider === "openrouter") {
+    return {
+      url: OPENROUTER_SCANNING_URL,
+      key: requiredEnv("OPENROUTER_API_KEY"),
+      model: configuredModel,
+      reasoning: { effort: "minimal", exclude: true },
+    };
+  }
+  return {
+    url: omnirouteChatCompletionsUrl(),
+    key: requiredEnv("OMNIROUTE_API_KEY"),
+    model: OMNIROUTE_LUNA_MODEL_ID,
+    reasoning: { effort: "minimal" },
+  };
+}
+
+export function scanningModelForProvider(provider: ScanningProvider, configuredModel: string): string {
+  return provider === "openrouter" ? configuredModel : OMNIROUTE_LUNA_MODEL_ID;
 }
 
 function providerError(status: number): ScanningProviderError {
@@ -161,28 +196,29 @@ function attachment(upload: ScanningUpload): JsonRecord {
 
 async function requestScanningContent(
   uploads: ScanningUpload[],
-  key: string,
+  provider: ScanningProvider,
   retry: boolean,
   instructions: string,
   model: string,
   staticPrompt: string,
   signal?: AbortSignal,
 ): Promise<string> {
+  const requestConfig = providerRequestConfig(provider, model);
   const userContent = scanningUserContent(uploads.map((upload) => upload.name), instructions);
   const retryInstruction = retry
     ? "\n\nWICHTIGER NEUVERSUCH: Die vorherige Ausgabe enthielt keine gültige Ergebnistabelle. Analysiere die Dateien erneut. Gib keinerlei Arbeitsnotizen aus und beginne die sichtbare Antwort direkt mit einer Kategorieüberschrift und danach der verlangten Tabellenkopfzeile."
     : "";
   const { response, text } = await runWithTimeout(
-    (activeSignal) => fetch(OPENROUTER_SCANNING_URL, {
+    (activeSignal) => fetch(requestConfig.url, {
       method: "POST",
       headers: {
         Accept: "application/json",
-        Authorization: `Bearer ${key}`,
+        Authorization: `Bearer ${requestConfig.key}`,
         "Content-Type": "application/json",
         "X-Title": "findog.at Scanning",
       },
       body: JSON.stringify({
-        model,
+        model: requestConfig.model,
         messages: [
           { role: "system", content: staticPrompt },
           {
@@ -193,7 +229,7 @@ async function requestScanningContent(
             ],
           },
         ],
-        reasoning: { effort: "minimal", exclude: true },
+        reasoning: requestConfig.reasoning,
         temperature: 0,
         max_tokens: 16_000,
       }),
@@ -222,15 +258,15 @@ export async function analyzeScanningBatch(
   instructions = "",
   model = "",
   staticPrompt = "",
+  provider: ScanningProvider = DEFAULT_SCANNING_PROVIDER,
 ): Promise<string> {
   if (uploads.length === 0) throw new ScanningProviderError("Bitte mindestens eine Datei hochladen.", 400);
-  const key = apiKey();
   let report = extractScanningTables(
-    await requestScanningContent(uploads, key, false, instructions, model, staticPrompt, signal),
+    await requestScanningContent(uploads, provider, false, instructions, model, staticPrompt, signal),
   );
   if (!report) {
     report = extractScanningTables(
-      await requestScanningContent(uploads, key, true, instructions, model, staticPrompt, signal),
+      await requestScanningContent(uploads, provider, true, instructions, model, staticPrompt, signal),
     );
   }
   if (!report) {

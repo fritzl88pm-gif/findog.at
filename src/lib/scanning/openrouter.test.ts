@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { analyzeScanningBatch, ScanningProviderError } from "./openrouter";
-import { DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT } from "./settings";
+import { DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, OMNIROUTE_LUNA_MODEL_ID } from "./settings";
 import type { ScanningUpload } from "./types";
 
 const originalKey = process.env.OPENROUTER_API_KEY;
+const originalOmnirouteBase = process.env.OMNIROUTE_BASE_URL;
+const originalOmnirouteKey = process.env.OMNIROUTE_API_KEY;
 
 function providerResponse(content: unknown, status = 200): Response {
   return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
@@ -39,13 +41,17 @@ describe("OpenRouter scanning adapter", () => {
     vi.unstubAllGlobals();
     if (originalKey === undefined) delete process.env.OPENROUTER_API_KEY;
     else process.env.OPENROUTER_API_KEY = originalKey;
+    if (originalOmnirouteBase === undefined) delete process.env.OMNIROUTE_BASE_URL;
+    else process.env.OMNIROUTE_BASE_URL = originalOmnirouteBase;
+    if (originalOmnirouteKey === undefined) delete process.env.OMNIROUTE_API_KEY;
+    else process.env.OMNIROUTE_API_KEY = originalOmnirouteKey;
   });
 
   it("sends the complete mixed batch in one direct Gemini request and returns its Markdown", async () => {
     const report = "| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.10.2024 | Betreuung Oktober | 2.680,00 EUR |\n| 2 | 01.11.2024 | Betreuung November | 2.060,00 EUR |\n| | | Gesamtsumme | 4.740,00 EUR |";
     vi.mocked(fetch).mockResolvedValue(providerResponse(report));
 
-    await expect(analyzeScanningBatch([upload("pdf", "sammel"), upload("image", "foto")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT))
+    await expect(analyzeScanningBatch([upload("pdf", "sammel"), upload("image", "foto")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter"))
       .resolves.toBe(report);
 
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -82,12 +88,41 @@ describe("OpenRouter scanning adapter", () => {
     expect(serialized).toContain("Der Beleg bleibt trotzdem in der Tabelle");
   });
 
+
+
+  it("sends OmniRoute Luna requests with fixed model and no reasoning.exclude", async () => {
+    process.env.OMNIROUTE_BASE_URL = "https://omniroute.example/";
+    process.env.OMNIROUTE_API_KEY = "omniroute-key";
+    const report = "| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.10.2024 | Test | 1,00 EUR |";
+    vi.mocked(fetch).mockResolvedValue(providerResponse(report));
+
+    await expect(analyzeScanningBatch(
+      [upload("image", "foto")],
+      undefined,
+      "",
+      "openrouter/free-form-model-must-not-win",
+      DEFAULT_SCANNING_PROMPT,
+      "omniroute_luna",
+    )).resolves.toBe(report);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("https://omniroute.example/v1/chat/completions");
+    const init = vi.mocked(fetch).mock.calls[0]?.[1];
+    const headers = init?.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer omniroute-key");
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(body.model).toBe(OMNIROUTE_LUNA_MODEL_ID);
+    expect(body.reasoning).toEqual({ effort: "minimal" });
+    expect(JSON.stringify(body.reasoning)).not.toContain("exclude");
+    expect(JSON.stringify(body)).toContain("data:image/png;base64,");
+  });
+
   it("adds optional user instructions to the prompt without weakening output rules", async () => {
     vi.mocked(fetch).mockResolvedValue(providerResponse(
       "## Apotheke\n\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 15.05.2024 | Medikament | 6,35 EUR |",
     ));
 
-    await analyzeScanningBatch([upload("pdf", "belege")], undefined, "nur Apothekenrechnungen", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT);
+    await analyzeScanningBatch([upload("pdf", "belege")], undefined, "nur Apothekenrechnungen", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter");
     const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
     const serialized = JSON.stringify(body);
     expect(serialized).toContain("**Zusätzliche Anweisung des Nutzers**");
@@ -101,7 +136,7 @@ describe("OpenRouter scanning adapter", () => {
       "## Bürobedarf\n\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | | Büromaterial | 12,00 EUR |\n| | | Gesamtsumme | 12,00 EUR |",
     ));
 
-    const result = await analyzeScanningBatch([upload("pdf", "ohne-datum")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT);
+    const result = await analyzeScanningBatch([upload("pdf", "ohne-datum")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter");
     expect(result).toContain("| 1 | – | Büromaterial | 12,00 EUR |");
     expect(result).toContain("| | | Gesamtsumme | 12,00 EUR |");
   });
@@ -110,7 +145,7 @@ describe("OpenRouter scanning adapter", () => {
     vi.mocked(fetch).mockResolvedValue(providerResponse(
       "| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.11.2024 | Betreuung<br>November<br />Wien | 2.060,00 EUR |",
     ));
-    await expect(analyzeScanningBatch([upload("pdf", "belege")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT))
+    await expect(analyzeScanningBatch([upload("pdf", "belege")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter"))
       .resolves.toContain("| 1 | 01.11.2024 | Betreuung November Wien | 2.060,00 EUR |");
   });
 
@@ -119,7 +154,7 @@ describe("OpenRouter scanning adapter", () => {
       "<thinking>Ich ordne die Belege zunächst intern.</thinking>\n\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.11.2024 | Betreuung | 2.060,00 EUR |",
     ));
 
-    const result = await analyzeScanningBatch([upload("pdf", "belege")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT);
+    const result = await analyzeScanningBatch([upload("pdf", "belege")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter");
     expect(result).toContain("| Pos. | Datum | Beschreibung | Summe |");
     expect(result).not.toContain("thinking");
     expect(result).not.toContain("Ich ordne die Belege zunächst intern.");
@@ -130,7 +165,7 @@ describe("OpenRouter scanning adapter", () => {
       "<think>\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.11.2024 | Betreuung | 2.060,00 EUR |\n</think-invalid>",
     ));
 
-    const result = await analyzeScanningBatch([upload("pdf", "belege")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT);
+    const result = await analyzeScanningBatch([upload("pdf", "belege")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter");
     expect(result).toContain("| Pos. | Datum | Beschreibung | Summe |");
     expect(result).not.toContain("<think>");
   });
@@ -141,7 +176,7 @@ describe("OpenRouter scanning adapter", () => {
       { type: "text", text: { value: "| 1 | 01.11.2024 | Beleg | 42,00 EUR |" } },
     ]));
 
-    await expect(analyzeScanningBatch([upload("pdf", "beleg")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT))
+    await expect(analyzeScanningBatch([upload("pdf", "beleg")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter"))
       .resolves.toContain("| 1 | 01.11.2024 | Beleg | 42,00 EUR |");
   });
 
@@ -149,7 +184,7 @@ describe("OpenRouter scanning adapter", () => {
     vi.mocked(fetch).mockResolvedValue(providerResponse(
       `| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.11.2024 | ${"x".repeat(70_000)} | 1,00 EUR |`,
     ));
-    const result = await analyzeScanningBatch([upload("pdf", "lang")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT);
+    const result = await analyzeScanningBatch([upload("pdf", "lang")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter");
     expect(result.length).toBeLessThanOrEqual(58_000);
     expect(result).toContain("gekürzt");
   });
@@ -161,27 +196,27 @@ describe("OpenRouter scanning adapter", () => {
 
   it("treats missing configuration and provider authentication as fatal", async () => {
     delete process.env.OPENROUTER_API_KEY;
-    await expect(analyzeScanningBatch([upload("image", "bild")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT))
+    await expect(analyzeScanningBatch([upload("image", "bild")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter"))
       .rejects.toMatchObject({ fatal: true, status: 503 });
 
     process.env.OPENROUTER_API_KEY = "test-key";
     vi.mocked(fetch).mockResolvedValue(new Response("unauthorized", { status: 401 }));
-    const failure = analyzeScanningBatch([upload("image", "bild")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT);
+    const failure = analyzeScanningBatch([upload("image", "bild")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter");
     await expect(failure).rejects.toBeInstanceOf(ScanningProviderError);
     await expect(failure).rejects.toMatchObject({ fatal: true, status: 503 });
   });
 
   it("maps rate limits and invalid or empty provider responses to safe errors", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(new Response("busy", { status: 429 }));
-    await expect(analyzeScanningBatch([upload("pdf", "rate")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT))
+    await expect(analyzeScanningBatch([upload("pdf", "rate")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter"))
       .rejects.toMatchObject({ status: 429, message: "Die Dokumentauswertung ist derzeit ausgelastet." });
 
     vi.mocked(fetch).mockResolvedValueOnce(new Response("not-json", { status: 200 }));
-    await expect(analyzeScanningBatch([upload("pdf", "json")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT))
+    await expect(analyzeScanningBatch([upload("pdf", "json")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter"))
       .rejects.toThrow("Die Dokumentauswertung lieferte keine gültige Antwort.");
 
     vi.mocked(fetch).mockImplementation(async () => providerResponse("   "));
-    await expect(analyzeScanningBatch([upload("pdf", "leer")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT))
+    await expect(analyzeScanningBatch([upload("pdf", "leer")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter"))
       .rejects.toThrow("Die Dokumentauswertung lieferte keine gültige Ergebnistabelle. Bitte erneut versuchen.");
   });
 
@@ -190,7 +225,7 @@ describe("OpenRouter scanning adapter", () => {
       "Wait, let's inspect the upside-down page first.\n- I need to read every product.\n\n## Apotheke & Gesundheit\n\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 15.05.2024 | Amoxicillin 500 mg | 6,35 EUR |",
     ));
 
-    const result = await analyzeScanningBatch([upload("pdf", "apotheke")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT);
+    const result = await analyzeScanningBatch([upload("pdf", "apotheke")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter");
     expect(result).toContain("## Apotheke & Gesundheit");
     expect(result).toContain("Amoxicillin 500 mg");
     expect(result).not.toContain("Wait");
@@ -204,7 +239,7 @@ describe("OpenRouter scanning adapter", () => {
         "## Apotheke & Gesundheit\n\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 15.05.2024 | Amoxicillin 500 mg | 6,35 EUR |",
       ));
 
-    await expect(analyzeScanningBatch([upload("pdf", "apotheke")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT))
+    await expect(analyzeScanningBatch([upload("pdf", "apotheke")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter"))
       .resolves.toContain("Amoxicillin 500 mg");
     expect(fetch).toHaveBeenCalledTimes(2);
     const retryBody = JSON.parse(String(vi.mocked(fetch).mock.calls[1]?.[1]?.body)) as Record<string, unknown>;
@@ -216,7 +251,7 @@ describe("OpenRouter scanning adapter", () => {
       "Let's read the upside-down page. Wait, I need to inspect the letters.",
     ));
 
-    await expect(analyzeScanningBatch([upload("pdf", "apotheke")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT))
+    await expect(analyzeScanningBatch([upload("pdf", "apotheke")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter"))
       .rejects.toThrow("Die Dokumentauswertung lieferte keine gültige Ergebnistabelle. Bitte erneut versuchen.");
     expect(fetch).toHaveBeenCalledTimes(2);
   });

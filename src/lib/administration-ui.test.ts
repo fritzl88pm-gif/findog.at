@@ -54,22 +54,33 @@ describe("Administration UI tabs and scanning settings", () => {
     expect(pageSource).toContain('<label htmlFor="scanning-document-pipeline">OCR-Pipeline</label>');
     expect(pageSource).toContain('id="scanning-document-pipeline"');
     expect(pageSource).toContain('aria-describedby="scanning-document-pipeline-description"');
-    expect(pageSource).toContain('value="mineru_with_openrouter_fallback"');
-    expect(pageSource).toContain("MinerU mit OpenRouter-Fallback");
-    expect(pageSource).toContain("MinerU wird zuerst genutzt; bei Fehler folgt OpenRouter.");
-    expect(pageSource).toContain('value="openrouter_only"');
-    expect(pageSource).toContain("Nur OpenRouter");
-    expect(pageSource).toContain("Dokumente werden ausschließlich über OpenRouter verarbeitet.");
+    expect(pageSource).toContain('value="mineru_with_omniroute_luna_fallback"');
+    expect(pageSource).toContain("MinerU mit Luna-Fallback");
+    expect(pageSource).toContain("MinerU wird zuerst genutzt; bei Fehler folgt Luna via OmniRoute.");
+    expect(pageSource).toContain('value="omniroute_luna_only"');
+    expect(pageSource).toContain("Nur Luna via OmniRoute");
+    expect(pageSource).toContain("Dokumente werden ausschließlich über Luna via OmniRoute verarbeitet.");
   });
 
   it("loads, validates and saves the document pipeline with the scanning settings", () => {
-    expect(pageSource).toMatch(/payload\.documentPipeline !== "mineru_with_openrouter_fallback"[\s\S]*?payload\.documentPipeline !== "openrouter_only"/u);
+    expect(pageSource).toMatch(/payload\.documentPipeline !== "mineru_with_omniroute_luna_fallback"[\s\S]*?payload\.documentPipeline !== "omniroute_luna_only"/u);
     expect(pageSource).toContain("setScanningDocumentPipeline(payload.documentPipeline)");
     expect(pageSource).toContain("documentPipeline: scanningDocumentPipeline");
   });
 
-  it("renders a model ID text input field for scanning settings", () => {
+  it("renders a separate Scanning provider select with German labels", () => {
+    expect(pageSource).toContain('<label htmlFor="scanning-provider">Scanning-Provider</label>');
+    expect(pageSource).toContain('id="scanning-provider"');
+    expect(pageSource).toContain('value="omniroute_luna"');
+    expect(pageSource).toContain("Luna via OmniRoute");
+    expect(pageSource).toContain('value="openrouter"');
+    expect(pageSource).toContain("OpenRouter");
+    expect(pageSource).toContain("scanningProvider: scanningProvider");
+  });
+
+  it("renders a model ID text input field only active for OpenRouter scanning", () => {
     expect(pageSource).toContain('<label htmlFor="scanning-model-id">OpenRouter-Modell-ID</label>');
+    expect(pageSource).toContain('disabled={isScanningSettingsLoading || isScanningSettingsSaving || scanningProvider !== "openrouter"}');
   });
 
   it("renders a prompt textarea for scanning settings", () => {

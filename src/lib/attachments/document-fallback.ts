@@ -1,10 +1,7 @@
 import type { MineruFileInput } from "@/lib/attachments/mineru-cloud";
 import { runWithTimeout } from "@/lib/deadline";
 import { UserVisibleError } from "@/lib/errors";
-import {
-  isValidModelId,
-  OPENROUTER_SCANNING_URL,
-} from "@/lib/scanning/settings";
+import { OMNIROUTE_LUNA_MODEL_ID } from "@/lib/scanning/settings";
 
 export class DocumentFallbackError extends UserVisibleError {
   constructor(message: string, status = 502) {
@@ -27,14 +24,13 @@ const MAX_DOCUMENT_CONTEXT_CHARS = 60_000;
 const TRUNCATION_SUFFIX = "\n\n[Dokumentinhalt aus technischen Gründen gekürzt.]";
 
 type ExtractDocumentFallbackOptions = {
-  model: string;
   fetch?: typeof globalThis.fetch;
   signal?: AbortSignal;
   maxResponseBytes?: number;
 };
 
-function apiKey(): string {
-  const value = process.env.OPENROUTER_API_KEY?.trim() ?? "";
+function requiredEnv(name: "OMNIROUTE_BASE_URL" | "OMNIROUTE_API_KEY"): string {
+  const value = process.env[name]?.trim() ?? "";
   if (!value) {
     throw new DocumentFallbackError(
       "Der Dokument-Fallback ist serverseitig nicht konfiguriert. Bitte Administrator kontaktieren.",
@@ -42,6 +38,10 @@ function apiKey(): string {
     );
   }
   return value;
+}
+
+function omnirouteChatCompletionsUrl(): string {
+  return `${requiredEnv("OMNIROUTE_BASE_URL").replace(/\/+$/u, "")}/v1/chat/completions`;
 }
 
 function providerError(status: number): DocumentFallbackError {
@@ -141,20 +141,15 @@ async function extractDocument(
   file: MineruFileInput,
   options: ExtractDocumentFallbackOptions,
 ): Promise<string> {
-  if (!isValidModelId(options.model)) {
-    throw new DocumentFallbackError(
-      "Das Modell für den Dokument-Fallback ist in der Administration ungültig.",
-      503,
-    );
-  }
-  const key = apiKey();
+  const key = requiredEnv("OMNIROUTE_API_KEY");
+  const url = omnirouteChatCompletionsUrl();
   const fetcher = options.fetch ?? globalThis.fetch;
   const fileData = `data:${file.mimeType};base64,${Buffer.from(file.bytes).toString("base64")}`;
 
   try {
     const payload = await runWithTimeout(
       async (signal) => {
-        const response = await fetcher(OPENROUTER_SCANNING_URL, {
+        const response = await fetcher(url, {
           method: "POST",
           headers: {
             Accept: "application/json",
@@ -163,7 +158,7 @@ async function extractDocument(
             "X-Title": "findog.at Document Fallback",
           },
           body: JSON.stringify({
-            model: options.model,
+            model: OMNIROUTE_LUNA_MODEL_ID,
             messages: [
               { role: "system", content: DOCUMENT_FALLBACK_PROMPT },
               {
@@ -177,7 +172,7 @@ async function extractDocument(
                 ],
               },
             ],
-            reasoning: { effort: "minimal", exclude: true },
+            reasoning: { effort: "minimal" },
             temperature: 0,
             max_tokens: 20_000,
           }),

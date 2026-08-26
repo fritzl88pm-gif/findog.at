@@ -11,23 +11,19 @@ export type DocumentProvider = (
   options?: DocumentProviderOptions,
 ) => Promise<string[]>;
 
-export type OpenrouterDocumentProvider = (
-  files: MineruFileInput[],
-  options: DocumentProviderOptions & { model: string },
-) => Promise<string[]>;
+export type OmnirouteDocumentProvider = DocumentProvider;
 
 type DocumentPipelineDependencies = {
   mineruProvider: DocumentProvider;
-  openrouterProvider: OpenrouterDocumentProvider;
+  omnirouteProvider: OmnirouteDocumentProvider;
 };
 
 type ConfiguredDocumentProviderDependencies = DocumentPipelineDependencies & {
-  getSettings: () => Promise<Pick<DocumentPipelineSettings, "documentPipeline" | "modelId">>;
+  getSettings: () => Promise<Pick<DocumentPipelineSettings, "documentPipeline">>;
 };
 
 type DocumentPipelineSettings = {
   documentPipeline: DocumentPipeline;
-  modelId: string;
 };
 
 function providerOptions(signal: AbortSignal | undefined): DocumentProviderOptions {
@@ -39,25 +35,25 @@ export async function extractDocumentsWithPipeline(
   options: {
     pipeline: unknown;
     mineruProvider: DocumentProvider;
-    openrouterProvider: DocumentProvider;
+    omnirouteProvider: DocumentProvider;
     signal?: AbortSignal;
   },
 ): Promise<string[]> {
   if (
-    options.pipeline !== "mineru_with_openrouter_fallback"
-    && options.pipeline !== "openrouter_only"
+    options.pipeline !== "mineru_with_omniroute_luna_fallback"
+    && options.pipeline !== "omniroute_luna_only"
   ) {
     throw new UserVisibleError("Die Dokument-Pipeline ist ungültig.", 500);
   }
 
-  if (options.pipeline === "openrouter_only") {
-    return options.openrouterProvider(files, providerOptions(options.signal));
+  if (options.pipeline === "omniroute_luna_only") {
+    return options.omnirouteProvider(files, providerOptions(options.signal));
   }
 
   try {
     return await options.mineruProvider(files, providerOptions(options.signal));
   } catch {
-    return options.openrouterProvider(files, providerOptions(options.signal));
+    return options.omnirouteProvider(files, providerOptions(options.signal));
   }
 }
 
@@ -70,10 +66,8 @@ export function createConfiguredDocumentProvider(
       pipeline: settings.documentPipeline,
       mineruProvider: (providerFiles, providerOptionsValue) =>
         dependencies.mineruProvider(providerFiles, providerOptionsValue),
-      openrouterProvider: (providerFiles, providerOptionsValue) => dependencies.openrouterProvider(
-        providerFiles,
-        { ...providerOptionsValue, model: settings.modelId },
-      ),
+      omnirouteProvider: (providerFiles, providerOptionsValue) =>
+        dependencies.omnirouteProvider(providerFiles, providerOptionsValue),
       signal: options?.signal,
     });
   };

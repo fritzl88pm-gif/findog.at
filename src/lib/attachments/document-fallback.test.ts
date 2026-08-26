@@ -7,8 +7,10 @@ import {
   DocumentFallbackError,
   extractDocumentsWithConfiguredModel,
 } from "./document-fallback";
+import { OMNIROUTE_LUNA_MODEL_ID } from "@/lib/scanning/settings";
 
-const originalKey = process.env.OPENROUTER_API_KEY;
+const originalBaseUrl = process.env.OMNIROUTE_BASE_URL;
+const originalKey = process.env.OMNIROUTE_API_KEY;
 
 function document(name = "beleg.pdf", kind: MineruFileInput["kind"] = "pdf"): MineruFileInput {
   return {
@@ -35,30 +37,35 @@ describe("document fallback timeout constant", () => {
   });
 });
 
-describe("configured Gemini document fallback", () => {
+describe("configured OmniRoute Luna document fallback", () => {
   beforeEach(() => {
-    process.env.OPENROUTER_API_KEY = "fallback-test-key";
+    process.env.OMNIROUTE_BASE_URL = "https://omniroute.example/base/";
+    process.env.OMNIROUTE_API_KEY = "fallback-test-key";
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    if (originalKey === undefined) delete process.env.OPENROUTER_API_KEY;
-    else process.env.OPENROUTER_API_KEY = originalKey;
+    if (originalBaseUrl === undefined) delete process.env.OMNIROUTE_BASE_URL;
+    else process.env.OMNIROUTE_BASE_URL = originalBaseUrl;
+    if (originalKey === undefined) delete process.env.OMNIROUTE_API_KEY;
+    else process.env.OMNIROUTE_API_KEY = originalKey;
   });
 
-  it("uses the configured model and sends the document as a private base64 file", async () => {
+  it("uses fixed Luna via OmniRoute and sends the document as a private base64 file", async () => {
     const fetch = vi.fn().mockResolvedValue(providerResponse("# Vollständiger Inhalt"));
 
     const result = await extractDocumentsWithConfiguredModel([document()], {
-      model: "google/gemini-3.5-flash",
       fetch,
     });
 
     expect(result).toEqual(["# Vollständiger Inhalt"]);
     const request = vi.mocked(fetch).mock.calls[0];
+    expect(request?.[0]).toBe("https://omniroute.example/base/v1/chat/completions");
     const body = JSON.parse(String(request?.[1]?.body)) as Record<string, unknown>;
-    expect(body.model).toBe("google/gemini-3.5-flash");
+    expect(body.model).toBe(OMNIROUTE_LUNA_MODEL_ID);
     expect(body.max_tokens).toBe(20_000);
+    expect(body.reasoning).toEqual({ effort: "minimal" });
+    expect(JSON.stringify(body.reasoning)).not.toContain("exclude");
     expect(body.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: "system", content: DOCUMENT_FALLBACK_PROMPT }),
     ]));
@@ -75,7 +82,7 @@ describe("configured Gemini document fallback", () => {
 
     await expect(extractDocumentsWithConfiguredModel(
       [document("first.pdf"), document("second.docx", "docx")],
-      { model: "google/gemini-3.5-flash", fetch },
+      { fetch },
     )).resolves.toEqual(["First", "Second"]);
 
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -90,32 +97,23 @@ describe("configured Gemini document fallback", () => {
     ]));
 
     const result = await extractDocumentsWithConfiguredModel([document()], {
-      model: "google/gemini-3.5-flash",
       fetch,
     });
     expect(result).toEqual(["Document content"]);
   });
 
-  it("rejects missing configuration, invalid models, provider errors and empty output", async () => {
-    delete process.env.OPENROUTER_API_KEY;
+  it("rejects missing configuration, provider errors and empty output", async () => {
+    delete process.env.OMNIROUTE_API_KEY;
     await expect(extractDocumentsWithConfiguredModel([document()], {
-      model: "google/gemini-3.5-flash",
       fetch: vi.fn(),
     })).rejects.toBeInstanceOf(DocumentFallbackError);
 
-    process.env.OPENROUTER_API_KEY = "fallback-test-key";
+    process.env.OMNIROUTE_API_KEY = "fallback-test-key";
     await expect(extractDocumentsWithConfiguredModel([document()], {
-      model: "invalid model",
-      fetch: vi.fn(),
-    })).rejects.toMatchObject({ status: 503 });
-
-    await expect(extractDocumentsWithConfiguredModel([document()], {
-      model: "google/gemini-3.5-flash",
       fetch: vi.fn().mockResolvedValue(new Response("busy", { status: 429 })),
     })).rejects.toMatchObject({ status: 429 });
 
     await expect(extractDocumentsWithConfiguredModel([document()], {
-      model: "google/gemini-3.5-flash",
       fetch: vi.fn().mockResolvedValue(providerResponse("   ")),
     })).rejects.toThrow("keinen Dokumentinhalt");
   });
@@ -128,7 +126,6 @@ describe("configured Gemini document fallback", () => {
     let error: unknown;
     try {
       await extractDocumentsWithConfiguredModel([document()], {
-        model: "google/gemini-3.5-flash",
         fetch,
         maxResponseBytes: 32,
       });

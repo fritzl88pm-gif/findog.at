@@ -233,18 +233,19 @@ describe("POST /api/fred/chat", () => {
     });
     vi.mocked(buildAttachmentContext).mockImplementation(async (question) => `${question}\n\nEXTRACTED`);
     vi.mocked(getScanningSettings).mockResolvedValue({
-      documentPipeline: "mineru_with_openrouter_fallback",
+      documentPipeline: "mineru_with_omniroute_luna_fallback",
       fredAttachmentMode: "findog_preprocess",
+      scanningProvider: "omniroute_luna",
       modelId: "google/gemini-3.5-flash",
       prompt: "Configured scanning prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
       updatedBy: userId,
     });
     vi.mocked(extractDocumentsWithConfiguredModel).mockResolvedValue(["FALLBACK"]);
-    vi.mocked(createConfiguredDocumentProvider).mockImplementation(({ getSettings, openrouterProvider }) => (
+    vi.mocked(createConfiguredDocumentProvider).mockImplementation(({ getSettings, omnirouteProvider }) => (
       async (files, options) => {
-        const settings = await getSettings();
-        return openrouterProvider(files, { ...(options ?? {}), model: settings.modelId });
+        await getSettings();
+        return omnirouteProvider(files, options ?? {});
       }
     ));
   });
@@ -811,8 +812,9 @@ describe("POST /api/fred/chat", () => {
     const rpc = rpcForTurn();
     vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
     vi.mocked(getScanningSettings).mockResolvedValue({
-      documentPipeline: "mineru_with_openrouter_fallback",
+      documentPipeline: "mineru_with_omniroute_luna_fallback",
       fredAttachmentMode: "weknora_native",
+      scanningProvider: "omniroute_luna",
       modelId: "model/x",
       prompt: "Scanning-specific prompt must not be used",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -882,8 +884,9 @@ describe("POST /api/fred/chat", () => {
     const rpc = vi.fn();
     vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
     vi.mocked(getScanningSettings).mockResolvedValue({
-      documentPipeline: "mineru_with_openrouter_fallback",
+      documentPipeline: "mineru_with_omniroute_luna_fallback",
       fredAttachmentMode: "weknora_native",
+      scanningProvider: "omniroute_luna",
       modelId: "model/x",
       prompt: "prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -954,8 +957,9 @@ describe("POST /api/fred/chat", () => {
     const rpc = rpcForTurn();
     vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
     vi.mocked(getScanningSettings).mockResolvedValue({
-      documentPipeline: "mineru_with_openrouter_fallback",
+      documentPipeline: "mineru_with_omniroute_luna_fallback",
       fredAttachmentMode: "weknora_native",
+      scanningProvider: "omniroute_luna",
       modelId: "model/x",
       prompt: "prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -989,8 +993,9 @@ describe("POST /api/fred/chat", () => {
     const rpc = vi.fn();
     vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
     vi.mocked(getScanningSettings).mockResolvedValue({
-      documentPipeline: "mineru_with_openrouter_fallback",
+      documentPipeline: "mineru_with_omniroute_luna_fallback",
       fredAttachmentMode: "weknora_native",
+      scanningProvider: "omniroute_luna",
       modelId: "model/x",
       prompt: "prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -1029,8 +1034,9 @@ describe("POST /api/fred/chat", () => {
     const rpc = rpcForTurn();
     vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
     vi.mocked(getScanningSettings).mockResolvedValue({
-      documentPipeline: "mineru_with_openrouter_fallback",
+      documentPipeline: "mineru_with_omniroute_luna_fallback",
       fredAttachmentMode: "weknora_native",
+      scanningProvider: "omniroute_luna",
       modelId: "model/x",
       prompt: "prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -1057,8 +1063,9 @@ describe("POST /api/fred/chat", () => {
     const rpc = vi.fn();
     vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
     vi.mocked(getScanningSettings).mockResolvedValue({
-      documentPipeline: "mineru_with_openrouter_fallback",
+      documentPipeline: "mineru_with_omniroute_luna_fallback",
       fredAttachmentMode: "weknora_native",
+      scanningProvider: "omniroute_luna",
       modelId: "model/x",
       prompt: "prompt",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -1096,8 +1103,9 @@ describe("POST /api/fred/chat", () => {
     const supabase = { rpc };
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase as never);
     vi.mocked(getScanningSettings).mockResolvedValue({
-      documentPipeline: "openrouter_only",
+      documentPipeline: "omniroute_luna_only",
       fredAttachmentMode: "findog_preprocess",
+      scanningProvider: "omniroute_luna",
       modelId: "google/gemini-3.5-flash:online",
       prompt: "Scanning-specific prompt must not be used for Fred extraction",
       updatedAt: "2026-07-19T10:00:00.000Z",
@@ -1118,12 +1126,11 @@ describe("POST /api/fred/chat", () => {
     const dependencies = vi.mocked(createConfiguredDocumentProvider).mock.calls[0][0];
     expect(typeof dependencies.getSettings).toBe("function");
     expect(typeof dependencies.mineruProvider).toBe("function");
-    expect(typeof dependencies.openrouterProvider).toBe("function");
+    expect(typeof dependencies.omnirouteProvider).toBe("function");
     expect(getScanningSettings).toHaveBeenCalledWith(supabase);
     expect(extractDocumentsWithConfiguredModel).toHaveBeenCalledWith(
       [expect.objectContaining({ name: "Fallback.pdf", kind: "pdf" })],
       {
-        model: "google/gemini-3.5-flash:online",
         signal: expect.any(AbortSignal),
       },
     );
@@ -1846,8 +1853,9 @@ describe("POST /api/fred/chat", () => {
       const mock = supabaseWithPreferences(prefRow);
       vi.mocked(getSupabaseServerClient).mockReturnValue(mock);
       vi.mocked(getScanningSettings).mockResolvedValue({
-        documentPipeline: "mineru_with_openrouter_fallback",
+        documentPipeline: "mineru_with_omniroute_luna_fallback",
         fredAttachmentMode: "weknora_native",
+        scanningProvider: "omniroute_luna",
         modelId: "model/x",
         prompt: "prompt",
         updatedAt: "2026-07-19T10:00:00.000Z",
@@ -2505,8 +2513,9 @@ describe("POST /api/fred/chat", () => {
       const rpc = rpcForTurn();
       vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
       vi.mocked(getScanningSettings).mockResolvedValue({
-        documentPipeline: "mineru_with_openrouter_fallback",
+        documentPipeline: "mineru_with_omniroute_luna_fallback",
         fredAttachmentMode: "weknora_native",
+        scanningProvider: "omniroute_luna",
         modelId: "model/x",
         prompt: "prompt",
         updatedAt: "2026-07-19T10:00:00.000Z",
@@ -2568,8 +2577,9 @@ describe("POST /api/fred/chat", () => {
       const rpc = rpcForTurn();
       vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
       vi.mocked(getScanningSettings).mockResolvedValue({
-        documentPipeline: "mineru_with_openrouter_fallback",
+        documentPipeline: "mineru_with_omniroute_luna_fallback",
         fredAttachmentMode: "weknora_native",
+        scanningProvider: "omniroute_luna",
         modelId: "model/x",
         prompt: "prompt",
         updatedAt: "2026-07-19T10:00:00.000Z",
@@ -2611,8 +2621,9 @@ describe("POST /api/fred/chat", () => {
       const rpc = rpcForTurn();
       vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
       vi.mocked(getScanningSettings).mockResolvedValue({
-        documentPipeline: "mineru_with_openrouter_fallback",
+        documentPipeline: "mineru_with_omniroute_luna_fallback",
         fredAttachmentMode: "findog_preprocess",
+        scanningProvider: "omniroute_luna",
         modelId: "model/x",
         prompt: "prompt",
         updatedAt: "2026-07-19T10:00:00.000Z",
@@ -2634,8 +2645,9 @@ describe("POST /api/fred/chat", () => {
       const rpc = rpcForTurn();
       vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
       vi.mocked(getScanningSettings).mockResolvedValue({
-        documentPipeline: "mineru_with_openrouter_fallback",
+        documentPipeline: "mineru_with_omniroute_luna_fallback",
         fredAttachmentMode: "weknora_native",
+        scanningProvider: "omniroute_luna",
         modelId: "model/x",
         prompt: "prompt",
         updatedAt: "2026-07-19T10:00:00.000Z",
