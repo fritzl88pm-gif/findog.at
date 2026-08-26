@@ -112,7 +112,7 @@ describe("OpenRouter scanning adapter", () => {
     expect(headers.Authorization).toBe("Bearer omniroute-key");
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     expect(body.model).toBe(OMNIROUTE_LUNA_MODEL_ID);
-    expect(body.reasoning).toEqual({ effort: "minimal" });
+    expect(body.reasoning).toEqual({ effort: "low" });
     expect(JSON.stringify(body.reasoning)).not.toContain("exclude");
     expect(JSON.stringify(body)).toContain("data:image/png;base64,");
   });

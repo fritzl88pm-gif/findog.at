@@ -172,7 +172,7 @@ async function extractDocument(
                 ],
               },
             ],
-            reasoning: { effort: "minimal" },
+            reasoning: { effort: "low" },
             temperature: 0,
             max_tokens: 20_000,
           }),

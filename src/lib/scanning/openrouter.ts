@@ -51,7 +51,7 @@ function providerRequestConfig(provider: ScanningProvider, configuredModel: stri
   url: string;
   key: string;
   model: string;
-  reasoning: { effort: "minimal"; exclude?: true };
+  reasoning: { effort: "minimal" | "low"; exclude?: true };
 } {
   if (provider === "openrouter") {
     return {
@@ -65,7 +65,7 @@ function providerRequestConfig(provider: ScanningProvider, configuredModel: stri
     url: omnirouteChatCompletionsUrl(),
     key: requiredEnv("OMNIROUTE_API_KEY"),
     model: OMNIROUTE_LUNA_MODEL_ID,
-    reasoning: { effort: "minimal" },
+    reasoning: { effort: "low" },
   };
 }
 

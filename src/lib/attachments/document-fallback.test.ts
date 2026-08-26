@@ -64,7 +64,7 @@ describe("configured OmniRoute Luna document fallback", () => {
     const body = JSON.parse(String(request?.[1]?.body)) as Record<string, unknown>;
     expect(body.model).toBe(OMNIROUTE_LUNA_MODEL_ID);
     expect(body.max_tokens).toBe(20_000);
-    expect(body.reasoning).toEqual({ effort: "minimal" });
+    expect(body.reasoning).toEqual({ effort: "low" });
     expect(JSON.stringify(body.reasoning)).not.toContain("exclude");
     expect(body.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: "system", content: DOCUMENT_FALLBACK_PROMPT }),
