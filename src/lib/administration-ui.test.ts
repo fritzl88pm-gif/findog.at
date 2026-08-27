@@ -11,13 +11,14 @@ const componentSource = readFileSync(
 const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
 describe("Administration UI tabs and scanning settings", () => {
-  it("has exactly six ARIA tabs including OmniRoute administration", () => {
+  it("has exactly six ARIA tabs including OpenRouter administration", () => {
     const tabMatches = pageSource.match(/role="tab"/gu);
     expect(tabMatches).toHaveLength(6);
     expect(pageSource).toContain('id="admin-tab-downloads"');
     expect(pageSource).toContain('id="admin-tab-personalities"');
-    expect(pageSource).toContain('id="admin-tab-omniroute"');
+    expect(pageSource).toContain('id="admin-tab-openrouter"');
     expect(pageSource).not.toContain('id="admin-tab-bfg-pro"');
+    expect(pageSource).not.toContain('id="admin-tab-omniroute"');
   });
 
   it("includes Downloads and Persönlichkeiten in ADMIN_TAB_IDS for keyboard navigation", () => {

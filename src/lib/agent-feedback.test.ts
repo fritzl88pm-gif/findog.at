@@ -71,7 +71,7 @@ describe("Fred feedback UI", () => {
 
 describe("admin feedback UI", () => {
   it("adds a keyboard-reachable feedback tab and loads the protected endpoint", () => {
-    expect(pageSource).toContain('"scanning", "benutzer", "feedback", "downloads", "omniroute", "personalities"');
+    expect(pageSource).toContain('"scanning", "benutzer", "feedback", "downloads", "openrouter", "personalities"');
     expect(pageSource).toContain('id="admin-tab-feedback"');
     expect(pageSource).toMatch(/>\s*Rückmeldungen\s*<\/button>/u);
     expect(pageSource).toContain("<AdminFeedbackView");

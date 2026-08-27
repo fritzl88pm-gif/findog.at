@@ -90,7 +90,7 @@ import ReasoningsView from "@/components/reasonings-view";
 import AdminFeedbackView from "@/components/admin-feedback-view";
 import AdminFredPersonalities from "@/components/admin-fred-personalities";
 import AdminDownloads from "@/components/admin-downloads";
-import AdminOmniRouteUsage from "@/components/admin-omniroute-usage";
+import AdminOpenRouterUsage from "@/components/admin-openrouter-usage";
 import DownloadsView from "@/components/downloads-view";
 import TelegramSettings, {
   type TelegramIntegrationPublicState,
@@ -1172,7 +1172,7 @@ function GermanPensionOptionView() {
 
 
 
-const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback", "downloads", "omniroute", "personalities"] as const;
+const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback", "downloads", "openrouter", "personalities"] as const;
 function handleAdminTabKeyDown(event: React.KeyboardEvent, currentTab: string): void {
   const currentIndex = ADMIN_TAB_IDS.indexOf(currentTab as typeof ADMIN_TAB_IDS[number]);
   let nextIndex: number | undefined;
@@ -1224,7 +1224,7 @@ export default function Home() {
   const [isAdminUsersLoading, setIsAdminUsersLoading] = useState(false);
   const [isAdminUserCreating, setIsAdminUserCreating] = useState(false);
   const [isAdminUserMutationRunning, setIsAdminUserMutationRunning] = useState(false);
-  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "omniroute" | "personalities">("scanning");
+  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "openrouter" | "personalities">("scanning");
   const [scanningDocumentPipeline, setScanningDocumentPipeline] = useState<DocumentPipeline>(DEFAULT_DOCUMENT_PIPELINE);
   const [fredAttachmentMode, setFredAttachmentMode] = useState<FredAttachmentMode>(DEFAULT_FRED_ATTACHMENT_MODE);
   const [scanningProvider, setScanningProvider] = useState<ScanningProvider>(DEFAULT_SCANNING_PROVIDER);
@@ -4130,15 +4130,15 @@ export default function Home() {
                 Downloads
               </button>
               <button
-                id="admin-tab-omniroute"
-                className={`admin-tab-button ${adminTab === "omniroute" ? "active" : ""}`}
+                id="admin-tab-openrouter"
+                className={`admin-tab-button ${adminTab === "openrouter" ? "active" : ""}`}
                 role="tab"
-                aria-selected={adminTab === "omniroute"}
-                aria-controls="admin-panel-omniroute"
-                onClick={() => setAdminTab("omniroute")}
-                onKeyDown={(e) => handleAdminTabKeyDown(e, "omniroute")}
+                aria-selected={adminTab === "openrouter"}
+                aria-controls="admin-panel-openrouter"
+                onClick={() => setAdminTab("openrouter")}
+                onKeyDown={(e) => handleAdminTabKeyDown(e, "openrouter")}
               >
-                Codex, Gemini &amp; OmniRoute
+                OpenRouter-Nutzung
               </button>
               <button
                 id="admin-tab-personalities"
@@ -4426,8 +4426,8 @@ export default function Home() {
               />
             ) : adminTab === "downloads" ? (
               <AdminDownloads accessToken={session?.access_token ?? ""} />
-            ) : adminTab === "omniroute" ? (
-              <AdminOmniRouteUsage accessToken={session?.access_token ?? ""} />
+            ) : adminTab === "openrouter" ? (
+              <AdminOpenRouterUsage accessToken={session?.access_token ?? ""} />
             ) : (
               <AdminFredPersonalities accessToken={session?.access_token ?? ""} />
             )}
