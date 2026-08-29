@@ -12,6 +12,7 @@ export type RichBlock =
   | { type: "unordered-list"; items: RichInline[][] }
   | { type: "ordered-list"; items: RichInline[][] }
   | { type: "table"; headers: RichInline[][]; rows: RichInline[][][] }
+  | { type: "code-block"; text: string; language?: string }
   | { type: "blockquote"; children: RichInline[] };
 
 export type RichTableClipboardContent = {
@@ -59,6 +60,38 @@ const headingPattern = /^(#{1,3})\s+(.+)$/;
 const unorderedListPattern = /^\s*[-*+]\s+(.+)$/;
 const orderedListPattern = /^\s*\d+[.)]\s+(.+)$/;
 const blockquotePattern = /^\s*>\s?(.*)$/;
+const unsupportedRelativeImagePattern = /^\s*!\[[^\]\r\n]*\]\(\s*\/images\/[^\r\n)]*\)\s*$/u;
+
+type CodeFence = {
+  marker: "`" | "~";
+  length: number;
+  language?: string;
+};
+
+function codeFenceStart(line: string): CodeFence | null {
+  const match = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+  if (!match) return null;
+
+  const fence = match[1];
+  const info = match[2].trim();
+  if (fence[0] === "`" && info.includes("`")) return null;
+
+  const language = info.split(/\s+/u, 1)[0];
+  return {
+    marker: fence[0] as "`" | "~",
+    length: fence.length,
+    ...(language ? { language } : {}),
+  };
+}
+
+function isCodeFenceEnd(line: string, fence: CodeFence): boolean {
+  const match = /^ {0,3}(`+|~+)[ \t]*$/u.exec(line);
+  return Boolean(
+    match
+      && match[1][0] === fence.marker
+      && match[1].length >= fence.length,
+  );
+}
 
 function pushText(nodes: RichInline[], text: string): void {
   if (!text) {
@@ -278,6 +311,8 @@ function isBlockStart(lines: string[], index: number): boolean {
     unorderedListPattern.test(line) ||
     orderedListPattern.test(line) ||
     blockquotePattern.test(line) ||
+    codeFenceStart(line) !== null ||
+    unsupportedRelativeImagePattern.test(line) ||
     isTableStart(lines, index)
   );
 }
@@ -327,6 +362,30 @@ export function parseRichAnswer(content: string): RichBlock[] {
         level: Math.min(4, heading[1].length + 1) as 2 | 3 | 4,
         children: parseInline(heading[2].trim()),
       });
+      index += 1;
+      continue;
+    }
+
+    const fence = codeFenceStart(line);
+    if (fence) {
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !isCodeFenceEnd(lines[index] ?? "", fence)) {
+        codeLines.push(lines[index] ?? "");
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push({
+        type: "code-block",
+        text: codeLines.join("\n"),
+        ...(fence.language ? { language: fence.language } : {}),
+      });
+      continue;
+    }
+
+    // WeKnora can return relative image references that are not available on
+    // Findog's origin. Do not expose unsupported Markdown as visible answer text.
+    if (unsupportedRelativeImagePattern.test(line)) {
       index += 1;
       continue;
     }

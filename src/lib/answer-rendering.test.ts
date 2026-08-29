@@ -3,6 +3,74 @@ import { describe, expect, it } from "vitest";
 import { parseRichAnswer, richTableClipboardContent } from "./answer-rendering";
 
 describe("parseRichAnswer", () => {
+  it("renders fenced calculations as code blocks without exposing the language tag", () => {
+    const blocks = parseRichAnswer([
+      "Vereinfacht:",
+      "",
+      "```text",
+      "Bruttobezüge 7.500 €",
+      "− Sozialversicherung 1.050 €",
+      "= maßgebliche Einkünfte 6.450 €",
+      "```",
+      "",
+      "Danach ist der Grenzbetrag zu prüfen.",
+    ].join("\n"));
+
+    expect(blocks).toEqual([
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Vereinfacht:" }],
+      },
+      {
+        type: "code-block",
+        language: "text",
+        text: "Bruttobezüge 7.500 €\n− Sozialversicherung 1.050 €\n= maßgebliche Einkünfte 6.450 €",
+      },
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Danach ist der Grenzbetrag zu prüfen." }],
+      },
+    ]);
+  });
+
+  it("keeps Markdown structure inside fenced code literal and accepts a longer closing fence", () => {
+    const blocks = parseRichAnswer("~~~markdown\n# Keine Überschrift\n| keine | Tabelle |\n~~~~");
+
+    expect(blocks).toEqual([{
+      type: "code-block",
+      language: "markdown",
+      text: "# Keine Überschrift\n| keine | Tabelle |",
+    }]);
+  });
+
+  it("removes legacy relative image references that Findog cannot resolve", () => {
+    const artifactId = "44444444-4444-4444-8444-444444444444";
+    const blocks = parseRichAnswer([
+      "Vor dem Bild.",
+      "",
+      "![](/images/generated-calculation.png)",
+      "",
+      `![Berechnung](findog-artifact://${artifactId})`,
+      "",
+      "Nach dem Bild.",
+    ].join("\n"));
+
+    expect(blocks).toEqual([
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Vor dem Bild." }],
+      },
+      {
+        type: "paragraph",
+        children: [{ type: "image", artifactId, alt: "Berechnung" }],
+      },
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Nach dem Bild." }],
+      },
+    ]);
+  });
+
   it("serializes an individual rich table as spreadsheet text and safe HTML", () => {
     const table = parseRichAnswer(`| Punkt | Ergebnis |
 | --- | --- |

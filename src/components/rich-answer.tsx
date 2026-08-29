@@ -39,6 +39,13 @@ function renderRichBlock(
   if (block.type === "paragraph") {
     return <p key={`paragraph-${index}`}>{renderRichInline(block.children, `paragraph-${index}`)}</p>;
   }
+  if (block.type === "code-block") {
+    return (
+      <pre className="answer-code-block" key={`code-block-${index}`}>
+        <code className="answer-code-block-code">{block.text}</code>
+      </pre>
+    );
+  }
   if (block.type === "unordered-list") {
     return (
       <ul key={`unordered-list-${index}`}>
