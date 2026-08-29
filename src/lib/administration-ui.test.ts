@@ -11,10 +11,11 @@ const componentSource = readFileSync(
 const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
 describe("Administration UI tabs and scanning settings", () => {
-  it("has exactly six ARIA tabs including OpenRouter administration", () => {
+  it("has exactly seven ARIA tabs including Startseiten-News and OpenRouter administration", () => {
     const tabMatches = pageSource.match(/role="tab"/gu);
-    expect(tabMatches).toHaveLength(6);
+    expect(tabMatches).toHaveLength(7);
     expect(pageSource).toContain('id="admin-tab-downloads"');
+    expect(pageSource).toContain('id="admin-tab-dashboard-news"');
     expect(pageSource).toContain('id="admin-tab-personalities"');
     expect(pageSource).toContain('id="admin-tab-openrouter"');
     expect(pageSource).not.toContain('id="admin-tab-bfg-pro"');
@@ -24,7 +25,7 @@ describe("Administration UI tabs and scanning settings", () => {
   it("includes Downloads and Persönlichkeiten in ADMIN_TAB_IDS for keyboard navigation", () => {
     expect(pageSource).toContain('"downloads"');
     expect(pageSource).toContain('"personalities"');
-    expect(pageSource).toMatch(/ADMIN_TAB_IDS\s*=\s*\[[^\]]*"scanning"[^\]]*"benutzer"[^\]]*"feedback"[^\]]*"downloads"[^\]]*"personalities"[^\]]*\]/);
+    expect(pageSource).toMatch(/ADMIN_TAB_IDS\s*=\s*\[[^\]]*"scanning"[^\]]*"benutzer"[^\]]*"feedback"[^\]]*"downloads"[^\]]*"dashboard-news"[^\]]*"personalities"[^\]]*\]/);
   });
 
   it("renders the admin personalities component inside the Persönlichkeiten tabpanel", () => {

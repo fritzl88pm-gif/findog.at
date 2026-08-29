@@ -90,8 +90,10 @@ import ReasoningsView from "@/components/reasonings-view";
 import AdminFeedbackView from "@/components/admin-feedback-view";
 import AdminFredPersonalities from "@/components/admin-fred-personalities";
 import AdminDownloads from "@/components/admin-downloads";
+import AdminDashboardNews from "@/components/admin-dashboard-news";
 import AdminOpenRouterUsage from "@/components/admin-openrouter-usage";
 import DownloadsView from "@/components/downloads-view";
+import DashboardView, { type DashboardAppTarget } from "@/components/dashboard-view";
 import TelegramSettings, {
   type TelegramIntegrationPublicState,
 } from "@/components/telegram-settings";
@@ -117,7 +119,7 @@ type ConversationSummary = {
   telegramIntegrationId?: string | null;
 };
 
-type AppView = "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data" | "reasonings";
+type AppView = "home" | "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data" | "reasonings";
 
 const TELEGRAM_BOT_USERNAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{4,31}$/u;
 
@@ -1172,7 +1174,7 @@ function GermanPensionOptionView() {
 
 
 
-const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback", "downloads", "openrouter", "personalities"] as const;
+const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback", "downloads", "dashboard-news", "openrouter", "personalities"] as const;
 function handleAdminTabKeyDown(event: React.KeyboardEvent, currentTab: string): void {
   const currentIndex = ADMIN_TAB_IDS.indexOf(currentTab as typeof ADMIN_TAB_IDS[number]);
   let nextIndex: number | undefined;
@@ -1224,7 +1226,7 @@ export default function Home() {
   const [isAdminUsersLoading, setIsAdminUsersLoading] = useState(false);
   const [isAdminUserCreating, setIsAdminUserCreating] = useState(false);
   const [isAdminUserMutationRunning, setIsAdminUserMutationRunning] = useState(false);
-  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "openrouter" | "personalities">("scanning");
+  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "dashboard-news" | "openrouter" | "personalities">("scanning");
   const [scanningDocumentPipeline, setScanningDocumentPipeline] = useState<DocumentPipeline>(DEFAULT_DOCUMENT_PIPELINE);
   const [fredAttachmentMode, setFredAttachmentMode] = useState<FredAttachmentMode>(DEFAULT_FRED_ATTACHMENT_MODE);
   const [scanningProvider, setScanningProvider] = useState<ScanningProvider>(DEFAULT_SCANNING_PROVIDER);
@@ -1249,7 +1251,7 @@ export default function Home() {
   const [isAccountDeletionSubmitting, setIsAccountDeletionSubmitting] = useState(false);
   const [authError, setAuthError] = useState("");
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
-  const [appView, setAppView] = useState<AppView>("chat");
+  const [appView, setAppView] = useState<AppView>("home");
   const [bfgQuery, setBfgQuery] = useState("");
   const [bfgSort, setBfgSort] = useState<BfgSort>("1");
   const [bfgAppliedSort, setBfgAppliedSort] = useState<BfgSort>("1");
@@ -1469,7 +1471,7 @@ export default function Home() {
         setFredMessages([]);
         setFredConversations([]);
         setSelectedFredConversationIds([]);
-        setAppView("chat");
+        setAppView("home");
         setBfgQuery("");
         setBfgPage(null);
         setBfgError("");
@@ -1494,7 +1496,7 @@ export default function Home() {
       const isFreshAuthenticatedLanding = authenticatedUserIdRef.current !== user.id;
       authenticatedUserIdRef.current = user.id;
       if (isFreshAuthenticatedLanding) {
-        setAppView("chat");
+        setAppView("home");
         setFredConversationId("");
         setActiveConversationOrigin("web");
         setFredMessages([]);
@@ -1592,7 +1594,7 @@ export default function Home() {
     if (!accessToken || !user?.id) {
       queueMicrotask(() => {
         setIsAdmin(false);
-        setAppView((current) => current === "administration" || current === "quiz" ? "chat" : current);
+        setAppView((current) => current === "administration" || current === "quiz" ? "home" : current);
       });
       return;
     }
@@ -1605,13 +1607,13 @@ export default function Home() {
         }
         setIsAdmin(adminCapability.isAdmin);
         if (!adminCapability.isAdmin) {
-          setAppView((current) => current === "administration" || current === "quiz" ? "chat" : current);
+          setAppView((current) => current === "administration" || current === "quiz" ? "home" : current);
         }
       })
       .catch(() => {
         if (isActive) {
           setIsAdmin(false);
-          setAppView((current) => current === "administration" || current === "quiz" ? "chat" : current);
+          setAppView((current) => current === "administration" || current === "quiz" ? "home" : current);
         }
       });
 
@@ -1818,7 +1820,7 @@ export default function Home() {
       setFredConversations([]);
       setSelectedFredConversationIds([]);
       setIsAdmin(false);
-      setAppView("chat");
+      setAppView("home");
       closeSettingsDialog();
     } catch (deletionError) {
       setAccountDeletionError(
@@ -1856,6 +1858,36 @@ export default function Home() {
     } finally {
       setIsAuthSubmitting(false);
     }
+  }
+
+  function openHomeView() {
+    setAppView("home");
+    setError("");
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
+  function openDashboardApp(target: DashboardAppTarget) {
+    switch (target) {
+      case "bfg-decisions": openBfgDecisionsView(); break;
+      case "bfg-pro": openBfgProView(); break;
+      case "data": openDataView(); break;
+      case "scanning": openScanningView(); break;
+      case "reasonings": openReasoningsView(); break;
+      case "forms": openFormsView(); break;
+      case "downloads": openDownloadsView(); break;
+      case "german-sv-pension": openGermanSvPensionView(); break;
+      case "l17b-currency": openL17bCurrencyView(); break;
+      case "fredrun": openFredRunView(); break;
+      case "quiz": openQuizView(); break;
+      case "administration": void openAdministrationView(); break;
+    }
+  }
+
+  function openDashboardConversation(id: string) {
+    const conversation = fredConversations.find((item) => item.id === id);
+    if (conversation) void selectFredConversation(conversation);
   }
 
   function openFormsView() {
@@ -2911,7 +2943,15 @@ export default function Home() {
         <div className="sidebar-header">
           {settingsOpen ? (
             <>
-              <Link className="sidebar-brand" href="/">
+              <Link
+                className="sidebar-brand"
+                href="/"
+                onClick={(event) => {
+                  event.preventDefault();
+                  openHomeView();
+                }}
+                aria-label="findog.at Startseite"
+              >
                 <span className="austria-flag" aria-hidden="true">
                   <span className="red"></span>
                   <span className="white"></span>
@@ -3090,10 +3130,19 @@ export default function Home() {
                   </svg>
                 </button>
                 {isApplicationNavigationExpanded ? (
-                  <nav className="forms-navigation"
-                    id="application-navigation"
-                    aria-label="Anwendungsbereiche"
-                  >
+                   <nav className="forms-navigation"
+                     id="application-navigation"
+                     aria-label="Anwendungsbereiche"
+                   >
+              <button
+                className={`sidebar-view-button ${appView === "home" ? "active" : ""}`}
+                type="button"
+                onClick={openHomeView}
+                aria-current={appView === "home" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 11 9-8 9 8"></path><path d="M5 10v10h14V10M9 20v-6h6v6"></path></svg>
+                Startseite
+              </button>
               <button
                 className={`sidebar-view-button ${appView === "bfg-decisions" ? "active" : ""}`}
                 type="button"
@@ -3222,6 +3271,16 @@ export default function Home() {
               aria-label="Neue Unterhaltung"
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+            <button
+              className={`icon-button rail-icon-btn rail-home-button ${appView === "home" ? "active" : ""}`}
+              type="button"
+              onClick={openHomeView}
+              title="Startseite"
+              aria-label="Startseite"
+              aria-current={appView === "home" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 11 9-8 9 8"></path><path d="M5 10v10h14V10M9 20v-6h6v6"></path></svg>
             </button>
             <button
               className={`icon-button rail-icon-btn rail-forms-button ${appView === "forms" ? "active" : ""}`}
@@ -3537,7 +3596,17 @@ export default function Home() {
         </div>
       ) : null}
 
-      {appView === "chat" ? (
+      {appView === "home" ? (
+        <DashboardView
+          accessToken={session?.access_token ?? ""}
+          conversations={fredConversations}
+          isHistoryLoading={isHistoryLoading}
+          isAdmin={isAdmin}
+          onStartConversation={startNewManagedConversation}
+          onOpenConversation={openDashboardConversation}
+          onOpenApp={openDashboardApp}
+        />
+      ) : appView === "chat" ? (
         <FredNativeChatView
           key={fredChatInstance}
           accessToken={session?.access_token ?? ""}
@@ -4130,6 +4199,17 @@ export default function Home() {
                 Downloads
               </button>
               <button
+                id="admin-tab-dashboard-news"
+                className={`admin-tab-button ${adminTab === "dashboard-news" ? "active" : ""}`}
+                role="tab"
+                aria-selected={adminTab === "dashboard-news"}
+                aria-controls="admin-panel-dashboard-news"
+                onClick={() => setAdminTab("dashboard-news")}
+                onKeyDown={(e) => handleAdminTabKeyDown(e, "dashboard-news")}
+              >
+                Startseiten-News
+              </button>
+              <button
                 id="admin-tab-openrouter"
                 className={`admin-tab-button ${adminTab === "openrouter" ? "active" : ""}`}
                 role="tab"
@@ -4426,6 +4506,8 @@ export default function Home() {
               />
             ) : adminTab === "downloads" ? (
               <AdminDownloads accessToken={session?.access_token ?? ""} />
+            ) : adminTab === "dashboard-news" ? (
+              <AdminDashboardNews accessToken={session?.access_token ?? ""} />
             ) : adminTab === "openrouter" ? (
               <AdminOpenRouterUsage accessToken={session?.access_token ?? ""} />
             ) : (

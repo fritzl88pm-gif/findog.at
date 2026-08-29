@@ -21,7 +21,7 @@ function cssRule(selector: string) {
   return stylesSource.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
 }
 
-describe("authenticated empty-chat landing", () => {
+describe("authenticated dashboard landing", () => {
   it("starts fresh and loads only durable Fred history", () => {
     expect(pageSource).not.toContain("chatHistoryStorageKey");
     expect(pageSource).toContain("authenticatedUserIdRef");
@@ -30,11 +30,11 @@ describe("authenticated empty-chat landing", () => {
     expect(pageSource).toMatch(/async function selectFredConversation[\s\S]*?fetchFredConversationHistory/);
   });
 
-  it("keeps the empty landing reset scoped to a newly authenticated user", () => {
+  it("keeps the home landing reset scoped to a newly authenticated user", () => {
     expect(pageSource).toMatch(
       /const isFreshAuthenticatedLanding\s*=\s*authenticatedUserIdRef\.current\s*!==\s*user\.id/,
     );
-    expect(pageSource).toMatch(/if \(isFreshAuthenticatedLanding\) \{[\s\S]*?setAppView\("chat"\)[\s\S]*?setFredConversationId\(""\)[\s\S]*?setFredMessages\(\[\]\)/);
+    expect(pageSource).toMatch(/if \(isFreshAuthenticatedLanding\) \{[\s\S]*?setAppView\("home"\)[\s\S]*?setFredConversationId\(""\)[\s\S]*?setFredMessages\(\[\]\)/);
   });
 
   it("renders Fred, one greeting, and the existing composer as a centered group", () => {

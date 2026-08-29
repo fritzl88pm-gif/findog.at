@@ -62,7 +62,7 @@ describe("Fred native Findog UI", () => {
   });
 
   it("uses the new-conversation action as the only Fred navigation and renders the native chat", () => {
-    expect(pageSource).toContain('type AppView = "chat" | "scanning" | "forms"');
+    expect(pageSource).toContain('type AppView = "home" | "chat" | "scanning" | "forms"');
     expect(pageSource).not.toContain('type AppView = "chat" | "fred"');
     expect(pageSource).not.toContain("onClick={openFredView}");
     expect(pageSource.match(/onClick=\{startNewManagedConversation\}/gu)).toHaveLength(2);

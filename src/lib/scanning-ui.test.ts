@@ -11,7 +11,7 @@ const providerSource = readFileSync(fileURLToPath(new URL("./scanning/openrouter
 
 describe("Scanning UI integration", () => {
   it("adds Scanning to both navigation modes as its own app view", () => {
-    expect(pageSource).toContain('type AppView = "chat" | "scanning"');
+    expect(pageSource).toContain('type AppView = "home" | "chat" | "scanning"');
     expect(pageSource.match(/onClick=\{openScanningView\}/gu)).toHaveLength(2);
     expect(pageSource).toMatch(/BFG Suche PRO\s*<\/button>\s*<button[\s\S]*?onClick=\{openScanningView\}/u);
     expect(pageSource).toMatch(/aria-label="BFG Suche PRO"[\s\S]*?<\/button>\s*<button[\s\S]*?onClick=\{openScanningView\}/u);

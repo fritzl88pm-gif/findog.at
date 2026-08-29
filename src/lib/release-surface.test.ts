@@ -40,7 +40,7 @@ describe("approved release surface", () => {
   });
 
   it("adds a separate BFG Suche PRO view and controls without replacing the normal search", () => {
-    expect(pageSource).toContain('type AppView = "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data"');
+    expect(pageSource).toContain('type AppView = "home" | "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data"');
     expect(pageSource).toMatch(/className={`sidebar-view-button[\s\S]*?BFG Suche PRO\s*<\/button>/);
     expect(pageSource).toContain('title="BFG Suche PRO"');
     expect(pageSource).toContain('aria-label="BFG Suche PRO"');
@@ -88,7 +88,7 @@ describe("approved release surface", () => {
   it("keeps the Quiz view behind the administrator capability in every client path", () => {
     expect(pageSource).toMatch(/function openQuizView\(\) \{\r?\n\s+if \(!isAdmin\)/);
     expect(pageSource.match(/\{isAdmin \? \(\s*<button[\s\S]{0,500}?appView === "quiz"/g)).toHaveLength(2);
-    expect(pageSource).toContain('current === "administration" || current === "quiz"');
+    expect(pageSource).toContain('current === "administration" || current === "quiz" ? "home" : current');
     expect(pageSource).toContain('appView === "quiz" && isAdmin ?');
   });
 
@@ -185,7 +185,7 @@ describe("approved release surface", () => {
   it("retires the legacy global system prompt: absent from the Administration client UI, not called by chat, server file preserved", () => {
     const settingsDialog = pageSource.slice(
       pageSource.indexOf('{isSettingsDialogOpen ? ('),
-      pageSource.indexOf('{appView === "chat" ? ('),
+      pageSource.indexOf('{appView === "home" ? ('),
     );
 
     expect(settingsDialog).not.toContain('settings-tab-system-prompt');
@@ -301,7 +301,7 @@ describe("approved release surface", () => {
 
   it("renders the expanded findog.at brand as a home link with a Beta tag", () => {
     expect(pageSource).toMatch(
-      /<Link className="sidebar-brand" href="\/">[\s\S]*className="austria-flag"[\s\S]*findog\.at[\s\S]*Beta[\s\S]*<\/Link>/,
+      /<Link[\s\S]*?className="sidebar-brand"[\s\S]*?href="\/"[\s\S]*?onClick=[\s\S]*?className="austria-flag"[\s\S]*?findog\.at[\s\S]*?Beta[\s\S]*?<\/Link>/,
     );
   });
 
