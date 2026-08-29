@@ -92,7 +92,7 @@ describe("POST /api/scanning", () => {
     expect(vi.mocked(analyzeScanningBatch).mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
     expect(final).toMatchObject({
       type: "final",
-      model: "codex/gpt-5.6-luna",
+      model: "omniroute-gpt-5.6-luna",
       report: expect.stringContaining("Gesamtsumme"),
     });
     if (final?.type === "final") {

@@ -52,7 +52,7 @@ export function isValidDocumentPipeline(value: unknown): value is DocumentPipeli
 }
 
 export const DEFAULT_SCANNING_MODEL_ID = "google/gemini-3.5-flash";
-export const OMNIROUTE_LUNA_MODEL_ID = "codex/gpt-5.6-luna";
+export const OMNIROUTE_LUNA_MODEL_ID = "omniroute-gpt-5.6-luna";
 
 export const DEFAULT_SCANNING_PROMPT = [
   "Du darfst die Dokumente intern gründlich analysieren und prüfen.",
