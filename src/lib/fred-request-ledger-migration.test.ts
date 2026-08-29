@@ -7,6 +7,10 @@ const migration = readFileSync(fileURLToPath(new URL(
   "../../supabase/migrations/20260829133712_fred_request_ledger.sql",
   import.meta.url,
 )), "utf8");
+const retentionMigration = readFileSync(fileURLToPath(new URL(
+  "../../supabase/migrations/20260829140505_preserve_user_history_after_quality_review.sql",
+  import.meta.url,
+)), "utf8");
 
 describe("Fred request ledger migration", () => {
   it("creates a private service-role ledger with bounded lifecycle states", () => {
@@ -41,12 +45,16 @@ describe("Fred request ledger migration", () => {
     expect(migration).toMatch(/status not in \('completed', 'failed', 'cancelled'\)/i);
   });
 
-  it("purges every local content copy while retaining a contentless deletion receipt", () => {
-    expect(migration).toMatch(/delete from public\.admin_request_history[\s\S]*request_id = any\(candidate_ids\)/i);
-    expect(migration).toMatch(/delete from public\.fred_webhook_events/i);
-    expect(migration).toMatch(/delete from public\.fred_messages/i);
-    expect(migration).toMatch(/update public\.telegram_deliveries[\s\S]*set message_content = ''/i);
-    expect(migration).toMatch(/set request_content = null,[\s\S]*request_content_sha256 = null,[\s\S]*content_deleted_at = now\(\)/i);
+  it("purges QA copies but preserves the user's conversation and messages", () => {
+    expect(retentionMigration).toMatch(/create or replace function public\.delete_confirmed_fred_quality_batch/i);
+    expect(retentionMigration).toMatch(/delete from public\.admin_request_history[\s\S]*request_id = any\(candidate_ids\)/i);
+    expect(retentionMigration).toMatch(/update public\.telegram_deliveries[\s\S]*set message_content = ''/i);
+    expect(retentionMigration).toMatch(/set request_content = null,[\s\S]*request_content_sha256 = null,[\s\S]*content_deleted_at = now\(\)/i);
+    expect(retentionMigration).not.toMatch(/delete from public\.fred_messages/i);
+    expect(retentionMigration).not.toMatch(/delete from public\.fred_conversations/i);
+    expect(retentionMigration).not.toMatch(/delete from public\.fred_webhook_events/i);
+    expect(retentionMigration).toMatch(/'deleted_messages', 0/i);
+    expect(retentionMigration).toMatch(/'preserved_user_messages', preserved_message_count/i);
   });
 
   it("adds exact audit provenance and backfills retained histories without inventing success", () => {

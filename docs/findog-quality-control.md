@@ -77,10 +77,11 @@ Damit wechselt der Batch von `awaiting_review` zu `pending_confirmation`.
 Mehrere bereits geprüfte, noch nicht zur Löschung bestätigte Tagesbatches
 können parallel bestehen.
 
-## Bestätigte Löschung
+## Bestätigte QA-Bereinigung
 
-Vor der Löschung nennt die Work-Aufgabe Batch-ID, Anzahl und Kandidatenhash und
-fragt ausdrücklich nach Bestätigung. Ohne Bestätigung erfolgt keine Löschung.
+Vor der QA-Bereinigung nennt die Work-Aufgabe Batch-ID, Anzahl und
+Kandidatenhash und fragt ausdrücklich nach Bestätigung. Ohne Bestätigung
+erfolgt keine Bereinigung.
 
 Nach Bestätigung wird nur diese Kombination ausgeführt:
 
@@ -98,14 +99,16 @@ Die Funktion sperrt den Batch und bricht vollständig ab, wenn:
 - ein Request noch nicht terminal ist;
 - ein Teil der Transaktion fehlschlägt.
 
-In einer Transaktion werden User-/Assistant-Nachrichten, Webhook-Rohdaten,
-Admin-Audit-Inhalte, öffentliche Antwortkopien und Bildartefakte gelöscht sowie
-Telegram-Auslieferungsinhalte geleert. Leere Unterhaltungen werden entfernt;
-bei verbleibenden Nachrichten werden Titel und Zeitstempel neu aufgebaut.
+In einer Transaktion werden ausschließlich die temporären QA-Inhalte entfernt:
+die inhaltliche Ledger-Kopie und der Admin-Audit-Inhalt werden gelöscht,
+Telegram-Auslieferungskopien werden geleert. User-/Assistant-Nachrichten,
+Unterhaltungen, Anhänge, Bildartefakte und die Provider-Sitzung bleiben
+unverändert erhalten. Sie werden nur durch eine eigene Löschung des Users
+entfernt.
 
 Der Ledger behält danach nur inhaltslose Metadaten, Batchzuordnung,
-Ergebnisstatus, Löschzeitpunkt und Löschgrund. Anfrage und Inhalts-Hash werden
-gelöscht.
+Ergebnisstatus, Bereinigungszeitpunkt und Bereinigungsgrund. Die QA-Kopie der
+Anfrage und ihr Inhalts-Hash werden gelöscht.
 
 ## Migration und Altbestand
 
@@ -118,10 +121,6 @@ interpretiert.
 
 ## Provider-Grenze
 
-Die lokale Löschtransaktion umfasst Supabase und die Telegram-Auslieferung.
-WeKnora besitzt zusätzlich eigene Sitzungsnachrichten. Die offizielle WeKnora-
-API unterstützt das Leeren einer vollständigen Sitzung, aber die derzeitige
-Embed-Schnittstelle liefert Findog keine sicher löschbaren Einzelmessage-IDs.
-Ein vollständiges Provider-Purge darf daher nur erfolgen, wenn die gesamte
-Sitzung zum bestätigten Batch gehört; andernfalls muss die Löschung blockieren
-statt ungeprüfte Nachrichten mitzulöschen.
+Die tägliche QA-Bereinigung löscht keine WeKnora-Sitzungsnachrichten, weil sie
+zum vom User aufbewahrten Verlauf gehören. Ein Provider-Purge ist ausschließlich
+Teil einer ausdrücklich vom User ausgelösten Unterhaltungs- oder Kontolöschung.
