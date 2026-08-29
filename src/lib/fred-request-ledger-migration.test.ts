@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const migration = readFileSync(fileURLToPath(new URL(
-  "../../supabase/migrations/20260829131247_fred_request_ledger.sql",
+  "../../supabase/migrations/20260829133712_fred_request_ledger.sql",
   import.meta.url,
 )), "utf8");
 
