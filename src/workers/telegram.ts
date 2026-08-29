@@ -45,6 +45,10 @@ import type {
   TurnServicePersistenceDeps,
   TurnServiceUpstreamDeps,
 } from "@/lib/fred/turn-service";
+import {
+  createFredRequestReceipt,
+  transitionFredRequestReceipt,
+} from "@/lib/fred/request-ledger";
 
 interface RpcResult {
   data: unknown;
@@ -206,6 +210,27 @@ export function buildStorage(supabase: Supabase): WorkerStorage {
         .select("id")
         .maybeSingle();
       if (error || !data) throw dbError("TELEGRAM_CONVERSATION_OWNERSHIP_FAILED");
+    },
+
+    async createRequestReceipt(params) {
+      return createFredRequestReceipt({
+        supabase,
+        clientId: params.clientId,
+        origin: "telegram",
+        agentKey: "fred",
+        content: params.content,
+        requestId: params.requestId,
+        userEventId: params.userEventId,
+        assistantEventId: params.assistantEventId,
+        telegramUpdateId: params.telegramUpdateId,
+      });
+    },
+
+    async transitionRequestReceipt(params) {
+      await transitionFredRequestReceipt({
+        supabase,
+        ...params,
+      });
     },
 
     async getDeliveryState(updateRowId) {

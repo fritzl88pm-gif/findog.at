@@ -119,6 +119,13 @@ function fakeStorage(overrides: Partial<WorkerStorage> = {}): WorkerStorage {
     clearActiveConversation: vi.fn().mockResolvedValue(undefined),
     bindConversation: vi.fn().mockResolvedValue(undefined),
     markTelegramOrigin: vi.fn().mockResolvedValue(undefined),
+    createRequestReceipt: vi.fn().mockImplementation(async (params) => ({
+      requestId: params.requestId,
+      userEventId: params.userEventId,
+      assistantEventId: params.assistantEventId,
+      receivedAt: "2026-08-29T10:00:00.000Z",
+    })),
+    transitionRequestReceipt: vi.fn().mockResolvedValue(undefined),
     getDeliveryState: vi.fn().mockResolvedValue([]),
     recordDelivery: vi.fn().mockResolvedValue(undefined),
     setMode: vi.fn().mockImplementation(async (_integrationId: string, mode: string, enabled: boolean) => {
@@ -1578,6 +1585,16 @@ describe("processUpdate: unchanged text and unsupported media", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.query).toBe("Normale Frage");
     expect(calls[0]?.upstreamQuery).toBeUndefined();
+    expect(storage.createRequestReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      clientId,
+      telegramUpdateId: updateRowId,
+      content: "Normale Frage",
+      requestId: expect.any(String),
+      userEventId: expect.any(String),
+      assistantEventId: expect.any(String),
+    }));
+    expect(calls[0]?.requestId).toEqual(expect.any(String));
+    expect(calls[0]?.onRequestTransition).toEqual(expect.any(Function));
     expect(preprocessor).not.toHaveBeenCalled();
   });
 

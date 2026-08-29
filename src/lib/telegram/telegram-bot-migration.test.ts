@@ -356,7 +356,7 @@ describe("telegram_bot_integration migration", () => {
 
   it("keeps every buildRpc function name in parity with the migration", () => {
     const buildRpc = workerEntrypoint.match(
-      /export function buildRpc\([\s\S]*?\n}\n/i,
+      /export function buildRpc\([\s\S]*?\r?\n}\r?\n/i,
     )?.[0] ?? "";
     const runtimeNames = [...buildRpc.matchAll(/invokeRpc\(supabase, "([a-z0-9_]+)"/g)]
       .map((match) => match[1]);

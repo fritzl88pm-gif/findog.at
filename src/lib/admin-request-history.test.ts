@@ -11,6 +11,7 @@ describe("admin request audit persistence", () => {
       supabase: { from } as never,
       userId: "user-1",
       conversationId: "conversation-1",
+      requestId: "request-1",
       content: "Benutzerfrage",
     });
 
@@ -18,6 +19,7 @@ describe("admin request audit persistence", () => {
     expect(insert).toHaveBeenCalledWith({
       user_id: "user-1",
       conversation_id: "conversation-1",
+      request_id: "request-1",
       content: "Benutzerfrage",
     });
   });
@@ -31,6 +33,7 @@ describe("admin request audit persistence", () => {
       supabase: { from } as never,
       userId: "user-1",
       conversationId: "conversation-1",
+      requestId: "request-1",
       content: "Benutzerfrage",
     })).rejects.toMatchObject({ status: 503 });
   });

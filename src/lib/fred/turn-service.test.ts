@@ -189,6 +189,34 @@ describe("executeFredTurn", () => {
     }));
   });
 
+  it("advances the durable request receipt with exact persisted message IDs", async () => {
+    const onRequestTransition = vi.fn().mockResolvedValue(undefined);
+    persistence = makePersistenceDeps({
+      recordEvent: vi.fn()
+        .mockResolvedValueOnce({ conversation: summaryConv(), messageId: 41 })
+        .mockResolvedValueOnce({
+          conversation: summaryConv({ updatedAt: "2026-07-19T10:00:02.000Z" }),
+          messageId: 42,
+        }),
+    });
+
+    await collectEvents(executeFredTurn(baseRequest({
+      requestId: "77777777-7777-4777-8777-777777777777",
+      userEventId: "88888888-8888-4888-8888-888888888888",
+      assistantEventId: "99999999-9999-4999-8999-999999999999",
+      onRequestTransition,
+    }), upstream, persistence, config));
+
+    expect(onRequestTransition.mock.calls).toEqual([
+      [{ status: "user_persisted", conversationId, userMessageId: 41 }],
+      [{ status: "generating" }],
+      [{ status: "completed", assistantMessageId: 42 }],
+    ]);
+    expect(persistence.recordAdminRequest).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: "77777777-7777-4777-8777-777777777777",
+    }));
+  });
+
   it("emits final upstream and verified citation research steps exactly once", async () => {
     const gz = "RV/1234567/2099";
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({

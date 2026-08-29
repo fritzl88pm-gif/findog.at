@@ -21,6 +21,11 @@ import { chunkTelegramMessage, hasGfmTable, normalizeFredMarkdown } from "./text
 import type { EncryptionAad } from "./credentials";
 import type { TelegramUpdate } from "./types";
 import type { FredTurnAttachmentMeta, FredTurnEvent, FredTurnRequest, FredTurnResult } from "../fred/turn-types";
+import type {
+  FredRequestFailurePhase,
+  FredRequestReceipt,
+  FredRequestStatus,
+} from "../fred/request-ledger";
 import { UserVisibleError } from "../errors";
 import {
   executeFredTurn,
@@ -49,6 +54,23 @@ export interface WorkerStorage {
   clearActiveConversation(integrationId: string, chatId: number): Promise<void>;
   bindConversation(integrationId: string, chatId: number, conversationId: string): Promise<void>;
   markTelegramOrigin(clientId: string, conversationId: string, integrationId: string): Promise<void>;
+  createRequestReceipt(params: {
+    requestId: string;
+    clientId: string;
+    telegramUpdateId: number;
+    content: string;
+    userEventId: string;
+    assistantEventId: string;
+  }): Promise<FredRequestReceipt>;
+  transitionRequestReceipt(params: {
+    requestId: string;
+    status: FredRequestStatus;
+    conversationId?: string;
+    userMessageId?: number;
+    assistantMessageId?: number;
+    failurePhase?: FredRequestFailurePhase;
+    errorCode?: string;
+  }): Promise<void>;
   getDeliveryState(updateRowId: number): Promise<{ chunkIndex: number; status: string }[]>;
   recordDelivery(
     updateRowId: number,
@@ -248,6 +270,7 @@ export async function processUpdate(
       return { updateId: update.updateId, status: "completed" };
     }
 
+    const receipt = await createTelegramRequestReceipt(config, integration, update, text);
     return await runWithTurnLifecycle(
       config,
       botApi,
@@ -257,6 +280,7 @@ export async function processUpdate(
       false,
       (lifecycle) => handleFredTurn(
         config, botApi, executeTurn, integration, update, handle, chatId, text, lifecycle,
+        undefined, undefined, receipt,
       ),
     );
   } catch (error) {
@@ -575,6 +599,12 @@ async function handleAttachmentTurn(
   }
 
   const originalQuestion = caption?.trim() || DEFAULT_ATTACHMENT_QUESTION;
+  const receipt = await createTelegramRequestReceipt(
+    config,
+    integration,
+    update,
+    originalQuestion,
+  );
   const isPhoto = photo !== undefined && photo.length > 0;
   const limit = isPhoto ? MAX_PHOTO_BYTES : MAX_DOCUMENT_BYTES;
   if (fileSize !== undefined && fileSize > limit) {
@@ -586,6 +616,12 @@ async function handleAttachmentTurn(
     } catch {
       // Best-effort
     }
+    await config.storage.transitionRequestReceipt({
+      requestId: receipt.requestId,
+      status: "failed",
+      failurePhase: "preprocessing",
+      errorCode: "attachment_too_large",
+    });
     await completeUpdate(rpc, handle);
     return { updateId: update.updateId, status: "completed" };
   }
@@ -599,7 +635,15 @@ async function handleAttachmentTurn(
     true,
     async (lifecycle) => {
       const initialInterruption = await lifecycleInterruptionResult(config, update, handle, lifecycle);
-      if (initialInterruption) return initialInterruption;
+      if (initialInterruption) {
+        await config.storage.transitionRequestReceipt({
+          requestId: receipt.requestId,
+          status: "cancelled",
+          failurePhase: "preprocessing",
+          errorCode: "request_cancelled",
+        });
+        return initialInterruption;
+      }
 
       let preprocessResult: AttachmentPreprocessResult | undefined;
       let preprocessError: unknown;
@@ -618,8 +662,24 @@ async function handleAttachmentTurn(
       }
 
       const preprocessInterruption = await lifecycleInterruptionResult(config, update, handle, lifecycle);
-      if (preprocessInterruption) return preprocessInterruption;
+      if (preprocessInterruption) {
+        await config.storage.transitionRequestReceipt({
+          requestId: receipt.requestId,
+          status: "cancelled",
+          failurePhase: "preprocessing",
+          errorCode: "request_cancelled",
+        });
+        return preprocessInterruption;
+      }
       if (preprocessError) {
+        await config.storage.transitionRequestReceipt({
+          requestId: receipt.requestId,
+          status: "failed",
+          failurePhase: "preprocessing",
+          errorCode: preprocessError instanceof UserVisibleError
+            ? "attachment_rejected"
+            : "preprocessing_failed",
+        });
         if (preprocessError instanceof UserVisibleError) {
           try {
             await botApi.sendMessage({ chat_id: chatId, text: preprocessError.message });
@@ -647,6 +707,7 @@ async function handleAttachmentTurn(
         lifecycle,
         preprocessResult.upstreamQuery,
         [preprocessResult.metadata],
+        receipt,
       );
     },
   );
@@ -664,6 +725,7 @@ async function handleFredTurn(
   lifecycle: TurnLifecycle,
   upstreamQuery?: string,
   attachments?: FredTurnAttachmentMeta[],
+  receipt?: FredRequestReceipt,
 ): Promise<ProcessedUpdateResult> {
   const { rpc, storage } = config;
   const conversationId = await storage.getActiveConversation(integration.id, chatId);
@@ -675,11 +737,19 @@ async function handleFredTurn(
     ...(attachments ? { attachments } : {}),
     origin: "telegram",
     telegramIntegrationId: integration.id,
+    requestId: receipt?.requestId,
     agentKey: "fred",
     webSearchEnabled: integration.webSearchEnabled,
     proModeEnabled: integration.proModeEnabled,
-    userEventId: deriveEventId(`${integration.id}:${update.updateId}:user`),
-    assistantEventId: deriveEventId(`${integration.id}:${update.updateId}:assistant`),
+    userEventId: receipt?.userEventId ?? deriveEventId(`${integration.id}:${update.updateId}:user`),
+    assistantEventId: receipt?.assistantEventId ?? deriveEventId(`${integration.id}:${update.updateId}:assistant`),
+    ...(receipt ? {
+      onRequestTransition: (transition: import("../fred/turn-types").FredRequestLifecycleTransition) =>
+        storage.transitionRequestReceipt({
+          requestId: receipt.requestId,
+          ...transition,
+        }),
+    } : {}),
     onConversationEvent: async (conversation) => {
       await storage.markTelegramOrigin(integration.clientId, conversation.id, integration.id);
       await storage.bindConversation(integration.id, chatId, conversation.id);
@@ -716,6 +786,22 @@ async function handleFredTurn(
   await deliverAnswer(config, botApi, chatId, update.id, finalResult.answer);
   await completeUpdate(rpc, handle);
   return { updateId: update.updateId, status: "completed" };
+}
+
+async function createTelegramRequestReceipt(
+  config: WorkerConfig,
+  integration: WorkerIntegration,
+  update: ClaimedUpdate,
+  content: string,
+): Promise<FredRequestReceipt> {
+  return config.storage.createRequestReceipt({
+    requestId: deriveEventId(`${integration.id}:${update.updateId}:request`),
+    clientId: integration.clientId,
+    telegramUpdateId: update.id,
+    content,
+    userEventId: deriveEventId(`${integration.id}:${update.updateId}:user`),
+    assistantEventId: deriveEventId(`${integration.id}:${update.updateId}:assistant`),
+  });
 }
 
 async function requeueForShutdown(

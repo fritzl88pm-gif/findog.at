@@ -152,6 +152,7 @@ export interface TurnServicePersistenceDeps {
   recordAdminRequest?(params: {
     clientId: string;
     conversationId: string;
+    requestId: string;
     content: string;
   }): Promise<void>;
 }
@@ -262,6 +263,8 @@ export async function* executeFredTurn(
 
   let acceptingCitationUpdates = true;
   const selectedAgentName = fredAgentName(request.agentKey);
+  let requestTerminal = false;
+  let requestFailurePhase: "connecting" | "streaming" = "connecting";
   try {
     // ── Resolve agent key & config ──────────────────────────────────────────
     const agentKey = request.agentKey;
@@ -382,7 +385,7 @@ export async function* executeFredTurn(
     // ── Record user event ───────────────────────────────────────────────────
     const userOccurredAt = new Date().toISOString();
     const userEventId = request.userEventId ?? randomUUID();
-    const { conversation } = await persistence.recordEvent({
+    const { conversation, messageId: userMessageId } = await persistence.recordEvent({
       clientId: request.clientId,
       channelId: fredConfig.channelId,
       sessionId: upstreamSession.id,
@@ -397,12 +400,24 @@ export async function* executeFredTurn(
       weknoraAgentId: upstreamConfig.agentId,
     });
 
+    if (request.onRequestTransition) {
+      if (userMessageId === undefined) {
+        throw new UserVisibleError("Die gespeicherte Anfrage hat keine Nachrichten-ID.", 503);
+      }
+      await request.onRequestTransition({
+        status: "user_persisted",
+        conversationId: conversation.id,
+        userMessageId,
+      });
+    }
+
     // The request audit is part of the durable write contract. If it cannot
     // be recorded, fail before opening the upstream response stream.
     if (persistence.recordAdminRequest) {
       await persistence.recordAdminRequest({
         clientId: request.clientId,
         conversationId: conversation.id,
+        requestId: request.requestId ?? userEventId,
         content: request.query,
       });
     }
@@ -420,6 +435,7 @@ export async function* executeFredTurn(
 
     // ── Open upstream stream ────────────────────────────────────────────────
     const visitorId = upstream.visitorId(fredConfig.publishToken, request.clientId);
+    await request.onRequestTransition?.({ status: "generating" });
     const upstreamBody = await upstream.openStream({
       sessionToken: embedSession.token,
       channelId: fredConfig.channelId,
@@ -438,6 +454,7 @@ export async function* executeFredTurn(
 
     const upstreamReader = upstreamBody.getReader();
     activeUpstreamReader = upstreamReader;
+    requestFailurePhase = "streaming";
     const decoder = new TextDecoder();
 
     let buffer = "";
@@ -593,6 +610,12 @@ export async function* executeFredTurn(
 
     if (stoppedByCaller) {
       acceptingCitationUpdates = false;
+      await request.onRequestTransition?.({
+        status: "cancelled",
+        failurePhase: requestFailurePhase,
+        errorCode: "request_cancelled",
+      });
+      requestTerminal = true;
       return {
         answer: "",
         rawAnswer: answerChunks.join(""),
@@ -677,6 +700,17 @@ export async function* executeFredTurn(
       weknoraAgentId: upstreamConfig.agentId,
     });
 
+    if (request.onRequestTransition) {
+      if (assistantMessageId === undefined) {
+        throw new UserVisibleError("Die gespeicherte Antwort hat keine Nachrichten-ID.", 503);
+      }
+      await request.onRequestTransition({
+        status: "completed",
+        assistantMessageId,
+      });
+      requestTerminal = true;
+    }
+
     void upstream.relayEvent({
       ...sessionConfigCache,
       type: "message_received",
@@ -706,6 +740,19 @@ export async function* executeFredTurn(
     };
   } catch (error) {
     acceptingCitationUpdates = false;
+    if (!requestTerminal && request.onRequestTransition) {
+      try {
+        await request.onRequestTransition({
+          status: request.signal?.aborted ? "cancelled" : "failed",
+          failurePhase: requestFailurePhase,
+          errorCode: request.signal?.aborted ? "request_cancelled" : "turn_failed",
+        });
+        requestTerminal = true;
+      } catch {
+        // Preserve the original turn failure. The stale receipt is itself a
+        // completeness alert and can be reconciled by its deterministic event IDs.
+      }
+    }
     // Best-effort stop
     if (sessionConfigCache && upstreamMsgId && !stopRequested) {
       stopRequested = true;

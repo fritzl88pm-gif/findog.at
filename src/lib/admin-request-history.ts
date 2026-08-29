@@ -8,11 +8,13 @@ export async function recordAdminRequest(options: {
   supabase: ServerSupabaseClient;
   userId: string;
   conversationId: string;
+  requestId: string;
   content: string;
 }): Promise<void> {
   const { error } = await options.supabase.from("admin_request_history").insert({
     user_id: options.userId,
     conversation_id: options.conversationId,
+    request_id: options.requestId,
     content: options.content,
   });
 

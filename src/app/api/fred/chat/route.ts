@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import { NextResponse } from "next/server";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
@@ -41,6 +39,12 @@ import {
   type TurnServicePersistenceDeps,
   type TurnServiceUpstreamDeps,
 } from "@/lib/fred/turn-service";
+import {
+  createFredRequestReceipt,
+  transitionFredRequestReceipt,
+  type FredRequestReceipt,
+} from "@/lib/fred/request-ledger";
+import type { FredRequestLifecycleTransition } from "@/lib/fred/turn-types";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { recordAdminRequest } from "@/lib/admin-request-history";
 import { DEFAULT_FRED_ATTACHMENT_MODE, getScanningSettings } from "@/lib/scanning/settings";
@@ -647,6 +651,7 @@ function buildWebTurnPersistence(
         supabase,
         userId: params.clientId,
         conversationId: params.conversationId,
+        requestId: params.requestId,
         content: params.content,
       });
     },
@@ -736,6 +741,7 @@ function streamTextOnlyTurn(options: {
   agentKey: FredAgentKey;
   personalizationBlock: string;
   researchDisplayMode: "simple" | "advanced";
+  receipt: FredRequestReceipt;
 }): Response {
   const encoder = new TextEncoder();
   const registeredConfigs = new Map<string, FredServerConfig>();
@@ -769,10 +775,19 @@ function streamTextOnlyTurn(options: {
               ? { upstreamQuery: options.body.query + "\n\n" + options.personalizationBlock }
               : {}),
             origin: "web",
+            requestId: options.receipt.requestId,
             agentKey: options.agentKey,
             webSearchEnabled: options.body.webSearchEnabled,
             proModeEnabled: options.body.proModeEnabled,
             researchDisplayMode: options.researchDisplayMode,
+            userEventId: options.receipt.userEventId,
+            assistantEventId: options.receipt.assistantEventId,
+            onRequestTransition: (transition: FredRequestLifecycleTransition) =>
+              transitionFredRequestReceipt({
+                supabase: options.supabase,
+                requestId: options.receipt.requestId,
+                ...transition,
+              }),
             signal: streamAbort.signal,
           },
           buildWebTurnUpstream(registeredConfigs),
@@ -824,9 +839,12 @@ export async function POST(request: Request) {
   let lifetimeAbort: AbortController | undefined;
   let onRequestAbort: (() => void) | undefined;
   let cleanupResources: (() => void) | undefined;
+  let outerReceipt: FredRequestReceipt | undefined;
+  let outerSupabase: NonNullable<ReturnType<typeof getSupabaseServerClient>> | undefined;
   try {
     const supabase = getSupabaseServerClient();
     if (!supabase) throw new UserVisibleError("Fred ist derzeit nicht verfügbar.", 503);
+    outerSupabase = supabase;
     const user = await authenticateSupabaseRequest(request, supabase);
     requireSameSiteRequest(request);
     enforceRateLimit(user.id);
@@ -858,6 +876,14 @@ export async function POST(request: Request) {
         400,
       );
     }
+    const requestReceipt = await createFredRequestReceipt({
+      supabase,
+      clientId: user.id,
+      origin: "web",
+      agentKey,
+      content: body.query,
+    });
+    outerReceipt = requestReceipt;
     const fredAttachmentMode = body.attachments.length > 0
       ? (await getScanningSettings(supabase)).fredAttachmentMode
       : DEFAULT_FRED_ATTACHMENT_MODE;
@@ -873,6 +899,7 @@ export async function POST(request: Request) {
         agentKey,
         personalizationBlock,
         researchDisplayMode,
+        receipt: requestReceipt,
       });
     }
     let config: ReturnType<typeof readFredEmbedServerConfig>;
@@ -911,6 +938,8 @@ export async function POST(request: Request) {
     let runId: string | null = null;
     let streamStarted = false;
     let lastTerminalStatus: string | null = null;
+    let requestLedgerTerminal = false;
+    let requestFailurePhase: "preprocessing" | "connecting" | "streaming" = "preprocessing";
     const clearAttachmentHeartbeat = () => {
       if (attachmentHeartbeat !== undefined) {
         clearInterval(attachmentHeartbeat);
@@ -968,6 +997,7 @@ export async function POST(request: Request) {
           runId = await createGenerationRun({
             supabase,
             clientId: user.id,
+            requestId: requestReceipt.requestId,
             attachmentCount: body.attachments.length,
             attachmentTotalBytes: totalAttachmentBytes,
             modelRoute,
@@ -1029,6 +1059,14 @@ export async function POST(request: Request) {
                   errorCode: ERROR_CODES.PREPROCESSING_FAILED,
                 });
               }
+              await transitionFredRequestReceipt({
+                supabase,
+                requestId: requestReceipt.requestId,
+                status: "failed",
+                failurePhase: "preprocessing",
+                errorCode: "preprocessing_failed",
+              });
+              requestLedgerTerminal = true;
               if (!lifetimeAbort!.signal.aborted) {
                 send(controller, {
                   type: "error",
@@ -1047,6 +1085,7 @@ export async function POST(request: Request) {
           }
 
           // Transition to connecting before upstream setup
+          requestFailurePhase = "connecting";
           if (runId) {
             await updateGenerationRun({ supabase, runId, status: "connecting" });
           }
@@ -1126,7 +1165,7 @@ export async function POST(request: Request) {
             userId: user.id,
             channelId: config.channelId,
             sessionId: upstreamSession.id,
-            eventId: randomUUID(),
+            eventId: requestReceipt.userEventId,
             eventType: "message_sent",
             content: body.query,
             occurredAt: userOccurredAt,
@@ -1136,10 +1175,21 @@ export async function POST(request: Request) {
             agentKey,
             weknoraAgentId: upstreamConfig.agentId,
           });
+          if (userMessageId === undefined) {
+            throw new UserVisibleError("Die gespeicherte Anfrage hat keine Nachrichten-ID.", 503);
+          }
+          await transitionFredRequestReceipt({
+            supabase,
+            requestId: requestReceipt.requestId,
+            status: "user_persisted",
+            conversationId: conversation.id,
+            userMessageId,
+          });
           await recordAdminRequest({
             supabase,
             userId: user.id,
             conversationId: conversation.id,
+            requestId: requestReceipt.requestId,
             content: body.query,
           });
           send(controller, { type: "conversation", conversation });
@@ -1156,6 +1206,11 @@ export async function POST(request: Request) {
             signal: deadline.signal,
           });
 
+          await transitionFredRequestReceipt({
+            supabase,
+            requestId: requestReceipt.requestId,
+            status: "generating",
+          });
           const upstream = await openFredUpstreamStream({
             session: embedSession,
             config,
@@ -1173,6 +1228,7 @@ export async function POST(request: Request) {
           const upstreamReader = upstream.body!.getReader();
           activeUpstreamReader = upstreamReader;
           streamStarted = true;
+          requestFailurePhase = "streaming";
           if (runId) {
             await updateGenerationRun({ supabase, runId, status: "streaming" });
           }
@@ -1322,6 +1378,14 @@ export async function POST(request: Request) {
                 errorCode: ERROR_CODES.UPSTREAM_EOF_WITHOUT_FINAL,
               });
             }
+            await transitionFredRequestReceipt({
+              supabase,
+              requestId: requestReceipt.requestId,
+              status: "failed",
+              failurePhase: "streaming",
+              errorCode: "upstream_eof_without_final",
+            });
+            requestLedgerTerminal = true;
             errorAlreadyEmitted = true;
             send(controller, {
               type: "error",
@@ -1392,7 +1456,7 @@ export async function POST(request: Request) {
             userId: user.id,
             channelId: config.channelId,
             sessionId: upstreamSession.id,
-            eventId: randomUUID(),
+            eventId: requestReceipt.assistantEventId,
             eventType: "message_received",
             content: rawAnswer,
             occurredAt: new Date().toISOString(),
@@ -1404,6 +1468,16 @@ export async function POST(request: Request) {
             agentKey,
             weknoraAgentId: upstreamConfig.agentId,
           });
+          if (assistantMessageId === undefined) {
+            throw new UserVisibleError("Die gespeicherte Antwort hat keine Nachrichten-ID.", 503);
+          }
+          await transitionFredRequestReceipt({
+            supabase,
+            requestId: requestReceipt.requestId,
+            status: "completed",
+            assistantMessageId,
+          });
+          requestLedgerTerminal = true;
           // Mark run completed
           if (runId) {
             lastTerminalStatus = "completed";
@@ -1442,6 +1516,20 @@ export async function POST(request: Request) {
         } catch (error) {
           acceptingCitationUpdates = false;
           const cancelled = lifetimeAbort!.signal.aborted;
+          if (!requestLedgerTerminal) {
+            try {
+              await transitionFredRequestReceipt({
+                supabase,
+                requestId: requestReceipt.requestId,
+                status: cancelled ? "cancelled" : "failed",
+                failurePhase: requestFailurePhase,
+                errorCode: cancelled ? "request_cancelled" : "turn_failed",
+              });
+              requestLedgerTerminal = true;
+            } catch {
+              // A stale receipt is surfaced by the daily completeness check.
+            }
+          }
           if (runId && lastTerminalStatus === null) {
             lastTerminalStatus = cancelled ? "cancelled" : "failed";
             const isTimeout = deadline.signal.aborted;
@@ -1487,6 +1575,16 @@ export async function POST(request: Request) {
             status: "cancelled",
           });
         }
+        if (!requestLedgerTerminal) {
+          await transitionFredRequestReceipt({
+            supabase,
+            requestId: requestReceipt.requestId,
+            status: "cancelled",
+            failurePhase: requestFailurePhase,
+            errorCode: "request_cancelled",
+          });
+          requestLedgerTerminal = true;
+        }
         await upstreamCleanup;
       },
     });
@@ -1502,6 +1600,19 @@ export async function POST(request: Request) {
   } catch (error) {
     cleanupResources?.();
     lifetimeAbort?.abort(error);
+    if (outerReceipt && outerSupabase) {
+      try {
+        await transitionFredRequestReceipt({
+          supabase: outerSupabase,
+          requestId: outerReceipt.requestId,
+          status: "failed",
+          failurePhase: "ingress",
+          errorCode: "request_setup_failed",
+        });
+      } catch {
+        // The original setup failure remains the user-visible error.
+      }
+    }
     if (error instanceof UserVisibleError) return json({ error: error.message }, error.status);
     if (error instanceof FredEmbedConfigurationError) {
       return json({ error: "Fred ist noch nicht vollständig eingerichtet." }, 503);

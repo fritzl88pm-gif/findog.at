@@ -36,6 +36,7 @@ export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
 export interface CreateGenerationRunParams {
   supabase: SupabaseClient;
   clientId: string;
+  requestId?: string;
   attachmentCount?: number;
   attachmentTotalBytes?: number;
   modelRoute?: string;
@@ -54,6 +55,7 @@ export async function createGenerationRun(
       .from("fred_generation_runs")
       .insert({
         client_id: params.clientId,
+        request_id: params.requestId ?? null,
         status: "preprocessing",
         attachment_count: params.attachmentCount ?? 0,
         attachment_total_bytes: params.attachmentTotalBytes ?? 0,

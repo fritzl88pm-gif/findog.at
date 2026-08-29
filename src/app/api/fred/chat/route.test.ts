@@ -36,9 +36,20 @@ import { POST } from "./route";
 const { recordAdminRequest: mockRecordAdminRequest } = vi.hoisted(() => ({
   recordAdminRequest: vi.fn(),
 }));
+const {
+  createFredRequestReceipt: mockCreateFredRequestReceipt,
+  transitionFredRequestReceipt: mockTransitionFredRequestReceipt,
+} = vi.hoisted(() => ({
+  createFredRequestReceipt: vi.fn(),
+  transitionFredRequestReceipt: vi.fn(),
+}));
 
 vi.mock("@/lib/admin-request-history", () => ({
   recordAdminRequest: mockRecordAdminRequest,
+}));
+vi.mock("@/lib/fred/request-ledger", () => ({
+  createFredRequestReceipt: mockCreateFredRequestReceipt,
+  transitionFredRequestReceipt: mockTransitionFredRequestReceipt,
 }));
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
 vi.mock("@/lib/attachments/context", async (importOriginal) => {
@@ -93,6 +104,9 @@ vi.mock("@/lib/weknora/fred-native", async (importOriginal) => {
 const userId = "11111111-1111-4111-8111-111111111111";
 const auditUserId = "33333333-3333-4333-8333-333333333333";
 const conversationId = "22222222-2222-4222-8222-222222222222";
+const requestId = "44444444-4444-4444-8444-444444444444";
+const userEventId = "55555555-5555-4555-8555-555555555555";
+const assistantEventId = "66666666-6666-4666-8666-666666666666";
 const summaryRow = {
   conversation_id: conversationId,
   title: "Wie ist die Rechtslage?",
@@ -202,6 +216,13 @@ describe("POST /api/fred/chat", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockRecordAdminRequest.mockResolvedValue(undefined);
+    mockCreateFredRequestReceipt.mockResolvedValue({
+      requestId,
+      userEventId,
+      assistantEventId,
+      receivedAt: "2026-08-29T10:00:00.000Z",
+    });
+    mockTransitionFredRequestReceipt.mockResolvedValue(undefined);
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: userId });
     vi.mocked(readFredEmbedServerConfig).mockReturnValue({
       channelId: "fred-channel",
@@ -1562,6 +1583,7 @@ describe("POST /api/fred/chat", () => {
         supabase,
         userId: auditUserId,
         conversationId,
+        requestId,
         content: "Meine Anfrage",
       });
     });
@@ -1615,8 +1637,8 @@ describe("POST /api/fred/chat", () => {
       expect(rpc).toHaveBeenCalledTimes(1);
     });
 
-  describe("message_id backward compatibility", () => {
-    it("accepts a legacy RPC response without message_id and emits a successful final event without assistantMessageId", async () => {
+  describe("message_id ledger contract", () => {
+    it("fails closed when a legacy RPC response omits message_id", async () => {
       const legacySummaryRow = {
         conversation_id: conversationId,
         title: "Wie ist die Rechtslage?",
@@ -1639,14 +1661,12 @@ describe("POST /api/fred/chat", () => {
         .filter(Boolean);
 
       expect(response.status).toBe(200);
-      const finalEvent = events.find((e) => e?.type === "final");
-      expect(finalEvent).toBeTruthy();
-      expect(finalEvent?.type).toBe("final");
-      if (finalEvent?.type === "final") {
-        expect(finalEvent.assistantMessageId).toBeUndefined();
-        expect(finalEvent.answer).toBe("Hallo Welt");
-      }
-      expect(rpc).toHaveBeenCalledTimes(2);
+      expect(events).toEqual([{
+        type: "error",
+        error: "Die gespeicherte Anfrage hat keine Nachrichten-ID.",
+      }]);
+      expect(openFredUpstreamStream).not.toHaveBeenCalled();
+      expect(rpc).toHaveBeenCalledTimes(1);
     });
 
     it("fails safely when a present message_id is malformed", async () => {

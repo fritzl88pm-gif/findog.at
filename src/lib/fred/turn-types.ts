@@ -15,6 +15,20 @@ export interface FredTurnAttachmentMeta {
   sha256: string;
 }
 
+export type FredRequestLifecycleTransition =
+  | {
+      status: "user_persisted";
+      conversationId: string;
+      userMessageId: number;
+    }
+  | { status: "generating" }
+  | { status: "completed"; assistantMessageId: number }
+  | {
+      status: "failed" | "cancelled";
+      failurePhase: "ingress" | "preprocessing" | "connecting" | "streaming" | "delivery";
+      errorCode: string;
+    };
+
 /** Trusted server-side input for a Fred turn. */
 export interface FredTurnRequest {
   /** The authenticated client (user) ID. */
@@ -34,6 +48,8 @@ export interface FredTurnRequest {
   origin: "web" | "telegram";
   /** For telegram-origin turns, the integration row ID. */
   telegramIntegrationId?: string;
+  /** Durable ingress receipt ID created before any upstream work. */
+  requestId?: string;
   /** The Fred agent key to use. */
   agentKey: FredAgentKey;
   /** Whether web search should be enabled for this turn. */
@@ -53,6 +69,8 @@ export interface FredTurnRequest {
   userEventId?: string;
   /** Deterministic event ID for the assistant's reply. See `userEventId`. */
   assistantEventId?: string;
+  /** Advances the durable receipt. Production callers provide this fail-closed hook. */
+  onRequestTransition?: (transition: FredRequestLifecycleTransition) => Promise<void>;
   /**
    * Invoked once, right after the user's message has been persisted and the
    * (possibly newly created) conversation is known. Lets origin-specific
