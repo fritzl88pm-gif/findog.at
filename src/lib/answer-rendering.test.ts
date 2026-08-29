@@ -43,12 +43,20 @@ describe("parseRichAnswer", () => {
     }]);
   });
 
-  it("removes legacy relative image references that Findog cannot resolve", () => {
+  it("discards every untrusted image reference and keeps exact artifact markers", () => {
     const artifactId = "44444444-4444-4444-8444-444444444444";
     const blocks = parseRichAnswer([
       "Vor dem Bild.",
       "",
       "![](/images/generated-calculation.png)",
+      "",
+      "![](images/generated-calculation.png)",
+      "",
+      "![Webbild](https://example.com/generated.png)",
+      "",
+      "![Providerbild](minio://bucket/generated.png)",
+      "",
+      "![Erfundenes Artefakt](findog-artifact://not-a-uuid)",
       "",
       `![Berechnung](findog-artifact://${artifactId})`,
       "",
@@ -59,6 +67,18 @@ describe("parseRichAnswer", () => {
       {
         type: "paragraph",
         children: [{ type: "text", text: "Vor dem Bild." }],
+      },
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Webbild" }],
+      },
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Providerbild" }],
+      },
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Erfundenes Artefakt" }],
       },
       {
         type: "paragraph",
@@ -226,7 +246,7 @@ Keine Bindungswirkung.
     ]);
   });
 
-  it("parses exact findog-artifact image markers and leaves arbitrary images as text", () => {
+  it("parses exact findog-artifact image markers and reduces arbitrary images to alt text", () => {
     const artifactId = "33333333-3333-4333-8333-333333333333";
     const blocks = parseRichAnswer(
       `Dokument: ![Beleg 1](findog-artifact://${artifactId}) und ![Web](https://example.com/pic.jpg) und ![Minio](minio://bucket/img.png) und ![Bad](findog-artifact://not-a-uuid).`,
@@ -244,10 +264,20 @@ Keine Bindungswirkung.
           },
           {
             type: "text",
-            text: " und ![Web](https://example.com/pic.jpg) und ![Minio](minio://bucket/img.png) und ![Bad](findog-artifact://not-a-uuid).",
+            text: " und Web und Minio und Bad.",
           },
         ],
       },
     ]);
+  });
+
+  it("leaves image-looking Markdown literal inside fenced code blocks", () => {
+    const blocks = parseRichAnswer("```markdown\n![](/images/example.png)\n```");
+
+    expect(blocks).toEqual([{
+      type: "code-block",
+      language: "markdown",
+      text: "![](/images/example.png)",
+    }]);
   });
 });

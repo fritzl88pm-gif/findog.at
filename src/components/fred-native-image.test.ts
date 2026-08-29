@@ -44,10 +44,13 @@ describe("FredNativeImage component and rendering integration", () => {
     expect(componentSource).toContain("URL.revokeObjectURL(createdUrl)");
   });
 
-  it("provides controlled loading and error placeholders without console logging", () => {
+  it("shows a controlled loading placeholder and discards failed artifact loads", () => {
     expect(componentSource).toContain("fred-native-image-loading");
-    expect(componentSource).toContain("fred-native-image-error");
     expect(componentSource).toContain("fred-native-image-placeholder");
+    expect(componentSource).toContain('if (status === "error" || !objectUrl)');
+    expect(componentSource).toContain("return null;");
+    expect(componentSource).not.toContain("fred-native-image-error");
+    expect(componentSource).not.toContain("Bild nicht verfügbar");
     expect(componentSource).not.toContain("console.log");
     expect(componentSource).not.toContain("console.error");
     expect(componentSource).not.toContain("console.warn");

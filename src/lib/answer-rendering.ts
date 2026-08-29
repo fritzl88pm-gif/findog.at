@@ -60,7 +60,6 @@ const headingPattern = /^(#{1,3})\s+(.+)$/;
 const unorderedListPattern = /^\s*[-*+]\s+(.+)$/;
 const orderedListPattern = /^\s*\d+[.)]\s+(.+)$/;
 const blockquotePattern = /^\s*>\s?(.*)$/;
-const unsupportedRelativeImagePattern = /^\s*!\[[^\]\r\n]*\]\(\s*\/images\/[^\r\n)]*\)\s*$/u;
 
 type CodeFence = {
   marker: "`" | "~";
@@ -114,7 +113,16 @@ type InlineMarker = "`" | "**" | "__" | "==";
 type InlineToken =
   | { type: "marker"; marker: InlineMarker; index: number }
   | { type: "link"; index: number; label: string; href: string; end: number }
-  | { type: "image"; index: number; alt: string; artifactId: string; end: number };
+  | { type: "image"; index: number; alt: string; artifactId: string; end: number }
+  | { type: "untrusted-image"; index: number; alt: string; end: number };
+
+function sanitizedImageAltText(value: string): string {
+  return value
+    .replace(/[\u0000-\u001f\u007f]/gu, "")
+    .replace(/[()[\]`\\]/gu, "")
+    .trim()
+    .slice(0, 255);
+}
 
 function isSafeFindokHref(value: string): boolean {
   try {
@@ -166,11 +174,22 @@ function findNextMarkdownImage(text: string, start: number): InlineToken | null 
     if (href.toLowerCase().startsWith(ARTIFACT_PREFIX)) {
       const artifactId = href.slice(ARTIFACT_PREFIX.length).trim();
       if (UUID_PATTERN.test(artifactId)) {
-        return { type: "image", index, alt, artifactId, end: hrefEnd + 1 };
+        return {
+          type: "image",
+          index,
+          alt: sanitizedImageAltText(alt),
+          artifactId,
+          end: hrefEnd + 1,
+        };
       }
     }
 
-    index = text.indexOf("![", index + 1);
+    return {
+      type: "untrusted-image",
+      index,
+      alt: sanitizedImageAltText(alt),
+      end: hrefEnd + 1,
+    };
   }
 
   return null;
@@ -235,6 +254,12 @@ export function parseInline(text: string): RichInline[] {
 
     if (token.type === "image") {
       nodes.push({ type: "image", artifactId: token.artifactId, alt: token.alt });
+      cursor = token.end;
+      continue;
+    }
+
+    if (token.type === "untrusted-image") {
+      pushText(nodes, token.alt);
       cursor = token.end;
       continue;
     }
@@ -312,7 +337,6 @@ function isBlockStart(lines: string[], index: number): boolean {
     orderedListPattern.test(line) ||
     blockquotePattern.test(line) ||
     codeFenceStart(line) !== null ||
-    unsupportedRelativeImagePattern.test(line) ||
     isTableStart(lines, index)
   );
 }
@@ -357,11 +381,14 @@ export function parseRichAnswer(content: string): RichBlock[] {
 
     const heading = headingPattern.exec(line);
     if (heading) {
-      blocks.push({
-        type: "heading",
-        level: Math.min(4, heading[1].length + 1) as 2 | 3 | 4,
-        children: parseInline(heading[2].trim()),
-      });
+      const children = parseInline(heading[2].trim());
+      if (children.length > 0) {
+        blocks.push({
+          type: "heading",
+          level: Math.min(4, heading[1].length + 1) as 2 | 3 | 4,
+          children,
+        });
+      }
       index += 1;
       continue;
     }
@@ -383,13 +410,6 @@ export function parseRichAnswer(content: string): RichBlock[] {
       continue;
     }
 
-    // WeKnora can return relative image references that are not available on
-    // Findog's origin. Do not expose unsupported Markdown as visible answer text.
-    if (unsupportedRelativeImagePattern.test(line)) {
-      index += 1;
-      continue;
-    }
-
     if (isTableStart(lines, index)) {
       const table = parseTable(lines, index);
       blocks.push(table.block);
@@ -405,10 +425,11 @@ export function parseRichAnswer(content: string): RichBlock[] {
         if (!match) {
           break;
         }
-        items.push(parseInline(match[1].trim()));
+        const item = parseInline(match[1].trim());
+        if (item.length > 0) items.push(item);
         index += 1;
       }
-      blocks.push({ type: "unordered-list", items });
+      if (items.length > 0) blocks.push({ type: "unordered-list", items });
       continue;
     }
 
@@ -420,10 +441,11 @@ export function parseRichAnswer(content: string): RichBlock[] {
         if (!match) {
           break;
         }
-        items.push(parseInline(match[1].trim()));
+        const item = parseInline(match[1].trim());
+        if (item.length > 0) items.push(item);
         index += 1;
       }
-      blocks.push({ type: "ordered-list", items });
+      if (items.length > 0) blocks.push({ type: "ordered-list", items });
       continue;
     }
 
@@ -441,7 +463,8 @@ export function parseRichAnswer(content: string): RichBlock[] {
         }
         index += 1;
       }
-      blocks.push({ type: "blockquote", children: parseInline(quoteLines.join("\n").trim()) });
+      const children = parseInline(quoteLines.join("\n").trim());
+      if (children.length > 0) blocks.push({ type: "blockquote", children });
       continue;
     }
 
@@ -450,7 +473,8 @@ export function parseRichAnswer(content: string): RichBlock[] {
       paragraphLines.push((lines[index] ?? "").trim());
       index += 1;
     }
-    blocks.push({ type: "paragraph", children: parseInline(paragraphLines.join(" ")) });
+    const children = parseInline(paragraphLines.join(" "));
+    if (children.length > 0) blocks.push({ type: "paragraph", children });
   }
 
   return blocks;

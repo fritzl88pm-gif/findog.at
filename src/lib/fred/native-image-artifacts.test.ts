@@ -100,6 +100,42 @@ describe("Native image artifacts materialization", () => {
     );
   });
 
+  it("discards every non-provider image marker before persistence", async () => {
+    const from = vi.fn();
+    const artifactId = "33333333-3333-4333-8333-333333333333";
+    const rawContent = [
+      "Vorher",
+      "![](/images/invented.png)",
+      "![Relativ](images/invented.png)",
+      "![Web](https://example.com/invented.png)",
+      '![Web mit Titel](https://example.com/invented.png "Vorschau")',
+      `![Erfunden](findog-artifact://${artifactId})`,
+      "Nachher",
+    ].join("\n");
+
+    const result = await materializeNativeImageArtifacts({
+      supabase: { from } as never,
+      userId,
+      conversationId,
+      userMessageId,
+      rawContent,
+      trustedImages: [],
+      userAttachments: [],
+    });
+
+    expect(result.displayContent).toBe([
+      "Vorher",
+      "",
+      "Relativ",
+      "Web",
+      "Web mit Titel",
+      "Erfunden",
+      "Nachher",
+    ].join("\n"));
+    expect(result.artifactMap.size).toBe(0);
+    expect(from).not.toHaveBeenCalled();
+  });
+
   it("deduplicates multiple references to the same provider URI into a single artifact row", async () => {
     const artifactId = "33333333-3333-4333-8333-333333333333";
     const trustedImages = [
@@ -222,10 +258,10 @@ describe("Native image artifacts materialization", () => {
   });
 
   describe("sanitizeProviderImageMarkupToAlt", () => {
-    it("converts provider images to safe alt text and leaves normal text untouched", () => {
-      const input = "Check ![Tabelle](minio://bucket/tab.png) and ![Graph](local://graphs/1.png) and [Link](https://findok.bmf.gv.at/findok/volltext?gz=RV/123/20)";
+    it("converts all unverified images to safe alt text and leaves normal links untouched", () => {
+      const input = "Check ![Tabelle](minio://bucket/tab.png), ![Web](https://example.com/pic.png), ![Relativ](/images/pic.png) and [Link](https://findok.bmf.gv.at/findok/volltext?gz=RV/123/20)";
       const output = sanitizeProviderImageMarkupToAlt(input);
-      expect(output).toBe("Check Tabelle and Graph and [Link](https://findok.bmf.gv.at/findok/volltext?gz=RV/123/20)");
+      expect(output).toBe("Check Tabelle, Web, Relativ and [Link](https://findok.bmf.gv.at/findok/volltext?gz=RV/123/20)");
     });
   });
 });

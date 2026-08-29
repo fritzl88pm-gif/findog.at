@@ -84,13 +84,7 @@ export function FredNativeImage({ artifactId, alt = "", className = "" }: FredNa
   }
 
   if (status === "error" || !objectUrl) {
-    return (
-      <span className="fred-native-image-container fred-native-image-error">
-        <span className="fred-native-image-placeholder">
-          {alt ? `[Bild: ${alt}]` : "[Bild nicht verfügbar]"}
-        </span>
-      </span>
-    );
+    return null;
   }
 
   return (

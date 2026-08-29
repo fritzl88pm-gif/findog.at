@@ -8,7 +8,7 @@ import {
   type FredTrustedEmbedImage,
 } from "../weknora/fred-native";
 
-const MARKDOWN_IMAGE_PATTERN = /!\[([^\]]*)\]\(([^)\s]+)\)/gu;
+const MARKDOWN_IMAGE_PATTERN = /!\[([^\]\r\n]*)\]\(\s*([^)\s]+)(?:\s+(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^\)\r\n]*\)))?\s*\)/gu;
 const ALLOWED_IMAGE_MIMES = new Set([
   "image/jpeg",
   "image/png",
@@ -33,12 +33,10 @@ export function sanitizeProviderImageMarkupToAlt(content: string): string {
   if (!content || !content.includes("![")) {
     return content;
   }
-  return content.replace(MARKDOWN_IMAGE_PATTERN, (match, alt: string, uri: string) => {
-    if (isAllowedProviderImageUri(uri)) {
-      return sanitizeAltText(alt);
-    }
-    return match;
-  });
+  return content.replace(
+    MARKDOWN_IMAGE_PATTERN,
+    (_match, alt: string) => sanitizeAltText(alt),
+  );
 }
 
 function extractProviderImageUrisFromMarkdown(markdown: string): Array<{ alt: string; uri: string }> {
@@ -75,7 +73,10 @@ export async function materializeNativeImageArtifacts(options: {
   try {
     const references = extractProviderImageUrisFromMarkdown(rawContent);
     if (references.length === 0) {
-      return { displayContent: rawContent, artifactMap: new Map() };
+      return {
+        displayContent: sanitizeProviderImageMarkupToAlt(rawContent),
+        artifactMap: new Map(),
+      };
     }
 
     const trustedUriSet = new Set(trustedImages.map((img) => img.url));
@@ -126,7 +127,7 @@ export async function materializeNativeImageArtifacts(options: {
       }
     }
 
-    const rewrittenContent = rawContent.replace(MARKDOWN_IMAGE_PATTERN, (match, alt: string, uri: string) => {
+    const rewrittenContent = rawContent.replace(MARKDOWN_IMAGE_PATTERN, (_match, alt: string, uri: string) => {
       if (isAllowedProviderImageUri(uri)) {
         const artifactId = artifactMap.get(uri);
         const safeAlt = sanitizeAltText(alt);
@@ -135,7 +136,7 @@ export async function materializeNativeImageArtifacts(options: {
         }
         return safeAlt;
       }
-      return match;
+      return sanitizeAltText(alt);
     });
 
     return {
