@@ -150,10 +150,92 @@ function formatLegalDate(value: string | null): string {
   }).format(new Date(`${value}T00:00:00.000Z`));
 }
 
+function NewsCard({
+  item,
+  isFeatured,
+}: {
+  item: DashboardNewsItem;
+  isFeatured: boolean;
+}) {
+  const isLegal = item.kind === "legal";
+  const HeadingTag = isFeatured ? "h3" : "h4";
+
+  return (
+    <article
+      className={`dashboard-news-card ${isFeatured ? "is-featured" : "is-secondary"}`}
+    >
+      <div className="dashboard-news-card-topline">
+        <div className="dashboard-news-tags">
+          <span className={`dashboard-news-badge ${isFeatured ? "" : "is-subtle"}`.trim()}>
+            {isLegal ? "Rechtsmeldung" : "Produktmeldung"}
+          </span>
+          {item.pinned ? (
+            <span className="dashboard-pinned-badge">Angeheftet</span>
+          ) : null}
+        </div>
+        {!isLegal && item.publishedAt ? (
+          <time dateTime={item.publishedAt} className="dashboard-news-time">
+            {formatTimestamp(item.publishedAt)}
+          </time>
+        ) : null}
+      </div>
+
+      <HeadingTag className="dashboard-news-title">{item.title}</HeadingTag>
+
+      <p className="dashboard-news-summary">{item.summary}</p>
+
+      {isLegal ? (
+        <>
+          <dl className={`dashboard-legal-meta ${isFeatured ? "" : "is-compact"}`.trim()}>
+            <div>
+              <dt>Quelle</dt>
+              <dd>{item.sourceSystem?.toUpperCase()}</dd>
+            </div>
+            <div>
+              <dt>Typ</dt>
+              <dd>
+                {item.documentKind === "entscheidungsdokument"
+                  ? "Entscheidungsdokument"
+                  : item.documentKind === "rechtssatz"
+                    ? "Rechtssatz"
+                    : "Norm"}
+              </dd>
+            </div>
+            <div>
+              <dt>Datum</dt>
+              <dd>{formatLegalDate(item.documentDate)}</dd>
+            </div>
+            <div>
+              <dt>Stichtag</dt>
+              <dd>{formatLegalDate(item.asOfDate)}</dd>
+            </div>
+          </dl>
+
+          <div className="dashboard-news-source-row">
+            <span title={item.sourceIdentifier ?? undefined}>
+              {item.sourceIdentifier}
+            </span>
+            {item.sourceUrl ? (
+              <a href={item.sourceUrl} target="_blank" rel="noreferrer">
+                Amtliche Quelle <Icon name="external" />
+              </a>
+            ) : null}
+          </div>
+
+          <p className="dashboard-legal-note">
+            Redaktionelle Information zum angegebenen Stichtag; maßgeblich bleibt die amtliche Quelle.
+          </p>
+        </>
+      ) : null}
+    </article>
+  );
+}
+
 function NewsSection({
   id,
   title,
   subtitle,
+  eyebrow,
   items,
   error,
   isLoading,
@@ -161,21 +243,27 @@ function NewsSection({
   id: string;
   title: string;
   subtitle: string;
+  eyebrow?: string;
   items: DashboardNewsItem[];
   error?: string;
   isLoading: boolean;
 }) {
+  const featuredItem = items[0];
+  const secondaryItems = items.slice(1);
+
   return (
     <section className="dashboard-section dashboard-news-section" aria-labelledby={id} aria-busy={isLoading}>
       <div className="dashboard-section-heading">
         <div>
+          {eyebrow ? <span className="dashboard-section-eyebrow">{eyebrow}</span> : null}
           <h2 id={id}>{title}</h2>
           <p>{subtitle}</p>
         </div>
       </div>
       {isLoading ? (
         <div className="dashboard-news-list" role="status" aria-label={`${title} werden geladen`}>
-          {[0, 1].map((index) => <div key={index} className="dashboard-news-card dashboard-skeleton-card" />)}
+          <div className="dashboard-news-card is-featured dashboard-skeleton-card" />
+          <div className="dashboard-news-card is-secondary dashboard-skeleton-card" />
         </div>
       ) : error ? (
         <div className="dashboard-inline-state is-error" role="status">
@@ -189,39 +277,16 @@ function NewsSection({
         </div>
       ) : (
         <div className="dashboard-news-list">
-          {items.map((item) => (
-            <article key={item.id} className="dashboard-news-card">
-              <div className="dashboard-news-card-topline">
-                <span>{item.kind === "legal" ? "Rechtsmeldung" : "Produktmeldung"}</span>
-                {item.pinned ? <span className="dashboard-pinned-badge">Angeheftet</span> : null}
-              </div>
-              <h3>{item.title}</h3>
-              <p>{item.summary}</p>
-              {item.kind === "legal" ? (
-                <>
-                  <dl className="dashboard-legal-meta">
-                    <div><dt>Quelle</dt><dd>{item.sourceSystem?.toUpperCase()}</dd></div>
-                    <div><dt>Typ</dt><dd>{item.documentKind === "entscheidungsdokument" ? "Entscheidungsdokument" : item.documentKind === "rechtssatz" ? "Rechtssatz" : "Norm"}</dd></div>
-                    <div><dt>Datum</dt><dd>{formatLegalDate(item.documentDate)}</dd></div>
-                    <div><dt>Stichtag</dt><dd>{formatLegalDate(item.asOfDate)}</dd></div>
-                  </dl>
-                  <div className="dashboard-news-source-row">
-                    <span title={item.sourceIdentifier ?? undefined}>{item.sourceIdentifier}</span>
-                    {item.sourceUrl ? (
-                      <a href={item.sourceUrl} target="_blank" rel="noreferrer">
-                        Amtliche Quelle <Icon name="external" />
-                      </a>
-                    ) : null}
-                  </div>
-                  <p className="dashboard-legal-note">
-                    Redaktionelle Information zum angegebenen Stichtag; maßgeblich bleibt die amtliche Quelle.
-                  </p>
-                </>
-              ) : item.publishedAt ? (
-                <time dateTime={item.publishedAt}>{formatTimestamp(item.publishedAt)}</time>
-              ) : null}
-            </article>
-          ))}
+          {featuredItem ? (
+            <NewsCard item={featuredItem} isFeatured={true} />
+          ) : null}
+          {secondaryItems.length > 0 ? (
+            <div className="dashboard-news-secondary-list">
+              {secondaryItems.map((item) => (
+                <NewsCard key={item.id} item={item} isFeatured={false} />
+              ))}
+            </div>
+          ) : null}
         </div>
       )}
     </section>
@@ -318,9 +383,33 @@ export default function DashboardView({
           </div>
         ) : null}
 
+        <div className="dashboard-news-grid">
+          <NewsSection
+            id="dashboard-legal-news-title"
+            title="Recht aktuell"
+            subtitle="Redaktionell freigegebene Meldungen mit amtlicher Quelle und Stichtag"
+            eyebrow="Recht & Praxis"
+            items={payload?.news.legal ?? []}
+            error={payload?.sectionErrors?.legalNews ?? (loadError || undefined)}
+            isLoading={isLoading}
+          />
+          <NewsSection
+            id="dashboard-product-news-title"
+            title="Neu bei findog.at"
+            subtitle="Produktneuigkeiten und Hinweise"
+            eyebrow="Plattform-Updates"
+            items={payload?.news.product ?? []}
+            error={payload?.sectionErrors?.productNews ?? (loadError || undefined)}
+            isLoading={isLoading}
+          />
+        </div>
+
         <section className="dashboard-overview" aria-labelledby="dashboard-overview-title" aria-busy={isLoading}>
           <div className="dashboard-section-heading dashboard-heading-compact">
-            <h2 id="dashboard-overview-title">Ihre Übersicht</h2>
+            <div>
+              <h2 id="dashboard-overview-title">Ihre Übersicht</h2>
+              <p>Arbeitsbereich und aktueller Systemdatenbestand</p>
+            </div>
           </div>
           <div className="dashboard-stat-grid">
             <button className="dashboard-stat-card" type="button" onClick={() => recentConversations[0] && onOpenConversation(recentConversations[0].id)} disabled={!recentConversations[0]}>
@@ -425,25 +514,6 @@ export default function DashboardView({
               })}
             </div>
           </section>
-        </div>
-
-        <div className="dashboard-news-grid">
-          <NewsSection
-            id="dashboard-product-news-title"
-            title="Neu bei findog.at"
-            subtitle="Produktneuigkeiten und Hinweise"
-            items={payload?.news.product ?? []}
-            error={payload?.sectionErrors?.productNews ?? (loadError || undefined)}
-            isLoading={isLoading}
-          />
-          <NewsSection
-            id="dashboard-legal-news-title"
-            title="Recht aktuell"
-            subtitle="Redaktionell freigegebene Meldungen mit amtlicher Quelle und Stichtag"
-            items={payload?.news.legal ?? []}
-            error={payload?.sectionErrors?.legalNews ?? (loadError || undefined)}
-            isLoading={isLoading}
-          />
         </div>
       </div>
     </section>

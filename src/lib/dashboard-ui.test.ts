@@ -46,6 +46,24 @@ describe("logged-in dashboard UI", () => {
     expect(view).toContain("Derzeit keine Meldungen");
     expect(view).toContain("<dt>Stichtag</dt>");
     expect(view).toContain("Amtliche Quelle");
+    expect(view.match(/formatTimestamp\(item\.publishedAt\)/gu)).toHaveLength(1);
+  });
+
+  it("promotes the editorial news grid directly after hero and warning before overview and main grid", () => {
+    const heroIndex = view.indexOf('className="dashboard-hero"');
+    const newsIndex = view.indexOf('className="dashboard-news-grid"');
+    const overviewIndex = view.indexOf('className="dashboard-overview"');
+    const mainGridIndex = view.indexOf('className="dashboard-main-grid"');
+
+    expect(heroIndex).toBeGreaterThan(-1);
+    expect(newsIndex).toBeGreaterThan(heroIndex);
+    expect(overviewIndex).toBeGreaterThan(newsIndex);
+    expect(mainGridIndex).toBeGreaterThan(overviewIndex);
+
+    expect(view).toContain("is-featured");
+    expect(view).toContain("is-secondary");
+    expect(css).toContain(".dashboard-news-card.is-featured");
+    expect(css).toContain(".dashboard-news-card.is-secondary");
   });
 
   it("provides single-column mobile layouts, focus states and reduced motion", () => {
