@@ -79,7 +79,6 @@ import {
   materializeNativeImageArtifacts,
   sanitizeProviderImageMarkupToAlt,
 } from "@/lib/fred/native-image-artifacts";
-import { buildUserPersonalizationBlock } from "@/lib/fred/user-personalization";
 import {
   FRED_CONTENT_TRANSFORMATION,
   mergeFredResearchStep,
@@ -680,56 +679,21 @@ function buildWebTurnConfig(
   };
 }
 
-async function loadUserPreferences(
+async function loadResearchDisplayMode(
   supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
   userId: string,
-): Promise<{ personalizationBlock: string; researchDisplayMode: "simple" | "advanced" }> {
+): Promise<"simple" | "advanced"> {
   try {
     const { data: prefData, error: prefError } = await supabase
       .from("fred_user_preferences")
-      .select("preferred_name,personality,research_display_mode")
+      .select("research_display_mode")
       .eq("user_id", userId)
       .maybeSingle();
 
-    const researchDisplayMode: "simple" | "advanced" = prefData?.research_display_mode === "advanced"
-      ? "advanced"
-      : "simple";
-
-    if (prefError || !prefData) {
-      return { personalizationBlock: "", researchDisplayMode };
-    }
-
-    const personalityId: string = prefData.personality ?? "standard";
-    const preferredName: string | null = prefData.preferred_name ?? null;
-
-    // Look up the admin-managed prompt text for this personality.
-    const { data: profileData, error: profileError } = await supabase
-      .from("fred_personality_profiles")
-      .select("prompt_text")
-      .eq("id", personalityId)
-      .maybeSingle();
-
-    if (profileError) {
-      // Log a bounded diagnostic — do not leak internal details.
-      console.error("fred personalization: failed to load profile prompt_text", personalityId);
-      return { personalizationBlock: "", researchDisplayMode };
-    }
-
-    if (!profileData) {
-      console.error("fred personalization: profile definition missing", personalityId);
-      return { personalizationBlock: "", researchDisplayMode };
-    }
-
-    const promptText: string = profileData.prompt_text ?? "";
-
-    const personalizationBlock = buildUserPersonalizationBlock({
-      promptText,
-      preferredName,
-    });
-
-    return { personalizationBlock, researchDisplayMode };
+    if (prefError) return "simple";
+    return prefData?.research_display_mode === "advanced" ? "advanced" : "simple";
   } catch {
-    return { personalizationBlock: "", researchDisplayMode: "simple" };
+    return "simple";
   }
 }
 
@@ -739,7 +703,6 @@ function streamTextOnlyTurn(options: {
   userId: string;
   body: ParsedFredChatRequest;
   agentKey: FredAgentKey;
-  personalizationBlock: string;
   researchDisplayMode: "simple" | "advanced";
   receipt: FredRequestReceipt;
 }): Response {
@@ -771,9 +734,6 @@ function streamTextOnlyTurn(options: {
               ? { conversationId: options.body.conversationId }
               : {}),
             query: options.body.query,
-            ...(options.personalizationBlock
-              ? { upstreamQuery: options.body.query + "\n\n" + options.personalizationBlock }
-              : {}),
             origin: "web",
             requestId: options.receipt.requestId,
             agentKey: options.agentKey,
@@ -849,7 +809,7 @@ export async function POST(request: Request) {
     requireSameSiteRequest(request);
     enforceRateLimit(user.id);
     const body = await readRequestBody(request);
-    const { personalizationBlock, researchDisplayMode } = await loadUserPreferences(supabase, user.id);
+    const researchDisplayMode = await loadResearchDisplayMode(supabase, user.id);
     const storedConversation = await loadOwnedConversation({
       supabase,
       userId: user.id,
@@ -897,7 +857,6 @@ export async function POST(request: Request) {
         userId: user.id,
         body,
         agentKey,
-        personalizationBlock,
         researchDisplayMode,
         receipt: requestReceipt,
       });
@@ -987,9 +946,6 @@ export async function POST(request: Request) {
         let errorAlreadyEmitted = false;
         try {
           let upstreamQuery = body.query;
-          if (personalizationBlock) {
-            upstreamQuery = upstreamQuery + "\n\n" + personalizationBlock;
-          }
 
           // Create generation run before preprocessing
           const totalAttachmentBytes = body.attachments.reduce((sum, a) => sum + a.sizeBytes, 0);
@@ -1045,9 +1001,6 @@ export async function POST(request: Request) {
                 },
               );
               upstreamQuery = combined;
-              if (personalizationBlock) {
-                upstreamQuery = combined + "\n\n" + personalizationBlock;
-              }
             } catch (error) {
               if (runId) {
                 lastTerminalStatus = "failed";

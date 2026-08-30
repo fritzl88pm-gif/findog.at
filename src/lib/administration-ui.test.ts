@@ -4,41 +4,31 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.meta.url)), "utf8");
-const componentSource = readFileSync(
-  fileURLToPath(new URL("../components/admin-fred-personalities.tsx", import.meta.url)),
-  "utf8",
-);
 const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
 describe("Administration UI tabs and scanning settings", () => {
-  it("has exactly seven ARIA tabs including Startseiten-News and OpenRouter administration", () => {
+  it("has exactly six ARIA tabs including Startseiten-News and OpenRouter administration", () => {
     const tabMatches = pageSource.match(/role="tab"/gu);
-    expect(tabMatches).toHaveLength(7);
+    expect(tabMatches).toHaveLength(6);
     expect(pageSource).toContain('id="admin-tab-downloads"');
     expect(pageSource).toContain('id="admin-tab-dashboard-news"');
-    expect(pageSource).toContain('id="admin-tab-personalities"');
     expect(pageSource).toContain('id="admin-tab-openrouter"');
+    expect(pageSource).not.toContain('id="admin-tab-personalities"');
     expect(pageSource).not.toContain('id="admin-tab-bfg-pro"');
     expect(pageSource).not.toContain('id="admin-tab-omniroute"');
   });
 
-  it("includes Downloads and Persönlichkeiten in ADMIN_TAB_IDS for keyboard navigation", () => {
+  it("keeps the remaining tabs in keyboard navigation and removes personalities", () => {
     expect(pageSource).toContain('"downloads"');
-    expect(pageSource).toContain('"personalities"');
-    expect(pageSource).toMatch(/ADMIN_TAB_IDS\s*=\s*\[[^\]]*"scanning"[^\]]*"benutzer"[^\]]*"feedback"[^\]]*"downloads"[^\]]*"dashboard-news"[^\]]*"personalities"[^\]]*\]/);
+    expect(pageSource).not.toContain('"personalities"');
+    expect(pageSource).toMatch(/ADMIN_TAB_IDS\s*=\s*\[[^\]]*"scanning"[^\]]*"benutzer"[^\]]*"feedback"[^\]]*"downloads"[^\]]*"dashboard-news"[^\]]*"openrouter"[^\]]*\]/);
   });
 
-  it("renders the admin personalities component inside the Persönlichkeiten tabpanel", () => {
-    // The component import and usage are in page.tsx
-    expect(pageSource).toContain("admin-fred-personalities");
-    expect(pageSource).toContain("<AdminFredPersonalities");
-    // The tabpanel id and aria-labelledby are in the component
-    expect(componentSource).toContain('id="admin-panel-personalities"');
-    expect(componentSource).toContain('aria-labelledby="admin-tab-personalities"');
-  });
-
-  it("passes accessToken to the admin personalities component", () => {
-    expect(pageSource).toMatch(/AdminFredPersonalities\s+accessToken=\{session\?\.access_token\s*\?\?\s*""\}/);
+  it("contains no personality administration surface", () => {
+    expect(pageSource).not.toContain("admin-fred-personalities");
+    expect(pageSource).not.toContain("AdminFredPersonalities");
+    expect(pageSource).not.toContain("/api/admin/fred-personalities");
+    expect(cssSource).not.toContain("admin-personality-");
   });
 
   it("loads scanning settings from /api/admin/scanning-settings when administration opens", () => {

@@ -1695,70 +1695,42 @@ describe("POST /api/fred/chat", () => {
   });
 
   });
-  describe("Fred user personalization", () => {
-    const PERS_USER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  describe("Fred query personalization removal", () => {
+    const PREFERENCE_USER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
     beforeEach(() => {
-      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: PERS_USER_ID });
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: PREFERENCE_USER_ID });
     });
 
-    const prefRow = { preferred_name: "Alina", personality: "friendly" };
-
-    function supabaseWithPreferences(row: { preferred_name: string | null; personality: string } | null) {
+    function supabaseWithResearchMode(
+      mode: "simple" | "advanced" = "simple",
+      preferenceError: unknown = null,
+    ) {
       const rpc = rpcForTurn();
-
-      // Preferences query: .select().eq().maybeSingle()
-      const prefMaybeSingle = vi.fn().mockResolvedValue({ data: row, error: null });
+      const prefMaybeSingle = vi.fn().mockResolvedValue({
+        data: { research_display_mode: mode },
+        error: preferenceError,
+      });
       const prefChain = { select: vi.fn(), eq: vi.fn(), maybeSingle: prefMaybeSingle };
       prefChain.select.mockReturnValue(prefChain);
       prefChain.eq.mockReturnValue(prefChain);
-
-      // Profile query: .select().eq().maybeSingle()
-      const profilePromptText = row?.personality === "friendly"
-        ? "Antworte herzlich, zugewandt und gesprächig. Verwende häufiger passende Emojis, ohne fachliche Präzision, Professionalität oder Verständlichkeit zu beeinträchtigen."
-        : row?.personality === "efficient"
-        ? "Antworte prägnant, direkt und klar. Konzentriere dich auf die wesentlichen Informationen und vermeide unnötige Einleitungen, Wiederholungen und Ausschmückungen."
-        : row?.personality === "cynical"
-        ? "Antworte kritisch, trocken und sarkastisch. Der Sarkasmus darf pointiert sein, aber nicht beleidigend, abwertend oder respektlos gegenüber dem Benutzer oder Dritten. Fachliche Präzision und Verlässlichkeit bleiben vollständig erhalten."
-        : "";
-      const profileMaybeSingle = vi.fn().mockResolvedValue({ data: { prompt_text: profilePromptText }, error: null });
-      const profileChain = { select: vi.fn(), eq: vi.fn(), maybeSingle: profileMaybeSingle };
-      profileChain.select.mockReturnValue(profileChain);
-      profileChain.eq.mockReturnValue(profileChain);
-
-      const from = vi.fn((table: string) => {
-        if (table === "fred_user_preferences") return prefChain;
-        if (table === "fred_personality_profiles") return profileChain;
-        return prefChain;
-      }) as never;
-      return { rpc, from } as never;
+      const from = vi.fn().mockReturnValue(prefChain);
+      return { client: { rpc, from } as never, rpc, from, prefChain };
     }
 
-    it("injects the user personalization block into the upstream query only", async () => {
-      const mock = supabaseWithPreferences(prefRow);
-      vi.mocked(getSupabaseServerClient).mockReturnValue(mock);
+    it("sends a text query upstream unchanged and never loads personality profiles", async () => {
+      const mock = supabaseWithResearchMode();
+      vi.mocked(getSupabaseServerClient).mockReturnValue(mock.client);
 
       const response = await POST(request({ query: "Wie ist die Rechtslage?" }));
       await response.text();
 
       expect(openFredUpstreamStream).toHaveBeenCalledWith(
-        expect.objectContaining({
-          query: expect.stringContaining("<user_personalization>"),
-        }),
+        expect.objectContaining({ query: "Wie ist die Rechtslage?" }),
       );
-      const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
-      expect(callQuery).toContain("<user_personalization>");
-      expect(callQuery).toContain('Der Benutzer möchte mit dem Namen „Alina“');
-      expect(callQuery).toContain("Wie ist die Rechtslage?");
-      // Block must be appended after the original query
-      expect(callQuery.indexOf("Wie ist die Rechtslage?")).toBeLessThan(
-        callQuery.indexOf("<user_personalization>"),
-      );
-      // Block must be the final content
-      expect(callQuery.trimEnd()).toMatch(/<\/user_personalization>$/);
-      // The persisted query is the original, unpolluted
-      const rpcCalls = (mock as { rpc: ReturnType<typeof vi.fn> }).rpc;
-      expect(rpcCalls).toHaveBeenCalledWith("record_fred_native_event", {
+      expect(mock.prefChain.select).toHaveBeenCalledWith("research_display_mode");
+      expect(mock.from).not.toHaveBeenCalledWith("fred_personality_profiles");
+      expect(mock.rpc).toHaveBeenCalledWith("record_fred_native_event", {
         payload: expect.objectContaining({
           content: "Wie ist die Rechtslage?",
           event_type: "message_sent",
@@ -1766,78 +1738,22 @@ describe("POST /api/fred/chat", () => {
       });
     });
 
-    it("leaves the upstream query unchanged when preferences are standard + empty name", async () => {
-      const mock = supabaseWithPreferences({ preferred_name: null, personality: "standard" });
-      vi.mocked(getSupabaseServerClient).mockReturnValue(mock);
-
-      const response = await POST(request({ query: "Test" }));
-      await response.text();
-
-      expect(openFredUpstreamStream).toHaveBeenCalledWith(
-        expect.objectContaining({
-          query: "Test",
-        }),
-      );
-    });
-
-    it("preserves Fred availability when preference read fails", async () => {
-      const rpc = rpcForTurn();
-      const maybeSingle = vi.fn().mockResolvedValue({ data: null, error: new Error("db-down") });
-      const chain = {
-        select: vi.fn(),
-        eq: vi.fn(),
-        maybeSingle,
-      };
-      chain.select.mockReturnValue(chain);
-      chain.eq.mockReturnValue(chain);
-      const from = vi.fn().mockReturnValue(chain);
-      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+    it("keeps the text query unchanged when the display preference read fails", async () => {
+      const mock = supabaseWithResearchMode("simple", new Error("db-down"));
+      vi.mocked(getSupabaseServerClient).mockReturnValue(mock.client);
 
       const response = await POST(request({ query: "Ist Fred noch da?" }));
       await response.text();
 
-      // The request succeeds
-      expect(openFredUpstreamStream).toHaveBeenCalled();
-      // The upstream query is clean (no personalization)
-      const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
-      expect(callQuery).not.toContain("<user_personalization>");
+      expect(openFredUpstreamStream).toHaveBeenCalledWith(
+        expect.objectContaining({ query: "Ist Fred noch da?" }),
+      );
     });
 
-    it("preserves Fred availability when preference load throws entirely", async () => {
-      const rpc = rpcForTurn();
-      const from = vi.fn().mockImplementation(() => {
-        throw new Error("connection refused");
-      });
-      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
-
-      const response = await POST(request({ query: "Test" }));
-      await response.text();
-
-      expect(openFredUpstreamStream).toHaveBeenCalled();
-      const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
-      expect(callQuery).not.toContain("<user_personalization>");
-    });
-
-    it("does not expose internal errors to the client when preference load fails", async () => {
-      const rpc = rpcForTurn();
-      const from = vi.fn().mockImplementation(() => {
-        throw new Error("secret stack trace with db password");
-      });
-      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
-
-      const response = await POST(request({ query: "Sicher?" }));
-      const text = await response.text();
-
-      expect(response.status).toBe(200);
-      expect(text).not.toContain("secret");
-      expect(text).not.toContain("password");
-      expect(text).not.toContain("stack");
-    });
-
-    it("sends the personalization block to upstream for attachment requests too", async () => {
-      const mock = supabaseWithPreferences(prefRow);
-      vi.mocked(getSupabaseServerClient).mockReturnValue(mock);
-      vi.mocked(buildAttachmentContext).mockImplementation(async (question) => `${question}\n\nEXTRACTED`);
+    it("sends only the required document context for preprocessed attachments", async () => {
+      const mock = supabaseWithResearchMode();
+      vi.mocked(getSupabaseServerClient).mockReturnValue(mock.client);
+      vi.mocked(buildAttachmentContext).mockResolvedValue("Was steht im Beleg?\n\nEXTRACTED");
 
       const response = await POST(multipartRequest({
         query: "Was steht im Beleg?",
@@ -1846,32 +1762,13 @@ describe("POST /api/fred/chat", () => {
       await response.text();
 
       expect(openFredUpstreamStream).toHaveBeenCalledWith(
-        expect.objectContaining({
-          query: expect.stringContaining("<user_personalization>"),
-        }),
+        expect.objectContaining({ query: "Was steht im Beleg?\n\nEXTRACTED" }),
       );
-      const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
-      expect(callQuery).toContain("<user_personalization>");
-      expect(callQuery).toContain("EXTRACTED");
-      // Attachment context must come before the personalization block
-      expect(callQuery.indexOf("EXTRACTED")).toBeLessThan(
-        callQuery.indexOf("<user_personalization>"),
-      );
-      // Block must be the final content
-      expect(callQuery.trimEnd()).toMatch(/<\/user_personalization>$/);
-      // Persisted content is original
-      const rpcCalls = (mock as { rpc: ReturnType<typeof vi.fn> }).rpc;
-      expect(rpcCalls).toHaveBeenCalledWith("record_fred_native_event", {
-        payload: expect.objectContaining({
-          content: "Was steht im Beleg?",
-          event_type: "message_sent",
-        }),
-      });
     });
 
-    it("keeps native attachment queries to the original question plus personalization", async () => {
-      const mock = supabaseWithPreferences(prefRow);
-      vi.mocked(getSupabaseServerClient).mockReturnValue(mock);
+    it("keeps native attachment queries equal to the original question", async () => {
+      const mock = supabaseWithResearchMode();
+      vi.mocked(getSupabaseServerClient).mockReturnValue(mock.client);
       vi.mocked(getScanningSettings).mockResolvedValue({
         documentPipeline: "mineru_with_omniroute_luna_fallback",
         fredAttachmentMode: "weknora_native",
@@ -1879,7 +1776,7 @@ describe("POST /api/fred/chat", () => {
         modelId: "model/x",
         prompt: "prompt",
         updatedAt: "2026-07-19T10:00:00.000Z",
-        updatedBy: PERS_USER_ID,
+        updatedBy: PREFERENCE_USER_ID,
       });
 
       const response = await POST(multipartRequest({
@@ -1888,74 +1785,11 @@ describe("POST /api/fred/chat", () => {
       }));
       await response.text();
 
-      const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
-      expect(callQuery).toContain("Was steht im Beleg?");
-      expect(callQuery).toContain("<user_personalization>");
-      expect(callQuery).not.toContain("EXTRACTED");
-      expect(callQuery).not.toContain("BEGINN DER ANHÄNGE");
       expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+        query: "Was steht im Beleg?",
         nativeAttachments: [expect.objectContaining({ kind: "file" })],
       }));
-    });
-
-    it("leaves the upstream query unchanged when preferences are standard + empty name", async () => {
-      const mock = supabaseWithPreferences({ preferred_name: null, personality: "standard" });
-      vi.mocked(getSupabaseServerClient).mockReturnValue(mock);
-
-      const response = await POST(request({ query: "Test" }));
-      await response.text();
-
-      expect(openFredUpstreamStream).toHaveBeenCalledWith(
-        expect.objectContaining({
-          query: "Test",
-        }),
-      );
-      const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
-      expect(callQuery).not.toContain("<user_personalization>");
-      expect(callQuery).not.toContain("name");
-    });
-
-    it("ignores missing profile and leaves upstream query unpersonalized without failing the turn", async () => {
-      const rpc = rpcForTurn();
-
-      // Preferences point to a non-existent personality profile 'unknown-xyz'
-      const prefMaybeSingle = vi.fn().mockResolvedValue({
-        data: { preferred_name: "Heinz", personality: "unknown-xyz" },
-        error: null,
-      });
-      const prefChain = { select: vi.fn(), eq: vi.fn(), maybeSingle: prefMaybeSingle };
-      prefChain.select.mockReturnValue(prefChain);
-      prefChain.eq.mockReturnValue(prefChain);
-
-      // Profile lookup returns {data: null, error: null} — missing definition
-      const profileMaybeSingle = vi.fn().mockResolvedValue({ data: null, error: null });
-      const profileChain = { select: vi.fn(), eq: vi.fn(), maybeSingle: profileMaybeSingle };
-      profileChain.select.mockReturnValue(profileChain);
-      profileChain.eq.mockReturnValue(profileChain);
-
-      const convChain = {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
-      };
-
-      const from = vi.fn((table: string) => {
-        if (table === "fred_user_preferences") return prefChain;
-        if (table === "fred_personality_profiles") return profileChain;
-        if (table === "fred_conversations") return convChain;
-        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }), insert: vi.fn().mockResolvedValue({ error: null }) };
-      }) as never;
-      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
-
-      const response = await POST(request({ query: "Test" }));
-      await response.text();
-
-      // Still succeeds (Fred available)
-      expect(openFredUpstreamStream).toHaveBeenCalled();
-      // The upstream query is clean — no personalization block at all
-      const callQuery = vi.mocked(openFredUpstreamStream).mock.calls[0][0].query;
-      expect(callQuery).not.toContain("<user_personalization>");
-      expect(callQuery).not.toContain("Heinz");
+      expect(buildAttachmentContext).not.toHaveBeenCalled();
     });
   });
 
@@ -1984,15 +1818,7 @@ describe("POST /api/fred/chat", () => {
         select: vi.fn().mockReturnThis(),
         eq: vi.fn().mockReturnThis(),
         maybeSingle: vi.fn().mockResolvedValue({
-          data: { preferred_name: null, personality: "standard", research_display_mode: "advanced" },
-          error: null,
-        }),
-      };
-      const profileChain = {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn().mockResolvedValue({
-          data: { prompt_text: "" },
+          data: { research_display_mode: "advanced" },
           error: null,
         }),
       };
@@ -2003,7 +1829,6 @@ describe("POST /api/fred/chat", () => {
       };
       const from = vi.fn((table: string) => {
         if (table === "fred_user_preferences") return prefChain;
-        if (table === "fred_personality_profiles") return profileChain;
         if (table === "fred_conversations") return convChain;
         return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }), insert: vi.fn().mockResolvedValue({ error: null }) };
       }) as never;
@@ -2051,15 +1876,7 @@ describe("POST /api/fred/chat", () => {
         select: vi.fn().mockReturnThis(),
         eq: vi.fn().mockReturnThis(),
         maybeSingle: vi.fn().mockResolvedValue({
-          data: { preferred_name: null, personality: "standard", research_display_mode: "simple" },
-          error: null,
-        }),
-      };
-      const profileChain = {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn().mockResolvedValue({
-          data: { prompt_text: "" },
+          data: { research_display_mode: "simple" },
           error: null,
         }),
       };
@@ -2070,7 +1887,6 @@ describe("POST /api/fred/chat", () => {
       };
       const from = vi.fn((table: string) => {
         if (table === "fred_user_preferences") return prefChain;
-        if (table === "fred_personality_profiles") return profileChain;
         if (table === "fred_conversations") return convChain;
         return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }), insert: vi.fn().mockResolvedValue({ error: null }) };
       }) as never;
@@ -2706,15 +2522,7 @@ describe("POST /api/fred/chat", () => {
         select: vi.fn().mockReturnThis(),
         eq: vi.fn().mockReturnThis(),
         maybeSingle: vi.fn().mockResolvedValue({
-          data: { preferred_name: null, personality: "standard", research_display_mode: "advanced" },
-          error: null,
-        }),
-      };
-      const profileChain = {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn().mockResolvedValue({
-          data: { prompt_text: "" },
+          data: { research_display_mode: "advanced" },
           error: null,
         }),
       };
@@ -2725,7 +2533,6 @@ describe("POST /api/fred/chat", () => {
       };
       const from = vi.fn((table: string) => {
         if (table === "fred_user_preferences") return prefChain;
-        if (table === "fred_personality_profiles") return profileChain;
         if (table === "fred_conversations") return convChain;
         return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }), insert: vi.fn().mockResolvedValue({ error: null }) };
       }) as never;
@@ -2771,15 +2578,7 @@ describe("POST /api/fred/chat", () => {
         select: vi.fn().mockReturnThis(),
         eq: vi.fn().mockReturnThis(),
         maybeSingle: vi.fn().mockResolvedValue({
-          data: { preferred_name: null, personality: "standard", research_display_mode: "simple" },
-          error: null,
-        }),
-      };
-      const profileChain = {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn().mockResolvedValue({
-          data: { prompt_text: "" },
+          data: { research_display_mode: "simple" },
           error: null,
         }),
       };
@@ -2790,7 +2589,6 @@ describe("POST /api/fred/chat", () => {
       };
       const from = vi.fn((table: string) => {
         if (table === "fred_user_preferences") return prefChain;
-        if (table === "fred_personality_profiles") return profileChain;
         if (table === "fred_conversations") return convChain;
         return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }), insert: vi.fn().mockResolvedValue({ error: null }) };
       }) as never;

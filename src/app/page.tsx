@@ -88,7 +88,6 @@ import KnowledgeLandscapeView from "@/components/knowledge-landscape-view";
 import QuizView from "@/components/quiz-view";
 import ReasoningsView from "@/components/reasonings-view";
 import AdminFeedbackView from "@/components/admin-feedback-view";
-import AdminFredPersonalities from "@/components/admin-fred-personalities";
 import AdminDownloads from "@/components/admin-downloads";
 import AdminDashboardNews from "@/components/admin-dashboard-news";
 import AdminOpenRouterUsage from "@/components/admin-openrouter-usage";
@@ -97,7 +96,7 @@ import DashboardView, { type DashboardAppTarget } from "@/components/dashboard-v
 import TelegramSettings, {
   type TelegramIntegrationPublicState,
 } from "@/components/telegram-settings";
-import FredPersonalizationSettings from "@/components/fred-personalization-settings";
+import FredResearchDisplaySettings from "@/components/fred-research-display-settings";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -1174,7 +1173,7 @@ function GermanPensionOptionView() {
 
 
 
-const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback", "downloads", "dashboard-news", "openrouter", "personalities"] as const;
+const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback", "downloads", "dashboard-news", "openrouter"] as const;
 function handleAdminTabKeyDown(event: React.KeyboardEvent, currentTab: string): void {
   const currentIndex = ADMIN_TAB_IDS.indexOf(currentTab as typeof ADMIN_TAB_IDS[number]);
   let nextIndex: number | undefined;
@@ -1226,7 +1225,7 @@ export default function Home() {
   const [isAdminUsersLoading, setIsAdminUsersLoading] = useState(false);
   const [isAdminUserCreating, setIsAdminUserCreating] = useState(false);
   const [isAdminUserMutationRunning, setIsAdminUserMutationRunning] = useState(false);
-  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "dashboard-news" | "openrouter" | "personalities">("scanning");
+  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "dashboard-news" | "openrouter">("scanning");
   const [scanningDocumentPipeline, setScanningDocumentPipeline] = useState<DocumentPipeline>(DEFAULT_DOCUMENT_PIPELINE);
   const [fredAttachmentMode, setFredAttachmentMode] = useState<FredAttachmentMode>(DEFAULT_FRED_ATTACHMENT_MODE);
   const [scanningProvider, setScanningProvider] = useState<ScanningProvider>(DEFAULT_SCANNING_PROVIDER);
@@ -1551,7 +1550,7 @@ export default function Home() {
     }
 
     const controller = new AbortController();
-    void fetch("/api/account/settings/fred-personalization", {
+    void fetch("/api/account/settings/fred-research-display", {
       headers: { Authorization: `Bearer ${accessToken}` },
       cache: "no-store",
       signal: controller.signal,
@@ -3497,7 +3496,7 @@ export default function Home() {
               </button>
             </div>
             <div className="account-settings-content">
-              <FredPersonalizationSettings
+              <FredResearchDisplaySettings
                 accessToken={session?.access_token ?? ""}
                 onResearchDisplayModeChange={setResearchDisplayMode}
               />
@@ -4220,17 +4219,6 @@ export default function Home() {
               >
                 OpenRouter-Nutzung
               </button>
-              <button
-                id="admin-tab-personalities"
-                className={`admin-tab-button ${adminTab === "personalities" ? "active" : ""}`}
-                role="tab"
-                aria-selected={adminTab === "personalities"}
-                aria-controls="admin-panel-personalities"
-                onClick={() => setAdminTab("personalities")}
-                onKeyDown={(e) => handleAdminTabKeyDown(e, "personalities")}
-              >
-                Persönlichkeiten
-              </button>
             </div>
             {adminTab === "scanning" ? (
               <section className="form-generator-card admin-system-prompt-card" role="tabpanel" id="admin-panel-scanning" aria-labelledby="admin-tab-scanning">
@@ -4510,9 +4498,7 @@ export default function Home() {
               <AdminDashboardNews accessToken={session?.access_token ?? ""} />
             ) : adminTab === "openrouter" ? (
               <AdminOpenRouterUsage accessToken={session?.access_token ?? ""} />
-            ) : (
-              <AdminFredPersonalities accessToken={session?.access_token ?? ""} />
-            )}
+            ) : null}
           </div>
         </section>
       ) : null}

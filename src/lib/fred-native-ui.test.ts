@@ -587,11 +587,11 @@ describe("Fred ResearchTrace rendering", () => {
     expect(viewSource).toMatch(/steps=\{activeAssistant\.researchTrace \?\? \[\]\}[\s\S]*?\n\s+active\n/u);
   });
 
-  it("passes researchDisplayMode from page state to FredPersonalizationSettings and FredNativeChatView", () => {
+  it("passes researchDisplayMode from page state to FredResearchDisplaySettings and FredNativeChatView", () => {
     expect(pageSource).toContain("const [researchDisplayMode, setResearchDisplayMode] = useState<\"simple\" | \"advanced\">(\"simple\");");
     expect(pageSource).toContain("onResearchDisplayModeChange={setResearchDisplayMode}");
     expect(pageSource).toContain("researchDisplayMode={researchDisplayMode}");
-    expect(pageSource).toContain('fetch("/api/account/settings/fred-personalization"');
+    expect(pageSource).toContain('fetch("/api/account/settings/fred-research-display"');
     expect(pageSource).toContain('setResearchDisplayMode(payload.researchDisplayMode === "advanced" ? "advanced" : "simple")');
     expect(viewSource).toContain("researchDisplayMode?: \"simple\" | \"advanced\";");
     expect(viewSource).toMatch(/displayMode=\{researchDisplayMode\}/u);
