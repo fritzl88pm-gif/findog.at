@@ -13,6 +13,7 @@ import {
 export type DashboardAppTarget =
   | "bfg-decisions"
   | "bfg-pro"
+  | "bfg-newsletters"
   | "data"
   | "scanning"
   | "reasonings"
@@ -55,7 +56,7 @@ type QuickLinkGroup = {
   links: QuickLink[];
 };
 
-type IconName = "home" | "chat" | "search" | "sparkles" | "database" | "scan" | "text" | "form" | "download" | "calculator" | "currency" | "game" | "quiz" | "admin" | "clock" | "external";
+type IconName = "home" | "chat" | "search" | "sparkles" | "newsletter" | "database" | "scan" | "text" | "form" | "download" | "calculator" | "currency" | "game" | "quiz" | "admin" | "clock" | "external";
 
 const QUICK_LINK_GROUPS: QuickLinkGroup[] = [
   {
@@ -64,6 +65,7 @@ const QUICK_LINK_GROUPS: QuickLinkGroup[] = [
       { label: "Fred", description: "Rechtsfrage stellen", icon: "chat", primary: true },
       { label: "BFG Suche", description: "Entscheidungen finden", icon: "search", target: "bfg-decisions" },
       { label: "BFG Suche PRO", description: "KI-gestützt reihen", icon: "sparkles", target: "bfg-pro" },
+      { label: "BFG Newsletter", description: "Aktuelle Ausgaben lesen", icon: "newsletter", target: "bfg-newsletters" },
       { label: "Daten", description: "Wissenslandschaft", icon: "database", target: "data" },
     ],
   },
@@ -104,6 +106,7 @@ function Icon({ name }: { name: IconName }) {
     chat: <><path d="M4 5h16v11H8l-4 4V5Z"/><path d="M8 9h8M8 12h5"/></>,
     search: <><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M8 11h6"/></>,
     sparkles: <><path d="m12 3 1.4 4.2L18 9l-4.6 1.8L12 15l-1.4-4.2L6 9l4.6-1.8L12 3Z"/><path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z"/></>,
+    newsletter: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/><path d="M7 16h5"/></>,
     database: <><ellipse cx="12" cy="5" rx="7" ry="3"/><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></>,
     scan: <><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8h10M7 12h10M7 16h6"/></>,
     text: <><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5V5.5Z"/><path d="M8 7h8M8 11h8"/></>,

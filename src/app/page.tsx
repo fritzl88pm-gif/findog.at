@@ -90,8 +90,10 @@ import ReasoningsView from "@/components/reasonings-view";
 import AdminFeedbackView from "@/components/admin-feedback-view";
 import AdminDownloads from "@/components/admin-downloads";
 import AdminDashboardNews from "@/components/admin-dashboard-news";
+import AdminBfgNewsletters from "@/components/admin-bfg-newsletters";
 import AdminOpenRouterUsage from "@/components/admin-openrouter-usage";
 import DownloadsView from "@/components/downloads-view";
+import BfgNewsletterView from "@/components/bfg-newsletter-view";
 import DashboardView, { type DashboardAppTarget } from "@/components/dashboard-view";
 import TelegramSettings, {
   type TelegramIntegrationPublicState,
@@ -118,7 +120,7 @@ type ConversationSummary = {
   telegramIntegrationId?: string | null;
 };
 
-type AppView = "home" | "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data" | "reasonings";
+type AppView = "home" | "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "bfg-newsletters" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data" | "reasonings";
 
 const TELEGRAM_BOT_USERNAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{4,31}$/u;
 
@@ -1173,7 +1175,7 @@ function GermanPensionOptionView() {
 
 
 
-const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback", "downloads", "dashboard-news", "openrouter"] as const;
+const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback", "downloads", "dashboard-news", "bfg-newsletters", "openrouter"] as const;
 function handleAdminTabKeyDown(event: React.KeyboardEvent, currentTab: string): void {
   const currentIndex = ADMIN_TAB_IDS.indexOf(currentTab as typeof ADMIN_TAB_IDS[number]);
   let nextIndex: number | undefined;
@@ -1225,7 +1227,7 @@ export default function Home() {
   const [isAdminUsersLoading, setIsAdminUsersLoading] = useState(false);
   const [isAdminUserCreating, setIsAdminUserCreating] = useState(false);
   const [isAdminUserMutationRunning, setIsAdminUserMutationRunning] = useState(false);
-  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "dashboard-news" | "openrouter">("scanning");
+  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "dashboard-news" | "bfg-newsletters" | "openrouter">("scanning");
   const [scanningDocumentPipeline, setScanningDocumentPipeline] = useState<DocumentPipeline>(DEFAULT_DOCUMENT_PIPELINE);
   const [fredAttachmentMode, setFredAttachmentMode] = useState<FredAttachmentMode>(DEFAULT_FRED_ATTACHMENT_MODE);
   const [scanningProvider, setScanningProvider] = useState<ScanningProvider>(DEFAULT_SCANNING_PROVIDER);
@@ -1871,6 +1873,7 @@ export default function Home() {
     switch (target) {
       case "bfg-decisions": openBfgDecisionsView(); break;
       case "bfg-pro": openBfgProView(); break;
+      case "bfg-newsletters": openBfgNewslettersView(); break;
       case "data": openDataView(); break;
       case "scanning": openScanningView(); break;
       case "reasonings": openReasoningsView(); break;
@@ -1939,6 +1942,14 @@ export default function Home() {
   function openBfgProView() {
     setAppView("bfg-pro");
     setBfgProError("");
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
+  function openBfgNewslettersView() {
+    setAppView("bfg-newsletters");
+    setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
     }
@@ -3161,6 +3172,15 @@ export default function Home() {
                 BFG Suche PRO
               </button>
               <button
+                className={`sidebar-view-button ${appView === "bfg-newsletters" ? "active" : ""}`}
+                type="button"
+                onClick={openBfgNewslettersView}
+                aria-current={appView === "bfg-newsletters" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path><path d="M7 16h5"></path></svg>
+                BFG Newsletter
+              </button>
+              <button
                 className={`sidebar-view-button ${appView === "scanning" ? "active" : ""}`}
                 type="button"
                 onClick={openScanningView}
@@ -3330,6 +3350,16 @@ export default function Home() {
               aria-current={appView === "bfg-pro" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"></path><path d="m19 15 .75 2.25L22 18l-2.25.75L19 21l-.75-2.25L16 18l2.25-.75L19 15Z"></path></svg>
+            </button>
+            <button
+              className={`icon-button rail-icon-btn ${appView === "bfg-newsletters" ? "active" : ""}`}
+              type="button"
+              onClick={openBfgNewslettersView}
+              title="BFG Newsletter"
+              aria-label="BFG Newsletter"
+              aria-current={appView === "bfg-newsletters" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path><path d="M7 16h5"></path></svg>
             </button>
             <button
               className={`icon-button rail-icon-btn ${appView === "scanning" ? "active" : ""}`}
@@ -3631,6 +3661,8 @@ export default function Home() {
         <KnowledgeLandscapeView accessToken={session?.access_token ?? ""} />
       ) : appView === "downloads" ? (
         <DownloadsView accessToken={session?.access_token ?? ""} />
+      ) : appView === "bfg-newsletters" ? (
+        <BfgNewsletterView accessToken={session?.access_token ?? ""} />
       ) : appView === "reasonings" ? (
         <ReasoningsView accessToken={session?.access_token ?? ""} />
       ) : appView === "bfg-pro" ? (
@@ -4209,6 +4241,17 @@ export default function Home() {
                 Startseiten-News
               </button>
               <button
+                id="admin-tab-bfg-newsletters"
+                className={`admin-tab-button ${adminTab === "bfg-newsletters" ? "active" : ""}`}
+                role="tab"
+                aria-selected={adminTab === "bfg-newsletters"}
+                aria-controls="admin-panel-bfg-newsletters"
+                onClick={() => setAdminTab("bfg-newsletters")}
+                onKeyDown={(e) => handleAdminTabKeyDown(e, "bfg-newsletters")}
+              >
+                BFG Newsletter
+              </button>
+              <button
                 id="admin-tab-openrouter"
                 className={`admin-tab-button ${adminTab === "openrouter" ? "active" : ""}`}
                 role="tab"
@@ -4496,6 +4539,8 @@ export default function Home() {
               <AdminDownloads accessToken={session?.access_token ?? ""} />
             ) : adminTab === "dashboard-news" ? (
               <AdminDashboardNews accessToken={session?.access_token ?? ""} />
+            ) : adminTab === "bfg-newsletters" ? (
+              <AdminBfgNewsletters accessToken={session?.access_token ?? ""} />
             ) : adminTab === "openrouter" ? (
               <AdminOpenRouterUsage accessToken={session?.access_token ?? ""} />
             ) : null}

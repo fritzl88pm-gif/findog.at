@@ -105,6 +105,7 @@ Apply all migrations in order through the Supabase SQL editor or your migration 
 43. `supabase/migrations/20260818081208_add_superfrida_character.sql`
 44. `supabase/migrations/20260829225606_dashboard_news.sql`
 45. `supabase/migrations/20260830093213_remove_fred_personalization.sql`
+46. `supabase/migrations/20260830142801_bfg_newsletters.sql`
 
 Supabase Auth must be enabled for email/password login. Authorized accounts are manually provisioned; the app does not expose self-service registration. Server persistence stores the authenticated Supabase `user.id` as `conversations.client_id`, `messages.client_id`, and `agent_runs.client_id`. Fred sessions and messages use separate `fred_*` tables and retain their bridge/webhook provenance. For assistant messages, `content` remains the original provider answer; `display_content`, `research_trace`, `source_references`, and `content_transformation` record the bounded native presentation separately. Deleting an owned conversation cascades to its messages, agent runs, and agent steps; deleting a Fred conversation cascades to its Fred messages and processed webhook events. The admin request audit records only submitted user prompts and is deliberately independent of conversation deletion; deleting the audit history does not remove a user's conversations.
 

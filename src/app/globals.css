@@ -9812,6 +9812,137 @@ textarea:focus {
   margin: 0;
 }
 
+/* BFG Newsletter */
+.bfg-newsletter-panel {
+  padding: 36px 24px 52px;
+  background:
+    radial-gradient(circle at 94% 4%, rgba(255, 212, 0, 0.12), transparent 28rem),
+    linear-gradient(180deg, #f7fbfd 0%, #ffffff 38%);
+}
+
+.bfg-newsletter-view {
+  display: grid;
+  width: min(920px, 100%);
+  margin: 0 auto;
+  gap: 24px;
+}
+
+.bfg-newsletter-header .eyebrow {
+  margin: 0 0 5px;
+  color: var(--bmf-blue);
+}
+
+.bfg-newsletter-header h1 {
+  margin: 0;
+  color: var(--bmf-blue-deep);
+  font-size: clamp(1.75rem, 3vw, 2.35rem);
+}
+
+.bfg-newsletter-header > p:last-child {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 1rem;
+}
+
+.bfg-newsletter-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 18px;
+  list-style: none;
+}
+
+.bfg-newsletter-entry,
+.bfg-newsletter-state {
+  border: 1px solid rgba(40, 111, 156, 0.16);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 16px 38px rgba(19, 65, 94, 0.08);
+}
+
+.bfg-newsletter-entry {
+  display: grid;
+  padding: clamp(20px, 3.5vw, 34px);
+  gap: 20px;
+}
+
+.bfg-newsletter-entry > time {
+  justify-self: start;
+  border: 1px solid rgba(40, 111, 156, 0.16);
+  border-radius: 999px;
+  padding: 6px 11px;
+  background: #edf6fb;
+  color: var(--bmf-blue-deep);
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.bfg-newsletter-entry .answer-content {
+  gap: 11px;
+  color: var(--text);
+  font-size: 1rem;
+  line-height: 1.72;
+}
+
+.bfg-newsletter-entry .answer-content h2 {
+  font-size: 1.28rem;
+}
+
+.bfg-newsletter-entry .answer-content h3 {
+  font-size: 1.12rem;
+}
+
+.bfg-newsletter-state {
+  display: grid;
+  padding: 28px;
+  gap: 5px;
+  color: var(--muted);
+}
+
+.bfg-newsletter-state strong {
+  color: var(--bmf-blue-deep);
+}
+
+.bfg-newsletter-error {
+  display: grid;
+  gap: 4px;
+}
+
+.admin-bfg-newsletter-textarea {
+  min-height: 360px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 1.55;
+}
+
+.admin-bfg-newsletters .admin-news-list-item small {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.35;
+}
+
+@media (max-width: 640px) {
+  .bfg-newsletter-panel {
+    padding: 26px 12px 38px;
+  }
+
+  .bfg-newsletter-view {
+    gap: 18px;
+  }
+
+  .bfg-newsletter-entry {
+    border-radius: var(--radius-md);
+    gap: 16px;
+  }
+
+  .admin-bfg-newsletter-textarea {
+    min-height: 300px;
+  }
+}
+
 /* Download administration */
 .admin-downloads-panel {
   display: grid;
