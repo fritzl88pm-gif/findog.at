@@ -49,6 +49,17 @@ describe("logged-in dashboard UI", () => {
     expect(view.match(/formatTimestamp\(item\.publishedAt\)/gu)).toHaveLength(1);
   });
 
+  it("uses the dedicated casual Fred artwork in the dashboard hero", () => {
+    const heroStart = view.indexOf('<header className="dashboard-hero">');
+    const heroEnd = view.indexOf("</header>", heroStart);
+    const hero = view.slice(heroStart, heroEnd);
+
+    expect(hero).toContain('src="/fred_casual.png"');
+    expect(hero).toContain("width={409}");
+    expect(hero).toContain("height={614}");
+    expect(hero).not.toContain('src="/fred.png"');
+  });
+
   it("promotes the editorial news grid directly after hero and warning before overview and main grid", () => {
     const heroIndex = view.indexOf('className="dashboard-hero"');
     const newsIndex = view.indexOf('className="dashboard-news-grid"');

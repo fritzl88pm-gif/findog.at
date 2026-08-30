@@ -372,7 +372,7 @@ export default function DashboardView({
           </div>
           <div className="dashboard-hero-art" aria-hidden="true">
             <span className="dashboard-hero-ring" />
-            <Image src="/fred.png" alt="" width={250} height={250} priority unoptimized />
+            <Image src="/fred_casual.png" alt="" width={409} height={614} priority unoptimized />
           </div>
         </header>
 
