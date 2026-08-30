@@ -1,12 +1,11 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import {
   formatDashboardDate,
   getDashboardGreeting,
-  type DashboardKnowledgeState,
   type DashboardNewsItem,
   type DashboardPayload,
 } from "@/lib/dashboard";
@@ -98,13 +97,6 @@ const QUICK_LINK_GROUPS: QuickLinkGroup[] = [
     ],
   },
 ];
-
-const KNOWLEDGE_LABELS: Record<DashboardKnowledgeState, string> = {
-  current: "Aktuell",
-  processing: "Wird verarbeitet",
-  stale: "Veraltet",
-  unavailable: "Nicht verfügbar",
-};
 
 function Icon({ name }: { name: IconName }) {
   const paths: Record<IconName, ReactNode> = {
@@ -306,7 +298,7 @@ export default function DashboardView({
   const [loadError, setLoadError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [now] = useState(() => new Date());
-  const recentConversations = useMemo(() => conversations.slice(0, 3), [conversations]);
+  const latestConversation = conversations[0];
 
   useEffect(() => {
     if (!accessToken) return;
@@ -343,9 +335,6 @@ export default function DashboardView({
     };
   }, [accessToken]);
 
-  const knowledgeStatus = payload?.knowledge.status ?? "unavailable";
-  const knowledgeError = payload?.sectionErrors?.knowledge;
-
   return (
     <section className="dashboard-panel" aria-labelledby="dashboard-title">
       <div className="dashboard-view">
@@ -358,11 +347,11 @@ export default function DashboardView({
               <button className="dashboard-primary-action" type="button" onClick={onStartConversation}>
                 <Icon name="chat" /> Neue Frage an Fred
               </button>
-              {recentConversations[0] ? (
+              {latestConversation ? (
                 <button
                   className="dashboard-secondary-action"
                   type="button"
-                  onClick={() => onOpenConversation(recentConversations[0].id)}
+                  onClick={() => onOpenConversation(latestConversation.id)}
                   disabled={isHistoryLoading}
                 >
                   Letzte Unterhaltung fortsetzen
@@ -385,15 +374,6 @@ export default function DashboardView({
 
         <div className="dashboard-news-grid">
           <NewsSection
-            id="dashboard-legal-news-title"
-            title="Recht aktuell"
-            subtitle="Redaktionell freigegebene Meldungen mit amtlicher Quelle und Stichtag"
-            eyebrow="Recht & Praxis"
-            items={payload?.news.legal ?? []}
-            error={payload?.sectionErrors?.legalNews ?? (loadError || undefined)}
-            isLoading={isLoading}
-          />
-          <NewsSection
             id="dashboard-product-news-title"
             title="Neu bei findog.at"
             subtitle="Produktneuigkeiten und Hinweise"
@@ -402,119 +382,49 @@ export default function DashboardView({
             error={payload?.sectionErrors?.productNews ?? (loadError || undefined)}
             isLoading={isLoading}
           />
+          <NewsSection
+            id="dashboard-legal-news-title"
+            title="Recht aktuell"
+            subtitle="Redaktionell freigegebene Meldungen mit amtlicher Quelle und Stichtag"
+            eyebrow="Recht & Praxis"
+            items={payload?.news.legal ?? []}
+            error={payload?.sectionErrors?.legalNews ?? (loadError || undefined)}
+            isLoading={isLoading}
+          />
         </div>
 
-        <section className="dashboard-overview" aria-labelledby="dashboard-overview-title" aria-busy={isLoading}>
-          <div className="dashboard-section-heading dashboard-heading-compact">
+        <section className="dashboard-section dashboard-quicklinks-section" aria-labelledby="dashboard-quicklinks-title">
+          <div className="dashboard-section-heading">
             <div>
-              <h2 id="dashboard-overview-title">Ihre Übersicht</h2>
-              <p>Arbeitsbereich und aktueller Systemdatenbestand</p>
+              <h2 id="dashboard-quicklinks-title">Anwendungen</h2>
+              <p>Direkt zum passenden Arbeitsbereich</p>
             </div>
           </div>
-          <div className="dashboard-stat-grid">
-            <button className="dashboard-stat-card" type="button" onClick={() => recentConversations[0] && onOpenConversation(recentConversations[0].id)} disabled={!recentConversations[0]}>
-              <span className="dashboard-stat-icon"><Icon name="chat" /></span>
-              <strong>{conversations.length}</strong>
-              <span>Fred-Unterhaltungen</span>
-            </button>
-            <button className="dashboard-stat-card" type="button" onClick={() => onOpenApp("reasonings")}>
-              <span className="dashboard-stat-icon"><Icon name="text" /></span>
-              <strong>{isLoading ? "…" : payload?.sectionErrors?.reasonings || loadError ? "—" : payload?.counts.reasonings ?? 0}</strong>
-              <span>Eigene Textbausteine</span>
-            </button>
-            <button className="dashboard-stat-card" type="button" onClick={() => onOpenApp("downloads")}>
-              <span className="dashboard-stat-icon"><Icon name="download" /></span>
-              <strong>{isLoading ? "…" : payload?.sectionErrors?.downloads || loadError ? "—" : payload?.counts.downloads ?? 0}</strong>
-              <span>Verfügbare Downloads</span>
-            </button>
-            <button className="dashboard-stat-card dashboard-knowledge-card" type="button" onClick={() => onOpenApp("data")}>
-              <span className="dashboard-stat-icon"><Icon name="database" /></span>
-              <strong className={`dashboard-status-label is-${knowledgeStatus}`}>
-                {isLoading ? "Wird geladen" : KNOWLEDGE_LABELS[knowledgeStatus]}
-              </strong>
-              <span>Wissensstand</span>
-              <small>{payload?.knowledge.fetchedAt && !knowledgeError
-                ? `Abruf ${formatTimestamp(payload.knowledge.fetchedAt)}`
-                : knowledgeError ?? "Kein Abrufzeitpunkt verfügbar"}</small>
-            </button>
+          <div className="dashboard-quicklink-groups">
+            {QUICK_LINK_GROUPS.map((group) => {
+              const links = group.links.filter((link) => !link.adminOnly || isAdmin);
+              if (links.length === 0) return null;
+              return (
+                <section key={group.title} className="dashboard-quicklink-group" aria-labelledby={`quicklink-${group.title.replaceAll(" ", "-").toLowerCase()}`}>
+                  <h3 id={`quicklink-${group.title.replaceAll(" ", "-").toLowerCase()}`}>{group.title}</h3>
+                  <div className="dashboard-quicklink-grid">
+                    {links.map((link) => (
+                      <button
+                        key={link.label}
+                        type="button"
+                        onClick={link.primary ? onStartConversation : () => link.target && onOpenApp(link.target)}
+                      >
+                        <span className="dashboard-quicklink-icon"><Icon name={link.icon} /></span>
+                        <span><strong>{link.label}</strong><small>{link.description}</small></span>
+                        <span aria-hidden="true">›</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              );
+            })}
           </div>
         </section>
-
-        <div className="dashboard-main-grid">
-          <section className="dashboard-section dashboard-recent-section" aria-labelledby="dashboard-recent-title">
-            <div className="dashboard-section-heading">
-              <div>
-                <h2 id="dashboard-recent-title">Zuletzt verwendet</h2>
-                <p>Ihre drei jüngsten Fred-Unterhaltungen</p>
-              </div>
-            </div>
-            {isHistoryLoading && conversations.length === 0 ? (
-              <div className="dashboard-inline-state" role="status"><span>Unterhaltungen werden geladen …</span></div>
-            ) : recentConversations.length === 0 ? (
-              <div className="dashboard-inline-state">
-                <strong>Noch keine Unterhaltung</strong>
-                <span>Starten Sie Ihre erste Frage an Fred.</span>
-                <button type="button" onClick={onStartConversation}>Neue Frage stellen</button>
-              </div>
-            ) : (
-              <div className="dashboard-conversation-list">
-                {recentConversations.map((conversation) => (
-                  <button
-                    key={conversation.id}
-                    type="button"
-                    onClick={() => onOpenConversation(conversation.id)}
-                    disabled={isHistoryLoading}
-                  >
-                    <span className="dashboard-conversation-icon"><Icon name="chat" /></span>
-                    <span className="dashboard-conversation-copy">
-                      <strong>{conversation.title}</strong>
-                      <span>
-                        <span className={`dashboard-origin-badge is-${conversation.origin ?? "web"}`}>
-                          {conversation.origin === "telegram" ? "Telegram" : "Web"}
-                        </span>
-                        <time dateTime={conversation.updatedAt}>{formatTimestamp(conversation.updatedAt)}</time>
-                      </span>
-                    </span>
-                    <span aria-hidden="true">›</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section className="dashboard-section dashboard-quicklinks-section" aria-labelledby="dashboard-quicklinks-title">
-            <div className="dashboard-section-heading">
-              <div>
-                <h2 id="dashboard-quicklinks-title">Anwendungen</h2>
-                <p>Direkt zum passenden Arbeitsbereich</p>
-              </div>
-            </div>
-            <div className="dashboard-quicklink-groups">
-              {QUICK_LINK_GROUPS.map((group) => {
-                const links = group.links.filter((link) => !link.adminOnly || isAdmin);
-                if (links.length === 0) return null;
-                return (
-                  <section key={group.title} className="dashboard-quicklink-group" aria-labelledby={`quicklink-${group.title.replaceAll(" ", "-").toLowerCase()}`}>
-                    <h3 id={`quicklink-${group.title.replaceAll(" ", "-").toLowerCase()}`}>{group.title}</h3>
-                    <div className="dashboard-quicklink-grid">
-                      {links.map((link) => (
-                        <button
-                          key={link.label}
-                          type="button"
-                          onClick={link.primary ? onStartConversation : () => link.target && onOpenApp(link.target)}
-                        >
-                          <span className="dashboard-quicklink-icon"><Icon name={link.icon} /></span>
-                          <span><strong>{link.label}</strong><small>{link.description}</small></span>
-                          <span aria-hidden="true">›</span>
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-                );
-              })}
-            </div>
-          </section>
-        </div>
       </div>
     </section>
   );

@@ -37,9 +37,9 @@ describe("logged-in dashboard UI", () => {
     expect(view).toContain("!link.adminOnly || isAdmin");
   });
 
-  it("shows three recent conversations, per-section states, source metadata and explicit Stichtag", () => {
-    expect(view).toContain("conversations.slice(0, 3)");
-    expect(view).toContain('conversation.origin === "telegram" ? "Telegram" : "Web"');
+  it("keeps the latest conversation in the hero and renders news states with explicit Stichtag", () => {
+    expect(view).toContain("const latestConversation = conversations[0]");
+    expect(view).toContain("onOpenConversation(latestConversation.id)");
     expect(view).toContain('title="Neu bei findog.at"');
     expect(view).toContain('title="Recht aktuell"');
     expect(view).toContain("Vorübergehend nicht verfügbar");
@@ -60,16 +60,22 @@ describe("logged-in dashboard UI", () => {
     expect(hero).not.toContain('src="/fred.png"');
   });
 
-  it("promotes the editorial news grid directly after hero and warning before overview and main grid", () => {
+  it("puts platform updates left of legal news and only applications below the news grid", () => {
     const heroIndex = view.indexOf('className="dashboard-hero"');
     const newsIndex = view.indexOf('className="dashboard-news-grid"');
-    const overviewIndex = view.indexOf('className="dashboard-overview"');
-    const mainGridIndex = view.indexOf('className="dashboard-main-grid"');
+    const productNewsIndex = view.indexOf('id="dashboard-product-news-title"', newsIndex);
+    const legalNewsIndex = view.indexOf('id="dashboard-legal-news-title"', newsIndex);
+    const applicationsIndex = view.indexOf('className="dashboard-section dashboard-quicklinks-section"');
 
     expect(heroIndex).toBeGreaterThan(-1);
     expect(newsIndex).toBeGreaterThan(heroIndex);
-    expect(overviewIndex).toBeGreaterThan(newsIndex);
-    expect(mainGridIndex).toBeGreaterThan(overviewIndex);
+    expect(productNewsIndex).toBeGreaterThan(newsIndex);
+    expect(legalNewsIndex).toBeGreaterThan(productNewsIndex);
+    expect(applicationsIndex).toBeGreaterThan(legalNewsIndex);
+    expect(view).not.toContain('className="dashboard-overview"');
+    expect(view).not.toContain('className="dashboard-main-grid"');
+    expect(view).not.toContain("Zuletzt verwendet");
+    expect(view).not.toContain("Ihre Übersicht");
 
     expect(view).toContain("is-featured");
     expect(view).toContain("is-secondary");
@@ -77,11 +83,15 @@ describe("logged-in dashboard UI", () => {
     expect(css).toContain(".dashboard-news-card.is-secondary");
   });
 
-  it("provides single-column mobile layouts, focus states and reduced motion", () => {
+  it("keeps news and enlarged application icons responsive with focus and reduced motion", () => {
     expect(css).toContain("width: min(100%, 1280px)");
-    expect(css).toMatch(/@media \(max-width: 560px\)[\s\S]*?\.dashboard-stat-grid \{\s*grid-template-columns: 1fr;/u);
-    expect(css).toMatch(/@media \(max-width: 960px\)[\s\S]*?\.dashboard-main-grid,[\s\S]*?\.dashboard-news-grid \{\s*grid-template-columns: 1fr;/u);
-    expect(css).toContain(".dashboard-stat-card:focus-visible");
+    expect(css).toMatch(/\.dashboard-quicklink-groups \{[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/u);
+    expect(css).toMatch(/\.dashboard-quicklink-icon \{[\s\S]*?width: 46px;[\s\S]*?height: 46px;/u);
+    expect(css).toMatch(/\.dashboard-quicklink-icon \.dashboard-icon \{\s*width: 24px;\s*height: 24px;/u);
+    expect(css).toMatch(/@media \(max-width: 960px\)[\s\S]*?\.dashboard-news-grid \{\s*grid-template-columns: 1fr;/u);
+    expect(css).toMatch(/@media \(max-width: 700px\)[\s\S]*?\.dashboard-quicklink-groups \{\s*grid-template-columns: 1fr;/u);
+    expect(css).toMatch(/@media \(max-width: 560px\)[\s\S]*?\.dashboard-quicklink-icon \.dashboard-icon \{\s*width: 22px;\s*height: 22px;/u);
+    expect(css).toContain(".dashboard-quicklink-grid button:focus-visible");
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.dashboard-skeleton-card/u);
   });
 
