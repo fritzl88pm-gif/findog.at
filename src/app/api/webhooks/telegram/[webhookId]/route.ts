@@ -21,8 +21,21 @@ function classifyUpdate(body: TelegramUpdate): { chatId: number; messageId: numb
 export const runtime = "nodejs";
 
 const MAX_BODY_BYTES = 256 * 1024;
+const MAX_SECRET_TOKEN_CHARS = 256;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const SECRET_TOKEN_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const BUSY_RESPONSE_TEXT =
   "⏳ Fred bearbeitet bereits fünf Fragen. Bitte warte, bis eine Antwort fertig ist.";
+
+class WebhookBodyError extends Error {
+  constructor(
+    readonly status: 400 | 413,
+    readonly responseText: string,
+  ) {
+    super(responseText);
+    this.name = "WebhookBodyError";
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -36,6 +49,51 @@ function okJson(payload: unknown): NextResponse {
   return NextResponse.json(payload);
 }
 
+function isValidSecretToken(value: string | null): value is string {
+  return Boolean(
+    value
+    && value.length <= MAX_SECRET_TOKEN_CHARS
+    && SECRET_TOKEN_PATTERN.test(value),
+  );
+}
+
+async function readBoundedJsonBody(request: Request): Promise<unknown> {
+  if (!request.body) {
+    throw new WebhookBodyError(400, "Bad request");
+  }
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let totalBytes = 0;
+  let rawBody = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_BODY_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new WebhookBodyError(413, "Payload too large");
+      }
+      rawBody += decoder.decode(value, { stream: true });
+    }
+    rawBody += decoder.decode();
+  } catch (error) {
+    if (error instanceof WebhookBodyError) throw error;
+    throw new WebhookBodyError(400, "Bad request");
+  } finally {
+    reader.releaseLock();
+  }
+
+  try {
+    return JSON.parse(rawBody) as unknown;
+  } catch {
+    throw new WebhookBodyError(400, "Bad request: invalid JSON");
+  }
+}
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ webhookId: string }> },
@@ -47,30 +105,8 @@ export async function POST(
     return text(413, "Payload too large");
   }
 
-  let rawBody: string;
-  try {
-    rawBody = await new Response(request.body).text();
-  } catch {
-    return text(400, "Bad request");
-  }
-
-  if (new TextEncoder().encode(rawBody).length > MAX_BODY_BYTES) {
-    return text(413, "Payload too large");
-  }
-
-  let body: TelegramUpdate;
-  try {
-    body = JSON.parse(rawBody) as TelegramUpdate;
-  } catch {
-    return text(400, "Bad request: invalid JSON");
-  }
-
-  if (!body || typeof body !== "object" || typeof body.update_id !== "number") {
-    return text(400, "Bad request: missing update_id");
-  }
-
   const secretToken = request.headers.get("x-telegram-bot-api-secret-token");
-  if (!secretToken) {
+  if (!UUID_PATTERN.test(webhookId) || !isValidSecretToken(secretToken)) {
     return text(404, "Not Found");
   }
 
@@ -94,6 +130,20 @@ export async function POST(
 
   if (!timingSafeDigestEqual(expectedHash, providedHash)) {
     return text(404, "Not Found");
+  }
+
+  let body: TelegramUpdate;
+  try {
+    body = await readBoundedJsonBody(request) as TelegramUpdate;
+  } catch (error) {
+    if (error instanceof WebhookBodyError) {
+      return text(error.status, error.responseText);
+    }
+    return text(400, "Bad request");
+  }
+
+  if (!body || typeof body !== "object" || typeof body.update_id !== "number") {
+    return text(400, "Bad request: missing update_id");
   }
 
   const status = integration.status as string;

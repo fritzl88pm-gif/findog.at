@@ -25,6 +25,8 @@ export interface DeliveryOptions {
   retryDelayMs?: number;
   /** Raw Markdown eligible for a single native Rich Message attempt. */
   richMarkdown?: string;
+  /** Cancels in-flight Telegram calls and retry waits after lease loss/stop. */
+  signal?: AbortSignal;
   /** Overridable sleep for deterministic retry tests. */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -109,11 +111,19 @@ export async function deliverFinalAnswer(
       let richError: unknown;
       let fallbackToLegacy = false;
       for (let attempt = 0; attempt < maxRetries; attempt++) {
+        if (options.signal?.aborted) {
+          entry.status = "failed";
+          entry.error = "Telegram delivery interrupted before send";
+          return { sent: anySent, uncertain: anyUncertain };
+        }
         try {
-          const result = await api.sendRichMessage({
+          const richParams = {
             chat_id: chatId,
             rich_message: { markdown: richMarkdown },
-          });
+          };
+          const result = options.signal
+            ? await api.sendRichMessage(richParams, { signal: options.signal })
+            : await api.sendRichMessage(richParams);
           entry.status = "sent";
           entry.messageId = result.message_id;
           anySent = true;
@@ -133,10 +143,28 @@ export async function deliverFinalAnswer(
           }
 
           const retryAfter = extractRetryAfter(err);
-          if (retryAfter !== undefined) {
-            await sleepFn(retryAfter * 1000);
+          if (retryAfter !== undefined && attempt < maxRetries - 1) {
+            const waitResult = await waitForRetry(
+              sleepFn,
+              retryAfter * 1000,
+              options.signal,
+            );
+            if (!waitResult.completed) {
+              entry.status = "failed";
+              entry.error = String(waitResult.error ?? "Telegram delivery retry interrupted");
+              return { sent: anySent, uncertain: anyUncertain };
+            }
           } else if (attempt < maxRetries - 1) {
-            await sleepFn(retryDelayMs * Math.pow(2, attempt));
+            const waitResult = await waitForRetry(
+              sleepFn,
+              retryDelayMs * Math.pow(2, attempt),
+              options.signal,
+            );
+            if (!waitResult.completed) {
+              entry.status = "failed";
+              entry.error = String(waitResult.error ?? "Telegram delivery retry interrupted");
+              return { sent: anySent, uncertain: anyUncertain };
+            }
           }
         }
       }
@@ -151,8 +179,16 @@ export async function deliverFinalAnswer(
 
     let lastError: unknown;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
+      if (options.signal?.aborted) {
+        entry.status = "failed";
+        entry.error = "Telegram delivery interrupted before send";
+        return { sent: anySent, uncertain: anyUncertain };
+      }
       try {
-        const result = await api.sendMessage({ chat_id: chatId, text: content, parse_mode: "HTML" });
+        const messageParams = { chat_id: chatId, text: content, parse_mode: "HTML" as const };
+        const result = options.signal
+          ? await api.sendMessage(messageParams, { signal: options.signal })
+          : await api.sendMessage(messageParams);
         entry.status = "sent";
         entry.messageId = result.message_id;
         anySent = true;
@@ -167,12 +203,30 @@ export async function deliverFinalAnswer(
         }
         const retryAfter = extractRetryAfter(err);
 
-        if (retryAfter !== undefined) {
+        if (retryAfter !== undefined && attempt < maxRetries - 1) {
           // 429 with retry_after — wait and retry
-          await sleepFn(retryAfter * 1000);
+          const waitResult = await waitForRetry(
+            sleepFn,
+            retryAfter * 1000,
+            options.signal,
+          );
+          if (!waitResult.completed) {
+            entry.status = "failed";
+            entry.error = String(waitResult.error ?? "Telegram delivery retry interrupted");
+            return { sent: anySent, uncertain: anyUncertain };
+          }
         } else if (attempt < maxRetries - 1) {
           // Transient error — exponential backoff
-          await sleepFn(retryDelayMs * Math.pow(2, attempt));
+          const waitResult = await waitForRetry(
+            sleepFn,
+            retryDelayMs * Math.pow(2, attempt),
+            options.signal,
+          );
+          if (!waitResult.completed) {
+            entry.status = "failed";
+            entry.error = String(waitResult.error ?? "Telegram delivery retry interrupted");
+            return { sent: anySent, uncertain: anyUncertain };
+          }
         }
         // If last attempt, don't sleep
       }
@@ -198,6 +252,31 @@ export async function deliverFinalAnswer(
     sent: anySent,
     uncertain: anyUncertain,
   };
+}
+
+async function waitForRetry(
+  sleepFn: (ms: number) => Promise<void>,
+  ms: number,
+  signal?: AbortSignal,
+): Promise<{ completed: true } | { completed: false; error: unknown }> {
+  try {
+    if (!signal) {
+      await sleepFn(ms);
+      return { completed: true };
+    }
+    signal.throwIfAborted();
+
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = (): void => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+      void sleepFn(ms).then(resolve, reject).finally(() => {
+        signal.removeEventListener("abort", onAbort);
+      });
+    });
+    return { completed: true };
+  } catch (error) {
+    return { completed: false, error };
+  }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

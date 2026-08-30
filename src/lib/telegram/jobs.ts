@@ -23,6 +23,8 @@ export interface ClaimedUpdate {
   leaseExpiresAt: string;
   /** Number of processing attempts so far. */
   attemptCount: number;
+  /** Durable per-row attempt limit; attemptCount > maxAttempts marks cleanup-only reclaim. */
+  maxAttempts: number;
   /** When the update becomes available for claiming. */
   availableAt: string;
   /** Whether a /stop cancellation has been requested. */
@@ -63,6 +65,23 @@ function requireRpcData(
   throw new Error(`${operation} failed`);
 }
 
+export class TelegramUpdateLeaseLostError extends Error {
+  constructor(operation: string) {
+    super(`${operation} lease lost`);
+    this.name = "TelegramUpdateLeaseLostError";
+  }
+}
+
+function requireLeaseTransition(
+  operation: string,
+  result: { data: unknown; error: unknown },
+): void {
+  const data = requireRpcData(operation, result);
+  if (data !== true) {
+    throw new TelegramUpdateLeaseLostError(operation);
+  }
+}
+
 function parseClaimedRow(row: unknown): ClaimedUpdate | null {
   if (!isRecord(row)) return null;
   const id = typeof row.id === "number" ? row.id : Number(row.id);
@@ -72,6 +91,8 @@ function parseClaimedRow(row: unknown): ClaimedUpdate | null {
   const leaseId = typeof row.lease_id === "string" ? row.lease_id : "";
   if (!leaseId) return null;
   const telegramMessageId = typeof row.telegram_message_id === "number" ? row.telegram_message_id : undefined;
+  const maxAttempts = typeof row.max_attempts === "number" ? row.max_attempts : Number(row.max_attempts);
+  if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) return null;
   return {
     id,
     updateId,
@@ -84,6 +105,7 @@ function parseClaimedRow(row: unknown): ClaimedUpdate | null {
     leaseId,
     leaseExpiresAt: typeof row.lease_expires_at === "string" ? row.lease_expires_at : new Date().toISOString(),
     attemptCount: typeof row.attempt_count === "number" ? row.attempt_count : 0,
+    maxAttempts,
     availableAt: typeof row.available_at === "string" ? row.available_at : new Date().toISOString(),
     cancelRequested: row.cancel_requested === true,
   };
@@ -145,7 +167,7 @@ export async function completeUpdate(
     p_update_id: handle.rowId,
     p_lease_id: handle.leaseId,
   });
-  requireRpcData("complete update", result);
+  requireLeaseTransition("complete update", result);
 }
 
 /**
@@ -159,14 +181,16 @@ export async function retryUpdate(
     retryDelaySeconds?: number;
     lastErrorCode?: string;
   },
-): Promise<void> {
+): Promise<"retried" | "cancel_requested"> {
   const result = await rpc.retry({
     p_update_id: params.rowId,
     p_lease_id: params.leaseId,
     p_retry_delay_seconds: params.retryDelaySeconds ?? 60,
     p_last_error_code: params.lastErrorCode ?? "UNKNOWN",
   });
-  requireRpcData("retry update", result);
+  const data = requireRpcData("retry update", result);
+  if (data === "retried" || data === "cancel_requested") return data;
+  throw new TelegramUpdateLeaseLostError("retry update");
 }
 
 /**
@@ -180,7 +204,7 @@ export async function cancelUpdate(
     p_update_id: handle.rowId,
     p_lease_id: handle.leaseId,
   });
-  requireRpcData("cancel update", result);
+  requireLeaseTransition("cancel update", result);
 }
 
 /**
@@ -212,7 +236,7 @@ export async function failUpdate(
     p_lease_id: params.leaseId,
     p_last_error_code: params.lastErrorCode ?? "UNKNOWN",
   });
-  requireRpcData("fail update", result);
+  requireLeaseTransition("fail update", result);
 }
 
 /**

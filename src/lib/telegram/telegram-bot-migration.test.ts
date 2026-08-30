@@ -10,6 +10,13 @@ const migration = readFileSync(
   )),
   "utf8",
 );
+const retryMigration = readFileSync(
+  fileURLToPath(new URL(
+    "../../../supabase/migrations/20260830165000_resume_telegram_fred_requests.sql",
+    import.meta.url,
+  )),
+  "utf8",
+);
 const workerEntrypoint = readFileSync(
   fileURLToPath(new URL("../../workers/telegram.ts", import.meta.url)),
   "utf8",
@@ -360,8 +367,9 @@ describe("telegram_bot_integration migration", () => {
     )?.[0] ?? "";
     const runtimeNames = [...buildRpc.matchAll(/invokeRpc\(supabase, "([a-z0-9_]+)"/g)]
       .map((match) => match[1]);
+    const effectiveTelegramMigrations = `${migration}\n${retryMigration}`;
     const migrationNames = new Set(
-      [...migration.matchAll(/create function public\.([a-z0-9_]+)\(/gi)]
+      [...effectiveTelegramMigrations.matchAll(/create (?:or replace )?function public\.([a-z0-9_]+)\(/gi)]
         .map((match) => match[1]),
     );
 

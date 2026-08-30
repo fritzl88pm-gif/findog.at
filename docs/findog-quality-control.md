@@ -15,6 +15,8 @@ Jeder Beleg besitzt:
 - eine eindeutige `request_id`;
 - getrennte, eindeutige Event-IDs für User und Assistant;
 - Quelle, Agent, Eingangszeit und Originalanfrage;
+- den beim Eingang geltenden Conversation-Bezug sowie Web-/Pro-Modus als
+  unveränderlichen Wiederaufnahme-Kontext;
 - den Status `received`, `user_persisted`, `generating`, `completed`, `failed`
   oder `cancelled`;
 - exakte Verknüpfungen auf die gespeicherten User- und Assistant-Nachrichten;
@@ -36,6 +38,30 @@ Für jeden nicht gelöschten Beleg gelten folgende Prüfungen:
    `admin_request_history`-Eintrag mit derselben `request_id`.
 6. Telegram-Belege werden zusätzlich gegen `telegram_updates` und sämtliche
    `telegram_deliveries` abgeglichen.
+
+## Telegram-Wiederaufnahme
+
+Telegram verwendet für jeden Update-Datensatz deterministische Request- und
+Event-IDs. Ein Queue-Retry eröffnet daher keinen neuen Request: Der Worker
+gleicht den Beleg zuerst mit den exakt zugehörigen User-/Assistant-Events ab.
+Ein bereits gespeicherter User-Turn wird in derselben Conversation fortgesetzt;
+eine bereits gespeicherte Assistant-Antwort wird nur noch idempotent zugestellt.
+Conversation sowie Web-/Pro-Modus stammen dabei ausschließlich aus dem beim
+Ingress eingefrorenen Beleg und nicht aus später geänderten Chat-Einstellungen.
+Transient gescheiterte Versuche bleiben bis zur letzten Queue-Chance
+nichtterminal. Terminale Belege werden nie wieder geöffnet.
+
+Alle lease-gebundenen Queue-Übergänge akzeptieren nur ihren jeweils exakt
+definierten Erfolgsausgang; `false`, `lease_lost` oder ein unbekannter Ausgang
+bedeutet Lease-Verlust. Danach darf der alte Worker keinen zweiten
+Statusübergang versuchen. Auch Beleg-Anlage und terminale Beleg-Abgleiche sind
+an `telegram_updates.id` plus aktuelle Lease gebunden. `/stop`, Retry und der
+Claim eines Auslieferungs-Chunks entscheiden unter demselben Queue-Zeilenlock,
+damit weder ein storniertes Update erneut claimbar bleibt noch nach zugesagter
+Stornierung ein neuer Send beginnt. Jeder Telegram-Auslieferungs-Chunk wird vor
+dem externen Send an genau diesen Lease gebunden. Ein von einem anderen Lease
+übernommener `pending`-Chunk sowie jeder `pending`-Chunk einer terminalen Queue
+gilt als `uncertain` und wird nicht blind erneut gesendet.
 
 ## Täglicher Ablauf
 
@@ -124,3 +150,15 @@ interpretiert.
 Die tägliche QA-Bereinigung löscht keine WeKnora-Sitzungsnachrichten, weil sie
 zum vom User aufbewahrten Verlauf gehören. Ein Provider-Purge ist ausschließlich
 Teil einer ausdrücklich vom User ausgelösten Unterhaltungs- oder Kontolöschung.
+
+Eine Unterhaltungs-Löschung und die Event-Persistenz verwenden dieselbe globale
+Reihenfolge: Account-Zeile, Provider-Session, Conversation und abhängige
+Arbeitszeilen. Die Löschung schreibt anschließend einen dauerhaften,
+inhaltsfreien SHA-256-Tombstone, storniert aktive Requests und Generationen,
+redigiert Telegram-/Ledger-Kopien und löscht erst danach die Conversation.
+Verspätete Webhooks für diese Session werden unter demselben Lock verworfen,
+ohne `content` oder `raw_event` zu speichern. Der Tombstone enthält weder
+Channel-/Session-ID noch Titel oder Nachrichteninhalt.
+Dieselbe Tombstone- und Bereinigungsfunktion läuft vor einer Löschung des
+zugehörigen `auth.users`-Datensatzes, damit der Account-Cascade die Sperre nicht
+umgehen kann.

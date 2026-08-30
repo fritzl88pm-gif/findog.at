@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { EOF_WITHOUT_FINAL_CLIENT_MESSAGE } from "./run-diagnostics";
 import type {
   FredTurnEvent,
   FredTurnRequest,
@@ -234,7 +235,8 @@ describe("executeFredTurn", () => {
       start(ctrl) {
         ctrl.enqueue(new TextEncoder().encode([
           `data: ${JSON.stringify({ response_type: "answer", content: `Siehe ${gz}.`, done: true })}\n\n`,
-          'data: {"response_type":"references","data":{"event_id":"sources-final","references":[{"document_name":"EStG.md","chunk_id":"chunk-final","kb_id":"kb-final"}]}}',
+          'data: {"response_type":"references","data":{"event_id":"sources-final","references":[{"document_name":"EStG.md","chunk_id":"chunk-final","kb_id":"kb-final"}]}}\n\n',
+          'data: {"response_type":"complete","data":{}}',
         ].join("")));
         ctrl.close();
       },
@@ -345,6 +347,77 @@ describe("executeFredTurn", () => {
 
     const gen = executeFredTurn(baseRequest(), upstream, persistence, config);
     await expect(collectEvents(gen)).rejects.toThrow("keine Antwort");
+  });
+
+  it("rejects EOF after a plausible answer when no completion event arrived", async () => {
+    const onRequestTransition = vi.fn().mockResolvedValue(undefined);
+    persistence = makePersistenceDeps({
+      recordEvent: vi.fn().mockResolvedValueOnce({
+        conversation: summaryConv(),
+        messageId: 41,
+      }),
+    });
+    upstream.openStream = vi.fn().mockResolvedValue(new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        ctrl.enqueue(new TextEncoder().encode([
+          'data: {"response_type":"agent_query","assistant_message_id":"answer-truncated"}\n\n',
+          'data: {"response_type":"answer","content":"Nur ein Präfix","done":true}\n\n',
+        ].join("")));
+        ctrl.close();
+      },
+    }));
+
+    const gen = executeFredTurn(
+      baseRequest({ onRequestTransition }),
+      upstream,
+      persistence,
+      config,
+    );
+
+    expect(await gen.next()).toMatchObject({
+      done: false,
+      value: { type: "conversation" },
+    });
+    expect(await gen.next()).toEqual({
+      done: false,
+      value: { type: "delta", content: "Nur ein Präfix" },
+    });
+    expect(await gen.next()).toEqual({
+      done: false,
+      value: { type: "error", error: EOF_WITHOUT_FINAL_CLIENT_MESSAGE },
+    });
+    await expect(gen.next()).rejects.toThrow(EOF_WITHOUT_FINAL_CLIENT_MESSAGE);
+
+    expect(persistence.recordEvent).toHaveBeenCalledTimes(1);
+    expect(onRequestTransition.mock.calls).toEqual([
+      [{ status: "user_persisted", conversationId, userMessageId: 41 }],
+      [{ status: "generating" }],
+      [{ status: "failed", failurePhase: "streaming", errorCode: "turn_failed" }],
+    ]);
+    expect(upstream.relayEvent).toHaveBeenCalledTimes(1);
+    expect(upstream.stopSession).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: "answer-truncated",
+    }));
+  });
+
+  it("accepts a completion event in the final unterminated SSE frame", async () => {
+    upstream.openStream = vi.fn().mockResolvedValue(new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        ctrl.enqueue(new TextEncoder().encode([
+          'data: {"response_type":"answer","content":"Vollständig","done":true}\n\n',
+          'data: {"response_type":"complete","data":{}}',
+        ].join("")));
+        ctrl.close();
+      },
+    }));
+
+    const { events, result } = await collectEvents(
+      executeFredTurn(baseRequest(), upstream, persistence, config),
+    );
+
+    expect(result).toMatchObject({ answer: "Vollständig", stopped: false });
+    expect(events.at(-1)).toMatchObject({ type: "final", answer: "Vollständig" });
+    expect(persistence.recordEvent).toHaveBeenCalledTimes(2);
   });
 
   it("throws on unsupported upstream events", async () => {

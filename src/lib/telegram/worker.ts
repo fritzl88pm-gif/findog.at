@@ -13,6 +13,7 @@ import {
   heartbeatUpdate,
   requestCancelForChat,
   retryUpdate,
+  TelegramUpdateLeaseLostError,
   type ClaimedUpdate,
   type JobQueueRpc,
   type UpdateHandle,
@@ -23,7 +24,9 @@ import type { TelegramUpdate } from "./types";
 import type { FredTurnAttachmentMeta, FredTurnEvent, FredTurnRequest, FredTurnResult } from "../fred/turn-types";
 import type {
   FredRequestFailurePhase,
+  FredOptionalReceiptTransition,
   FredRequestReceipt,
+  FredRequestResume,
   FredRequestStatus,
 } from "../fred/request-ledger";
 import { UserVisibleError } from "../errors";
@@ -58,10 +61,20 @@ export interface WorkerStorage {
     requestId: string;
     clientId: string;
     telegramUpdateId: number;
+    updateRowId: number;
+    leaseId: string;
     content: string;
     userEventId: string;
     assistantEventId: string;
-  }): Promise<FredRequestReceipt>;
+    conversationId?: string;
+    webSearchEnabled: boolean;
+    proModeEnabled: boolean;
+  }): Promise<FredRequestReceipt | false>;
+  resumeRequestReceipt(params: {
+    requestId: string;
+    clientId: string;
+    telegramUpdateId: number;
+  }): Promise<FredRequestResume>;
   transitionRequestReceipt(params: {
     requestId: string;
     status: FredRequestStatus;
@@ -71,14 +84,28 @@ export interface WorkerStorage {
     failurePhase?: FredRequestFailurePhase;
     errorCode?: string;
   }): Promise<void>;
-  getDeliveryState(updateRowId: number): Promise<{ chunkIndex: number; status: string }[]>;
-  recordDelivery(
-    updateRowId: number,
-    chunkIndex: number,
-    content: string,
-    status: "pending" | "sent" | "uncertain" | "failed",
-    telegramMessageId?: number,
-  ): Promise<void>;
+  transitionRequestReceiptIfPresent(params: {
+    requestId: string;
+    updateRowId: number;
+    leaseId: string;
+    status: "failed" | "cancelled";
+    failurePhase: FredRequestFailurePhase;
+    errorCode: string;
+  }): Promise<FredOptionalReceiptTransition>;
+  claimDelivery(params: {
+    updateRowId: number;
+    chunkIndex: number;
+    content: string;
+    leaseId: string;
+  }): Promise<"claimed" | "sent" | "uncertain" | "cancelled" | "lease_lost">;
+  finishDelivery(params: {
+    updateRowId: number;
+    chunkIndex: number;
+    leaseId: string;
+    status: "sent" | "uncertain" | "failed";
+    telegramMessageId?: number;
+    lastErrorCode?: string;
+  }): Promise<boolean>;
   setMode(integrationId: string, mode: "pro" | "web", enabled: boolean): Promise<Pick<WorkerIntegration, "proModeEnabled" | "webSearchEnabled">>;
 }
 
@@ -139,7 +166,6 @@ export interface WorkerLoopOptions {
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-const MAX_ATTEMPTS = 5;
 const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 const RICH_MESSAGE_MAX_LENGTH = 32_768;
@@ -195,16 +221,42 @@ export async function processUpdate(
   const handle: UpdateHandle = { rowId: update.id, leaseId: update.leaseId };
 
   if (options.shutdownSignal?.aborted) {
-    return requeueForShutdown(rpc, update);
+    return requeueForShutdown(config, update);
+  }
+  if (update.cancelRequested) {
+    return cancelRetryRequested(config, update, "ingress");
   }
 
-  const integration = await storage.loadIntegration(update.integrationId).catch(() => null);
+  let integration: WorkerIntegration | null;
+  try {
+    integration = await storage.loadIntegration(update.integrationId);
+  } catch (error) {
+    if (options.shutdownSignal?.aborted) {
+      return requeueForShutdown(config, update);
+    }
+    // A control-plane read failure must not consume the last processing
+    // attempt: an earlier attempt may already have committed the answer, and
+    // without the integration token this worker cannot safely deliver or
+    // conclude that delivery is impossible. The max+1 cleanup marker may be
+    // reclaimed repeatedly, but it never starts preprocessing/upstream work.
+    const retryOutcome = await retryUpdate(rpc, {
+      rowId: update.id,
+      leaseId: update.leaseId,
+      retryDelaySeconds: Math.min(60 * 2 ** update.attemptCount, 600),
+      lastErrorCode: "INTEGRATION_READ_FAILED",
+    });
+    if (retryOutcome === "cancel_requested") {
+      return cancelRetryRequested(config, update, "ingress");
+    }
+    return { updateId: update.updateId, status: "retry", error: errorMessage(error) };
+  }
   if (
     !integration
     || integration.status !== "active"
     || integration.pairedTelegramUserId === null
     || integration.pairedTelegramChatId === null
   ) {
+    await terminalizeExistingReceipt(config, update, "integration_inactive");
     await failUpdate(rpc, { rowId: update.id, leaseId: update.leaseId, lastErrorCode: "INTEGRATION_INACTIVE" });
     return { updateId: update.updateId, status: "failed", error: "integration missing or inactive" };
   }
@@ -222,6 +274,7 @@ export async function processUpdate(
     || chatId !== integration.pairedTelegramChatId
     || chatId !== update.telegramChatId
   ) {
+    await terminalizeExistingReceipt(config, update, "telegram_identity_mismatch");
     await completeUpdate(rpc, handle);
     return { updateId: update.updateId, status: "completed" };
   }
@@ -234,10 +287,24 @@ export async function processUpdate(
       botUserId: integration.botUserId,
     });
   } catch {
+    await terminalizeExistingReceipt(config, update, "token_decryption_failed");
     await failUpdate(rpc, { rowId: update.id, leaseId: update.leaseId, lastErrorCode: "DECRYPT_FAILED" });
     return { updateId: update.updateId, status: "failed", error: "token decryption failed" };
   }
   const botApi = createBotApiForToken(token);
+
+  // A lease-expired final attempt is reclaimed with the explicit max+1 marker.
+  // It may reconcile/deliver already committed work, but must never start a
+  // sixth preprocessing or upstream attempt.
+  if (update.attemptCount > update.maxAttempts) {
+    return handleProcessingError(
+      config,
+      botApi,
+      update,
+      chatId,
+      new Error("EXHAUSTED_ATTEMPT_CLEANUP"),
+    );
+  }
 
   try {
     if (message.document && config.attachmentPreprocessor) {
@@ -277,18 +344,55 @@ export async function processUpdate(
       handle,
       chatId,
       options.shutdownSignal,
-      false,
+      true,
       (lifecycle) => handleFredTurn(
         config, botApi, executeTurn, integration, update, handle, chatId, text, lifecycle,
         undefined, undefined, receipt,
       ),
     );
   } catch (error) {
+    if (error instanceof TelegramUpdateLeaseLostError) {
+      throw error;
+    }
     if (options.shutdownSignal?.aborted) {
-      return requeueForShutdown(rpc, update);
+      return requeueForShutdown(config, update);
     }
     return await handleProcessingError(config, botApi, update, chatId, error);
   }
+}
+
+async function terminalizeExistingReceipt(
+  config: WorkerConfig,
+  update: ClaimedUpdate,
+  errorCode: string,
+): Promise<void> {
+  await transitionRequestReceiptUnderLease(config, update, {
+    requestId: deriveEventId(`${update.integrationId}:${update.updateId}:request`),
+    status: "failed",
+    failurePhase: "ingress",
+    errorCode,
+  });
+}
+
+async function transitionRequestReceiptUnderLease(
+  config: WorkerConfig,
+  update: ClaimedUpdate,
+  transition: {
+    requestId: string;
+    status: "failed" | "cancelled";
+    failurePhase: FredRequestFailurePhase;
+    errorCode: string;
+  },
+): Promise<FredOptionalReceiptTransition> {
+  const outcome = await config.storage.transitionRequestReceiptIfPresent({
+    ...transition,
+    updateRowId: update.id,
+    leaseId: update.leaseId,
+  });
+  if (!outcome.leaseValid) {
+    throw new TelegramUpdateLeaseLostError("transition request receipt");
+  }
+  return outcome;
 }
 
 export async function runWorkerLoop(options: WorkerLoopOptions): Promise<void> {
@@ -470,7 +574,7 @@ async function createTurnLifecycle(
       const leaseOk = await heartbeatUpdate(config.rpc, handle);
       if (cleaned) return;
       if (!leaseOk) {
-        state.controlPlaneError = new Error("Telegram update lease lost");
+        state.controlPlaneError = new TelegramUpdateLeaseLostError("heartbeat update");
         controller.abort();
         return;
       }
@@ -550,7 +654,7 @@ async function lifecycleInterruptionResult(
     return { updateId: update.updateId, status: "cancelled" };
   }
   if (lifecycle.state.shutdownRequested) {
-    return requeueForShutdown(config.rpc, update);
+    return requeueForShutdown(config, update);
   }
   if (lifecycle.state.controlPlaneError) {
     throw lifecycle.state.controlPlaneError;
@@ -605,23 +709,91 @@ async function handleAttachmentTurn(
     update,
     originalQuestion,
   );
+  const resume = await config.storage.resumeRequestReceipt({
+    requestId: receipt.requestId,
+    clientId: integration.clientId,
+    telegramUpdateId: update.id,
+  });
+  if (
+    resume.contentDeleted
+    || resume.status === "completed"
+    || resume.status === "failed"
+    || resume.status === "cancelled"
+  ) {
+    return runWithTurnLifecycle(
+      config,
+      botApi,
+      handle,
+      chatId,
+      shutdownSignal,
+      true,
+      (lifecycle) => handleFredTurn(
+        config,
+        botApi,
+        executeTurn,
+        integration,
+        update,
+        handle,
+        chatId,
+        originalQuestion,
+        lifecycle,
+        undefined,
+        undefined,
+        receipt,
+        resume,
+      ),
+    );
+  }
   const isPhoto = photo !== undefined && photo.length > 0;
   const limit = isPhoto ? MAX_PHOTO_BYTES : MAX_DOCUMENT_BYTES;
   if (fileSize !== undefined && fileSize > limit) {
     const message = isPhoto
       ? "Ein Bild darf maximal 10 MB groß sein."
       : "Eine Datei darf maximal 20 MB groß sein.";
-    try {
-      await botApi.sendMessage({ chat_id: chatId, text: message });
-    } catch {
-      // Best-effort
-    }
-    await config.storage.transitionRequestReceipt({
+    await transitionRequestReceiptUnderLease(config, update, {
       requestId: receipt.requestId,
       status: "failed",
       failurePhase: "preprocessing",
       errorCode: "attachment_too_large",
     });
+    const settled = await config.storage.resumeRequestReceipt({
+      requestId: receipt.requestId,
+      clientId: integration.clientId,
+      telegramUpdateId: update.id,
+    });
+    if (settled.contentDeleted || settled.status === "completed" || settled.status === "cancelled") {
+      return runWithTurnLifecycle(
+        config,
+        botApi,
+        handle,
+        chatId,
+        shutdownSignal,
+        true,
+        (lifecycle) => handleFredTurn(
+          config,
+          botApi,
+          executeTurn,
+          integration,
+          update,
+          handle,
+          chatId,
+          originalQuestion,
+          lifecycle,
+          undefined,
+          undefined,
+          receipt,
+          settled,
+        ),
+      );
+    }
+    if (settled.status !== "failed") {
+      throw new Error("Attachment receipt did not settle after rejection");
+    }
+    try {
+      await botApi.sendMessage({ chat_id: chatId, text: message });
+    } catch {
+      // Best-effort
+    }
     await completeUpdate(rpc, handle);
     return { updateId: update.updateId, status: "completed" };
   }
@@ -634,16 +806,16 @@ async function handleAttachmentTurn(
     shutdownSignal,
     true,
     async (lifecycle) => {
-      const initialInterruption = await lifecycleInterruptionResult(config, update, handle, lifecycle);
-      if (initialInterruption) {
-        await config.storage.transitionRequestReceipt({
+      if (lifecycle.state.cancellationRequested) {
+        await transitionRequestReceiptUnderLease(config, update, {
           requestId: receipt.requestId,
           status: "cancelled",
           failurePhase: "preprocessing",
           errorCode: "request_cancelled",
         });
-        return initialInterruption;
       }
+      const initialInterruption = await lifecycleInterruptionResult(config, update, handle, lifecycle);
+      if (initialInterruption) return initialInterruption;
 
       let preprocessResult: AttachmentPreprocessResult | undefined;
       let preprocessError: unknown;
@@ -661,26 +833,53 @@ async function handleAttachmentTurn(
         preprocessError = error;
       }
 
-      const preprocessInterruption = await lifecycleInterruptionResult(config, update, handle, lifecycle);
-      if (preprocessInterruption) {
-        await config.storage.transitionRequestReceipt({
+      if (lifecycle.state.cancellationRequested) {
+        await transitionRequestReceiptUnderLease(config, update, {
           requestId: receipt.requestId,
           status: "cancelled",
           failurePhase: "preprocessing",
           errorCode: "request_cancelled",
         });
-        return preprocessInterruption;
       }
+      const preprocessInterruption = await lifecycleInterruptionResult(config, update, handle, lifecycle);
+      if (preprocessInterruption) return preprocessInterruption;
       if (preprocessError) {
-        await config.storage.transitionRequestReceipt({
-          requestId: receipt.requestId,
-          status: "failed",
-          failurePhase: "preprocessing",
-          errorCode: preprocessError instanceof UserVisibleError
-            ? "attachment_rejected"
-            : "preprocessing_failed",
-        });
         if (preprocessError instanceof UserVisibleError) {
+          await transitionRequestReceiptUnderLease(config, update, {
+            requestId: receipt.requestId,
+            status: "failed",
+            failurePhase: "preprocessing",
+            errorCode: "attachment_rejected",
+          });
+          const settled = await config.storage.resumeRequestReceipt({
+            requestId: receipt.requestId,
+            clientId: integration.clientId,
+            telegramUpdateId: update.id,
+          });
+          if (
+            settled.contentDeleted
+            || settled.status === "completed"
+            || settled.status === "cancelled"
+          ) {
+            return handleFredTurn(
+              config,
+              botApi,
+              executeTurn,
+              integration,
+              update,
+              handle,
+              chatId,
+              originalQuestion,
+              lifecycle,
+              undefined,
+              undefined,
+              receipt,
+              settled,
+            );
+          }
+          if (settled.status !== "failed") {
+            throw new Error("Attachment receipt did not settle after rejection");
+          }
           try {
             await botApi.sendMessage({ chat_id: chatId, text: preprocessError.message });
           } catch {
@@ -689,9 +888,77 @@ async function handleAttachmentTurn(
           await completeUpdate(rpc, handle);
           return { updateId: update.updateId, status: "completed" };
         }
+        if (update.attemptCount >= update.maxAttempts) {
+          await transitionRequestReceiptUnderLease(config, update, {
+            requestId: receipt.requestId,
+            status: "failed",
+            failurePhase: "preprocessing",
+            errorCode: "preprocessing_failed",
+          });
+          const settled = await config.storage.resumeRequestReceipt({
+            requestId: receipt.requestId,
+            clientId: integration.clientId,
+            telegramUpdateId: update.id,
+          });
+          if (
+            settled.contentDeleted
+            || settled.status === "completed"
+            || settled.status === "cancelled"
+          ) {
+            return handleFredTurn(
+              config,
+              botApi,
+              executeTurn,
+              integration,
+              update,
+              handle,
+              chatId,
+              originalQuestion,
+              lifecycle,
+              undefined,
+              undefined,
+              receipt,
+              settled,
+            );
+          }
+        }
         throw preprocessError;
       }
       if (!preprocessResult) {
+        if (update.attemptCount >= update.maxAttempts) {
+          await transitionRequestReceiptUnderLease(config, update, {
+            requestId: receipt.requestId,
+            status: "failed",
+            failurePhase: "preprocessing",
+            errorCode: "preprocessing_failed",
+          });
+          const settled = await config.storage.resumeRequestReceipt({
+            requestId: receipt.requestId,
+            clientId: integration.clientId,
+            telegramUpdateId: update.id,
+          });
+          if (
+            settled.contentDeleted
+            || settled.status === "completed"
+            || settled.status === "cancelled"
+          ) {
+            return handleFredTurn(
+              config,
+              botApi,
+              executeTurn,
+              integration,
+              update,
+              handle,
+              chatId,
+              originalQuestion,
+              lifecycle,
+              undefined,
+              undefined,
+              receipt,
+              settled,
+            );
+          }
+        }
         throw new Error("Attachment preprocessing returned no result");
       }
 
@@ -726,9 +993,68 @@ async function handleFredTurn(
   upstreamQuery?: string,
   attachments?: FredTurnAttachmentMeta[],
   receipt?: FredRequestReceipt,
+  resumeSnapshot?: FredRequestResume,
 ): Promise<ProcessedUpdateResult> {
   const { rpc, storage } = config;
-  const conversationId = await storage.getActiveConversation(integration.id, chatId);
+  const resume = receipt
+    ? (resumeSnapshot ?? await storage.resumeRequestReceipt({
+        requestId: receipt.requestId,
+        clientId: integration.clientId,
+        telegramUpdateId: update.id,
+      }))
+    : undefined;
+
+  if (
+    receipt
+    && lifecycle.state.cancellationRequested
+    && resume
+    && !resume.contentDeleted
+    && (resume.status === "received" || resume.status === "user_persisted" || resume.status === "generating")
+  ) {
+    await transitionRequestReceiptUnderLease(config, update, {
+      requestId: receipt.requestId,
+      status: "cancelled",
+      failurePhase: "connecting",
+      errorCode: "request_cancelled",
+    });
+  }
+  const initialInterruption = await lifecycleInterruptionResult(config, update, handle, lifecycle);
+  if (initialInterruption) return initialInterruption;
+
+  if (resume?.contentDeleted || resume?.status === "cancelled") {
+    await cancelUpdate(rpc, handle);
+    return { updateId: update.updateId, status: "cancelled" };
+  }
+  if (resume?.status === "failed") {
+    await failUpdate(rpc, {
+      rowId: update.id,
+      leaseId: update.leaseId,
+      lastErrorCode: "REQUEST_TERMINAL",
+    });
+    return { updateId: update.updateId, status: "failed", error: "request already failed" };
+  }
+  if (resume?.status === "completed") {
+    if (!resume.answer) {
+      throw new Error("Completed Fred request has no persisted answer");
+    }
+    const deliveryInterruption = await deliverAnswer(
+      config,
+      botApi,
+      update,
+      handle,
+      lifecycle,
+      chatId,
+      resume.answer,
+    );
+    if (deliveryInterruption) return deliveryInterruption;
+    await completeUpdate(rpc, handle);
+    return { updateId: update.updateId, status: "completed" };
+  }
+
+  const conversationId = receipt
+    ? resume?.conversationId
+    : (await storage.getActiveConversation(integration.id, chatId)) ?? undefined;
+  let failurePhase: FredRequestFailurePhase = "connecting";
   const request: FredTurnRequest = {
     clientId: integration.clientId,
     ...(conversationId ? { conversationId } : {}),
@@ -739,17 +1065,20 @@ async function handleFredTurn(
     telegramIntegrationId: integration.id,
     requestId: receipt?.requestId,
     agentKey: "fred",
-    webSearchEnabled: integration.webSearchEnabled,
-    proModeEnabled: integration.proModeEnabled,
+    webSearchEnabled: resume?.webSearchEnabled ?? integration.webSearchEnabled,
+    proModeEnabled: resume?.proModeEnabled ?? integration.proModeEnabled,
     userEventId: receipt?.userEventId ?? deriveEventId(`${integration.id}:${update.updateId}:user`),
     assistantEventId: receipt?.assistantEventId ?? deriveEventId(`${integration.id}:${update.updateId}:assistant`),
     ...(receipt ? {
-      onRequestTransition: (transition: import("../fred/turn-types").FredRequestLifecycleTransition) =>
-        storage.transitionRequestReceipt({
+      onRequestTransition: async (transition: import("../fred/turn-types").FredRequestLifecycleTransition) => {
+        await storage.transitionRequestReceipt({
           requestId: receipt.requestId,
           ...transition,
-        }),
+        });
+        if (transition.status === "generating") failurePhase = "streaming";
+      },
     } : {}),
+    deferUnsuccessfulTerminalTransition: receipt !== undefined,
     onConversationEvent: async (conversation) => {
       await storage.markTelegramOrigin(integration.clientId, conversation.id, integration.id);
       await storage.bindConversation(integration.id, chatId, conversation.id);
@@ -759,6 +1088,7 @@ async function handleFredTurn(
 
   let finalResult: FredTurnResult | undefined;
   let turnError: unknown;
+  let streamedError: Error | undefined;
   try {
     const gen = executeTurn(request, config.turnUpstream, config.turnPersistence, config.turnConfig);
     while (true) {
@@ -768,22 +1098,86 @@ async function handleFredTurn(
         break;
       }
       const event = value as FredTurnEvent;
-      if (event.type === "error") throw new Error(event.error);
+      if (event.type === "error") streamedError = new Error(event.error);
     }
+    if (streamedError) throw streamedError;
   } catch (error) {
     turnError = error;
   }
 
+  if (lifecycle.state.cancellationRequested && receipt) {
+    await transitionRequestReceiptUnderLease(config, update, {
+      requestId: receipt.requestId,
+      status: "cancelled",
+      failurePhase,
+      errorCode: "request_cancelled",
+    });
+  }
   const interruption = await lifecycleInterruptionResult(config, update, handle, lifecycle);
   if (interruption) return interruption;
-  if (turnError) throw turnError;
+  if (turnError) {
+    if (receipt && update.attemptCount >= update.maxAttempts) {
+      await transitionRequestReceiptUnderLease(config, update, {
+        requestId: receipt.requestId,
+        status: "failed",
+        failurePhase,
+        errorCode: "turn_failed",
+      });
+
+      const terminalResume = await storage.resumeRequestReceipt({
+        requestId: receipt.requestId,
+        clientId: integration.clientId,
+        telegramUpdateId: update.id,
+      });
+
+      if (terminalResume.contentDeleted || terminalResume.status === "cancelled") {
+        await cancelUpdate(rpc, handle);
+        return { updateId: update.updateId, status: "cancelled" };
+      }
+      if (terminalResume.status === "completed") {
+        if (!terminalResume.answer) {
+          throw new Error("Completed Fred request has no persisted answer");
+        }
+        const deliveryInterruption = await deliverAnswer(
+          config,
+          botApi,
+          update,
+          handle,
+          lifecycle,
+          chatId,
+          terminalResume.answer,
+        );
+        if (deliveryInterruption) return deliveryInterruption;
+        await completeUpdate(rpc, handle);
+        return { updateId: update.updateId, status: "completed" };
+      }
+    }
+    throw turnError;
+  }
   if (!finalResult) throw new Error("Fred turn returned no final result");
   if (finalResult.stopped) {
+    if (receipt) {
+      await transitionRequestReceiptUnderLease(config, update, {
+        requestId: receipt.requestId,
+        status: "cancelled",
+        failurePhase,
+        errorCode: "request_cancelled",
+      });
+    }
     await cancelUpdate(rpc, handle);
     return { updateId: update.updateId, status: "cancelled" };
   }
 
-  await deliverAnswer(config, botApi, chatId, update.id, finalResult.answer);
+  const deliveryInterruption = await deliverAnswer(
+    config,
+    botApi,
+    update,
+    handle,
+    lifecycle,
+    chatId,
+    finalResult.answer,
+  );
+  if (deliveryInterruption) return deliveryInterruption;
   await completeUpdate(rpc, handle);
   return { updateId: update.updateId, status: "completed" };
 }
@@ -794,36 +1188,69 @@ async function createTelegramRequestReceipt(
   update: ClaimedUpdate,
   content: string,
 ): Promise<FredRequestReceipt> {
-  return config.storage.createRequestReceipt({
+  const conversationId = await config.storage.getActiveConversation(
+    integration.id,
+    update.telegramChatId,
+  );
+  const receipt = await config.storage.createRequestReceipt({
     requestId: deriveEventId(`${integration.id}:${update.updateId}:request`),
     clientId: integration.clientId,
     telegramUpdateId: update.id,
+    updateRowId: update.id,
+    leaseId: update.leaseId,
     content,
     userEventId: deriveEventId(`${integration.id}:${update.updateId}:user`),
     assistantEventId: deriveEventId(`${integration.id}:${update.updateId}:assistant`),
+    ...(conversationId ? { conversationId } : {}),
+    webSearchEnabled: integration.webSearchEnabled,
+    proModeEnabled: integration.proModeEnabled,
   });
+  if (receipt === false) {
+    throw new TelegramUpdateLeaseLostError("create request receipt");
+  }
+  return receipt;
 }
 
 async function requeueForShutdown(
-  rpc: JobQueueRpc,
+  config: WorkerConfig,
   update: ClaimedUpdate,
 ): Promise<ProcessedUpdateResult> {
-  await retryUpdate(rpc, {
+  const retryOutcome = await retryUpdate(config.rpc, {
     rowId: update.id,
     leaseId: update.leaseId,
     retryDelaySeconds: 0,
     lastErrorCode: "WORKER_SHUTDOWN",
   });
+  if (retryOutcome === "cancel_requested") {
+    return cancelRetryRequested(config, update, "connecting");
+  }
   return { updateId: update.updateId, status: "retry", error: "worker shutdown" };
+}
+
+async function cancelRetryRequested(
+  config: WorkerConfig,
+  update: ClaimedUpdate,
+  failurePhase: FredRequestFailurePhase,
+): Promise<ProcessedUpdateResult> {
+  await transitionRequestReceiptUnderLease(config, update, {
+    requestId: deriveEventId(`${update.integrationId}:${update.updateId}:request`),
+    status: "cancelled",
+    failurePhase,
+    errorCode: "request_cancelled",
+  });
+  await cancelUpdate(config.rpc, { rowId: update.id, leaseId: update.leaseId });
+  return { updateId: update.updateId, status: "cancelled" };
 }
 
 async function deliverAnswer(
   config: WorkerConfig,
   botApi: BotApi,
+  update: ClaimedUpdate,
+  handle: UpdateHandle,
+  lifecycle: TurnLifecycle,
   chatId: number,
-  updateRowId: number,
   answer: string,
-): Promise<void> {
+): Promise<ProcessedUpdateResult | undefined> {
   const { storage } = config;
   const chunks = chunkTelegramMessage(normalizeFredMarkdown(answer));
   const richMarkdown = hasGfmTable(answer)
@@ -831,38 +1258,139 @@ async function deliverAnswer(
     && chunks.length === 1
     ? answer
     : undefined;
-  const existing = await storage.getDeliveryState(updateRowId);
-  if (existing.some((entry) => entry.status === "uncertain")) {
-    throw new UncertainDeliveryError();
-  }
-  const sentChunkIndexes = new Set(
-    existing.filter((entry) => entry.status === "sent").map((entry) => entry.chunkIndex),
-  );
 
   for (let i = 0; i < chunks.length; i++) {
-    if (sentChunkIndexes.has(i)) continue;
     const content = chunks[i];
+    await refreshDeliveryLifecycle(config, handle, lifecycle);
+    const preSendInterruption = await lifecycleInterruptionResult(
+      config,
+      update,
+      handle,
+      lifecycle,
+    );
+    if (preSendInterruption) return preSendInterruption;
 
-    await storage.recordDelivery(updateRowId, i, content, "pending");
-    const ledger: DeliveryLedger = { chunks: [], uncertainChunks: [] };
-    await deliverFinalAnswer(botApi, chatId, content, {
-      ledger,
-      maxRetries: config.maxDeliveryRetries,
-      richMarkdown: i === 0 ? richMarkdown : undefined,
+    const claim = await storage.claimDelivery({
+      updateRowId: update.id,
+      chunkIndex: i,
+      content,
+      leaseId: update.leaseId,
     });
+    if (claim === "lease_lost") {
+      throw new TelegramUpdateLeaseLostError("claim delivery chunk");
+    }
+    if (claim === "cancelled") {
+      lifecycle.state.cancellationRequested = true;
+      lifecycle.controller.abort();
+      return { updateId: update.updateId, status: "cancelled" };
+    }
+    if (claim === "uncertain") {
+      throw new UncertainDeliveryError();
+    }
+    if (claim === "sent") continue;
+
+    const ledger: DeliveryLedger = { chunks: [], uncertainChunks: [] };
+    try {
+      await deliverFinalAnswer(botApi, chatId, content, {
+        ledger,
+        maxRetries: config.maxDeliveryRetries,
+        richMarkdown: i === 0 ? richMarkdown : undefined,
+        signal: lifecycle.controller.signal,
+      });
+    } catch (error) {
+      const finished = await storage.finishDelivery({
+        updateRowId: update.id,
+        chunkIndex: i,
+        leaseId: update.leaseId,
+        status: "uncertain",
+        lastErrorCode: "DELIVERY_INTERRUPTED",
+      });
+      if (!finished) throw new TelegramUpdateLeaseLostError("finish delivery chunk");
+      const interruption = await lifecycleInterruptionResult(
+        config,
+        update,
+        handle,
+        lifecycle,
+      );
+      if (interruption) return interruption;
+      throw error;
+    }
     const entry = ledger.chunks[0];
 
-    if (entry?.status === "sent") {
-      await storage.recordDelivery(updateRowId, i, content, "sent", entry.messageId);
+    if (entry?.status === "sent" && entry.messageId !== undefined) {
+      const finished = await storage.finishDelivery({
+        updateRowId: update.id,
+        chunkIndex: i,
+        leaseId: update.leaseId,
+        status: "sent",
+        telegramMessageId: entry.messageId,
+      });
+      if (!finished) throw new TelegramUpdateLeaseLostError("finish delivery chunk");
     } else if (entry?.status === "uncertain") {
       // Ambiguous outcome (e.g. network error after the request was sent):
       // record it but never blindly resend on a later retry.
-      await storage.recordDelivery(updateRowId, i, content, "uncertain");
-      throw new UncertainDeliveryError();
+      const finished = await storage.finishDelivery({
+        updateRowId: update.id,
+        chunkIndex: i,
+        leaseId: update.leaseId,
+        status: "uncertain",
+        lastErrorCode: "DELIVERY_UNCERTAIN",
+      });
+      if (!finished) throw new TelegramUpdateLeaseLostError("finish delivery chunk");
     } else {
-      await storage.recordDelivery(updateRowId, i, content, "failed");
+      const finished = await storage.finishDelivery({
+        updateRowId: update.id,
+        chunkIndex: i,
+        leaseId: update.leaseId,
+        status: "failed",
+        lastErrorCode: sanitizeErrorCode(entry?.error ?? "DELIVERY_FAILED"),
+      });
+      if (!finished) throw new TelegramUpdateLeaseLostError("finish delivery chunk");
+    }
+
+    const postSendInterruption = await lifecycleInterruptionResult(
+      config,
+      update,
+      handle,
+      lifecycle,
+    );
+    if (postSendInterruption) return postSendInterruption;
+    if (entry?.status === "uncertain") throw new UncertainDeliveryError();
+    if (entry?.status !== "sent") {
       throw new Error(`Telegram-Zustellung fehlgeschlagen: ${entry?.error ?? "unbekannter Fehler"}`);
     }
+  }
+
+  return undefined;
+}
+
+async function refreshDeliveryLifecycle(
+  config: WorkerConfig,
+  handle: UpdateHandle,
+  lifecycle: TurnLifecycle,
+): Promise<void> {
+  if (
+    lifecycle.state.cancellationRequested
+    || lifecycle.state.shutdownRequested
+    || lifecycle.state.controlPlaneError
+  ) {
+    return;
+  }
+
+  try {
+    const leaseOk = await heartbeatUpdate(config.rpc, handle);
+    if (!leaseOk) {
+      lifecycle.state.controlPlaneError = new TelegramUpdateLeaseLostError("delivery heartbeat");
+      lifecycle.controller.abort();
+      return;
+    }
+    if (await checkUpdateCancelled(config.rpc, handle)) {
+      lifecycle.state.cancellationRequested = true;
+      lifecycle.controller.abort();
+    }
+  } catch (error) {
+    lifecycle.state.controlPlaneError = error;
+    lifecycle.controller.abort();
   }
 }
 
@@ -888,14 +1416,73 @@ async function handleProcessingError(
     return { updateId: update.updateId, status: "failed", error: message };
   }
 
-  if (update.attemptCount < MAX_ATTEMPTS) {
-    await retryUpdate(rpc, {
+  if (update.attemptCount < update.maxAttempts) {
+    const retryOutcome = await retryUpdate(rpc, {
       rowId: update.id,
       leaseId: update.leaseId,
       retryDelaySeconds: Math.min(60 * 2 ** update.attemptCount, 600),
       lastErrorCode: errorCode,
     });
+    if (retryOutcome === "cancel_requested") {
+      return cancelRetryRequested(config, update, "connecting");
+    }
     return { updateId: update.updateId, status: "failed", error: message };
+  }
+
+  const terminalOutcome = await transitionRequestReceiptUnderLease(config, update, {
+    requestId: deriveEventId(`${update.integrationId}:${update.updateId}:request`),
+    status: "failed",
+    failurePhase: "connecting",
+    errorCode,
+  });
+  if (terminalOutcome.receiptPresent) {
+    if (terminalOutcome.contentDeleted || terminalOutcome.status === "cancelled") {
+      await cancelUpdate(rpc, { rowId: update.id, leaseId: update.leaseId });
+      return { updateId: update.updateId, status: "cancelled" };
+    }
+    if (terminalOutcome.status === "completed") {
+      if (!terminalOutcome.answer) {
+        throw new Error("Completed Fred request has no persisted answer");
+      }
+      const persistedAnswer = terminalOutcome.answer;
+      try {
+        return await runWithTurnLifecycle(
+          config,
+          botApi,
+          { rowId: update.id, leaseId: update.leaseId },
+          chatId,
+          undefined,
+          true,
+          async (lifecycle) => {
+            const interruption = await deliverAnswer(
+              config,
+              botApi,
+              update,
+              { rowId: update.id, leaseId: update.leaseId },
+              lifecycle,
+              chatId,
+              persistedAnswer,
+            );
+            if (interruption) return interruption;
+            await completeUpdate(rpc, { rowId: update.id, leaseId: update.leaseId });
+            return { updateId: update.updateId, status: "completed" };
+          },
+        );
+      } catch (deliveryError) {
+        if (deliveryError instanceof TelegramUpdateLeaseLostError) throw deliveryError;
+        const uncertain = deliveryError instanceof UncertainDeliveryError;
+        await failUpdate(rpc, {
+          rowId: update.id,
+          leaseId: update.leaseId,
+          lastErrorCode: uncertain ? "DELIVERY_UNCERTAIN" : "DELIVERY_FAILED",
+        });
+        return {
+          updateId: update.updateId,
+          status: "failed",
+          error: errorMessage(deliveryError),
+        };
+      }
+    }
   }
 
   await failUpdate(rpc, { rowId: update.id, leaseId: update.leaseId, lastErrorCode: errorCode });

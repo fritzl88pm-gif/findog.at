@@ -2,16 +2,29 @@ import { NextResponse } from "next/server";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import {
+  parseBoundedMultipart,
+  type BoundedMultipartFile,
+} from "@/lib/attachments/bounded-multipart";
+import {
   buildAttachmentContext,
   type AttachmentInput,
 } from "@/lib/attachments/context";
+import {
+  acquireHeavyAttachmentRequest,
+  type HeavyAttachmentRequestLease,
+} from "@/lib/attachments/heavy-request-admission";
+import {
+  assertFredNativeFileTotalSize,
+  fredAttachmentAggregateByteLimit,
+  fredMultipartRequestByteLimit,
+} from "@/lib/attachments/fred-upload-limits";
 import {
   validateAttachmentBytes,
   attachmentMetadata as buildAttachmentMeta,
   attachmentKindFromMime,
   MAX_FILE_BYTES,
-  MAX_IMAGE_BYTES,
   MAX_FILE_UPLOADS,
+  MAX_IMAGE_BYTES,
   MAX_IMAGE_UPLOADS,
 } from "@/lib/attachments/validation";
 import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-fallback";
@@ -107,12 +120,9 @@ export const runtime = "nodejs";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_REQUEST_BYTES = 64 * 1_024;
 const MAX_QUERY_LENGTH = 50_000;
-const MAX_MULTIPART_REQUEST_BYTES = MAX_REQUEST_BYTES
-  + MAX_IMAGE_UPLOADS * MAX_IMAGE_BYTES
-  + MAX_FILE_UPLOADS * MAX_FILE_BYTES
-  + 1_024 * 1_024; // Multipart boundaries and per-part headers.
 const MAX_REQUESTS_PER_WINDOW = 30;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1_000;
+const MULTIPART_INGRESS_TIMEOUT_MS = 120_000;
 const TOTAL_TIMEOUT_MS = 720_000;
 const PREPROCESSING_TIMEOUT_MS = 300_000;
 const FRED_RESERVE_MS = 300_000;
@@ -223,21 +233,13 @@ function validatedRequestFields(value: unknown): Omit<ParsedFredChatRequest, "at
 }
 
 
-function uploadedFile(value: FormDataEntryValue): value is File {
-  return typeof File !== "undefined" && value instanceof File;
-}
-
-
-
-
-async function validatedAttachment(file: File, kind: "image" | "file"): Promise<FindogAttachment> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
+function validatedAttachment(file: BoundedMultipartFile, kind: "image" | "file"): FindogAttachment {
   const validated = validateAttachmentBytes({
     kind,
     name: file.name,
-    mimeType: file.type,
-    sizeBytes: file.size,
-    bytes,
+    mimeType: file.mimeType,
+    sizeBytes: file.sizeBytes,
+    bytes: file.bytes,
   });
   return {
     kind: validated.kind,
@@ -298,44 +300,52 @@ async function readJsonRequestBody(request: Request): Promise<ParsedFredChatRequ
   return { ...validatedRequestFields(value), attachments: [] };
 }
 
-async function readMultipartRequestBody(request: Request): Promise<ParsedFredChatRequest> {
+async function readMultipartRequestBody(
+  request: Request,
+  enforceNativeAggregateLimit: boolean,
+  signal: AbortSignal,
+): Promise<ParsedFredChatRequest> {
+  const maxMultipartBytes = fredMultipartRequestByteLimit(enforceNativeAggregateLimit);
   const declaredLength = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_MULTIPART_REQUEST_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxMultipartBytes) {
     throw new UserVisibleError("Die Fred-Anfrage ist zu groß.", 413);
   }
-  if (!request.body) throw new UserVisibleError("Die Fred-Anfrage ist leer.", 400);
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > MAX_MULTIPART_REQUEST_BYTES) {
-      await reader.cancel();
-      throw new UserVisibleError("Die Fred-Anfrage ist zu groß.", 413);
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
   const contentType = request.headers.get("content-type") ?? "";
-  let formData: FormData;
-  try {
-    formData = await new Request("http://localhost", {
-      method: "POST",
-      headers: { "Content-Type": contentType },
-      body: bytes,
-    }).formData();
-  } catch {
-    throw new UserVisibleError("Die Fred-Anfrage enthält keine gültigen Formulardaten.", 400);
-  }
-  const payload = formData.get("payload");
-  if (typeof payload !== "string") {
+  const multipart = await parseBoundedMultipart({
+    request,
+    signal,
+    contentType,
+    maxBytes: maxMultipartBytes,
+    maxFileAggregateBytes: fredAttachmentAggregateByteLimit(enforceNativeAggregateLimit),
+    fileRules: {
+      image: {
+        maxCount: MAX_IMAGE_UPLOADS,
+        maxBytes: MAX_IMAGE_BYTES,
+        tooManyMessage: "Bitte maximal fünf Bilder pro Anfrage hochladen.",
+        tooLargeMessage: "Ein Bild darf maximal 10 MB groß sein.",
+      },
+      attachment: {
+        maxCount: MAX_FILE_UPLOADS,
+        maxBytes: MAX_FILE_BYTES,
+        tooManyMessage: "Bitte maximal fünf Dateien pro Anfrage hochladen.",
+        tooLargeMessage: "Eine Datei darf maximal 20 MB groß sein.",
+      },
+    },
+    fieldRules: {
+      payload: {
+        maxCount: 1,
+        maxBytes: MAX_REQUEST_BYTES,
+        invalidMessage: "Die Fred-Anfrage enthält kein gültiges Payload.",
+      },
+    },
+    emptyMessage: "Die Fred-Anfrage ist leer.",
+    invalidMessage: "Die Fred-Anfrage enthält keine gültigen Formulardaten.",
+    tooLargeMessage: "Die Fred-Anfrage ist zu groß.",
+    fileAggregateTooLargeMessage:
+      "Die Fred-Anhänge sind zusammen zu groß. Bitte reduziere die Gesamtgröße.",
+  });
+  const payload = multipart.fields.find((field) => field.name === "payload")?.value;
+  if (payload === undefined) {
     throw new UserVisibleError("Die Fred-Anfrage enthält kein gültiges Payload.", 400);
   }
   let value: unknown;
@@ -344,28 +354,69 @@ async function readMultipartRequestBody(request: Request): Promise<ParsedFredCha
   } catch {
     throw new UserVisibleError("Die Fred-Anfrage enthält kein gültiges JSON-Payload.", 400);
   }
-  const images = formData.getAll("image");
-  const files = formData.getAll("attachment");
-  if (images.some((entry) => !uploadedFile(entry)) || files.some((entry) => !uploadedFile(entry))) {
-    throw new UserVisibleError("Ein Fred-Anhang ist ungültig.", 400);
+  const images = multipart.files.filter((file) => file.fieldName === "image");
+  const files = multipart.files.filter((file) => file.fieldName === "attachment");
+  if (enforceNativeAggregateLimit) {
+    assertFredNativeFileTotalSize(
+      multipart.files.map((file) => ({ size: file.sizeBytes })),
+    );
   }
-  if (images.length > MAX_IMAGE_UPLOADS) {
-    throw new UserVisibleError("Bitte maximal fünf Bilder pro Anfrage hochladen.", 400);
+  const attachments: FindogAttachment[] = [];
+  for (const entry of images) {
+    attachments.push(validatedAttachment(entry, "image"));
   }
-  if (files.length > MAX_FILE_UPLOADS) {
-    throw new UserVisibleError("Bitte maximal fünf Dateien pro Anfrage hochladen.", 400);
+  for (const entry of files) {
+    attachments.push(validatedAttachment(entry, "file"));
   }
-  const attachments = await Promise.all([
-    ...images.map((entry) => validatedAttachment(entry as File, "image")),
-    ...files.map((entry) => validatedAttachment(entry as File, "file")),
-  ]);
   return { ...validatedRequestFields(value), attachments };
 }
 
-async function readRequestBody(request: Request): Promise<ParsedFredChatRequest> {
+function requireActiveRequest(request: Request): void {
+  if (request.signal.aborted) {
+    throw new UserVisibleError("Die Fred-Anfrage wurde abgebrochen.", 400);
+  }
+}
+
+function ingressAbortError(signal: AbortSignal): UserVisibleError {
+  return signal.reason instanceof UserVisibleError
+    ? signal.reason
+    : new UserVisibleError("Die Fred-Anfrage hat beim Einlesen zu lange gedauert.", 504);
+}
+
+async function awaitWithIngressSignal<T>(
+  operation: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  if (!signal) return operation;
+  if (signal.aborted) throw ingressAbortError(signal);
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(ingressAbortError(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    void operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function readRequestBody(
+  request: Request,
+  enforceNativeAggregateLimit = false,
+  multipartSignal?: AbortSignal,
+): Promise<ParsedFredChatRequest> {
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
   if (contentType.startsWith("multipart/form-data")) {
-    return readMultipartRequestBody(request);
+    if (!multipartSignal) {
+      throw new UserVisibleError("Die Fred-Anfrage konnte nicht sicher eingelesen werden.", 503);
+    }
+    return readMultipartRequestBody(request, enforceNativeAggregateLimit, multipartSignal);
   }
   if (contentType.startsWith("application/json")) {
     return readJsonRequestBody(request);
@@ -801,20 +852,70 @@ export async function POST(request: Request) {
   let cleanupResources: (() => void) | undefined;
   let outerReceipt: FredRequestReceipt | undefined;
   let outerSupabase: NonNullable<ReturnType<typeof getSupabaseServerClient>> | undefined;
+  let admissionLease: HeavyAttachmentRequestLease | undefined;
+  let ingressDeadline: ReturnType<typeof createDeadline> | undefined;
+  let pendingReceipt: Promise<FredRequestReceipt> | undefined;
+  let retainedAttachments: FindogAttachment[] | undefined;
+  const releaseAdmission = () => {
+    admissionLease?.release();
+    admissionLease = undefined;
+  };
   try {
     const supabase = getSupabaseServerClient();
     if (!supabase) throw new UserVisibleError("Fred ist derzeit nicht verfügbar.", 503);
     outerSupabase = supabase;
     const user = await authenticateSupabaseRequest(request, supabase);
     requireSameSiteRequest(request);
+    requireActiveRequest(request);
+    const isMultipartRequest = request.headers.get("content-type")?.toLowerCase()
+      .startsWith("multipart/form-data") === true;
+    let ingressAttachmentMode = DEFAULT_FRED_ATTACHMENT_MODE;
+    let ingressScanningSettings: Awaited<ReturnType<typeof getScanningSettings>> | undefined;
+    if (isMultipartRequest) {
+      // Settings are small control-plane data. Resolve them before reserving
+      // the single large-body slot so a stalled lookup cannot block uploads.
+      ingressScanningSettings = await getScanningSettings(supabase);
+      ingressAttachmentMode = ingressScanningSettings.fredAttachmentMode;
+      requireActiveRequest(request);
+      ingressDeadline = createDeadline(MULTIPART_INGRESS_TIMEOUT_MS, {
+        parentSignal: request.signal,
+        timeoutMessage: "Der Upload hat zu lange gedauert. Bitte erneut versuchen.",
+      });
+      ingressDeadline.throwIfExpired();
+      try {
+        admissionLease = acquireHeavyAttachmentRequest();
+      } catch (error) {
+        void request.body?.cancel(error).catch(() => undefined);
+        throw error;
+      }
+    }
+    // Fail-fast overload must not burn a user's rate-limit allowance.
     enforceRateLimit(user.id);
-    const body = await readRequestBody(request);
-    const researchDisplayMode = await loadResearchDisplayMode(supabase, user.id);
-    const storedConversation = await loadOwnedConversation({
-      supabase,
-      userId: user.id,
-      conversationId: body.conversationId,
-    });
+    const body = await readRequestBody(
+      request,
+      ingressAttachmentMode === "weknora_native",
+      ingressDeadline?.signal,
+    );
+    retainedAttachments = body.attachments;
+    ingressDeadline?.throwIfExpired();
+    if (isMultipartRequest && body.attachments.length === 0) {
+      releaseAdmission();
+    }
+    requireActiveRequest(request);
+    const researchDisplayMode = await awaitWithIngressSignal(
+      loadResearchDisplayMode(supabase, user.id),
+      ingressDeadline?.signal,
+    );
+    requireActiveRequest(request);
+    const storedConversation = await awaitWithIngressSignal(
+      loadOwnedConversation({
+        supabase,
+        userId: user.id,
+        conversationId: body.conversationId,
+      }),
+      ingressDeadline?.signal,
+    );
+    requireActiveRequest(request);
     const requestedAgentKey: FredAgentKey = body.quickFredEnabled === true
       ? "quickfred"
       : "fred";
@@ -836,19 +937,30 @@ export async function POST(request: Request) {
         400,
       );
     }
-    const requestReceipt = await createFredRequestReceipt({
+    pendingReceipt = createFredRequestReceipt({
       supabase,
       clientId: user.id,
       origin: "web",
       agentKey,
       content: body.query,
+      conversationId: storedConversation?.id,
+      webSearchEnabled: body.webSearchEnabled,
+      proModeEnabled: body.proModeEnabled,
     });
+    const requestReceipt = await awaitWithIngressSignal(
+      pendingReceipt,
+      ingressDeadline?.signal,
+    );
     outerReceipt = requestReceipt;
+    pendingReceipt = undefined;
+    requireActiveRequest(request);
+    ingressDeadline?.dispose();
+    ingressDeadline = undefined;
     const fredAttachmentMode = body.attachments.length > 0
-      ? (await getScanningSettings(supabase)).fredAttachmentMode
+      ? ingressAttachmentMode
       : DEFAULT_FRED_ATTACHMENT_MODE;
     if (fredAttachmentMode === "weknora_native") {
-      assertFredNativeAttachmentTotalSize(body.attachments);
+      assertFredNativeAttachmentTotalSize([...body.attachments]);
     }
     if (body.attachments.length === 0) {
       return streamTextOnlyTurn({
@@ -861,6 +973,10 @@ export async function POST(request: Request) {
         receipt: requestReceipt,
       });
     }
+    if (!ingressScanningSettings) {
+      throw new UserVisibleError("Die Fred-Anhänge konnten nicht sicher konfiguriert werden.", 503);
+    }
+    const attachmentSettings = ingressScanningSettings;
     let config: ReturnType<typeof readFredEmbedServerConfig>;
     if (agentKey === "quickfred") {
       try {
@@ -928,6 +1044,10 @@ export async function POST(request: Request) {
       cleanup();
       void upstreamCleanup;
     };
+    if (request.signal.aborted) {
+      onRequestAbort();
+      throw new UserVisibleError("Die Fred-Anfrage wurde abgebrochen.", 400);
+    }
     request.signal.addEventListener("abort", onRequestAbort, { once: true });
 
     const encoder = new TextEncoder();
@@ -979,7 +1099,7 @@ export async function POST(request: Request) {
             try {
               const attachmentInputs = body.attachments.map(attachmentToInput);
               const configuredDocumentProvider = createConfiguredDocumentProvider({
-                getSettings: () => getScanningSettings(supabase),
+                getSettings: async () => attachmentSettings,
                 mineruProvider: (files, options = {}) => processMineruBatch(files, options),
                 omnirouteProvider: (files, options) => extractDocumentsWithConfiguredModel(files, {
                   signal: options?.signal,
@@ -1513,10 +1633,12 @@ export async function POST(request: Request) {
         } finally {
           acceptingCitationUpdates = false;
           cleanup();
+          releaseAdmission();
         }
       },
       async cancel(reason) {
         lifetimeAbort?.abort(reason);
+        releaseAdmission();
         const upstreamCleanup = stopAndCancelUpstream(reason);
         cleanup();
         // Mark run cancelled — exactly one terminal state, no later failed
@@ -1551,8 +1673,32 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
+    if (!request.bodyUsed) void request.body?.cancel(error).catch(() => undefined);
+    ingressDeadline?.dispose();
+    ingressDeadline = undefined;
+    // No downstream work can use these bytes after setup failed. Drop the
+    // contiguous buffers before any best-effort audit write can stall.
+    retainedAttachments?.splice(0);
+    releaseAdmission();
     cleanupResources?.();
     lifetimeAbort?.abort(error);
+    const lateReceipt = pendingReceipt;
+    const lateReceiptSupabase = outerSupabase;
+    const lateReceiptErrorCode = error instanceof UserVisibleError && error.status === 504
+      ? "request_setup_timed_out"
+      : "request_setup_failed";
+    pendingReceipt = undefined;
+    if (lateReceipt && lateReceiptSupabase) {
+      // If receipt creation completed just after setup already failed, close
+      // that audit row asynchronously instead of leaving it in `received`.
+      void lateReceipt.then((receipt) => transitionFredRequestReceipt({
+        supabase: lateReceiptSupabase,
+        requestId: receipt.requestId,
+        status: "failed",
+        failurePhase: "ingress",
+        errorCode: lateReceiptErrorCode,
+      })).catch(() => undefined);
+    }
     if (outerReceipt && outerSupabase) {
       try {
         await transitionFredRequestReceipt({

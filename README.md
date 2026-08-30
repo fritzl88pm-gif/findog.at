@@ -36,6 +36,7 @@ Copy `.env.example` to `.env.local` and configure Supabase Auth before using the
 | `TELEGRAM_PUBLIC_ORIGIN` | For Telegram | Public HTTPS origin used to register owner-specific Telegram webhooks; production is `https://findog.at`. |
 | `TELEGRAM_WORKER_CONCURRENCY` | Telegram worker | Number of concurrently processed jobs. The production default is `2`. |
 | `TELEGRAM_WORKER_PORT` | Telegram worker | Private health-listener port. The worker must not have a public domain. |
+| `FINDOG_HEAVY_ATTACHMENT_CONCURRENCY` | Optional | Process-wide admission limit for memory-heavy multipart attachment requests. Defaults to `1`; keep this conservative unless the container memory budget is measured. |
 | `OPENROUTER_API_KEY` | For Scanning and image-assisted forms | Server-only OpenRouter key used by Gemini 3.5 Flash for Scanning and by the form image extraction flow. Never expose it to the browser. |
 
 Fred uses Findog's native chat surface. The authenticated `/api/fred/chat` proxy exchanges the long-lived `em_` publish token server-side, creates or resumes the user-owned WeKnora session, streams Fred's answer and structured research events as NDJSON, and persists both sides of the turn. Findog renders deterministic German research summaries instead of exposing raw model reasoning or tool arguments. Complete BFG business numbers are verified against the official Findok API while the answer streams; verified citations become official Findok full-text links, while unresolved citations remain unchanged and unlinked. WeKnora's internal `<kb ... />` and `<web ... />` citation tags are removed from the visible answer while their source metadata and the unchanged provider answer remain stored for provenance. Neither the short-lived `ems_` token nor the signed WeKnora session handle reaches the browser. There is no Taxdog iframe or cross-origin browser storage.
@@ -58,54 +59,9 @@ Harald provisions authorized accounts manually. Findog supports only email/passw
 
 ## Supabase Migration
 
-Apply all migrations in order through the Supabase SQL editor or your migration flow:
-
-1. `supabase/migrations/0001_chat_history.sql`
-2. `supabase/migrations/0002_agent_runs.sql`
-3. `supabase/migrations/0003_admin_settings.sql`
-4. `supabase/migrations/0004_admin_user_management.sql`
-5. `supabase/migrations/0005_remove_global_system_prompt_length_limit.sql`
-6. `supabase/migrations/20260714195644_central_model_settings.sql`
-7. `supabase/migrations/20260714205842_lock_down_chat_tables.sql`
-8. `supabase/migrations/20260714205944_index_model_provenance_fks.sql`
-9. `supabase/migrations/20260715000000_agent_feedback.sql`
-10. `supabase/migrations/20260715000001_laozhang_dynamic_models.sql`
-11. `supabase/migrations/20260715093000_openai_compatible_providers.sql`
-12. `supabase/migrations/20260715171030_global_default_and_model_icons.sql`
-13. `supabase/migrations/20260715172808_index_model_default_policy_fk.sql`
-14. `supabase/migrations/20260718000000_document_artifacts.sql`
-15. `supabase/migrations/20260718100000_research_result_limit.sql`
-16. `supabase/migrations/20260718133121_research_evidence_memory_cards.sql`
-17. `supabase/migrations/20260719012227_weknora_fred_chat_history.sql`
-18. `supabase/migrations/20260719012331_fred_chat_history_fk_indexes.sql`
-19. `supabase/migrations/20260719072643_fred_native_attachment_metadata.sql`
-20. `supabase/migrations/20260719084653_fred_research_trace_and_citations.sql`
-21. `supabase/migrations/20260719171431_fredrun_highscores.sql`
-22. `supabase/migrations/20260719190000_scanning_settings.sql`
-23. `supabase/migrations/20260723123000_fred_pro_mode.sql`
-24. `supabase/migrations/20260723170000_quickfred_conversation_agent.sql`
-25. `supabase/migrations/20260727182232_user_reasonings.sql`
-26. `supabase/migrations/20260727183824_user_reasoning_owner_fk_indexes.sql`
-27. `supabase/migrations/20260730150000_fred_public_answer_shares.sql`
-28. `supabase/migrations/20260730192000_user_reasoning_subcategories.sql`
-29. `supabase/migrations/20260731110000_telegram_bot_integration.sql`
-30. `supabase/migrations/20260801051911_telegram_pro_web_modes.sql`
-31. `supabase/migrations/20260807051732_fred_user_preferences.sql`
-32. `supabase/migrations/20260807064643_fred_personality_profiles.sql`
-33. `supabase/migrations/20260808094800_download_library.sql`
-34. `supabase/migrations/20260808121758_harden_download_audit.sql`
-35. `supabase/migrations/20260812120000_fred_generation_runs.sql`
-36. `supabase/migrations/20260813133900_reset_fredrun_leaderboard_for_endless_mode.sql`
-37. `supabase/migrations/20260817073451_fredrun_user_progress.sql`
-38. `supabase/migrations/20260817075512_harden_fredrun_progress_audit.sql`
-39. `supabase/migrations/20260817075656_index_fredrun_progress_catalog_fks.sql`
-40. `supabase/migrations/20260817130855_block_fredrun_user_access.sql`
-41. `supabase/migrations/20260817154502_add_cyberfred_character.sql`
-42. `supabase/migrations/20260817160731_add_fredrun_admin_coin_grant_audit.sql`
-43. `supabase/migrations/20260818081208_add_superfrida_character.sql`
-44. `supabase/migrations/20260829225606_dashboard_news.sql`
-45. `supabase/migrations/20260830093213_remove_fred_personalization.sql`
-46. `supabase/migrations/20260830142801_bfg_newsletters.sql`
+Apply every `.sql` file in `supabase/migrations` in lexicographic filename
+order through the Supabase migration flow. The directory is the source of
+truth; do not deploy a hand-maintained subset or skip later timestamped files.
 
 Supabase Auth must be enabled for email/password login. Authorized accounts are manually provisioned; the app does not expose self-service registration. Server persistence stores the authenticated Supabase `user.id` as `conversations.client_id`, `messages.client_id`, and `agent_runs.client_id`. Fred sessions and messages use separate `fred_*` tables and retain their bridge/webhook provenance. For assistant messages, `content` remains the original provider answer; `display_content`, `research_trace`, `source_references`, and `content_transformation` record the bounded native presentation separately. Deleting an owned conversation cascades to its messages, agent runs, and agent steps; deleting a Fred conversation cascades to its Fred messages and processed webhook events. The admin request audit records only submitted user prompts and is deliberately independent of conversation deletion; deleting the audit history does not remove a user's conversations.
 
@@ -130,7 +86,7 @@ npm run build
 
 Deploy the Next.js application through Coolify. Configure the Supabase variables, `DEEPSEEK_API_KEY` for BFG Suche PRO, `OPENROUTER_API_KEY` for Scanning and image-assisted forms, and the required `WEKNORA_FRED_*` values as protected runtime environment variables. For QuickFred, configure all four `WEKNORA_QUICKFRED_*` values and bind its dedicated channel to the expected agent UUID. Both channel allowlists must include the exact Findog exchange origin and use the same message webhook URL and HMAC secret. Do not expose provider keys as build arguments or `NEXT_PUBLIC_` variables. Restart or redeploy the application after changing a runtime variable. The Coolify reverse proxy must accept request bodies of at least 100 MiB so that a valid maximum Scanning batch, including multipart overhead, reaches the application. BFG Suche PRO plans Findok queries with deepseek-v4-flash and reranks the official candidates with deepseek-v4-pro at maximum reasoning effort, so a single PRO request can take several minutes; the reverse proxy read/response timeout for `/api/findok/bfg/pro` must allow at least 600 seconds. That route streams newline-delimited JSON progress events (query planning, Findok retrieval, sorting, reranking) before the final result, so the reverse proxy must forward the response unbuffered and must not compress or rewrite `application/x-ndjson`.
 
-The native Fred chat mirrors the WeKnora embed capabilities configured for its channel and agent. When enabled upstream, users can request web search and attach up to five images (JPEG, PNG, GIF, or WebP; 10 MB each) plus five documents (`pdf`, `doc`, `docx`, `txt`, `md`, `csv`, `xlsx`, `xls`, `ppt`, or `pptx`; 20 MB each). Files are forwarded to WeKnora for the current request only. Findog stores auditable attachment metadata (name, MIME type, size, SHA-256) and the web-search flag with the user message, but not the binary file or data URI.
+The native Fred chat mirrors the WeKnora embed capabilities configured for its channel and agent. When enabled upstream, users can request web search and attach up to five images (JPEG, PNG, GIF, or WebP; 10 MB each) plus five documents (`pdf`, `doc`, `docx`, `txt`, `md`, `csv`, `xlsx`, `xls`, `ppt`, or `pptx`; 20 MB each), subject to a combined 35 MiB attachment limit per request. Files are forwarded to WeKnora for the current request only. Findog stores auditable attachment metadata (name, MIME type, size, SHA-256) and the web-search flag with the user message, but not the binary file or data URI.
 
 ### Telegram worker deployment
 

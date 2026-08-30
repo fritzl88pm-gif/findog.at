@@ -72,6 +72,12 @@ export interface FredTurnRequest {
   /** Advances the durable receipt. Production callers provide this fail-closed hook. */
   onRequestTransition?: (transition: FredRequestLifecycleTransition) => Promise<void>;
   /**
+   * Lets a durable queue decide whether an unsuccessful attempt is retryable.
+   * Successful completion is still persisted here; failed/cancelled transitions
+   * are left to the queue owner so a retry never reopens a terminal receipt.
+   */
+  deferUnsuccessfulTerminalTransition?: boolean;
+  /**
    * Invoked once, right after the user's message has been persisted and the
    * (possibly newly created) conversation is known. Lets origin-specific
    * callers (e.g. the Telegram worker) bind/tag the conversation without the

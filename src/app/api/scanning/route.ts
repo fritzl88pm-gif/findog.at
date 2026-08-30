@@ -3,6 +3,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
+import { parseBoundedMultipart } from "@/lib/attachments/bounded-multipart";
+import {
+  acquireHeavyAttachmentRequest,
+  type HeavyAttachmentRequestLease,
+} from "@/lib/attachments/heavy-request-admission";
+import { createDeadline } from "@/lib/deadline";
 import { UserVisibleError } from "@/lib/errors";
 import {
   matchesScanningFileSignature,
@@ -25,6 +31,8 @@ import type { ScanningFileStatus, ScanningUpload } from "@/lib/scanning/types";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
+
+const SCANNING_INGRESS_TIMEOUT_MS = 120_000;
 
 const rateLimit = new ScanningRateLimiter({
   maxRequests: SCANNING_RATE_LIMIT_REQUESTS,
@@ -61,65 +69,54 @@ function validateMultipartHeader(request: Request): string {
   return contentType;
 }
 
-async function readBoundedBody(request: Request): Promise<Uint8Array<ArrayBuffer>> {
-  if (!request.body) throw new UserVisibleError("Die Scanning-Anfrage ist leer.", 400);
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > MAX_SCANNING_MULTIPART_BYTES) {
-        await reader.cancel().catch(() => undefined);
-        throw new UserVisibleError("Die Scanning-Anfrage ist zu groß.", 413);
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
-function uploadedFile(value: FormDataEntryValue): value is File {
-  return typeof File !== "undefined" && value instanceof File;
-}
-
-async function parseUploads(request: Request, contentType: string): Promise<{
+async function parseUploads(
+  request: Request,
+  contentType: string,
+  signal: AbortSignal,
+): Promise<{
   uploads: ScanningUpload[];
   statuses: ScanningFileStatus[];
   instructions: string;
 }> {
-  const body = await readBoundedBody(request);
-  let formData: FormData;
-  try {
-    formData = await new Request(request.url, {
-      method: "POST",
-      headers: { "Content-Type": contentType },
-      body: body.buffer,
-    }).formData();
-  } catch {
-    throw new UserVisibleError("Die Scanning-Anfrage enthält keine gültigen Formulardaten.", 400);
-  }
-  if ([...formData.keys()].some((key) => key !== "image" && key !== "pdf" && key !== "instructions")) {
-    throw new UserVisibleError("Die Scanning-Anfrage enthält unbekannte Felder.", 400);
-  }
-  const images = formData.getAll("image");
-  const pdfs = formData.getAll("pdf");
-  const instructionEntries = formData.getAll("instructions");
-  if (instructionEntries.length > 1 || instructionEntries.some((entry) => typeof entry !== "string")) {
-    throw new UserVisibleError("Die zusätzlichen Anweisungen sind ungültig.", 400);
-  }
-  const instructions = typeof instructionEntries[0] === "string"
-    ? instructionEntries[0]
+  const multipart = await parseBoundedMultipart({
+    request,
+    signal,
+    contentType,
+    maxBytes: MAX_SCANNING_MULTIPART_BYTES,
+    maxFileAggregateBytes:
+      MAX_SCANNING_IMAGES * MAX_SCANNING_IMAGE_BYTES
+      + MAX_SCANNING_PDFS * MAX_SCANNING_PDF_BYTES,
+    fileRules: {
+      image: {
+        maxCount: MAX_SCANNING_IMAGES,
+        maxBytes: MAX_SCANNING_IMAGE_BYTES,
+        tooManyMessage: "Bitte maximal fünf Bilder hochladen.",
+        tooLargeMessage: "Ein Bild darf maximal 5 MB groß sein.",
+      },
+      pdf: {
+        maxCount: MAX_SCANNING_PDFS,
+        maxBytes: MAX_SCANNING_PDF_BYTES,
+        tooManyMessage: "Bitte maximal fünf PDFs hochladen.",
+        tooLargeMessage: "Ein PDF darf maximal 10 MB groß sein.",
+      },
+    },
+    fieldRules: {
+      instructions: {
+        maxCount: 1,
+        maxBytes: MAX_SCANNING_INSTRUCTIONS_CHARS * 4,
+        invalidMessage: "Die zusätzlichen Anweisungen sind ungültig.",
+      },
+    },
+    emptyMessage: "Die Scanning-Anfrage ist leer.",
+    invalidMessage: "Die Scanning-Anfrage enthält keine gültigen Formulardaten.",
+    tooLargeMessage: "Die Scanning-Anfrage ist zu groß.",
+    fileAggregateTooLargeMessage: "Die Scanning-Dateien sind zusammen zu groß.",
+  });
+  const images = multipart.files.filter((file) => file.fieldName === "image");
+  const pdfs = multipart.files.filter((file) => file.fieldName === "pdf");
+  const instructionEntry = multipart.fields.find((field) => field.name === "instructions");
+  const instructions = instructionEntry
+    ? instructionEntry.value
       .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, "")
       .trim()
     : "";
@@ -129,28 +126,22 @@ async function parseUploads(request: Request, contentType: string): Promise<{
       400,
     );
   }
-  if (images.length > MAX_SCANNING_IMAGES) {
-    throw new UserVisibleError("Bitte maximal fünf Bilder hochladen.", 400);
-  }
-  if (pdfs.length > MAX_SCANNING_PDFS) {
-    throw new UserVisibleError("Bitte maximal fünf PDFs hochladen.", 400);
-  }
   if (images.length + pdfs.length === 0) {
     throw new UserVisibleError("Bitte mindestens ein Bild oder PDF hochladen.", 400);
   }
-  if ([...images, ...pdfs].some((entry) => !uploadedFile(entry) || entry.size <= 0)) {
+  if ([...images, ...pdfs].some((file) => file.sizeBytes <= 0)) {
     throw new UserVisibleError("Eine hochgeladene Datei ist ungültig oder leer.", 400);
   }
 
   const candidates = [
-    ...images.map((file) => ({ file: file as File, kind: "image" as const })),
-    ...pdfs.map((file) => ({ file: file as File, kind: "pdf" as const })),
+    ...images.map((file) => ({ file, kind: "image" as const })),
+    ...pdfs.map((file) => ({ file, kind: "pdf" as const })),
   ];
   const uploads: ScanningUpload[] = [];
   const statuses: ScanningFileStatus[] = [];
   const hashes = new Set<string>();
   for (const candidate of candidates) {
-    const mimeType = candidate.file.type.toLowerCase();
+    const mimeType = candidate.file.mimeType.toLowerCase();
     if (candidate.kind === "image" && !SCANNING_IMAGE_MIME_TYPES.has(mimeType)) {
       throw new UserVisibleError("Erlaubt sind JPEG-, PNG-, WebP- und GIF-Bilder.", 400);
     }
@@ -158,13 +149,13 @@ async function parseUploads(request: Request, contentType: string): Promise<{
       throw new UserVisibleError("Bitte nur PDF-Dateien im PDF-Feld hochladen.", 400);
     }
     const maximum = candidate.kind === "image" ? MAX_SCANNING_IMAGE_BYTES : MAX_SCANNING_PDF_BYTES;
-    if (candidate.file.size > maximum) {
+    if (candidate.file.sizeBytes > maximum) {
       throw new UserVisibleError(
         candidate.kind === "image" ? "Ein Bild darf maximal 5 MB groß sein." : "Ein PDF darf maximal 10 MB groß sein.",
         413,
       );
     }
-    const bytes = new Uint8Array(await candidate.file.arrayBuffer());
+    const bytes = candidate.file.bytes;
     if (!matchesScanningFileSignature(mimeType, bytes)) {
       throw new UserVisibleError("Dateityp und Dateiinhalt stimmen nicht überein.", 400);
     }
@@ -181,7 +172,7 @@ async function parseUploads(request: Request, contentType: string): Promise<{
       kind: candidate.kind,
       name,
       mimeType,
-      sizeBytes: candidate.file.size,
+      sizeBytes: candidate.file.sizeBytes,
       sha256,
       bytes,
     });
@@ -197,6 +188,8 @@ function fileError(error: unknown): string {
 }
 
 export async function POST(request: Request) {
+  let admissionLease: HeavyAttachmentRequestLease | undefined;
+  let ingressDeadline: ReturnType<typeof createDeadline> | undefined;
   try {
     if (request.headers.get("sec-fetch-site")?.toLowerCase() === "cross-site") {
       throw new UserVisibleError("Diese Scanning-Anfrage ist nicht erlaubt.", 403);
@@ -205,11 +198,27 @@ export async function POST(request: Request) {
     const supabase = getSupabaseServerClient();
     if (!supabase) throw new UserVisibleError("Scanning ist derzeit nicht verfügbar.", 503);
     const user = await authenticateSupabaseRequest(request, supabase);
-    enforceRateLimit(user.id);
-    const parsed = await parseUploads(request, contentType);
 
-    // Resolve scanning settings server-side, do not trust client-provided model/prompt
+    // Resolve settings before reserving the single large-body slot. A stalled
+    // settings lookup must not retain an upload or block every other request.
     const settings = await getScanningSettings(supabase);
+    ingressDeadline = createDeadline(SCANNING_INGRESS_TIMEOUT_MS, {
+      parentSignal: request.signal,
+      timeoutMessage: "Der Upload hat zu lange gedauert. Bitte erneut versuchen.",
+    });
+    ingressDeadline.throwIfExpired();
+    try {
+      admissionLease = acquireHeavyAttachmentRequest();
+    } catch (error) {
+      void request.body?.cancel(error).catch(() => undefined);
+      throw error;
+    }
+    // Overload rejections must not consume the user's five-request quota.
+    enforceRateLimit(user.id);
+    const parsed = await parseUploads(request, contentType, ingressDeadline.signal);
+    ingressDeadline.throwIfExpired();
+    ingressDeadline.dispose();
+    ingressDeadline = undefined;
 
     const encoder = new TextEncoder();
     const lifetime = new AbortController();
@@ -267,11 +276,13 @@ export async function POST(request: Request) {
           try { controller.close(); } catch { /* Client already disconnected. */ }
         } finally {
           request.signal.removeEventListener("abort", onRequestAbort);
+          admissionLease?.release();
         }
       },
       cancel(reason) {
         lifetime.abort(reason);
         request.signal.removeEventListener("abort", onRequestAbort);
+        admissionLease?.release();
       },
     });
 
@@ -284,6 +295,9 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
+    if (!request.bodyUsed) void request.body?.cancel(error).catch(() => undefined);
+    ingressDeadline?.dispose();
+    admissionLease?.release();
     if (error instanceof UserVisibleError) return json({ error: error.message }, error.status);
     return json({ error: "Die Scanning-Anfrage konnte nicht verarbeitet werden." }, 500);
   }

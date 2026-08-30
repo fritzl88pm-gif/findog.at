@@ -337,6 +337,73 @@ describe("deliverFinalAnswer", () => {
     expect(callCount).toBe(2);
   });
 
+  it("does not sleep for retry_after after the final allowed attempt", async () => {
+    const error = new Error("Too Many Requests");
+    (error as unknown as Record<string, unknown>).telegramRetryAfter = 30;
+    const api = fakeBotApi({
+      sendMessage: vi.fn().mockRejectedValue(error),
+    });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const ledger: DeliveryLedger = { chunks: [], uncertainChunks: [] };
+
+    const result = await deliverFinalAnswer(api, chatId, "Hello", {
+      ledger,
+      maxRetries: 1,
+      sleep,
+    });
+
+    expect(result.sent).toBe(false);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("does not call Telegram after its delivery signal was aborted", async () => {
+    const api = fakeBotApi();
+    const ledger: DeliveryLedger = { chunks: [], uncertainChunks: [] };
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await deliverFinalAnswer(api, chatId, "Hello", {
+      ledger,
+      signal: controller.signal,
+    });
+
+    expect(result).toEqual({ sent: false, uncertain: false });
+    expect(ledger.chunks[0]?.status).toBe("failed");
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps an abort during a retry wait safely retryable", async () => {
+    const error = new Error("Too Many Requests");
+    (error as unknown as Record<string, unknown>).telegramRetryAfter = 30;
+    const api = fakeBotApi({
+      sendMessage: vi.fn().mockRejectedValue(error),
+    });
+    const controller = new AbortController();
+    let notifyWaitStarted!: () => void;
+    const waitStarted = new Promise<void>((resolve) => {
+      notifyWaitStarted = resolve;
+    });
+    const sleep = vi.fn().mockImplementation(async () => {
+      notifyWaitStarted();
+      await new Promise<void>(() => undefined);
+    });
+    const ledger: DeliveryLedger = { chunks: [], uncertainChunks: [] };
+
+    const pending = deliverFinalAnswer(api, chatId, "Hello", {
+      ledger,
+      maxRetries: 2,
+      sleep,
+      signal: controller.signal,
+    });
+    await waitStarted;
+    controller.abort();
+    const result = await pending;
+
+    expect(result).toEqual({ sent: false, uncertain: false });
+    expect(ledger.chunks[0]?.status).toBe("failed");
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("does not send empty messages", async () => {
     const api = fakeBotApi();
     const ledger: DeliveryLedger = { chunks: [], uncertainChunks: [] };

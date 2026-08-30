@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { TelegramFileTooLargeError, type BotApi } from "./bot-api";
-import type { ClaimedUpdate, JobQueueRpc } from "./jobs";
+import { TelegramUpdateLeaseLostError, type ClaimedUpdate, type JobQueueRpc } from "./jobs";
 import {
   processUpdate,
   runWorkerLoop,
@@ -74,6 +74,7 @@ function makeUpdate(overrides: Partial<ClaimedUpdate> = {}): ClaimedUpdate {
     leaseId: "lease-1",
     leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
     attemptCount: 0,
+    maxAttempts: 5,
     availableAt: new Date().toISOString(),
     cancelRequested: false,
     ...overrides,
@@ -102,7 +103,7 @@ function fakeRpc(overrides: Partial<Record<keyof JobQueueRpc, ReturnType<typeof 
     claimPending: overrides.claimPending ?? vi.fn().mockResolvedValue({ data: [], error: null }),
     heartbeat: overrides.heartbeat ?? vi.fn().mockResolvedValue({ data: true, error: null }),
     complete: overrides.complete ?? vi.fn().mockResolvedValue({ data: true, error: null }),
-    retry: overrides.retry ?? vi.fn().mockResolvedValue({ data: true, error: null }),
+    retry: overrides.retry ?? vi.fn().mockResolvedValue({ data: "retried", error: null }),
     cancel: overrides.cancel ?? vi.fn().mockResolvedValue({ data: true, error: null }),
     cancelAll: overrides.cancelAll ?? vi.fn().mockResolvedValue({ data: true, error: null }),
     fail: overrides.fail ?? vi.fn().mockResolvedValue({ data: true, error: null }),
@@ -113,21 +114,56 @@ function fakeRpc(overrides: Partial<Record<keyof JobQueueRpc, ReturnType<typeof 
 }
 
 function fakeStorage(overrides: Partial<WorkerStorage> = {}): WorkerStorage {
+  let receiptCreated = false;
+  let receiptStatus: "received" | "failed" | "cancelled" = "received";
+  let ingressContext = {
+    conversationId: undefined as string | undefined,
+    webSearchEnabled: false,
+    proModeEnabled: false,
+  };
   return {
     loadIntegration: vi.fn().mockResolvedValue(makeIntegration()),
     getActiveConversation: vi.fn().mockResolvedValue(null),
     clearActiveConversation: vi.fn().mockResolvedValue(undefined),
     bindConversation: vi.fn().mockResolvedValue(undefined),
     markTelegramOrigin: vi.fn().mockResolvedValue(undefined),
-    createRequestReceipt: vi.fn().mockImplementation(async (params) => ({
-      requestId: params.requestId,
-      userEventId: params.userEventId,
-      assistantEventId: params.assistantEventId,
-      receivedAt: "2026-08-29T10:00:00.000Z",
+    createRequestReceipt: vi.fn().mockImplementation(async (params) => {
+      receiptCreated = true;
+      ingressContext = {
+        conversationId: params.conversationId,
+        webSearchEnabled: params.webSearchEnabled,
+        proModeEnabled: params.proModeEnabled,
+      };
+      return {
+        requestId: params.requestId,
+        userEventId: params.userEventId,
+        assistantEventId: params.assistantEventId,
+        status: "received" as const,
+        receivedAt: "2026-08-29T10:00:00.000Z",
+      };
+    }),
+    resumeRequestReceipt: vi.fn().mockImplementation(async () => ({
+      status: receiptStatus,
+      contentDeleted: false,
+      ...(ingressContext.conversationId ? { conversationId: ingressContext.conversationId } : {}),
+      webSearchEnabled: ingressContext.webSearchEnabled,
+      proModeEnabled: ingressContext.proModeEnabled,
     })),
     transitionRequestReceipt: vi.fn().mockResolvedValue(undefined),
-    getDeliveryState: vi.fn().mockResolvedValue([]),
-    recordDelivery: vi.fn().mockResolvedValue(undefined),
+    transitionRequestReceiptIfPresent: vi.fn().mockImplementation(async (params) => {
+      if (!receiptCreated) return { leaseValid: true, receiptPresent: false } as const;
+      if (receiptStatus === "received") receiptStatus = params.status;
+      return {
+        leaseValid: true,
+        receiptPresent: true,
+        status: receiptStatus,
+        contentDeleted: false,
+        webSearchEnabled: ingressContext.webSearchEnabled,
+        proModeEnabled: ingressContext.proModeEnabled,
+      } as const;
+    }),
+    claimDelivery: vi.fn().mockResolvedValue("claimed"),
+    finishDelivery: vi.fn().mockResolvedValue(true),
     setMode: vi.fn().mockImplementation(async (_integrationId: string, mode: string, enabled: boolean) => {
       return { proModeEnabled: mode === "pro" ? enabled : false, webSearchEnabled: mode === "web" ? enabled : false };
     }),
@@ -218,6 +254,102 @@ afterEach(() => {
 // ── Integration gating ──────────────────────────────────────────────────────
 
 describe("processUpdate: integration gating", () => {
+  it("settles an already-requested cancellation before loading integration or Telegram state", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const createBotApiForToken = vi.fn(() => fakeBotApi());
+    const config = fakeConfig({ rpc, storage, createBotApiForToken });
+
+    const result = await processUpdate(config, makeUpdate({ cancelRequested: true }));
+
+    expect(result.status).toBe("cancelled");
+    expect(storage.loadIntegration).not.toHaveBeenCalled();
+    expect(storage.transitionRequestReceiptIfPresent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "cancelled", updateRowId, leaseId: "lease-1" }),
+    );
+    expect(rpc.cancel).toHaveBeenCalled();
+    expect(createBotApiForToken).not.toHaveBeenCalled();
+  });
+
+  it("retries a transient integration read failure without poisoning the receipt", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockRejectedValue(new Error("temporary database outage")),
+    });
+    const config = fakeConfig({ rpc, storage });
+
+    const result = await processUpdate(config, makeUpdate({ attemptCount: 2 }));
+
+    expect(result.status).toBe("retry");
+    expect(rpc.retry).toHaveBeenCalledWith(expect.objectContaining({
+      p_update_id: updateRowId,
+      p_last_error_code: "INTEGRATION_READ_FAILED",
+    }));
+    expect(storage.transitionRequestReceiptIfPresent).not.toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
+  it("keeps retrying a max-plus-one integration read outage without terminalizing a persisted answer", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockRejectedValue(new Error("temporary database outage")),
+    });
+    const config = fakeConfig({ rpc, storage });
+
+    const result = await processUpdate(config, makeUpdate({ attemptCount: 6, maxAttempts: 5 }));
+
+    expect(result.status).toBe("retry");
+    expect(rpc.retry).toHaveBeenCalledWith(expect.objectContaining({
+      p_update_id: updateRowId,
+      p_last_error_code: "INTEGRATION_READ_FAILED",
+    }));
+    expect(storage.transitionRequestReceiptIfPresent).not.toHaveBeenCalled();
+    expect(storage.createRequestReceipt).not.toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
+  it("honors a queued cancellation discovered while retrying an integration read", async () => {
+    const rpc = fakeRpc({
+      retry: vi.fn().mockResolvedValue({ data: "cancel_requested", error: null }),
+    });
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockRejectedValue(new Error("temporary database outage")),
+    });
+    const config = fakeConfig({ rpc, storage });
+
+    const result = await processUpdate(config, makeUpdate({ attemptCount: 2 }));
+
+    expect(result.status).toBe("cancelled");
+    expect(storage.transitionRequestReceiptIfPresent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "cancelled", updateRowId, leaseId: "lease-1" }),
+    );
+    expect(rpc.cancel).toHaveBeenCalledWith(expect.objectContaining({ p_update_id: updateRowId }));
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
+  it("honors a queued cancellation when shutdown tries to requeue the update", async () => {
+    const rpc = fakeRpc({
+      retry: vi.fn().mockResolvedValue({ data: "cancel_requested", error: null }),
+    });
+    const storage = fakeStorage();
+    const config = fakeConfig({ rpc, storage });
+    const shutdownController = new AbortController();
+    shutdownController.abort();
+
+    const result = await processUpdate(
+      config,
+      makeUpdate(),
+      { shutdownSignal: shutdownController.signal },
+    );
+
+    expect(result.status).toBe("cancelled");
+    expect(storage.loadIntegration).not.toHaveBeenCalled();
+    expect(storage.transitionRequestReceiptIfPresent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "cancelled" }),
+    );
+    expect(rpc.cancel).toHaveBeenCalled();
+  });
+
   it("terminally fails when the integration does not exist, without calling Telegram", async () => {
     const rpc = fakeRpc();
     const storage = fakeStorage({ loadIntegration: vi.fn().mockResolvedValue(null) });
@@ -227,9 +359,37 @@ describe("processUpdate: integration gating", () => {
     const result = await processUpdate(config, makeUpdate());
 
     expect(result.status).toBe("failed");
+    expect(storage.transitionRequestReceiptIfPresent).toHaveBeenCalledWith(expect.objectContaining({
+      updateRowId,
+      leaseId: "lease-1",
+      status: "failed",
+      errorCode: "integration_inactive",
+    }));
     expect(rpc.fail).toHaveBeenCalledWith(expect.objectContaining({ p_update_id: updateRowId }));
     expect(rpc.complete).not.toHaveBeenCalled();
     expect(createBotApiForToken).not.toHaveBeenCalled();
+  });
+
+  it("stops before queue terminalization when the receipt RPC rejects a stale lease", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(null),
+      transitionRequestReceiptIfPresent: vi.fn().mockResolvedValue({
+        leaseValid: false,
+        receiptPresent: false,
+      }),
+    });
+    const config = fakeConfig({ rpc, storage });
+
+    await expect(processUpdate(config, makeUpdate())).rejects.toBeInstanceOf(
+      TelegramUpdateLeaseLostError,
+    );
+
+    expect(storage.transitionRequestReceiptIfPresent).toHaveBeenCalledWith(
+      expect.objectContaining({ updateRowId, leaseId: "lease-1" }),
+    );
+    expect(rpc.fail).not.toHaveBeenCalled();
+    expect(rpc.complete).not.toHaveBeenCalled();
   });
 
   it("terminally fails when the integration is not active, without calling Telegram", async () => {
@@ -441,6 +601,31 @@ describe("processUpdate: slash commands", () => {
 // ── Free text / Fred turn ────────────────────────────────────────────────────
 
 describe("processUpdate: free text routed to Fred", () => {
+  it("does not create or run a Fred request after the queue lease was reclaimed", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      createRequestReceipt: vi.fn().mockResolvedValue(false),
+    });
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn });
+
+    await expect(processUpdate(config, makeUpdate())).rejects.toBeInstanceOf(
+      TelegramUpdateLeaseLostError,
+    );
+
+    expect(storage.createRequestReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        telegramUpdateId: updateRowId,
+        updateRowId,
+        leaseId: "lease-1",
+      }),
+    );
+    expect(storage.resumeRequestReceipt).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+    expect(rpc.complete).not.toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
   it("does not send draft previews while Fred emits partial answer deltas", async () => {
     vi.useFakeTimers();
     let settleTurn!: () => void;
@@ -554,10 +739,13 @@ describe("processUpdate: free text routed to Fred", () => {
       { chat_id: telegramChatId, action: "typing" },
       { signal: expect.any(AbortSignal) },
     );
-    expect(botApi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
-      chat_id: telegramChatId,
-      text: expect.stringContaining("trotzdem zugestellt"),
-    }));
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: telegramChatId,
+        text: expect.stringContaining("trotzdem zugestellt"),
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(rpc.complete).toHaveBeenCalled();
   });
 
@@ -570,6 +758,36 @@ describe("processUpdate: free text routed to Fred", () => {
     await processUpdate(config, makeUpdate());
 
     expect(calls[0]?.conversationId).toBe("existing-conv-id");
+  });
+
+  it("resumes with the frozen conversation and modes instead of the current binding and integration settings", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      loadIntegration: vi.fn().mockResolvedValue(makeIntegration({
+        proModeEnabled: true,
+        webSearchEnabled: false,
+      })),
+      getActiveConversation: vi.fn().mockResolvedValue("current-conversation-id"),
+      resumeRequestReceipt: vi.fn().mockResolvedValue({
+        status: "user_persisted",
+        contentDeleted: false,
+        conversationId: "frozen-conversation-id",
+        userMessageId: 81,
+        webSearchEnabled: true,
+        proModeEnabled: false,
+      }),
+    });
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn });
+
+    await processUpdate(config, makeUpdate({ attemptCount: 1 }));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual(expect.objectContaining({
+      conversationId: "frozen-conversation-id",
+      webSearchEnabled: true,
+      proModeEnabled: false,
+    }));
   });
 
   it("binds a newly created conversation and marks its Telegram origin via onConversationEvent", async () => {
@@ -611,9 +829,20 @@ describe("processUpdate: free text routed to Fred", () => {
     expect(result.status).toBe("completed");
     expect(botApi.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ chat_id: telegramChatId, text: expect.stringContaining("20%") }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
-    expect(storage.recordDelivery).toHaveBeenCalledWith(42, 0, expect.any(String), "pending");
-    expect(storage.recordDelivery).toHaveBeenCalledWith(42, 0, expect.any(String), "sent", 2);
+    expect(storage.claimDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      updateRowId: 42,
+      chunkIndex: 0,
+      leaseId: "lease-1",
+    }));
+    expect(storage.finishDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      updateRowId: 42,
+      chunkIndex: 0,
+      leaseId: "lease-1",
+      status: "sent",
+      telegramMessageId: 2,
+    }));
     expect(rpc.complete).toHaveBeenCalled();
   });
 
@@ -628,13 +857,25 @@ describe("processUpdate: free text routed to Fred", () => {
     const result = await processUpdate(config, makeUpdate({ id: 43 }));
 
     expect(result.status).toBe("completed");
-    expect(botApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: telegramChatId,
-      rich_message: { markdown: answer },
-    });
+    expect(botApi.sendRichMessage).toHaveBeenCalledWith(
+      {
+        chat_id: telegramChatId,
+        rich_message: { markdown: answer },
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(botApi.sendMessage).not.toHaveBeenCalled();
-    expect(storage.recordDelivery).toHaveBeenCalledWith(43, 0, expect.stringContaining("<pre>"), "pending");
-    expect(storage.recordDelivery).toHaveBeenCalledWith(43, 0, expect.stringContaining("<pre>"), "sent", 3);
+    expect(storage.claimDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      updateRowId: 43,
+      chunkIndex: 0,
+      content: expect.stringContaining("<pre>"),
+    }));
+    expect(storage.finishDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      updateRowId: 43,
+      chunkIndex: 0,
+      status: "sent",
+      telegramMessageId: 3,
+    }));
   });
 
   it("uses legacy delivery when rich Markdown exceeds the cap", async () => {
@@ -655,7 +896,7 @@ describe("processUpdate: free text routed to Fred", () => {
   it("skips chunks already marked sent in delivery state instead of resending them", async () => {
     const rpc = fakeRpc();
     const storage = fakeStorage({
-      getDeliveryState: vi.fn().mockResolvedValue([{ chunkIndex: 0, status: "sent" }]),
+      claimDelivery: vi.fn().mockResolvedValue("sent"),
     });
     const botApi = fakeBotApi();
     const { executeTurn } = answerTurn("Kurze Antwort.");
@@ -665,13 +906,13 @@ describe("processUpdate: free text routed to Fred", () => {
 
     expect(result.status).toBe("completed");
     expect(botApi.sendMessage).not.toHaveBeenCalled();
-    expect(storage.recordDelivery).not.toHaveBeenCalled();
+    expect(storage.finishDelivery).not.toHaveBeenCalled();
   });
 
   it("terminally fails without resending when a persisted delivery chunk is uncertain", async () => {
     const rpc = fakeRpc();
     const storage = fakeStorage({
-      getDeliveryState: vi.fn().mockResolvedValue([{ chunkIndex: 0, status: "uncertain" }]),
+      claimDelivery: vi.fn().mockResolvedValue("uncertain"),
     });
     const botApi = fakeBotApi();
     const { executeTurn } = answerTurn("Kurze Antwort.");
@@ -681,7 +922,7 @@ describe("processUpdate: free text routed to Fred", () => {
 
     expect(result.status).toBe("failed");
     expect(botApi.sendMessage).not.toHaveBeenCalled();
-    expect(storage.recordDelivery).not.toHaveBeenCalled();
+    expect(storage.finishDelivery).not.toHaveBeenCalled();
     expect(rpc.retry).not.toHaveBeenCalled();
     expect(rpc.fail).toHaveBeenCalledWith(expect.objectContaining({
       p_update_id: updateRowId,
@@ -733,7 +974,9 @@ describe("processUpdate: free text routed to Fred", () => {
     vi.useFakeTimers();
     const rpc = fakeRpc({
       heartbeat: vi.fn().mockResolvedValue({ data: true, error: null }),
-      checkCancelled: vi.fn().mockResolvedValue({ data: true, error: null }),
+      checkCancelled: vi.fn()
+        .mockResolvedValueOnce({ data: false, error: null })
+        .mockResolvedValue({ data: true, error: null }),
     });
     const storage = fakeStorage();
     const botApi = fakeBotApi();
@@ -785,6 +1028,275 @@ describe("processUpdate: free text routed to Fred", () => {
     expect(botApi.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("honors a queued cancellation discovered while retrying a turn failure", async () => {
+    const rpc = fakeRpc({
+      retry: vi.fn().mockResolvedValue({ data: "cancel_requested", error: null }),
+    });
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const { executeTurn } = erroringTurn("Upstream fehlgeschlagen");
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+    const result = await processUpdate(config, makeUpdate({ attemptCount: 2 }));
+
+    expect(result.status).toBe("cancelled");
+    expect(storage.transitionRequestReceiptIfPresent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "cancelled", failurePhase: "connecting" }),
+    );
+    expect(rpc.cancel).toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
+  it("delivers an atomically reconciled completed receipt on the generic final attempt", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      resumeRequestReceipt: vi.fn().mockRejectedValue(new Error("transient resume read")),
+      transitionRequestReceiptIfPresent: vi.fn().mockResolvedValue({
+        leaseValid: true,
+        receiptPresent: true,
+        status: "completed",
+        contentDeleted: false,
+        conversationId: "frozen-conversation-id",
+        userMessageId: 81,
+        assistantMessageId: 82,
+        answer: "Atomar wiedergefundene Antwort",
+        webSearchEnabled: false,
+        proModeEnabled: false,
+      }),
+    });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
+
+    const result = await processUpdate(config, makeUpdate({ attemptCount: 5 }));
+
+    expect(result.status).toBe("completed");
+    expect(storage.transitionRequestReceiptIfPresent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed", updateRowId, leaseId: "lease-1" }),
+    );
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Atomar wiedergefundene Antwort" }),
+      expect.any(Object),
+    );
+    expect(rpc.complete).toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
+  it("uses a max-plus-one reclaim only for reconciliation and never starts upstream work", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      transitionRequestReceiptIfPresent: vi.fn().mockResolvedValue({
+        leaseValid: true,
+        receiptPresent: true,
+        status: "completed",
+        contentDeleted: false,
+        conversationId: "frozen-conversation-id",
+        userMessageId: 81,
+        assistantMessageId: 82,
+        answer: "Nach Lease-Ablauf wiedergefundene Antwort",
+        webSearchEnabled: false,
+        proModeEnabled: false,
+      }),
+    });
+    const botApi = fakeBotApi();
+    const executeTurn = vi.fn() as unknown as typeof executeFredTurn;
+    const config = fakeConfig({
+      rpc,
+      storage,
+      createBotApiForToken: () => botApi,
+      executeTurn,
+    });
+
+    const result = await processUpdate(config, makeUpdate({ attemptCount: 6, maxAttempts: 5 }));
+
+    expect(result.status).toBe("completed");
+    expect(executeTurn).not.toHaveBeenCalled();
+    expect(storage.createRequestReceipt).not.toHaveBeenCalled();
+    expect(storage.transitionRequestReceiptIfPresent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed", errorCode: "EXHAUSTED_ATTEMPT_CLEANUP" }),
+    );
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Nach Lease-Ablauf wiedergefundene Antwort" }),
+      expect.any(Object),
+    );
+    expect(rpc.complete).toHaveBeenCalledTimes(1);
+    expect(rpc.retry).not.toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
+  it("terminally records an uncertain delivery of a reconciled final-attempt answer", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      resumeRequestReceipt: vi.fn().mockRejectedValue(new Error("transient resume read")),
+      transitionRequestReceiptIfPresent: vi.fn().mockResolvedValue({
+        leaseValid: true,
+        receiptPresent: true,
+        status: "completed",
+        contentDeleted: false,
+        conversationId: "frozen-conversation-id",
+        userMessageId: 81,
+        assistantMessageId: 82,
+        answer: "Nicht doppelt zustellen",
+        webSearchEnabled: false,
+        proModeEnabled: false,
+      }),
+    });
+    const botApi = fakeBotApi();
+    vi.mocked(botApi.sendMessage).mockRejectedValue(new TypeError("socket closed after write"));
+    const config = fakeConfig({
+      rpc,
+      storage,
+      createBotApiForToken: () => botApi,
+      maxDeliveryRetries: 1,
+    });
+
+    const result = await processUpdate(config, makeUpdate({ attemptCount: 5, maxAttempts: 5 }));
+
+    expect(result.status).toBe("failed");
+    expect(rpc.fail).toHaveBeenCalledWith(expect.objectContaining({
+      p_update_id: updateRowId,
+      p_last_error_code: "DELIVERY_UNCERTAIN",
+    }));
+    expect(rpc.retry).not.toHaveBeenCalled();
+    expect(rpc.complete).not.toHaveBeenCalled();
+  });
+
+  it("keeps a transient failed attempt nonterminal before retrying the queue row", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const { executeTurn } = capturingTurn(async function* (request) {
+      await request.onRequestTransition?.({
+        status: "user_persisted",
+        conversationId: "frozen-conversation-id",
+        userMessageId: 81,
+      });
+      await request.onRequestTransition?.({ status: "generating" });
+      throw new Error("transient upstream failure");
+    });
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+    const result = await processUpdate(config, makeUpdate({ attemptCount: 2 }));
+
+    expect(result.status).toBe("failed");
+    expect(storage.transitionRequestReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      status: "user_persisted",
+    }));
+    expect(storage.transitionRequestReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      status: "generating",
+    }));
+    expect(storage.transitionRequestReceipt).not.toHaveBeenCalledWith(expect.objectContaining({
+      status: "failed",
+    }));
+    expect(storage.transitionRequestReceipt).not.toHaveBeenCalledWith(expect.objectContaining({
+      status: "cancelled",
+    }));
+    expect(rpc.retry).toHaveBeenCalledWith(expect.objectContaining({
+      p_update_id: updateRowId,
+      p_retry_delay_seconds: 60 * 2 ** 2,
+    }));
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
+  it("propagates a lost completion lease without attempting a stale retry or fail transition", async () => {
+    const rpc = fakeRpc({
+      complete: vi.fn().mockResolvedValue({ data: false, error: null }),
+    });
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const { executeTurn } = answerTurn("Persistierte Antwort");
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+    await expect(processUpdate(config, makeUpdate())).rejects.toBeInstanceOf(
+      TelegramUpdateLeaseLostError,
+    );
+
+    expect(rpc.complete).toHaveBeenCalledTimes(1);
+    expect(rpc.retry).not.toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
+  it("refuses to start Telegram delivery when the synchronous lease check is lost", async () => {
+    const rpc = fakeRpc({
+      heartbeat: vi.fn().mockResolvedValue({ data: false, error: null }),
+    });
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const { executeTurn } = answerTurn("Nicht mehr zustellen.");
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+    await expect(processUpdate(config, makeUpdate())).rejects.toBeInstanceOf(
+      TelegramUpdateLeaseLostError,
+    );
+
+    expect(storage.claimDelivery).not.toHaveBeenCalled();
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+    expect(rpc.retry).not.toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
+  it("does not start normal text upstream work when the synchronous first heartbeat loses the lease", async () => {
+    const rpc = fakeRpc({
+      heartbeat: vi.fn().mockResolvedValue({ data: false, error: null }),
+    });
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const executeTurn = vi.fn() as unknown as typeof executeFredTurn;
+    const config = fakeConfig({
+      rpc,
+      storage,
+      createBotApiForToken: () => botApi,
+      executeTurn,
+    });
+
+    await expect(processUpdate(config, makeUpdate())).rejects.toBeInstanceOf(
+      TelegramUpdateLeaseLostError,
+    );
+
+    expect(executeTurn).not.toHaveBeenCalled();
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+    expect(rpc.retry).not.toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
+  it("refuses to send a chunk when its durable claim reports lease loss", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      claimDelivery: vi.fn().mockResolvedValue("lease_lost"),
+    });
+    const botApi = fakeBotApi();
+    const { executeTurn } = answerTurn("Nicht mehr zustellen.");
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+    await expect(processUpdate(config, makeUpdate())).rejects.toBeInstanceOf(
+      TelegramUpdateLeaseLostError,
+    );
+
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+    expect(storage.finishDelivery).not.toHaveBeenCalled();
+    expect(rpc.retry).not.toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
+  it("cancels without sending when /stop wins the locked delivery claim", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      claimDelivery: vi.fn().mockResolvedValue("cancelled"),
+    });
+    const botApi = fakeBotApi();
+    const { executeTurn } = answerTurn("Nicht mehr zustellen.");
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+    const result = await processUpdate(config, makeUpdate());
+
+    expect(result.status).toBe("cancelled");
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+    expect(storage.finishDelivery).not.toHaveBeenCalled();
+    expect(rpc.cancel).not.toHaveBeenCalled();
+    expect(rpc.complete).not.toHaveBeenCalled();
+    expect(rpc.retry).not.toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
   it("terminally fails and sends a generic German failure notice once attemptCount reaches the max", async () => {
     const rpc = fakeRpc();
     const storage = fakeStorage();
@@ -800,6 +1312,56 @@ describe("processUpdate: free text routed to Fred", () => {
     expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
     const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
     expect(sentText).toContain("Fehler");
+  });
+
+  it("delivers a concurrently persisted answer instead of poisoning it on the last attempt", async () => {
+    const rpc = fakeRpc();
+    let resumeCalls = 0;
+    const storage = fakeStorage({
+      transitionRequestReceiptIfPresent: vi.fn().mockResolvedValue({
+        leaseValid: true,
+        receiptPresent: false,
+      }),
+      resumeRequestReceipt: vi.fn().mockImplementation(async () => {
+        resumeCalls += 1;
+        if (resumeCalls === 1) {
+          return {
+            status: "generating" as const,
+            contentDeleted: false,
+            conversationId: "frozen-conversation-id",
+            userMessageId: 81,
+            webSearchEnabled: false,
+            proModeEnabled: false,
+          };
+        }
+        return {
+          status: "completed" as const,
+          contentDeleted: false,
+          conversationId: "frozen-conversation-id",
+          userMessageId: 81,
+          assistantMessageId: 82,
+          answer: "Atomar reconciliierte Antwort.",
+          webSearchEnabled: false,
+          proModeEnabled: false,
+        };
+      }),
+    });
+    const botApi = fakeBotApi();
+    const { executeTurn } = erroringTurn("stale worker event collision");
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+    const result = await processUpdate(config, makeUpdate({ attemptCount: 5 }));
+
+    expect(result.status).toBe("completed");
+    expect(storage.transitionRequestReceiptIfPresent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed", errorCode: "turn_failed" }),
+    );
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("Atomar reconciliierte Antwort") }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(rpc.complete).toHaveBeenCalledTimes(1);
+    expect(rpc.fail).not.toHaveBeenCalled();
   });
 });
 
@@ -832,8 +1394,8 @@ describe("runWorkerLoop", () => {
       if (claimCallCount === 1) {
         return Promise.resolve({
           data: [
-            { id: 1, update_id: 1, integration_id: "int-a", raw_update: rawUpdateFor(1), telegram_chat_id: 1, status: "processing", lease_id: "l1", lease_expires_at: new Date().toISOString(), attempt_count: 0, available_at: new Date().toISOString(), cancel_requested: false, update_kind: "message" },
-            { id: 2, update_id: 2, integration_id: "int-b", raw_update: rawUpdateFor(2), telegram_chat_id: 2, status: "processing", lease_id: "l2", lease_expires_at: new Date().toISOString(), attempt_count: 0, available_at: new Date().toISOString(), cancel_requested: false, update_kind: "message" },
+            { id: 1, update_id: 1, integration_id: "int-a", raw_update: rawUpdateFor(1), telegram_chat_id: 1, status: "processing", lease_id: "l1", lease_expires_at: new Date().toISOString(), attempt_count: 0, max_attempts: 5, available_at: new Date().toISOString(), cancel_requested: false, update_kind: "message" },
+            { id: 2, update_id: 2, integration_id: "int-b", raw_update: rawUpdateFor(2), telegram_chat_id: 2, status: "processing", lease_id: "l2", lease_expires_at: new Date().toISOString(), attempt_count: 0, max_attempts: 5, available_at: new Date().toISOString(), cancel_requested: false, update_kind: "message" },
           ],
           error: null,
         });
@@ -875,6 +1437,7 @@ describe("runWorkerLoop", () => {
         lease_id: claimed.leaseId,
         lease_expires_at: claimed.leaseExpiresAt,
         attempt_count: claimed.attemptCount,
+        max_attempts: claimed.maxAttempts,
         available_at: claimed.availableAt,
         cancel_requested: claimed.cancelRequested,
       }],
@@ -901,7 +1464,8 @@ describe("runWorkerLoop", () => {
         };
       })();
     }) as unknown as typeof executeFredTurn;
-    const config = fakeConfig({ rpc, executeTurn });
+    const storage = fakeStorage();
+    const config = fakeConfig({ rpc, storage, executeTurn });
 
     const loop = runWorkerLoop({ config, signal: controller.signal });
     await started;
@@ -916,6 +1480,9 @@ describe("runWorkerLoop", () => {
     }));
     expect(rpc.cancel).not.toHaveBeenCalled();
     expect(rpc.complete).not.toHaveBeenCalled();
+    expect(storage.transitionRequestReceipt).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "cancelled" }),
+    );
   });
 });
 
@@ -1317,6 +1884,50 @@ function fakePreprocessor(result: AttachmentPreprocessResult): AttachmentPreproc
 }
 
 describe("processUpdate: document attachments", () => {
+  it("delivers a persisted completed answer without rerunning the turn or attachment preprocessor", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      resumeRequestReceipt: vi.fn().mockResolvedValue({
+        status: "completed",
+        contentDeleted: false,
+        conversationId: "completed-conversation-id",
+        userMessageId: 81,
+        assistantMessageId: 82,
+        answer: "Bereits gespeicherte Antwort.",
+        webSearchEnabled: false,
+        proModeEnabled: false,
+      }),
+    });
+    const botApi = fakeBotApi();
+    const preprocessor = vi.fn<AttachmentPreprocessor>();
+    const { executeTurn, calls } = answerTurn("Diese Antwort darf nicht erzeugt werden.");
+    const config = fakeConfig({
+      rpc,
+      storage,
+      createBotApiForToken: () => botApi,
+      executeTurn,
+      attachmentPreprocessor: preprocessor,
+    });
+    const update = makeUpdate({
+      rawUpdate: docUpdate("report.pdf", "application/pdf", 1024, "Bitte prüfen."),
+      attemptCount: 1,
+    });
+
+    const result = await processUpdate(config, update);
+
+    expect(result.status).toBe("completed");
+    expect(preprocessor).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: telegramChatId,
+        text: expect.stringContaining("Bereits gespeicherte Antwort"),
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(rpc.complete).toHaveBeenCalledTimes(1);
+  });
+
   it("downloads, validates, preprocesses a PDF document with caption and calls FredTurn with original query and upstreamQuery", async () => {
     const rpc = fakeRpc();
     const storage = fakeStorage();
@@ -1412,6 +2023,70 @@ describe("processUpdate: document attachments", () => {
     const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
     expect(sentText).toContain("Nicht unterstützter Dateityp");
     expect(rpc.retry).not.toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+  });
+
+  it("delivers an answer reconciled during attachment rejection instead of sending the rejection", async () => {
+    const rpc = fakeRpc();
+    let resumeCalls = 0;
+    const storage = fakeStorage({
+      transitionRequestReceiptIfPresent: vi.fn().mockResolvedValue({
+        leaseValid: true,
+        receiptPresent: false,
+      }),
+      resumeRequestReceipt: vi.fn().mockImplementation(async () => {
+        resumeCalls += 1;
+        if (resumeCalls === 1) {
+          return {
+            status: "generating" as const,
+            contentDeleted: false,
+            conversationId: "frozen-conversation-id",
+            userMessageId: 81,
+            webSearchEnabled: false,
+            proModeEnabled: false,
+          };
+        }
+        return {
+          status: "completed" as const,
+          contentDeleted: false,
+          conversationId: "frozen-conversation-id",
+          userMessageId: 81,
+          assistantMessageId: 82,
+          answer: "Während der Vorverarbeitung persistierte Antwort.",
+          webSearchEnabled: false,
+          proModeEnabled: false,
+        };
+      }),
+    });
+    const botApi = fakeBotApi();
+    const preprocessor = vi.fn<AttachmentPreprocessor>().mockRejectedValue(
+      new UserVisibleError("Nicht unterstützter Dateityp.", 400),
+    );
+    const { executeTurn, calls } = answerTurn("Darf nicht neu erzeugt werden.");
+    const config = fakeConfig({
+      rpc,
+      storage,
+      executeTurn,
+      attachmentPreprocessor: preprocessor,
+      createBotApiForToken: () => botApi,
+    });
+
+    const result = await processUpdate(config, makeUpdate({
+      rawUpdate: docUpdate("race.pdf", "application/pdf", 100, "Frage"),
+      attemptCount: 5,
+    }));
+
+    expect(result.status).toBe("completed");
+    expect(calls).toHaveLength(0);
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("Während der Vorverarbeitung persistierte Antwort"),
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(botApi.sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("Nicht unterstützter") }),
+    );
     expect(rpc.fail).not.toHaveBeenCalled();
   });
 
@@ -1588,6 +2263,8 @@ describe("processUpdate: unchanged text and unsupported media", () => {
     expect(storage.createRequestReceipt).toHaveBeenCalledWith(expect.objectContaining({
       clientId,
       telegramUpdateId: updateRowId,
+      updateRowId,
+      leaseId: "lease-1",
       content: "Normale Frage",
       requestId: expect.any(String),
       userEventId: expect.any(String),

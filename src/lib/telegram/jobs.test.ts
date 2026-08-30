@@ -11,6 +11,7 @@ import {
   requestCancelForChat,
   retryUpdate,
   type JobQueueRpc,
+  TelegramUpdateLeaseLostError,
 } from "./jobs";
 
 function makeRpc(behavior: Record<string, ReturnType<typeof vi.fn>> = {}): JobQueueRpc {
@@ -18,7 +19,7 @@ function makeRpc(behavior: Record<string, ReturnType<typeof vi.fn>> = {}): JobQu
     claimPending: (behavior.claimPending ?? vi.fn().mockResolvedValue({ data: [], error: null })) as never,
     heartbeat: (behavior.heartbeat ?? vi.fn().mockResolvedValue({ data: true, error: null })) as never,
     complete: (behavior.complete ?? vi.fn().mockResolvedValue({ data: true, error: null })) as never,
-    retry: (behavior.retry ?? vi.fn().mockResolvedValue({ data: true, error: null })) as never,
+    retry: (behavior.retry ?? vi.fn().mockResolvedValue({ data: "retried", error: null })) as never,
     cancel: (behavior.cancel ?? vi.fn().mockResolvedValue({ data: true, error: null })) as never,
     cancelAll: (behavior.cancelAll ?? vi.fn().mockResolvedValue({ data: true, error: null })) as never,
     fail: (behavior.fail ?? vi.fn().mockResolvedValue({ data: true, error: null })) as never,
@@ -70,6 +71,7 @@ function claimedRow(overrides: Record<string, unknown> = {}): Record<string, unk
     lease_id: leaseId,
     lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
     attempt_count: 0,
+    max_attempts: 5,
     available_at: new Date().toISOString(),
     cancel_requested: false,
     ...overrides,
@@ -102,6 +104,7 @@ describe("claimPendingUpdates", () => {
     expect(result[0].leaseId).toBe(leaseId);
     expect(result[0].rawUpdate).toEqual(row.raw_update);
     expect(result[0].attemptCount).toBe(0);
+    expect(result[0].maxAttempts).toBe(5);
     expect(result[0].cancelRequested).toBe(false);
     expect(result[0].telegramChatId).toBe(123);
     expect(result[0].telegramMessageId).toBe(55);
@@ -169,7 +172,12 @@ describe("completeUpdate", () => {
 describe("retryUpdate", () => {
   it("marks an update for retry with delay", async () => {
     const rpc = makeRpc();
-    await retryUpdate(rpc, { rowId: 1, leaseId, retryDelaySeconds: 30, lastErrorCode: "ERR_TIMEOUT" });
+    await expect(retryUpdate(rpc, {
+      rowId: 1,
+      leaseId,
+      retryDelaySeconds: 30,
+      lastErrorCode: "ERR_TIMEOUT",
+    })).resolves.toBe("retried");
     expect(rpc.retry).toHaveBeenCalledWith(expect.objectContaining({
         p_update_id: 1, p_lease_id: leaseId, p_retry_delay_seconds: 30, p_last_error_code: "ERR_TIMEOUT" }),
     );
@@ -263,14 +271,29 @@ describe("lifecycle stale-lease/no-match results", () => {
     ["completeUpdate", "complete", (rpc: JobQueueRpc) => completeUpdate(rpc, { rowId: 1, leaseId })],
     ["retryUpdate", "retry", (rpc: JobQueueRpc) => retryUpdate(rpc, { rowId: 1, leaseId })],
     ["cancelUpdate", "cancel", (rpc: JobQueueRpc) => cancelUpdate(rpc, { rowId: 1, leaseId })],
-    ["cancelAllUpdatesForIntegration", "cancelAll", (rpc: JobQueueRpc) => cancelAllUpdatesForIntegration(rpc, integrationId)],
     ["failUpdate", "fail", (rpc: JobQueueRpc) => failUpdate(rpc, { rowId: 1, leaseId })],
-  ])("%s does not throw when %s returns data false without an error", async (_name, method, invoke) => {
+  ])("%s fails closed when %s reports no matching lease", async (_name, method, invoke) => {
     const rpc = makeRpc({
       [method]: vi.fn().mockResolvedValue({ data: false, error: null }),
     });
 
-    await expect(invoke(rpc)).resolves.toBeUndefined();
+    await expect(invoke(rpc)).rejects.toBeInstanceOf(TelegramUpdateLeaseLostError);
+  });
+
+  it("reports when a concurrent stop won without releasing the lease", async () => {
+    const rpc = makeRpc({
+      retry: vi.fn().mockResolvedValue({ data: "cancel_requested", error: null }),
+    });
+
+    await expect(retryUpdate(rpc, { rowId: 1, leaseId })).resolves.toBe("cancel_requested");
+  });
+
+  it("does not treat cancel-all's zero-result response as a per-update lease loss", async () => {
+    const rpc = makeRpc({
+      cancelAll: vi.fn().mockResolvedValue({ data: 0, error: null }),
+    });
+
+    await expect(cancelAllUpdatesForIntegration(rpc, integrationId)).resolves.toBeUndefined();
   });
 });
 

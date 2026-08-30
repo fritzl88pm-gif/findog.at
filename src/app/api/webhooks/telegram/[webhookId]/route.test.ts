@@ -27,6 +27,50 @@ function buildRequest(body: unknown, secretToken?: string): Request {
   );
 }
 
+function buildStreamingRequest(
+  chunks: Uint8Array[],
+  options: {
+    secretToken?: string;
+    requestWebhookId?: string;
+  } = {},
+): { request: Request; pull: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn> } {
+  let chunkIndex = 0;
+  const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+    const chunk = chunks[chunkIndex];
+    chunkIndex += 1;
+    if (chunk) {
+      controller.enqueue(chunk);
+      return;
+    }
+    controller.close();
+  });
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>(
+    { pull, cancel },
+    { highWaterMark: 0 },
+  );
+  const init: RequestInit & { duplex: "half" } = {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.secretToken === undefined
+        ? {}
+        : { "X-Telegram-Bot-Api-Secret-Token": options.secretToken }),
+    },
+    body,
+    duplex: "half",
+  };
+
+  return {
+    request: new Request(
+      `https://findog.at/api/webhooks/telegram/${options.requestWebhookId ?? webhookId}`,
+      init,
+    ),
+    pull,
+    cancel,
+  };
+}
+
 function mockQuery(result: unknown) {
   const maybeSingle = vi.fn().mockResolvedValue(result);
   const eq = vi.fn().mockReturnValue({ maybeSingle });
@@ -49,10 +93,16 @@ describe("POST /api/webhooks/telegram/[webhookId]", () => {
     const ms = mockQuery({ data: null, error: null });
     const rpc = mockRpc({ data: { id: 1, status: "pending" }, error: null });
     vi.mocked(getSupabaseServerClient).mockReturnValue({ from: vi.fn().mockReturnValue(ms), rpc } as never);
-    const response = await POST(buildRequest({ update_id: 1 }, "some-secret"), {
-      params: Promise.resolve({ webhookId: randomUUID() }),
+    const unknownWebhookId = randomUUID();
+    const { request, pull } = buildStreamingRequest(
+      [new TextEncoder().encode(JSON.stringify({ update_id: 1 }))],
+      { secretToken: "some-secret", requestWebhookId: unknownWebhookId },
+    );
+    const response = await POST(request, {
+      params: Promise.resolve({ webhookId: unknownWebhookId }),
     });
     expect(response.status).toBe(404);
+    expect(pull).not.toHaveBeenCalled();
   });
 
   it("returns 404 for invalid secret token (timing-safe)", async () => {
@@ -62,10 +112,51 @@ describe("POST /api/webhooks/telegram/[webhookId]", () => {
     });
     const rpc = mockRpc({ data: { id: 1, status: "pending" }, error: null });
     vi.mocked(getSupabaseServerClient).mockReturnValue({ from: vi.fn().mockReturnValue(ms), rpc } as never);
-    const response = await POST(buildRequest({ update_id: 1 }, "wrong-secret"), {
+    const { request, pull } = buildStreamingRequest(
+      [new TextEncoder().encode(JSON.stringify({ update_id: 1 }))],
+      { secretToken: "wrong-secret" },
+    );
+    const response = await POST(request, {
       params: Promise.resolve({ webhookId }),
     });
     expect(response.status).toBe(404);
+    expect(pull).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "malformed webhook ID",
+      requestWebhookId: "not-a-uuid",
+      secretToken: webhookSecret,
+    },
+    {
+      label: "missing secret token",
+      requestWebhookId: webhookId,
+      secretToken: undefined,
+    },
+    {
+      label: "oversized secret token",
+      requestWebhookId: webhookId,
+      secretToken: "a".repeat(257),
+    },
+    {
+      label: "secret token with invalid characters",
+      requestWebhookId: webhookId,
+      secretToken: "invalid secret",
+    },
+  ])("rejects $label before database access or body reads", async ({ requestWebhookId, secretToken }) => {
+    const { request, pull } = buildStreamingRequest(
+      [new TextEncoder().encode(JSON.stringify({ update_id: 1 }))],
+      { requestWebhookId, secretToken },
+    );
+
+    const response = await POST(request, {
+      params: Promise.resolve({ webhookId: requestWebhookId }),
+    });
+
+    expect(response.status).toBe(404);
+    expect(getSupabaseServerClient).not.toHaveBeenCalled();
+    expect(pull).not.toHaveBeenCalled();
   });
 
   it("returns 200 for unknown/unsupported update types", async () => {
@@ -383,6 +474,32 @@ describe("POST /api/webhooks/telegram/[webhookId]", () => {
 
     const response = await POST(request, { params: Promise.resolve({ webhookId }) });
     expect(response.status).toBe(413);
+  });
+
+  it("cancels a chunked request immediately when its streamed bytes exceed 256 KiB", async () => {
+    const ms = mockQuery({
+      data: { id: "int-1", webhook_secret_sha256: webhookSecretHash, status: "active" },
+      error: null,
+    });
+    const rpc = mockRpc({ data: { id: 1, status: "pending" }, error: null });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from: vi.fn().mockReturnValue(ms), rpc } as never);
+    const { request, pull, cancel } = buildStreamingRequest(
+      [
+        new Uint8Array(200 * 1024),
+        new Uint8Array(57 * 1024),
+        new Uint8Array([1]),
+      ],
+      { secretToken: webhookSecret },
+    );
+
+    expect(request.headers.get("content-length")).toBeNull();
+
+    const response = await POST(request, { params: Promise.resolve({ webhookId }) });
+
+    expect(response.status).toBe(413);
+    expect(pull).toHaveBeenCalledTimes(2);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(rpc).not.toHaveBeenCalled();
   });
 
     it("returns 200 and ignores /start with invalid/expired pairing token", async () => {

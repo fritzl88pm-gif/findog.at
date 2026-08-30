@@ -4,6 +4,8 @@ vi.mock("server-only", () => ({}));
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { buildAttachmentContext } from "@/lib/attachments/context";
+import { acquireHeavyAttachmentRequest } from "@/lib/attachments/heavy-request-admission";
+import { MAX_FRED_NATIVE_MULTIPART_BYTES } from "@/lib/attachments/fred-upload-limits";
 import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-fallback";
 import { createConfiguredDocumentProvider } from "@/lib/attachments/document-pipeline";
 import {
@@ -52,6 +54,9 @@ vi.mock("@/lib/fred/request-ledger", () => ({
   transitionFredRequestReceipt: mockTransitionFredRequestReceipt,
 }));
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
+vi.mock("@/lib/attachments/heavy-request-admission", () => ({
+  acquireHeavyAttachmentRequest: vi.fn(() => ({ release: vi.fn() })),
+}));
 vi.mock("@/lib/attachments/context", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/attachments/context")>();
   return { ...original, buildAttachmentContext: vi.fn() };
@@ -220,6 +225,7 @@ describe("POST /api/fred/chat", () => {
       requestId,
       userEventId,
       assistantEventId,
+      status: "received",
       receivedAt: "2026-08-29T10:00:00.000Z",
     });
     mockTransitionFredRequestReceipt.mockResolvedValue(undefined);
@@ -898,6 +904,42 @@ describe("POST /api/fred/chat", () => {
     });
   });
 
+  it("releases the heavy slot immediately after parsing multipart without attachments", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "30303030-3030-4030-8030-303030303030",
+    });
+    const release = vi.fn();
+    vi.mocked(acquireHeavyAttachmentRequest).mockReturnValueOnce({ release });
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+
+    const response = await POST(multipartRequest({ query: "Nur eine Textfrage" }));
+
+    expect(response.status).toBe(200);
+    expect(release).toHaveBeenCalledTimes(1);
+    await response.text();
+  });
+
+  it("does not consume the user rate limit while multipart admission is busy", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "31313131-3131-4131-8131-313131313131",
+    });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc: rpcForTurn() } as never);
+    vi.mocked(acquireHeavyAttachmentRequest).mockImplementation(() => {
+      throw new UserVisibleError("Die Anhangverarbeitung ist ausgelastet.", 503);
+    });
+
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const response = await POST(multipartRequest({ query: `Versuch ${attempt}` }));
+      expect(response.status).toBe(503);
+    }
+
+    vi.mocked(acquireHeavyAttachmentRequest).mockReturnValue({ release: vi.fn() });
+    const admitted = await POST(multipartRequest({ query: "Jetzt verarbeiten" }));
+    expect(admitted.status).toBe(200);
+    await admitted.text();
+  });
+
   it("rejects a native aggregate attachment overflow with 413 before runs, persistence, providers, and WeKnora", async () => {
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
       id: "12121212-1212-4121-8121-121212121212",
@@ -943,6 +985,83 @@ describe("POST /api/fred/chat", () => {
     expect(stopFredUpstreamSession).not.toHaveBeenCalled();
     expect(mockRecordAdminRequest).not.toHaveBeenCalled();
     expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("stream-rejects more than 35 MiB of native files before receipt creation or provider work", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "77777777-7777-4777-8777-777777777777",
+    });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc: vi.fn() } as never);
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "mineru_with_omniroute_luna_fallback",
+      fredAttachmentMode: "weknora_native",
+      scanningProvider: "omniroute_luna",
+      modelId: "model/x",
+      prompt: "prompt",
+      updatedAt: "2026-07-19T10:00:00.000Z",
+      updatedBy: userId,
+    });
+    const first = new Uint8Array(20 * 1_024 * 1_024);
+    const second = new Uint8Array(15 * 1_024 * 1_024 + 1);
+    first.set(new TextEncoder().encode("%PDF-"));
+    second.set(new TextEncoder().encode("%PDF-"));
+    const formData = new FormData();
+    formData.append("payload", JSON.stringify({ query: "Prüfen" }));
+    formData.append("attachment", new File([first], "eins.pdf", { type: "application/pdf" }));
+    formData.append("attachment", new File([second], "zwei.pdf", { type: "application/pdf" }));
+
+    const response = await POST(new Request("https://findog.at/api/fred/chat", {
+      method: "POST",
+      headers: { Authorization: "Bearer access-token", "Sec-Fetch-Site": "same-origin" },
+      body: formData,
+    }));
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({
+      error: "Die Fred-Anhänge sind zusammen zu groß. Bitte reduziere die Gesamtgröße.",
+    });
+    expect(mockCreateFredRequestReceipt).not.toHaveBeenCalled();
+    expect(assertFredNativeAttachmentTotalSize).not.toHaveBeenCalled();
+  });
+
+  it("cancels an under-reported native multipart stream at its bounded request cap", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "88888888-8888-4888-8888-888888888888",
+    });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc: vi.fn() } as never);
+    vi.mocked(getScanningSettings).mockResolvedValue({
+      documentPipeline: "mineru_with_omniroute_luna_fallback",
+      fredAttachmentMode: "weknora_native",
+      scanningProvider: "omniroute_luna",
+      modelId: "model/x",
+      prompt: "prompt",
+      updatedAt: "2026-07-19T10:00:00.000Z",
+      updatedBy: userId,
+    });
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_FRED_NATIVE_MULTIPART_BYTES + 1));
+      },
+      cancel,
+    });
+    const init: RequestInit & { duplex: "half" } = {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer access-token",
+        "Content-Type": "multipart/form-data; boundary=underreported",
+        "Content-Length": "1",
+        "Sec-Fetch-Site": "same-origin",
+      },
+      body,
+      duplex: "half",
+    };
+
+    const response = await POST(new Request("https://findog.at/api/fred/chat", init));
+
+    expect(response.status).toBe(413);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(mockCreateFredRequestReceipt).not.toHaveBeenCalled();
   });
 
   it("leaves the larger Findog preprocessing aggregate behavior in default mode unchanged", async () => {
@@ -2039,7 +2158,7 @@ describe("POST /api/fred/chat", () => {
     });
 
     it("marks failed on upstream EOF without a complete/final answer and emits exactly one EOF error", async () => {
-      const { from, insertSingle, updateChain } = makeGenRunSupabase();
+      const { from, updateChain } = makeGenRunSupabase();
       const rpc = vi.fn()
         .mockResolvedValueOnce({ data: summaryRow, error: null });
       vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
@@ -2077,7 +2196,7 @@ describe("POST /api/fred/chat", () => {
     });
 
     it("marks completed when the normal final stream completes and does not emit the EOF error", async () => {
-      const { from, insertSingle, updateChain } = makeGenRunSupabase();
+      const { from, updateChain } = makeGenRunSupabase();
       const rpc = rpcForTurn();
       vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
       // Use the default upstreamStream() which includes "complete"
@@ -2106,7 +2225,7 @@ describe("POST /api/fred/chat", () => {
     });
 
     it("marks cancelled on explicit browser abort", async () => {
-      const { from, insertSingle, updateChain } = makeGenRunSupabase();
+      const { from, updateChain } = makeGenRunSupabase();
       const rpc = vi.fn()
         .mockResolvedValueOnce({ data: summaryRow, error: null });
       vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
@@ -2147,7 +2266,7 @@ describe("POST /api/fred/chat", () => {
     });
 
     it("does not break the successful answer when diagnostics persistence fails", async () => {
-      const { from, insertSingle, updateChain } = makeGenRunSupabase({ insertError: new Error("DB down") });
+      const { from } = makeGenRunSupabase({ insertError: new Error("DB down") });
       const rpc = rpcForTurn();
       vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
       vi.mocked(openFredUpstreamStream).mockImplementation(async () => upstreamStream());

@@ -8,6 +8,10 @@ import {
   type VerifiedBfgCitation,
 } from "@/lib/findok/bfg-citations";
 import {
+  EOF_WITHOUT_FINAL_CLIENT_MESSAGE,
+  isUpstreamCompleteEvent,
+} from "@/lib/fred/run-diagnostics";
+import {
   fredAgentName,
   type FredAgentKey,
 } from "@/lib/weknora/fred-agent";
@@ -458,6 +462,7 @@ export async function* executeFredTurn(
     const decoder = new TextDecoder();
 
     let buffer = "";
+    let sawUpstreamCompletion = false;
     const externalAbort = abortSignalPromise(request.signal);
     let stoppedByCaller = false;
 
@@ -554,6 +559,9 @@ export async function* executeFredTurn(
           // yield is handled by caller
         }
       }
+      if (isUpstreamCompleteEvent(parsed)) {
+        sawUpstreamCompletion = true;
+      }
       const event = upstreamDelta(parsed);
       if (event.content) {
         answerChunks.push(event.content);
@@ -610,12 +618,14 @@ export async function* executeFredTurn(
 
     if (stoppedByCaller) {
       acceptingCitationUpdates = false;
-      await request.onRequestTransition?.({
-        status: "cancelled",
-        failurePhase: requestFailurePhase,
-        errorCode: "request_cancelled",
-      });
-      requestTerminal = true;
+      if (!request.deferUnsuccessfulTerminalTransition) {
+        await request.onRequestTransition?.({
+          status: "cancelled",
+          failurePhase: requestFailurePhase,
+          errorCode: "request_cancelled",
+        });
+        requestTerminal = true;
+      }
       return {
         answer: "",
         rawAnswer: answerChunks.join(""),
@@ -629,6 +639,10 @@ export async function* executeFredTurn(
 
     buffer += decoder.decode();
     if (buffer.trim()) processFrame(buffer);
+
+    if (!sawUpstreamCompletion) {
+      throw new UserVisibleError(EOF_WITHOUT_FINAL_CLIENT_MESSAGE, 502);
+    }
 
     const rawAnswer = answerChunks.join("");
     const plainFinalAnswer = rawAnswer.trim();
@@ -740,7 +754,11 @@ export async function* executeFredTurn(
     };
   } catch (error) {
     acceptingCitationUpdates = false;
-    if (!requestTerminal && request.onRequestTransition) {
+    if (
+      !requestTerminal
+      && request.onRequestTransition
+      && !request.deferUnsuccessfulTerminalTransition
+    ) {
       try {
         await request.onRequestTransition({
           status: request.signal?.aborted ? "cancelled" : "failed",

@@ -47,7 +47,9 @@ import type {
 } from "@/lib/fred/turn-service";
 import {
   createFredRequestReceipt,
+  resumeFredRequestReceipt,
   transitionFredRequestReceipt,
+  transitionFredRequestReceiptIfPresent,
 } from "@/lib/fred/request-ledger";
 
 interface RpcResult {
@@ -113,7 +115,7 @@ export function buildRpc(supabase: Supabase): JobQueueRpc {
     claimPending: (params) => invokeRpc(supabase, "claim_pending_telegram_updates", params),
     heartbeat: (params) => invokeRpc(supabase, "heartbeat_telegram_update", params),
     complete: (params) => invokeRpc(supabase, "complete_telegram_update", params),
-    retry: (params) => invokeRpc(supabase, "retry_telegram_update", params),
+    retry: (params) => invokeRpc(supabase, "retry_or_cancel_telegram_update", params),
     cancel: (params) => invokeRpc(supabase, "cancel_telegram_update", params),
     cancelAll: (params) => invokeRpc(supabase, "cancel_all_telegram_updates_for_integration", params),
     fail: (params) => invokeRpc(supabase, "fail_telegram_update", params),
@@ -223,6 +225,18 @@ export function buildStorage(supabase: Supabase): WorkerStorage {
         userEventId: params.userEventId,
         assistantEventId: params.assistantEventId,
         telegramUpdateId: params.telegramUpdateId,
+        updateRowId: params.updateRowId,
+        leaseId: params.leaseId,
+        conversationId: params.conversationId,
+        webSearchEnabled: params.webSearchEnabled,
+        proModeEnabled: params.proModeEnabled,
+      });
+    },
+
+    async resumeRequestReceipt(params) {
+      return resumeFredRequestReceipt({
+        supabase,
+        ...params,
       });
     },
 
@@ -233,33 +247,46 @@ export function buildStorage(supabase: Supabase): WorkerStorage {
       });
     },
 
-    async getDeliveryState(updateRowId) {
-      const { data, error } = await supabase
-        .from("telegram_deliveries")
-        .select("chunk_index,status")
-        .eq("update_id", updateRowId)
-        .order("chunk_index", { ascending: true });
-      if (error) throw dbError("TELEGRAM_DELIVERY_READ_FAILED");
-      return (data ?? []).map((row: { chunk_index: unknown; status: unknown }) => ({
-        chunkIndex: Number(row.chunk_index),
-        status: String(row.status),
-      }));
+    async transitionRequestReceiptIfPresent(params) {
+      return transitionFredRequestReceiptIfPresent({
+        supabase,
+        ...params,
+      });
     },
 
-    async recordDelivery(updateRowId, chunkIndex, content, status, telegramMessageId) {
-      const { error } = await supabase.from("telegram_deliveries").upsert(
-        {
-          update_id: updateRowId,
-          chunk_index: chunkIndex,
-          message_content: content,
-          status,
-          telegram_message_id: telegramMessageId ?? null,
-          sent_at: status === "sent" ? new Date().toISOString() : null,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "update_id,chunk_index" },
-      );
-      if (error) throw dbError("TELEGRAM_DELIVERY_WRITE_FAILED");
+    async claimDelivery(params) {
+      const { data, error } = await supabase.rpc("claim_telegram_delivery_chunk", {
+        p_update_id: params.updateRowId,
+        p_chunk_index: params.chunkIndex,
+        p_lease_id: params.leaseId,
+        p_message_content: params.content,
+      });
+      if (
+        error
+        || (data !== "claimed"
+          && data !== "sent"
+          && data !== "uncertain"
+          && data !== "cancelled"
+          && data !== "lease_lost")
+      ) {
+        throw dbError("TELEGRAM_DELIVERY_CLAIM_FAILED");
+      }
+      return data;
+    },
+
+    async finishDelivery(params) {
+      const { data, error } = await supabase.rpc("finish_telegram_delivery_chunk", {
+        p_update_id: params.updateRowId,
+        p_chunk_index: params.chunkIndex,
+        p_lease_id: params.leaseId,
+        p_status: params.status,
+        p_telegram_message_id: params.telegramMessageId ?? null,
+        p_last_error_code: params.lastErrorCode ?? null,
+      });
+      if (error || typeof data !== "boolean") {
+        throw dbError("TELEGRAM_DELIVERY_FINISH_FAILED");
+      }
+      return data;
     },
 
     async setMode(integrationId, mode, enabled) {
