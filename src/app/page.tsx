@@ -91,7 +91,7 @@ import AdminFeedbackView from "@/components/admin-feedback-view";
 import AdminDownloads from "@/components/admin-downloads";
 import AdminDashboardNews from "@/components/admin-dashboard-news";
 import AdminBfgNewsletters from "@/components/admin-bfg-newsletters";
-import AdminOpenRouterUsage from "@/components/admin-openrouter-usage";
+import AdminOmniRouteUsage from "@/components/admin-omniroute-usage";
 import DownloadsView from "@/components/downloads-view";
 import BfgNewsletterView from "@/components/bfg-newsletter-view";
 import DashboardView, { type DashboardAppTarget } from "@/components/dashboard-view";
@@ -1175,7 +1175,7 @@ function GermanPensionOptionView() {
 
 
 
-const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback", "downloads", "dashboard-news", "bfg-newsletters", "openrouter"] as const;
+const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback", "downloads", "dashboard-news", "bfg-newsletters", "omniroute"] as const;
 function handleAdminTabKeyDown(event: React.KeyboardEvent, currentTab: string): void {
   const currentIndex = ADMIN_TAB_IDS.indexOf(currentTab as typeof ADMIN_TAB_IDS[number]);
   let nextIndex: number | undefined;
@@ -1227,7 +1227,7 @@ export default function Home() {
   const [isAdminUsersLoading, setIsAdminUsersLoading] = useState(false);
   const [isAdminUserCreating, setIsAdminUserCreating] = useState(false);
   const [isAdminUserMutationRunning, setIsAdminUserMutationRunning] = useState(false);
-  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "dashboard-news" | "bfg-newsletters" | "openrouter">("scanning");
+  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "dashboard-news" | "bfg-newsletters" | "omniroute">("scanning");
   const [scanningDocumentPipeline, setScanningDocumentPipeline] = useState<DocumentPipeline>(DEFAULT_DOCUMENT_PIPELINE);
   const [fredAttachmentMode, setFredAttachmentMode] = useState<FredAttachmentMode>(DEFAULT_FRED_ATTACHMENT_MODE);
   const [scanningProvider, setScanningProvider] = useState<ScanningProvider>(DEFAULT_SCANNING_PROVIDER);
@@ -4252,15 +4252,15 @@ export default function Home() {
                 BFG Newsletter
               </button>
               <button
-                id="admin-tab-openrouter"
-                className={`admin-tab-button ${adminTab === "openrouter" ? "active" : ""}`}
+                id="admin-tab-omniroute"
+                className={`admin-tab-button ${adminTab === "omniroute" ? "active" : ""}`}
                 role="tab"
-                aria-selected={adminTab === "openrouter"}
-                aria-controls="admin-panel-openrouter"
-                onClick={() => setAdminTab("openrouter")}
-                onKeyDown={(e) => handleAdminTabKeyDown(e, "openrouter")}
+                aria-selected={adminTab === "omniroute"}
+                aria-controls="admin-panel-omniroute"
+                onClick={() => setAdminTab("omniroute")}
+                onKeyDown={(e) => handleAdminTabKeyDown(e, "omniroute")}
               >
-                OpenRouter-Nutzung
+                OmniRoute Stats
               </button>
             </div>
             {adminTab === "scanning" ? (
@@ -4541,8 +4541,8 @@ export default function Home() {
               <AdminDashboardNews accessToken={session?.access_token ?? ""} />
             ) : adminTab === "bfg-newsletters" ? (
               <AdminBfgNewsletters accessToken={session?.access_token ?? ""} />
-            ) : adminTab === "openrouter" ? (
-              <AdminOpenRouterUsage accessToken={session?.access_token ?? ""} />
+            ) : adminTab === "omniroute" ? (
+              <AdminOmniRouteUsage accessToken={session?.access_token ?? ""} />
             ) : null}
           </div>
         </section>

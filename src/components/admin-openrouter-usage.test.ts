@@ -11,19 +11,17 @@ const componentSource = readFileSync(
 const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
 describe("Admin OpenRouter-Nutzung UI", () => {
-  it("renders a dedicated keyboard-navigable top-level OpenRouter admin tab in page.tsx", () => {
-    expect(pageSource).toContain('id="admin-tab-openrouter"');
-    expect(pageSource).toContain('aria-controls="admin-panel-openrouter"');
-    expect(pageSource).toContain('onClick={() => setAdminTab("openrouter")}');
-    expect(pageSource).toContain('onKeyDown={(e) => handleAdminTabKeyDown(e, "openrouter")}');
-    expect(pageSource).toContain("OpenRouter-Nutzung");
-    expect(pageSource).toMatch(/ADMIN_TAB_IDS\s*=\s*\[[^\]]*"openrouter"[^\]]*\]/u);
-    expect(pageSource).not.toContain('id="admin-tab-omniroute"');
+  it("keeps the dormant OpenRouter component source while switching the active tab to OmniRoute", () => {
+    expect(pageSource).toContain('id="admin-tab-omniroute"');
+    expect(pageSource).toContain('aria-controls="admin-panel-omniroute"');
+    expect(pageSource).toContain('onClick={() => setAdminTab("omniroute")}');
+    expect(pageSource).toContain('onKeyDown={(e) => handleAdminTabKeyDown(e, "omniroute")}');
+    expect(pageSource).toMatch(/ADMIN_TAB_IDS\s*=\s*\[[^\]]*"omniroute"[^\]]*\]/u);
+    expect(pageSource).not.toContain('id="admin-tab-openrouter"');
+    expect(pageSource).not.toContain('adminTab === "openrouter"');
   });
 
-  it("mounts the standalone component only inside its selected openrouter tabpanel", () => {
-    expect(pageSource).toContain('adminTab === "openrouter" ? (');
-    expect(pageSource).toContain('<AdminOpenRouterUsage accessToken={session?.access_token ?? ""');
+  it("preserves the standalone component structure and panel attributes", () => {
     expect(componentSource).toContain('id="admin-panel-openrouter"');
     expect(componentSource).toContain('aria-labelledby="admin-tab-openrouter"');
     expect(componentSource).not.toContain("AdminScanning");
