@@ -4,9 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   OmniRouteAdminUsageSnapshot,
-  OmniRouteQuotaSnapshot,
-  OmniRouteModelHealth,
+  OmniRouteExchangeRateSnapshot,
+  OmniRouteModelUsage,
   OmniRouteProviderHealth,
+  OmniRouteQuotaSnapshot,
+  OmniRouteRouteSnapshot,
   OmniRouteUsageRange,
 } from "@/lib/omniroute-usage-types";
 
@@ -14,16 +16,30 @@ type AdminOmniRouteUsageProps = {
   accessToken: string;
 };
 
-const RANGE_OPTIONS: Array<{ value: OmniRouteUsageRange; label: string }> = [
-  { value: "24h", label: "Heute (24 Stunden)" },
-  { value: "7d", label: "7 Tage" },
-  { value: "30d", label: "30 Tage" },
+const RANGE_OPTIONS: Array<{ value: OmniRouteUsageRange; label: string; shortLabel: string }> = [
+  { value: "24h", label: "Letzte 24 Stunden", shortLabel: "24 h" },
+  { value: "7d", label: "Letzte 7 Tage", shortLabel: "7 Tage" },
+  { value: "30d", label: "Letzte 30 Tage", shortLabel: "30 Tage" },
 ];
 
 function optionalRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function validExchangeRate(value: unknown): value is OmniRouteExchangeRateSnapshot | null {
+  if (value === null) return true;
+  const rate = optionalRecord(value);
+  return Boolean(
+    rate
+      && typeof rate.rate === "number"
+      && Number.isFinite(rate.rate)
+      && rate.rate > 0
+      && typeof rate.date === "string"
+      && typeof rate.source === "string"
+      && typeof rate.fetchedAt === "string",
+  );
 }
 
 function snapshotFromPayload(value: unknown): OmniRouteAdminUsageSnapshot | null {
@@ -33,10 +49,14 @@ function snapshotFromPayload(value: unknown): OmniRouteAdminUsageSnapshot | null
     || typeof payload.generatedAt !== "string"
     || typeof payload.stale !== "boolean"
     || (payload.range !== "24h" && payload.range !== "7d" && payload.range !== "30d")
+    || typeof payload.userQuestions !== "number"
+    || !Number.isSafeInteger(payload.userQuestions)
+    || payload.userQuestions < 0
+    || !validExchangeRate(payload.exchangeRate)
+    || (payload.costConversionWarning !== null && typeof payload.costConversionWarning !== "string")
     || !("quota" in payload)
     || !("codexQuota" in payload)
     || !("usage" in payload)
-    || !("routes" in payload)
     || !Array.isArray(payload.routes)
     || !Array.isArray(payload.providerHealth)
     || (payload.warning !== undefined && typeof payload.warning !== "string")
@@ -64,8 +84,10 @@ function formatPercent(value: number | null | undefined): string {
   return value === null || value === undefined ? "–" : `${formatNumber(value, 1)} %`;
 }
 
-function formatCost(value: number | null | undefined): string {
-  return value === null || value === undefined ? "–" : formatNumber(value, 4);
+function formatEuro(value: number | null | undefined): string {
+  return value === null || value === undefined
+    ? "Nicht verfügbar"
+    : `${formatNumber(value, 4)} €`;
 }
 
 function formatDateTime(value: string | null | undefined): string {
@@ -79,6 +101,14 @@ function formatDateTime(value: string | null | undefined): string {
   }).format(date)} Uhr`;
 }
 
+function formatDate(value: string | null | undefined): string {
+  if (!value) return "–";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "–"
+    : new Intl.DateTimeFormat("de-AT", { dateStyle: "medium", timeZone: "Europe/Vienna" }).format(date);
+}
+
 function formatDuration(value: number | null | undefined): string {
   if (value === null || value === undefined) return "–";
   if (value < 1_000) return `${formatNumber(value)} ms`;
@@ -90,24 +120,26 @@ function metricValue(value: string | number, unit?: string): string {
   return unit ? `${value} ${unit}` : String(value);
 }
 
+function compactNumber(value: number | null | undefined): string {
+  return value === null || value === undefined
+    ? "–"
+    : new Intl.NumberFormat("de-AT", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
+
 function remainingAtSnapshot(value: number | null, generatedAt: string | undefined): number | null {
   if (value === null) return null;
   const elapsed = generatedAt ? Math.max(0, Date.now() - new Date(generatedAt).getTime()) : 0;
   return value - elapsed;
 }
 
-function isRateLimited(
-  provider: OmniRouteProviderHealth | undefined,
-  generatedAt: string | undefined,
-): boolean {
+function isRateLimited(provider: OmniRouteProviderHealth | undefined, generatedAt: string | undefined): boolean {
   if (!provider) return false;
   if ((remainingAtSnapshot(provider.cooldownRemainingMs, generatedAt) ?? 0) > 0) return true;
-  return provider.models.some((model: OmniRouteModelHealth) => {
+  return provider.models.some((model) => {
     if (!model.isLockedOut) return false;
     const remaining = remainingAtSnapshot(model.lockoutRemainingMs, generatedAt);
     return remaining === null || remaining > 0;
-  })
-    || (provider.rateLimitedUntil !== null && new Date(provider.rateLimitedUntil).getTime() > Date.now());
+  }) || (provider.rateLimitedUntil !== null && new Date(provider.rateLimitedUntil).getTime() > Date.now());
 }
 
 function progressValue(value: number | null | undefined): number {
@@ -115,9 +147,37 @@ function progressValue(value: number | null | undefined): number {
   return Math.max(0, Math.min(100, value));
 }
 
-function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
+function providerLabel(provider: OmniRouteProviderHealth["provider"]): string {
+  return provider === "codex" ? "OpenAI Codex" : "Gemini / Antigravity";
+}
+
+function statusLabel(active: boolean): string {
+  return active ? "Aktiv" : "Nein";
+}
+
+function Metric({ label, value, detail, tone }: { label: string; value: string; detail?: string; tone?: "primary" | "warning" }) {
   return (
-    <div className="admin-omniroute-metric">
+    <div className={`admin-omniroute-metric${tone ? ` admin-omniroute-metric-${tone}` : ""}`}>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+      {detail ? <small>{detail}</small> : null}
+    </div>
+  );
+}
+
+function KpiCard({
+  label,
+  value,
+  detail,
+  emphasis,
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+  emphasis?: "blue" | "yellow";
+}) {
+  return (
+    <div className={`admin-omniroute-kpi${emphasis ? ` admin-omniroute-kpi-${emphasis}` : ""}`}>
       <dt>{label}</dt>
       <dd>{value}</dd>
       {detail ? <small>{detail}</small> : null}
@@ -128,76 +188,198 @@ function Metric({ label, value, detail }: { label: string; value: string; detail
 function normalizedQuotaUsage(quota: OmniRouteQuotaSnapshot | null): string {
   if (!quota) return "–";
   if (quota.unlimited) {
-    return quota.used === null
-      ? "Unbegrenzt"
-      : `${formatNumber(quota.used)} Einheiten · unbegrenzt`;
+    return quota.used === null ? "Unbegrenzt" : `${formatNumber(quota.used)} Einheiten · unbegrenzt`;
   }
   if (quota.used === null || quota.total === null) return "–";
   return metricValue(`${formatNumber(quota.used)} / ${formatNumber(quota.total)}`, "Einheiten");
 }
 
-function QuotaPanel({
-  title,
+function QuotaDetails({
   quota,
   health,
   generatedAt,
-  headingId,
 }: {
-  title: string;
   quota: OmniRouteQuotaSnapshot | null;
-  health: OmniRouteProviderHealth | undefined;
-  generatedAt: string | undefined;
-  headingId: string;
+  health: OmniRouteProviderHealth;
+  generatedAt: string;
 }) {
   return (
-    <section className="admin-omniroute-section" aria-labelledby={headingId}>
-      <h3 id={headingId}>{title}</h3>
-      <div className="admin-omniroute-quota">
-        <div className="admin-omniroute-progress">
-          <div className="admin-omniroute-progress-label">
-            <span>Verbleibend</span>
-            <strong>{formatPercent(quota?.remainingPercent)}</strong>
-          </div>
-          {quota?.remainingPercent !== null && quota?.remainingPercent !== undefined ? (
-            <div
-              role="progressbar"
-              aria-labelledby={headingId}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={progressValue(quota.remainingPercent)}
-              aria-valuetext={`${formatNumber(quota.remainingPercent, 1)} Prozent verbleibend`}
-            >
-              <span style={{ width: `${progressValue(quota.remainingPercent)}%` }} />
-            </div>
-          ) : (
-            <p className="admin-empty-state">Keine Quotenwerte vorhanden.</p>
-          )}
+    <div className="admin-omniroute-quota">
+      <div className="admin-omniroute-progress">
+        <div className="admin-omniroute-progress-label">
+          <span>Verbleibend</span>
+          <strong>{formatPercent(quota?.remainingPercent)}</strong>
         </div>
-        <dl className="admin-omniroute-metrics">
-          <Metric label="Normalisierte Nutzung" value={normalizedQuotaUsage(quota)} />
-          <Metric label="Verbleibende Einheiten" value={quota?.remaining === null || quota?.remaining === undefined ? "–" : formatNumber(quota.remaining)} />
-          <Metric label="Reset / Fenster" value={formatDateTime(quota?.resetAt)} detail={quota?.quotaLabel ?? undefined} />
-          <Metric label="Plan" value={quota?.plan ?? "–"} />
-          <Metric label="Quota-Quelle" value={quota?.source ?? "–"} />
-          <Metric label="Letzte Quota-Synchronisation" value={formatDateTime(quota?.quotaFetchedAt)} />
-          <Metric
-            label="Quota-Intervall"
-            value={quota?.quotaSyncIntervalMinutes === null || quota?.quotaSyncIntervalMinutes === undefined
-              ? "–"
-              : metricValue(formatNumber(quota.quotaSyncIntervalMinutes), "Minuten")}
-          />
-          <Metric
-            label="Aktiver Cooldown / Rate-Limit"
-            value={isRateLimited(health, generatedAt) ? "Aktiv" : "Nein"}
-            detail={health?.cooldownRemainingMs
-              ? `Verbleibend ${formatDuration(remainingAtSnapshot(health.cooldownRemainingMs, generatedAt))}`
-              : health?.rateLimitedUntil
-                ? `Bis ${formatDateTime(health.rateLimitedUntil)}`
-                : undefined}
-          />
-        </dl>
+        {quota?.remainingPercent !== null && quota?.remainingPercent !== undefined ? (
+          <div
+            role="progressbar"
+            aria-label={`${providerLabel(health.provider)} verbleibende Quote`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressValue(quota.remainingPercent)}
+            aria-valuetext={`${formatNumber(quota.remainingPercent, 1)} Prozent verbleibend`}
+          >
+            <span style={{ width: `${progressValue(quota.remainingPercent)}%` }} />
+          </div>
+        ) : (
+          <p className="admin-empty-state">Keine Quotenwerte vorhanden.</p>
+        )}
       </div>
-    </section>
+      <dl className="admin-omniroute-metric-grid">
+        <Metric label="Normalisierte Nutzung" value={normalizedQuotaUsage(quota)} />
+        <Metric label="Verbleibende Einheiten" value={quota?.remaining === null || quota?.remaining === undefined ? "–" : formatNumber(quota.remaining)} />
+        <Metric label="Reset / Fenster" value={formatDateTime(quota?.resetAt)} detail={quota?.quotaLabel ?? undefined} />
+        <Metric label="Quota-Quelle" value={quota?.source ?? "–"} detail={quota?.plan ?? undefined} />
+        <Metric label="Letzte Synchronisation" value={formatDateTime(quota?.quotaFetchedAt)} detail={quota?.quotaSyncIntervalMinutes === null || quota?.quotaSyncIntervalMinutes === undefined ? undefined : metricValue(formatNumber(quota.quotaSyncIntervalMinutes), "Minuten")} />
+        <Metric label="Cooldown / Rate-Limit" value={statusLabel(isRateLimited(health, generatedAt))} tone={isRateLimited(health, generatedAt) ? "warning" : undefined} detail={health.cooldownRemainingMs ? `Verbleibend ${formatDuration(remainingAtSnapshot(health.cooldownRemainingMs, generatedAt))}` : health.rateLimitedUntil ? `Bis ${formatDateTime(health.rateLimitedUntil)}` : undefined} />
+      </dl>
+    </div>
+  );
+}
+
+function ProviderHealthCard({
+  health,
+  quota,
+  generatedAt,
+}: {
+  health: OmniRouteProviderHealth;
+  quota: OmniRouteQuotaSnapshot | null;
+  generatedAt: string;
+}) {
+  const limited = isRateLimited(health, generatedAt);
+  return (
+    <article className={`admin-omniroute-provider-card${limited ? " admin-omniroute-provider-warning" : ""}`}>
+      <div className="admin-omniroute-provider-heading">
+        <h4>{providerLabel(health.provider)}</h4>
+        <span className={`admin-omniroute-pill${limited ? " admin-omniroute-pill-warning" : ""}`}>
+          {health.state ?? "Status unbekannt"}
+        </span>
+      </div>
+      <dl className="admin-omniroute-metric-grid">
+        <Metric label="Anfragen" value={formatNumber(health.requests)} />
+        <Metric label="Erfolgsquote" value={formatPercent(health.successRatePct)} />
+        <Metric label="Latenz" value={formatDuration(health.avgLatencyMs)} />
+        <Metric label="Verbindungen" value={formatNumber(health.connections)} />
+        <Metric label="Gesperrte Modelle" value={formatNumber(health.modelLockoutCount)} />
+        <Metric label="Letzter Fehler" value={[health.lastErrorType, health.lastErrorCode].filter(Boolean).join(" · ") || "–"} detail={formatDateTime(health.lastErrorAt)} />
+      </dl>
+      <QuotaDetails quota={quota} health={health} generatedAt={generatedAt} />
+      {health.models.length > 0 ? (
+        <ul className="admin-omniroute-model-health-list">
+          {health.models.map((model) => (
+            <li key={model.model}>
+              <span className="admin-omniroute-model-name">{model.model}</span>
+              <dl>
+                <Metric label="Status" value={model.status ?? model.lastStatus ?? "–"} detail={model.isLockedOut ? `Lockout aktiv · ${formatDuration(remainingAtSnapshot(model.lockoutRemainingMs, generatedAt))}` : undefined} />
+                <Metric label="Anfragen" value={formatNumber(model.requests)} />
+                <Metric label="Erfolgsquote" value={formatPercent(model.successRatePct)} />
+                <Metric label="Latenz" value={formatDuration(model.avgLatencyMs)} />
+              </dl>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="admin-empty-state">Keine Modell-Health-Werte für konfigurierte Ziele.</p>
+      )}
+    </article>
+  );
+}
+
+function ModelPerformanceCard({ model }: { model: OmniRouteModelUsage }) {
+  return (
+    <article className="admin-omniroute-model-card">
+      <div>
+        <h4>{model.model}</h4>
+        <span className="admin-omniroute-pill">{model.provider}</span>
+      </div>
+      <dl className="admin-omniroute-metric-grid">
+        <Metric label="Anfragen" value={formatNumber(model.requests)} />
+        <Metric label="Tokens" value={compactNumber(model.totalTokens)} detail={`${formatNumber(model.promptTokens)} in · ${formatNumber(model.completionTokens)} out`} />
+        <Metric label="Erfolgsquote" value={formatPercent(model.successRatePct)} />
+        <Metric label="Latenz" value={formatDuration(model.avgLatencyMs)} />
+        <Metric label="Kosten (EUR)" value={formatEuro(model.costEur)} />
+        <Metric label="Letzte Nutzung" value={formatDateTime(model.lastUsed)} />
+      </dl>
+    </article>
+  );
+}
+
+function RouteCard({ route }: { route: OmniRouteRouteSnapshot }) {
+  return (
+    <article className={`admin-omniroute-route-card${route.productionTraffic ? " admin-omniroute-route-live" : ""}`}>
+      <div className="admin-omniroute-route-heading">
+        <div>
+          <h4>{route.name}</h4>
+          <p>Strategie: {route.strategy ?? "–"}{route.version === null ? "" : ` · Version ${formatNumber(route.version)}`}</p>
+        </div>
+        <span className={`admin-omniroute-pill${route.productionTraffic ? " admin-omniroute-pill-blue" : ""}`}>
+          {route.productionTraffic ? "Produktion" : "Kein Produktions-Traffic"}
+        </span>
+      </div>
+      <ol className="admin-omniroute-target-flow" aria-label="Ziele in konfigurierter Reihenfolge">
+        {route.targets.map((target, index) => (
+          <li key={`${route.name}-${index}-${target}`}>
+            <span>{index === 0 ? "Primär" : `Stufe ${index + 1}`}</span>
+            <strong>{target}</strong>
+          </li>
+        ))}
+      </ol>
+      <dl className="admin-omniroute-metric-grid">
+        <Metric label="Anfragen" value={formatNumber(route.requests)} />
+        <Metric label="Erfolgreiche Anfragen" value={formatNumber(route.successes)} />
+        <Metric label="Fehler" value={formatNumber(route.failures)} />
+        <Metric label="Fallbacks" value={formatNumber(route.fallbacks)} detail={route.fallbackRatePct === null ? undefined : formatPercent(route.fallbackRatePct)} />
+        <Metric label="Erfolgsquote" value={formatPercent(route.successRatePct)} />
+        <Metric label="Latenz" value={formatDuration(route.avgLatencyMs)} />
+        <Metric label="Letzte Nutzung" value={formatDateTime(route.lastUsedAt)} />
+      </dl>
+      {route.models.length > 0 ? (
+        <ul className="admin-omniroute-route-models">
+          {route.models.map((model) => (
+            <li key={`${route.name}-${model.model}`}>
+              <span className="admin-omniroute-model-name">{model.model}</span>
+              <dl className="admin-omniroute-metric-grid">
+                <Metric label="Anfragen" value={formatNumber(model.requests)} />
+                <Metric label="Erfolge" value={formatNumber(model.successes)} />
+                <Metric label="Fehler" value={formatNumber(model.failures)} />
+                <Metric label="Latenz" value={formatDuration(model.avgLatencyMs)} />
+                <Metric label="Letzter Status" value={model.lastStatus ?? "–"} detail={formatDateTime(model.lastUsedAt)} />
+              </dl>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="admin-empty-state">Keine Zielmodell-Metriken im ausgewählten Zeitraum.</p>
+      )}
+    </article>
+  );
+}
+
+function TrendPanel({ snapshot }: { snapshot: OmniRouteAdminUsageSnapshot }) {
+  const days = snapshot.usage.dailyTrend;
+  const maxRequests = Math.max(1, ...days.map((day) => day.requests ?? 0));
+  if (days.length === 0) return <p className="admin-empty-state">Kein Tagesverlauf vorhanden.</p>;
+  return (
+    <ol className="admin-omniroute-trend">
+      {days.map((day) => {
+        const width = ((day.requests ?? 0) / maxRequests) * 100;
+        return (
+          <li key={day.date}>
+            <div className="admin-omniroute-trend-head">
+              <time dateTime={day.date}>{formatDate(day.date)}</time>
+              <strong>{formatNumber(day.requests)} Anfragen</strong>
+            </div>
+            <div className="admin-omniroute-trend-track" aria-hidden="true">
+              <span style={{ width: `${Math.max(2, width)}%` }} />
+            </div>
+            <dl>
+              <Metric label="Tokens" value={formatNumber(day.tokens)} />
+              <Metric label="Kosten (EUR)" value={formatEuro(day.costEur)} />
+            </dl>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -233,9 +415,7 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
     } catch (loadError) {
       if (loadError instanceof DOMException && loadError.name === "AbortError") return;
       if (loadIdRef.current !== loadId) return;
-      setError(loadError instanceof Error
-        ? loadError.message
-        : "Die OmniRoute-Nutzung konnte nicht geladen werden.");
+      setError(loadError instanceof Error ? loadError.message : "Die OmniRoute-Nutzung konnte nicht geladen werden.");
     } finally {
       if (loadIdRef.current === loadId) setIsLoading(false);
     }
@@ -250,12 +430,12 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
     };
   }, [load, range]);
 
-  const quota = snapshot?.quota ?? null;
   const summary = snapshot?.usage.summary ?? null;
+  const models = snapshot?.usage.models ?? [];
   const routes = snapshot?.routes ?? [];
-  const codexQuota = snapshot?.codexQuota ?? null;
-  const codexHealth = snapshot?.providerHealth.find((provider) => provider.provider === "codex");
-  const geminiHealth = snapshot?.providerHealth.find((provider) => provider.provider === "gemini");
+  const providers = snapshot?.providerHealth ?? [];
+  const isBusy = isLoading && Boolean(snapshot);
+  const rangeLabel = RANGE_OPTIONS.find((option) => option.value === range)?.label ?? "";
 
   return (
     <section
@@ -265,10 +445,11 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
       aria-labelledby="admin-tab-omniroute"
     >
       <div className="form-generator-card admin-omniroute-card">
-        <div className="admin-omniroute-heading">
+        <header className="admin-omniroute-heading">
           <div>
+            <p className="admin-omniroute-eyebrow">Operations Console</p>
             <h2>OmniRoute Stats</h2>
-            <p>Geschützte Serverauswertung von Codex-OAuth- und Gemini-Quoten, Nutzung, Routen und Provider-Health.</p>
+            <p>Geschützte Auswertung aller OmniRoute-Anfragen, konfigurierter Routen, Provider-Health und EUR-Kosten.</p>
           </div>
           <div className="admin-omniroute-controls">
             <label htmlFor="admin-omniroute-range">Zeitraum</label>
@@ -288,246 +469,112 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
               onClick={() => void load(range, true)}
               disabled={isLoading || !accessToken}
             >
-              {isLoading ? "Wird aktualisiert …" : "Aktualisieren"}
+              {isBusy ? "Aktualisiert …" : "Aktualisieren"}
             </button>
           </div>
-        </div>
+        </header>
 
         {error ? <div className="error-box" role="alert">{error}</div> : null}
-        {snapshot?.warning ? (
-          <div className="notice-box" role="status">
-            Veraltete Daten: {snapshot.warning}
-          </div>
+        {snapshot?.warning ? <div className="notice-box" role="status">Veraltete Daten: {snapshot.warning}</div> : null}
+        {snapshot?.costConversionWarning ? (
+          <div className="notice-box admin-omniroute-compact-warning" role="status">{snapshot.costConversionWarning}</div>
         ) : null}
 
         {isLoading && !snapshot ? (
-          <p className="admin-empty-state" role="status">OmniRoute-Daten werden geladen …</p>
+          <div className="admin-omniroute-loading" role="status">
+            <span aria-hidden="true" />
+            <p>OmniRoute-Daten werden geladen …</p>
+          </div>
         ) : !snapshot ? (
-          <p className="admin-empty-state">Keine OmniRoute-Daten verfügbar.</p>
+          <div className="admin-empty-state admin-omniroute-empty">
+            <p>Keine OmniRoute-Daten verfügbar.</p>
+          </div>
         ) : (
           <>
-            <p className="admin-omniroute-updated">
-              Zuletzt aktualisiert:{" "}
-              <time dateTime={snapshot.generatedAt}>{formatDateTime(snapshot.generatedAt)}</time>
-            </p>
+            <div className="admin-omniroute-metadata">
+              <dl>
+                <div><dt>Zuletzt aktualisiert</dt><dd><time dateTime={snapshot.generatedAt}>{formatDateTime(snapshot.generatedAt)}</time></dd></div>
+                <div><dt>Zeitraum</dt><dd>{rangeLabel}</dd></div>
+                <div>
+                  <dt>EUR-Referenzkurs</dt>
+                  <dd>{snapshot.exchangeRate ? `1 USD = ${formatNumber(snapshot.exchangeRate.rate, 4)} EUR` : "Nicht verfügbar"}</dd>
+                </div>
+                <div><dt>Kursdatum</dt><dd>{snapshot.exchangeRate ? `${formatDate(snapshot.exchangeRate.date)} · ${snapshot.exchangeRate.source}` : "–"}</dd></div>
+              </dl>
+              <span className={`admin-omniroute-pill${snapshot.stale ? " admin-omniroute-pill-warning" : " admin-omniroute-pill-blue"}`}>
+                {snapshot.stale ? "Veraltet" : "Aktuell"}
+              </span>
+            </div>
 
-            <QuotaPanel
-              title="Codex OAuth Quota"
-              headingId="admin-omniroute-codex-quota-title"
-              quota={codexQuota}
-              health={codexHealth}
-              generatedAt={snapshot.generatedAt}
-            />
-            <QuotaPanel
-              title="Gemini Flash Pool"
-              headingId="admin-omniroute-quota-title"
-              quota={quota}
-              health={geminiHealth}
-              generatedAt={snapshot.generatedAt}
-            />
-
-            <section className="admin-omniroute-section" aria-labelledby="admin-omniroute-usage-title">
-              <h3 id="admin-omniroute-usage-title">OmniRoute-Nutzung</h3>
-              <dl className="admin-omniroute-metrics">
-                <Metric label="Anfragen" value={formatNumber(summary?.totalRequests)} />
-                <Metric label="Eingabe-Tokens" value={formatNumber(summary?.promptTokens)} detail="Token" />
-                <Metric label="Ausgabe-Tokens" value={formatNumber(summary?.completionTokens)} detail="Token" />
-                <Metric label="Tokens insgesamt" value={formatNumber(summary?.totalTokens)} detail="Token" />
-                <Metric label="Erfolgsquote" value={formatPercent(summary?.successRatePct)} />
-                <Metric label="Durchschnittliche Latenz" value={formatDuration(summary?.avgLatencyMs)} />
-                <Metric label="Kosten (USD)" value={formatCost(summary?.totalCost)} />
-                <Metric label="Letzte Anfrage" value={formatDateTime(summary?.lastRequest)} />
-                <Metric label="Fallbacks" value={formatNumber(summary?.fallbackCount)} />
+            <section className="admin-omniroute-section admin-omniroute-summary" aria-labelledby="admin-omniroute-kpis-title">
+              <div className="admin-omniroute-section-heading">
+                <h3 id="admin-omniroute-kpis-title">Gesamtüberblick</h3>
+                <p>Alle OmniRoute-Anfragen im Zeitraum. Modell- und Provider-Details sind auf aktuell konfigurierte Ziele beschränkt.</p>
+              </div>
+              <dl className="admin-omniroute-kpis">
+                <KpiCard label="Anfragen" value={formatNumber(summary?.totalRequests)} detail={`Fallbacks: ${formatNumber(summary?.fallbackCount)}`} emphasis="blue" />
+                <KpiCard label="Erfolgsquote" value={formatPercent(summary?.successRatePct)} detail={`${formatNumber(summary?.successfulRequests)} erfolgreich`} />
+                <KpiCard label="Latenz Ø" value={formatDuration(summary?.avgLatencyMs)} detail={`Letzte Anfrage: ${formatDateTime(summary?.lastRequest)}`} />
+                <KpiCard label="Tokens" value={compactNumber(summary?.totalTokens)} detail={`${compactNumber(summary?.promptTokens)} in · ${compactNumber(summary?.completionTokens)} out`} />
+                <KpiCard label="Kosten (EUR)" value={formatEuro(summary?.totalCostEur)} detail={snapshot.exchangeRate ? "Referenz: Frankfurter USD→EUR" : "Kein gültiger EUR-Kurs"} emphasis="yellow" />
+                <KpiCard label="Findog-Fragen" value={formatNumber(snapshot.userQuestions)} detail="Exakte Anzahl Nutzerfragen" />
               </dl>
             </section>
 
+            <section className="admin-omniroute-section" aria-labelledby="admin-omniroute-models-title">
+              <div className="admin-omniroute-section-heading">
+                <h3 id="admin-omniroute-models-title">Konfigurierte Modell-Performance</h3>
+                <p>Nur Zielmodelle aus der aktuellen Route-Konfiguration.</p>
+              </div>
+              {models.length > 0 ? (
+                <div className="admin-omniroute-model-grid">
+                  {models.map((model) => <ModelPerformanceCard key={`${model.provider}-${model.model}`} model={model} />)}
+                </div>
+              ) : (
+                <p className="admin-empty-state">Keine Nutzung für aktuell konfigurierte Zielmodelle.</p>
+              )}
+            </section>
+
             <section className="admin-omniroute-section" aria-labelledby="admin-omniroute-routes-title">
-              <h3 id="admin-omniroute-routes-title">Konfigurierte Routen</h3>
+              <div className="admin-omniroute-section-heading">
+                <h3 id="admin-omniroute-routes-title">Routen</h3>
+                <p>Aktuelle Combo-Konfiguration und zugeordnete Metriken.</p>
+              </div>
               {routes.length > 0 ? (
                 <div className="admin-omniroute-routes-list">
-                  {routes.map((route) => (
-                    <article key={route.name} className="admin-omniroute-route-card">
-                      <h4>{route.name}</h4>
-                      <dl className="admin-omniroute-metrics">
-                        <Metric label="Strategie" value={route.strategy ?? "–"} />
-                        <Metric
-                          label="Ziele (geordnet)"
-                          value={route.targets.length > 0 ? route.targets.join(" → ") : "–"}
-                        />
-                        <Metric
-                          label="Produktionsstatus"
-                          value={route.productionTraffic ? "Produktion" : "Kein Produktions-Traffic"}
-                        />
-                        <Metric label="Anfragen" value={formatNumber(route.requests)} />
-                        <Metric label="Erfolgreiche Anfragen" value={formatNumber(route.successes)} />
-                        <Metric label="Fehler" value={formatNumber(route.failures)} />
-                        <Metric
-                          label="Fallbacks"
-                          value={formatNumber(route.fallbacks)}
-                          detail={route.fallbackRatePct !== null ? formatPercent(route.fallbackRatePct) : undefined}
-                        />
-                        <Metric label="Erfolgsquote" value={formatPercent(route.successRatePct)} />
-                        <Metric label="Durchschnittliche Latenz" value={formatDuration(route.avgLatencyMs)} />
-                        <Metric label="Letzte Nutzung" value={formatDateTime(route.lastUsedAt)} />
-                      </dl>
-                      {route.models.length > 0 ? (
-                        <div className="admin-omniroute-table-wrap">
-                          <table>
-                            <caption>Modellstatus für {route.name}</caption>
-                            <thead>
-                              <tr>
-                                <th scope="col">Modell</th>
-                                <th scope="col">Anfragen</th>
-                                <th scope="col">Erfolge</th>
-                                <th scope="col">Fehler</th>
-                                <th scope="col">Latenz</th>
-                                <th scope="col">Letzter Status</th>
-                                <th scope="col">Letzte Nutzung</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {route.models.map((model) => (
-                                <tr key={`${route.name}-${model.model}`}>
-                                  <th scope="row">{model.model}</th>
-                                  <td>{formatNumber(model.requests)}</td>
-                                  <td>{formatNumber(model.successes)}</td>
-                                  <td>{formatNumber(model.failures)}</td>
-                                  <td>{formatDuration(model.avgLatencyMs)}</td>
-                                  <td>{model.lastStatus ?? "–"}</td>
-                                  <td>{formatDateTime(model.lastUsedAt)}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : null}
-                    </article>
-                  ))}
+                  {routes.map((route) => <RouteCard key={route.name} route={route} />)}
                 </div>
               ) : (
                 <p className="admin-empty-state">Keine konfigurierten Routen gefunden.</p>
               )}
             </section>
 
-            <section className="admin-omniroute-section" aria-labelledby="admin-omniroute-breakdown-title">
-              <h3 id="admin-omniroute-breakdown-title">Provider und Modell</h3>
-              {snapshot.usage.models.length > 0 || snapshot.usage.providers.length > 0 ? (
-                <div className="admin-omniroute-table-wrap">
-                  <table>
-                    <caption>Nutzung nach Provider und Modell</caption>
-                    <thead>
-                      <tr>
-                        <th scope="col">Provider</th>
-                        <th scope="col">Modell</th>
-                        <th scope="col">Anfragen</th>
-                        <th scope="col">Tokens</th>
-                        <th scope="col">Kosten</th>
-                        <th scope="col">Erfolgsquote</th>
-                        <th scope="col">Latenz</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {snapshot.usage.models.map((model) => (
-                        <tr key={`${model.provider}-${model.model}`}>
-                          <th scope="row">{model.provider}</th>
-                          <td>{model.model}</td>
-                          <td>{formatNumber(model.requests)}</td>
-                          <td>{formatNumber(model.totalTokens)}</td>
-                          <td>{formatCost(model.cost)}</td>
-                          <td>{formatPercent(model.successRatePct)}</td>
-                          <td>{formatDuration(model.avgLatencyMs)}</td>
-                        </tr>
-                      ))}
-                      {snapshot.usage.providers.map((provider) => (
-                        <tr key={`provider-${provider.provider}`} className="admin-omniroute-provider-row">
-                          <th scope="row">{provider.provider}</th>
-                          <td>Provider-Summe</td>
-                          <td>{formatNumber(provider.requests)}</td>
-                          <td>{formatNumber(provider.totalTokens)}</td>
-                          <td>{formatCost(provider.cost)}</td>
-                          <td>{formatPercent(provider.successRatePct)}</td>
-                          <td>{formatDuration(provider.avgLatencyMs)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <p className="admin-empty-state">Keine Nutzung im ausgewählten Zeitraum.</p>
-              )}
-            </section>
-
             <section className="admin-omniroute-section" aria-labelledby="admin-omniroute-trend-title">
-              <h3 id="admin-omniroute-trend-title">Tagesverlauf</h3>
-              {snapshot.usage.dailyTrend.length > 0 ? (
-                <div className="admin-omniroute-table-wrap">
-                  <table>
-                    <caption>Tagesverlauf im ausgewählten Zeitraum</caption>
-                    <thead>
-                      <tr>
-                        <th scope="col">Datum</th>
-                        <th scope="col">Anfragen</th>
-                        <th scope="col">Tokens</th>
-                        <th scope="col">Kosten</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {snapshot.usage.dailyTrend.map((day) => (
-                        <tr key={day.date}>
-                          <th scope="row"><time dateTime={day.date}>{day.date}</time></th>
-                          <td>{formatNumber(day.requests)}</td>
-                          <td>{formatNumber(day.tokens)}</td>
-                          <td>{formatCost(day.cost)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <p className="admin-empty-state">Kein Tagesverlauf vorhanden.</p>
-              )}
+              <div className="admin-omniroute-section-heading">
+                <h3 id="admin-omniroute-trend-title">Aktivität</h3>
+                <p>Tagesverlauf mit Anfragen, Tokens und EUR-Kosten.</p>
+              </div>
+              <TrendPanel snapshot={snapshot} />
             </section>
 
             <section className="admin-omniroute-section" aria-labelledby="admin-omniroute-health-title">
-              <h3 id="admin-omniroute-health-title">Provider-Health</h3>
-              {[codexHealth, geminiHealth].every((provider) => !provider) ? (
-                <p className="admin-empty-state">Keine Provider-Health-Daten vorhanden.</p>
-              ) : (
-                <div className="admin-omniroute-health-grid">
-                  {[
-                    { label: "OpenAI Codex", provider: codexHealth },
-                    { label: "Gemini / Antigravity", provider: geminiHealth },
-                  ].map(({ label, provider }) => (
-                    <article key={label} className="admin-omniroute-health">
-                      <h4>{label}</h4>
-                      {provider ? (
-                        <dl>
-                          <div><dt>Status</dt><dd>{provider.state ?? "–"}</dd></div>
-                          <div><dt>Cooldown / Rate-Limit</dt><dd>{isRateLimited(provider, snapshot?.generatedAt) ? "Aktiv" : "Nein"}</dd></div>
-                          <div><dt>Verbindungen</dt><dd>{formatNumber(provider.connections)}</dd></div>
-                          <div><dt>Gesperrte Modelle</dt><dd>{formatNumber(provider.modelLockoutCount)}</dd></div>
-                          <div><dt>Letzter Anbieter-Fehler</dt><dd>{[
-                            provider.lastErrorType,
-                            provider.lastErrorCode,
-                          ].filter(Boolean).join(" · ") || "–"}</dd></div>
-                          <div><dt>Fehlerzeit</dt><dd>{formatDateTime(provider.lastErrorAt)}</dd></div>
-                          {provider.models.map((model) => (
-                            <div key={model.model} className="admin-omniroute-model-health">
-                              <dt>Zielmodell {model.model}</dt>
-                              <dd>
-                                {model.status ?? model.lastStatus ?? "–"}
-                                {model.isLockedOut ? " · Lockout aktiv" : ""}
-                                {model.lockoutRemainingMs !== null ? ` · ${formatDuration(remainingAtSnapshot(model.lockoutRemainingMs, snapshot.generatedAt))}` : ""}
-                              </dd>
-                            </div>
-                          ))}
-                        </dl>
-                      ) : (
-                        <p className="admin-empty-state">Kein Anbieter gefunden.</p>
-                      )}
-                    </article>
+              <div className="admin-omniroute-section-heading">
+                <h3 id="admin-omniroute-health-title">Health &amp; Quoten</h3>
+                <p>Ausschließlich Provider, die von konfigurierten Routen genutzt werden.</p>
+              </div>
+              {providers.length > 0 ? (
+                <div className="admin-omniroute-provider-grid">
+                  {providers.map((health) => (
+                    <ProviderHealthCard
+                      key={health.provider}
+                      health={health}
+                      quota={health.provider === "codex" ? snapshot.codexQuota : snapshot.quota}
+                      generatedAt={snapshot.generatedAt}
+                    />
                   ))}
                 </div>
+              ) : (
+                <p className="admin-empty-state">Keine unterstützten Provider-Health-Daten für konfigurierte Ziele.</p>
               )}
             </section>
           </>

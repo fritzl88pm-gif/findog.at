@@ -36,7 +36,7 @@ export async function GET(request: Request) {
     await authenticateAdminRequest(request, supabase);
     const range = parseRange(request);
     const refresh = new URL(request.url).searchParams.get("refresh") === "1";
-    return json(await getOmniRouteUsageSnapshot(range, { refresh }));
+    return json(await getOmniRouteUsageSnapshot(range, { refresh, supabase }));
   } catch (error) {
     return errorResponse(error);
   }

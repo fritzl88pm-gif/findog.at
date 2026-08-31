@@ -10220,7 +10220,7 @@ textarea:focus {
   }
 }
 
-/* OmniRoute administration */
+/* OmniRoute operational console */
 .admin-omniroute-panel {
   display: grid;
   gap: 20px;
@@ -10228,26 +10228,45 @@ textarea:focus {
 }
 
 .admin-omniroute-card {
-  gap: 22px;
+  gap: 20px;
   min-width: 0;
+  background:
+    radial-gradient(circle at 96% 0%, rgba(255, 212, 0, 0.08), transparent 14rem),
+    linear-gradient(180deg, rgba(40, 111, 156, 0.045), transparent 260px);
 }
 
 .admin-omniroute-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: start;
   min-width: 0;
+}
+
+.admin-omniroute-eyebrow {
+  margin: 0 0 5px;
+  color: var(--accent-yellow);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
 }
 
 .admin-omniroute-heading h2,
 .admin-omniroute-section h3,
-.admin-omniroute-health h4 {
+.admin-omniroute-provider-card h4,
+.admin-omniroute-model-card h4 {
   margin: 0;
   color: var(--bmf-blue-deep);
 }
 
-.admin-omniroute-heading p {
+.admin-omniroute-heading h2 {
+  font-size: clamp(1.25rem, 3vw, 1.7rem);
+  line-height: 1.2;
+}
+
+.admin-omniroute-heading > div > p:last-child {
+  max-width: 720px;
   margin: 7px 0 0;
   color: var(--muted);
   font-size: 0.88rem;
@@ -10256,43 +10275,48 @@ textarea:focus {
 
 .admin-omniroute-controls {
   display: grid;
-  grid-template-columns: auto minmax(150px, 1fr);
-  gap: 8px 10px;
-  align-items: center;
-  min-width: 0;
+  grid-template-columns: minmax(128px, 1fr);
+  gap: 8px;
+  width: min(100%, 180px);
 }
 
 .admin-omniroute-controls label {
   color: var(--bmf-blue-deep);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: 0.74rem;
+  font-weight: 750;
+}
+
+.admin-omniroute-controls select,
+.admin-omniroute-controls .compact-button {
+  min-height: 44px;
+  min-width: 0;
 }
 
 .admin-omniroute-controls select {
-  min-height: 40px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   padding: 0 10px;
   background: #fafbfc;
   color: var(--ink);
+  font-size: 0.88rem;
   transition: var(--transition);
 }
 
-.admin-omniroute-controls select:hover {
+.admin-omniroute-controls select:hover,
+.admin-omniroute-controls select:focus,
+.admin-omniroute-controls .compact-button:hover {
   border-color: var(--border-hover);
-  background-color: var(--bg-surface);
 }
 
-.admin-omniroute-controls select:focus {
+.admin-omniroute-controls select:focus,
+.admin-omniroute-controls .compact-button:focus-visible {
   border-color: var(--border-focus);
-  background-color: var(--bg-surface);
-  box-shadow: 0 0 0 3px rgba(40, 111, 156, 0.12);
+  box-shadow: 0 0 0 3px rgba(40, 111, 156, 0.16);
   outline: none;
 }
 
 .admin-omniroute-controls .compact-button {
-  grid-column: 1 / -1;
-  justify-self: end;
+  justify-self: stretch;
 }
 
 .admin-omniroute-card .error-box,
@@ -10300,57 +10324,390 @@ textarea:focus {
   margin: 0;
 }
 
-.admin-omniroute-updated {
+.admin-omniroute-compact-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 0.83rem;
+  line-height: 1.45;
+}
+
+.admin-omniroute-loading {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  min-height: 150px;
+  padding: 26px 14px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  background: rgba(40, 111, 156, 0.03);
+}
+
+.admin-omniroute-loading span,
+.admin-omniroute-loading p {
   margin: 0;
+}
+
+.admin-omniroute-loading span {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(40, 111, 156, 0.14);
+  border-top-color: var(--bmf-blue);
+  border-radius: 50%;
+  animation: admin-omniroute-spin 0.8s linear infinite;
+}
+
+.admin-omniroute-loading p {
   color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.admin-omniroute-empty {
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  background: rgba(40, 111, 156, 0.025);
+}
+
+.admin-omniroute-empty p {
+  margin: 0;
+}
+
+.admin-omniroute-metadata {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--bg-surface);
+}
+
+.admin-omniroute-metadata dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  min-width: 0;
+}
+
+.admin-omniroute-metadata dl > div {
+  min-width: 0;
+}
+
+.admin-omniroute-metadata dt {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.admin-omniroute-metadata dd {
+  overflow-wrap: anywhere;
+  margin: 3px 0 0;
+  color: var(--bmf-blue-deep);
   font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.admin-omniroute-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  width: fit-content;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border: 1px solid rgba(40, 111, 156, 0.18);
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: rgba(40, 111, 156, 0.07);
+  color: var(--bmf-blue-deep);
+  font-size: 0.72rem;
+  font-weight: 750;
+  line-height: 1.2;
+}
+
+.admin-omniroute-pill-blue {
+  border-color: rgba(40, 111, 156, 0.2);
+  background: rgba(40, 111, 156, 0.12);
+}
+
+.admin-omniroute-pill-warning {
+  border-color: rgba(172, 86, 0, 0.18);
+  background: rgba(255, 212, 0, 0.22);
+  color: #6f4200;
 }
 
 .admin-omniroute-section {
   display: grid;
-  gap: 16px;
+  gap: 14px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  padding: 18px;
-  background: rgba(40, 111, 156, 0.025);
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.72);
   min-width: 0;
 }
 
-.admin-omniroute-section h3 {
-  font-size: 1.05rem;
-  font-weight: 700;
+.admin-omniroute-section > * {
+  min-width: 0;
+}
+
+.admin-omniroute-section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 10px;
+}
+
+.admin-omniroute-section-heading h3 {
+  font-size: 1rem;
+}
+
+.admin-omniroute-section-heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-align: right;
+}
+
+.admin-omniroute-kpis,
+.admin-omniroute-model-grid,
+.admin-omniroute-provider-grid,
+.admin-omniroute-routes-list,
+.admin-omniroute-metric-grid {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.admin-omniroute-kpis {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.admin-omniroute-model-grid,
+.admin-omniroute-provider-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-omniroute-routes-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-omniroute-kpi {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.admin-omniroute-kpi-blue {
+  border-color: rgba(40, 111, 156, 0.24);
+  background: linear-gradient(150deg, rgba(40, 111, 156, 0.1), #fff 68%);
+}
+
+.admin-omniroute-kpi-yellow {
+  border-color: rgba(255, 212, 0, 0.5);
+  background: linear-gradient(150deg, rgba(255, 212, 0, 0.18), #fff 68%);
+}
+
+.admin-omniroute-kpi dt,
+.admin-omniroute-metric dt {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 780;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.admin-omniroute-kpi dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--bmf-blue-deep);
+  font-size: clamp(1.05rem, 2vw, 1.28rem);
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.admin-omniroute-kpi small,
+.admin-omniroute-metric small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.admin-omniroute-metric-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.admin-omniroute-metric {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border: 1px solid rgba(40, 111, 156, 0.1);
+  border-radius: var(--radius-sm);
+  padding: 9px;
+  background: rgba(244, 247, 249, 0.72);
+}
+
+.admin-omniroute-metric dd {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  margin: 0;
+  color: var(--bmf-blue-deep);
+  font-size: 0.86rem;
+  font-weight: 750;
+  line-height: 1.3;
+}
+
+.admin-omniroute-metric-warning {
+  border-color: rgba(255, 212, 0, 0.65);
+  background: rgba(255, 212, 0, 0.13);
+}
+
+.admin-omniroute-model-card,
+.admin-omniroute-provider-card,
+.admin-omniroute-route-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 13px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.admin-omniroute-model-card > div:first-child,
+.admin-omniroute-provider-heading,
+.admin-omniroute-route-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.admin-omniroute-model-card h4,
+.admin-omniroute-provider-card h4,
+.admin-omniroute-route-card h4 {
+  overflow-wrap: anywhere;
+  font-size: 0.94rem;
+  line-height: 1.25;
+}
+
+.admin-omniroute-route-heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.admin-omniroute-route-live {
+  border-color: rgba(40, 111, 156, 0.28);
+  background: linear-gradient(160deg, rgba(40, 111, 156, 0.06), #fff 42%);
+}
+
+.admin-omniroute-target-flow {
+  display: flex;
+  flex-flow: row wrap;
+  align-items: stretch;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-omniroute-target-flow li {
+  display: grid;
+  gap: 2px;
+  flex: 1 1 140px;
+  min-width: 0;
+  border: 1px solid rgba(40, 111, 156, 0.12);
+  border-radius: var(--radius-sm);
+  padding: 7px 8px;
+  background: rgba(40, 111, 156, 0.045);
+}
+
+.admin-omniroute-target-flow span {
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.admin-omniroute-target-flow strong,
+.admin-omniroute-model-name {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--bmf-blue-deep);
+  font-size: 0.78rem;
+  line-height: 1.3;
+}
+
+.admin-omniroute-route-models,
+.admin-omniroute-model-health-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-omniroute-route-models li,
+.admin-omniroute-model-health-list li {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 9px;
+  background: rgba(244, 247, 249, 0.68);
+}
+
+.admin-omniroute-provider-warning {
+  border-color: rgba(255, 212, 0, 0.55);
 }
 
 .admin-omniroute-quota {
   display: grid;
-  gap: 18px;
-  min-width: 0;
+  gap: 10px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 10px;
 }
 
 .admin-omniroute-progress {
   display: grid;
-  gap: 8px;
-  min-width: 0;
+  gap: 7px;
 }
 
 .admin-omniroute-progress-label {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   color: var(--muted);
-  font-size: 0.82rem;
-  font-weight: 600;
+  font-size: 0.76rem;
+  font-weight: 700;
 }
 
 .admin-omniroute-progress-label strong {
   color: var(--bmf-blue-deep);
-  font-weight: 700;
+  font-weight: 800;
 }
 
 .admin-omniroute-progress > div[role="progressbar"] {
   overflow: hidden;
-  height: 12px;
+  height: 10px;
   border-radius: 999px;
   background: rgba(40, 111, 156, 0.12);
 }
@@ -10363,216 +10720,178 @@ textarea:focus {
   transition: width 0.25s ease-out;
 }
 
-.admin-omniroute-metrics {
+.admin-omniroute-trend {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
   margin: 0;
+  padding: 0;
   min-width: 0;
+  list-style: none;
 }
 
-.admin-omniroute-metric {
-  min-width: 0;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: 12px;
-  background: var(--bg-surface);
-}
-
-.admin-omniroute-metric dt {
-  color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 750;
-  text-transform: uppercase;
-}
-
-.admin-omniroute-metric dd {
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  margin: 5px 0 0;
-  color: var(--bmf-blue-deep);
-  font-size: 0.95rem;
-  font-weight: 700;
-}
-
-.admin-omniroute-metric small {
-  display: block;
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 0.74rem;
-  overflow-wrap: anywhere;
-}
-
-.admin-omniroute-table-wrap {
-  overflow-x: auto;
-  max-width: 100%;
-  min-width: 0;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-surface);
-  -webkit-overflow-scrolling: touch;
-}
-
-.admin-omniroute-table-wrap table {
-  width: 100%;
-  min-width: 640px;
-  border-collapse: collapse;
-  font-variant-numeric: tabular-nums;
-}
-
-.admin-omniroute-table-wrap caption {
-  padding: 10px 12px;
-  color: var(--muted);
-  font-size: 0.78rem;
-  text-align: left;
-  font-weight: 600;
-}
-
-.admin-omniroute-table-wrap th,
-.admin-omniroute-table-wrap td {
-  border-top: 1px solid var(--border-color);
-  padding: 10px 12px;
-  text-align: right;
-  white-space: nowrap;
-  font-size: 0.85rem;
-}
-
-.admin-omniroute-table-wrap thead th,
-.admin-omniroute-table-wrap tbody th {
-  text-align: left;
-}
-
-.admin-omniroute-table-wrap thead th {
-  color: var(--muted);
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  font-weight: 750;
-  background: rgba(40, 111, 156, 0.04);
-}
-
-.admin-omniroute-table-wrap tbody th {
-  color: var(--bmf-blue-deep);
-  font-weight: 650;
-}
-
-.admin-omniroute-table-wrap td {
-  color: var(--ink);
-}
-
-.admin-omniroute-provider-row {
-  background: rgba(40, 111, 156, 0.06);
-  font-weight: 600;
-}
-
-.admin-omniroute-health-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  min-width: 0;
-}
-
-.admin-omniroute-health {
-  min-width: 0;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: 14px;
-  background: var(--bg-surface);
-}
-
-.admin-omniroute-health h4 {
-  margin: 0 0 10px;
-  font-size: 0.95rem;
-  font-weight: 700;
-}
-
-.admin-omniroute-health dl {
+.admin-omniroute-trend li {
   display: grid;
   gap: 8px;
-  margin: 0;
+  align-content: start;
   min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  background: var(--bg-surface);
 }
 
-.admin-omniroute-health dl > div {
+.admin-omniroute-trend-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.admin-omniroute-trend-head time,
+.admin-omniroute-trend-head strong {
+  color: var(--bmf-blue-deep);
+  font-size: 0.77rem;
+}
+
+.admin-omniroute-trend-head strong {
+  white-space: nowrap;
+}
+
+.admin-omniroute-trend-track {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(40, 111, 156, 0.11);
+}
+
+.admin-omniroute-trend-track span {
+  display: block;
+  min-width: 2px;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--bmf-blue), var(--accent-yellow));
+}
+
+.admin-omniroute-trend dl {
   display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.admin-omniroute-health dt {
-  color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 750;
-  text-transform: uppercase;
-}
-
-.admin-omniroute-health dd {
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
   margin: 0;
-  color: var(--ink);
-  font-size: 0.88rem;
-  font-weight: 650;
 }
 
-.admin-omniroute-model-health {
-  border-top: 1px solid var(--border-color);
-  padding-top: 8px;
-  margin-top: 4px;
+.admin-omniroute-trend .admin-omniroute-metric {
+  padding: 7px;
 }
 
-@media (max-width: 960px) {
-  .admin-omniroute-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+.admin-empty-state {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+@keyframes admin-omniroute-spin {
+  to {
+    transform: rotate(360deg);
   }
+}
 
-  .admin-omniroute-health-grid {
+@media (max-width: 1150px) {
+  .admin-omniroute-kpis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1000px) {
+  .admin-omniroute-model-grid,
+  .admin-omniroute-provider-grid,
+  .admin-omniroute-routes-list {
     grid-template-columns: 1fr;
   }
-}
 
-@media (max-width: 760px) {
-  .admin-omniroute-section {
-    padding: 16px;
+  .admin-omniroute-metadata dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 700px) {
-  .admin-omniroute-heading {
+@media (max-width: 780px) {
+  .admin-omniroute-heading,
+  .admin-omniroute-section-heading {
     align-items: stretch;
     flex-direction: column;
   }
 
   .admin-omniroute-controls {
-    align-items: stretch;
+    width: 100%;
   }
 
-  .admin-omniroute-controls .compact-button {
-    justify-self: stretch;
+  .admin-omniroute-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .admin-omniroute-metrics {
-    grid-template-columns: 1fr;
+  .admin-omniroute-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 520px) {
+@media (max-width: 560px) {
   .admin-omniroute-card {
-    padding: 14px;
+    gap: 16px;
+    padding: 13px;
     border-radius: var(--radius-md);
   }
 
-  .admin-omniroute-controls {
+  .admin-omniroute-section {
+    padding: 11px;
+  }
+
+  .admin-omniroute-metadata {
+    align-items: start;
+  }
+
+  .admin-omniroute-metadata dl {
     grid-template-columns: 1fr;
   }
 
-  .admin-omniroute-section {
-    padding: 12px;
+  .admin-omniroute-kpis,
+  .admin-omniroute-metric-grid,
+  .admin-omniroute-trend {
+    grid-template-columns: 1fr;
   }
 
-  .admin-omniroute-table-wrap th,
-  .admin-omniroute-table-wrap td {
-    padding: 8px 10px;
-    font-size: 0.8rem;
+  .admin-omniroute-section-heading {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .admin-omniroute-section-heading p {
+    text-align: left;
+  }
+
+  .admin-omniroute-trend-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .admin-omniroute-trend-head strong {
+    white-space: normal;
+  }
+}
+
+@media (max-width: 350px) {
+  .admin-omniroute-card,
+  .admin-omniroute-section {
+    padding: 10px;
+  }
+
+  .admin-omniroute-kpi,
+  .admin-omniroute-model-card,
+  .admin-omniroute-provider-card,
+  .admin-omniroute-route-card,
+  .admin-omniroute-metric {
+    padding: 8px;
   }
 }
 

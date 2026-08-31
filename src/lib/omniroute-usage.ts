@@ -1,8 +1,11 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 import { UserVisibleError } from "./errors";
 import type {
   OmniRouteAdminUsageSnapshot,
   OmniRouteComboModelStats,
   OmniRouteDailyTrend,
+  OmniRouteExchangeRateSnapshot,
   OmniRouteModelHealth,
   OmniRouteModelUsage,
   OmniRouteProviderHealth,
@@ -10,13 +13,21 @@ import type {
   OmniRouteQuotaSnapshot,
   OmniRouteRouteSnapshot,
   OmniRouteUsageRange,
-  OmniRouteUsageSnapshot,
   OmniRouteUsageSummary,
 } from "./omniroute-usage-types";
 
 export const OMNIROUTE_USAGE_CACHE_TTL_MS = 5 * 60 * 1_000;
 export const OMNIROUTE_USAGE_TIMEOUT_MS = 10_000;
+export const OMNIROUTE_FX_CACHE_TTL_MS = 12 * 60 * 60 * 1_000;
+export const OMNIROUTE_FX_TIMEOUT_MS = 5_000;
 const MAX_OMNIROUTE_RESPONSE_BYTES = 2 * 1_024 * 1_024;
+const MAX_OMNIROUTE_FX_RESPONSE_BYTES = 64 * 1_024;
+const FRANKFURTER_USD_EUR_URL = "https://api.frankfurter.app/latest?from=USD&to=EUR";
+const RANGE_DURATION_MS: Record<OmniRouteUsageRange, number> = {
+  "24h": 24 * 60 * 60 * 1_000,
+  "7d": 7 * 24 * 60 * 60 * 1_000,
+  "30d": 30 * 24 * 60 * 60 * 1_000,
+};
 
 type JsonRecord = Record<string, unknown>;
 type ProviderKind = "codex" | "gemini" | "openrouter" | "deepseek";
@@ -34,7 +45,34 @@ type OmniRouteServerConfig = {
 
 type UsageCacheEntry = {
   fetchedAt: number;
-  snapshot: Omit<OmniRouteAdminUsageSnapshot, "stale" | "warning">;
+  snapshot: OmniRouteRawAdminUsageSnapshot;
+};
+
+type ExchangeRateCacheEntry = {
+  fetchedAt: number;
+  exchangeRate: OmniRouteExchangeRateSnapshot;
+};
+
+type InternalUsageSummary = Omit<OmniRouteUsageSummary, "totalCostEur"> & { totalCostUsd: number | null };
+type InternalModelUsage = Omit<OmniRouteModelUsage, "costEur"> & { costUsd: number | null };
+type InternalProviderUsage = Omit<OmniRouteProviderUsage, "costEur"> & { costUsd: number | null };
+type InternalDailyTrend = Omit<OmniRouteDailyTrend, "costEur"> & { costUsd: number | null };
+type InternalUsageSnapshot = {
+  summary: InternalUsageSummary | null;
+  models: InternalModelUsage[];
+  providers: InternalProviderUsage[];
+  dailyTrend: InternalDailyTrend[];
+};
+
+type OmniRouteRawAdminUsageSnapshot = {
+  generatedAt: string;
+  range: OmniRouteUsageRange;
+  userQuestions: number;
+  quota: OmniRouteQuotaSnapshot | null;
+  codexQuota: OmniRouteQuotaSnapshot | null;
+  usage: InternalUsageSnapshot;
+  routes: OmniRouteRouteSnapshot[];
+  providerHealth: OmniRouteProviderHealth[];
 };
 
 class OmniRoutePayloadError extends Error {
@@ -45,9 +83,11 @@ class OmniRoutePayloadError extends Error {
 }
 
 const usageCache = new Map<OmniRouteUsageRange, UsageCacheEntry>();
+let exchangeRateCache: ExchangeRateCacheEntry | null = null;
 
 export function clearOmniRouteUsageCacheForTests(): void {
   usageCache.clear();
+  exchangeRateCache = null;
 }
 
 function recordOf(value: unknown): JsonRecord | null {
@@ -223,8 +263,10 @@ function cacheProviderKind(cacheId: string, connections: ProviderConnectionMap):
 function normalizeQuotaSnapshots(
   payload: unknown,
   connections: ProviderConnectionMap,
+  allowedProviders?: readonly ProviderKind[],
 ): { quota: OmniRouteQuotaSnapshot | null; codexQuota: OmniRouteQuotaSnapshot | null } {
   const root = recordOf(payload);
+  const allowed = allowedProviders ? new Set(allowedProviders) : null;
   const caches = root?.caches === undefined || root.caches === null ? null : recordOf(root.caches);
   if (!root || !caches) return { quota: null, codexQuota: null };
 
@@ -232,7 +274,7 @@ function normalizeQuotaSnapshots(
   const codexCandidates: Array<{ quota: OmniRouteQuotaSnapshot }> = [];
   for (const [cacheId, cacheValue] of Object.entries(caches)) {
     const kind = cacheProviderKind(cacheId, connections);
-    if (!kind) continue;
+    if (!kind || (allowed && !allowed.has(kind))) continue;
     const cache = recordOf(cacheValue);
     if (!cache) continue;
     const quotasValue = cache.quotas === undefined || cache.quotas === null ? null : recordOf(cache.quotas);
@@ -268,21 +310,28 @@ function normalizeQuotaSnapshots(
 export function normalizeProviderLimitsPayload(
   payload: unknown,
   providerConnections?: unknown,
+  allowedProviders?: readonly ProviderKind[],
 ): OmniRouteQuotaSnapshot | null {
   return normalizeQuotaSnapshots(
     payload,
     normalizeProviderConnectionsPayload(providerConnections ?? { connections: [] }),
+    allowedProviders,
   ).quota;
 }
 
 export function normalizeProviderQuotasPayload(
   payload: unknown,
   providerConnections: unknown,
+  allowedProviders?: readonly ProviderKind[],
 ): { quota: OmniRouteQuotaSnapshot | null; codexQuota: OmniRouteQuotaSnapshot | null } {
-  return normalizeQuotaSnapshots(payload, normalizeProviderConnectionsPayload(providerConnections));
+  return normalizeQuotaSnapshots(
+    payload,
+    normalizeProviderConnectionsPayload(providerConnections),
+    allowedProviders,
+  );
 }
 
-function normalizeUsageSummary(value: unknown): OmniRouteUsageSummary | null {
+function normalizeUsageSummary(value: unknown): InternalUsageSummary | null {
   const summary = recordOf(value);
   if (!summary) return null;
   return {
@@ -293,38 +342,65 @@ function normalizeUsageSummary(value: unknown): OmniRouteUsageSummary | null {
     successfulRequests: integer(summary.successfulRequests),
     successRatePct: percent(summary.successRatePct),
     avgLatencyMs: nonnegativeNumber(summary.avgLatencyMs),
-    totalCost: nonnegativeNumber(summary.totalCost),
+    totalCostUsd: nonnegativeNumber(summary.totalCost),
     fallbackCount: integer(summary.fallbackCount),
     lastRequest: timestamp(summary.lastRequest),
   };
 }
 
-function normalizeModelUsage(value: unknown): OmniRouteModelUsage | null {
+function normalizeModelUsage(
+  value: unknown,
+  allowedTargets?: readonly InternalRouteTarget[],
+): InternalModelUsage | null {
   const entry = recordOf(value);
   if (!entry) return null;
-  const kind = providerKind(entry.provider) ?? providerKind(entry.model);
-  if (!kind) return null;
-  const model = modelText(entry.model);
-  if (!model) return null;
+  const reportedKind = providerKind(entry.provider) ?? providerKind(entry.model);
+  if (!reportedKind) return null;
+  const reportedModel = modelText(entry.model);
+  if (!reportedModel) return null;
+
+  if (allowedTargets) {
+    const configuredTarget = allowedTargets.find((target) => (
+      target.provider === reportedKind && sameModel(reportedModel, target.model)
+    ));
+    if (!configuredTarget) return null;
+    return {
+      model: configuredTarget.model,
+      provider: publicProvider(configuredTarget.provider),
+      requests: integer(entry.requests),
+      promptTokens: integer(entry.promptTokens),
+      completionTokens: integer(entry.completionTokens),
+      totalTokens: integer(entry.totalTokens),
+      avgLatencyMs: nonnegativeNumber(entry.avgLatencyMs),
+      successRatePct: percent(entry.successRatePct),
+      costUsd: nonnegativeNumber(entry.cost),
+      lastUsed: timestamp(entry.lastUsed),
+    };
+  }
+
   return {
-    model,
-    provider: publicProvider(kind),
+    model: reportedModel,
+    provider: publicProvider(reportedKind),
     requests: integer(entry.requests),
     promptTokens: integer(entry.promptTokens),
     completionTokens: integer(entry.completionTokens),
     totalTokens: integer(entry.totalTokens),
     avgLatencyMs: nonnegativeNumber(entry.avgLatencyMs),
     successRatePct: percent(entry.successRatePct),
-    cost: nonnegativeNumber(entry.cost),
+    costUsd: nonnegativeNumber(entry.cost),
     lastUsed: timestamp(entry.lastUsed),
   };
 }
 
-function normalizeProviderUsage(value: unknown): OmniRouteProviderUsage | null {
+function normalizeProviderUsage(
+  value: unknown,
+  allowedTargets?: readonly InternalRouteTarget[],
+): InternalProviderUsage | null {
   const entry = recordOf(value);
   if (!entry) return null;
   const kind = providerKind(entry.provider);
   if (!kind) return null;
+  if (allowedTargets && !allowedTargets.some((target) => target.provider === kind)) return null;
   return {
     provider: publicProvider(kind),
     requests: integer(entry.requests),
@@ -333,12 +409,12 @@ function normalizeProviderUsage(value: unknown): OmniRouteProviderUsage | null {
     totalTokens: integer(entry.totalTokens),
     avgLatencyMs: nonnegativeNumber(entry.avgLatencyMs),
     successRatePct: percent(entry.successRatePct),
-    cost: nonnegativeNumber(entry.cost),
+    costUsd: nonnegativeNumber(entry.cost),
     lastUsed: timestamp(entry.lastUsed),
   };
 }
 
-function normalizeDailyTrend(value: unknown): OmniRouteDailyTrend | null {
+function normalizeDailyTrend(value: unknown): InternalDailyTrend | null {
   const entry = recordOf(value);
   if (!entry) return null;
   const date = publicText(entry.date, 32);
@@ -347,11 +423,14 @@ function normalizeDailyTrend(value: unknown): OmniRouteDailyTrend | null {
     date,
     requests: integer(entry.requests),
     tokens: integer(entry.tokens ?? entry.totalTokens),
-    cost: nonnegativeNumber(entry.cost),
+    costUsd: nonnegativeNumber(entry.cost),
   };
 }
 
-export function normalizeAnalyticsPayload(payload: unknown): OmniRouteUsageSnapshot {
+export function normalizeAnalyticsPayload(
+  payload: unknown,
+  allowedTargets?: readonly InternalRouteTarget[],
+): InternalUsageSnapshot {
   const root = recordOf(payload);
   if (!root) {
     return { summary: null, models: [], providers: [], dailyTrend: [] };
@@ -360,20 +439,20 @@ export function normalizeAnalyticsPayload(payload: unknown): OmniRouteUsageSnaps
   const models = root.byModel === undefined || root.byModel === null
     ? []
     : requiredArray(root.byModel)
-      .map(normalizeModelUsage)
-      .filter((entry): entry is OmniRouteModelUsage => entry !== null)
+      .map((value) => normalizeModelUsage(value, allowedTargets))
+      .filter((entry): entry is InternalModelUsage => entry !== null)
       .slice(0, 100);
   const providers = root.byProvider === undefined || root.byProvider === null
     ? []
     : requiredArray(root.byProvider)
-      .map(normalizeProviderUsage)
-      .filter((entry): entry is OmniRouteProviderUsage => entry !== null)
+      .map((value) => normalizeProviderUsage(value, allowedTargets))
+      .filter((entry): entry is InternalProviderUsage => entry !== null)
       .slice(0, 10);
   const dailyTrend = root.dailyTrend === undefined || root.dailyTrend === null
     ? []
     : requiredArray(root.dailyTrend)
       .map(normalizeDailyTrend)
-      .filter((entry): entry is OmniRouteDailyTrend => entry !== null)
+      .filter((entry): entry is InternalDailyTrend => entry !== null)
       .slice(0, 31);
 
   return { summary, models, providers, dailyTrend };
@@ -668,7 +747,8 @@ export function normalizeHealthMatrixPayload(
     .map((value) => recordOf(value))
     .filter((value): value is JsonRecord => value !== null);
 
-  const relevantProviders: Array<"codex" | "gemini"> = ["codex", "gemini"];
+  const relevantProviders: Array<"codex" | "gemini"> = (["codex", "gemini"] as const)
+    .filter((kind): kind is "codex" | "gemini" => routeTargets.some((target) => target.provider === kind));
   const results: OmniRouteProviderHealth[] = [];
 
   for (const kind of relevantProviders) {
@@ -703,12 +783,17 @@ export function normalizeOmniRouteUsagePayloads(input: {
   combos: unknown;
   range: OmniRouteUsageRange;
   generatedAt?: string;
-}): Omit<OmniRouteAdminUsageSnapshot, "stale" | "warning"> {
+}): OmniRouteRawAdminUsageSnapshot {
   const connections = normalizeProviderConnectionsPayload(input.providerConnections);
   const comboConfigs = normalizeCombosConfiguration(input.combos, connections);
-  const allRouteTargets = comboConfigs.flatMap((c) => c.routeTargets);
-  const usage = normalizeAnalyticsPayload(input.analytics);
-  const quotas = normalizeProviderQuotasPayload(input.providerLimits, input.providerConnections);
+  const allRouteTargets = comboConfigs.flatMap((combo) => combo.routeTargets);
+  const allowedProviders = Array.from(new Set(allRouteTargets.map((target) => target.provider)));
+  const usage = normalizeAnalyticsPayload(input.analytics, allRouteTargets);
+  const quotas = normalizeProviderQuotasPayload(
+    input.providerLimits,
+    input.providerConnections,
+    allowedProviders,
+  );
   const generatedAt = timestamp(input.generatedAt ?? new Date(Date.now()).toISOString()) ?? new Date(Date.now()).toISOString();
 
   const routes = normalizeRoutesPayload(input.providerStats, comboConfigs);
@@ -716,6 +801,7 @@ export function normalizeOmniRouteUsagePayloads(input: {
   return {
     generatedAt,
     range: input.range,
+    userQuestions: 0,
     quota: quotas.quota,
     codexQuota: quotas.codexQuota,
     usage,
@@ -750,9 +836,9 @@ function serverConfig(): OmniRouteServerConfig {
   return { baseUrl: baseUrl.toString().replace(/\/+$/u, ""), apiKey };
 }
 
-async function readBoundedJson(response: Response): Promise<unknown> {
+async function readBoundedJson(response: Response, maxBytes = MAX_OMNIROUTE_RESPONSE_BYTES): Promise<unknown> {
   const contentLength = Number(response.headers.get("content-length") ?? "");
-  if (Number.isFinite(contentLength) && contentLength > MAX_OMNIROUTE_RESPONSE_BYTES) {
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
     throw new Error("OmniRoute request failed.");
   }
   if (!response.body) return response.json();
@@ -765,7 +851,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
       const { value, done } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > MAX_OMNIROUTE_RESPONSE_BYTES) {
+      if (total > maxBytes) {
         await reader.cancel().catch(() => undefined);
         throw new Error("OmniRoute request failed.");
       }
@@ -810,7 +896,7 @@ async function fetchOmniRouteJson(
 async function fetchUsageSnapshot(
   range: OmniRouteUsageRange,
   fetcher: typeof fetch,
-): Promise<Omit<OmniRouteAdminUsageSnapshot, "stale" | "warning">> {
+): Promise<OmniRouteRawAdminUsageSnapshot> {
   const config = serverConfig();
   const generatedAt = new Date(Date.now()).toISOString();
   const [
@@ -841,31 +927,165 @@ async function fetchUsageSnapshot(
   });
 }
 
-export async function getOmniRouteUsageSnapshot(
+async function countUserQuestionsInRange(
+  supabase: SupabaseClient | undefined,
   range: OmniRouteUsageRange,
-  options: { refresh?: boolean; fetcher?: typeof fetch } = {},
-): Promise<OmniRouteAdminUsageSnapshot> {
-  const fetcher = options.fetcher ?? globalThis.fetch;
-  const cached = usageCache.get(range);
+  rangeEndAtMs: number,
+): Promise<number> {
+  if (!supabase) return 0;
+  const rangeStartAtMs = rangeEndAtMs - RANGE_DURATION_MS[range];
+  const { count, error } = await supabase
+    .from("fred_messages")
+    .select("*", { count: "exact", head: true })
+    .eq("role", "user")
+    .gte("created_at", new Date(rangeStartAtMs).toISOString())
+    .lt("created_at", new Date(rangeEndAtMs).toISOString());
+  if (error || count === null || count === undefined || !Number.isSafeInteger(count) || count < 0) {
+    throw new UserVisibleError("Die Findog-Fragen konnten nicht gezählt werden.", 503);
+  }
+  return count;
+}
+
+function convertCost(value: number | null, exchangeRate: OmniRouteExchangeRateSnapshot | null): number | null {
+  return value === null || exchangeRate === null ? null : value * exchangeRate.rate;
+}
+
+function convertUsageSnapshotToDto(
+  raw: OmniRouteRawAdminUsageSnapshot,
+  exchangeRate: OmniRouteExchangeRateSnapshot | null,
+): Omit<OmniRouteAdminUsageSnapshot, "stale" | "warning" | "costConversionWarning"> {
+  const usageSummary = raw.usage.summary;
+  return {
+    generatedAt: raw.generatedAt,
+    range: raw.range,
+    userQuestions: raw.userQuestions,
+    exchangeRate,
+    quota: raw.quota,
+    codexQuota: raw.codexQuota,
+    usage: {
+      summary: (() => {
+        if (!usageSummary) return null;
+        const { totalCostUsd, ...summary } = usageSummary;
+        return { ...summary, totalCostEur: convertCost(totalCostUsd, exchangeRate) };
+      })(),
+      models: raw.usage.models.map(({ costUsd, ...model }) => ({
+        ...model,
+        costEur: convertCost(costUsd, exchangeRate),
+      })),
+      providers: raw.usage.providers.map(({ costUsd, ...provider }) => ({
+        ...provider,
+        costEur: convertCost(costUsd, exchangeRate),
+      })),
+      dailyTrend: raw.usage.dailyTrend.map(({ costUsd, ...day }) => ({
+        ...day,
+        costEur: convertCost(costUsd, exchangeRate),
+      })),
+    },
+    routes: raw.routes,
+    providerHealth: raw.providerHealth,
+  };
+}
+
+function validateExchangeRatePayload(payload: unknown): OmniRouteExchangeRateSnapshot {
+  const root = recordOf(payload);
+  if (!root || root.base !== "USD") throw new Error("Invalid exchange-rate payload.");
+  const rates = recordOf(root.rates);
+  if (!rates) throw new Error("Invalid exchange-rate payload.");
+  const rate = rates.EUR;
+  if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) {
+    throw new Error("Invalid exchange-rate payload.");
+  }
+  if (typeof root.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(root.date)) {
+    throw new Error("Invalid exchange-rate payload.");
+  }
+  const date = new Date(`${root.date}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== root.date) {
+    throw new Error("Invalid exchange-rate payload.");
+  }
+  return {
+    rate,
+    date: root.date,
+    source: "Frankfurter",
+    fetchedAt: new Date(Date.now()).toISOString(),
+  };
+}
+
+async function getUsdEurExchangeRate(fetcher: typeof fetch): Promise<OmniRouteExchangeRateSnapshot | null> {
   const now = Date.now();
-  if (!options.refresh && cached && now - cached.fetchedAt < OMNIROUTE_USAGE_CACHE_TTL_MS) {
-    return { ...cached.snapshot, stale: false };
+  if (exchangeRateCache && now - exchangeRateCache.fetchedAt < OMNIROUTE_FX_CACHE_TTL_MS) {
+    return exchangeRateCache.exchangeRate;
   }
 
   try {
+    const response = await fetcher(FRANKFURTER_USD_EUR_URL, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(OMNIROUTE_FX_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error("Exchange-rate request failed.");
+    const payload = await readBoundedJson(response, MAX_OMNIROUTE_FX_RESPONSE_BYTES);
+    const exchangeRate = validateExchangeRatePayload(payload);
+    exchangeRateCache = { fetchedAt: Date.now(), exchangeRate };
+    return exchangeRate;
+  } catch {
+    return null;
+  }
+}
+
+export async function getOmniRouteUsageSnapshot(
+  range: OmniRouteUsageRange,
+  options: {
+    refresh?: boolean;
+    fetcher?: typeof fetch;
+    fxFetcher?: typeof fetch;
+    supabase?: SupabaseClient;
+  } = {},
+): Promise<OmniRouteAdminUsageSnapshot> {
+  const fetcher = options.fetcher ?? globalThis.fetch;
+  const fxFetcher = options.fxFetcher ?? fetcher;
+  const cached = usageCache.get(range);
+  const now = Date.now();
+  const canUseUsageCache = !options.refresh && Boolean(cached && now - cached.fetchedAt < OMNIROUTE_USAGE_CACHE_TTL_MS);
+
+  if (canUseUsageCache && cached) {
+    const exchangeRate = await getUsdEurExchangeRate(fxFetcher);
+    return {
+      ...convertUsageSnapshotToDto(cached.snapshot, exchangeRate),
+      stale: false,
+      costConversionWarning: exchangeRate === null
+        ? "EUR-Kosten sind derzeit nicht verfügbar; Quellenwerte werden nicht als EUR angezeigt."
+        : null,
+    };
+  }
+
+  try {
+    const userQuestions = await countUserQuestionsInRange(options.supabase, range, now);
     const snapshot = await fetchUsageSnapshot(range, fetcher);
+    const rawSnapshot: OmniRouteRawAdminUsageSnapshot = { ...snapshot, userQuestions };
     usageCache.set(range, {
       fetchedAt: Date.now(),
-      snapshot,
+      snapshot: rawSnapshot,
     });
-    return { ...snapshot, stale: false };
+    const exchangeRate = await getUsdEurExchangeRate(fxFetcher);
+    return {
+      ...convertUsageSnapshotToDto(rawSnapshot, exchangeRate),
+      stale: false,
+      costConversionWarning: exchangeRate === null
+        ? "EUR-Kosten sind derzeit nicht verfügbar; Quellenwerte werden nicht als EUR angezeigt."
+        : null,
+    };
   } catch (error) {
     if (error instanceof UserVisibleError) throw error;
     if (cached) {
+      const exchangeRate = await getUsdEurExchangeRate(fxFetcher);
       return {
-        ...cached.snapshot,
+        ...convertUsageSnapshotToDto(cached.snapshot, exchangeRate),
         stale: true,
         warning: "OmniRoute ist vorübergehend nicht erreichbar. Es werden zuletzt erfolgreich geladene Werte angezeigt.",
+        costConversionWarning: exchangeRate === null
+          ? "EUR-Kosten sind derzeit nicht verfügbar; Quellenwerte werden nicht als EUR angezeigt."
+          : null,
       };
     }
     throw new UserVisibleError("OmniRoute ist derzeit nicht erreichbar.", 503);

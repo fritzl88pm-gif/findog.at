@@ -14,6 +14,13 @@ export type OmniRouteQuotaSnapshot = {
   quotaSyncIntervalMinutes: number | null;
 };
 
+export type OmniRouteExchangeRateSnapshot = {
+  rate: number;
+  date: string;
+  source: string;
+  fetchedAt: string;
+};
+
 export type OmniRouteUsageSummary = {
   totalRequests: number | null;
   promptTokens: number | null;
@@ -22,7 +29,7 @@ export type OmniRouteUsageSummary = {
   successfulRequests: number | null;
   successRatePct: number | null;
   avgLatencyMs: number | null;
-  totalCost: number | null;
+  totalCostEur: number | null;
   fallbackCount: number | null;
   lastRequest: string | null;
 };
@@ -36,7 +43,7 @@ export type OmniRouteModelUsage = {
   totalTokens: number | null;
   avgLatencyMs: number | null;
   successRatePct: number | null;
-  cost: number | null;
+  costEur: number | null;
   lastUsed: string | null;
 };
 
@@ -48,7 +55,7 @@ export type OmniRouteProviderUsage = {
   totalTokens: number | null;
   avgLatencyMs: number | null;
   successRatePct: number | null;
-  cost: number | null;
+  costEur: number | null;
   lastUsed: string | null;
 };
 
@@ -56,7 +63,7 @@ export type OmniRouteDailyTrend = {
   date: string;
   requests: number | null;
   tokens: number | null;
-  cost: number | null;
+  costEur: number | null;
 };
 
 export type OmniRouteUsageSnapshot = {
@@ -132,6 +139,9 @@ export type OmniRouteAdminUsageSnapshot = {
   generatedAt: string;
   stale: boolean;
   range: OmniRouteUsageRange;
+  userQuestions: number;
+  exchangeRate: OmniRouteExchangeRateSnapshot | null;
+  costConversionWarning: string | null;
   quota: OmniRouteQuotaSnapshot | null;
   codexQuota: OmniRouteQuotaSnapshot | null;
   usage: OmniRouteUsageSnapshot;

@@ -155,7 +155,6 @@ function usagePayloads() {
           strategy: "priority",
           models: [
             { model: "codex/gpt-5.6-luna", providerId: "secret-codex-connection-id" },
-            { model: "gemini-3.7-flash-high", providerId: "secret-connection-id" },
           ],
           version: 1,
           updatedAt: "2026-08-18T00:00:00.000Z",
@@ -165,7 +164,6 @@ function usagePayloads() {
           strategy: "priority",
           models: [
             { model: "codex/gpt-5.6-luna", providerId: "secret-codex-connection-id" },
-            { model: "gemini-3.7-flash-high", providerId: "secret-connection-id" },
           ],
           version: 1,
           updatedAt: "2026-08-19T00:00:00.000Z",
@@ -175,7 +173,6 @@ function usagePayloads() {
           strategy: "priority",
           models: [
             { model: "codex/gpt-5.6-luna", providerId: "secret-codex-connection-id" },
-            { model: "gemini-3.7-flash-high", providerId: "secret-connection-id" },
           ],
           version: 1,
           updatedAt: "2026-08-20T00:00:00.000Z",
@@ -185,7 +182,6 @@ function usagePayloads() {
           strategy: "priority",
           models: [
             { model: "codex/gpt-5.6-luna", providerId: "secret-codex-connection-id" },
-            { model: "gemini-3.7-flash-high", providerId: "secret-connection-id" },
           ],
           version: 1,
           updatedAt: "2026-08-21T00:00:00.000Z",
@@ -202,6 +198,9 @@ function jsonResponse(url: string): Response {
   if (url.endsWith("/api/provider-stats")) return Response.json(payloads.providerStats);
   if (url.endsWith("/api/providers")) return Response.json(payloads.providers);
   if (url.endsWith("/api/providers/health-matrix")) return Response.json(payloads.healthMatrix);
+  if (url === "https://api.frankfurter.app/latest?from=USD&to=EUR") {
+    return Response.json({ base: "USD", rates: { EUR: 0.92 }, date: "2026-08-20" });
+  }
   return Response.json(payloads.combos);
 }
 
@@ -210,6 +209,13 @@ function request(query = "", authenticated = true): Request {
     headers: authenticated ? { Authorization: "Bearer admin-access-token" } : {},
   });
 }
+
+const countQuery = {
+  select: vi.fn(),
+  eq: vi.fn(),
+  gte: vi.fn(),
+  lt: vi.fn(),
+};
 
 describe("GET /api/admin/omniroute-usage", () => {
   const originalEnv = { ...process.env };
@@ -224,7 +230,14 @@ describe("GET /api/admin/omniroute-usage", () => {
     vi.spyOn(Date, "now").mockReturnValue(new Date("2026-08-20T12:00:00.000Z").getTime());
     process.env.OMNIROUTE_ADMIN_BASE_URL = "https://omniroute.example";
     process.env.OMNIROUTE_ADMIN_API_KEY = "secret-management-key";
-    vi.mocked(getSupabaseServerClient).mockReturnValue({ auth: {} } as never);
+    countQuery.select.mockReturnValue(countQuery);
+    countQuery.eq.mockReturnValue(countQuery);
+    countQuery.gte.mockReturnValue(countQuery);
+    countQuery.lt.mockResolvedValue({ count: 37, error: null });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({
+      auth: {},
+      from: vi.fn(() => countQuery),
+    } as never);
     vi.mocked(authenticateAdminRequest).mockResolvedValue({ id: "admin-1" });
   });
 
@@ -263,36 +276,56 @@ describe("GET /api/admin/omniroute-usage", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("returns a strict no-store snapshot for admins and sanitizes upstream data with exactly 6 parallel fetches", async () => {
+  it("returns a strict no-store snapshot for admins with configured targets, exact question count, and EUR conversion", async () => {
     const response = await GET(request("?range=7d"));
     const payload = await response.json();
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store, max-age=0");
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://omniroute.example/api/usage/provider-limits");
     expect(String(fetchMock.mock.calls[1]?.[0])).toBe("https://omniroute.example/api/providers");
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain("/api/usage/analytics?range=7d");
     expect(String(fetchMock.mock.calls[3]?.[0])).toBe("https://omniroute.example/api/provider-stats");
     expect(String(fetchMock.mock.calls[4]?.[0])).toBe("https://omniroute.example/api/providers/health-matrix");
     expect(String(fetchMock.mock.calls[5]?.[0])).toBe("https://omniroute.example/api/combos");
+    expect(String(fetchMock.mock.calls[6]?.[0])).toBe("https://api.frankfurter.app/latest?from=USD&to=EUR");
+    const fxCall = fetchMock.mock.calls[6] as unknown as [string, RequestInit];
+    expect(fxCall[1].headers).toEqual({ Accept: "application/json" });
+    expect(JSON.stringify(fxCall[1].headers)).not.toContain("Authorization");
 
     expect(payload).toMatchObject({
       stale: false,
       range: "7d",
-      quota: { used: 20, total: 100, remainingPercent: 80 },
+      userQuestions: 37,
+      exchangeRate: { rate: 0.92, date: "2026-08-20", source: "Frankfurter" },
+      costConversionWarning: null,
+      quota: null,
       codexQuota: { used: 10, total: 50, remainingPercent: 80, quotaLabel: "Weekly" },
-      usage: { summary: { totalRequests: 20 } },
+      usage: {
+        summary: { totalRequests: 20, totalCostEur: expect.any(Number) },
+        models: [{ model: "codex/gpt-5.6-luna", costEur: expect.any(Number) }],
+        providers: [{ provider: "OpenAI Codex", costEur: null }],
+        dailyTrend: [{ costEur: expect.any(Number) }],
+      },
       providerHealth: [
         { provider: "codex", models: [{ model: "codex/gpt-5.6-luna" }] },
-        { provider: "gemini", models: [{ model: "gemini-3.7-flash-high" }] },
       ],
     });
+    expect(countQuery.select).toHaveBeenCalledWith("*", { count: "exact", head: true });
+    expect(countQuery.eq).toHaveBeenCalledWith("role", "user");
+    expect(countQuery.gte).toHaveBeenCalledWith("created_at", "2026-08-13T12:00:00.000Z");
+    expect(countQuery.lt).toHaveBeenCalledWith("created_at", "2026-08-20T12:00:00.000Z");
+    expect(payload.usage.summary.totalCostEur).toBeCloseTo(0.184);
+    expect(payload.usage.models[0].costEur).toBeCloseTo(0.184);
+    expect(payload.usage.dailyTrend[0].costEur).toBeCloseTo(0.184);
+    expect(JSON.stringify(payload)).not.toContain("costUsd");
+    expect(JSON.stringify(payload)).not.toContain("totalCostUsd");
     expect(payload.routes).toHaveLength(4);
     expect(payload.routes[0]).toMatchObject({
       name: "omniroute-gpt-5.6-luna",
       strategy: "priority",
-      targets: ["codex/gpt-5.6-luna", "gemini-3.7-flash-high"],
+      targets: ["codex/gpt-5.6-luna"],
       version: 1,
       productionTraffic: true,
       requests: 20,
@@ -304,7 +337,8 @@ describe("GET /api/admin/omniroute-usage", () => {
       fallbackRatePct: 10,
       lastUsedAt: "2026-08-20T09:00:00.000Z",
     });
-    expect(payload.routes[0].models).toHaveLength(2);
+    expect(payload.routes[0].models).toHaveLength(1);
+    expect(payload.usage.models.map((model: { model: string }) => model.model)).toEqual(["codex/gpt-5.6-luna"]);
     expect(payload.routes[1]).toMatchObject({
       name: "omniroute-gpt-5.6-luna-medium",
       strategy: "priority",
@@ -324,10 +358,11 @@ describe("GET /api/admin/omniroute-usage", () => {
       productionTraffic: false,
     });
     expect(payload.usage.models).toEqual(expect.arrayContaining([
-      expect.objectContaining({ provider: "OpenAI Codex", model: "gpt-5.6-luna", successRatePct: 100 }),
+      expect.objectContaining({ provider: "OpenAI Codex", model: "codex/gpt-5.6-luna", successRatePct: 100 }),
     ]));
     expect(Object.keys(payload).sort()).toEqual([
-      "codexQuota", "generatedAt", "providerHealth", "quota", "range", "routes", "stale", "usage",
+      "codexQuota", "costConversionWarning", "exchangeRate", "generatedAt", "providerHealth",
+      "quota", "range", "routes", "stale", "usage", "userQuestions",
     ]);
     const serialized = JSON.stringify(payload);
     expect(serialized).not.toContain("secret");
@@ -339,7 +374,7 @@ describe("GET /api/admin/omniroute-usage", () => {
     expect(serialized).not.toContain("Fred V4");
     expect(serialized).not.toContain("fred-v4-stack");
     expect(serialized).not.toContain("call-logs");
-    expect(payload.providerHealth.map((provider: { provider: string }) => provider.provider)).toEqual(["codex", "gemini"]);
+    expect(payload.providerHealth.map((provider: { provider: string }) => provider.provider)).toEqual(["codex"]);
     expect(serialized).not.toContain("targetId");
   });
 
@@ -359,5 +394,32 @@ describe("GET /api/admin/omniroute-usage", () => {
     expect(response.status).toBe(503);
     expect(fetchMock).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toEqual({ error: "OmniRoute ist serverseitig nicht konfiguriert." });
+  });
+
+  it("returns a sanitized 503 when the exact question count cannot be read", async () => {
+    countQuery.lt.mockResolvedValueOnce({ count: null, error: { message: "secret database failure" } });
+    const response = await GET(request("?range=24h"));
+
+    expect(response.status).toBe(503);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({ error: "Die Findog-Fragen konnten nicht gezählt werden." });
+  });
+
+  it("keeps EUR unavailable when the reference rate is invalid", async () => {
+    fetchMock.mockImplementation(async (input: URL | Request | string) => {
+      const url = String(input);
+      if (url.startsWith("https://api.frankfurter.app/")) {
+        return Response.json({ base: "USD", rates: { EUR: 0 }, date: "2026-08-20" });
+      }
+      return jsonResponse(url);
+    });
+    const response = await GET(request("?refresh=1"));
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.exchangeRate).toBeNull();
+    expect(payload.costConversionWarning).toContain("nicht verfügbar");
+    expect(payload.usage.summary.totalCostEur).toBeNull();
+    expect(payload.usage.models[0].costEur).toBeNull();
   });
 });

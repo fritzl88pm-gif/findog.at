@@ -475,7 +475,7 @@ describe("OmniRoute usage normalization", () => {
     });
 
     expect(Object.keys(snapshot).sort()).toEqual([
-      "codexQuota", "generatedAt", "providerHealth", "quota", "range", "routes", "usage",
+      "codexQuota", "generatedAt", "providerHealth", "quota", "range", "routes", "usage", "userQuestions",
     ]);
     expect(snapshot.routes).toHaveLength(4);
     expect(snapshot.routes[0]).toMatchObject({
@@ -555,9 +555,8 @@ describe("OmniRoute usage normalization", () => {
     });
     expect(snapshot.providerHealth[1]?.models[0]?.model).toBe("gemini-3.7-flash-high");
     expect(snapshot.usage.models.map((model) => model.model)).toEqual([
-      "gpt-5.6-luna",
+      "codex/gpt-5.6-luna",
       "gemini-3.7-flash-high",
-      "openrouter/luna-pro",
     ]);
 
     const serializedSnapshot = JSON.stringify(snapshot);
@@ -637,6 +636,29 @@ describe("OmniRoute usage normalization", () => {
   });
 });
 
+  it("excludes historical Gemini analytics, quota, and health when only Codex targets are configured", () => {
+    const combos = combosPayload();
+    for (const combo of combos.combos) {
+      combo.models = combo.models.filter((target) => target.model === "codex/gpt-5.6-luna");
+    }
+    const snapshot = normalizeOmniRouteUsagePayloads({
+      providerLimits: providerLimitsPayload(),
+      providerConnections: providersPayload(),
+      analytics: analyticsPayload(),
+      providerStats: providerStatsPayload(),
+      healthMatrix: healthMatrixPayload(),
+      combos,
+      range: "24h",
+    });
+
+    expect(snapshot.usage.models.map((model) => model.model)).toEqual(["codex/gpt-5.6-luna"]);
+    expect(snapshot.usage.providers.map((provider) => provider.provider)).toEqual(["OpenAI Codex"]);
+    expect(snapshot.providerHealth.map((provider) => provider.provider)).toEqual(["codex"]);
+    expect(snapshot.quota).toBeNull();
+    expect(snapshot.codexQuota).not.toBeNull();
+    expect(JSON.stringify(snapshot)).not.toContain("gemini-3.7-flash-high");
+  });
+
 describe("OmniRoute usage cache", () => {
   const originalEnv = { ...process.env };
 
@@ -668,18 +690,30 @@ describe("OmniRoute usage cache", () => {
     });
   }
 
-  it("makes authenticated bounded requests with exactly six parallel fetches and never emits sensitive data", async () => {
+  it("makes authenticated bounded OmniRoute requests and an isolated EUR reference fetch", async () => {
     vi.spyOn(Date, "now").mockReturnValue(new Date("2026-08-20T12:00:00.000Z").getTime());
     const fetcher = successfulFetcher();
-    const snapshot = await getOmniRouteUsageSnapshot("24h", { fetcher: fetcher as unknown as typeof fetch });
+    const fxFetcher = vi.fn<typeof fetch>(async () => Response.json({
+      base: "USD",
+      rates: { EUR: 0.92 },
+      date: "2026-08-20",
+    }));
+    const snapshot = await getOmniRouteUsageSnapshot("24h", {
+      fetcher: fetcher as unknown as typeof fetch,
+      fxFetcher: fxFetcher as unknown as typeof fetch,
+    });
 
     expect(fetcher).toHaveBeenCalledTimes(6);
+    expect(fxFetcher).toHaveBeenCalledTimes(1);
     expect(String(fetcher.mock.calls[0]?.[0])).toBe("https://omniroute.example/sub/api/usage/provider-limits");
     expect(String(fetcher.mock.calls[1]?.[0])).toBe("https://omniroute.example/sub/api/providers");
     expect(String(fetcher.mock.calls[2]?.[0])).toContain("/api/usage/analytics?range=24h");
     expect(String(fetcher.mock.calls[3]?.[0])).toBe("https://omniroute.example/sub/api/provider-stats");
     expect(String(fetcher.mock.calls[4]?.[0])).toBe("https://omniroute.example/sub/api/providers/health-matrix");
     expect(String(fetcher.mock.calls[5]?.[0])).toBe("https://omniroute.example/sub/api/combos");
+    expect(String(fxFetcher.mock.calls[0]?.[0])).toBe("https://api.frankfurter.app/latest?from=USD&to=EUR");
+    expect(fxFetcher.mock.calls[0]?.[1]?.headers).toEqual({ Accept: "application/json" });
+    expect(JSON.stringify(fxFetcher.mock.calls[0]?.[1]?.headers)).not.toContain("Authorization");
     for (const call of fetcher.mock.calls) {
       const url = String(call[0]);
       expect(url.startsWith("https://omniroute.example/sub/api/")).toBe(true);
@@ -691,6 +725,13 @@ describe("OmniRoute usage cache", () => {
       expect(call[1]?.signal).toBeInstanceOf(AbortSignal);
     }
     expect(snapshot.stale).toBe(false);
+    expect(snapshot.userQuestions).toBe(0);
+    expect(snapshot.exchangeRate).toMatchObject({ rate: 0.92, date: "2026-08-20", source: "Frankfurter" });
+    expect(snapshot.costConversionWarning).toBeNull();
+    expect(snapshot.usage.summary?.totalCostEur).toBeCloseTo(1.38);
+    expect(snapshot.usage.models[0]?.costEur).toBeCloseTo(0.92);
+    expect(snapshot.usage.providers[0]?.costEur).toBeCloseTo(0.92);
+    expect(snapshot.usage.dailyTrend[0]?.costEur).toBeCloseTo(0.368);
     expect(snapshot.codexQuota).toMatchObject({ quotaLabel: "Weekly", remainingPercent: 80 });
     expect(snapshot.routes).toHaveLength(4);
     expect(snapshot.routes[0]?.name).toBe("omniroute-gpt-5.6-luna");
@@ -698,22 +739,35 @@ describe("OmniRoute usage cache", () => {
     expect(JSON.stringify(snapshot)).not.toContain("secret-access-token");
   });
 
-  it("serves a fresh snapshot without another upstream call", async () => {
+  it("serves a fresh snapshot and independently cached FX rate without another upstream call", async () => {
     const fetcher = successfulFetcher();
-    await getOmniRouteUsageSnapshot("7d", { fetcher: fetcher as unknown as typeof fetch });
-    const cached = await getOmniRouteUsageSnapshot("7d", { fetcher: fetcher as unknown as typeof fetch });
+    const fxFetcher = vi.fn<typeof fetch>(async () => Response.json({ base: "USD", rates: { EUR: 0.92 }, date: "2026-08-20" }));
+    await getOmniRouteUsageSnapshot("7d", {
+      fetcher: fetcher as unknown as typeof fetch,
+      fxFetcher: fxFetcher as unknown as typeof fetch,
+    });
+    const cached = await getOmniRouteUsageSnapshot("7d", {
+      fetcher: fetcher as unknown as typeof fetch,
+      fxFetcher: fxFetcher as unknown as typeof fetch,
+    });
 
     expect(fetcher).toHaveBeenCalledTimes(6);
+    expect(fxFetcher).toHaveBeenCalledTimes(1);
     expect(cached.stale).toBe(false);
   });
 
   it("bypasses fresh cache for refresh and safely falls back to the last snapshot", async () => {
     const fetcher = successfulFetcher();
-    const first = await getOmniRouteUsageSnapshot("30d", { fetcher: fetcher as unknown as typeof fetch });
+    const fxFetcher = vi.fn<typeof fetch>(async () => Response.json({ base: "USD", rates: { EUR: 0.92 }, date: "2026-08-20" }));
+    const first = await getOmniRouteUsageSnapshot("30d", {
+      fetcher: fetcher as unknown as typeof fetch,
+      fxFetcher: fxFetcher as unknown as typeof fetch,
+    });
     const failingFetcher = vi.fn(async () => new Response("secret upstream failure", { status: 503 }));
     const refreshed = await getOmniRouteUsageSnapshot("30d", {
       refresh: true,
       fetcher: failingFetcher as unknown as typeof fetch,
+      fxFetcher: fxFetcher as unknown as typeof fetch,
     });
 
     expect(fetcher).toHaveBeenCalledTimes(6);
@@ -723,6 +777,43 @@ describe("OmniRoute usage cache", () => {
     expect(refreshed.generatedAt).toBe(first.generatedAt);
     expect(refreshed.warning).toContain("vorübergehend");
     expect(refreshed.warning).not.toContain("secret");
+  });
+
+  it("keeps FX failure nonfatal, suppresses all EUR costs, and warns compactly", async () => {
+    const fetcher = successfulFetcher();
+    const fxFetcher = vi.fn<typeof fetch>(async () => new Response("invalid", { status: 500 }));
+    const snapshot = await getOmniRouteUsageSnapshot("24h", {
+      fetcher: fetcher as unknown as typeof fetch,
+      fxFetcher: fxFetcher as unknown as typeof fetch,
+    });
+
+    expect(snapshot.exchangeRate).toBeNull();
+    expect(snapshot.usage.summary?.totalCostEur).toBeNull();
+    expect(snapshot.usage.models.map((model) => model.costEur)).toEqual([null, null]);
+    expect(snapshot.usage.providers.map((provider) => provider.costEur)).toEqual([null, null]);
+    expect(snapshot.usage.dailyTrend.map((day) => day.costEur)).toEqual([null, null]);
+    expect(snapshot.costConversionWarning).toContain("EUR-Kosten");
+    expect(snapshot.costConversionWarning).toContain("nicht als EUR");
+    expect(JSON.stringify(snapshot)).not.toContain("1.5");
+    expect(JSON.stringify(snapshot)).not.toContain("USD");
+  });
+
+  it("rejects a malformed FX response without caching or failing the dashboard", async () => {
+    const fetcher = successfulFetcher();
+    const fxFetcher = vi.fn<typeof fetch>(async () => Response.json({ base: "EUR", rates: { EUR: 0.92 }, date: "2026-08-20" }));
+    const snapshot = await getOmniRouteUsageSnapshot("24h", {
+      fetcher: fetcher as unknown as typeof fetch,
+      fxFetcher: fxFetcher as unknown as typeof fetch,
+    });
+
+    expect(snapshot.exchangeRate).toBeNull();
+    expect(snapshot.usage.summary?.totalCostEur).toBeNull();
+    const second = await getOmniRouteUsageSnapshot("24h", {
+      fetcher: fetcher as unknown as typeof fetch,
+      fxFetcher: fxFetcher as unknown as typeof fetch,
+    });
+    expect(fxFetcher).toHaveBeenCalledTimes(2);
+    expect(second.exchangeRate).toBeNull();
   });
 
   it("returns a sanitized 503 when no cached snapshot exists", async () => {
