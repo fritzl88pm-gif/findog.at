@@ -2491,6 +2491,26 @@ textarea:focus {
   word-break: break-word;
 }
 
+.fred-execution-detail-fold {
+  margin-top: 4px;
+}
+
+.fred-execution-detail-fold summary {
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 550;
+  color: var(--bmf-blue);
+  user-select: none;
+}
+
+.fred-execution-detail-fold summary:hover {
+  text-decoration: underline;
+}
+
+.fred-execution-detail-fold[open] > summary {
+  margin-bottom: 4px;
+}
+
 .fred-research-sources {
   padding: 10px 12px 12px;
   border-top: 1px solid rgba(40, 111, 156, 0.12);
@@ -2520,6 +2540,24 @@ textarea:focus {
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.fred-research-sources span.fred-knowledge-source-advanced {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  border-radius: var(--radius-sm);
+  white-space: normal;
+}
+
+.fred-source-doc {
+  font-weight: 500;
+}
+
+.fred-source-meta {
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.2;
 }
 
 .fred-research-sources a:hover {

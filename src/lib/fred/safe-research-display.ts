@@ -337,6 +337,8 @@ export function sanitizeAndRedactDetail(value: unknown, maxLength = DEFAULT_MAX_
   const sanitized = sanitizeControlCharacters(value);
   if (!sanitized.trim()) return undefined;
   const redacted = redactSensitiveText(sanitized);
-  const bounded = redacted.slice(0, maxLength);
-  return bounded || undefined;
+  if (redacted.length > maxLength) {
+    return `${redacted.slice(0, maxLength)}\n…[gekürzt]`;
+  }
+  return redacted || undefined;
 }

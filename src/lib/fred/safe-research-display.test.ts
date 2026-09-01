@@ -195,12 +195,20 @@ describe("Safe Research Display & Sanitization Helper", () => {
       }
     });
 
-    it("sanitizes control characters and bounds output", () => {
+    it("sanitizes control characters and bounds output with truncation marker", () => {
       expect(sanitizeControlCharacters("A\x00B\r\nC\x1FD")).toBe("AB\nCD");
       expect(sanitizeSafeLabel("  Valid Label\x00  ", 10)).toBe("Valid Labe");
       expect(sanitizeSafeId("id-123\x08", 50)).toBe("id-123");
-      expect(sanitizeAndRedactDetail("Some detail text", 11)).toBe("Some detail");
+      expect(sanitizeAndRedactDetail("Some detail text", 11)).toBe("Some detail\n…[gekürzt]");
+      expect(sanitizeAndRedactDetail("Short text", 20)).toBe("Short text");
       expect(sanitizeAndRedactDetail("   ")).toBeUndefined();
+    });
+
+    it("appends \\n…[gekürzt] when redacted detail exceeds maxLength", () => {
+      const longInput = "Dies ist ein sehr langer Text, der die vorgegebene maximale Zeichenanzahl überschreitet.";
+      const truncated = sanitizeAndRedactDetail(longInput, 30);
+      expect(truncated).toBe(`${longInput.slice(0, 30)}\n…[gekürzt]`);
+      expect(truncated?.length).toBe(30 + "\n…[gekürzt]".length);
     });
   });
 });

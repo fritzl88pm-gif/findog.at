@@ -235,7 +235,7 @@ export function resolveResearchTraceDisplay({
   return { shouldRender: false, isAdvanced: false, summary: "" };
 }
 
-function ResearchTrace({
+export function ResearchTrace({
   steps,
   sources,
   active,
@@ -282,7 +282,17 @@ function ResearchTrace({
                   ) : null}
                 </div>
                 {step.detail ? (
-                  <div className="fred-execution-detail">{step.detail}</div>
+                  step.detail.length > 400 ? (
+                    <details
+                      className="fred-execution-detail-fold"
+                      open={step.status === "running" ? true : undefined}
+                    >
+                      <summary>Details</summary>
+                      <div className="fred-execution-detail">{step.detail}</div>
+                    </details>
+                  ) : (
+                    <div className="fred-execution-detail">{step.detail}</div>
+                  )
                 ) : null}
               </div>
             </li>
@@ -311,6 +321,22 @@ function ResearchTrace({
               <a href={source.url} target="_blank" rel="noreferrer" key={`web-${source.url}`}>
                 {source.title || new URL(source.url).hostname}
               </a>
+            ) : displayMode === "advanced" ? (
+              <span
+                className="fred-knowledge-source-advanced"
+                title={source.chunkId ? `Chunk: ${source.chunkId}` : undefined}
+                key={`kb-${source.knowledgeBaseId ?? ""}-${source.chunkId ?? ""}-${index}`}
+              >
+                <span className="fred-source-doc">{source.doc}</span>
+                {(source.knowledgeBaseId || source.chunkId) ? (
+                  <small className="fred-source-meta">
+                    {[
+                      source.knowledgeBaseId ? `KB ${source.knowledgeBaseId.slice(0, 8)}` : null,
+                      source.chunkId ? `Chunk ${source.chunkId.slice(0, 8)}` : null,
+                    ].filter(Boolean).join(" · ")}
+                  </small>
+                ) : null}
+              </span>
             ) : (
               <span title={source.chunkId ? `Chunk: ${source.chunkId}` : undefined} key={`kb-${source.knowledgeBaseId ?? ""}-${source.chunkId ?? ""}-${index}`}>
                 {source.doc}

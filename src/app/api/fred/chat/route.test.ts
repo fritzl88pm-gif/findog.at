@@ -1964,6 +1964,14 @@ describe("POST /api/fred/chat", () => {
       expect(executionEvents[0]).toMatchObject({
         type: "execution",
         step: expect.objectContaining({
+          kind: "analysis",
+          label: "Anfrage an Fred übermittelt",
+          status: "completed",
+        }),
+      });
+      expect(executionEvents).toContainEqual({
+        type: "execution",
+        step: expect.objectContaining({
           id: expect.stringMatching(/^web:/u),
           kind: "web",
         }),

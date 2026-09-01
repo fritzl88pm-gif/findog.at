@@ -236,9 +236,9 @@ describe("WeKnora execution trace projection and parser", () => {
       kind: "tool",
       status: "running",
       label: "Recherchewerkzeug wird ausgeführt",
+      detail: "Parameter: code: import os; print(os.environ)",
     });
     expect(JSON.stringify(unknownCall)).not.toContain("run_arbitrary_python_script");
-    expect(JSON.stringify(unknownCall)).not.toContain("os.environ");
 
     const unknownFail = parseWeKnoraExecutionEvent({
       response_type: "error",
@@ -407,7 +407,8 @@ describe("WeKnora execution trace projection and parser", () => {
       content: longContent,
       data: { event_id: "think-long-1" },
     });
-    expect(longThinking.step?.detail?.length).toBe(2000);
+    expect(longThinking.step?.detail?.length).toBe(2000 + "\n…[gekürzt]".length);
+    expect(longThinking.step?.detail?.endsWith("\n…[gekürzt]")).toBe(true);
   });
 
   it("redacts real GitHub and Google token formats from reasoning and search queries", () => {
@@ -1389,5 +1390,285 @@ describe("WeKnora execution trace projection and parser", () => {
       },
     });
     expect(safeUrlQuery.step?.detail).toBe("Suche: https://ris.bka.gv.at/Dokument.wxe?id=123");
+  });
+
+  it("Task 1: surfaces agent_query as initial trace step only when assistant_message_id is present", () => {
+    const withId = parseWeKnoraExecutionEvent({
+      response_type: "agent_query",
+      assistant_message_id: "m1",
+    });
+
+    expect(withId.step).toEqual({
+      id: expect.stringMatching(/^analysis:[a-z0-9]+$/u),
+      kind: "analysis",
+      status: "completed",
+      label: "Anfrage an Fred übermittelt",
+    });
+
+    const withoutId = parseWeKnoraExecutionEvent({
+      response_type: "agent_query",
+    });
+    expect(withoutId.step).toBeUndefined();
+
+    const emptyId = parseWeKnoraExecutionEvent({
+      response_type: "agent_query",
+      assistant_message_id: "   ",
+    });
+    expect(emptyId.step).toBeUndefined();
+
+    const nonStringId = parseWeKnoraExecutionEvent({
+      response_type: "agent_query",
+      assistant_message_id: 12345,
+    });
+    expect(nonStringId.step).toBeUndefined();
+  });
+
+  describe("Task 2: formatSafeToolArguments for generic tools in tool_call", () => {
+    it("formats object arguments with scalar values and ellipsis for nested objects", () => {
+      const call = parseWeKnoraExecutionEvent({
+        response_type: "tool_call",
+        data: {
+          tool_call_id: "calc-1",
+          tool_name: "calculate_tax",
+          arguments: {
+            year: 2024,
+            category: "pendler",
+            include_details: true,
+            extra_options: { debug: false },
+            nested_list: [1, 2, 3],
+          },
+        },
+      });
+
+      expect(call.step).toEqual({
+        id: expect.stringMatching(/^tool:[a-z0-9]+$/u),
+        kind: "tool",
+        status: "running",
+        label: "Recherchewerkzeug wird ausgeführt",
+        detail: "Parameter: year: 2024; category: pendler; include_details: true; extra_options: …; nested_list: …",
+      });
+    });
+
+    it("formats JSON-string arguments safely", () => {
+      const call = parseWeKnoraExecutionEvent({
+        response_type: "tool_call",
+        data: {
+          tool_call_id: "custom-json-1",
+          tool_name: "custom_analyzer",
+          arguments: JSON.stringify({ section: "§ 16 EStG", active: true }),
+        },
+      });
+
+      expect(call.step?.detail).toBe("Parameter: section: § 16 EStG; active: true");
+    });
+
+    it("drops detail entirely when credentials / sensitive keys (e.g. api_key) are present", () => {
+      const callWithApiKey = parseWeKnoraExecutionEvent({
+        response_type: "tool_call",
+        data: {
+          tool_call_id: "sec-tool-1",
+          tool_name: "external_service",
+          arguments: {
+            api_key: "sk-proj-super-secret-12345678",
+            query: "tax info",
+          },
+        },
+      });
+
+      expect(callWithApiKey.step?.detail).toBeUndefined();
+
+      const callWithSecretAssignment = parseWeKnoraExecutionEvent({
+        response_type: "tool_call",
+        data: {
+          tool_call_id: "sec-tool-2",
+          tool_name: "external_service",
+          arguments: {
+            password: "supersecretpassword",
+            mode: "fast",
+          },
+        },
+      });
+
+      expect(callWithSecretAssignment.step?.detail).toBeUndefined();
+    });
+
+    it("truncates arguments detail longer than 300 chars", () => {
+      const longText = "A".repeat(500);
+      const call = parseWeKnoraExecutionEvent({
+        response_type: "tool_call",
+        data: {
+          tool_call_id: "long-args-1",
+          tool_name: "external_service",
+          arguments: {
+            description: longText,
+          },
+        },
+      });
+
+      expect(call.step?.detail).toBeDefined();
+      expect(call.step?.detail?.startsWith("Parameter: description: ")).toBe(true);
+      expect(call.step?.detail?.length).toBeLessThanOrEqual(315);
+    });
+  });
+
+  describe("Task 3: extractGenericResultSummary for generic tools in tool_result", () => {
+    it("extracts item names from results array (up to 3 items)", () => {
+      const res = parseWeKnoraExecutionEvent({
+        response_type: "tool_result",
+        data: {
+          tool_call_id: "tool-res-1",
+          tool_name: "custom_analyzer",
+          success: true,
+          result: {
+            results: [
+              { name: "Bericht 2023" },
+              { name: "Bericht 2024" },
+              { name: "Bericht 2025" },
+              { name: "Bericht 2026 (übersprungen)" },
+            ],
+          },
+        },
+      });
+
+      expect(res.step).toEqual({
+        id: expect.stringMatching(/^tool:[a-z0-9]+$/u),
+        kind: "tool",
+        status: "completed",
+        label: "Recherchewerkzeug ausgeführt",
+        detail: "Ergebnis: Bericht 2023; Bericht 2024; Bericht 2025",
+      });
+    });
+
+    it("extracts scalar summary fields in order (status, ok, error, result_count, total, count)", () => {
+      const res = parseWeKnoraExecutionEvent({
+        response_type: "tool_result",
+        data: {
+          tool_call_id: "tool-res-2",
+          tool_name: "custom_fetcher",
+          success: true,
+          result: {
+            count: 5,
+            status: "ready",
+            total: 10,
+            ok: true,
+            ignore_me: "not in summary list",
+          },
+        },
+      });
+
+      expect(res.step?.detail).toBe("Ergebnis: status: ready; ok: true; total: 10; count: 5");
+    });
+
+    it("extracts error field from result object when present in successful response", () => {
+      const res = parseWeKnoraExecutionEvent({
+        response_type: "tool_result",
+        data: {
+          tool_call_id: "tool-res-3",
+          tool_name: "custom_fetcher",
+          success: true,
+          result: {
+            error: "Teilweise fehlgeschlagen",
+            count: 0,
+          },
+        },
+      });
+
+      expect(res.step?.detail).toBe("Ergebnis: error: Teilweise fehlgeschlagen; count: 0");
+    });
+
+    it("parses JSON-string result payloads", () => {
+      const res = parseWeKnoraExecutionEvent({
+        response_type: "tool_result",
+        data: {
+          tool_call_id: "tool-res-json",
+          tool_name: "custom_fetcher",
+          success: true,
+          result: JSON.stringify({
+            status: "success",
+            items: [{ title: "Item 1" }, { title: "Item 2" }],
+          }),
+        },
+      });
+
+      expect(res.step?.detail).toBe("Ergebnis: status: success; Item 1; Item 2");
+    });
+
+    it("drops detail when result contains credentials or sensitive data", () => {
+      const res = parseWeKnoraExecutionEvent({
+        response_type: "tool_result",
+        data: {
+          tool_call_id: "tool-res-sec",
+          tool_name: "custom_fetcher",
+          success: true,
+          result: {
+            status: "sk-proj-super-secret-key",
+          },
+        },
+      });
+
+      expect(res.step?.detail).toBeUndefined();
+
+      const resInternalUrl = parseWeKnoraExecutionEvent({
+        response_type: "tool_result",
+        data: {
+          tool_call_id: "tool-res-sec-url",
+          tool_name: "custom_fetcher",
+          success: true,
+          result: {
+            items: [{ name: "http://db.internal.corp/table" }],
+          },
+        },
+      });
+
+      expect(resInternalUrl.step?.detail).toBeUndefined();
+    });
+  });
+
+  describe("Task 4: reference detail step on response_type references", () => {
+    it("formats mixed web and knowledge references into multiline detail with short kb ids", () => {
+      const refEvent = parseWeKnoraExecutionEvent({
+        response_type: "references",
+        data: {
+          event_id: "ref-step-1",
+          references: [
+            { kind: "web", url: "https://ris.bka.gv.at/Dokument.wxe?id=123", title: "RIS Judikatur" },
+            { kind: "web", url: "https://findok.bmf.gv.at/findok" },
+            { kind: "knowledge", doc: "EStG § 16 Pendlerpauschale", knowledge_base_id: "kb-12345678-abcd" },
+            { kind: "knowledge", doc: "BFG Richtlinien" },
+          ],
+        },
+      });
+
+      expect(refEvent.step).toEqual({
+        id: expect.stringMatching(/^sources:[a-z0-9]+$/u),
+        kind: "sources",
+        status: "completed",
+        label: "4 Quellen gefunden",
+        detail: "RIS Judikatur (ris.bka.gv.at)\nfindok.bmf.gv.at\nEStG § 16 Pendlerpauschale (kb-12345)\nBFG Richtlinien",
+      });
+    });
+
+    it("caps references detail to at most 10 lines when 12 references are present", () => {
+      const twelveReferences = Array.from({ length: 12 }, (_, i) => ({
+        kind: "knowledge",
+        doc: `Dokument Nr. ${i + 1}`,
+        knowledge_base_id: `kb-base-${i + 1}`,
+      }));
+
+      const refEvent = parseWeKnoraExecutionEvent({
+        response_type: "references",
+        data: {
+          event_id: "ref-step-12",
+          references: twelveReferences,
+        },
+      });
+
+      expect(refEvent.step?.label).toBe("12 Quellen gefunden");
+      expect(refEvent.step?.detail).toBeDefined();
+      const lines = refEvent.step?.detail?.split("\n") ?? [];
+      expect(lines).toHaveLength(10);
+      expect(lines[0]).toBe("Dokument Nr. 1 (kb-base-)");
+      expect(lines[9]).toBe("Dokument Nr. 10 (kb-base-)");
+    });
   });
 });

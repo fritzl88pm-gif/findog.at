@@ -635,23 +635,35 @@ describe("researchDisplayMode", () => {
     const { events } = await collectEvents(gen);
 
     const execEvents = events.filter((e) => e.type === "execution");
-    expect(execEvents.length).toBeGreaterThanOrEqual(2);
+    expect(execEvents.length).toBeGreaterThanOrEqual(3);
     expect(execEvents[0]).toMatchObject({
       type: "execution",
       step: {
-        id: expect.stringMatching(/^analysis:[a-z0-9]+$/u),
         kind: "analysis",
-        label: "Anfrage wird analysiert",
+        label: "Anfrage an Fred übermittelt",
+        status: "completed",
       },
     });
-    expect(execEvents[1]).toMatchObject({
-      type: "execution",
-      step: {
-        id: expect.stringMatching(/^planning:[a-z0-9]+$/u),
-        kind: "planning",
-        label: "Rechercheplan wird aktualisiert",
-      },
-    });
+    expect(execEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "execution",
+          step: expect.objectContaining({
+            id: expect.stringMatching(/^analysis:[a-z0-9]+$/u),
+            kind: "analysis",
+            label: "Anfrage wird analysiert",
+          }),
+        }),
+        expect.objectContaining({
+          type: "execution",
+          step: expect.objectContaining({
+            id: expect.stringMatching(/^planning:[a-z0-9]+$/u),
+            kind: "planning",
+            label: "Rechercheplan wird aktualisiert",
+          }),
+        }),
+      ]),
+    );
 
     const finalEvent = events.find((e) => e.type === "final");
     expect(finalEvent).toMatchObject({

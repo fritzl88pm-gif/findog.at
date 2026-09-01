@@ -503,6 +503,206 @@ function extractKnowledgeChunksListSummary(
   return parts.join(" · ");
 }
 
+function formatSafeToolArguments(
+  data: Record<string, unknown>,
+  event: Record<string, unknown>,
+): string | undefined {
+  const raw = data.arguments !== undefined ? data.arguments : event.arguments;
+  let argsObj: Record<string, unknown> | null = null;
+  if (typeof raw === "string" && raw.length <= 100_000) {
+    try {
+      argsObj = recordOf(JSON.parse(raw));
+    } catch {
+      return undefined;
+    }
+  } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    argsObj = raw as Record<string, unknown>;
+  }
+
+  if (!argsObj) return undefined;
+
+  const entries: string[] = [];
+  for (const [key, value] of Object.entries(argsObj)) {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      entries.push(`${key}: ${value}`);
+    } else if (value !== null && typeof value === "object") {
+      entries.push(`${key}: …`);
+    }
+  }
+
+  if (entries.length === 0) return undefined;
+
+  const joined = `Parameter: ${entries.join("; ")}`;
+  const sanitized = sanitizeAndRedactDetail(joined, 300);
+  if (!sanitized || sanitized.includes("[REDACTED") || !sanitized.trim()) {
+    return undefined;
+  }
+
+  return sanitized;
+}
+
+function extractGenericResultSummary(
+  data: Record<string, unknown>,
+  event: Record<string, unknown>,
+): string | undefined {
+  const raw = data.result !== undefined ? data.result : event.result;
+  let resultObj: Record<string, unknown> | null = null;
+  let itemsArray: unknown[] | null = null;
+
+  if (typeof raw === "string" && raw.length <= 100_000) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        itemsArray = parsed;
+      } else {
+        resultObj = recordOf(parsed);
+      }
+    } catch {
+      return undefined;
+    }
+  } else if (Array.isArray(raw)) {
+    itemsArray = raw;
+  } else if (raw && typeof raw === "object") {
+    resultObj = raw as Record<string, unknown>;
+  }
+
+  if (!resultObj && !itemsArray) return undefined;
+
+  const parts: string[] = [];
+
+  // 1. Scalar summary fields in order: status, ok, error, result_count, total, count
+  if (resultObj) {
+    const summaryFields = ["status", "ok", "error", "result_count", "total", "count"] as const;
+    for (const field of summaryFields) {
+      if (field in resultObj) {
+        const val = resultObj[field];
+        if (typeof val === "string" && val.trim().length > 0) {
+          parts.push(`${field}: ${val.trim()}`);
+        } else if (typeof val === "number" || typeof val === "boolean") {
+          parts.push(`${field}: ${val}`);
+        }
+      }
+    }
+
+    if (!itemsArray) {
+      const arrayKeys = ["results", "items", "documents", "data", "entries", "records", "matches", "chunks", "todos", "steps"];
+      for (const key of arrayKeys) {
+        if (Array.isArray(resultObj[key])) {
+          itemsArray = resultObj[key] as unknown[];
+          break;
+        }
+      }
+      if (!itemsArray) {
+        for (const val of Object.values(resultObj)) {
+          if (Array.isArray(val)) {
+            itemsArray = val;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Up to 3 item names/titles
+  if (itemsArray && itemsArray.length > 0) {
+    const topItems = itemsArray.slice(0, 3);
+    for (const item of topItems) {
+      if (typeof item === "string" && item.trim().length > 0) {
+        parts.push(item.trim());
+      } else if (item && typeof item === "object") {
+        const rec = item as Record<string, unknown>;
+        const label = boundedText(
+          rec.name ?? rec.title ?? rec.label ?? rec.task ?? rec.text ?? rec.doc ?? rec.id,
+          100,
+        );
+        if (label) {
+          parts.push(label);
+        }
+      }
+    }
+  }
+
+  if (parts.length === 0) return undefined;
+
+  const joined = `Ergebnis: ${parts.join("; ")}`;
+  const sanitized = sanitizeAndRedactDetail(joined, 300);
+  if (!sanitized || sanitized.includes("[REDACTED") || !sanitized.trim()) {
+    return undefined;
+  }
+
+  return sanitized;
+}
+
+function formatReferencesDetail(references: unknown[]): string | undefined {
+  if (!Array.isArray(references) || references.length === 0) return undefined;
+  const entries = references.slice(0, 10);
+  const lines: string[] = [];
+
+  for (const item of entries) {
+    if (typeof item === "string" && item.trim().length > 0) {
+      const trimmed = item.trim();
+      if (/^https?:\/\//i.test(trimmed)) {
+        try {
+          lines.push(new URL(trimmed).hostname);
+        } catch {
+          lines.push(trimmed);
+        }
+      } else {
+        lines.push(trimmed);
+      }
+      continue;
+    }
+
+    const rec = recordOf(item);
+    if (!rec) continue;
+
+    const kind = boundedText(rec.kind, 40).toLowerCase();
+    const rawUrl = rec.url ?? rec.link;
+    const isWeb = kind === "web" || (typeof rawUrl === "string" && rawUrl.trim().length > 0);
+
+    if (isWeb) {
+      let host = "";
+      if (typeof rawUrl === "string" && rawUrl.trim().length > 0) {
+        try {
+          host = new URL(rawUrl.trim()).hostname;
+        } catch {
+          host = rawUrl.trim();
+        }
+      }
+      const title = boundedText(rec.title ?? rec.name, 200);
+      if (title && host) {
+        lines.push(`${title} (${host})`);
+      } else if (title) {
+        lines.push(title);
+      } else if (host) {
+        lines.push(host);
+      }
+    } else {
+      const doc = boundedText(
+        rec.doc ?? rec.title ?? rec.document_name ?? rec.file_name ?? rec.name ?? rec.faq_standard_question ?? rec.faq_question,
+        200,
+      );
+      const rawKbId = boundedText(
+        rec.knowledge_base_id ?? rec.kb_id ?? rec.knowledgeBaseId ?? rec.knowledge_base ?? rec.kbId,
+        100,
+      );
+      const shortKbId = rawKbId ? rawKbId.slice(0, 8) : "";
+
+      if (doc && shortKbId) {
+        lines.push(`${doc} (${shortKbId})`);
+      } else if (doc) {
+        lines.push(doc);
+      } else if (shortKbId) {
+        lines.push(`KB ${shortKbId}`);
+      }
+    }
+  }
+
+  if (lines.length === 0) return undefined;
+
+  return sanitizeAndRedactDetail(lines.join("\n"), 1000);
+}
+
 function extractSearchResultSummary(data: Record<string, unknown>, event: Record<string, unknown>): string | undefined {
   const resultRecord = recordOf(data.result) ?? recordOf(event.result) ?? (typeof data.result === "string" ? (() => {
     try { return recordOf(JSON.parse(data.result)); } catch { return null; }
@@ -594,6 +794,23 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
     return { fatalError: true, unsupported: false };
   }
 
+  if (responseType === "agent_query") {
+    const rawId = event.assistant_message_id ?? data.assistant_message_id;
+    if (typeof rawId === "string" && rawId.trim().length > 0) {
+      return {
+        fatalError: false,
+        unsupported: false,
+        step: {
+          id: eventId(event, data, "analysis"),
+          kind: "analysis",
+          status: "completed",
+          label: "Anfrage an Fred übermittelt",
+        },
+      };
+    }
+    return { fatalError: false, unsupported: false };
+  }
+
   if (responseType === "thinking") {
     const done = data.done === true || event.done === true;
     const rawContent = extractProviderReasoningContent(event, data);
@@ -639,6 +856,7 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
         ? event.references
         : [];
     const count = references.length;
+    const detail = formatReferencesDetail(references);
     return {
       fatalError: false,
       unsupported: false,
@@ -647,6 +865,7 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
         kind: "sources",
         status: "completed",
         label: `${count} ${count === 1 ? "Quelle" : "Quellen"} gefunden`,
+        ...(detail ? { detail } : {}),
       } : undefined,
     };
   }
@@ -697,6 +916,12 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
         } else {
           detail = extractSearchResultSummary(data, event);
         }
+      }
+    } else {
+      if (responseType === "tool_call") {
+        detail = formatSafeToolArguments(data, event);
+      } else if (responseType === "tool_result" && successful) {
+        detail = extractGenericResultSummary(data, event);
       }
     }
 
