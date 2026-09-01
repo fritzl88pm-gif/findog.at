@@ -210,12 +210,24 @@ function request(query = "", authenticated = true): Request {
   });
 }
 
-const countQuery = {
+const fredQuery = {
   select: vi.fn(),
   eq: vi.fn(),
   gte: vi.fn(),
   lt: vi.fn(),
+  order: vi.fn(),
+  range: vi.fn(),
 };
+const listUsers = vi.fn();
+
+function mockFredMessages() {
+  return [
+    { client_id: "user-1", created_at: "2026-08-20T11:58:00.000Z" },
+    { client_id: "user-1", created_at: "2026-08-20T11:59:00.000Z" },
+    { client_id: "user-2", created_at: "2026-08-20T11:57:00.000Z" },
+    { client_id: null, created_at: "2026-08-20T11:56:00.000Z" },
+  ];
+}
 
 describe("GET /api/admin/omniroute-usage", () => {
   const originalEnv = { ...process.env };
@@ -230,13 +242,27 @@ describe("GET /api/admin/omniroute-usage", () => {
     vi.spyOn(Date, "now").mockReturnValue(new Date("2026-08-20T12:00:00.000Z").getTime());
     process.env.OMNIROUTE_ADMIN_BASE_URL = "https://omniroute.example";
     process.env.OMNIROUTE_ADMIN_API_KEY = "secret-management-key";
-    countQuery.select.mockReturnValue(countQuery);
-    countQuery.eq.mockReturnValue(countQuery);
-    countQuery.gte.mockReturnValue(countQuery);
-    countQuery.lt.mockResolvedValue({ count: 37, error: null });
+    fredQuery.select.mockReturnValue(fredQuery);
+    fredQuery.eq.mockReturnValue(fredQuery);
+    fredQuery.gte.mockReturnValue(fredQuery);
+    fredQuery.lt.mockReturnValue(fredQuery);
+    fredQuery.order.mockReturnValue(fredQuery);
+    fredQuery.range.mockImplementation((from: number, to: number) => Promise.resolve({
+      data: mockFredMessages().slice(from, to + 1),
+      error: null,
+    }));
+    listUsers.mockImplementation(({ page = 1, perPage = 1_000 } = {}) => {
+      const firstPage = [
+        { id: "user-1", email: "one@example.com", userMetadata: { upstreamId: "secret-upstream-id" } },
+        { id: "user-2", email: "two@example.com" },
+        ...Array.from({ length: 998 }, (_, index) => ({ id: `auth-user-${index}`, email: `auth-${index}@example.com` })),
+      ];
+      const pages = [firstPage, [{ id: "deleted-user", email: "deleted@example.com" }]];
+      return Promise.resolve({ data: { users: pages[page - 1] ?? [] }, error: null, perPage });
+    });
     vi.mocked(getSupabaseServerClient).mockReturnValue({
-      auth: {},
-      from: vi.fn(() => countQuery),
+      auth: { admin: { listUsers } },
+      from: vi.fn(() => fredQuery),
     } as never);
     vi.mocked(authenticateAdminRequest).mockResolvedValue({ id: "admin-1" });
   });
@@ -276,7 +302,7 @@ describe("GET /api/admin/omniroute-usage", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("returns a strict no-store snapshot for admins with configured targets, exact question count, and EUR conversion", async () => {
+  it("returns a strict no-store snapshot for admins with configured targets, exact per-user questions, and EUR conversion", async () => {
     const response = await GET(request("?range=7d"));
     const payload = await response.json();
 
@@ -297,7 +323,33 @@ describe("GET /api/admin/omniroute-usage", () => {
     expect(payload).toMatchObject({
       stale: false,
       range: "7d",
-      userQuestions: 37,
+      userQuestions: 4,
+      userUsage: [
+        {
+          clientId: "user-1",
+          email: "one@example.com",
+          questionCount: 2,
+          questionSharePct: expect.closeTo(50, 6),
+          estimatedCostEur: expect.closeTo(0.0184, 8),
+          lastQuestionAt: "2026-08-20T11:59:00.000Z",
+        },
+        {
+          clientId: "user-2",
+          email: "two@example.com",
+          questionCount: 1,
+          questionSharePct: expect.closeTo(25, 6),
+          estimatedCostEur: expect.closeTo(0.0092, 8),
+          lastQuestionAt: "2026-08-20T11:57:00.000Z",
+        },
+        {
+          clientId: null,
+          email: "System / nicht zugeordnet",
+          questionCount: 1,
+          questionSharePct: expect.closeTo(25, 6),
+          estimatedCostEur: expect.closeTo(0.0092, 8),
+          lastQuestionAt: "2026-08-20T11:56:00.000Z",
+        },
+      ],
       exchangeRate: { rate: 0.92, date: "2026-08-20", source: "Frankfurter" },
       costConversionWarning: null,
       quota: null,
@@ -312,10 +364,14 @@ describe("GET /api/admin/omniroute-usage", () => {
         { provider: "codex", models: [{ model: "codex/gpt-5.6-luna" }] },
       ],
     });
-    expect(countQuery.select).toHaveBeenCalledWith("*", { count: "exact", head: true });
-    expect(countQuery.eq).toHaveBeenCalledWith("role", "user");
-    expect(countQuery.gte).toHaveBeenCalledWith("created_at", "2026-08-13T12:00:00.000Z");
-    expect(countQuery.lt).toHaveBeenCalledWith("created_at", "2026-08-20T12:00:00.000Z");
+    expect(fredQuery.select).toHaveBeenCalledWith("client_id, created_at");
+    expect(fredQuery.eq).toHaveBeenCalledWith("role", "user");
+    expect(fredQuery.gte).toHaveBeenCalledWith("created_at", "2026-08-13T12:00:00.000Z");
+    expect(fredQuery.lt).toHaveBeenCalledWith("created_at", "2026-08-20T12:00:00.000Z");
+    expect(fredQuery.order).toHaveBeenCalledWith("created_at", { ascending: false });
+    expect(fredQuery.range).toHaveBeenCalledWith(0, 999);
+    expect(listUsers).toHaveBeenNthCalledWith(1, { page: 1, perPage: 1_000 });
+    expect(listUsers).toHaveBeenNthCalledWith(2, { page: 2, perPage: 1_000 });
     expect(payload.usage.summary.totalCostEur).toBeCloseTo(0.184);
     expect(payload.usage.models[0].costEur).toBeCloseTo(0.184);
     expect(payload.usage.dailyTrend[0].costEur).toBeCloseTo(0.184);
@@ -362,7 +418,7 @@ describe("GET /api/admin/omniroute-usage", () => {
     ]));
     expect(Object.keys(payload).sort()).toEqual([
       "codexQuota", "costConversionWarning", "exchangeRate", "generatedAt", "providerHealth",
-      "quota", "range", "routes", "stale", "usage", "userQuestions",
+      "quota", "range", "routes", "stale", "usage", "userQuestions", "userUsage",
     ]);
     const serialized = JSON.stringify(payload);
     expect(serialized).not.toContain("secret");
@@ -376,6 +432,11 @@ describe("GET /api/admin/omniroute-usage", () => {
     expect(serialized).not.toContain("call-logs");
     expect(payload.providerHealth.map((provider: { provider: string }) => provider.provider)).toEqual(["codex"]);
     expect(serialized).not.toContain("targetId");
+    expect(payload.userUsage.map((user: Record<string, unknown>) => Object.keys(user).sort())).toEqual([
+      ["clientId", "email", "estimatedCostEur", "lastQuestionAt", "questionCount", "questionSharePct"],
+      ["clientId", "email", "estimatedCostEur", "lastQuestionAt", "questionCount", "questionSharePct"],
+      ["clientId", "email", "estimatedCostEur", "lastQuestionAt", "questionCount", "questionSharePct"],
+    ]);
   });
 
   it("returns a sanitized 503 when the upstream request fails and no cache exists", async () => {
@@ -396,13 +457,22 @@ describe("GET /api/admin/omniroute-usage", () => {
     await expect(response.json()).resolves.toEqual({ error: "OmniRoute ist serverseitig nicht konfiguriert." });
   });
 
-  it("returns a sanitized 503 when the exact question count cannot be read", async () => {
-    countQuery.lt.mockResolvedValueOnce({ count: null, error: { message: "secret database failure" } });
+  it("returns a sanitized 503 when the exact question rows cannot be read", async () => {
+    fredQuery.range.mockResolvedValueOnce({ data: null, error: { message: "secret database failure" } });
     const response = await GET(request("?range=24h"));
 
     expect(response.status).toBe(503);
     expect(fetchMock).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toEqual({ error: "Die Findog-Fragen konnten nicht gezählt werden." });
+  });
+
+  it("returns a sanitized 503 when paginated email resolution fails", async () => {
+    listUsers.mockResolvedValueOnce({ data: null, error: { message: "secret auth admin failure" } });
+    const response = await GET(request("?range=24h"));
+
+    expect(response.status).toBe(503);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({ error: "Die Findog-Fragen konnten nicht zugeordnet werden." });
   });
 
   it("keeps EUR unavailable when the reference rate is invalid", async () => {
@@ -421,5 +491,6 @@ describe("GET /api/admin/omniroute-usage", () => {
     expect(payload.costConversionWarning).toContain("nicht verfügbar");
     expect(payload.usage.summary.totalCostEur).toBeNull();
     expect(payload.usage.models[0].costEur).toBeNull();
+    expect(payload.userUsage.every((user: { estimatedCostEur: number | null }) => user.estimatedCostEur === null)).toBe(true);
   });
 });

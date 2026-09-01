@@ -56,9 +56,31 @@ describe("Admin OmniRoute Stats UI", () => {
       "codexQuota",
       "providerHealth",
       "routes",
+      "userUsage",
     ]) {
       expect(componentSource).toContain(field);
     }
+  });
+
+  it("renders exact per-user Fred questions in a responsive card grid", () => {
+    expect(componentSource).toContain('id="admin-omniroute-users-title"');
+    expect(componentSource).toContain("Useranfragen");
+    expect(componentSource).toContain("Fred-Fragen (exakt)");
+    expect(componentSource).toContain("Kostenanteil (Schätzung)");
+    expect(componentSource).toContain("Anteil an Fred-Fragen");
+    expect(componentSource).toContain("Letzte Frage");
+    expect(componentSource).toContain("userUsage.map((user)");
+    expect(componentSource).toContain("admin-omniroute-user-grid");
+    expect(componentSource).toContain("admin-omniroute-user-card");
+    expect(componentSource).toContain("System / nicht zugeordnet");
+    expect(componentSource).toContain("Fred-Fragen sind exakt gezählt");
+    expect(componentSource).toContain("proportional zu allen OmniRoute-Anfragen");
+    expect(componentSource).not.toContain("<table>");
+    expect(cssSource).toContain(".admin-omniroute-user-grid");
+    expect(cssSource).toContain(".admin-omniroute-user-card");
+    expect(cssSource).toContain(
+      "  .admin-omniroute-user-grid,\n  .admin-omniroute-routes-list {\n    grid-template-columns: 1fr;",
+    );
   });
 
   it("keeps model and provider surfaces dynamic and free of a fixed Gemini panel", () => {
@@ -103,6 +125,7 @@ describe("Admin OmniRoute Stats UI", () => {
   it("uses the existing light system with responsive cards, focus states, and 44px controls", () => {
     expect(cssSource).toContain(".admin-omniroute-panel");
     expect(cssSource).toContain(".admin-omniroute-controls select,\n.admin-omniroute-controls .compact-button");
+    expect(cssSource).toMatch(/\.admin-omniroute-model-grid,\n\.admin-omniroute-provider-grid,\n\.admin-omniroute-user-grid/u);
     expect(cssSource).toContain("min-height: 44px");
     expect(cssSource).toContain(".admin-omniroute-controls select:focus");
     expect(cssSource).toContain("min-width: 0");

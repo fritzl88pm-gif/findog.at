@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -475,7 +476,7 @@ describe("OmniRoute usage normalization", () => {
     });
 
     expect(Object.keys(snapshot).sort()).toEqual([
-      "codexQuota", "generatedAt", "providerHealth", "quota", "range", "routes", "usage", "userQuestions",
+      "codexQuota", "generatedAt", "providerHealth", "quota", "range", "routes", "usage", "userQuestions", "userUsage",
     ]);
     expect(snapshot.routes).toHaveLength(4);
     expect(snapshot.routes[0]).toMatchObject({
@@ -690,6 +691,112 @@ describe("OmniRoute usage cache", () => {
     });
   }
 
+  function createPerUserSupabase(messages: Array<{ client_id: string | null; created_at: string }>): SupabaseClient {
+    const query = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      gte: vi.fn().mockReturnThis(),
+      lt: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      range: vi.fn().mockImplementation((from: number, to: number) => Promise.resolve({
+        data: messages.slice(from, to + 1),
+        error: null,
+      })),
+    };
+    const listUsers = vi.fn().mockImplementation(({ page = 1, perPage = 1_000 }: { page?: number; perPage?: number }) => {
+      const firstPage = [
+        { id: "user-1", email: "one@example.com", userMetadata: { upstreamId: "secret-upstream-id" } },
+        { id: "user-2", email: "two@example.com" },
+        ...Array.from({ length: 998 }, (_, index) => ({ id: `auth-user-${index}`, email: `auth-${index}@example.com` })),
+      ];
+      const pages = [firstPage, [{ id: "user-3", email: "three@example.com" }]];
+      return Promise.resolve({ data: { users: pages[page - 1] ?? [] }, error: null, perPage });
+    });
+    return {
+      from: vi.fn(() => query),
+      auth: { admin: { listUsers } },
+    } as unknown as SupabaseClient;
+  }
+
+  it("loads exact paginated Fred questions and attributes only the EUR cost estimate proportionally", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(new Date("2026-08-20T12:00:00.000Z").getTime());
+    const baseMessage = (clientId: string | null, minute: number) => ({
+      client_id: clientId,
+      created_at: `2026-08-20T11:${String(minute).padStart(2, "0")}:00.000Z`,
+    });
+    const messages = [
+      ...Array.from({ length: 1_000 }, (_, index) => baseMessage("user-1", index % 60)),
+      { client_id: "user-2", created_at: "2026-08-20T11:58:00.000Z" },
+      { client_id: "user-2", created_at: "2026-08-20T11:59:00.000Z" },
+      { client_id: null, created_at: "2026-08-20T11:57:00.000Z" },
+      { client_id: "user-unknown", created_at: "2026-08-20T11:56:00.000Z" },
+    ];
+    const supabase = createPerUserSupabase(messages);
+    const fetcher = successfulFetcher();
+    const fxFetcher = vi.fn<typeof fetch>(async () => Response.json({
+      base: "USD",
+      rates: { EUR: 0.92 },
+      date: "2026-08-20",
+    }));
+
+    const snapshot = await getOmniRouteUsageSnapshot("24h", {
+      fetcher: fetcher as unknown as typeof fetch,
+      fxFetcher: fxFetcher as unknown as typeof fetch,
+      supabase,
+    });
+
+    const query = (supabase.from as ReturnType<typeof vi.fn>).mock.results[0]?.value as {
+      select: ReturnType<typeof vi.fn>;
+      eq: ReturnType<typeof vi.fn>;
+      gte: ReturnType<typeof vi.fn>;
+      lt: ReturnType<typeof vi.fn>;
+      order: ReturnType<typeof vi.fn>;
+      range: ReturnType<typeof vi.fn>;
+    };
+    expect(query.select).toHaveBeenCalledWith("client_id, created_at");
+    expect(query.eq).toHaveBeenCalledWith("role", "user");
+    expect(query.gte).toHaveBeenCalledWith("created_at", "2026-08-19T12:00:00.000Z");
+    expect(query.lt).toHaveBeenCalledWith("created_at", "2026-08-20T12:00:00.000Z");
+    expect(query.order).toHaveBeenNthCalledWith(1, "created_at", { ascending: false });
+    expect(query.order).toHaveBeenNthCalledWith(2, "id", { ascending: false });
+    expect(query.range).toHaveBeenNthCalledWith(1, 0, 999);
+    expect(query.range).toHaveBeenNthCalledWith(2, 1_000, 1_999);
+    expect(query.range).toHaveBeenCalledTimes(2);
+    const listUsers = (supabase.auth.admin as unknown as { listUsers: ReturnType<typeof vi.fn> }).listUsers;
+    expect(listUsers).toHaveBeenNthCalledWith(1, { page: 1, perPage: 1_000 });
+    expect(listUsers).toHaveBeenNthCalledWith(2, { page: 2, perPage: 1_000 });
+    expect(listUsers).toHaveBeenCalledTimes(2);
+
+    expect(snapshot.userQuestions).toBe(1_004);
+    expect(snapshot.userUsage.map((user) => [
+      user.clientId,
+      user.email,
+      user.questionCount,
+      user.questionSharePct,
+      user.lastQuestionAt,
+    ])).toEqual([
+      ["user-1", "one@example.com", 1_000, expect.closeTo(99.602, 3), "2026-08-20T11:59:00.000Z"],
+      ["user-2", "two@example.com", 2, expect.closeTo(0.199, 3), "2026-08-20T11:59:00.000Z"],
+      ["user-unknown", "Unbekannter User", 1, expect.closeTo(0.0996, 3), "2026-08-20T11:56:00.000Z"],
+      [null, "System / nicht zugeordnet", 1, expect.closeTo(0.0996, 3), "2026-08-20T11:57:00.000Z"],
+    ]);
+    expect(snapshot.userUsage.map((user) => user.estimatedCostEur)).toEqual([
+      expect.closeTo((1.38 * 1_000) / 130, 8),
+      expect.closeTo((1.38 * 2) / 130, 8),
+      expect.closeTo(1.38 / 130, 8),
+      expect.closeTo(1.38 / 130, 8),
+    ]);
+    for (const user of snapshot.userUsage) {
+      expect(Object.keys(user).sort()).toEqual([
+        "clientId", "email", "estimatedCostEur", "lastQuestionAt", "questionCount", "questionSharePct",
+      ]);
+    }
+    const serialized = JSON.stringify(snapshot.userUsage);
+    expect(serialized).not.toContain("secret");
+    expect(serialized).not.toContain("userMetadata");
+    expect(serialized).not.toContain("upstreamId");
+  });
+
   it("makes authenticated bounded OmniRoute requests and an isolated EUR reference fetch", async () => {
     vi.spyOn(Date, "now").mockReturnValue(new Date("2026-08-20T12:00:00.000Z").getTime());
     const fetcher = successfulFetcher();
@@ -780,6 +887,7 @@ describe("OmniRoute usage cache", () => {
   });
 
   it("keeps FX failure nonfatal, suppresses all EUR costs, and warns compactly", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(new Date("2026-08-20T12:00:00.000Z").getTime());
     const fetcher = successfulFetcher();
     const fxFetcher = vi.fn<typeof fetch>(async () => new Response("invalid", { status: 500 }));
     const snapshot = await getOmniRouteUsageSnapshot("24h", {

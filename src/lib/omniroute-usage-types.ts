@@ -34,6 +34,15 @@ export type OmniRouteUsageSummary = {
   lastRequest: string | null;
 };
 
+export type OmniRouteUserUsage = {
+  clientId: string | null;
+  email: string;
+  questionCount: number;
+  questionSharePct: number;
+  estimatedCostEur: number | null;
+  lastQuestionAt: string | null;
+};
+
 export type OmniRouteModelUsage = {
   model: string;
   provider: string;
@@ -140,6 +149,7 @@ export type OmniRouteAdminUsageSnapshot = {
   stale: boolean;
   range: OmniRouteUsageRange;
   userQuestions: number;
+  userUsage: OmniRouteUserUsage[];
   exchangeRate: OmniRouteExchangeRateSnapshot | null;
   costConversionWarning: string | null;
   quota: OmniRouteQuotaSnapshot | null;

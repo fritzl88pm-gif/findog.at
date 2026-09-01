@@ -10255,7 +10255,8 @@ textarea:focus {
 .admin-omniroute-heading h2,
 .admin-omniroute-section h3,
 .admin-omniroute-provider-card h4,
-.admin-omniroute-model-card h4 {
+.admin-omniroute-model-card h4,
+.admin-omniroute-user-card h4 {
   margin: 0;
   color: var(--bmf-blue-deep);
 }
@@ -10477,6 +10478,7 @@ textarea:focus {
 .admin-omniroute-kpis,
 .admin-omniroute-model-grid,
 .admin-omniroute-provider-grid,
+.admin-omniroute-user-grid,
 .admin-omniroute-routes-list,
 .admin-omniroute-metric-grid {
   display: grid;
@@ -10489,7 +10491,8 @@ textarea:focus {
 }
 
 .admin-omniroute-model-grid,
-.admin-omniroute-provider-grid {
+.admin-omniroute-provider-grid,
+.admin-omniroute-user-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -10577,7 +10580,8 @@ textarea:focus {
 
 .admin-omniroute-model-card,
 .admin-omniroute-provider-card,
-.admin-omniroute-route-card {
+.admin-omniroute-route-card,
+.admin-omniroute-user-card {
   display: grid;
   gap: 12px;
   min-width: 0;
@@ -10589,6 +10593,7 @@ textarea:focus {
 }
 
 .admin-omniroute-model-card > div:first-child,
+.admin-omniroute-user-card > div:first-child,
 .admin-omniroute-provider-heading,
 .admin-omniroute-route-heading {
   display: flex;
@@ -10600,7 +10605,8 @@ textarea:focus {
 
 .admin-omniroute-model-card h4,
 .admin-omniroute-provider-card h4,
-.admin-omniroute-route-card h4 {
+.admin-omniroute-route-card h4,
+.admin-omniroute-user-card h4 {
   overflow-wrap: anywhere;
   font-size: 0.94rem;
   line-height: 1.25;
@@ -10610,6 +10616,12 @@ textarea:focus {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 0.76rem;
+}
+
+.admin-omniroute-user-card > div:first-child p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
 }
 
 .admin-omniroute-route-live {
@@ -10806,6 +10818,7 @@ textarea:focus {
 @media (max-width: 1000px) {
   .admin-omniroute-model-grid,
   .admin-omniroute-provider-grid,
+  .admin-omniroute-user-grid,
   .admin-omniroute-routes-list {
     grid-template-columns: 1fr;
   }
@@ -10890,6 +10903,7 @@ textarea:focus {
   .admin-omniroute-model-card,
   .admin-omniroute-provider-card,
   .admin-omniroute-route-card,
+  .admin-omniroute-user-card,
   .admin-omniroute-metric {
     padding: 8px;
   }

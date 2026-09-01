@@ -14,6 +14,7 @@ import type {
   OmniRouteRouteSnapshot,
   OmniRouteUsageRange,
   OmniRouteUsageSummary,
+  OmniRouteUserUsage,
 } from "./omniroute-usage-types";
 
 export const OMNIROUTE_USAGE_CACHE_TTL_MS = 5 * 60 * 1_000;
@@ -21,6 +22,8 @@ export const OMNIROUTE_USAGE_TIMEOUT_MS = 10_000;
 export const OMNIROUTE_FX_CACHE_TTL_MS = 12 * 60 * 60 * 1_000;
 export const OMNIROUTE_FX_TIMEOUT_MS = 5_000;
 const MAX_OMNIROUTE_RESPONSE_BYTES = 2 * 1_024 * 1_024;
+const FRED_MESSAGE_PAGE_SIZE = 1_000;
+const AUTH_USER_PAGE_SIZE = 1_000;
 const MAX_OMNIROUTE_FX_RESPONSE_BYTES = 64 * 1_024;
 const FRANKFURTER_USD_EUR_URL = "https://api.frankfurter.app/latest?from=USD&to=EUR";
 const RANGE_DURATION_MS: Record<OmniRouteUsageRange, number> = {
@@ -54,6 +57,21 @@ type ExchangeRateCacheEntry = {
 };
 
 type InternalUsageSummary = Omit<OmniRouteUsageSummary, "totalCostEur"> & { totalCostUsd: number | null };
+type InternalUserUsage = {
+  clientId: string | null;
+  email: string;
+  questionCount: number;
+  lastQuestionAt: string | null;
+};
+type FredUserQuestionRow = {
+  client_id: string | null;
+  created_at: string;
+};
+type UserQuestionAggregate = {
+  clientId: string | null;
+  questionCount: number;
+  lastQuestionAt: string | null;
+};
 type InternalModelUsage = Omit<OmniRouteModelUsage, "costEur"> & { costUsd: number | null };
 type InternalProviderUsage = Omit<OmniRouteProviderUsage, "costEur"> & { costUsd: number | null };
 type InternalDailyTrend = Omit<OmniRouteDailyTrend, "costEur"> & { costUsd: number | null };
@@ -68,6 +86,7 @@ type OmniRouteRawAdminUsageSnapshot = {
   generatedAt: string;
   range: OmniRouteUsageRange;
   userQuestions: number;
+  userUsage: InternalUserUsage[];
   quota: OmniRouteQuotaSnapshot | null;
   codexQuota: OmniRouteQuotaSnapshot | null;
   usage: InternalUsageSnapshot;
@@ -802,6 +821,7 @@ export function normalizeOmniRouteUsagePayloads(input: {
     generatedAt,
     range: input.range,
     userQuestions: 0,
+    userUsage: [],
     quota: quotas.quota,
     codexQuota: quotas.codexQuota,
     usage,
@@ -927,23 +947,131 @@ async function fetchUsageSnapshot(
   });
 }
 
-async function countUserQuestionsInRange(
+function validClientIdentifier(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") return null;
+  const clientId = value.trim();
+  return clientId && clientId.length <= 128 && !/[\u0000-\u001f\u007f]/u.test(clientId) ? clientId : null;
+}
+
+function fredQuestionRows(value: unknown): FredUserQuestionRow[] {
+  if (!Array.isArray(value)) {
+    throw new UserVisibleError("Die Findog-Fragen konnten nicht gezählt werden.", 503);
+  }
+
+  return value.map((rowValue) => {
+    if (!rowValue || typeof rowValue !== "object" || Array.isArray(rowValue)) {
+      throw new UserVisibleError("Die Findog-Fragen konnten nicht gezählt werden.", 503);
+    }
+    const row = rowValue as Record<string, unknown>;
+    if (typeof row.client_id !== "string" && row.client_id !== null) {
+      throw new UserVisibleError("Die Findog-Fragen konnten nicht gezählt werden.", 503);
+    }
+    const createdAt = timestamp(row.created_at);
+    if (!createdAt) {
+      throw new UserVisibleError("Die Findog-Fragen konnten nicht gezählt werden.", 503);
+    }
+    const clientId = validClientIdentifier(row.client_id);
+    if (clientId === null && row.client_id !== null && String(row.client_id).trim() !== "") {
+      throw new UserVisibleError("Die Findog-Fragen konnten nicht gezählt werden.", 503);
+    }
+    return { client_id: clientId, created_at: createdAt };
+  });
+}
+
+async function resolveUserEmails(
+  supabase: SupabaseClient,
+  clientIds: ReadonlySet<string>,
+): Promise<Map<string, string>> {
+  const emails = new Map<string, string>();
+  if (clientIds.size === 0) return emails;
+
+  for (let page = 1; page <= 1_000; page += 1) {
+    const { data, error } = await supabase.auth.admin.listUsers({
+      page,
+      perPage: AUTH_USER_PAGE_SIZE,
+    });
+    const users = data?.users;
+    if (error || !Array.isArray(users)) {
+      throw new UserVisibleError("Die Findog-Fragen konnten nicht zugeordnet werden.", 503);
+    }
+    if (users.length > AUTH_USER_PAGE_SIZE) {
+      throw new UserVisibleError("Die Findog-Fragen konnten nicht zugeordnet werden.", 503);
+    }
+
+    for (const user of users) {
+      const id = validClientIdentifier(user.id);
+      const email = typeof user.email === "string" ? publicText(user.email, 320) : null;
+      if (id && clientIds.has(id) && email) emails.set(id, email);
+    }
+
+    if (users.length < AUTH_USER_PAGE_SIZE) break;
+    if (page === 1_000) {
+      throw new UserVisibleError("Die Findog-Fragen konnten nicht zugeordnet werden.", 503);
+    }
+  }
+
+  return emails;
+}
+
+async function loadUserQuestionsInRange(
   supabase: SupabaseClient | undefined,
   range: OmniRouteUsageRange,
   rangeEndAtMs: number,
-): Promise<number> {
-  if (!supabase) return 0;
+): Promise<{ userQuestions: number; userUsage: InternalUserUsage[] }> {
+  if (!supabase) return { userQuestions: 0, userUsage: [] };
   const rangeStartAtMs = rangeEndAtMs - RANGE_DURATION_MS[range];
-  const { count, error } = await supabase
-    .from("fred_messages")
-    .select("*", { count: "exact", head: true })
-    .eq("role", "user")
-    .gte("created_at", new Date(rangeStartAtMs).toISOString())
-    .lt("created_at", new Date(rangeEndAtMs).toISOString());
-  if (error || count === null || count === undefined || !Number.isSafeInteger(count) || count < 0) {
+  const rows: FredUserQuestionRow[] = [];
+
+  for (let from = 0; ; from += FRED_MESSAGE_PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("fred_messages")
+      .select("client_id, created_at")
+      .eq("role", "user")
+      .gte("created_at", new Date(rangeStartAtMs).toISOString())
+      .lt("created_at", new Date(rangeEndAtMs).toISOString())
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .range(from, from + FRED_MESSAGE_PAGE_SIZE - 1);
+    if (error) {
+      throw new UserVisibleError("Die Findog-Fragen konnten nicht gezählt werden.", 503);
+    }
+    const page = fredQuestionRows(data);
+    rows.push(...page);
+    if (page.length < FRED_MESSAGE_PAGE_SIZE) break;
+  }
+
+  if (!Number.isSafeInteger(rows.length) || rows.length < 0) {
     throw new UserVisibleError("Die Findog-Fragen konnten nicht gezählt werden.", 503);
   }
-  return count;
+
+  const grouped = new Map<string, UserQuestionAggregate>();
+  for (const row of rows) {
+    const key = row.client_id ?? "__system_unassigned__";
+    const current = grouped.get(key) ?? {
+      clientId: row.client_id,
+      questionCount: 0,
+      lastQuestionAt: null,
+    };
+    current.questionCount += 1;
+    current.lastQuestionAt = latestTimestamp(current.lastQuestionAt, row.created_at);
+    grouped.set(key, current);
+  }
+
+  const clientIds = new Set(rows.map((row) => row.client_id).filter((clientId): clientId is string => clientId !== null));
+  const emails = await resolveUserEmails(supabase, clientIds);
+  const userUsage = Array.from(grouped.values(), (user) => ({
+    clientId: user.clientId,
+    email: user.clientId === null
+      ? "System / nicht zugeordnet"
+      : emails.get(user.clientId) ?? "Unbekannter User",
+    questionCount: user.questionCount,
+    lastQuestionAt: user.lastQuestionAt,
+  })).sort((left, right) => right.questionCount - left.questionCount
+    || (left.clientId === null ? 1 : 0) - (right.clientId === null ? 1 : 0)
+    || (left.clientId ?? "").localeCompare(right.clientId ?? ""));
+
+  return { userQuestions: rows.length, userUsage };
 }
 
 function convertCost(value: number | null, exchangeRate: OmniRouteExchangeRateSnapshot | null): number | null {
@@ -955,10 +1083,24 @@ function convertUsageSnapshotToDto(
   exchangeRate: OmniRouteExchangeRateSnapshot | null,
 ): Omit<OmniRouteAdminUsageSnapshot, "stale" | "warning" | "costConversionWarning"> {
   const usageSummary = raw.usage.summary;
+  const totalCostEur = usageSummary ? convertCost(usageSummary.totalCostUsd, exchangeRate) : null;
+  const totalRequests = usageSummary?.totalRequests ?? null;
   return {
     generatedAt: raw.generatedAt,
     range: raw.range,
     userQuestions: raw.userQuestions,
+    userUsage: raw.userUsage.map((user): OmniRouteUserUsage => ({
+      clientId: user.clientId,
+      email: user.email,
+      questionCount: user.questionCount,
+      questionSharePct: raw.userQuestions > 0
+        ? (user.questionCount / raw.userQuestions) * 100
+        : 0,
+      estimatedCostEur: totalCostEur !== null && totalRequests !== null && totalRequests > 0
+        ? totalCostEur * (user.questionCount / totalRequests)
+        : null,
+      lastQuestionAt: user.lastQuestionAt,
+    })),
     exchangeRate,
     quota: raw.quota,
     codexQuota: raw.codexQuota,
@@ -1060,9 +1202,9 @@ export async function getOmniRouteUsageSnapshot(
   }
 
   try {
-    const userQuestions = await countUserQuestionsInRange(options.supabase, range, now);
+    const fredUsage = await loadUserQuestionsInRange(options.supabase, range, now);
     const snapshot = await fetchUsageSnapshot(range, fetcher);
-    const rawSnapshot: OmniRouteRawAdminUsageSnapshot = { ...snapshot, userQuestions };
+    const rawSnapshot: OmniRouteRawAdminUsageSnapshot = { ...snapshot, ...fredUsage };
     usageCache.set(range, {
       fetchedAt: Date.now(),
       snapshot: rawSnapshot,

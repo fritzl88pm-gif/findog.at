@@ -10,12 +10,14 @@ import type {
   OmniRouteQuotaSnapshot,
   OmniRouteRouteSnapshot,
   OmniRouteUsageRange,
+  OmniRouteUserUsage,
 } from "@/lib/omniroute-usage-types";
 
 type AdminOmniRouteUsageProps = {
   accessToken: string;
 };
 
+const SYSTEM_USER_LABEL = "System / nicht zugeordnet";
 const RANGE_OPTIONS: Array<{ value: OmniRouteUsageRange; label: string; shortLabel: string }> = [
   { value: "24h", label: "Letzte 24 Stunden", shortLabel: "24 h" },
   { value: "7d", label: "Letzte 7 Tage", shortLabel: "7 Tage" },
@@ -26,6 +28,26 @@ function optionalRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function validUserUsage(value: unknown): value is OmniRouteUserUsage {
+  const user = optionalRecord(value);
+  return Boolean(
+    user
+      && (typeof user.clientId === "string" || user.clientId === null)
+      && typeof user.email === "string"
+      && user.email.length > 0
+      && typeof user.questionCount === "number"
+      && Number.isSafeInteger(user.questionCount)
+      && user.questionCount >= 0
+      && typeof user.questionSharePct === "number"
+      && Number.isFinite(user.questionSharePct)
+      && user.questionSharePct >= 0
+      && user.questionSharePct <= 100
+      && (user.estimatedCostEur === null
+        || (typeof user.estimatedCostEur === "number" && Number.isFinite(user.estimatedCostEur) && user.estimatedCostEur >= 0))
+      && (user.lastQuestionAt === null || typeof user.lastQuestionAt === "string"),
+  );
 }
 
 function validExchangeRate(value: unknown): value is OmniRouteExchangeRateSnapshot | null {
@@ -57,6 +79,8 @@ function snapshotFromPayload(value: unknown): OmniRouteAdminUsageSnapshot | null
     || !("quota" in payload)
     || !("codexQuota" in payload)
     || !("usage" in payload)
+    || !Array.isArray(payload.userUsage)
+    || !payload.userUsage.every((user) => validUserUsage(user))
     || !Array.isArray(payload.routes)
     || !Array.isArray(payload.providerHealth)
     || (payload.warning !== undefined && typeof payload.warning !== "string")
@@ -182,6 +206,28 @@ function KpiCard({
       <dd>{value}</dd>
       {detail ? <small>{detail}</small> : null}
     </div>
+  );
+}
+
+function UserUsageCard({ user }: { user: OmniRouteUserUsage }) {
+  return (
+    <article className="admin-omniroute-user-card">
+      <div>
+        <div>
+          <h4>{user.email || SYSTEM_USER_LABEL}</h4>
+          <p>{user.clientId === null ? "Nicht zugeordnete Fred-Nachrichten" : "Authentifizierter User"}</p>
+        </div>
+        <span className={`admin-omniroute-pill${user.clientId === null ? " admin-omniroute-pill-warning" : " admin-omniroute-pill-blue"}`}>
+          {user.clientId === null ? "System" : formatPercent(user.questionSharePct)}
+        </span>
+      </div>
+      <dl className="admin-omniroute-metric-grid">
+        <Metric label="Fred-Fragen (exakt)" value={formatNumber(user.questionCount)} />
+        <Metric label="Anteil an Fred-Fragen" value={formatPercent(user.questionSharePct)} />
+        <Metric label="Kostenanteil (Schätzung)" value={formatEuro(user.estimatedCostEur)} />
+        <Metric label="Letzte Frage" value={formatDateTime(user.lastQuestionAt)} />
+      </dl>
+    </article>
   );
 }
 
@@ -434,6 +480,7 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
   const models = snapshot?.usage.models ?? [];
   const routes = snapshot?.routes ?? [];
   const providers = snapshot?.providerHealth ?? [];
+  const userUsage = snapshot?.userUsage ?? [];
   const isBusy = isLoading && Boolean(snapshot);
   const rangeLabel = RANGE_OPTIONS.find((option) => option.value === range)?.label ?? "";
 
@@ -519,6 +566,22 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
                 <KpiCard label="Kosten (EUR)" value={formatEuro(summary?.totalCostEur)} detail={snapshot.exchangeRate ? "Referenz: Frankfurter USD→EUR" : "Kein gültiger EUR-Kurs"} emphasis="yellow" />
                 <KpiCard label="Findog-Fragen" value={formatNumber(snapshot.userQuestions)} detail="Exakte Anzahl Nutzerfragen" />
               </dl>
+            </section>
+
+            <section className="admin-omniroute-section" aria-labelledby="admin-omniroute-users-title">
+              <div className="admin-omniroute-section-heading">
+                <h3 id="admin-omniroute-users-title">Useranfragen</h3>
+                <p>Fred-Fragen sind exakt gezählt. Kostenanteile sind proportional zu allen OmniRoute-Anfragen geschätzt.</p>
+              </div>
+              {userUsage.length > 0 ? (
+                <div className="admin-omniroute-user-grid">
+                  {userUsage.map((user) => (
+                    <UserUsageCard key={user.clientId ?? SYSTEM_USER_LABEL} user={user} />
+                  ))}
+                </div>
+              ) : (
+                <p className="admin-empty-state">Keine Fred-Fragen im ausgewählten Zeitraum.</p>
+              )}
             </section>
 
             <section className="admin-omniroute-section" aria-labelledby="admin-omniroute-models-title">
