@@ -7,10 +7,11 @@ import {
   GEMINI_IMAGE_TIMEOUT_MS,
 } from "./gemini-image-context";
 
-const originalKey = process.env.OPENROUTER_API_KEY;
+const originalBaseUrl = process.env.OMNIROUTE_BASE_URL;
+const originalKey = process.env.OMNIROUTE_API_KEY;
 
-const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL = "google/gemini-3.5-flash";
+const ENDPOINT = "https://omniroute.example/v1/chat/completions";
+const MODEL = "omniroute-gpt-5.6-luna";
 
 function imageDataUri(): string {
   return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
@@ -22,18 +23,21 @@ describe("Gemini image timeout constant", () => {
   });
 });
 
-describe("Gemini image context via OpenRouter", () => {
+describe("image context via OmniRoute Luna", () => {
   beforeEach(() => {
-    process.env.OPENROUTER_API_KEY = "test-or-key";
+    process.env.OMNIROUTE_BASE_URL = "https://omniroute.example/";
+    process.env.OMNIROUTE_API_KEY = "test-omniroute-key";
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    if (originalKey === undefined) delete process.env.OPENROUTER_API_KEY;
-    else process.env.OPENROUTER_API_KEY = originalKey;
+    if (originalBaseUrl === undefined) delete process.env.OMNIROUTE_BASE_URL;
+    else process.env.OMNIROUTE_BASE_URL = originalBaseUrl;
+    if (originalKey === undefined) delete process.env.OMNIROUTE_API_KEY;
+    else process.env.OMNIROUTE_API_KEY = originalKey;
   });
 
-  it("sends prompt and image to OpenRouter and returns description text", async () => {
+  it("sends prompt and image only to OmniRoute Luna and returns description text", async () => {
     const description = "This image contains a form with the text: Patient Name: John Doe, Date: 2024-01-15.";
     const fetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({
@@ -51,6 +55,7 @@ describe("Gemini image context via OpenRouter", () => {
     const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
     expect(body.model).toBe(MODEL);
     expect(body.max_tokens).toBe(15_000);
+    expect(body.reasoning).toEqual({ effort: "low" });
     const messages = body.messages as Array<Record<string, unknown>>;
     expect(messages[0].role).toBe("user");
     const userContent = messages[0].content as Array<Record<string, unknown>>;
@@ -60,7 +65,7 @@ describe("Gemini image context via OpenRouter", () => {
     expect((userContent[1].image_url as Record<string, string>).url).toBe(imageDataUri());
     const headers = vi.mocked(fetch).mock.calls[0]?.[1]?.headers as Record<string, string>;
     const hObj = typeof headers === "object" ? Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v])) : {};
-    expect(hObj["authorization"]).toBe("Bearer test-or-key");
+    expect(hObj["authorization"]).toBe("Bearer test-omniroute-key");
     expect(hObj["x-title"]).toBe("findog.at Attachments");
   });
 
@@ -78,8 +83,8 @@ describe("Gemini image context via OpenRouter", () => {
     expect(result).toBe("First part. Second part.");
   });
 
-  it("throws when OPENROUTER_API_KEY is missing", async () => {
-    delete process.env.OPENROUTER_API_KEY;
+  it("throws when OMNIROUTE_API_KEY is missing", async () => {
+    delete process.env.OMNIROUTE_API_KEY;
     await expect(describeImage(imageDataUri()))
       .rejects.toThrow(GeminiImageError);
   });
@@ -129,7 +134,7 @@ describe("Gemini image context via OpenRouter", () => {
   it("never exposes the provider key or response body in user errors", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response("error details", { status: 500 }));
     const err = await describeImage(imageDataUri(), { fetch }).catch((e) => e);
-    expect(err.message).not.toContain("test-or-key");
+    expect(err.message).not.toContain("test-omniroute-key");
     expect(err.message).not.toContain("sk-");
   });
 

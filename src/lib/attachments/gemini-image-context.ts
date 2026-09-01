@@ -1,5 +1,6 @@
 
 import { UserVisibleError } from "@/lib/errors";
+import { OMNIROUTE_LUNA_MODEL_ID } from "@/lib/scanning/settings";
 
 export class GeminiImageError extends UserVisibleError {
   constructor(message: string, status = 502) {
@@ -11,8 +12,6 @@ export class GeminiImageError extends UserVisibleError {
 export const GEMINI_CONTEXT_PROMPT =
   "Describe this image in detail, including all visible text, numbers, tables, labels, and markings.";
 
-const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL = "google/gemini-3.5-flash";
 const MAX_DESCRIPTION_CHARS = 15_000;
 export const GEMINI_IMAGE_TIMEOUT_MS = 180_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -23,8 +22,8 @@ export type DescribeImageOptions = {
   maxResponseBytes?: number;
 };
 
-function apiKey(): string {
-  const value = process.env.OPENROUTER_API_KEY?.trim() ?? "";
+function requiredEnv(name: "OMNIROUTE_BASE_URL" | "OMNIROUTE_API_KEY"): string {
+  const value = process.env[name]?.trim() ?? "";
   if (!value) {
     throw new GeminiImageError(
       "Bildanalyse ist serverseitig nicht konfiguriert. Bitte Administrator kontaktieren.",
@@ -32,6 +31,14 @@ function apiKey(): string {
     );
   }
   return value;
+}
+
+function apiKey(): string {
+  return requiredEnv("OMNIROUTE_API_KEY");
+}
+
+function chatCompletionsUrl(): string {
+  return `${requiredEnv("OMNIROUTE_BASE_URL").replace(/\/+$/u, "")}/v1/chat/completions`;
 }
 
 function providerError(status: number): GeminiImageError {
@@ -122,6 +129,7 @@ export async function describeImage(
   }
 
   const key = apiKey();
+  const url = chatCompletionsUrl();
   const fetcher = options.fetch ?? globalThis.fetch;
 
   const controller = new AbortController();
@@ -134,7 +142,7 @@ export async function describeImage(
   }, GEMINI_IMAGE_TIMEOUT_MS);
 
   try {
-    const response = await fetcher(ENDPOINT, {
+    const response = await fetcher(url, {
       method: "POST",
       headers: {
         Accept: "application/json",
@@ -143,7 +151,7 @@ export async function describeImage(
         "X-Title": "findog.at Attachments",
       },
       body: JSON.stringify({
-        model: MODEL,
+        model: OMNIROUTE_LUNA_MODEL_ID,
         messages: [
           {
             role: "user",
@@ -153,6 +161,7 @@ export async function describeImage(
             ],
           },
         ],
+        reasoning: { effort: "low" },
         max_tokens: 15_000,
       }),
       cache: "no-store",
