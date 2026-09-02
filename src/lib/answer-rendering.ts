@@ -12,7 +12,7 @@ export type RichBlock =
   | { type: "math-block"; expression: string }
   | { type: "heading"; level: 2 | 3 | 4; children: RichInline[] }
   | { type: "unordered-list"; items: RichInline[][] }
-  | { type: "ordered-list"; items: RichInline[][] }
+  | { type: "ordered-list"; items: RichInline[][]; numbers: number[] }
   | { type: "table"; headers: RichInline[][]; rows: RichInline[][][] }
   | { type: "code-block"; text: string; language?: string }
   | { type: "blockquote"; children: RichInline[] };
@@ -61,7 +61,9 @@ export function richTableClipboardContent(
 
 const headingPattern = /^(#{1,3})\s+(.+)$/;
 const unorderedListPattern = /^\s*[-*+]\s+(.+)$/;
-const orderedListPattern = /^\s*\d+[.)]\s+(.+)$/;
+const orderedListPattern = /^\s*(\d+)[.)]\s+(.+)$/;
+const indentedUnorderedListPattern = /^\s+[-*+]\s+(.+)$/;
+const indentedOrderedListPattern = /^\s+\d+[.)]\s+(.+)$/;
 const blockquotePattern = /^\s*>\s?(.*)$/;
 
 type CodeFence = {
@@ -519,33 +521,71 @@ export function parseRichAnswer(content: string): RichBlock[] {
 
     const unorderedItem = unorderedListPattern.exec(line);
     if (unorderedItem) {
-      const items: RichInline[][] = [];
+      const itemTexts: string[] = [];
       while (index < lines.length) {
-        const match = unorderedListPattern.exec(lines[index] ?? "");
-        if (!match) {
-          break;
+        const currentLine = lines[index] ?? "";
+        if (!currentLine.trim()) break;
+
+        const match = unorderedListPattern.exec(currentLine);
+        if (match) {
+          itemTexts.push(match[1].trim());
+          index += 1;
+          continue;
         }
-        const item = parseInline(match[1].trim());
-        if (item.length > 0) items.push(item);
+
+        const indentedOrderedItem = indentedOrderedListPattern.exec(currentLine);
+        if (indentedOrderedItem && itemTexts.length > 0) {
+          itemTexts[itemTexts.length - 1] += ` ${indentedOrderedItem[1].trim()}`;
+          index += 1;
+          continue;
+        }
+
+        if (isBlockStart(lines, index)) break;
+        itemTexts[itemTexts.length - 1] += ` ${currentLine.trim()}`;
         index += 1;
       }
+      const items = itemTexts.map(parseInline).filter((item) => item.length > 0);
       if (items.length > 0) blocks.push({ type: "unordered-list", items });
       continue;
     }
 
     const orderedItem = orderedListPattern.exec(line);
     if (orderedItem) {
+      const itemTexts: Array<{ text: string; number: number }> = [];
       const items: RichInline[][] = [];
+      const numbers: number[] = [];
       while (index < lines.length) {
-        const match = orderedListPattern.exec(lines[index] ?? "");
-        if (!match) {
-          break;
+        const currentLine = lines[index] ?? "";
+        if (!currentLine.trim()) break;
+
+        const match = orderedListPattern.exec(currentLine);
+        if (match) {
+          itemTexts.push({
+            text: match[2].trim(),
+            number: Number.parseInt(match[1], 10),
+          });
+          index += 1;
+          continue;
         }
-        const item = parseInline(match[1].trim());
-        if (item.length > 0) items.push(item);
+
+        const indentedUnorderedItem = indentedUnorderedListPattern.exec(currentLine);
+        if (indentedUnorderedItem && itemTexts.length > 0) {
+          itemTexts[itemTexts.length - 1].text += ` ${indentedUnorderedItem[1].trim()}`;
+          index += 1;
+          continue;
+        }
+
+        if (isBlockStart(lines, index)) break;
+        itemTexts[itemTexts.length - 1].text += ` ${currentLine.trim()}`;
         index += 1;
       }
-      if (items.length > 0) blocks.push({ type: "ordered-list", items });
+      for (const itemText of itemTexts) {
+        const item = parseInline(itemText.text);
+        if (item.length === 0) continue;
+        items.push(item);
+        numbers.push(itemText.number);
+      }
+      if (items.length > 0) blocks.push({ type: "ordered-list", items, numbers });
       continue;
     }
 

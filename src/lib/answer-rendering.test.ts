@@ -3,6 +3,102 @@ import { describe, expect, it } from "vitest";
 import { parseRichAnswer, richInlinePlainText, richTableClipboardContent } from "./answer-rendering";
 
 describe("parseRichAnswer", () => {
+  it("keeps repeated ordered-list numbers in one block", () => {
+    expect(parseRichAnswer("1. A\n1. B\n1. C")).toEqual([{
+      type: "ordered-list",
+      items: [
+        [{ type: "text", text: "A" }],
+        [{ type: "text", text: "B" }],
+        [{ type: "text", text: "C" }],
+      ],
+      numbers: [1, 1, 1],
+    }]);
+  });
+
+  it("preserves continuing ordered-list numbers", () => {
+    expect(parseRichAnswer("3. A\n4. B")).toEqual([{
+      type: "ordered-list",
+      items: [
+        [{ type: "text", text: "A" }],
+        [{ type: "text", text: "B" }],
+      ],
+      numbers: [3, 4],
+    }]);
+  });
+
+  it("merges wrapped ordered-list text into the preceding item", () => {
+    expect(parseRichAnswer("1. Erster Punkt der\nüber mehrere Zeilen läuft\n2. Zweiter")).toEqual([{
+      type: "ordered-list",
+      items: [
+        [{ type: "text", text: "Erster Punkt der über mehrere Zeilen läuft" }],
+        [{ type: "text", text: "Zweiter" }],
+      ],
+      numbers: [1, 2],
+    }]);
+  });
+
+  it("merges wrapped unordered-list text into the preceding item", () => {
+    expect(parseRichAnswer("- Erster Punkt der\nüber mehrere Zeilen läuft\n- Zweiter")).toEqual([{
+      type: "unordered-list",
+      items: [
+        [{ type: "text", text: "Erster Punkt der über mehrere Zeilen läuft" }],
+        [{ type: "text", text: "Zweiter" }],
+      ],
+    }]);
+  });
+
+  it("keeps indented cross-type sub-items inside the outer list", () => {
+    expect(parseRichAnswer("1. Außen\n  - Unterpunkt\n2. Danach")).toEqual([{
+      type: "ordered-list",
+      items: [
+        [{ type: "text", text: "Außen Unterpunkt" }],
+        [{ type: "text", text: "Danach" }],
+      ],
+      numbers: [1, 2],
+    }]);
+    expect(parseRichAnswer("- Außen\n  1. Unterpunkt\n- Danach")).toEqual([{
+      type: "unordered-list",
+      items: [
+        [{ type: "text", text: "Außen Unterpunkt" }],
+        [{ type: "text", text: "Danach" }],
+      ],
+    }]);
+  });
+
+  it("ends a list at an empty line and preserves paragraph flow", () => {
+    expect(parseRichAnswer("1. Listenpunkt\n\nAbsatz danach")).toEqual([
+      {
+        type: "ordered-list",
+        items: [[{ type: "text", text: "Listenpunkt" }]],
+        numbers: [1],
+      },
+      {
+        type: "paragraph",
+        children: [{ type: "text", text: "Absatz danach" }],
+      },
+    ]);
+  });
+
+  it("ends a list at a heading and resumes block parsing", () => {
+    expect(parseRichAnswer("1. Vorher\n# Überschrift\n2. Nachher")).toEqual([
+      {
+        type: "ordered-list",
+        items: [[{ type: "text", text: "Vorher" }]],
+        numbers: [1],
+      },
+      {
+        type: "heading",
+        level: 2,
+        children: [{ type: "text", text: "Überschrift" }],
+      },
+      {
+        type: "ordered-list",
+        items: [[{ type: "text", text: "Nachher" }]],
+        numbers: [2],
+      },
+    ]);
+  });
+
   it("renders fenced calculations as code blocks without exposing the language tag", () => {
     const blocks = parseRichAnswer([
       "Vereinfacht:",

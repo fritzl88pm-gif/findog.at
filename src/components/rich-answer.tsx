@@ -89,10 +89,19 @@ function renderRichBlock(
     );
   }
   if (block.type === "ordered-list") {
+    const usesDefaultNumbering = block.numbers.every(
+      (number, itemIndex) => number === itemIndex + 1,
+    );
     return (
-      <ol key={`ordered-list-${index}`}>
+      <ol
+        key={`ordered-list-${index}`}
+        start={usesDefaultNumbering ? undefined : block.numbers[0]}
+      >
         {block.items.map((item, itemIndex) => (
-          <li key={`ordered-list-${index}-${itemIndex}`}>
+          <li
+            key={`ordered-list-${index}-${itemIndex}`}
+            value={usesDefaultNumbering ? undefined : block.numbers[itemIndex]}
+          >
             {renderRichInline(item, `ordered-list-${index}-${itemIndex}`)}
           </li>
         ))}
