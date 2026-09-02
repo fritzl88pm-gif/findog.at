@@ -342,6 +342,48 @@ Keine Bindungswirkung.
     ]);
   });
 
+  it("parses time-limited Pendlerrechner PDF links on taxdog.cloud only", () => {
+    const blocks = parseRichAnswer(
+      "Formular: [Pendlerrechner-Formular (PDF)](https://taxdog.cloud/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf) und [gefälscht](https://taxdog.cloud/pendlerrechner/pdf/short.pdf) und [falsche Domain](https://evil.example/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf).",
+    );
+
+    expect(blocks).toMatchObject([
+      {
+        type: "paragraph",
+        children: [
+          { type: "text", text: "Formular: " },
+          {
+            type: "link",
+            href: "https://taxdog.cloud/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf",
+            children: [{ type: "text", text: "Pendlerrechner-Formular (PDF)" }],
+          },
+          {
+            type: "text",
+            text: " und [gefälscht](https://taxdog.cloud/pendlerrechner/pdf/short.pdf) und [falsche Domain](https://evil.example/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf).",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("rejects taxdog.cloud PDF links with query, hash, or other paths", () => {
+    const blocks = parseRichAnswer(
+      "Links: [a](https://taxdog.cloud/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf?x=1), [b](https://taxdog.cloud/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf#top), [c](https://taxdog.cloud/other/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf).",
+    );
+
+    expect(blocks).toMatchObject([
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "text",
+            text: "Links: [a](https://taxdog.cloud/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf?x=1), [b](https://taxdog.cloud/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf#top), [c](https://taxdog.cloud/other/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf).",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("parses exact findog-artifact image markers and reduces arbitrary images to alt text", () => {
     const artifactId = "33333333-3333-4333-8333-333333333333";
     const blocks = parseRichAnswer(

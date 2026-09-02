@@ -130,6 +130,28 @@ function sanitizedImageAltText(value: string): string {
     .slice(0, 255);
 }
 
+const TAXDOG_PDF_PATH_PREFIX = "/pendlerrechner/pdf/";
+const TAXDOG_PDF_FILENAME_PATTERN = /^[A-Za-z0-9_-]{20,128}\.pdf$/u;
+
+function isSafePendlerrechnerPdfHref(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:"
+      || url.hostname !== "taxdog.cloud"
+      || url.username
+      || url.password
+      || url.hash
+      || [...url.searchParams.keys()].length > 0
+    ) return false;
+    if (!url.pathname.startsWith(TAXDOG_PDF_PATH_PREFIX)) return false;
+    const filename = url.pathname.slice(TAXDOG_PDF_PATH_PREFIX.length);
+    return TAXDOG_PDF_FILENAME_PATTERN.test(filename);
+  } catch {
+    return false;
+  }
+}
+
 function isSafeFindokHref(value: string): boolean {
   try {
     const url = new URL(value);
@@ -221,7 +243,7 @@ function findNextMarkdownLink(text: string, start: number): InlineToken | null {
 
     const label = text.slice(index + 1, labelEnd);
     const href = text.slice(hrefStart, hrefEnd);
-    if (label && isSafeFindokHref(href)) {
+    if (label && (isSafeFindokHref(href) || isSafePendlerrechnerPdfHref(href))) {
       return { type: "link", index, label, href, end: hrefEnd + 1 };
     }
 
