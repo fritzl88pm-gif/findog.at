@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import katex from "katex";
 
 import CopyIconButton from "@/components/copy-icon-button";
 import FredNativeImage from "@/components/fred-native-image";
@@ -9,10 +10,32 @@ import {
   type RichInline,
 } from "@/lib/answer-rendering";
 
+function renderMathHtml(expression: string, displayMode: boolean): string | null {
+  try {
+    return katex.renderToString(expression, {
+      displayMode,
+      output: "htmlAndMathml",
+      strict: "warn",
+      throwOnError: false,
+      trust: false,
+    });
+  } catch {
+    return null;
+  }
+}
+
 function renderRichInline(nodes: RichInline[], keyPrefix: string): ReactNode[] {
   return nodes.map((node, index) => {
     const key = `${keyPrefix}-${index}`;
     if (node.type === "text") return <span key={key}>{node.text}</span>;
+    if (node.type === "math-inline") {
+      const html = renderMathHtml(node.expression, false);
+      return html ? (
+        <span className="answer-math-inline" dangerouslySetInnerHTML={{ __html: html }} key={key} />
+      ) : (
+        <code className="math-fallback" key={key}>{`\\(${node.expression}\\)`}</code>
+      );
+    }
     if (node.type === "strong") return <strong key={key}>{renderRichInline(node.children, key)}</strong>;
     if (node.type === "code") return <code key={key}>{node.text}</code>;
     if (node.type === "highlight") return <mark key={key}>{renderRichInline(node.children, key)}</mark>;
@@ -32,6 +55,14 @@ function renderRichBlock(
   index: number,
   showTableCopyActions: boolean,
 ): ReactNode {
+  if (block.type === "math-block") {
+    const html = renderMathHtml(block.expression, true);
+    return html ? (
+      <div className="answer-math-block" dangerouslySetInnerHTML={{ __html: html }} key={`math-${index}`} />
+    ) : (
+      <code className="math-fallback" key={`math-${index}`}>{`\\[${block.expression}\\]`}</code>
+    );
+  }
   if (block.type === "heading") {
     const HeadingTag = `h${block.level}` as "h2" | "h3" | "h4";
     return <HeadingTag key={`heading-${index}`}>{renderRichInline(block.children, `heading-${index}`)}</HeadingTag>;

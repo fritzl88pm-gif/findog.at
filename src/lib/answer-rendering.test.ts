@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseRichAnswer, richTableClipboardContent } from "./answer-rendering";
+import { parseRichAnswer, richInlinePlainText, richTableClipboardContent } from "./answer-rendering";
 
 describe("parseRichAnswer", () => {
   it("renders fenced calculations as code blocks without exposing the language tag", () => {
@@ -278,6 +278,82 @@ Keine Bindungswirkung.
       type: "code-block",
       language: "markdown",
       text: "![](/images/example.png)",
+    }]);
+  });
+
+  it("parses the reported Fred calculation as a display-math block", () => {
+    const blocks = parseRichAnswer(
+      "Daher:\n\n\\[ 150\\,€ + 150\\,€ + 300\\,€ + 132\\,€ = \\boxed{732\\,€} \\]",
+    );
+
+    expect(blocks).toEqual([
+      { type: "paragraph", children: [{ type: "text", text: "Daher:" }] },
+      {
+        type: "math-block",
+        expression: "150\\,€ + 150\\,€ + 300\\,€ + 132\\,€ = \\boxed{732\\,€}",
+      },
+    ]);
+  });
+
+  it("parses multiline bracket and dollar display math", () => {
+    expect(parseRichAnswer("\\[\na+b\n= c\n\\]")).toEqual([
+      { type: "math-block", expression: "a+b\n= c" },
+    ]);
+    expect(parseRichAnswer("$$\nx^2 + y^2\n$$")).toEqual([
+      { type: "math-block", expression: "x^2 + y^2" },
+    ]);
+  });
+
+  it("parses inline bracket and strict dollar math", () => {
+    const blocks = parseRichAnswer("Mit \\(x^2\\) und $y_1 + 2$ weiter.");
+    expect(blocks).toEqual([{
+      type: "paragraph",
+      children: [
+        { type: "text", text: "Mit " },
+        { type: "math-inline", expression: "x^2" },
+        { type: "text", text: " und " },
+        { type: "math-inline", expression: "y_1 + 2" },
+        { type: "text", text: " weiter." },
+      ],
+    }]);
+    if (blocks[0]?.type === "paragraph") {
+      expect(richInlinePlainText(blocks[0].children)).toBe("Mit x^2 und y_1 + 2 weiter.");
+    }
+  });
+
+  it("keeps currency-like dollars and code delimiters literal", () => {
+    const text = "150 €; $100; $100$; $1.234,56$; Preis $100 und $200; `\\(x^2\\)`; `$y^2$`.";
+    expect(parseRichAnswer(text)).toEqual([{
+      type: "paragraph",
+      children: [
+        { type: "text", text: "150 €; $100; $100$; $1.234,56$; Preis $100 und $200; " },
+        { type: "code", text: "\\(x^2\\)" },
+        { type: "text", text: "; " },
+        { type: "code", text: "$y^2$" },
+        { type: "text", text: "." },
+      ],
+    }]);
+  });
+
+  it("keeps malformed, empty, and oversized math delimiters as text", () => {
+    expect(parseRichAnswer("Vorher \\(x^2 nachher")).toEqual([
+      { type: "paragraph", children: [{ type: "text", text: "Vorher \\(x^2 nachher" }] },
+    ]);
+    expect(parseRichAnswer("\\[ \\]\n\nDanach")).toEqual([
+      { type: "paragraph", children: [{ type: "text", text: "\\[ \\]" }] },
+      { type: "paragraph", children: [{ type: "text", text: "Danach" }] },
+    ]);
+    const oversized = `\\(${"x".repeat(2_001)}\\)`;
+    expect(parseRichAnswer(oversized)).toEqual([
+      { type: "paragraph", children: [{ type: "text", text: oversized }] },
+    ]);
+  });
+
+  it("leaves math-looking delimiters literal inside fenced code", () => {
+    expect(parseRichAnswer("```latex\n\\[x^2\\]\n$$y^2$$\n```")).toEqual([{
+      type: "code-block",
+      language: "latex",
+      text: "\\[x^2\\]\n$$y^2$$",
     }]);
   });
 });

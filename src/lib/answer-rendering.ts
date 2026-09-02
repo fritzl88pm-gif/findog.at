@@ -1,5 +1,6 @@
 export type RichInline =
   | { type: "text"; text: string }
+  | { type: "math-inline"; expression: string }
   | { type: "strong"; children: RichInline[] }
   | { type: "code"; text: string }
   | { type: "highlight"; children: RichInline[] }
@@ -8,6 +9,7 @@ export type RichInline =
 
 export type RichBlock =
   | { type: "paragraph"; children: RichInline[] }
+  | { type: "math-block"; expression: string }
   | { type: "heading"; level: 2 | 3 | 4; children: RichInline[] }
   | { type: "unordered-list"; items: RichInline[][] }
   | { type: "ordered-list"; items: RichInline[][] }
@@ -23,6 +25,7 @@ export type RichTableClipboardContent = {
 export function richInlinePlainText(nodes: RichInline[]): string {
   return nodes.map((node) => {
     if (node.type === "text" || node.type === "code") return node.text;
+    if (node.type === "math-inline") return node.expression;
     if (node.type === "image") return node.alt;
     return richInlinePlainText(node.children);
   }).join("");
@@ -112,6 +115,7 @@ const ARTIFACT_PREFIX = "findog-artifact://";
 type InlineMarker = "`" | "**" | "__" | "==";
 type InlineToken =
   | { type: "marker"; marker: InlineMarker; index: number }
+  | { type: "math-inline"; index: number; expression: string; end: number }
   | { type: "link"; index: number; label: string; href: string; end: number }
   | { type: "image"; index: number; alt: string; artifactId: string; end: number }
   | { type: "untrusted-image"; index: number; alt: string; end: number };
@@ -225,6 +229,63 @@ function findNextMarkdownLink(text: string, start: number): InlineToken | null {
   return null;
 }
 
+const MAX_INLINE_MATH_CHARS = 2_000;
+const MAX_BLOCK_MATH_CHARS = 10_000;
+
+function isEscaped(text: string, index: number): boolean {
+  let slashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) slashes += 1;
+  return slashes % 2 === 1;
+}
+
+function strictDollarMathExpression(expression: string): boolean {
+  return Boolean(
+    expression
+      && expression.length <= MAX_INLINE_MATH_CHARS
+      && !/^[\d\s.,€$]+$/u.test(expression)
+      && !/[`\r\n]/u.test(expression)
+      && /[\p{L}\\^_{}=+\-*/<>]/u.test(expression),
+  );
+}
+
+function findNextInlineMath(text: string, start: number): InlineToken | null {
+  const candidates: InlineToken[] = [];
+  let bracketStart = text.indexOf("\\(", start);
+  while (bracketStart >= 0) {
+    if (!isEscaped(text, bracketStart)) {
+      const end = text.indexOf("\\)", bracketStart + 2);
+      if (end >= 0) {
+        const expression = text.slice(bracketStart + 2, end).trim();
+        if (expression && expression.length <= MAX_INLINE_MATH_CHARS) {
+          candidates.push({ type: "math-inline", index: bracketStart, expression, end: end + 2 });
+          break;
+        }
+      }
+    }
+    bracketStart = text.indexOf("\\(", bracketStart + 2);
+  }
+
+  let dollarStart = text.indexOf("$", start);
+  while (dollarStart >= 0) {
+    if (!isEscaped(text, dollarStart) && !/\s/u.test(text[dollarStart + 1] ?? "")) {
+      let dollarEnd = text.indexOf("$", dollarStart + 1);
+      while (dollarEnd >= 0 && isEscaped(text, dollarEnd)) {
+        dollarEnd = text.indexOf("$", dollarEnd + 1);
+      }
+      if (dollarEnd >= 0 && !/\s/u.test(text[dollarEnd - 1] ?? "")) {
+        const expression = text.slice(dollarStart + 1, dollarEnd);
+        if (strictDollarMathExpression(expression)) {
+          candidates.push({ type: "math-inline", index: dollarStart, expression, end: dollarEnd + 1 });
+          break;
+        }
+      }
+    }
+    dollarStart = text.indexOf("$", dollarStart + 1);
+  }
+
+  return candidates.sort((left, right) => left.index - right.index)[0] ?? null;
+}
+
 function findNextToken(text: string, start: number): InlineToken | null {
   const candidates = (["`", "**", "__", "=="] as const)
     .map((marker) => ({ type: "marker" as const, marker, index: text.indexOf(marker, start) }))
@@ -233,7 +294,8 @@ function findNextToken(text: string, start: number): InlineToken | null {
 
   const image = findNextMarkdownImage(text, start);
   const link = findNextMarkdownLink(text, start);
-  const nonMarkers = [image, link].filter((t): t is InlineToken => t !== null);
+  const math = findNextInlineMath(text, start);
+  const nonMarkers = [image, link, math].filter((t): t is InlineToken => t !== null);
   return [...nonMarkers, ...candidates].sort((left, right) => left.index - right.index)[0] ?? null;
 }
 
@@ -266,6 +328,12 @@ export function parseInline(text: string): RichInline[] {
 
     if (token.type === "link") {
       nodes.push({ type: "link", href: token.href, children: parseInline(token.label) });
+      cursor = token.end;
+      continue;
+    }
+
+    if (token.type === "math-inline") {
+      nodes.push({ type: "math-inline", expression: token.expression });
       cursor = token.end;
       continue;
     }
@@ -329,6 +397,30 @@ function isTableStart(lines: string[], index: number): boolean {
   return Boolean(splitTableRow(lines[index] ?? "") && isTableSeparator(lines[index + 1] ?? ""));
 }
 
+function parseMathBlock(lines: string[], index: number): { block: RichBlock; nextIndex: number } | null {
+  const trimmed = (lines[index] ?? "").trim();
+  const opening = trimmed.startsWith("\\[") ? "\\[" : trimmed.startsWith("$$") ? "$$" : null;
+  if (!opening) return null;
+  const closing = opening === "\\[" ? "\\]" : "$$";
+  const expressionLines: string[] = [];
+  let cursor = index;
+  let remainder = trimmed.slice(opening.length);
+
+  for (;;) {
+    const closingIndex = remainder.indexOf(closing);
+    if (closingIndex >= 0 && !remainder.slice(closingIndex + closing.length).trim()) {
+      expressionLines.push(remainder.slice(0, closingIndex));
+      const expression = expressionLines.join("\n").trim();
+      if (!expression || expression.length > MAX_BLOCK_MATH_CHARS) return null;
+      return { block: { type: "math-block", expression }, nextIndex: cursor + 1 };
+    }
+    expressionLines.push(remainder);
+    cursor += 1;
+    if (cursor >= lines.length || expressionLines.join("\n").length > MAX_BLOCK_MATH_CHARS) return null;
+    remainder = lines[cursor] ?? "";
+  }
+}
+
 function isBlockStart(lines: string[], index: number): boolean {
   const line = lines[index] ?? "";
   return (
@@ -337,6 +429,7 @@ function isBlockStart(lines: string[], index: number): boolean {
     orderedListPattern.test(line) ||
     blockquotePattern.test(line) ||
     codeFenceStart(line) !== null ||
+    parseMathBlock(lines, index) !== null ||
     isTableStart(lines, index)
   );
 }
@@ -407,6 +500,13 @@ export function parseRichAnswer(content: string): RichBlock[] {
         text: codeLines.join("\n"),
         ...(fence.language ? { language: fence.language } : {}),
       });
+      continue;
+    }
+
+    const mathBlock = parseMathBlock(lines, index);
+    if (mathBlock) {
+      blocks.push(mathBlock.block);
+      index = mathBlock.nextIndex;
       continue;
     }
 

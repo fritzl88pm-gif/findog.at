@@ -6815,6 +6815,33 @@ textarea:focus {
   line-height: 1.6;
 }
 
+.answer-math-block {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.answer-math-block .katex-display {
+  min-width: max-content;
+  margin: 0.5em 0;
+}
+
+.answer-math-inline {
+  display: inline;
+  max-width: 100%;
+}
+
+.math-fallback {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .answer-content :where(p, h2, h3, h4, ul, ol, blockquote) {
   margin: 0;
 }
