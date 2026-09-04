@@ -20,17 +20,10 @@ export async function DELETE(
       throw new UserVisibleError("Benutzerverwaltung ist derzeit nicht verfügbar.", 503);
     }
     await authenticateAdminRequest(request, supabase);
-    const userId = parseManagedUserId((await context.params).userId);
-
-    const { error } = await supabase
-      .from("admin_request_history")
-      .delete()
-      .eq("user_id", userId);
-    if (error) {
-      throw new UserVisibleError("Anfrageverlauf konnte nicht gelöscht werden.", 503);
-    }
-
-    return NextResponse.json({ success: true });
+    parseManagedUserId((await context.params).userId);
+    return NextResponse.json({
+      error: "Der separate Anfrageverlauf wurde entfernt. Anfragen werden aus den vorhandenen Unterhaltungen angezeigt.",
+    }, { status: 410 });
   } catch (error) {
     return adminUsersErrorResponse(error, "Anfrageverlauf konnte nicht gelöscht werden.");
   }

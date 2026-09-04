@@ -42,9 +42,10 @@ export async function GET(
     }
 
     const { data, error } = await supabase
-      .from("admin_request_history")
+      .from("fred_messages")
       .select("id,conversation_id,content,created_at")
-      .eq("user_id", userId)
+      .eq("client_id", userId)
+      .eq("role", "user")
       .order("created_at", { ascending: false })
       .order("id", { ascending: false });
     if (error) {

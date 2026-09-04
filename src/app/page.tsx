@@ -2408,44 +2408,6 @@ export default function Home() {
     }
   }
 
-  async function deleteAdminRequestHistory() {
-    const accessToken = session?.access_token;
-    const profile = adminUserProfile;
-    if (!accessToken || !profile || isAdminUserMutationRunning) {
-      return;
-    }
-    if (!window.confirm(
-      `Den separaten Anfrageverlauf von ${profile.user.email} wirklich löschen? Die Unterhaltungen bleiben erhalten.`,
-    )) {
-      return;
-    }
-    setAdminError("");
-    setAdminNotice("");
-    setIsAdminUserMutationRunning(true);
-    try {
-      const response = await fetch(
-        `/api/admin/users/${encodeURIComponent(profile.user.id)}/requests`,
-        { method: "DELETE", headers: { Authorization: `Bearer ${accessToken}` } },
-      );
-      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!response.ok || payload.success !== true) {
-        throw new Error(
-          typeof payload.error === "string" ? payload.error : "Anfrageverlauf konnte nicht gelöscht werden.",
-        );
-      }
-      setAdminUserProfile((current) => current?.user.id === profile.user.id
-        ? { ...current, requestCount: 0, requests: [] }
-        : current);
-      setAdminNotice("Der separate Anfrageverlauf wurde gelöscht. Unterhaltungen bleiben erhalten.");
-    } catch (deleteError) {
-      setAdminError(deleteError instanceof Error
-        ? deleteError.message
-        : "Anfrageverlauf konnte nicht gelöscht werden.");
-    } finally {
-      setIsAdminUserMutationRunning(false);
-    }
-  }
-
   async function deleteAdminManagedUser() {
     const accessToken = session?.access_token;
     const profile = adminUserProfile;
@@ -4478,7 +4440,7 @@ export default function Home() {
                 <div className="form-generator-card admin-user-profile-card">
                   <div className="form-generator-heading">
                     <h2>Benutzerprofil</h2>
-                    <p>Der Anfrageverlauf enthält ausschließlich Eingaben des Benutzers.</p>
+                    <p>Der Anfrageverlauf zeigt die Eingaben aus den vorhandenen Unterhaltungen.</p>
                   </div>
                   {!adminUserProfile ? (
                     <p className="admin-empty-state">Wähle einen Benutzer aus der Liste.</p>
@@ -4493,7 +4455,7 @@ export default function Home() {
                       <div className="admin-request-history">
                         <h3>Anfrageverlauf</h3>
                         {adminUserProfile.requests.length === 0 ? (
-                          <p className="admin-empty-state">Keine protokollierten Anfragen.</p>
+                          <p className="admin-empty-state">Keine Anfragen in den vorhandenen Unterhaltungen.</p>
                         ) : (
                           <ol>
                             {adminUserProfile.requests.map((entry) => (
@@ -4506,14 +4468,6 @@ export default function Home() {
                         )}
                       </div>
                       <div className="admin-profile-actions">
-                        <button
-                          className="secondary-button danger-button"
-                          type="button"
-                          onClick={() => void deleteAdminRequestHistory()}
-                          disabled={isAdminUserMutationRunning || adminUserProfile.requestCount === 0}
-                        >
-                          Anfrageverlauf löschen
-                        </button>
                         <button
                           className="secondary-button danger-button"
                           type="button"

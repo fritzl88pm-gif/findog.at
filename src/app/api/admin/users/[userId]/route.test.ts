@@ -32,7 +32,8 @@ describe("/api/admin/users/:userId", () => {
   const rpc = vi.fn();
   const orderId = vi.fn();
   const orderCreated = vi.fn(() => ({ order: orderId }));
-  const eq = vi.fn(() => ({ order: orderCreated }));
+  const eqRole = vi.fn(() => ({ order: orderCreated }));
+  const eq = vi.fn(() => ({ eq: eqRole }));
   const select = vi.fn(() => ({ eq }));
   const from = vi.fn(() => ({ select }));
   const supabase = { auth: { admin: { getUserById } }, from, rpc };
@@ -45,7 +46,7 @@ describe("/api/admin/users/:userId", () => {
     orderId.mockResolvedValue({ data: [], error: null });
   });
 
-  it("returns auth metadata and request-only audit history", async () => {
+  it("returns auth metadata and existing user messages without copying content", async () => {
     getUserById.mockResolvedValue({
       data: { user: {
         id: USER_ID,
@@ -72,7 +73,9 @@ describe("/api/admin/users/:userId", () => {
 
     expect(response.status).toBe(200);
     expect(from).toHaveBeenCalledTimes(1);
-    expect(from).toHaveBeenCalledWith("admin_request_history");
+    expect(from).toHaveBeenCalledWith("fred_messages");
+    expect(eq).toHaveBeenCalledWith("client_id", USER_ID);
+    expect(eqRole).toHaveBeenCalledWith("role", "user");
     expect(select).toHaveBeenCalledWith("id,conversation_id,content,created_at");
     await expect(response.json()).resolves.toEqual({
       user: {
@@ -96,6 +99,14 @@ describe("/api/admin/users/:userId", () => {
 
     expect(response.status).toBe(400);
     expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("does not read user messages for a non-admin caller", async () => {
+    vi.mocked(authenticateAdminRequest).mockRejectedValue(new UserVisibleError("Nicht erlaubt", 403));
+    const response = await GET(request("GET"), context());
+    expect(response.status).toBe(403);
+    expect(from).not.toHaveBeenCalled();
+    expect(getUserById).not.toHaveBeenCalled();
   });
 
   it("cleans up Telegram before deleting a managed account through the atomic RPC", async () => {

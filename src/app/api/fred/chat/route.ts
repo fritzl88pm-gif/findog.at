@@ -59,7 +59,6 @@ import {
 } from "@/lib/fred/request-ledger";
 import type { FredRequestLifecycleTransition } from "@/lib/fred/turn-types";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { recordAdminRequest } from "@/lib/admin-request-history";
 import { DEFAULT_FRED_ATTACHMENT_MODE, getScanningSettings } from "@/lib/scanning/settings";
 import {
   FredEmbedConfigurationError,
@@ -696,15 +695,6 @@ function buildWebTurnPersistence(
         conversationId: params.conversationId,
       });
     },
-    async recordAdminRequest(params) {
-      await recordAdminRequest({
-        supabase,
-        userId: params.clientId,
-        conversationId: params.conversationId,
-        requestId: params.requestId,
-        content: params.content,
-      });
-    },
   };
 }
 
@@ -1257,13 +1247,6 @@ export async function POST(request: Request) {
             status: "user_persisted",
             conversationId: conversation.id,
             userMessageId,
-          });
-          await recordAdminRequest({
-            supabase,
-            userId: user.id,
-            conversationId: conversation.id,
-            requestId: requestReceipt.requestId,
-            content: body.query,
           });
           send(controller, { type: "conversation", conversation });
           // Best-effort update run with conversation_id immediately

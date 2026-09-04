@@ -152,13 +152,6 @@ export interface TurnServicePersistenceDeps {
     agent_key: string;
     weknora_agent_id: string | null;
   } | null>;
-  /** Record an admin request for auditing. */
-  recordAdminRequest?(params: {
-    clientId: string;
-    conversationId: string;
-    requestId: string;
-    content: string;
-  }): Promise<void>;
 }
 
 export interface TurnServiceConfigDeps {
@@ -412,17 +405,6 @@ export async function* executeFredTurn(
         status: "user_persisted",
         conversationId: conversation.id,
         userMessageId,
-      });
-    }
-
-    // The request audit is part of the durable write contract. If it cannot
-    // be recorded, fail before opening the upstream response stream.
-    if (persistence.recordAdminRequest) {
-      await persistence.recordAdminRequest({
-        clientId: request.clientId,
-        conversationId: conversation.id,
-        requestId: request.requestId ?? userEventId,
-        content: request.query,
       });
     }
 

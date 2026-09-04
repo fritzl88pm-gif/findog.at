@@ -1689,71 +1689,15 @@ describe("POST /api/fred/chat", () => {
       vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: auditUserId });
     });
 
-    it("calls recordAdminRequest exactly once with the authenticated user, returned conversationId, and original user query", async () => {
-      const rpc = rpcForTurn();
-      const supabase = { rpc };
-      vi.mocked(getSupabaseServerClient).mockReturnValue(supabase as never);
-
-      const response = await POST(request({ query: "Meine Anfrage" }));
-      await response.text();
-
-      expect(mockRecordAdminRequest).toHaveBeenCalledTimes(1);
-      expect(mockRecordAdminRequest).toHaveBeenCalledWith({
-        supabase,
-        userId: auditUserId,
-        conversationId,
-        requestId,
-        content: "Meine Anfrage",
-      });
-    });
-
-    it("persists the durable user event before the audit call and the audit call before the upstream stream", async () => {
+    it("persists the user message before upstream without a separate QA insert", async () => {
       const rpc = rpcForTurn();
       vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
-
       const response = await POST(request({ query: "Reihenfolge" }));
       await response.text();
-
-      // record_fred_native_event (message_sent) < recordAdminRequest < openFredUpstreamStream
-      const rpcOrder = rpc.mock.invocationCallOrder[0];
-      const adminOrder = vi.mocked(mockRecordAdminRequest).mock.invocationCallOrder[0];
-      const upstreamOrder = vi.mocked(openFredUpstreamStream).mock.invocationCallOrder[0];
-
-      expect(rpcOrder).toBeLessThan(adminOrder);
-      expect(adminOrder).toBeLessThan(upstreamOrder);
-    });
-
-    it("emits only the error and skips upstream calls when recordAdminRequest rejects with UserVisibleError", async () => {
-      const rpc = vi.fn().mockResolvedValueOnce({ data: summaryRow, error: null });
-      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
-      vi.mocked(mockRecordAdminRequest).mockRejectedValueOnce(
-        new UserVisibleError("Die Anfrage konnte nicht sicher protokolliert werden. Bitte erneut versuchen.", 503),
+      expect(mockRecordAdminRequest).not.toHaveBeenCalled();
+      expect(rpc.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(openFredUpstreamStream).mock.invocationCallOrder[0]!,
       );
-
-      const response = await POST(request({ query: "Sensible Anfrage" }));
-      const events = (await response.text())
-        .split("\n")
-        .map(parseFredNativeStreamLine)
-        .filter(Boolean);
-
-      expect(events).toEqual([
-        {
-          type: "error",
-          error: "Die Anfrage konnte nicht sicher protokolliert werden. Bitte erneut versuchen.",
-        },
-      ]);
-      // Durable user event was persisted
-      expect(rpc).toHaveBeenCalledWith("record_fred_native_event", {
-        payload: expect.objectContaining({
-          event_type: "message_sent",
-          content: "Sensible Anfrage",
-        }),
-      });
-      // But no upstream calls, no conversation event, no webhook
-      expect(openFredUpstreamStream).not.toHaveBeenCalled();
-      expect(relayFredWebhookEvent).not.toHaveBeenCalled();
-      // Only the user-side RPC call ran
-      expect(rpc).toHaveBeenCalledTimes(1);
     });
 
   describe("message_id ledger contract", () => {

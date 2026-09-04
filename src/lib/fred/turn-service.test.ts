@@ -91,7 +91,6 @@ function makePersistenceDeps(
       .mockResolvedValueOnce({ conversation: conv1 })
       .mockResolvedValueOnce({ conversation: conv2, messageId: 2 }),
     loadConversation: vi.fn().mockResolvedValue(null),
-    recordAdminRequest: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -213,9 +212,6 @@ describe("executeFredTurn", () => {
       [{ status: "generating" }],
       [{ status: "completed", assistantMessageId: 42 }],
     ]);
-    expect(persistence.recordAdminRequest).toHaveBeenCalledWith(expect.objectContaining({
-      requestId: "77777777-7777-4777-8777-777777777777",
-    }));
   });
 
   it("emits final upstream and verified citation research steps exactly once", async () => {
@@ -532,10 +528,6 @@ describe("upstreamQuery", () => {
       content: "Originale Frage",
     }));
 
-    // recordAdminRequest should receive the original query
-    expect(persistence.recordAdminRequest).toHaveBeenCalledWith(expect.objectContaining({
-      content: "Originale Frage",
-    }));
   });
 
   it("falls back to query when upstreamQuery is absent", async () => {
