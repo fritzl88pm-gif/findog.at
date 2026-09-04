@@ -2773,14 +2773,14 @@ describe("worker capacity and generation deadlines", () => {
     const rpc = fakeRpc({ claimPending: claimed, claimControls: controls });
     const bot = fakeBotApi();
     vi.mocked(bot.sendMessage).mockImplementation(async (params) => {
-      if (params.chat_id === 1 && params.text.includes("verbunden")) await blocked;
+      if ((params.chat_id === 1 || params.chat_id === 3) && params.text.includes("verbunden")) await blocked;
       return { message_id: 1, date: 1, chat: { id: Number(params.chat_id), type: "private" } };
     });
     const storage = fakeStorage({ loadIntegration: vi.fn(async (id: string) =>
       makeIntegration({ id, pairedTelegramChatId: Number(id.slice(4)) })) });
     const loop = runWorkerLoop({ config: fakeConfig({ rpc, storage, createBotApiForToken: () => bot }), signal: control.signal });
     try {
-      await vi.waitFor(() => expect(rpc.complete).toHaveBeenCalledWith(expect.objectContaining({ p_update_id: 3 })));
+      await vi.waitFor(() => expect(bot.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ chat_id: 3 })));
       expect(claimed.mock.calls[1][0].p_limit).toBe(1);
       expect(rpc.complete).not.toHaveBeenCalledWith(expect.objectContaining({ p_update_id: 1 }));
       controls.mockResolvedValueOnce({ data: [{ ...row(1, "/stop"), id: 4, update_id: 4 }], error: null });
