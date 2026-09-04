@@ -53,9 +53,9 @@ begin
 end;
 $$;
 
-\ir ../migrations/20260904210842_retire_fred_quality_review_compat.sql
-\ir ../migrations/20260904211151_remove_fred_quality_content.sql
-\ir ../migrations/20260904211151_remove_fred_quality_content.sql
+\ir ../migrations/20260904212100_retire_fred_quality_review_compat.sql
+\ir ../migrations/20260904212132_remove_fred_quality_content.sql
+\ir ../migrations/20260904212132_remove_fred_quality_content.sql
 
 do $$
 declare
