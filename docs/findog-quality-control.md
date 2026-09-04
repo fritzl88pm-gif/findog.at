@@ -89,3 +89,24 @@ beide neuen Migrationen, doppelte Bereinigung, unveränderte User-Nachrichten,
 aktive Zustellungen, Wiederaufnahme, Inhalts-Hash-Konflikte, stillgelegte RPCs,
 Nutzerlöschung und verspätete Webhooks. Ergänzend laufen die Web-/Admin-/Worker-
 Tests, beide Typechecks und beide Builds.
+
+## Durchgeführter Rollout am 4. September 2026
+
+- Codex-Automation `t-gliche-findog-qualit-tspr-fung` gelöscht;
+  wöchentlicher BFG-Sync/Newsletter weiterhin aktiv.
+- Kompatibilitätsmigration `20260904212100` live angewendet.
+- Web und Telegram-Worker aus Revision
+  `5690b1d73822cdfbfe48591678c3a301f00e0c48` erfolgreich veröffentlicht.
+- Bereinigungsmigration `20260904213057` um 23:30:57 Europe/Vienna angewendet:
+  163 Ledger-Texte, 1.201 Admin-Texte und 0 terminale Telegram-Resttexte entfernt.
+  Alle 163 Ledger-Hashes blieben erhalten. Danach enthalten beide QA-Tabellen
+  keine Texte mehr.
+- Prüfsummenvergleich vor/nach der Bereinigung: 1.289 Fred-Nachrichten,
+  327 Unterhaltungen und 1.286 Webhook-Einträge vollständig unverändert.
+  Beide Artefakttabellen waren und blieben leer.
+- 554 betroffene Anwendungstests erfolgreich; PostgreSQL-17-Integrationstest
+  einschließlich zweimaliger Bereinigung erfolgreich. Web-/Worker-Builds,
+  Typechecks und gezielter ESLint-Lauf erfolgreich.
+- Der breitere Testlauf hatte fünf bestehende, unabhängige Fehler: zwei
+  Windows-Zeilenumbruchannahmen in `fred-native-ui.test.ts` und drei fehlende
+  externe Fredrun-Bild-/Preview-Dateien in `fredrun-alps-rebuild.test.ts`.
