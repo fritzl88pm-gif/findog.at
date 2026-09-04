@@ -4,6 +4,7 @@ import type { BotApi } from "./bot-api";
 import { createBotApi } from "./bot-api";
 import { looksLikeSlashCommand, parseSlashCommand } from "./commands";
 import { deliverFinalAnswer, type DeliveryLedger } from "./delivery";
+import { createGenerationWatchdog } from "./generation-watchdog";
 import {
   cancelUpdate,
   checkUpdateCancelled,
@@ -145,6 +146,9 @@ export interface WorkerConfig {
   draftRefreshIntervalMs: number;
   maxDraftRefreshes: number;
   maxDeliveryRetries: number;
+  generationTimeoutMs?: number;
+  generationIdleTimeoutMs?: number;
+  onUnresponsiveGeneration?: () => void;
   /** Overridable sleep for deterministic loop tests. */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -162,6 +166,7 @@ export interface ProcessUpdateOptions {
 export interface WorkerLoopOptions {
   config: WorkerConfig;
   signal?: AbortSignal;
+  onHealth?: (lane: "generation" | "control", healthy: boolean) => void;
 }
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -396,29 +401,59 @@ async function transitionRequestReceiptUnderLease(
 }
 
 export async function runWorkerLoop(options: WorkerLoopOptions): Promise<void> {
-  const { config, signal } = options;
-  const { rpc, concurrency } = config;
-  const sleepFn = config.sleep ?? sleep;
-
-  while (!signal?.aborted) {
-    const leaseId = randomUUID();
-    let updates: ClaimedUpdate[];
+  const { config, signal, onHealth } = options;
+  async function runLane(controlsOnly: boolean): Promise<void> {
+    const lane = controlsOnly ? "control" : "generation";
+    const capacity = controlsOnly ? 1 : config.concurrency;
+    const active = new Set<Promise<void>>();
+    let wake: (() => void) | undefined;
+    const wait = () => new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
+        if (timer) clearTimeout(timer);
+        signal?.removeEventListener("abort", finish);
+        if (wake === finish) wake = undefined;
+        resolve();
+      };
+      wake = finish;
+      signal?.addEventListener("abort", finish, { once: true });
+      if (config.sleep) void config.sleep(config.pollIntervalMs).then(finish);
+      else timer = setTimeout(finish, config.pollIntervalMs);
+      if (signal?.aborted) finish();
+    });
     try {
-      updates = await claimPendingUpdates(rpc, concurrency, leaseId, config.leaseSeconds);
-    } catch {
-      await sleepFn(config.pollIntervalMs);
-      continue;
+      while (!signal?.aborted) {
+        const free = capacity - active.size;
+        if (free === 0) {
+          onHealth?.(lane, true);
+          await wait();
+          continue;
+        }
+        let updates: ClaimedUpdate[];
+        try {
+          updates = await claimPendingUpdates(config.rpc, free, randomUUID(), config.leaseSeconds, controlsOnly);
+          onHealth?.(lane, true);
+        } catch {
+          onHealth?.(lane, false);
+          await wait();
+          continue;
+        }
+        for (const update of updates) {
+          const task = processUpdate(config, update, { shutdownSignal: signal })
+            .then(() => undefined, () => {
+              // Durable leases are reclaimed after errors; do not stop other jobs.
+              onHealth?.(lane, false);
+            }).finally(() => { active.delete(task); wake?.(); });
+          active.add(task);
+        }
+        // Refill immediately after a completion, otherwise poll for new arrivals.
+        if (updates.length === 0 || active.size >= capacity) await wait();
+      }
+    } finally {
+      await Promise.allSettled(active);
     }
-
-    if (updates.length === 0) {
-      await sleepFn(config.pollIntervalMs);
-      continue;
-    }
-
-    await Promise.allSettled(
-      updates.map((update) => processUpdate(config, update, { shutdownSignal: signal })),
-    );
   }
+  await Promise.all([runLane(false), runLane(true)]);
 }
 
 // ── Command handling ────────────────────────────────────────────────────────
@@ -513,6 +548,7 @@ interface TurnLifecycleState {
   cancellationRequested: boolean;
   shutdownRequested: boolean;
   controlPlaneError: unknown;
+  generationError?: Error;
 }
 
 interface TurnLifecycle {
@@ -659,6 +695,7 @@ async function lifecycleInterruptionResult(
   if (lifecycle.state.controlPlaneError) {
     throw lifecycle.state.controlPlaneError;
   }
+  if (lifecycle.state.generationError) throw lifecycle.state.generationError;
   return undefined;
 }
 
@@ -1089,6 +1126,15 @@ async function handleFredTurn(
   let finalResult: FredTurnResult | undefined;
   let turnError: unknown;
   let streamedError: Error | undefined;
+  const watchdog = createGenerationWatchdog({
+    timeoutMs: config.generationTimeoutMs,
+    idleTimeoutMs: config.generationIdleTimeoutMs,
+    onTimeout: (error) => {
+      lifecycle.state.generationError = error;
+      lifecycle.controller.abort(error);
+    },
+    onUnresponsive: config.onUnresponsiveGeneration,
+  });
   try {
     const gen = executeTurn(request, config.turnUpstream, config.turnPersistence, config.turnConfig);
     while (true) {
@@ -1098,11 +1144,14 @@ async function handleFredTurn(
         break;
       }
       const event = value as FredTurnEvent;
+      watchdog.observe(event);
       if (event.type === "error") streamedError = new Error(event.error);
     }
     if (streamedError) throw streamedError;
   } catch (error) {
     turnError = error;
+  } finally {
+    watchdog.dispose();
   }
 
   if (lifecycle.state.cancellationRequested && receipt) {
@@ -1516,8 +1565,4 @@ function errorMessage(error: unknown): string {
 function sanitizeErrorCode(message: string): string {
   const truncated = message.slice(0, 60).replace(/[^a-zA-Z0-9_\- ]/g, "");
   return truncated || "UNKNOWN";
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

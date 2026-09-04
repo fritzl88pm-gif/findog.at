@@ -16,6 +16,7 @@ import {
 
 function makeRpc(behavior: Record<string, ReturnType<typeof vi.fn>> = {}): JobQueueRpc {
   return {
+    claimControls: vi.fn().mockResolvedValue({ data: [], error: null }),
     claimPending: (behavior.claimPending ?? vi.fn().mockResolvedValue({ data: [], error: null })) as never,
     heartbeat: (behavior.heartbeat ?? vi.fn().mockResolvedValue({ data: true, error: null })) as never,
     complete: (behavior.complete ?? vi.fn().mockResolvedValue({ data: true, error: null })) as never,

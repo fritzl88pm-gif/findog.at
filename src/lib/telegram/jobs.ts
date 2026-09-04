@@ -38,6 +38,7 @@ export interface UpdateHandle {
 }
 
 export interface JobQueueRpc {
+  claimControls(params: Record<string, unknown>): Promise<{ data: unknown; error: unknown }>;
   claimPending(params: Record<string, unknown>): Promise<{ data: unknown; error: unknown }>;
   heartbeat(params: Record<string, unknown>): Promise<{ data: unknown; error: unknown }>;
   complete(params: Record<string, unknown>): Promise<{ data: unknown; error: unknown }>;
@@ -125,8 +126,9 @@ export async function claimPendingUpdates(
   limit: number,
   leaseId: string,
   leaseSeconds: number,
+  controlsOnly = false,
 ): Promise<ClaimedUpdate[]> {
-  const result = await rpc.claimPending({
+  const result = await (controlsOnly ? rpc.claimControls : rpc.claimPending)({
     p_limit: limit,
     p_lease_id: leaseId,
     p_lease_seconds: leaseSeconds,

@@ -100,6 +100,7 @@ function fakeBotApi(): BotApi {
 
 function fakeRpc(overrides: Partial<Record<keyof JobQueueRpc, ReturnType<typeof vi.fn>>> = {}): JobQueueRpc {
   return {
+    claimControls: overrides.claimControls ?? vi.fn().mockResolvedValue({ data: [], error: null }),
     claimPending: overrides.claimPending ?? vi.fn().mockResolvedValue({ data: [], error: null }),
     heartbeat: overrides.heartbeat ?? vi.fn().mockResolvedValue({ data: true, error: null }),
     complete: overrides.complete ?? vi.fn().mockResolvedValue({ data: true, error: null }),
@@ -2744,4 +2745,116 @@ describe("processUpdate: download streamed oversize", () => {
     expect(rpc.retry).not.toHaveBeenCalled();
     expect(rpc.complete).toHaveBeenCalled();
   });
+});
+
+
+describe("worker capacity and generation deadlines", () => {
+  function row(chat: number, command = "/status") {
+    return {
+      id: chat, update_id: chat, integration_id: `int-${chat}`,
+      raw_update: { update_id: chat, message: { message_id: chat,
+        from: { id: telegramUserId, is_bot: false, first_name: "Test" },
+        chat: { id: chat, type: "private" }, date: 1, text: command } },
+      telegram_chat_id: chat, status: "processing", lease_id: `lease-${chat}`,
+      lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
+      attempt_count: 1, max_attempts: 5, available_at: new Date().toISOString(),
+      cancel_requested: false, update_kind: "command",
+    };
+  }
+
+  it("refills a free slot and handles /stop while another job is still blocked", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const control = new AbortController();
+    const claimed = vi.fn().mockResolvedValueOnce({ data: [row(1), row(2)], error: null })
+      .mockResolvedValueOnce({ data: [row(3)], error: null })
+      .mockResolvedValue({ data: [], error: null });
+    const controls = vi.fn().mockResolvedValue({ data: [], error: null });
+    const rpc = fakeRpc({ claimPending: claimed, claimControls: controls });
+    const bot = fakeBotApi();
+    vi.mocked(bot.sendMessage).mockImplementation(async (params) => {
+      if (params.chat_id === 1 && params.text.includes("verbunden")) await blocked;
+      return { message_id: 1, date: 1, chat: { id: Number(params.chat_id), type: "private" } };
+    });
+    const storage = fakeStorage({ loadIntegration: vi.fn(async (id: string) =>
+      makeIntegration({ id, pairedTelegramChatId: Number(id.slice(4)) })) });
+    const loop = runWorkerLoop({ config: fakeConfig({ rpc, storage, createBotApiForToken: () => bot }), signal: control.signal });
+    try {
+      await vi.waitFor(() => expect(rpc.complete).toHaveBeenCalledWith(expect.objectContaining({ p_update_id: 3 })));
+      expect(claimed.mock.calls[1][0].p_limit).toBe(1);
+      expect(rpc.complete).not.toHaveBeenCalledWith(expect.objectContaining({ p_update_id: 1 }));
+      controls.mockResolvedValueOnce({ data: [{ ...row(1, "/stop"), id: 4, update_id: 4 }], error: null });
+      await vi.waitFor(() => expect(rpc.requestCancelForChat).toHaveBeenCalled());
+      expect(rpc.complete).not.toHaveBeenCalledWith(expect.objectContaining({ p_update_id: 1 }));
+    } finally {
+      control.abort();
+      release();
+      await loop;
+    }
+  });
+
+  it("times out a real stalled upstream stream, stops it and retries instead of recording user cancellation", async () => {
+    vi.useFakeTimers();
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const cancelStream = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"response_type":"agent_query","assistant_message_id":"hung-answer"}\n\n'));
+      }, cancel: cancelStream,
+    });
+    const upstream: TurnServiceUpstreamDeps = {
+      mintSession: vi.fn().mockResolvedValue({ token: "test", expiresIn: 1800 }),
+      fetchUpstreamConfig: vi.fn().mockResolvedValue({ agentId: "agent", knowledgeBaseIds: [], allowWebSearch: false }),
+      createSession: vi.fn().mockResolvedValue({ id: "session", signature: "signature" }),
+      deriveSessionSignature: vi.fn().mockReturnValue("signature"),
+      visitorId: vi.fn().mockReturnValue("visitor"),
+      openStream: vi.fn().mockResolvedValue(stream),
+      relayEvent: vi.fn().mockResolvedValue(undefined), stopSession: vi.fn().mockResolvedValue(undefined),
+    };
+    const persistence: TurnServicePersistenceDeps = {
+      loadConversation: vi.fn().mockResolvedValue(null),
+      recordEvent: vi.fn().mockResolvedValue({ conversation: fakeConversation, messageId: 1 }),
+    };
+    const turnConfig: TurnServiceConfigDeps = {
+      readFredConfig: () => ({ channelId: "channel", publishToken: "test", exchangeOrigin: "https://findog.at" }),
+      readQuickFredConfig: () => null, readProModelId: () => "model",
+    };
+    const config = fakeConfig({ rpc, storage, executeTurn: executeFredTurn,
+      turnUpstream: upstream, turnPersistence: persistence, turnConfig,
+      generationIdleTimeoutMs: 100, generationTimeoutMs: 1_000 });
+    const pending = processUpdate(config, makeUpdate({ attemptCount: 1 }));
+    await vi.advanceTimersByTimeAsync(100);
+    await pending;
+    expect(upstream.stopSession).toHaveBeenCalledWith(expect.objectContaining({ messageId: "hung-answer" }));
+    expect(cancelStream).toHaveBeenCalledOnce();
+    expect(rpc.retry).toHaveBeenCalledWith(expect.objectContaining({ p_last_error_code: "GENERATION_IDLE_TIMEOUT" }));
+    expect(rpc.cancel).not.toHaveBeenCalled();
+    expect(persistence.recordEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventType: "message_received" }));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+
+it("reconciles an answer committed during timeout on the final attempt", async () => {
+  vi.useFakeTimers();
+  const rpc = fakeRpc();
+  const bot = fakeBotApi();
+  const storage = fakeStorage({ transitionRequestReceiptIfPresent: vi.fn().mockResolvedValue({
+    leaseValid: true, receiptPresent: true, status: "completed", contentDeleted: false,
+    answer: "Bereits gespeicherte Antwort.", webSearchEnabled: false, proModeEnabled: false,
+  }) });
+  const { executeTurn } = capturingTurn(async function* (request) {
+    await new Promise<void>((resolve) => request.signal!.addEventListener("abort", () => resolve(), { once: true }));
+    return { answer: "", rawAnswer: "", stopped: true, conversation: fakeConversation, researchTrace: [], sourceReferences: [] };
+  });
+  const pending = processUpdate(fakeConfig({ rpc, storage, executeTurn,
+    createBotApiForToken: () => bot, generationIdleTimeoutMs: 100 }), makeUpdate({ attemptCount: 5 }));
+  await vi.advanceTimersByTimeAsync(100);
+  const result = await pending;
+  expect(result.status).toBe("completed");
+  expect(rpc.fail).not.toHaveBeenCalled();
+  expect(rpc.cancel).not.toHaveBeenCalled();
+  expect(bot.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: "Bereits gespeicherte Antwort." }), expect.any(Object));
+  expect(vi.getTimerCount()).toBe(0);
 });

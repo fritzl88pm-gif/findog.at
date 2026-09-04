@@ -7,6 +7,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getScanningSettings } from "@/lib/scanning/settings";
 
 import type { JobQueueRpc } from "@/lib/telegram/jobs";
+import { createWorkerHealth } from "@/lib/telegram/worker-health";
 import {
   runWorkerLoop,
   type WorkerConfig,
@@ -112,6 +113,7 @@ function invokeRpc(supabase: Supabase, name: string, params: Record<string, unkn
 
 export function buildRpc(supabase: Supabase): JobQueueRpc {
   return {
+    claimControls: (params) => invokeRpc(supabase, "claim_pending_telegram_control_updates", params),
     claimPending: (params) => invokeRpc(supabase, "claim_pending_telegram_updates", params),
     heartbeat: (params) => invokeRpc(supabase, "heartbeat_telegram_update", params),
     complete: (params) => invokeRpc(supabase, "complete_telegram_update", params),
@@ -501,11 +503,12 @@ function buildTurnConfig(): TurnServiceConfigDeps {
   };
 }
 
-function createHealthHandler(isReady: () => boolean) {
+export function createHealthHandler(isReady: () => boolean) {
   return (req: IncomingMessage, res: ServerResponse): void => {
     if (req.url === "/healthz") {
-      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end("ok");
+      const healthy = isReady();
+      res.writeHead(healthy ? 200 : 503, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end(healthy ? "ok" : "not ready");
       return;
     }
     if (req.url === "/readyz") {
@@ -552,8 +555,9 @@ async function main(): Promise<void> {
   });
 
   let ready = false;
+  const health = createWorkerHealth();
   const controller = new AbortController();
-  const server = createServer(createHealthHandler(() => ready));
+  const server = createServer(createHealthHandler(() => ready && health.isHealthy()));
   await listen(server, port);
 
   const probe = await supabase
@@ -583,6 +587,12 @@ async function main(): Promise<void> {
     draftRefreshIntervalMs: 2_000,
     maxDraftRefreshes: 12,
     maxDeliveryRetries: 5,
+    generationTimeoutMs: 720_000,
+    generationIdleTimeoutMs: 300_000,
+    onUnresponsiveGeneration: () => {
+      health.fail();
+      requestShutdown("generation_unresponsive");
+    },
   };
 
   let shuttingDown = false;
@@ -606,7 +616,7 @@ async function main(): Promise<void> {
   console.info("telegram_worker_started", { port, concurrency });
 
   try {
-    await runWorkerLoop({ config, signal: controller.signal });
+    await runWorkerLoop({ config, signal: controller.signal, onHealth: health.record });
   } finally {
     ready = false;
     if (forceTimer) clearTimeout(forceTimer);

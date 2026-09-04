@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createConfiguredDocumentProvider } from "@/lib/attachments/document-pipeline";
 import { getScanningSettings } from "@/lib/scanning/settings";
-import { buildPreprocessorProviders, buildStorage } from "./telegram";
+import { buildPreprocessorProviders, buildStorage, buildRpc, createHealthHandler } from "./telegram";
 
 function fakeSupabase(overrides: Record<string, unknown> = {}) {
   return {
@@ -228,4 +228,26 @@ describe("import safety", () => {
       errorSpy.mockRestore();
     }
   });
+});
+
+
+it("routes control claims to the dedicated RPC without changing normal claims", async () => {
+  const supabase = fakeSupabase({ rpc: vi.fn().mockResolvedValue({ data: [], error: null }) });
+  const rpc = buildRpc(supabase as never);
+  const params = { p_lease_id: "lease", p_limit: 1, p_lease_seconds: 60 };
+  await rpc.claimControls(params);
+  await rpc.claimPending(params);
+  expect(supabase.rpc).toHaveBeenCalledWith("claim_pending_telegram_control_updates", params);
+  expect(supabase.rpc).toHaveBeenCalledWith("claim_pending_telegram_updates", params);
+});
+
+it.each(["/healthz", "/readyz"])("returns 503 on %s when the worker is unresponsive", (url) => {
+  let healthy = false;
+  const handler = createHealthHandler(() => healthy);
+  const response = { writeHead: vi.fn(), end: vi.fn() };
+  handler({ url } as never, response as never);
+  expect(response.writeHead).toHaveBeenLastCalledWith(503, expect.any(Object));
+  healthy = true;
+  handler({ url } as never, response as never);
+  expect(response.writeHead).toHaveBeenLastCalledWith(200, expect.any(Object));
 });
