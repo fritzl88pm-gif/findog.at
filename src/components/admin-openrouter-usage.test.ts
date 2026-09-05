@@ -11,13 +11,9 @@ const componentSource = readFileSync(
 const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
 describe("Admin OpenRouter-Nutzung UI", () => {
-  it("keeps the dormant OpenRouter component source while switching the active tab to OmniRoute", () => {
-    expect(pageSource).toContain('id="admin-tab-omniroute"');
-    expect(pageSource).toContain('aria-controls="admin-panel-omniroute"');
-    expect(pageSource).toContain('onClick={() => setAdminTab("omniroute")}');
-    expect(pageSource).toContain('onKeyDown={(e) => handleAdminTabKeyDown(e, "omniroute")}');
-    expect(pageSource).toMatch(/ADMIN_TAB_IDS\s*=\s*\[[^\]]*"omniroute"[^\]]*\]/u);
-    expect(pageSource).not.toContain('id="admin-tab-openrouter"');
+  it("mounts OmniRoute as the selected administration area", () => {
+    expect(pageSource).toContain('adminTab === "omniroute" ? (');
+    expect(pageSource).toContain("<AdminOmniRouteUsage");
     expect(pageSource).not.toContain('adminTab === "openrouter"');
   });
 

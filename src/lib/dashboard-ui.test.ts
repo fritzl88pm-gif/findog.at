@@ -96,7 +96,7 @@ describe("logged-in dashboard UI", () => {
   });
 
   it("adds the protected news editor with all legal provenance fields and lifecycle actions", () => {
-    expect(page).toContain('id="admin-tab-dashboard-news"');
+    expect(page).toContain('adminTab === "dashboard-news" ? (');
     expect(page).toContain("<AdminDashboardNews");
     expect(admin).toContain('fetch("/api/admin/dashboard-news"');
     expect(admin).toContain("Amtliche Kennung");

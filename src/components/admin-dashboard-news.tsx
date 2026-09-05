@@ -1,5 +1,7 @@
 "use client";
 
+import { useAdminEditorGuard } from "@/components/admin-editor-guard";
+
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
 import type {
@@ -93,6 +95,10 @@ export default function AdminDashboardNews({ accessToken }: Props) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
+  const selectedItem = items.find((item) => item.id === selectedId);
+  const isDirty = JSON.stringify(form) !== JSON.stringify(selectedItem ? formFromItem(selectedItem) : EMPTY_FORM);
+  const confirmDiscard = useAdminEditorGuard({ dirty: isDirty, busy: isSaving });
+
   const loadItems = useCallback(async (signal?: AbortSignal) => {
     if (!accessToken) return;
     setIsLoading(true);
@@ -110,13 +116,13 @@ export default function AdminDashboardNews({ accessToken }: Props) {
       if (!response.ok || !Array.isArray(payload.items)) {
         throw new Error(payload.error ?? "Startseiten-News konnten nicht geladen werden.");
       }
-      setItems(payload.items);
+      if (!signal?.aborted) setItems(payload.items);
     } catch (loadError) {
       if ((loadError as { name?: string }).name !== "AbortError") {
         setError(loadError instanceof Error ? loadError.message : "Startseiten-News konnten nicht geladen werden.");
       }
     } finally {
-      setIsLoading(false);
+      if (!signal?.aborted) setIsLoading(false);
     }
   }, [accessToken]);
 
@@ -138,6 +144,11 @@ export default function AdminDashboardNews({ accessToken }: Props) {
   )), [items, kindFilter, statusFilter]);
 
   function startNewItem() {
+    if (!confirmDiscard()) return;
+    resetEditor();
+  }
+
+  function resetEditor() {
     setSelectedId(null);
     setForm(EMPTY_FORM);
     setError("");
@@ -145,6 +156,7 @@ export default function AdminDashboardNews({ accessToken }: Props) {
   }
 
   function selectItem(item: DashboardNewsItem) {
+    if (item.id === selectedId || !confirmDiscard()) return;
     setSelectedId(item.id);
     setForm(formFromItem(item));
     setError("");
@@ -231,7 +243,7 @@ export default function AdminDashboardNews({ accessToken }: Props) {
       const payload = await response.json().catch(() => ({})) as { error?: string };
       if (!response.ok) throw new Error(payload.error ?? "Die Meldung konnte nicht gelöscht werden.");
       setItems((current) => current.filter((item) => item.id !== selectedId));
-      startNewItem();
+      resetEditor();
       setNotice("Die Meldung wurde soft-gelöscht; der Auditverlauf bleibt erhalten.");
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Die Meldung konnte nicht gelöscht werden.");
@@ -243,13 +255,12 @@ export default function AdminDashboardNews({ accessToken }: Props) {
   return (
     <section
       className="admin-dashboard-news"
-      role="tabpanel"
       id="admin-panel-dashboard-news"
-      aria-labelledby="admin-tab-dashboard-news"
+      aria-labelledby="admin-news-title"
     >
       <div className="admin-dashboard-news-heading">
         <div>
-          <h2>Startseiten-News</h2>
+          <h2 id="admin-news-title">Meldungen verwalten</h2>
           <p>Produktmeldungen und redaktionell geprüfte RIS-/EVI-Rechtsmeldungen verwalten.</p>
         </div>
         <button className="secondary-button" type="button" onClick={startNewItem} disabled={isSaving}>
@@ -257,7 +268,7 @@ export default function AdminDashboardNews({ accessToken }: Props) {
         </button>
       </div>
 
-      {error ? <div className="error-box" role="alert">{error}</div> : null}
+      {error ? <div className="error-box" role="alert">{error}<button className="secondary-button" type="button" disabled={isSaving || isLoading} onClick={() => { if (confirmDiscard()) { resetEditor(); void loadItems(); } }}>Erneut laden</button></div> : null}
       {notice ? <div className="notice-box" role="status">{notice}</div> : null}
 
       <div className="admin-dashboard-news-layout">
@@ -315,6 +326,7 @@ export default function AdminDashboardNews({ accessToken }: Props) {
             void saveItem();
           }}
         >
+          <fieldset className="admin-editor-fields" disabled={isSaving}>
           <div className="admin-news-editor-header">
             <div>
               <span className="eyebrow">{selectedId ? "Meldung bearbeiten" : "Meldung anlegen"}</span>
@@ -447,6 +459,7 @@ export default function AdminDashboardNews({ accessToken }: Props) {
           ) : null}
 
           <div className="admin-news-editor-actions">
+            <span className="admin-draft-status" role="status">{isSaving ? "Wird gespeichert …" : isDirty ? "Ungespeicherte Änderungen" : "Keine offenen Änderungen"}</span>
             <button className="primary-button" type="submit" disabled={isSaving}>
               {isSaving ? "Speichert …" : form.status === "draft" ? "Entwurf speichern" : "Änderungen speichern"}
             </button>
@@ -469,6 +482,7 @@ export default function AdminDashboardNews({ accessToken }: Props) {
               </button>
             ) : null}
           </div>
+          </fieldset>
         </form>
       </div>
     </section>

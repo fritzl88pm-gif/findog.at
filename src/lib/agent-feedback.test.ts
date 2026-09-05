@@ -71,19 +71,17 @@ describe("Fred feedback UI", () => {
 
 describe("admin feedback UI", () => {
   it("adds a keyboard-reachable feedback tab and loads the protected endpoint", () => {
-    expect(pageSource).toContain('"scanning", "benutzer", "feedback", "downloads", "dashboard-news", "bfg-newsletters", "omniroute"');
-    expect(pageSource).toContain('id="admin-tab-feedback"');
-    expect(pageSource).toMatch(/>\s*Rückmeldungen\s*<\/button>/u);
+    expect(pageSource).toContain('adminTab === "feedback" ? (');
     expect(pageSource).toContain("<AdminFeedbackView");
     expect(adminSource).toContain('fetch("/api/admin/feedback"');
     expect(adminSource).toContain("Negative Fred-Rückmeldungen");
   });
 
-  it("shows the report first and keeps question and answer expandable", () => {
+  it("shows the report with the selected question and response", () => {
     expect(adminSource).toContain("entry.feedback");
-    expect(adminSource).toContain("<details>");
-    expect(adminSource).toContain("entry.userRequest");
-    expect(adminSource).toContain("entry.assistantResponse");
+    expect(adminSource).toContain("admin-feedback-detail");
+    expect(adminSource).toContain("selected.userRequest");
+    expect(adminSource).toContain("selected.assistantResponse");
     expect(cssSource).toContain(".admin-feedback-list");
   });
 });

@@ -94,6 +94,10 @@ import AdminBfgNewsletters from "@/components/admin-bfg-newsletters";
 import AdminOmniRouteUsage from "@/components/admin-omniroute-usage";
 import DownloadsView from "@/components/downloads-view";
 import BfgNewsletterView from "@/components/bfg-newsletter-view";
+import AdminWorkspace from "@/components/admin-workspace";
+import AdminDialog from "@/components/admin-dialog";
+import { AdminGuardContext, useAdminEditorGuard, useAdminNavigationGuard } from "@/components/admin-editor-guard";
+import type { AdminArea } from "@/lib/admin-navigation";
 import SidebarNavigationGroup from "@/components/sidebar-navigation-group";
 import DashboardView, { type DashboardAppTarget } from "@/components/dashboard-view";
 import TelegramSettings, {
@@ -1176,27 +1180,6 @@ function GermanPensionOptionView() {
 
 
 
-const ADMIN_TAB_IDS = ["scanning", "benutzer", "feedback", "downloads", "dashboard-news", "bfg-newsletters", "omniroute"] as const;
-function handleAdminTabKeyDown(event: React.KeyboardEvent, currentTab: string): void {
-  const currentIndex = ADMIN_TAB_IDS.indexOf(currentTab as typeof ADMIN_TAB_IDS[number]);
-  let nextIndex: number | undefined;
-  if (event.key === "ArrowRight") {
-    nextIndex = (currentIndex + 1) % ADMIN_TAB_IDS.length;
-  } else if (event.key === "ArrowLeft") {
-    nextIndex = (currentIndex - 1 + ADMIN_TAB_IDS.length) % ADMIN_TAB_IDS.length;
-  } else if (event.key === "Home") {
-    nextIndex = 0;
-  } else if (event.key === "End") {
-    nextIndex = ADMIN_TAB_IDS.length - 1;
-  }
-  if (nextIndex !== undefined) {
-    event.preventDefault();
-    const nextId = ADMIN_TAB_IDS[nextIndex];
-    const button = document.getElementById(`admin-tab-${nextId}`) as HTMLElement | null;
-    button?.click();
-    button?.focus();
-  }
-}
 export default function Home() {
   const supabase = getSupabaseBrowserClient();
   const [fredConversationId, setFredConversationId] = useState("");
@@ -1225,11 +1208,15 @@ export default function Home() {
   const [adminNotice, setAdminNotice] = useState("");
   const [adminUsers, setAdminUsers] = useState<AdminUserSummary[]>([]);
   const [adminUserProfile, setAdminUserProfile] = useState<AdminUserProfile | null>(null);
+  const [isCreateUserOpen, setIsCreateUserOpen] = useState(false);
+  const [adminUserQuery, setAdminUserQuery] = useState("");
+  const [scanningBaseline, setScanningBaseline] = useState("");
+  const adminLoadController = useRef<AbortController | null>(null);
   const [adminUserForm, setAdminUserForm] = useState({ email: "", password: "" });
   const [isAdminUsersLoading, setIsAdminUsersLoading] = useState(false);
   const [isAdminUserCreating, setIsAdminUserCreating] = useState(false);
   const [isAdminUserMutationRunning, setIsAdminUserMutationRunning] = useState(false);
-  const [adminTab, setAdminTab] = useState<"scanning" | "benutzer" | "downloads" | "feedback" | "dashboard-news" | "bfg-newsletters" | "omniroute">("scanning");
+  const [adminTab, setAdminTab] = useState<AdminArea>("overview");
   const [scanningDocumentPipeline, setScanningDocumentPipeline] = useState<DocumentPipeline>(DEFAULT_DOCUMENT_PIPELINE);
   const [fredAttachmentMode, setFredAttachmentMode] = useState<FredAttachmentMode>(DEFAULT_FRED_ATTACHMENT_MODE);
   const [scanningProvider, setScanningProvider] = useState<ScanningProvider>(DEFAULT_SCANNING_PROVIDER);
@@ -1255,6 +1242,34 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [appView, setAppView] = useState<AppView>("home");
+  const adminGuard = useAdminNavigationGuard();
+  const scanningSnapshot = JSON.stringify([scanningDocumentPipeline, fredAttachmentMode, scanningProvider, scanningModelId, scanningPrompt]);
+  useAdminEditorGuard({
+    dirty: appView === "administration" && (
+      (adminTab === "scanning" && Boolean(scanningBaseline) && scanningSnapshot !== scanningBaseline)
+      || (isCreateUserOpen && Boolean(adminUserForm.email || adminUserForm.password))
+    ),
+    busy: appView === "administration" && (isAdminUserCreating || isAdminUserMutationRunning || isScanningSettingsSaving),
+  }, adminGuard);
+  useEffect(() => () => adminLoadController.current?.abort(), []);
+
+  function leaveAdministration() {
+    if (appView !== "administration") return true;
+    if (!adminGuard.canLeave()) return false;
+    adminLoadController.current?.abort();
+    setIsAdminUsersLoading(false);
+    setIsScanningSettingsLoading(false);
+    setIsCreateUserOpen(false);
+    setAdminUserForm({ email: "", password: "" });
+    return true;
+  }
+
+  function closeCreateUser() {
+    if (!adminGuard.canLeave()) return;
+    setIsCreateUserOpen(false);
+    setAdminUserForm({ email: "", password: "" });
+  }
+
   const [bfgQuery, setBfgQuery] = useState("");
   const [bfgSort, setBfgSort] = useState<BfgSort>("1");
   const [bfgAppliedSort, setBfgAppliedSort] = useState<BfgSort>("1");
@@ -1839,6 +1854,7 @@ export default function Home() {
   }
 
   async function handleSignOut() {
+    if (!leaveAdministration()) return;
     if (!supabase || isAuthSubmitting) {
       return;
     }
@@ -1867,6 +1883,7 @@ export default function Home() {
   }
 
   function openHomeView() {
+    if (!leaveAdministration()) return;
     setAppView("home");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1898,6 +1915,7 @@ export default function Home() {
   }
 
   function openFormsView() {
+    if (!leaveAdministration()) return;
     setAppView("forms");
     setSelectedFormId("");
     setFormImage(null);
@@ -1913,6 +1931,7 @@ export default function Home() {
   }
 
   function openDataView() {
+    if (!leaveAdministration()) return;
     setAppView("data");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1921,6 +1940,7 @@ export default function Home() {
   }
 
   function openDownloadsView() {
+    if (!leaveAdministration()) return;
     setAppView("downloads");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1929,6 +1949,7 @@ export default function Home() {
   }
 
   function openReasoningsView() {
+    if (!leaveAdministration()) return;
     setAppView("reasonings");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1937,6 +1958,7 @@ export default function Home() {
   }
 
   function openBfgDecisionsView() {
+    if (!leaveAdministration()) return;
     setAppView("bfg-decisions");
     setBfgError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1945,6 +1967,7 @@ export default function Home() {
   }
 
   function openBfgProView() {
+    if (!leaveAdministration()) return;
     setAppView("bfg-pro");
     setBfgProError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1953,6 +1976,7 @@ export default function Home() {
   }
 
   function openBfgNewslettersView() {
+    if (!leaveAdministration()) return;
     setAppView("bfg-newsletters");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1961,6 +1985,7 @@ export default function Home() {
   }
 
   function openGermanSvPensionView() {
+    if (!leaveAdministration()) return;
     setAppView("german-sv-pension");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1969,6 +1994,7 @@ export default function Home() {
   }
 
   function openL17bCurrencyView() {
+    if (!leaveAdministration()) return;
     setAppView("l17b-currency");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1977,6 +2003,7 @@ export default function Home() {
   }
 
   function openFredRunView() {
+    if (!leaveAdministration()) return;
     setAppView("fredrun");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1988,6 +2015,7 @@ export default function Home() {
     if (!isAdmin) {
       return;
     }
+    if (!leaveAdministration()) return;
     setAppView("quiz");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
@@ -1995,6 +2023,7 @@ export default function Home() {
   }
 
   function openFredView() {
+    if (!leaveAdministration()) return;
     setAppView("chat");
     setFredConversationId("");
     setActiveConversationOrigin("web");
@@ -2182,11 +2211,12 @@ export default function Home() {
     }
   }
 
-  async function loadScanningSettings(accessToken: string) {
+  async function loadScanningSettings(accessToken: string, signal?: AbortSignal) {
     setIsScanningSettingsLoading(true);
     try {
       const response = await fetch("/api/admin/scanning-settings", {
         headers: { Authorization: `Bearer ${accessToken}` },
+        signal,
       });
       const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (
@@ -2215,17 +2245,20 @@ export default function Home() {
             : "Die Scanning-Konfiguration konnte nicht geladen werden.",
         );
       }
+      if (signal?.aborted) return;
       setScanningDocumentPipeline(payload.documentPipeline);
       setFredAttachmentMode(payload.fredAttachmentMode);
       setScanningProvider(payload.scanningProvider);
       setScanningModelId(payload.modelId);
       setScanningPrompt(payload.prompt);
+      setScanningBaseline(JSON.stringify([payload.documentPipeline, payload.fredAttachmentMode, payload.scanningProvider, payload.modelId, payload.prompt]));
     } catch (settingsError) {
+      if (signal?.aborted) return;
       setAdminError(settingsError instanceof Error
         ? settingsError.message
         : "Die Scanning-Konfiguration konnte nicht geladen werden.");
     } finally {
-      setIsScanningSettingsLoading(false);
+      if (!signal?.aborted) setIsScanningSettingsLoading(false);
     }
   }
 
@@ -2235,6 +2268,8 @@ export default function Home() {
       !accessToken
       || !isAdmin
       || isScanningSettingsSaving
+      || isScanningSettingsLoading
+      || !scanningBaseline
       || !scanningModelId.trim()
       || !scanningPrompt.trim()
     ) {
@@ -2290,6 +2325,7 @@ export default function Home() {
       setScanningProvider(payload.scanningProvider);
       setScanningModelId(payload.modelId);
       setScanningPrompt(payload.prompt);
+      setScanningBaseline(JSON.stringify([payload.documentPipeline, payload.fredAttachmentMode, payload.scanningProvider, payload.modelId, payload.prompt]));
       setAdminNotice("Die Scanning-Konfiguration wurde gespeichert und gilt für neue Auswertungen.");
     } catch (settingsError) {
       setAdminError(settingsError instanceof Error
@@ -2301,24 +2337,41 @@ export default function Home() {
   }
 
   async function openAdministrationView() {
-    const accessToken = session?.access_token;
-    if (!isAdmin || !accessToken) {
-      return;
-    }
+    if (!isAdmin || !session?.access_token || !leaveAdministration()) return;
     setAppView("administration");
-    setAdminTab("scanning");
+    setAdminTab("overview");
     setAdminError("");
     setAdminNotice("");
-    setIsAdminUsersLoading(true);
-    setAdminUserProfile(null);
-    void loadScanningSettings(accessToken);
-    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
-      setSettingsOpen(false);
-    }
+    if (window.matchMedia("(max-width: 960px)").matches) setSettingsOpen(false);
+  }
 
+  function navigateAdminArea(area: AdminArea, reload = false) {
+    if ((area === adminTab && !reload) || !adminGuard.canLeave()) return;
+    adminLoadController.current?.abort();
+    const controller = new AbortController();
+    adminLoadController.current = controller;
+    setIsCreateUserOpen(false);
+    setAdminUserForm({ email: "", password: "" });
+    setAdminTab(area);
+    setIsAdminUsersLoading(false);
+    setIsScanningSettingsLoading(false);
+    setAdminError("");
+    setAdminNotice("");
+    const accessToken = session?.access_token;
+    if (!accessToken) return;
+    if (area === "scanning") {
+      setScanningBaseline("");
+      void loadScanningSettings(accessToken, controller.signal);
+    }
+    if (area === "benutzer" || area === "feedback") void loadAdminUsers(accessToken, controller.signal);
+  }
+
+  async function loadAdminUsers(accessToken: string, signal?: AbortSignal) {
+    setIsAdminUsersLoading(true);
     try {
       const usersResponse = await fetch("/api/admin/users", {
         headers: { Authorization: `Bearer ${accessToken}` },
+        signal,
       });
       const usersPayload = (await usersResponse.json().catch(() => ({}))) as Record<string, unknown>;
       if (!usersResponse.ok || !Array.isArray(usersPayload.users)) {
@@ -2335,27 +2388,32 @@ export default function Home() {
       if (loadedUsers.length !== usersPayload.users.length) {
         throw new Error("Die geladenen Benutzerdaten sind ungültig.");
       }
-      setAdminUsers(loadedUsers);
+      if (!signal?.aborted) setAdminUsers(loadedUsers);
     } catch (adminUsersError) {
+      if (signal?.aborted) return;
       setAdminError(adminUsersError instanceof Error
         ? adminUsersError.message
         : "Benutzer konnten nicht geladen werden.");
     } finally {
-      setIsAdminUsersLoading(false);
+      if (!signal?.aborted) setIsAdminUsersLoading(false);
     }
   }
 
   async function loadAdminUserProfile(userId: string) {
     const accessToken = session?.access_token;
-    if (!accessToken || isAdminUserMutationRunning) {
+    if (!accessToken || isAdminUsersLoading || isAdminUserMutationRunning) {
       return;
     }
+    adminLoadController.current?.abort();
+    const controller = new AbortController();
+    adminLoadController.current = controller;
     setAdminError("");
     setAdminNotice("");
     setIsAdminUsersLoading(true);
     try {
       const response = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
         headers: { Authorization: `Bearer ${accessToken}` },
+        signal: controller.signal,
       });
       const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       const profile = normalizeAdminUserProfile(payload);
@@ -2364,13 +2422,14 @@ export default function Home() {
           typeof payload.error === "string" ? payload.error : "Benutzerprofil konnte nicht geladen werden.",
         );
       }
-      setAdminUserProfile(profile);
+      if (!controller.signal.aborted) setAdminUserProfile(profile);
     } catch (profileError) {
+      if (controller.signal.aborted) return;
       setAdminError(profileError instanceof Error
         ? profileError.message
         : "Benutzerprofil konnte nicht geladen werden.");
     } finally {
-      setIsAdminUsersLoading(false);
+      if (!controller.signal.aborted) setIsAdminUsersLoading(false);
     }
   }
 
@@ -2402,6 +2461,7 @@ export default function Home() {
       setAdminUsers((current) => [...current, createdUser]
         .sort((left, right) => left.email.localeCompare(right.email, "de")));
       setAdminUserForm({ email: "", password: "" });
+      setIsCreateUserOpen(false);
       setAdminNotice(`Das Benutzerkonto ${createdUser.email} wurde erstellt.`);
       setAdminUserProfile({ user: createdUser, requestCount: 0, requests: [] });
     } catch (createError) {
@@ -2594,6 +2654,7 @@ export default function Home() {
   }
 
   function openScanningView() {
+    if (!leaveAdministration()) return;
     setAppView("scanning");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -2602,6 +2663,7 @@ export default function Home() {
   }
 
   async function selectFredConversation(conversation: ConversationSummary) {
+    if (!leaveAdministration()) return;
     if (isHistoryLoading || isDeleting || !session?.access_token) {
       return;
     }
@@ -4158,110 +4220,47 @@ export default function Home() {
           </div>
         </section>
       ) : appView === "administration" && isAdmin ? (
-        <section className="forms-panel" aria-labelledby="administration-view-title">
-          <div className="forms-view">
-            <header className="forms-view-header">
-              <p className="eyebrow">Systemkonfiguration</p>
-              <h1 id="administration-view-title">Administration</h1>
-            </header>
-            {adminError ? (
-              <div className="admin-message error-box" role="alert" aria-live="polite">
-                {adminError}
-              </div>
-            ) : null}
-            {adminNotice ? (
-              <div className="notice-box" role="status" aria-live="polite">
-                {adminNotice}
-              </div>
-            ) : null}
-            <div className="admin-tabs" role="tablist" aria-label="Administration">
-              <button
-                id="admin-tab-scanning"
-                className={`admin-tab-button ${adminTab === "scanning" ? "active" : ""}`}
-                role="tab"
-                aria-selected={adminTab === "scanning"}
-                aria-controls="admin-panel-scanning"
-                onClick={() => setAdminTab("scanning")}
-                onKeyDown={(e) => handleAdminTabKeyDown(e, "scanning")}
-              >
-                Dokumente scannen
-              </button>
-              <button
-                id="admin-tab-benutzer"
-                className={`admin-tab-button ${adminTab === "benutzer" ? "active" : ""}`}
-                role="tab"
-                aria-selected={adminTab === "benutzer"}
-                aria-controls="admin-panel-benutzer"
-                onClick={() => setAdminTab("benutzer")}
-                onKeyDown={(e) => handleAdminTabKeyDown(e, "benutzer")}
-              >
-                Benutzer
-              </button>
-              <button
-                id="admin-tab-feedback"
-                className={`admin-tab-button ${adminTab === "feedback" ? "active" : ""}`}
-                role="tab"
-                aria-selected={adminTab === "feedback"}
-                aria-controls="admin-panel-feedback"
-                onClick={() => setAdminTab("feedback")}
-                onKeyDown={(e) => handleAdminTabKeyDown(e, "feedback")}
-              >
-                Rückmeldungen
-              </button>
-              <button
-                id="admin-tab-downloads"
-                className={`admin-tab-button ${adminTab === "downloads" ? "active" : ""}`}
-                role="tab"
-                aria-selected={adminTab === "downloads"}
-                aria-controls="admin-panel-downloads"
-                onClick={() => setAdminTab("downloads")}
-                onKeyDown={(e) => handleAdminTabKeyDown(e, "downloads")}
-              >
-                Downloads
-              </button>
-              <button
-                id="admin-tab-dashboard-news"
-                className={`admin-tab-button ${adminTab === "dashboard-news" ? "active" : ""}`}
-                role="tab"
-                aria-selected={adminTab === "dashboard-news"}
-                aria-controls="admin-panel-dashboard-news"
-                onClick={() => setAdminTab("dashboard-news")}
-                onKeyDown={(e) => handleAdminTabKeyDown(e, "dashboard-news")}
-              >
-                Startseiten-News
-              </button>
-              <button
-                id="admin-tab-bfg-newsletters"
-                className={`admin-tab-button ${adminTab === "bfg-newsletters" ? "active" : ""}`}
-                role="tab"
-                aria-selected={adminTab === "bfg-newsletters"}
-                aria-controls="admin-panel-bfg-newsletters"
-                onClick={() => setAdminTab("bfg-newsletters")}
-                onKeyDown={(e) => handleAdminTabKeyDown(e, "bfg-newsletters")}
-              >
-                BFG Newsletter
-              </button>
-              <button
-                id="admin-tab-omniroute"
-                className={`admin-tab-button ${adminTab === "omniroute" ? "active" : ""}`}
-                role="tab"
-                aria-selected={adminTab === "omniroute"}
-                aria-controls="admin-panel-omniroute"
-                onClick={() => setAdminTab("omniroute")}
-                onKeyDown={(e) => handleAdminTabKeyDown(e, "omniroute")}
-              >
-                OmniRoute Stats
-              </button>
-            </div>
+        <AdminGuardContext.Provider value={adminGuard}>
+          <AdminWorkspace area={adminTab} onNavigate={navigateAdminArea} error={isCreateUserOpen ? "" : adminError} notice={adminNotice}>
+            {adminError && !isCreateUserOpen && (adminTab === "benutzer" || adminTab === "feedback" || adminTab === "scanning") ? <button className="secondary-button admin-retry" type="button" disabled={isAdminUsersLoading || isScanningSettingsLoading || isScanningSettingsSaving || isAdminUserMutationRunning} onClick={() => navigateAdminArea(adminTab, true)}>Bereich erneut laden</button> : null}
             {adminTab === "scanning" ? (
-              <section className="form-generator-card admin-system-prompt-card" role="tabpanel" id="admin-panel-scanning" aria-labelledby="admin-tab-scanning">
+              <section className="form-generator-card admin-system-prompt-card" id="admin-panel-scanning" aria-labelledby="admin-scanning-title">
                 <div className="form-generator-heading">
-                  <h2>Scanning-Einstellungen</h2>
+                  <h2 id="admin-scanning-title">Dokumentverarbeitung konfigurieren</h2>
                   <p>
                     Konfiguriert Dokument-OCR, Scanning-Provider und OpenRouter-Modell.
                     Der statische Prompt gilt nur für die Belegauswertung.
                   </p>
                 </div>
+                {isScanningSettingsLoading ? <p className="admin-empty-state" role="status">Einstellungen werden geladen …</p> : null}
+                <fieldset className="admin-editor-fields" disabled={isScanningSettingsLoading || !scanningBaseline}>
+                <fieldset className="admin-settings-section"><legend>Fred-Anhänge</legend>
+                <div className="field-group">
+                  <label htmlFor="fred-attachment-mode">Fred-Dateiverarbeitung</label>
+                  <select
+                    id="fred-attachment-mode"
+                    value={fredAttachmentMode}
+                    aria-describedby="fred-attachment-mode-description"
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (value === "findog_preprocess" || value === "weknora_native") {
+                        setFredAttachmentMode(value);
+                        setAdminError("");
+                        setAdminNotice("");
+                      }
+                    }}
+                    disabled={isScanningSettingsLoading || isScanningSettingsSaving}
+                  >
+                    <option value="findog_preprocess">Findog-Vorverarbeitung</option>
+                    <option value="weknora_native">WeKnora nativ</option>
+                  </select>
+                  <p id="fred-attachment-mode-description" className="admin-model-hint">
+                    Findog liest Anhänge selbst aus; nativ übergibt sie direkt an WeKnora.
+                  </p>
+                </div>
+
+                </fieldset>
+                <fieldset className="admin-settings-section"><legend>OCR-Verarbeitung</legend>
                 <div className="field-group">
                   <label htmlFor="scanning-document-pipeline">OCR-Pipeline</label>
                   <select
@@ -4289,30 +4288,8 @@ export default function Home() {
                       : "Dokumente werden ausschließlich über Luna via OmniRoute verarbeitet."}
                   </p>
                 </div>
-                <div className="field-group">
-                  <label htmlFor="fred-attachment-mode">Fred-Dateiverarbeitung</label>
-                  <select
-                    id="fred-attachment-mode"
-                    value={fredAttachmentMode}
-                    aria-describedby="fred-attachment-mode-description"
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      if (value === "findog_preprocess" || value === "weknora_native") {
-                        setFredAttachmentMode(value);
-                        setAdminError("");
-                        setAdminNotice("");
-                      }
-                    }}
-                    disabled={isScanningSettingsLoading || isScanningSettingsSaving}
-                  >
-                    <option value="findog_preprocess">Findog-Vorverarbeitung</option>
-                    <option value="weknora_native">WeKnora nativ</option>
-                  </select>
-                  <p id="fred-attachment-mode-description" className="admin-model-hint">
-                    Findog liest Anhänge selbst aus; nativ übergibt sie direkt an WeKnora.
-                  </p>
-                </div>
-
+                </fieldset>
+                <fieldset className="admin-settings-section"><legend>Belegauswertung</legend>
                 <div className="field-group">
                   <label htmlFor="scanning-provider">Scanning-Provider</label>
                   <select
@@ -4354,6 +4331,8 @@ export default function Home() {
                     placeholder="z. B. google/gemini-3.5-flash"
                   />
                 </div>
+                </fieldset>
+                <details className="admin-prompt-disclosure"><summary>Prompt für die Belegauswertung</summary>
                 <div className="field-group">
                   <label htmlFor="scanning-prompt">Scanning-Prompt</label>
                   <textarea
@@ -4365,13 +4344,15 @@ export default function Home() {
                       setAdminError("");
                       setAdminNotice("");
                     }}
-                    rows={24}
+                    rows={14}
                     spellCheck={false}
                     disabled={isScanningSettingsLoading || isScanningSettingsSaving}
                   />
 
                 </div>
+                </details>
                 <div className="admin-model-actions">
+                  <span className="admin-draft-status" role="status">{isScanningSettingsSaving ? "Wird gespeichert …" : scanningBaseline && scanningSnapshot !== scanningBaseline ? "Ungespeicherte Änderungen" : "Keine offenen Änderungen"}</span>
                   <button
                     className="primary-button"
                     type="button"
@@ -4386,14 +4367,17 @@ export default function Home() {
                     {isScanningSettingsSaving ? "Wird gespeichert…" : "Scanning-Einstellungen speichern"}
                   </button>
                 </div>
+                </fieldset>
               </section>
             ) : adminTab === "benutzer" ? (
-              <section className="admin-user-management" role="tabpanel" id="admin-panel-benutzer" aria-labelledby="admin-tab-benutzer">
-                <div className="form-generator-card admin-create-user-card">
-                  <div className="form-generator-heading">
-                    <h2>Benutzer anlegen</h2>
-                    <p>Erstellt ein bestätigtes Konto für die Anmeldung mit E-Mail und Passwort.</p>
-                  </div>
+              <section className="admin-user-management" id="admin-panel-benutzer" aria-label="Benutzerverwaltung">
+                <div className="admin-section-toolbar">
+                  <div><h2>Benutzerkonten</h2><p>{adminUsers.length} Konten · Zugriff und vorhandene Anfragen</p></div>
+                  <button type="button" className="primary-button" disabled={isAdminUsersLoading || isAdminUserMutationRunning} onClick={() => { setAdminError(""); setIsCreateUserOpen(true); }}>Benutzer anlegen</button>
+                </div>
+                {isCreateUserOpen ? (
+                <AdminDialog title="Benutzer anlegen" busy={isAdminUserCreating} onClose={closeCreateUser}>
+                  {adminError ? <div className="error-box" role="alert">{adminError}</div> : null}
                   <form className="admin-create-user-form" onSubmit={(event) => void createAdminManagedUser(event)}>
                     <div className="field-group">
                       <label htmlFor="admin-user-email">E-Mail</label>
@@ -4435,23 +4419,28 @@ export default function Home() {
                       {isAdminUserCreating ? "Wird angelegt…" : "Benutzer anlegen"}
                     </button>
                   </form>
-                </div>
+                </AdminDialog>
+                ) : null}
 
                 <div className="form-generator-card admin-user-list-card">
                   <div className="form-generator-heading">
                     <h2>Benutzer</h2>
-                    <p>{adminUsers.length} Konten</p>
+                    <p>Ein Konto auswählen, um das Profil zu öffnen.</p>
                   </div>
+                  <label className="admin-search-field">Benutzer suchen
+                    <input type="search" value={adminUserQuery} onChange={(event) => setAdminUserQuery(event.target.value)} placeholder="E-Mail suchen …" />
+                  </label>
                   {isAdminUsersLoading && adminUsers.length === 0 ? (
                     <p className="admin-empty-state">Benutzer werden geladen…</p>
-                  ) : adminUsers.length === 0 ? (
+                  ) : adminUsers.filter((entry) => entry.email.toLocaleLowerCase("de-AT").includes(adminUserQuery.trim().toLocaleLowerCase("de-AT"))).length === 0 ? (
                     <p className="admin-empty-state">Keine Benutzer gefunden.</p>
                   ) : (
                     <ul className="admin-user-list">
-                      {adminUsers.map((adminUser) => (
+                      {adminUsers.filter((entry) => entry.email.toLocaleLowerCase("de-AT").includes(adminUserQuery.trim().toLocaleLowerCase("de-AT"))).map((adminUser) => (
                         <li key={adminUser.id}>
                           <button
                             type="button"
+                            aria-pressed={adminUserProfile?.user.id === adminUser.id}
                             className={adminUserProfile?.user.id === adminUser.id ? "active" : undefined}
                             onClick={() => void loadAdminUserProfile(adminUser.id)}
                             disabled={isAdminUsersLoading || isAdminUserMutationRunning}
@@ -4465,7 +4454,7 @@ export default function Home() {
                   )}
                 </div>
 
-                <div className="form-generator-card admin-user-profile-card">
+                <div className="form-generator-card admin-user-profile-card" aria-busy={isAdminUsersLoading}>
                   <div className="form-generator-heading">
                     <h2>Benutzerprofil</h2>
                     <p>Der Anfrageverlauf zeigt die Eingaben aus den vorhandenen Unterhaltungen.</p>
@@ -4500,7 +4489,7 @@ export default function Home() {
                           className="secondary-button danger-button"
                           type="button"
                           onClick={() => void deleteAdminManagedUser()}
-                          disabled={isAdminUserMutationRunning || adminUserProfile.user.id === user?.id}
+                          disabled={isAdminUsersLoading || isAdminUserMutationRunning || adminUserProfile.user.id === user?.id}
                           title={adminUserProfile.user.id === user?.id
                             ? "Das eigene Administratorkonto kann nicht gelöscht werden."
                             : undefined}
@@ -4526,8 +4515,8 @@ export default function Home() {
             ) : adminTab === "omniroute" ? (
               <AdminOmniRouteUsage accessToken={session?.access_token ?? ""} />
             ) : null}
-          </div>
-        </section>
+          </AdminWorkspace>
+        </AdminGuardContext.Provider>
       ) : null}
     </main>
   );

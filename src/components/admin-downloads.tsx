@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import AdminDialog from "@/components/admin-dialog";
+import { confirmAdminEditorLeave, useAdminEditorGuard } from "@/components/admin-editor-guard";
+
 import type { DownloadCatalog, DownloadCategory, DownloadDocument } from "@/lib/downloads";
 
 type CategoryDraft = { name: string; description: string; sortOrder: string };
@@ -52,6 +55,8 @@ export default function AdminDownloads({ accessToken }: { accessToken: string })
   const [selectedDocumentId, setSelectedDocumentId] = useState("");
   const [documentDraft, setDocumentDraft] = useState<DocumentDraft>(EMPTY_DOCUMENT);
   const [uploadDraft, setUploadDraft] = useState<DocumentDraft>(EMPTY_DOCUMENT);
+  const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [documentQuery, setDocumentQuery] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isMutating, setIsMutating] = useState(false);
@@ -65,25 +70,52 @@ export default function AdminDownloads({ accessToken }: { accessToken: string })
     [catalog.documents, selectedCategoryId],
   );
 
-  const load = useCallback(async (preferredCategoryId?: string) => {
+  const selectedDocument = catalog.documents.find((document) => document.id === selectedDocumentId);
+  const categoryDirty = JSON.stringify(categoryDraft) !== JSON.stringify(!isCreatingCategory && selectedCategory ? draftForCategory(selectedCategory) : EMPTY_CATEGORY);
+  const documentDirty = Boolean(selectedDocumentId) && JSON.stringify(documentDraft) !== JSON.stringify(selectedDocument ? draftForDocument(selectedDocument) : EMPTY_DOCUMENT);
+  const uploadDirty = isUploadOpen && Boolean(uploadFile || uploadDraft.title || uploadDraft.description || uploadDraft.sortOrder !== "0" || uploadDraft.categoryId !== selectedCategoryId);
+  const confirmDiscard = useAdminEditorGuard({ dirty: categoryDirty || documentDirty || uploadDirty, busy: isMutating });
+  const visibleDocuments = categoryDocuments.filter((document) => (document.title + " " + document.originalFilename).toLocaleLowerCase("de-AT").includes(documentQuery.trim().toLocaleLowerCase("de-AT")));
+
+  function closeUpload() {
+    if (!confirmAdminEditorLeave({ dirty: uploadDirty, busy: isMutating })) return;
+    setIsUploadOpen(false);
+    setUploadFile(null);
+    setUploadDraft({ ...EMPTY_DOCUMENT, categoryId: selectedCategoryId });
+  }
+
+  function openUpload() {
+    if (!confirmDiscard()) return;
+    setCategoryDraft(selectedCategory ? draftForCategory(selectedCategory) : EMPTY_CATEGORY);
+    setIsCreatingCategory(false);
+    setSelectedDocumentId("");
+    setUploadDraft({ ...EMPTY_DOCUMENT, categoryId: selectedCategoryId });
+    setUploadFile(null);
+    clearFeedback();
+    setIsUploadOpen(true);
+  }
+
+  const load = useCallback(async (preferredCategoryId?: string, synchronizeCategoryDraft = true, signal?: AbortSignal) => {
     if (!accessToken) return;
     setIsLoading(true);
     try {
       const response = await fetch("/api/downloads", {
         headers: { Authorization: `Bearer ${accessToken}` },
         cache: "no-store",
+        signal,
       });
       const payload = (await response.json().catch(() => ({}))) as unknown;
       if (!response.ok) throw new Error(payloadError(payload, "Downloads konnten nicht geladen werden."));
       const nextCatalog = catalogFromPayload(payload);
       if (!nextCatalog) throw new Error("Downloads konnten nicht geladen werden.");
+      if (signal?.aborted) return;
       setCatalog(nextCatalog);
       const nextCategoryId = nextCatalog.categories.some((category) => category.id === preferredCategoryId)
         ? preferredCategoryId ?? ""
         : nextCatalog.categories[0]?.id ?? "";
       const nextCategory = nextCatalog.categories.find((category) => category.id === nextCategoryId) ?? null;
       setSelectedCategoryId(nextCategoryId);
-      setCategoryDraft(nextCategory ? draftForCategory(nextCategory) : EMPTY_CATEGORY);
+      if (synchronizeCategoryDraft) setCategoryDraft(nextCategory ? draftForCategory(nextCategory) : EMPTY_CATEGORY);
       setUploadDraft((current) => ({
         ...current,
         categoryId: nextCatalog.categories.some((category) => category.id === current.categoryId)
@@ -91,15 +123,17 @@ export default function AdminDownloads({ accessToken }: { accessToken: string })
           : nextCategoryId,
       }));
     } catch (loadError) {
+      if (signal?.aborted) return;
       setError(loadError instanceof Error ? loadError.message : "Downloads konnten nicht geladen werden.");
     } finally {
-      setIsLoading(false);
+      if (!signal?.aborted) setIsLoading(false);
     }
   }, [accessToken]);
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(timeout);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => void load(undefined, true, controller.signal), 0);
+    return () => { window.clearTimeout(timeout); controller.abort(); };
   }, [load]);
 
   function clearFeedback() {
@@ -108,12 +142,16 @@ export default function AdminDownloads({ accessToken }: { accessToken: string })
   }
 
   function selectCategory(category: DownloadCategory) {
+    if ((category.id === selectedCategoryId && !isCreatingCategory) || !confirmDiscard()) return;
     clearFeedback();
+    setDocumentQuery("");
     setSelectedCategoryId(category.id);
     setCategoryDraft(draftForCategory(category));
     setIsCreatingCategory(false);
     setSelectedDocumentId("");
-    setUploadDraft((current) => ({ ...current, categoryId: category.id }));
+    setUploadDraft({ ...EMPTY_DOCUMENT, categoryId: category.id });
+    setUploadFile(null);
+    setDocumentDraft(EMPTY_DOCUMENT);
   }
 
   async function saveCategory(event: React.FormEvent) {
@@ -198,6 +236,7 @@ export default function AdminDownloads({ accessToken }: { accessToken: string })
       setUploadDraft({ categoryId: uploadDraft.categoryId, title: "", description: "", sortOrder: "0" });
       if (uploadInputRef.current) uploadInputRef.current.value = "";
       await load(uploadDraft.categoryId);
+      setIsUploadOpen(false);
       setNotice("Dokument hochgeladen.");
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "Das Dokument konnte nicht hochgeladen werden.");
@@ -207,6 +246,9 @@ export default function AdminDownloads({ accessToken }: { accessToken: string })
   }
 
   function selectDocument(document: DownloadDocument) {
+    if (document.id === selectedDocumentId || !confirmDiscard()) return;
+    setCategoryDraft(selectedCategory ? draftForCategory(selectedCategory) : EMPTY_CATEGORY);
+    setIsCreatingCategory(false);
     clearFeedback();
     setSelectedDocumentId(document.id);
     setDocumentDraft(draftForDocument(document));
@@ -229,7 +271,7 @@ export default function AdminDownloads({ accessToken }: { accessToken: string })
       const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (!response.ok) throw new Error(payloadError(payload, "Das Dokument konnte nicht gespeichert werden."));
       const document = payload.document as DownloadDocument | undefined;
-      await load(document?.categoryId ?? selectedCategoryId);
+      await load(selectedCategoryId, false);
       if (document) setDocumentDraft(draftForDocument(document));
       setNotice("Dokument gespeichert.");
     } catch (saveError) {
@@ -256,7 +298,7 @@ export default function AdminDownloads({ accessToken }: { accessToken: string })
       const payload = (await response.json().catch(() => ({}))) as unknown;
       if (!response.ok) throw new Error(payloadError(payload, "Das Dokument konnte nicht entfernt werden."));
       if (selectedDocumentId === document.id) setSelectedDocumentId("");
-      await load(selectedCategoryId);
+      await load(selectedCategoryId, false);
       setNotice("Dokument entfernt.");
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Das Dokument konnte nicht entfernt werden.");
@@ -267,23 +309,27 @@ export default function AdminDownloads({ accessToken }: { accessToken: string })
 
   if (isLoading && catalog.categories.length === 0) {
     return (
-      <section className="admin-downloads-panel" role="tabpanel" id="admin-panel-downloads" aria-labelledby="admin-tab-downloads">
+      <section className="admin-downloads-panel" id="admin-panel-downloads" aria-label="Downloadverwaltung">
         <p className="admin-empty-state">Downloadverwaltung wird geladen …</p>
       </section>
     );
   }
 
   return (
-    <section className="admin-downloads-panel" role="tabpanel" id="admin-panel-downloads" aria-labelledby="admin-tab-downloads">
+    <section className="admin-downloads-panel" id="admin-panel-downloads" aria-label="Downloadverwaltung">
       <div className="admin-downloads-heading">
         <div>
-          <h2>Downloadverwaltung</h2>
+          <h2>Dateibibliothek</h2>
           <p>Kategorien, Metadaten und freigegebene Dateien verwalten.</p>
         </div>
+        <div className="admin-toolbar-actions">
+        <button className="primary-button" type="button" onClick={openUpload} disabled={isMutating || catalog.categories.length === 0}>Dokument hochladen</button>
         <button
-          className="primary-button"
+          className="secondary-button"
           type="button"
           onClick={() => {
+            if (!confirmDiscard()) return;
+            setSelectedDocumentId("");
             clearFeedback();
             setIsCreatingCategory(true);
             setCategoryDraft(EMPTY_CATEGORY);
@@ -292,11 +338,13 @@ export default function AdminDownloads({ accessToken }: { accessToken: string })
         >
           Neue Kategorie
         </button>
+        </div>
       </div>
 
-      {error ? <div className="error-box" role="alert">{error}</div> : null}
+      {error && !isUploadOpen ? <div className="error-box" role="alert">{error}<button type="button" className="secondary-button" disabled={isMutating || isLoading} onClick={() => { if (confirmDiscard()) { setSelectedDocumentId(""); setIsCreatingCategory(false); void load(selectedCategoryId); } }}>Erneut laden</button></div> : null}
       {notice ? <div className="notice-box" role="status">{notice}</div> : null}
 
+      <div className="admin-downloads-layout">
       <div className="admin-downloads-grid">
         <div className="form-generator-card admin-downloads-categories-card">
           <h3>Kategorien</h3>
@@ -343,8 +391,9 @@ export default function AdminDownloads({ accessToken }: { accessToken: string })
           ) : null}
         </div>
 
-        <div className="form-generator-card admin-downloads-upload-card">
-          <h3>Dokument hochladen</h3>
+        {isUploadOpen ? (
+        <AdminDialog title="Dokument hochladen" onClose={closeUpload} busy={isMutating}>
+          {error ? <div className="error-box" role="alert">{error}</div> : null}
           <form className="admin-downloads-form" onSubmit={uploadDocument}>
             <div className="field-group">
               <label htmlFor="admin-download-file">Datei</label>
@@ -388,7 +437,8 @@ export default function AdminDownloads({ accessToken }: { accessToken: string })
             </div>
             <button className="primary-button" type="submit" disabled={isMutating || !uploadFile || !uploadDraft.categoryId || !uploadDraft.title.trim()}>Dokument hochladen</button>
           </form>
-        </div>
+        </AdminDialog>
+        ) : null}
       </div>
 
       <div className="form-generator-card admin-downloads-documents-card">
@@ -396,11 +446,12 @@ export default function AdminDownloads({ accessToken }: { accessToken: string })
           <div><h3>Dokumente</h3><p>{selectedCategory ? selectedCategory.name : "Kategorie auswählen"}</p></div>
           <span>{categoryDocuments.length}</span>
         </div>
-        {categoryDocuments.length === 0 ? (
-          <p className="admin-empty-state">In dieser Kategorie sind noch keine Dokumente vorhanden.</p>
+        <label className="admin-search-field">Dokumente suchen<input type="search" value={documentQuery} onChange={(event) => setDocumentQuery(event.target.value)} placeholder="Titel oder Dateiname …" /></label>
+        {visibleDocuments.length === 0 ? (
+          <p className="admin-empty-state">{documentQuery ? "Keine Dokumente für diese Suche gefunden." : "In dieser Kategorie sind noch keine Dokumente vorhanden."}</p>
         ) : (
           <ul className="admin-downloads-document-list">
-            {categoryDocuments.map((document) => (
+            {visibleDocuments.map((document) => (
               <li key={document.id}>
                 <span className="admin-downloads-file-type">{document.fileExtension.toUpperCase()}</span>
                 <div><strong>{document.title}</strong><small>{document.originalFilename}</small></div>
@@ -436,10 +487,11 @@ export default function AdminDownloads({ accessToken }: { accessToken: string })
             </div>
             <div className="admin-model-actions">
               <button className="primary-button" type="submit" disabled={isMutating || !documentDraft.title.trim()}>Dokument speichern</button>
-              <button type="button" onClick={() => setSelectedDocumentId("")} disabled={isMutating}>Abbrechen</button>
+              <button type="button" onClick={() => { if (confirmAdminEditorLeave({ dirty: documentDirty, busy: isMutating })) setSelectedDocumentId(""); }} disabled={isMutating}>Abbrechen</button>
             </div>
           </form>
         ) : null}
+      </div>
       </div>
     </section>
   );

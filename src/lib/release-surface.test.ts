@@ -211,7 +211,7 @@ describe("approved release surface", () => {
     expect(pageSource).not.toContain('id="admin-system-prompt"');
     expect(pageSource).not.toContain('Keine Zeichenbegrenzung');
     expect(pageSource).not.toContain('DEFAULT_SYSTEM_PROMPT');
-    expect(pageSource).toContain('<p className="eyebrow">Systemkonfiguration</p>');
+    expect(pageSource).toContain('<AdminWorkspace area={adminTab}');
     expect(pageSource).toContain('fetch("/api/admin/users"');
     expect(existsSync(adminSettingsPath)).toBe(true);
     expect(chatRouteSource).not.toContain('getGlobalSystemPrompt');

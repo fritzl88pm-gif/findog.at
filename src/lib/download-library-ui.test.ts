@@ -21,7 +21,7 @@ describe("download library surface", () => {
     expect(page).toContain("openDownloadsView");
     expect(page).toContain('<DownloadsView accessToken={session?.access_token ?? ""} />');
     expect(page.match(/aria-label="Downloads"/gu)).toHaveLength(1);
-    expect(page.match(/>\s*Downloads\s*<\/button>/gu)?.length).toBeGreaterThanOrEqual(2);
+    expect(page.match(/>\s*Downloads\s*<\/button>/gu)?.length).toBeGreaterThanOrEqual(1);
   });
 
   it("implements the screenshot-inspired category, file, size and pagination UI", () => {
@@ -32,8 +32,8 @@ describe("download library surface", () => {
     expect(publicView).toContain("DOWNLOAD_PAGE_SIZE");
   });
 
-  it("exposes administration only through an admin tab and admin-authenticated routes", () => {
-    expect(page).toContain('id="admin-tab-downloads"');
+  it("exposes administration only through its admin area and admin-authenticated routes", () => {
+    expect(page).toContain('adminTab === "downloads" ? (');
     expect(page).toContain('<AdminDownloads accessToken={session?.access_token ?? ""} />');
     expect(adminView).toContain("Neue Kategorie");
     expect(adminView).toContain("Dokument hochladen");

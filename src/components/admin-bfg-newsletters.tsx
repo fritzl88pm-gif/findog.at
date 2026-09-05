@@ -1,5 +1,7 @@
 "use client";
 
+import { useAdminEditorGuard } from "@/components/admin-editor-guard";
+
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import {
@@ -57,6 +59,13 @@ export default function AdminBfgNewsletters({ accessToken }: Props) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
+  const [emptyDraft, setEmptyDraft] = useState<BfgNewsletterInput>(emptyInput);
+  const selectedItem = items.find((item) => item.id === selectedId);
+  const isDirty = JSON.stringify(form) !== JSON.stringify(selectedItem
+    ? { publicationDate: selectedItem.publicationDate, contentMarkdown: selectedItem.contentMarkdown }
+    : emptyDraft);
+  const confirmDiscard = useAdminEditorGuard({ dirty: isDirty, busy: isSaving });
+
   const loadItems = useCallback(async (signal?: AbortSignal) => {
     if (!accessToken) return;
     setIsLoading(true);
@@ -74,13 +83,13 @@ export default function AdminBfgNewsletters({ accessToken }: Props) {
       if (!response.ok || !Array.isArray(payload.items)) {
         throw new Error(payload.error ?? "BFG Newsletter konnte nicht geladen werden.");
       }
-      setItems(sortBfgNewsletters(payload.items));
+      if (!signal?.aborted) setItems(sortBfgNewsletters(payload.items));
     } catch (loadError) {
       if ((loadError as { name?: string }).name !== "AbortError") {
         setError(loadError instanceof Error ? loadError.message : "BFG Newsletter konnte nicht geladen werden.");
       }
     } finally {
-      setIsLoading(false);
+      if (!signal?.aborted) setIsLoading(false);
     }
   }, [accessToken]);
 
@@ -94,13 +103,21 @@ export default function AdminBfgNewsletters({ accessToken }: Props) {
   }, [loadItems]);
 
   function startNewItem() {
+    if (!confirmDiscard()) return;
+    resetEditor();
+  }
+
+  function resetEditor() {
     setSelectedId(null);
-    setForm(emptyInput());
+    const nextDraft = emptyInput();
+    setEmptyDraft(nextDraft);
+    setForm(nextDraft);
     setError("");
     setNotice("");
   }
 
   function selectItem(item: BfgNewsletterItem) {
+    if (item.id === selectedId || !confirmDiscard()) return;
     setSelectedId(item.id);
     setForm({ publicationDate: item.publicationDate, contentMarkdown: item.contentMarkdown });
     setError("");
@@ -165,7 +182,9 @@ export default function AdminBfgNewsletters({ accessToken }: Props) {
       if (!response.ok) throw new Error(payload.error ?? "Der Newsletter konnte nicht gelöscht werden.");
       setItems((current) => current.filter((item) => item.id !== selectedId));
       setSelectedId(null);
-      setForm(emptyInput());
+      const nextDraft = emptyInput();
+      setEmptyDraft(nextDraft);
+      setForm(nextDraft);
       setNotice("Der Newsletter wurde soft-gelöscht; der Auditverlauf bleibt erhalten.");
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Der Newsletter konnte nicht gelöscht werden.");
@@ -177,13 +196,12 @@ export default function AdminBfgNewsletters({ accessToken }: Props) {
   return (
     <section
       className="admin-dashboard-news admin-bfg-newsletters"
-      role="tabpanel"
       id="admin-panel-bfg-newsletters"
-      aria-labelledby="admin-tab-bfg-newsletters"
+      aria-labelledby="admin-newsletter-title"
     >
       <div className="admin-dashboard-news-heading">
         <div>
-          <h2>BFG Newsletter</h2>
+          <h2 id="admin-newsletter-title">Ausgaben verwalten</h2>
           <p>Datierte Text- oder Markdown-Ausgaben verwalten. Die neueste Ausgabe erscheint zuerst.</p>
         </div>
         <button className="secondary-button" type="button" onClick={startNewItem} disabled={isSaving}>
@@ -191,7 +209,7 @@ export default function AdminBfgNewsletters({ accessToken }: Props) {
         </button>
       </div>
 
-      {error ? <div className="error-box" role="alert">{error}</div> : null}
+      {error ? <div className="error-box" role="alert">{error}<button className="secondary-button" type="button" disabled={isSaving || isLoading} onClick={() => { if (confirmDiscard()) { resetEditor(); void loadItems(); } }}>Erneut laden</button></div> : null}
       {notice ? <div className="notice-box" role="status">{notice}</div> : null}
 
       <div className="admin-dashboard-news-layout">
@@ -220,6 +238,7 @@ export default function AdminBfgNewsletters({ accessToken }: Props) {
         </div>
 
         <form className="admin-news-editor" onSubmit={(event) => void saveItem(event)}>
+          <fieldset className="admin-editor-fields" disabled={isSaving}>
           <div className="admin-news-editor-header">
             <div>
               <span className="eyebrow">{selectedId ? "Newsletter bearbeiten" : "Newsletter anlegen"}</span>
@@ -266,6 +285,7 @@ export default function AdminBfgNewsletters({ accessToken }: Props) {
           </div>
 
           <div className="admin-news-editor-actions">
+            <span className="admin-draft-status" role="status">{isSaving ? "Wird gespeichert …" : isDirty ? "Ungespeicherte Änderungen" : "Keine offenen Änderungen"}</span>
             <button
               className="primary-button"
               type="submit"
@@ -284,6 +304,7 @@ export default function AdminBfgNewsletters({ accessToken }: Props) {
               </button>
             ) : null}
           </div>
+          </fieldset>
         </form>
       </div>
     </section>

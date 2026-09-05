@@ -32,7 +32,7 @@ describe("BFG newsletter UI", () => {
   });
 
   it("adds an admin editor limited to date and text or Markdown", () => {
-    expect(page).toContain('id="admin-tab-bfg-newsletters"');
+    expect(page).toContain('adminTab === "bfg-newsletters" ? (');
     expect(page).toContain("<AdminBfgNewsletters");
     expect(admin).toContain('fetch("/api/admin/bfg-newsletters"');
     expect(admin).toContain('type="date"');

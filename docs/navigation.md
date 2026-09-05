@@ -22,3 +22,7 @@ Diese Änderung betrifft ausschließlich die Oberfläche. Arbeitsbereichswechsel
 Löschbestätigungen, API-Endpunkte, Datenmodell und Provenienz bleiben unverändert;
 es ist keine Migration erforderlich. Eigene URLs und Browser-History für die
 Arbeitsbereiche sind ein separater nächster Schritt.
+
+Die interne Administration startet auf einer gruppierten Übersicht und hat eine
+separate, responsive Bereichsauswahl. Arbeitsabläufe und Prüfstatus stehen in
+[Administrationsoberfläche](admin-interface.md).

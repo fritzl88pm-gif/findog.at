@@ -11,23 +11,20 @@ const componentSource = readFileSync(
   fileURLToPath(new URL("./admin-omniroute-usage.tsx", import.meta.url)),
   "utf8",
 );
-const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
+const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8").replace(/\r\n/gu, "\n");
 
 describe("Admin OmniRoute Stats UI", () => {
-  it("renders a dedicated keyboard-navigable top-level admin tab", () => {
-    expect(pageSource).toContain('id="admin-tab-omniroute"');
-    expect(pageSource).toContain('aria-controls="admin-panel-omniroute"');
-    expect(pageSource).toContain('onClick={() => setAdminTab("omniroute")}');
-    expect(pageSource).toContain('onKeyDown={(e) => handleAdminTabKeyDown(e, "omniroute")}');
-    expect(pageSource).toContain("OmniRoute Stats");
-    expect(pageSource).toMatch(/ADMIN_TAB_IDS\s*=\s*\[[^\]]*"omniroute"[^\]]*\]/u);
+  it("mounts OmniRoute as the selected administration area", () => {
+    expect(pageSource).toContain('adminTab === "omniroute" ? (');
+    expect(pageSource).toContain("<AdminOmniRouteUsage");
+    expect(pageSource).not.toContain('adminTab === "openrouter"');
   });
 
-  it("mounts the standalone component only inside its selected tabpanel", () => {
+  it("mounts the standalone component only inside its selected area", () => {
     expect(pageSource).toContain('adminTab === "omniroute" ? (');
     expect(pageSource).toContain("<AdminOmniRouteUsage accessToken={session?.access_token ?? \"\"} />");
     expect(componentSource).toContain('id="admin-panel-omniroute"');
-    expect(componentSource).toContain('aria-labelledby="admin-tab-omniroute"');
+    expect(componentSource).toContain('aria-labelledby="admin-omniroute-title"');
     expect(componentSource).not.toContain("AdminScanning");
   });
 
@@ -42,7 +39,7 @@ describe("Admin OmniRoute Stats UI", () => {
     expect(markup).toContain("OmniRoute-Daten werden geladen …");
     expect(markup).toContain('role="status"');
     expect(markup).toContain("Aktualisieren");
-    expect(markup).toContain("Operations Console");
+    expect(markup).toContain("Nutzung im Überblick");
   });
 
   it("authorizes only with the Supabase access token and validates the full browser DTO shape", () => {

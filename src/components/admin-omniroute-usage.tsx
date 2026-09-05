@@ -487,15 +487,14 @@ export default function AdminOmniRouteUsage({ accessToken }: AdminOmniRouteUsage
   return (
     <section
       className="admin-omniroute-panel"
-      role="tabpanel"
       id="admin-panel-omniroute"
-      aria-labelledby="admin-tab-omniroute"
+      aria-labelledby="admin-omniroute-title"
     >
       <div className="form-generator-card admin-omniroute-card">
         <header className="admin-omniroute-heading">
           <div>
-            <p className="admin-omniroute-eyebrow">Operations Console</p>
-            <h2>OmniRoute Stats</h2>
+            <p className="admin-omniroute-eyebrow">OmniRoute</p>
+            <h2 id="admin-omniroute-title">Nutzung im Überblick</h2>
             <p>Geschützte Auswertung aller OmniRoute-Anfragen, konfigurierter Routen, Provider-Health und EUR-Kosten.</p>
           </div>
           <div className="admin-omniroute-controls">

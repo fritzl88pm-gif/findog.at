@@ -2,27 +2,24 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+import { ADMIN_AREAS } from "./admin-navigation";
 
 const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.meta.url)), "utf8");
 const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
-describe("Administration UI tabs and scanning settings", () => {
-  it("has exactly seven ARIA tabs including Startseiten-News, BFG Newsletter and OmniRoute administration", () => {
-    const tabMatches = pageSource.match(/role="tab"/gu);
-    expect(tabMatches).toHaveLength(7);
-    expect(pageSource).toContain('id="admin-tab-downloads"');
-    expect(pageSource).toContain('id="admin-tab-dashboard-news"');
-    expect(pageSource).toContain('id="admin-tab-bfg-newsletters"');
-    expect(pageSource).toContain('id="admin-tab-omniroute"');
-    expect(pageSource).not.toContain('id="admin-tab-personalities"');
-    expect(pageSource).not.toContain('id="admin-tab-bfg-pro"');
-    expect(pageSource).not.toContain('id="admin-tab-openrouter"');
+describe("Administration workspace and scanning settings", () => {
+  it("exposes seven areas through the grouped workspace and starts on overview", () => {
+    expect(ADMIN_AREAS.map((area) => area.id)).toEqual(["benutzer", "feedback", "downloads", "dashboard-news", "bfg-newsletters", "scanning", "omniroute"]);
+    expect(pageSource).toContain('useState<AdminArea>("overview")');
+    expect(pageSource).toContain('<AdminWorkspace area={adminTab} onNavigate={navigateAdminArea}');
+    expect(pageSource).not.toContain('role="tab"');
   });
 
-  it("keeps the remaining tabs in keyboard navigation and removes personalities", () => {
-    expect(pageSource).toContain('"downloads"');
-    expect(pageSource).not.toContain('"personalities"');
-    expect(pageSource).toMatch(/ADMIN_TAB_IDS\s*=\s*\[[^\]]*"scanning"[^\]]*"benutzer"[^\]]*"feedback"[^\]]*"downloads"[^\]]*"dashboard-news"[^\]]*"bfg-newsletters"[^\]]*"omniroute"[^\]]*\]/);
+  it("loads settings and users only when their area opens", () => {
+    const overview = pageSource.slice(pageSource.indexOf("async function openAdministrationView"), pageSource.indexOf("function navigateAdminArea"));
+    expect(overview).not.toMatch(/loadScanningSettings|loadAdminUsers|fetch\(/u);
+    expect(pageSource).toContain('if (area === "scanning")');
+    expect(pageSource).toContain('if (area === "benutzer" || area === "feedback") void loadAdminUsers');
   });
 
   it("contains no personality administration surface", () => {
@@ -85,8 +82,8 @@ describe("Administration UI tabs and scanning settings", () => {
     expect(pageSource).toMatch(savePattern);
   });
 
-  it("contains minimal tab CSS in globals.css", () => {
-    expect(cssSource).toMatch(/admin-tab-button|admin-tabs/u);
+  it("uses a container-based internal navigation breakpoint", () => {
+    expect(cssSource).toContain("@container administration (min-width: 1000px)");
   });
 
   it("does not reference /api/admin/settings or the global/BFG prompt editor", () => {

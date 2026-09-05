@@ -64,6 +64,9 @@ export default function AdminFeedbackView({
   const [entries, setEntries] = useState<AdminFeedbackEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [query, setQuery] = useState("");
+  const [userFilter, setUserFilter] = useState("");
   const usersById = useMemo(
     () => new Map(users.map((user) => [user.id, user.email])),
     [users],
@@ -124,71 +127,37 @@ export default function AdminFeedbackView({
     };
   }, [loadFeedback]);
 
+  const filtered = entries.filter((entry) => (!userFilter || entry.userId === userFilter)
+    && [entry.feedback, entry.userRequest, usersById.get(entry.userId) ?? ""].join(" ").toLocaleLowerCase("de-AT").includes(query.toLocaleLowerCase("de-AT")));
+  const selected = filtered.find((entry) => entry.id === selectedId) ?? filtered[0];
   return (
-    <section
-      className="admin-feedback-panel"
-      role="tabpanel"
-      id="admin-panel-feedback"
-      aria-labelledby="admin-tab-feedback"
-    >
-      <div className="form-generator-card admin-feedback-card">
-        <div className="form-generator-heading admin-feedback-heading">
-          <div>
-            <h2>Negative Fred-Rückmeldungen</h2>
-            <p>
-              Gemeldete Antworten mit ursprünglicher Frage, Antworttext und Begründung.
-            </p>
-          </div>
-          <button
-            className="secondary-button compact-button"
-            type="button"
-            onClick={() => void loadFeedback()}
-            disabled={isLoading}
-          >
-            {isLoading ? "Wird geladen …" : "Aktualisieren"}
-          </button>
-        </div>
-
-        {error ? (
-          <div className="error-box" role="alert">{error}</div>
-        ) : null}
-        {isLoading && entries.length === 0 ? (
-          <p className="admin-empty-state">Rückmeldungen werden geladen …</p>
-        ) : entries.length === 0 ? (
-          <p className="admin-empty-state">Noch keine negativen Rückmeldungen vorhanden.</p>
-        ) : (
-          <ol className="admin-feedback-list">
-            {entries.map((entry) => (
-              <li key={entry.id}>
-                <header>
-                  <div>
-                    <strong>{usersById.get(entry.userId) || "Unbekannter Benutzer"}</strong>
-                    <small>Gespräch {entry.conversationId}</small>
-                  </div>
-                  <time dateTime={entry.createdAt}>{formattedDate(entry.createdAt)}</time>
-                </header>
-                <div className="admin-feedback-report">
-                  <span>Rückmeldung</span>
-                  <p>{entry.feedback}</p>
-                </div>
-                <details>
-                  <summary>Frage und gemeldete Antwort anzeigen</summary>
-                  <div className="admin-feedback-context">
-                    <section>
-                      <h3>Frage</h3>
-                      <p>{entry.userRequest}</p>
-                    </section>
-                    <section>
-                      <h3>Fred-Antwort</h3>
-                      <p>{entry.assistantResponse}</p>
-                    </section>
-                  </div>
-                </details>
-              </li>
-            ))}
-          </ol>
-        )}
+    <section className="admin-feedback-panel" id="admin-panel-feedback" aria-labelledby="admin-feedback-title">
+      <div className="admin-section-toolbar">
+        <div><h2 id="admin-feedback-title">Negative Fred-Rückmeldungen</h2><p>{entries.length} Rückmeldungen · Frage, Antwort und Begründung im Zusammenhang prüfen.</p></div>
+        <button className="secondary-button compact-button" type="button" onClick={() => void loadFeedback()} disabled={isLoading}>{isLoading ? "Wird geladen …" : "Aktualisieren"}</button>
       </div>
+      {error ? <div className="error-box" role="alert">{error}</div> : null}
+      <div className="admin-feedback-filters">
+        <label className="admin-search-field">Rückmeldungen suchen<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Frage oder Rückmeldung …" /></label>
+        <label className="admin-search-field">Benutzer<select value={userFilter} onChange={(event) => setUserFilter(event.target.value)}><option value="">Alle Benutzer</option>{users.map((user) => <option key={user.id} value={user.id}>{user.email}</option>)}</select></label>
+      </div>
+      {isLoading && entries.length === 0 ? <p className="admin-empty-state" role="status">Rückmeldungen werden geladen …</p> : !filtered.length ? <p className="admin-empty-state">{entries.length ? "Keine Rückmeldungen für diese Auswahl gefunden." : "Noch keine negativen Rückmeldungen vorhanden."}</p> : (
+        <div className="admin-feedback-layout">
+          <ol className="admin-feedback-inbox" aria-label="Rückmeldungen auswählen">
+            {filtered.map((entry) => <li key={entry.id}><button type="button" aria-pressed={selected.id === entry.id} onClick={() => setSelectedId(entry.id)}>
+              <strong>{usersById.get(entry.userId) || "Unbekannter Benutzer"}</strong>
+              <time dateTime={entry.createdAt}>{formattedDate(entry.createdAt)}</time>
+              <span>{entry.feedback}</span>
+            </button></li>)}
+          </ol>
+          <article className="admin-feedback-detail" aria-label="Ausgewählte Rückmeldung">
+            <header><h3>{usersById.get(selected.userId) || "Unbekannter Benutzer"}</h3><time dateTime={selected.createdAt}>{formattedDate(selected.createdAt)}</time><small>Gespräch {selected.conversationId}</small></header>
+            <section className="admin-feedback-report"><h3>Rückmeldung</h3><p>{selected.feedback}</p></section>
+            <section><h3>Frage</h3><p>{selected.userRequest}</p></section>
+            <section><h3>Fred-Antwort</h3><p>{selected.assistantResponse}</p></section>
+          </article>
+        </div>
+      )}
     </section>
   );
 }
