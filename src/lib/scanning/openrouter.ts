@@ -86,10 +86,59 @@ function providerError(status: number): ScanningProviderError {
   return new ScanningProviderError("Die Dokumentauswertung ist derzeit nicht erreichbar.", 502);
 }
 
+function validateScanningChoice(firstChoice: JsonRecord | null): void {
+  if (!firstChoice) {
+    throw new ScanningProviderError("Die Dokumentauswertung lieferte keine gültige Antwort.", 502);
+  }
+
+  const message = recordOf(firstChoice.message);
+  if (!message) {
+    throw new ScanningProviderError("Die Dokumentauswertung lieferte keine gültige Antwort.", 502);
+  }
+
+  const finishReason = (
+    typeof firstChoice.finish_reason === "string"
+      ? firstChoice.finish_reason
+      : typeof message.finish_reason === "string"
+        ? (message.finish_reason as string)
+        : ""
+  ).trim().toLowerCase();
+
+  if (!finishReason) {
+    throw new ScanningProviderError("Die Dokumentauswertung lieferte keine vollständige Antwort.", 502);
+  }
+  if (finishReason === "length") {
+    throw new ScanningProviderError(
+      "Die Dokumentauswertung lieferte eine unvollständige Antwort (Längenbegrenzung erreicht).",
+      502,
+    );
+  }
+  if (finishReason === "content_filter") {
+    throw new ScanningProviderError(
+      "Die Dokumentauswertung wurde aufgrund eines Sicherheitsfilters abgelehnt.",
+      502,
+    );
+  }
+  if (finishReason === "tool_calls" || finishReason === "function_call") {
+    throw new ScanningProviderError(
+      "Die Dokumentauswertung hat die Antwort mit einem unerwarteten Status beendet.",
+      502,
+    );
+  }
+  if (finishReason !== "stop") {
+    throw new ScanningProviderError(
+      "Die Dokumentauswertung hat die Antwort mit einem unbekannten Status beendet.",
+      502,
+    );
+  }
+}
+
 function responseText(payload: unknown): string {
   const body = recordOf(payload);
   const choices = Array.isArray(body?.choices) ? body.choices : [];
-  const message = recordOf(recordOf(choices[0])?.message);
+  const firstChoice = recordOf(choices[0]);
+  validateScanningChoice(firstChoice);
+  const message = recordOf(firstChoice?.message);
   const content = message?.content;
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";

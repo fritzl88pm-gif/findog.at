@@ -8,8 +8,12 @@ const originalKey = process.env.OPENROUTER_API_KEY;
 const originalOmnirouteBase = process.env.OMNIROUTE_BASE_URL;
 const originalOmnirouteKey = process.env.OMNIROUTE_API_KEY;
 
-function providerResponse(content: unknown, status = 200): Response {
-  return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+function providerResponse(content: unknown, status = 200, finishReason: string | null = "stop"): Response {
+  const choice: Record<string, unknown> = { message: { content } };
+  if (finishReason !== null) {
+    choice.finish_reason = finishReason;
+  }
+  return new Response(JSON.stringify({ choices: [choice] }), {
     status,
     headers: { "Content-Type": "application/json" },
   });
@@ -254,5 +258,129 @@ describe("OpenRouter scanning adapter", () => {
     await expect(analyzeScanningBatch([upload("pdf", "apotheke")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter"))
       .rejects.toThrow("Die Dokumentauswertung lieferte keine gültige Ergebnistabelle. Bitte erneut versuchen.");
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects truncated response with finish_reason length even if a table row was parsed, and makes only one fetch", async () => {
+    const truncatedTable = "| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.10.2024 | Betreuung Oktober | 2.680,00 EUR |\n| 2 | 01.11.2024 | Betreuung Nov";
+    vi.mocked(fetch).mockResolvedValueOnce(providerResponse(truncatedTable, 200, "length"));
+
+    const promise = analyzeScanningBatch(
+      [upload("pdf", "sammel")],
+      undefined,
+      "",
+      DEFAULT_SCANNING_MODEL_ID,
+      DEFAULT_SCANNING_PROMPT,
+      "openrouter",
+    );
+
+    await expect(promise).rejects.toBeInstanceOf(ScanningProviderError);
+    await expect(promise).rejects.toMatchObject({
+      status: 502,
+      message: expect.stringMatching(/Längenbegrenzung|unvollständig/i),
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects truncated response with finish_reason length when using content parts", async () => {
+    const truncatedParts = [
+      { type: "text", text: "## Sonstiges\n\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|" },
+      { type: "text", text: { value: "| 1 | 01.11.2024 | Beleg | 42,00 EUR |\n| 2 | 02.11.2024 | Abgebrochen" } },
+    ];
+    vi.mocked(fetch).mockResolvedValueOnce(providerResponse(truncatedParts, 200, "length"));
+
+    const promise = analyzeScanningBatch(
+      [upload("pdf", "parts-truncated")],
+      undefined,
+      "",
+      DEFAULT_SCANNING_MODEL_ID,
+      DEFAULT_SCANNING_PROMPT,
+      "openrouter",
+    );
+
+    await expect(promise).rejects.toBeInstanceOf(ScanningProviderError);
+    await expect(promise).rejects.toMatchObject({
+      status: 502,
+      message: expect.stringMatching(/Längenbegrenzung|unvollständig/i),
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects truncated response with finish_reason length for OmniRoute Luna provider without retry", async () => {
+    process.env.OMNIROUTE_BASE_URL = "https://omniroute.example/";
+    process.env.OMNIROUTE_API_KEY = "omniroute-key";
+    const truncatedTable = "| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.10.2024 | Test | 1,00 EUR |\n| 2 | 02.10.2024 | Trunc";
+    vi.mocked(fetch).mockResolvedValueOnce(providerResponse(truncatedTable, 200, "length"));
+
+    const promise = analyzeScanningBatch(
+      [upload("image", "foto")],
+      undefined,
+      "",
+      DEFAULT_SCANNING_MODEL_ID,
+      DEFAULT_SCANNING_PROMPT,
+      "omniroute_luna",
+    );
+
+    await expect(promise).rejects.toBeInstanceOf(ScanningProviderError);
+    await expect(promise).rejects.toMatchObject({
+      status: 502,
+      message: expect.stringMatching(/Längenbegrenzung|unvollständig/i),
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts valid complete response with finish_reason stop for string content and supported content-parts formats", async () => {
+    const stringReport = "| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.10.2024 | Betreuung | 100,00 EUR |\n| | | Gesamtsumme | 100,00 EUR |";
+    vi.mocked(fetch).mockResolvedValueOnce(providerResponse(stringReport, 200, "stop"));
+
+    await expect(analyzeScanningBatch(
+      [upload("pdf", "beleg-str")],
+      undefined,
+      "",
+      DEFAULT_SCANNING_MODEL_ID,
+      DEFAULT_SCANNING_PROMPT,
+      "openrouter",
+    )).resolves.toBe(stringReport);
+
+    const partsReport = [
+      { type: "text", text: "## Sonstiges\n\n| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.11.2024 | Beleg 1 | 42,00 EUR |" },
+      { type: "text", text: { value: "| 2 | 02.11.2024 | Beleg 2 | 10,00 EUR |\n| | | Gesamtsumme | 52,00 EUR |" } },
+    ];
+    vi.mocked(fetch).mockResolvedValueOnce(providerResponse(partsReport, 200, "stop"));
+
+    const partsResult = await analyzeScanningBatch(
+      [upload("pdf", "beleg-parts")],
+      undefined,
+      "",
+      DEFAULT_SCANNING_MODEL_ID,
+      DEFAULT_SCANNING_PROMPT,
+      "openrouter",
+    );
+    expect(partsResult).toContain("| 1 | 01.11.2024 | Beleg 1 | 42,00 EUR |");
+    expect(partsResult).toContain("| 2 | 02.11.2024 | Beleg 2 | 10,00 EUR |");
+    expect(partsResult).toContain("| | | Gesamtsumme | 52,00 EUR |");
+  });
+
+  it("rejects responses with missing, unknown, tool_calls, or content_filter finish_reason even with valid table content", async () => {
+    const validTable = "| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.10.2024 | Betreuung | 100,00 EUR |\n| | | Gesamtsumme | 100,00 EUR |";
+
+    // Missing finish_reason
+    vi.mocked(fetch).mockResolvedValueOnce(providerResponse(validTable, 200, null));
+    await expect(analyzeScanningBatch([upload("pdf", "beleg-missing")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter"))
+      .rejects.toBeInstanceOf(ScanningProviderError);
+
+    // Unknown finish_reason
+    vi.mocked(fetch).mockResolvedValueOnce(providerResponse(validTable, 200, "unknown_reason"));
+    await expect(analyzeScanningBatch([upload("pdf", "beleg-unknown")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter"))
+      .rejects.toBeInstanceOf(ScanningProviderError);
+
+    // tool_calls finish_reason
+    vi.mocked(fetch).mockResolvedValueOnce(providerResponse(validTable, 200, "tool_calls"));
+    await expect(analyzeScanningBatch([upload("pdf", "beleg-tools")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter"))
+      .rejects.toBeInstanceOf(ScanningProviderError);
+
+    // content_filter finish_reason
+    vi.mocked(fetch).mockResolvedValueOnce(providerResponse(validTable, 200, "content_filter"));
+    await expect(analyzeScanningBatch([upload("pdf", "beleg-filter")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter"))
+      .rejects.toBeInstanceOf(ScanningProviderError);
   });
 });
