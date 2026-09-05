@@ -29,8 +29,8 @@ describe("logged-in dashboard UI", () => {
 
   it("renders all planned quicklinks and keeps Quiz and Administration permission-filtered", () => {
     for (const label of [
-      "Fred", "BFG Suche", "BFG Suche PRO", "Daten", "Scanning", "Textbausteine",
-      "Formulare", "Downloads", "Deutsche SV Rente", "L17b Währungsrechner", "Quiz", "Fredrun",
+      "Fred", "BFG Suche", "BFG Suche PRO", "Wissensbestand", "Dokumente scannen", "Textbausteine",
+      "Formulare", "Downloads", "Deutsche SV-Rente", "L17b Währungsrechner", "Quiz", "Fredrun",
       "Administration",
     ]) expect(view).toContain(`label: "${label}"`);
     expect(view.match(/adminOnly: true/gu)).toHaveLength(2);

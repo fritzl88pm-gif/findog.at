@@ -66,27 +66,27 @@ const QUICK_LINK_GROUPS: QuickLinkGroup[] = [
       { label: "BFG Suche", description: "Entscheidungen finden", icon: "search", target: "bfg-decisions" },
       { label: "BFG Suche PRO", description: "KI-gestützt reihen", icon: "sparkles", target: "bfg-pro" },
       { label: "BFG Newsletter", description: "Aktuelle Ausgaben lesen", icon: "newsletter", target: "bfg-newsletters" },
-      { label: "Daten", description: "Wissenslandschaft", icon: "database", target: "data" },
+      { label: "Wissensbestand", description: "Wissenslandschaft", icon: "database", target: "data" },
     ],
   },
   {
-    title: "Arbeitswerkzeuge",
+    title: "Dokumente",
     links: [
-      { label: "Scanning", description: "Belege auswerten", icon: "scan", target: "scanning" },
+      { label: "Dokumente scannen", description: "Belege auswerten", icon: "scan", target: "scanning" },
       { label: "Textbausteine", description: "Eigene Vorlagen", icon: "text", target: "reasonings" },
       { label: "Formulare", description: "Formulare erstellen", icon: "form", target: "forms" },
       { label: "Downloads", description: "Dokumente abrufen", icon: "download", target: "downloads" },
     ],
   },
   {
-    title: "Spezialwerkzeuge",
+    title: "Rechner",
     links: [
-      { label: "Deutsche SV Rente", description: "Schnellcheck", icon: "calculator", target: "german-sv-pension" },
+      { label: "Deutsche SV-Rente", description: "Schnellcheck", icon: "calculator", target: "german-sv-pension" },
       { label: "L17b Währungsrechner", description: "Beträge umrechnen", icon: "currency", target: "l17b-currency" },
     ],
   },
   {
-    title: "Lernen und Spiel",
+    title: "Lernen & Spiel",
     links: [
       { label: "Fredrun", description: "Lernspiel starten", icon: "game", target: "fredrun" },
       { label: "Quiz", description: "Wissen testen", icon: "quiz", target: "quiz", adminOnly: true },

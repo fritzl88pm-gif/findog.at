@@ -19,7 +19,7 @@ describe("knowledge landscape UI integration", () => {
     expect(pageSource).toMatch(/type AppView = [^;]*"data"[^;]*;/u);
     expect(pageSource.match(/onClick=\{openDataView\}/gu)).toHaveLength(2);
     expect(pageSource).toMatch(/<nav className="forms-navigation"[\s\S]*?onClick=\{openDataView\}[\s\S]*?\{isAdmin \? \(/u);
-    expect(pageSource).toMatch(/<div className="rail-content">[\s\S]*?onClick=\{openDataView\}[\s\S]*?title="Daten"[\s\S]*?aria-label="Daten"[\s\S]*?\{isAdmin \? \(/u);
+    expect(pageSource).toMatch(/<div className="rail-content">[\s\S]*?onClick=\{openDataView\}[\s\S]*?title="Wissensbestand"[\s\S]*?aria-label="Wissensbestand"[\s\S]*?\{isAdmin \? \(/u);
     expect(pageSource).toContain('appView === "data"');
     expect(pageSource).toContain('<KnowledgeLandscapeView accessToken={session?.access_token ?? ""} />');
   });

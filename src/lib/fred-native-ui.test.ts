@@ -66,7 +66,7 @@ describe("Fred native Findog UI", () => {
     expect(pageSource).not.toContain('type AppView = "chat" | "fred"');
     expect(pageSource).not.toContain("onClick={openFredView}");
     expect(pageSource.match(/onClick=\{startNewManagedConversation\}/gu)).toHaveLength(2);
-    expect(pageSource).toContain("Neue Unterhaltung");
+    expect(pageSource).toContain("Neue Frage an Fred");
     expect(pageSource).not.toContain("Aktueller Fred-Chat");
     expect(pageSource).toContain("<FredNativeChatView");
     expect(pageSource).toContain("initialMessages={fredMessages}");

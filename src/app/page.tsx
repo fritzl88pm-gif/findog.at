@@ -94,6 +94,7 @@ import AdminBfgNewsletters from "@/components/admin-bfg-newsletters";
 import AdminOmniRouteUsage from "@/components/admin-omniroute-usage";
 import DownloadsView from "@/components/downloads-view";
 import BfgNewsletterView from "@/components/bfg-newsletter-view";
+import SidebarNavigationGroup from "@/components/sidebar-navigation-group";
 import DashboardView, { type DashboardAppTarget } from "@/components/dashboard-view";
 import TelegramSettings, {
   type TelegramIntegrationPublicState,
@@ -1205,6 +1206,7 @@ export default function Home() {
   const [fredChatInstance, setFredChatInstance] = useState(0);
   const [fredMessages, setFredMessages] = useState<ChatMessage[]>([]);
   const [fredConversations, setFredConversations] = useState<ConversationSummary[]>([]);
+  const [isHistorySelectionMode, setIsHistorySelectionMode] = useState(false);
   const [selectedFredConversationIds, setSelectedFredConversationIds] = useState<string[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -1472,6 +1474,7 @@ export default function Home() {
         setFredMessages([]);
         setFredConversations([]);
         setSelectedFredConversationIds([]);
+        setIsHistorySelectionMode(false);
         setAppView("home");
         setBfgQuery("");
         setBfgPage(null);
@@ -1820,6 +1823,7 @@ export default function Home() {
       setFredMessages([]);
       setFredConversations([]);
       setSelectedFredConversationIds([]);
+      setIsHistorySelectionMode(false);
       setIsAdmin(false);
       setAppView("home");
       closeSettingsDialog();
@@ -1853,6 +1857,7 @@ export default function Home() {
       setFredMessages([]);
       setFredConversations([]);
       setSelectedFredConversationIds([]);
+      setIsHistorySelectionMode(false);
       setError("");
     } catch {
       setAuthError("Abmeldung fehlgeschlagen. Bitte erneut versuchen.");
@@ -2957,20 +2962,30 @@ export default function Home() {
 
         {settingsOpen ? (
           <div className="sidebar-content">
-            <button
-              className="primary-button new-conversation-button"
-              type="button"
-              onClick={startNewManagedConversation}
-              disabled={historyControlsDisabled}
-            >
-              <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-              Neue Unterhaltung
-            </button>
+            <div className="sidebar-primary-navigation">
+              <button
+                className={`sidebar-view-button ${appView === "home" ? "active" : ""}`}
+                type="button"
+                onClick={openHomeView}
+                aria-current={appView === "home" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 11 9-8 9 8"></path><path d="M5 10v10h14V10M9 20v-6h6v6"></path></svg>
+                Startseite
+              </button>
+              <button
+                className="primary-button new-conversation-button"
+                type="button"
+                onClick={startNewManagedConversation}
+                disabled={historyControlsDisabled}
+              >
+                <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                Neue Frage an Fred
+              </button>
+            </div>
             <div
               ref={sidebarSplitRegionRef}
-              className={`sidebar-split-region${isSidebarSplitResizing ? " is-resizing" : ""}${
-                isApplicationNavigationExpanded ? "" : " applications-collapsed"
-              }`}
+              className={`sidebar-split-region${isSidebarSplitResizing ? " is-resizing" : ""}${isApplicationNavigationExpanded ? "" : " applications-collapsed"
+                }`}
               style={{
                 "--sidebar-history-share": `${sidebarHistoryPercent}%`,
               } as React.CSSProperties}
@@ -2978,38 +2993,54 @@ export default function Home() {
               <div className="conversation-history" aria-label="Gespeicherte Unterhaltungen">
                 <div className="conversation-history-heading">
                   <span>Unterhaltungen</span>
+                  <button
+                    className="history-selection-toggle"
+                    type="button"
+                    aria-pressed={isHistorySelectionMode}
+                    onClick={() => {
+                      setIsHistorySelectionMode(!isHistorySelectionMode);
+                      setSelectedFredConversationIds([]);
+                    }}
+                    disabled={historyControlsDisabled || (!isHistorySelectionMode && visibleConversations.length === 0)}
+                  >
+                    {isHistorySelectionMode ? "Fertig" : "Auswählen"}
+                  </button>
                   {isHistoryLoading || isDeleting ? (
                     <span className="history-loading">{isDeleting ? "Löscht…" : "Lädt…"}</span>
                   ) : null}
                 </div>
-                <div className="conversation-bulk-actions">
-                  <span>{visibleSelectedConversationIds.length} ausgewählt</span>
-                  <button
-                    className="bulk-delete-button"
-                    type="button"
-                    onClick={() => void deleteFredConversations(visibleSelectedConversationIds, true)}
-                    disabled={historyControlsDisabled || visibleSelectedConversationIds.length === 0}
-                  >
-                    Auswahl löschen
-                  </button>
-                </div>
+                {isHistorySelectionMode ? (
+                  <div className="conversation-bulk-actions">
+                    <span>{visibleSelectedConversationIds.length} ausgewählt</span>
+                    <button
+                      className="bulk-delete-button"
+                      type="button"
+                      onClick={() => void deleteFredConversations(visibleSelectedConversationIds, true)}
+                      disabled={historyControlsDisabled || visibleSelectedConversationIds.length === 0}
+                    >
+                      Auswahl löschen
+                    </button>
+                  </div>
+                ) : null}
                 <div className="conversation-list">
                   {!isHistoryLoading && visibleConversations.length === 0 ? (
                     <p className="conversation-empty">Noch keine gespeicherten Unterhaltungen.</p>
                   ) : null}
                   {visibleConversations.map((conversation) => (
                     <div
-                      className={`conversation-row ${conversation.id === visibleActiveConversationId ? "active" : ""}`}
+                      className={`conversation-row${isHistorySelectionMode ? " is-selecting" : ""} ${conversation.id === visibleActiveConversationId ? "active" : ""}`}
                       key={conversation.id}
                     >
-                      <input
-                        className="conversation-checkbox"
-                        type="checkbox"
-                        checked={visibleSelectedConversationIds.includes(conversation.id)}
-                        onChange={() => toggleFredConversationSelection(conversation.id)}
-                        disabled={historyControlsDisabled}
-                        aria-label={`Unterhaltung „${conversation.title}“ auswählen`}
-                      />
+                      {isHistorySelectionMode ? (
+                        <input
+                          className="conversation-checkbox"
+                          type="checkbox"
+                          checked={visibleSelectedConversationIds.includes(conversation.id)}
+                          onChange={() => toggleFredConversationSelection(conversation.id)}
+                          disabled={historyControlsDisabled}
+                          aria-label={`Unterhaltung „${conversation.title}“ auswählen`}
+                        />
+                      ) : null}
                       <button
                         className="conversation-open"
                         type="button"
@@ -3020,7 +3051,7 @@ export default function Home() {
                         <span className="conversation-title-row">
                           {conversation.origin === "telegram" ? (
                             <svg className="conversation-telegram-icon" aria-label="Telegram-Unterhaltung" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.81-.75-1-.65-1.56-1.06-2.53-1.7-1.12-.74-.4-1.14.25-1.8.17-.17 3.02-2.77 3.08-3.01.01-.03.01-.18-.07-.25-.08-.07-.19-.05-.27-.03-.12.03-1.99 1.26-5.62 3.72-.53.36-1.01.54-1.44.53-.47-.01-1.38-.27-2.06-.49-.83-.27-1.49-.41-1.43-.87.03-.24.36-.48.99-.73 3.88-1.69 6.47-2.8 7.77-3.34 3.7-1.54 4.47-1.81 4.97-1.82.11 0 .35.03.51.16.13.12.16.27.18.39.01.11.02.37 0 .57z"/>
+                              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.81-.75-1-.65-1.56-1.06-2.53-1.7-1.12-.74-.4-1.14.25-1.8.17-.17 3.02-2.77 3.08-3.01.01-.03.01-.18-.07-.25-.08-.07-.19-.05-.27-.03-.12.03-1.99 1.26-5.62 3.72-.53.36-1.01.54-1.44.53-.47-.01-1.38-.27-2.06-.49-.83-.27-1.49-.41-1.43-.87.03-.24.36-.48.99-.73 3.88-1.69 6.47-2.8 7.77-3.34 3.7-1.54 4.47-1.81 4.97-1.82.11 0 .35.03.51.16.13.12.16.27.18.39.01.11.02.37 0 .57z" />
                             </svg>
                           ) : null}
                           <span title={conversation.title}>{conversation.title}</span>
@@ -3043,18 +3074,20 @@ export default function Home() {
                             </svg>
                           </button>
                         ) : null}
-                        <button
-                          className="conversation-delete"
-                          type="button"
-                          onClick={() => void deleteFredConversations([conversation.id])}
-                          disabled={historyControlsDisabled}
-                          aria-label={`Unterhaltung „${conversation.title}“ löschen`}
-                          title="Unterhaltung löschen"
-                        >
-                          <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" />
-                          </svg>
-                        </button>
+                        {isHistorySelectionMode ? (
+                          <button
+                            className="conversation-delete"
+                            type="button"
+                            onClick={() => void deleteFredConversations([conversation.id])}
+                            disabled={historyControlsDisabled}
+                            aria-label={`Unterhaltung „${conversation.title}“ löschen`}
+                            title="Unterhaltung löschen"
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" />
+                            </svg>
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                   ))}
@@ -3102,140 +3135,126 @@ export default function Home() {
                   </svg>
                 </button>
                 {isApplicationNavigationExpanded ? (
-                   <nav className="forms-navigation"
-                     id="application-navigation"
-                     aria-label="Anwendungsbereiche"
-                   >
-              <button
-                className={`sidebar-view-button ${appView === "home" ? "active" : ""}`}
-                type="button"
-                onClick={openHomeView}
-                aria-current={appView === "home" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 11 9-8 9 8"></path><path d="M5 10v10h14V10M9 20v-6h6v6"></path></svg>
-                Startseite
-              </button>
-              <button
-                className={`sidebar-view-button ${appView === "bfg-decisions" ? "active" : ""}`}
-                type="button"
-                onClick={openBfgDecisionsView}
-                aria-current={appView === "bfg-decisions" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="20" y1="20" x2="16.65" y2="16.65"></line><path d="M8 11h6M11 8v6"></path></svg>
-                BFG Suche
-              </button>
-              <button
-                className={`sidebar-view-button ${appView === "bfg-pro" ? "active" : ""}`}
-                type="button"
-                onClick={openBfgProView}
-                aria-current={appView === "bfg-pro" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"></path><path d="m19 15 .75 2.25L22 18l-2.25.75L19 21l-.75-2.25L16 18l2.25-.75L19 15Z"></path></svg>
-                BFG Suche PRO
-              </button>
-              <button
-                className={`sidebar-view-button ${appView === "bfg-newsletters" ? "active" : ""}`}
-                type="button"
-                onClick={openBfgNewslettersView}
-                aria-current={appView === "bfg-newsletters" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path><path d="M7 16h5"></path></svg>
-                BFG Newsletter
-              </button>
-              <button
-                className={`sidebar-view-button ${appView === "scanning" ? "active" : ""}`}
-                type="button"
-                onClick={openScanningView}
-                aria-current={appView === "scanning" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8h10M7 12h10M7 16h6" /></svg>
-                Scanning
-              </button>
-              <button
-                className={`sidebar-view-button ${appView === "reasonings" ? "active" : ""}`}
-                type="button"
-                onClick={openReasoningsView}
-                aria-current={appView === "reasonings" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"></path><path d="M4 5.5v16M8 7h8M8 11h8"></path></svg>
-                Textbausteine
-              </button>
-              <button
-                className={`sidebar-view-button ${appView === "german-sv-pension" ? "active" : ""}`}
-                type="button"
-                onClick={openGermanSvPensionView}
-                aria-current={appView === "german-sv-pension" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"></rect><path d="M8 6h8M8 10h2M14 10h2M8 14h2M14 14h2M8 18h2M14 18h2"></path></svg>
-                Deutsche SV Rente
-              </button>
-              <button
-                className={`sidebar-view-button ${appView === "l17b-currency" ? "active" : ""}`}
-                type="button"
-                onClick={openL17bCurrencyView}
-                aria-current={appView === "l17b-currency" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v12M8 10h8"></path></svg>
-                L17b Währungsrechner
-              </button>
-              <button
-                className={`sidebar-view-button ${appView === "fredrun" ? "active" : ""}`}
-                type="button"
-                onClick={openFredRunView}
-                aria-current={appView === "fredrun" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17h3l2-4 3 2 2-5 2 4h4"></path><path d="M5 7h.01M9 5h.01M13 7h.01"></path></svg>
-                Fredrun
-              </button>
-              {isAdmin ? (
-                <button
-                  className={`sidebar-view-button ${appView === "quiz" ? "active" : ""}`}
-                  type="button"
-                  onClick={openQuizView}
-                  aria-current={appView === "quiz" ? "page" : undefined}
-                >
-                  <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9 9a3 3 0 0 1 6 0c0 2-3 3-3 5"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  Quiz
-                </button>
-              ) : null}
-              <button
-                className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
-                type="button"
-                onClick={openFormsView}
-                aria-current={appView === "forms" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
-                Formulare
-              </button>
-              <button
-                className={`sidebar-view-button ${appView === "downloads" ? "active" : ""}`}
-                type="button"
-                onClick={openDownloadsView}
-                aria-current={appView === "downloads" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12"></path><polyline points="7 10 12 15 17 10"></polyline><path d="M5 21h14a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2"></path></svg>
-                Downloads
-              </button>
-              <button
-                className={`sidebar-view-button ${appView === "data" ? "active" : ""}`}
-                type="button"
-                onClick={openDataView}
-                aria-current={appView === "data" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="7" ry="3"></ellipse><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path></svg>
-                Daten
-              </button>
-              {isAdmin ? (
-                <button
-                  className={`sidebar-view-button ${appView === "administration" ? "active" : ""}`}
-                  type="button"
-                  onClick={() => void openAdministrationView()}
-                  aria-current={appView === "administration" ? "page" : undefined}
-                >
-                  <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-4"></path></svg>
-                  Administration
-                </button>
-              ) : null}
+                  <nav className="forms-navigation"
+                    id="application-navigation"
+                    aria-label="Anwendungsbereiche"
+                  >
+                    <SidebarNavigationGroup title="Recherche" active={["bfg-decisions", "bfg-pro", "bfg-newsletters", "data"].includes(appView)} defaultExpanded>
+                      <button
+                        className={`sidebar-view-button ${appView === "bfg-decisions" ? "active" : ""}`}
+                        type="button"
+                        onClick={openBfgDecisionsView}
+                        aria-current={appView === "bfg-decisions" ? "page" : undefined}
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="20" y1="20" x2="16.65" y2="16.65"></line><path d="M8 11h6M11 8v6"></path></svg>
+                        BFG Suche
+                      </button>
+                      <button
+                        className={`sidebar-view-button ${appView === "bfg-pro" ? "active" : ""}`}
+                        type="button"
+                        onClick={openBfgProView}
+                        aria-current={appView === "bfg-pro" ? "page" : undefined}
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"></path><path d="m19 15 .75 2.25L22 18l-2.25.75L19 21l-.75-2.25L16 18l2.25-.75L19 15Z"></path></svg>
+                        BFG Suche PRO
+                      </button>
+                      <button
+                        className={`sidebar-view-button ${appView === "bfg-newsletters" ? "active" : ""}`}
+                        type="button"
+                        onClick={openBfgNewslettersView}
+                        aria-current={appView === "bfg-newsletters" ? "page" : undefined}
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path><path d="M7 16h5"></path></svg>
+                        BFG Newsletter
+                      </button>
+                      <button
+                        className={`sidebar-view-button ${appView === "data" ? "active" : ""}`}
+                        type="button"
+                        onClick={openDataView}
+                        aria-current={appView === "data" ? "page" : undefined}
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="7" ry="3"></ellipse><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path></svg>
+                        Wissensbestand
+                      </button>
+                    </SidebarNavigationGroup>
+                    <SidebarNavigationGroup title="Dokumente" active={["scanning", "reasonings", "forms", "downloads"].includes(appView)}>
+                      <button
+                        className={`sidebar-view-button ${appView === "scanning" ? "active" : ""}`}
+                        type="button"
+                        onClick={openScanningView}
+                        aria-current={appView === "scanning" ? "page" : undefined}
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8h10M7 12h10M7 16h6" /></svg>
+                        Dokumente scannen
+                      </button>
+                      <button
+                        className={`sidebar-view-button ${appView === "reasonings" ? "active" : ""}`}
+                        type="button"
+                        onClick={openReasoningsView}
+                        aria-current={appView === "reasonings" ? "page" : undefined}
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"></path><path d="M4 5.5v16M8 7h8M8 11h8"></path></svg>
+                        Textbausteine
+                      </button>
+                      <button
+                        className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
+                        type="button"
+                        onClick={openFormsView}
+                        aria-current={appView === "forms" ? "page" : undefined}
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
+                        Formulare
+                      </button>
+                      <button
+                        className={`sidebar-view-button ${appView === "downloads" ? "active" : ""}`}
+                        type="button"
+                        onClick={openDownloadsView}
+                        aria-current={appView === "downloads" ? "page" : undefined}
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12"></path><polyline points="7 10 12 15 17 10"></polyline><path d="M5 21h14a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2"></path></svg>
+                        Downloads
+                      </button>
+                    </SidebarNavigationGroup>
+                    <SidebarNavigationGroup title="Rechner" active={["german-sv-pension", "l17b-currency"].includes(appView)}>
+                      <button
+                        className={`sidebar-view-button ${appView === "german-sv-pension" ? "active" : ""}`}
+                        type="button"
+                        onClick={openGermanSvPensionView}
+                        aria-current={appView === "german-sv-pension" ? "page" : undefined}
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"></rect><path d="M8 6h8M8 10h2M14 10h2M8 14h2M14 14h2M8 18h2M14 18h2"></path></svg>
+                        Deutsche SV-Rente
+                      </button>
+                      <button
+                        className={`sidebar-view-button ${appView === "l17b-currency" ? "active" : ""}`}
+                        type="button"
+                        onClick={openL17bCurrencyView}
+                        aria-current={appView === "l17b-currency" ? "page" : undefined}
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v12M8 10h8"></path></svg>
+                        L17b Währungsrechner
+                      </button>
+                    </SidebarNavigationGroup>
+                    <SidebarNavigationGroup title="Lernen & Spiel" active={["fredrun", "quiz"].includes(appView)}>
+                      <button
+                        className={`sidebar-view-button ${appView === "fredrun" ? "active" : ""}`}
+                        type="button"
+                        onClick={openFredRunView}
+                        aria-current={appView === "fredrun" ? "page" : undefined}
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17h3l2-4 3 2 2-5 2 4h4"></path><path d="M5 7h.01M9 5h.01M13 7h.01"></path></svg>
+                        Fredrun
+                      </button>
+                      {isAdmin ? (<button
+                        className={`sidebar-view-button ${appView === "quiz" ? "active" : ""}`}
+                        type="button"
+                        onClick={openQuizView}
+                        aria-current={appView === "quiz" ? "page" : undefined}
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9 9a3 3 0 0 1 6 0c0 2-3 3-3 5"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                        Quiz
+                      </button>) : null}
+                    </SidebarNavigationGroup>
                   </nav>
                 ) : null}
               </section>
@@ -3248,8 +3267,8 @@ export default function Home() {
               type="button"
               onClick={startNewManagedConversation}
               disabled={historyControlsDisabled}
-              title="Neue Unterhaltung"
-              aria-label="Neue Unterhaltung"
+              title="Neue Frage an Fred"
+              aria-label="Neue Frage an Fred"
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             </button>
@@ -3262,36 +3281,6 @@ export default function Home() {
               aria-current={appView === "home" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 11 9-8 9 8"></path><path d="M5 10v10h14V10M9 20v-6h6v6"></path></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn rail-forms-button ${appView === "forms" ? "active" : ""}`}
-              type="button"
-              onClick={openFormsView}
-              title="Formulare"
-              aria-label="Formulare"
-              aria-current={appView === "forms" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "downloads" ? "active" : ""}`}
-              type="button"
-              onClick={openDownloadsView}
-              title="Downloads"
-              aria-label="Downloads"
-              aria-current={appView === "downloads" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12"></path><polyline points="7 10 12 15 17 10"></polyline><path d="M5 21h14a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2"></path></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "data" ? "active" : ""}`}
-              type="button"
-              onClick={openDataView}
-              title="Daten"
-              aria-label="Daten"
-              aria-current={appView === "data" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="7" ry="3"></ellipse><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path></svg>
             </button>
             <button
               className={`icon-button rail-icon-btn ${appView === "bfg-decisions" ? "active" : ""}`}
@@ -3324,11 +3313,21 @@ export default function Home() {
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path><path d="M7 16h5"></path></svg>
             </button>
             <button
+              className={`icon-button rail-icon-btn ${appView === "data" ? "active" : ""}`}
+              type="button"
+              onClick={openDataView}
+              title="Wissensbestand"
+              aria-label="Wissensbestand"
+              aria-current={appView === "data" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="7" ry="3"></ellipse><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path></svg>
+            </button>
+            <button
               className={`icon-button rail-icon-btn ${appView === "scanning" ? "active" : ""}`}
               type="button"
               onClick={openScanningView}
-              title="Scanning"
-              aria-label="Scanning"
+              title="Dokumente scannen"
+              aria-label="Dokumente scannen"
               aria-current={appView === "scanning" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8h10M7 12h10M7 16h6" /></svg>
@@ -3344,11 +3343,31 @@ export default function Home() {
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"></path><path d="M4 5.5v16M8 7h8M8 11h8"></path></svg>
             </button>
             <button
+              className={`icon-button rail-icon-btn rail-forms-button ${appView === "forms" ? "active" : ""}`}
+              type="button"
+              onClick={openFormsView}
+              title="Formulare"
+              aria-label="Formulare"
+              aria-current={appView === "forms" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
+            </button>
+            <button
+              className={`icon-button rail-icon-btn ${appView === "downloads" ? "active" : ""}`}
+              type="button"
+              onClick={openDownloadsView}
+              title="Downloads"
+              aria-label="Downloads"
+              aria-current={appView === "downloads" ? "page" : undefined}
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12"></path><polyline points="7 10 12 15 17 10"></polyline><path d="M5 21h14a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2"></path></svg>
+            </button>
+            <button
               className={`icon-button rail-icon-btn ${appView === "german-sv-pension" ? "active" : ""}`}
               type="button"
               onClick={openGermanSvPensionView}
-              title="Deutsche SV Rente"
-              aria-label="Deutsche SV Rente"
+              title="Deutsche SV-Rente"
+              aria-label="Deutsche SV-Rente"
               aria-current={appView === "german-sv-pension" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"></rect><path d="M8 6h8M8 10h2M14 10h2M8 14h2M14 14h2M8 18h2M14 18h2"></path></svg>
@@ -3385,18 +3404,6 @@ export default function Home() {
                 <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9 9a3 3 0 0 1 6 0c0 2-3 3-3 5"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
               </button>
             ) : null}
-            {isAdmin ? (
-              <button
-                className={`icon-button rail-icon-btn rail-forms-button ${appView === "administration" ? "active" : ""}`}
-                type="button"
-                onClick={() => void openAdministrationView()}
-                title="Administration"
-                aria-label="Administration"
-                aria-current={appView === "administration" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-4"></path></svg>
-              </button>
-            ) : null}
           </div>
         )}
 
@@ -3416,6 +3423,15 @@ export default function Home() {
                 <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                 Einstellungen
               </button>
+              {isAdmin ? (<button
+                className={`sidebar-view-button ${appView === "administration" ? "active" : ""}`}
+                type="button"
+                onClick={() => void openAdministrationView()}
+                aria-current={appView === "administration" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-4"></path></svg>
+                Administration
+              </button>) : null}
               <button
                 className="secondary-button sidebar-signout-btn"
                 type="button"
@@ -3440,6 +3456,18 @@ export default function Home() {
               >
                 <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
               </button>
+              {isAdmin ? (
+                <button
+                  className={`icon-button rail-icon-btn rail-forms-button ${appView === "administration" ? "active" : ""}`}
+                  type="button"
+                  onClick={() => void openAdministrationView()}
+                  title="Administration"
+                  aria-label="Administration"
+                  aria-current={appView === "administration" ? "page" : undefined}
+                >
+                  <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-4"></path></svg>
+                </button>
+              ) : null}
               <button
                 className="icon-button rail-icon-btn sidebar-signout-btn"
                 type="button"
@@ -4156,7 +4184,7 @@ export default function Home() {
                 onClick={() => setAdminTab("scanning")}
                 onKeyDown={(e) => handleAdminTabKeyDown(e, "scanning")}
               >
-                Scanning
+                Dokumente scannen
               </button>
               <button
                 id="admin-tab-benutzer"
