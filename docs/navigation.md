@@ -26,3 +26,9 @@ Arbeitsbereiche sind ein separater nächster Schritt.
 Die interne Administration startet auf einer gruppierten Übersicht und hat eine
 separate, responsive Bereichsauswahl. Arbeitsabläufe und Prüfstatus stehen in
 [Administrationsoberfläche](admin-interface.md).
+
+Die Seite „BFG Newsletter“ bietet eine Datumsauswahl mit der neuesten Ausgabe
+zuerst. Anfangs wird die neueste Ausgabe geöffnet; beim Wechsel erscheint nur
+der ausgewählte Newsletter. Die Sortierung verwendet das Veröffentlichungsdatum,
+bei gleichem Datum den Erstellungszeitpunkt und die ID, jeweils absteigend.
+API, Inhalte und Audit bleiben unverändert; es ist keine Migration erforderlich.

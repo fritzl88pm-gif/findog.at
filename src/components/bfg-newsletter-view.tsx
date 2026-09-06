@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import RichAnswer from "@/components/rich-answer";
-import type { BfgNewsletterItem } from "@/lib/bfg-newsletters";
+import { sortBfgNewsletters, type BfgNewsletterItem } from "@/lib/bfg-newsletters";
 
 function normalizeItem(value: unknown): BfgNewsletterItem | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -36,6 +36,7 @@ function payloadError(payload: unknown, fallback: string): string {
 
 export default function BfgNewsletterView({ accessToken }: { accessToken: string }) {
   const [items, setItems] = useState<BfgNewsletterItem[]>([]);
+  const [selectedId, setSelectedId] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -59,7 +60,7 @@ export default function BfgNewsletterView({ accessToken }: { accessToken: string
       if (nextItems.some((item) => item === null)) {
         throw new Error("BFG Newsletter konnte nicht geladen werden.");
       }
-      setItems(nextItems as BfgNewsletterItem[]);
+      setItems(sortBfgNewsletters(nextItems as BfgNewsletterItem[]));
     } catch (loadError) {
       if ((loadError as { name?: string }).name !== "AbortError") {
         setError(loadError instanceof Error ? loadError.message : "BFG Newsletter konnte nicht geladen werden.");
@@ -78,13 +79,15 @@ export default function BfgNewsletterView({ accessToken }: { accessToken: string
     };
   }, [load]);
 
+  const item = items.find((entry) => entry.id === selectedId) ?? items[0];
+
   return (
     <section className="forms-panel bfg-newsletter-panel" aria-labelledby="bfg-newsletter-view-title">
       <div className="bfg-newsletter-view">
         <header className="bfg-newsletter-header">
           <p className="eyebrow">Bundesfinanzgericht</p>
           <h1 id="bfg-newsletter-view-title">BFG Newsletter</h1>
-          <p>Aktuelle Ausgaben in chronologischer Reihenfolge.</p>
+          <p>Ausgabe auswählen und lesen – die neueste steht zuerst.</p>
         </header>
 
         {isLoading ? (
@@ -100,18 +103,29 @@ export default function BfgNewsletterView({ accessToken }: { accessToken: string
             <span>Neue Ausgaben erscheinen hier automatisch mit der neuesten Ausgabe zuerst.</span>
           </div>
         ) : (
-          <ol className="bfg-newsletter-list">
-            {items.map((item) => (
-              <li key={item.id}>
-                <article className="bfg-newsletter-entry">
-                  <time dateTime={item.publicationDate}>
-                    {formatPublicationDate(item.publicationDate)}
-                  </time>
-                  <RichAnswer content={item.contentMarkdown} showTableCopyActions={false} />
-                </article>
-              </li>
-            ))}
-          </ol>
+          <>
+            <div className="bfg-newsletter-selector">
+              <label htmlFor="bfg-newsletter-edition">Ausgabe auswählen</label>
+              <select
+                id="bfg-newsletter-edition"
+                value={item.id}
+                onChange={(event) => setSelectedId(event.target.value)}
+                aria-controls="bfg-newsletter-content"
+              >
+                {items.map((edition, index) => (
+                  <option key={edition.id} value={edition.id}>
+                    {formatPublicationDate(edition.publicationDate)}{index === 0 ? " · Neueste Ausgabe" : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <article className="bfg-newsletter-entry" id="bfg-newsletter-content" key={item.id}>
+              <time dateTime={item.publicationDate}>
+                {formatPublicationDate(item.publicationDate)}
+              </time>
+              <RichAnswer content={item.contentMarkdown} showTableCopyActions={false} />
+            </article>
+          </>
         )}
       </div>
     </section>
