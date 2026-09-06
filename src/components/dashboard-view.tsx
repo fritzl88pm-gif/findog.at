@@ -135,16 +135,6 @@ function formatTimestamp(value: string): string {
   }).format(new Date(value));
 }
 
-function formatLegalDate(value: string | null): string {
-  if (!value) return "—";
-  return new Intl.DateTimeFormat("de-AT", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${value}T00:00:00.000Z`));
-}
-
 function NewsCard({
   item,
   isFeatured,
@@ -152,7 +142,6 @@ function NewsCard({
   item: DashboardNewsItem;
   isFeatured: boolean;
 }) {
-  const isLegal = item.kind === "legal";
   const HeadingTag = isFeatured ? "h3" : "h4";
 
   return (
@@ -162,13 +151,13 @@ function NewsCard({
       <div className="dashboard-news-card-topline">
         <div className="dashboard-news-tags">
           <span className={`dashboard-news-badge ${isFeatured ? "" : "is-subtle"}`.trim()}>
-            {isLegal ? "Rechtsmeldung" : "Produktmeldung"}
+            Plattformupdate
           </span>
           {item.pinned ? (
             <span className="dashboard-pinned-badge">Angeheftet</span>
           ) : null}
         </div>
-        {!isLegal && item.publishedAt ? (
+        {item.publishedAt ? (
           <time dateTime={item.publishedAt} className="dashboard-news-time">
             {formatTimestamp(item.publishedAt)}
           </time>
@@ -179,49 +168,6 @@ function NewsCard({
 
       <p className="dashboard-news-summary">{item.summary}</p>
 
-      {isLegal ? (
-        <>
-          <dl className={`dashboard-legal-meta ${isFeatured ? "" : "is-compact"}`.trim()}>
-            <div>
-              <dt>Quelle</dt>
-              <dd>{item.sourceSystem?.toUpperCase()}</dd>
-            </div>
-            <div>
-              <dt>Typ</dt>
-              <dd>
-                {item.documentKind === "entscheidungsdokument"
-                  ? "Entscheidungsdokument"
-                  : item.documentKind === "rechtssatz"
-                    ? "Rechtssatz"
-                    : "Norm"}
-              </dd>
-            </div>
-            <div>
-              <dt>Datum</dt>
-              <dd>{formatLegalDate(item.documentDate)}</dd>
-            </div>
-            <div>
-              <dt>Stichtag</dt>
-              <dd>{formatLegalDate(item.asOfDate)}</dd>
-            </div>
-          </dl>
-
-          <div className="dashboard-news-source-row">
-            <span title={item.sourceIdentifier ?? undefined}>
-              {item.sourceIdentifier}
-            </span>
-            {item.sourceUrl ? (
-              <a href={item.sourceUrl} target="_blank" rel="noreferrer">
-                Amtliche Quelle <Icon name="external" />
-              </a>
-            ) : null}
-          </div>
-
-          <p className="dashboard-legal-note">
-            Redaktionelle Information zum angegebenen Stichtag; maßgeblich bleibt die amtliche Quelle.
-          </p>
-        </>
-      ) : null}
     </article>
   );
 }
@@ -379,19 +325,10 @@ export default function DashboardView({
           <NewsSection
             id="dashboard-product-news-title"
             title="Neu bei findog.at"
-            subtitle="Produktneuigkeiten und Hinweise"
-            eyebrow="Plattform-Updates"
+            subtitle="Neuigkeiten und Hinweise zur Plattform"
+            eyebrow="Plattformupdates"
             items={payload?.news.product ?? []}
             error={payload?.sectionErrors?.productNews ?? (loadError || undefined)}
-            isLoading={isLoading}
-          />
-          <NewsSection
-            id="dashboard-legal-news-title"
-            title="Recht aktuell"
-            subtitle="Redaktionell freigegebene Meldungen mit amtlicher Quelle und Stichtag"
-            eyebrow="Recht & Praxis"
-            items={payload?.news.legal ?? []}
-            error={payload?.sectionErrors?.legalNews ?? (loadError || undefined)}
             isLoading={isLoading}
           />
         </div>

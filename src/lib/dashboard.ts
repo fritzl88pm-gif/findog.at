@@ -37,10 +37,9 @@ export type DashboardPayload = {
   knowledge: DashboardKnowledgeStatus;
   news: {
     product: DashboardNewsItem[];
-    legal: DashboardNewsItem[];
   };
   sectionErrors?: Partial<Record<
-    "reasonings" | "downloads" | "knowledge" | "productNews" | "legalNews",
+    "reasonings" | "downloads" | "knowledge" | "productNews",
     string
   >>;
 };

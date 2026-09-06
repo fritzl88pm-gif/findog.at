@@ -5,11 +5,8 @@ import { useAdminEditorGuard } from "@/components/admin-editor-guard";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
 import type {
-  DashboardLegalDocumentKind,
   DashboardNewsInput,
   DashboardNewsItem,
-  DashboardNewsKind,
-  DashboardNewsSourceSystem,
   DashboardNewsStatus,
 } from "@/lib/dashboard";
 
@@ -18,33 +15,19 @@ type Props = {
 };
 
 type NewsForm = {
-  kind: DashboardNewsKind;
   title: string;
   summary: string;
   status: DashboardNewsStatus;
   pinned: boolean;
   publishedAt: string | null;
-  sourceSystem: DashboardNewsSourceSystem;
-  documentKind: DashboardLegalDocumentKind;
-  sourceIdentifier: string;
-  sourceUrl: string;
-  documentDate: string;
-  asOfDate: string;
 };
 
 const EMPTY_FORM: NewsForm = {
-  kind: "product",
   title: "",
   summary: "",
   status: "draft",
   pinned: false,
   publishedAt: null,
-  sourceSystem: "ris",
-  documentKind: "norm",
-  sourceIdentifier: "",
-  sourceUrl: "",
-  documentDate: "",
-  asOfDate: "",
 };
 
 const STATUS_LABELS: Record<DashboardNewsStatus, string> = {
@@ -53,25 +36,13 @@ const STATUS_LABELS: Record<DashboardNewsStatus, string> = {
   archived: "Archiviert",
 };
 
-const KIND_LABELS: Record<DashboardNewsKind, string> = {
-  product: "Produktmeldung",
-  legal: "Rechtsmeldung",
-};
-
 function formFromItem(item: DashboardNewsItem): NewsForm {
   return {
-    kind: item.kind,
     title: item.title,
     summary: item.summary,
     status: item.status,
     pinned: item.pinned,
     publishedAt: item.publishedAt,
-    sourceSystem: item.sourceSystem ?? "ris",
-    documentKind: item.documentKind ?? "norm",
-    sourceIdentifier: item.sourceIdentifier ?? "",
-    sourceUrl: item.sourceUrl ?? "",
-    documentDate: item.documentDate ?? "",
-    asOfDate: item.asOfDate ?? "",
   };
 }
 
@@ -88,7 +59,6 @@ export default function AdminDashboardNews({ accessToken }: Props) {
   const [items, setItems] = useState<DashboardNewsItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState<NewsForm>(EMPTY_FORM);
-  const [kindFilter, setKindFilter] = useState<"all" | DashboardNewsKind>("all");
   const [statusFilter, setStatusFilter] = useState<"all" | DashboardNewsStatus>("all");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -114,12 +84,12 @@ export default function AdminDashboardNews({ accessToken }: Props) {
         error?: string;
       };
       if (!response.ok || !Array.isArray(payload.items)) {
-        throw new Error(payload.error ?? "Startseiten-News konnten nicht geladen werden.");
+        throw new Error(payload.error ?? "Plattformupdates konnten nicht geladen werden.");
       }
       if (!signal?.aborted) setItems(payload.items);
     } catch (loadError) {
       if ((loadError as { name?: string }).name !== "AbortError") {
-        setError(loadError instanceof Error ? loadError.message : "Startseiten-News konnten nicht geladen werden.");
+        setError(loadError instanceof Error ? loadError.message : "Plattformupdates konnten nicht geladen werden.");
       }
     } finally {
       if (!signal?.aborted) setIsLoading(false);
@@ -139,9 +109,9 @@ export default function AdminDashboardNews({ accessToken }: Props) {
   }, [loadItems]);
 
   const visibleItems = useMemo(() => items.filter((item) => (
-    (kindFilter === "all" || item.kind === kindFilter)
+    item.kind === "product"
     && (statusFilter === "all" || item.status === statusFilter)
-  )), [items, kindFilter, statusFilter]);
+  )), [items, statusFilter]);
 
   function startNewItem() {
     if (!confirmDiscard()) return;
@@ -164,9 +134,8 @@ export default function AdminDashboardNews({ accessToken }: Props) {
   }
 
   function requestInput(status: DashboardNewsStatus): DashboardNewsInput {
-    const isLegal = form.kind === "legal";
     return {
-      kind: form.kind,
+      kind: "product",
       title: form.title,
       summary: form.summary,
       status,
@@ -176,12 +145,12 @@ export default function AdminDashboardNews({ accessToken }: Props) {
         : form.status === "archived" && status === "published"
           ? new Date().toISOString()
           : form.publishedAt ?? new Date().toISOString(),
-      sourceSystem: isLegal ? form.sourceSystem : null,
-      documentKind: isLegal ? form.documentKind : null,
-      sourceIdentifier: isLegal ? form.sourceIdentifier : null,
-      sourceUrl: isLegal ? form.sourceUrl : null,
-      documentDate: isLegal ? form.documentDate : null,
-      asOfDate: isLegal ? form.asOfDate : null,
+      sourceSystem: null,
+      documentKind: null,
+      sourceIdentifier: null,
+      sourceUrl: null,
+      documentDate: null,
+      asOfDate: null,
     };
   }
 
@@ -260,8 +229,8 @@ export default function AdminDashboardNews({ accessToken }: Props) {
     >
       <div className="admin-dashboard-news-heading">
         <div>
-          <h2 id="admin-news-title">Meldungen verwalten</h2>
-          <p>Produktmeldungen und redaktionell geprüfte RIS-/EVI-Rechtsmeldungen verwalten.</p>
+          <h2 id="admin-news-title">Plattformupdates verwalten</h2>
+          <p>Neuigkeiten und Hinweise zu findog.at verwalten.</p>
         </div>
         <button className="secondary-button" type="button" onClick={startNewItem} disabled={isSaving}>
           Neue Meldung
@@ -274,14 +243,6 @@ export default function AdminDashboardNews({ accessToken }: Props) {
       <div className="admin-dashboard-news-layout">
         <div className="admin-news-list-column">
           <div className="admin-news-filters" aria-label="Meldungen filtern">
-            <label>
-              Typ
-              <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value as typeof kindFilter)}>
-                <option value="all">Alle</option>
-                <option value="product">Produkt</option>
-                <option value="legal">Recht</option>
-              </select>
-            </label>
             <label>
               Status
               <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
@@ -307,7 +268,6 @@ export default function AdminDashboardNews({ accessToken }: Props) {
                   aria-pressed={selectedId === item.id}
                 >
                   <span className="admin-news-list-meta">
-                    <span>{KIND_LABELS[item.kind]}</span>
                     <span data-status={item.status}>{STATUS_LABELS[item.status]}</span>
                     {item.pinned ? <span>Gepinnt</span> : null}
                   </span>
@@ -343,18 +303,6 @@ export default function AdminDashboardNews({ accessToken }: Props) {
           </div>
 
           <div className="field-group">
-            <label htmlFor="dashboard-news-kind">Meldungstyp</label>
-            <select
-              id="dashboard-news-kind"
-              value={form.kind}
-              onChange={(event) => setForm((current) => ({ ...current, kind: event.target.value as DashboardNewsKind }))}
-              disabled={isSaving}
-            >
-              <option value="product">Neu bei findog.at</option>
-              <option value="legal">Recht aktuell</option>
-            </select>
-          </div>
-          <div className="field-group">
             <label htmlFor="dashboard-news-title">Titel</label>
             <input
               id="dashboard-news-title"
@@ -378,85 +326,6 @@ export default function AdminDashboardNews({ accessToken }: Props) {
             />
             <span className="field-help">Administrativ gepflegter Klartext, maximal 600 Zeichen.</span>
           </div>
-
-          {form.kind === "legal" ? (
-            <fieldset className="admin-news-legal-fields">
-              <legend>Amtliche Rechtsquelle</legend>
-              <div className="admin-news-field-grid">
-                <div className="field-group">
-                  <label htmlFor="dashboard-news-source">Quellsystem</label>
-                  <select
-                    id="dashboard-news-source"
-                    value={form.sourceSystem}
-                    onChange={(event) => setForm((current) => ({ ...current, sourceSystem: event.target.value as DashboardNewsSourceSystem }))}
-                    disabled={isSaving}
-                  >
-                    <option value="ris">RIS</option>
-                    <option value="evi">EVI</option>
-                  </select>
-                </div>
-                <div className="field-group">
-                  <label htmlFor="dashboard-news-document-kind">Dokumenttyp</label>
-                  <select
-                    id="dashboard-news-document-kind"
-                    value={form.documentKind}
-                    onChange={(event) => setForm((current) => ({ ...current, documentKind: event.target.value as DashboardLegalDocumentKind }))}
-                    disabled={isSaving}
-                  >
-                    <option value="norm">Norm</option>
-                    <option value="rechtssatz">Rechtssatz</option>
-                    <option value="entscheidungsdokument">Entscheidungsdokument</option>
-                  </select>
-                </div>
-                <div className="field-group admin-news-field-span">
-                  <label htmlFor="dashboard-news-identifier">Amtliche Kennung</label>
-                  <input
-                    id="dashboard-news-identifier"
-                    value={form.sourceIdentifier}
-                    maxLength={200}
-                    required
-                    onChange={(event) => setForm((current) => ({ ...current, sourceIdentifier: event.target.value }))}
-                    disabled={isSaving}
-                  />
-                </div>
-                <div className="field-group admin-news-field-span">
-                  <label htmlFor="dashboard-news-source-url">HTTPS-Quellenlink</label>
-                  <input
-                    id="dashboard-news-source-url"
-                    type="url"
-                    value={form.sourceUrl}
-                    placeholder={form.sourceSystem === "ris" ? "https://www.ris.bka.gv.at/…" : "https://www.evi.gv.at/…"}
-                    required
-                    onChange={(event) => setForm((current) => ({ ...current, sourceUrl: event.target.value }))}
-                    disabled={isSaving}
-                  />
-                </div>
-                <div className="field-group">
-                  <label htmlFor="dashboard-news-document-date">Dokument-/Entscheidungsdatum</label>
-                  <input
-                    id="dashboard-news-document-date"
-                    type="date"
-                    value={form.documentDate}
-                    required
-                    onChange={(event) => setForm((current) => ({ ...current, documentDate: event.target.value }))}
-                    disabled={isSaving}
-                  />
-                </div>
-                <div className="field-group">
-                  <label htmlFor="dashboard-news-as-of-date">Rechtlicher Stichtag</label>
-                  <input
-                    id="dashboard-news-as-of-date"
-                    type="date"
-                    value={form.asOfDate}
-                    required
-                    onChange={(event) => setForm((current) => ({ ...current, asOfDate: event.target.value }))}
-                    disabled={isSaving}
-                  />
-                </div>
-              </div>
-              <p className="field-help">Veröffentlichungen beschreiben nur den redaktionell gepflegten Stand zum angegebenen Stichtag.</p>
-            </fieldset>
-          ) : null}
 
           <div className="admin-news-editor-actions">
             <span className="admin-draft-status" role="status">{isSaving ? "Wird gespeichert …" : isDirty ? "Ungespeicherte Änderungen" : "Keine offenen Änderungen"}</span>

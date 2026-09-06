@@ -173,7 +173,7 @@ describe("GET /api/dashboard", () => {
     expect(supabase.client.from).not.toHaveBeenCalled();
   });
 
-  it("returns counts, only published news, pinned-first sorting and at most three items per kind", async () => {
+  it("returns counts and only published platform updates with pinned-first sorting", async () => {
     const supabase = fakeSupabase();
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client as never);
 
@@ -187,13 +187,12 @@ describe("GET /api/dashboard", () => {
     expect(payload.counts).toEqual({ reasonings: 2, downloads: 2 });
     expect(payload.knowledge).toEqual({ status: "current", fetchedAt: knowledgeFixture.fetchedAt });
     expect(payload.news.product.map((item: { title: string }) => item.title)).toEqual(["Angeheftet", "Alt"]);
-    expect(payload.news.legal).toHaveLength(3);
-    expect(payload.news.legal[0].title).toBe("Recht 1");
-    expect(payload.news.legal.every((item: { status: string }) => item.status === "published")).toBe(true);
+    expect(payload.news).not.toHaveProperty("legal");
     const newsQueries = supabase.queries.filter((query) => query.table === "dashboard_news_items");
-    expect(newsQueries).toHaveLength(2);
+    expect(newsQueries).toHaveLength(1);
     for (const query of newsQueries) {
       expect(query.filters).toContainEqual(["eq", "status", "published"]);
+      expect(query.filters).toContainEqual(["eq", "kind", "product"]);
       expect(query.orders).toEqual([
         ["pinned", false],
         ["published_at", false],
@@ -226,8 +225,8 @@ describe("GET /api/dashboard", () => {
 
     expect(response.status).toBe(200);
     expect(payload.counts).toEqual({ reasonings: 2, downloads: 2 });
-    expect(payload.news).toEqual({ product: [], legal: [] });
+    expect(payload.news).toEqual({ product: [] });
     expect(payload.sectionErrors.productNews).toBeTruthy();
-    expect(payload.sectionErrors.legalNews).toBeTruthy();
+    expect(payload.sectionErrors).not.toHaveProperty("legalNews");
   });
 });

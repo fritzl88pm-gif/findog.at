@@ -5,7 +5,6 @@ import {
   DASHBOARD_NEWS_SELECT,
   mapDashboardNewsItem,
   type DashboardKnowledgeStatus,
-  type DashboardNewsKind,
   type DashboardNewsRow,
   type DashboardPayload,
 } from "@/lib/dashboard";
@@ -34,7 +33,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     const user = await authenticateSupabaseRequest(request, supabase);
     const now = new Date().toISOString();
 
-    const [reasoningsResult, downloadsResult, productResult, legalResult, knowledgeResult] = await Promise.all([
+    const [reasoningsResult, downloadsResult, productResult, knowledgeResult] = await Promise.all([
       supabase
         .from("user_reasonings")
         .select("id", { count: "exact", head: true })
@@ -43,8 +42,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         .from("download_documents")
         .select("id", { count: "exact", head: true })
         .is("deleted_at", null),
-      readPublishedNews(supabase, "product", now),
-      readPublishedNews(supabase, "legal", now),
+      readPublishedNews(supabase, now),
       getWeKnoraDashboard()
         .then((dashboard): DashboardKnowledgeStatus => ({
           status: dashboard.stale
@@ -60,8 +58,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     const sectionErrors: NonNullable<DashboardPayload["sectionErrors"]> = {};
     if (reasoningsResult.error) sectionErrors.reasonings = "Textbausteine konnten nicht geladen werden.";
     if (downloadsResult.error) sectionErrors.downloads = "Downloads konnten nicht geladen werden.";
-    if (productResult.error) sectionErrors.productNews = "Produktmeldungen konnten nicht geladen werden.";
-    if (legalResult.error) sectionErrors.legalNews = "Rechtsmeldungen konnten nicht geladen werden.";
+    if (productResult.error) sectionErrors.productNews = "Plattformupdates konnten nicht geladen werden.";
     if (knowledgeResult.status === "unavailable") sectionErrors.knowledge = "Der Wissensstand ist derzeit nicht verfügbar.";
 
     const payload: DashboardPayload = {
@@ -72,7 +69,6 @@ export async function GET(request: Request): Promise<NextResponse> {
       knowledge: knowledgeResult,
       news: {
         product: productResult.error ? [] : productResult.items,
-        legal: legalResult.error ? [] : legalResult.items,
       },
       ...(Object.keys(sectionErrors).length > 0 ? { sectionErrors } : {}),
     };
@@ -87,13 +83,12 @@ export async function GET(request: Request): Promise<NextResponse> {
 
 async function readPublishedNews(
   supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
-  kind: DashboardNewsKind,
   now: string,
 ): Promise<{ items: ReturnType<typeof mapDashboardNewsItem>[]; error: boolean }> {
   const { data, error } = await supabase
     .from("dashboard_news_items")
     .select(DASHBOARD_NEWS_SELECT)
-    .eq("kind", kind)
+    .eq("kind", "product")
     .eq("status", "published")
     .is("deleted_at", null)
     .lte("published_at", now)

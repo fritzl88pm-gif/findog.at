@@ -37,15 +37,15 @@ describe("logged-in dashboard UI", () => {
     expect(view).toContain("!link.adminOnly || isAdmin");
   });
 
-  it("keeps the latest conversation in the hero and renders news states with explicit Stichtag", () => {
+  it("keeps the latest conversation in the hero and renders platform update states", () => {
     expect(view).toContain("const latestConversation = conversations[0]");
     expect(view).toContain("onOpenConversation(latestConversation.id)");
     expect(view).toContain('title="Neu bei findog.at"');
-    expect(view).toContain('title="Recht aktuell"');
+    expect(view).not.toContain('title="Recht aktuell"');
     expect(view).toContain("Vorübergehend nicht verfügbar");
     expect(view).toContain("Derzeit keine Meldungen");
-    expect(view).toContain("<dt>Stichtag</dt>");
-    expect(view).toContain("Amtliche Quelle");
+    expect(view).not.toContain("<dt>Stichtag</dt>");
+    expect(view).toContain("Plattformupdate");
     expect(view.match(/formatTimestamp\(item\.publishedAt\)/gu)).toHaveLength(1);
   });
 
@@ -60,7 +60,7 @@ describe("logged-in dashboard UI", () => {
     expect(hero).not.toContain('src="/fred.png"');
   });
 
-  it("puts platform updates left of legal news and only applications below the news grid", () => {
+  it("puts platform updates across the available width above applications", () => {
     const heroIndex = view.indexOf('className="dashboard-hero"');
     const newsIndex = view.indexOf('className="dashboard-news-grid"');
     const productNewsIndex = view.indexOf('id="dashboard-product-news-title"', newsIndex);
@@ -70,8 +70,9 @@ describe("logged-in dashboard UI", () => {
     expect(heroIndex).toBeGreaterThan(-1);
     expect(newsIndex).toBeGreaterThan(heroIndex);
     expect(productNewsIndex).toBeGreaterThan(newsIndex);
-    expect(legalNewsIndex).toBeGreaterThan(productNewsIndex);
-    expect(applicationsIndex).toBeGreaterThan(legalNewsIndex);
+    expect(legalNewsIndex).toBe(-1);
+    expect(applicationsIndex).toBeGreaterThan(productNewsIndex);
+    expect(css).toMatch(/\.dashboard-news-grid \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\);/u);
     expect(view).not.toContain('className="dashboard-overview"');
     expect(view).not.toContain('className="dashboard-main-grid"');
     expect(view).not.toContain("Zuletzt verwendet");
@@ -95,13 +96,13 @@ describe("logged-in dashboard UI", () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.dashboard-skeleton-card/u);
   });
 
-  it("adds the protected news editor with all legal provenance fields and lifecycle actions", () => {
+  it("keeps the protected platform update editor and lifecycle actions", () => {
     expect(page).toContain('adminTab === "dashboard-news" ? (');
     expect(page).toContain("<AdminDashboardNews");
     expect(admin).toContain('fetch("/api/admin/dashboard-news"');
-    expect(admin).toContain("Amtliche Kennung");
-    expect(admin).toContain("HTTPS-Quellenlink");
-    expect(admin).toContain("Rechtlicher Stichtag");
+    expect(admin).not.toContain("Amtliche Kennung");
+    expect(admin).not.toContain("HTTPS-Quellenlink");
+    expect(admin).not.toContain("Rechtlicher Stichtag");
     expect(admin).toContain("Veröffentlichen");
     expect(admin).toContain("Archivieren");
     expect(admin).toContain("Soft-löschen");

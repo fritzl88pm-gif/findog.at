@@ -76,6 +76,10 @@ describe("administration workspace interactions", () => {
     window.dispatchEvent(unload); expect(unload.defaultPrevented).toBe(true);
     await click(button("Übersicht", ".admin-mobile-navigation button"));
     expect(host.querySelector("h1")?.textContent).toBe("BFG Newsletter");
+    expect(host.querySelectorAll(".admin-news-list-item")).toHaveLength(1);
+    expect(host.textContent).not.toContain("Alte Rechtsmeldung");
+    expect(host.querySelector("#dashboard-news-kind")).toBeNull();
+    expect(host.querySelector("#dashboard-news-source")).toBeNull();
     await click(host.querySelector(".admin-news-list-item")!);
     expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Mein ungespeicherter Entwurf");
     await click(button("Newsletter speichern"));
@@ -119,18 +123,18 @@ describe("administration workspace interactions", () => {
     expect(fetchMock.mock.calls.some((call) => call[1]?.method)).toBe(false);
   });
 
-  it("preserves a legal news source and stichtag on save and releases the dirty guard after success", async () => {
-    const item = { id: "news-1", kind: "legal", title: "Testmeldung", summary: "Testbeschreibung", status: "draft", pinned: false, publishedAt: null,
-      sourceSystem: "ris", documentKind: "norm", sourceIdentifier: "fixture-norm", sourceUrl: "https://www.ris.bka.gv.at/fixture",
-      documentDate: "2026-08-01", asOfDate: "2026-09-01", createdAt: "2026-09-01T10:00:00Z", updatedAt: "2026-09-01T10:00:00Z" };
+  it("edits only platform updates and releases the dirty guard after success", async () => {
+    const item = { id: "news-1", kind: "product", title: "Testmeldung", summary: "Testbeschreibung", status: "draft", pinned: false, publishedAt: null,
+      sourceSystem: null, documentKind: null, sourceIdentifier: null, sourceUrl: null,
+      documentDate: null, asOfDate: null, createdAt: "2026-09-01T10:00:00Z", updatedAt: "2026-09-01T10:00:00Z" };
     fetchMock.mockImplementation((_url, options) => options?.method
-      ? reply({ item: { ...item, ...JSON.parse(options.body) } }) : reply({ items: [item] }));
+      ? reply({ item: { ...item, ...JSON.parse(options.body) } }) : reply({ items: [{ ...item, id: "old-legal", kind: "legal", title: "Alte Rechtsmeldung" }, item] }));
     await render(createElement(Harness, { initial: "dashboard-news" }, createElement(AdminDashboardNews, { accessToken: "fixture" })));
     await click(host.querySelector(".admin-news-list-item")!);
     await input("#dashboard-news-title", "Geänderter Titel");
     await click(button("Entwurf speichern"));
     const write = fetchMock.mock.calls.find((call) => call[1]?.method === "PUT")!;
-    expect(JSON.parse(write[1].body)).toMatchObject({ id: item.id, title: "Geänderter Titel", sourceSystem: item.sourceSystem, documentKind: item.documentKind, sourceIdentifier: item.sourceIdentifier, sourceUrl: item.sourceUrl, documentDate: item.documentDate, asOfDate: item.asOfDate, status: "draft" });
+    expect(JSON.parse(write[1].body)).toMatchObject({ id: item.id, kind: "product", title: "Geänderter Titel", sourceSystem: item.sourceSystem, documentKind: item.documentKind, sourceIdentifier: item.sourceIdentifier, sourceUrl: item.sourceUrl, documentDate: item.documentDate, asOfDate: item.asOfDate, status: "draft" });
     expect(host.querySelector(".admin-draft-status")?.textContent).toBe("Keine offenen Änderungen");
     await click(button("Übersicht", ".admin-mobile-navigation button"));
     expect(window.confirm).not.toHaveBeenCalled();

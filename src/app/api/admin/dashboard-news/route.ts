@@ -34,20 +34,22 @@ async function requestJson(request: Request): Promise<unknown> {
   }
 }
 
+function parsePlatformUpdateInput(body: unknown) {
+  const input = parseDashboardNewsInput(body);
+  if (input.kind !== "product") {
+    throw new UserVisibleError("Es können nur Plattformupdates verwaltet werden.", 400);
+  }
+  return input;
+}
+
 function errorResponse(error: unknown): NextResponse {
   if (error instanceof UserVisibleError) {
     return json({ error: error.message }, error.status);
   }
-  return json({ error: "Die Startseiten-News konnten nicht verarbeitet werden." }, 500);
+  return json({ error: "Die Plattformupdates konnten nicht verarbeitet werden." }, 500);
 }
 
 function databaseWriteError(error: { code?: string } | null): UserVisibleError {
-  if (error?.code === "23505") {
-    return new UserVisibleError(
-      "Für dieses Quellsystem und diese amtliche Kennung besteht bereits eine aktive Rechtsmeldung.",
-      409,
-    );
-  }
   if (error?.code === "23514") {
     return new UserVisibleError("Die Meldung verletzt eine Datenregel und konnte nicht gespeichert werden.", 400);
   }
@@ -62,11 +64,12 @@ export async function GET(request: Request): Promise<NextResponse> {
     const { data, error } = await supabase
       .from("dashboard_news_items")
       .select(DASHBOARD_NEWS_SELECT)
+      .eq("kind", "product")
       .is("deleted_at", null)
       .order("updated_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(500);
-    if (error) throw new UserVisibleError("Startseiten-News konnten nicht geladen werden.", 503);
+    if (error) throw new UserVisibleError("Plattformupdates konnten nicht geladen werden.", 503);
     return json({ items: ((data ?? []) as unknown as DashboardNewsRow[]).map(mapDashboardNewsItem) });
   } catch (error) {
     return errorResponse(error);
@@ -78,7 +81,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     const supabase = getSupabaseServerClient();
     if (!supabase) throw new UserVisibleError("Administration ist derzeit nicht verfügbar.", 503);
     const user = await authenticateAdminRequest(request, supabase);
-    const input = parseDashboardNewsInput(await requestJson(request));
+    const input = parsePlatformUpdateInput(await requestJson(request));
     assertDashboardNewsStatusTransition(null, input.status);
     const { data, error } = await supabase
       .from("dashboard_news_items")
@@ -110,11 +113,12 @@ export async function PUT(request: Request): Promise<NextResponse> {
       throw new UserVisibleError("Die Meldungsangaben enthalten ungültige Felder.", 400);
     }
     const id = requireDashboardNewsId(rawId);
-    const input = parseDashboardNewsInput(rawInput);
+    const input = parsePlatformUpdateInput(rawInput);
     const { data: current, error: currentError } = await supabase
       .from("dashboard_news_items")
       .select("status")
       .eq("id", id)
+      .eq("kind", "product")
       .is("deleted_at", null)
       .maybeSingle();
     if (currentError) throw new UserVisibleError("Die Meldung konnte nicht geprüft werden.", 503);
@@ -125,6 +129,7 @@ export async function PUT(request: Request): Promise<NextResponse> {
       .from("dashboard_news_items")
       .update({ ...dashboardNewsInputToRow(input), updated_by: user.id })
       .eq("id", id)
+      .eq("kind", "product")
       .is("deleted_at", null)
       .select(DASHBOARD_NEWS_SELECT)
       .maybeSingle();
@@ -158,6 +163,7 @@ export async function DELETE(request: Request): Promise<NextResponse> {
         updated_by: user.id,
       })
       .eq("id", id)
+      .eq("kind", "product")
       .is("deleted_at", null)
       .select("id")
       .maybeSingle();

@@ -16,9 +16,12 @@ Findog-Navigation bleibt erreichbar. Bereichswechsel fokussieren die Überschrif
   beziehungsweise darunter.
 - **Downloads:** Kategorien und Dateiliste, Suche nach Titel oder Dateiname,
   Metadatenbearbeitung und separater Uploaddialog.
-- **Startseiten-News:** gefilterte Meldungsliste und Editor mit Entwurf,
-  Veröffentlichung und Archivierung. RIS/EVI-Quelle, Dokumenttyp,
-  Dokumentdatum und rechtlicher Stichtag bleiben erhalten.
+- **Plattformupdates:** nach Status gefilterte Meldungsliste und Editor mit
+  Entwurf, Veröffentlichung und Archivierung. Auf der Startseite und in der
+  Administration werden ausschließlich Plattformupdates angezeigt. Die API
+  erlaubt nur das Anlegen, Bearbeiten und Soft-Löschen von `kind = product`.
+  Bestehende Rechtsmeldungen und ihr Auditverlauf bleiben unverändert gespeichert;
+  sie werden nicht mehr ausgeliefert. Dafür ist keine Migration erforderlich.
 - **BFG Newsletter:** datierte Ausgaben mit Editor und vorhandener Soft-Löschung.
 - **Dokumentverarbeitung:** getrennte Abschnitte für Fred-Anhänge, OCR und
   Belegauswertung. Der Beleg-Prompt ist standardmäßig eingeklappt.
@@ -37,7 +40,8 @@ sperren weitere Schreibaktionen und Bereichswechsel. Speicherfehler erhalten
 die Eingaben. Native Dialoge unterstützen Escape und geben den Fokus nach dem
 Schließen zurück. Bestehende Löschbestätigungen bleiben bestehen.
 
-Es gibt keine API-, Rechte- oder Schemaänderung und keine Migration. Der
+Der Administrationsumbau vom 5. September enthält keine API-, Rechte- oder
+Schemaänderung und keine Migration. Der
 Anfrageverlauf stammt weiterhin aus vorhandenen Nachrichten; Audit und
 Provenienz werden unverändert über die bestehenden Endpunkte geführt.
 
@@ -58,3 +62,15 @@ Provenienz werden unverändert über die bestehenden Endpunkte geführt.
   verbunden. DOM-Tests prüfen kein CSS-Layout; die Dialog-API ist dort simuliert.
 
 Der Umbau ist lokal umgesetzt; es wurde dafür kein Deployment ausgelöst.
+
+## Plattformupdates, 6. September 2026
+
+Rechtsnews wurden aus Startseite und Administration entfernt. Der verbleibende
+Startseitenbereich nutzt die volle Breite. Die vorhandenen API-Endpunkte filtern
+auf Plattformupdates; Rechtsmeldungen werden auch bei direkten Schreibanfragen
+abgewiesen. Gespeicherte Rechtsmeldungen, Provenienz und Audit bleiben erhalten.
+
+Lokale Prüfung: 45 relevante Tests, TypeScript und Produktionsbuild erfolgreich;
+ESLint ohne Fehler mit vier bestehenden Warnungen außerhalb dieser Änderung.
+Keine Datenbankmigration und kein Deployment ausgeführt. Das Layout wurde nicht
+im echten Browser geprüft.
