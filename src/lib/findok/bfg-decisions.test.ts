@@ -140,9 +140,52 @@ describe("Findok BFG result mapping", () => {
       decisionDate: "03.04.2025",
       publicationDate: "10.04.2025",
       content: "Vollständiger offizieller Entscheidungstext für serverseitige Verarbeitung.",
+      contentTruncated: false,
       htmlUrl: "https://findok.bmf.gv.at/findok/volltext?dokumentId=doc-1&segmentId=seg-1&indexName=findok",
       pdfUrl: "https://findok.bmf.gv.at/findok/resources/pdf/decision.pdf",
     }]);
+  });
+
+  it("accurately records contentTruncated: exactly 100000 chars is not truncated, 100001 is truncated", async () => {
+    const exact100k = "a".repeat(100_000);
+    const oversized100kPlus1 = "b".repeat(100_001);
+
+    const firstPage = sseResponse({
+      pageResults: {
+        searchResults: [
+          { dokumentId: "doc-exact", segmentId: "seg-1", indexName: "findok", title: "Exact", dokumenttyp: "BFG", snippet: "" },
+          { dokumentId: "doc-over", segmentId: "seg-2", indexName: "findok", title: "Over", dokumenttyp: "BFG", snippet: "" },
+        ],
+        currentPage: 0,
+        pageSize: 20,
+        totalPages: 1,
+        totalSize: 2,
+      },
+    });
+
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(jsonResponse({
+        bfg: true,
+        titel: "Exact 100k Doc",
+        geschaeftszahl: "RV/1/2025",
+        content: `   <p>${exact100k}</p>   `,
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        bfg: true,
+        titel: "Over 100k Doc",
+        geschaeftszahl: "RV/2/2025",
+        content: oversized100kPlus1,
+      }));
+
+    const result = await fetchBfgProCandidates({ query: "Test", fetchImpl: fetchMock });
+
+    expect(result).toHaveLength(2);
+    expect(result[0]?.content.length).toBe(100_000);
+    expect(result[0]?.contentTruncated).toBe(false);
+
+    expect(result[1]?.content.length).toBe(100_000);
+    expect(result[1]?.contentTruncated).toBe(true);
   });
 
   it.each([

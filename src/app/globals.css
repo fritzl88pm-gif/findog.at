@@ -4847,6 +4847,16 @@ textarea:focus {
   color: var(--muted);
 }
 
+.bfg-pro-excerpt blockquote {
+  margin: 2px 0 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--border);
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-style: italic;
+  line-height: 1.55;
+}
+
 .bfg-result-links {
   display: flex;
   flex-wrap: wrap;

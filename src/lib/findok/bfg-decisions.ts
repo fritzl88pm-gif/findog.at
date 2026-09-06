@@ -76,6 +76,7 @@ export type BfgProCandidate = {
   decisionDate: string;
   publicationDate: string;
   content: string;
+  contentTruncated: boolean;
   htmlUrl: string | null;
   pdfUrl: string | null;
 };
@@ -480,7 +481,17 @@ function mapProDetail(
     publicationDate: isRecord(publication)
       ? plainText(stringValue(publication, "inFindokVeroeffentlichtAm"))
       : "",
-    content: plainTextWithLimit(stringValue(detail, "content"), MAX_PRO_CONTENT_CHARS),
+    ...(() => {
+      const rawContent = stringValue(detail, "content");
+      const normalizedContent = decodeHtmlEntities(rawContent.replace(/<[^>]*>/g, " "))
+        .replace(/\s+/g, " ")
+        .trim();
+      const contentTruncated = normalizedContent.length > MAX_PRO_CONTENT_CHARS;
+      return {
+        content: normalizedContent.slice(0, MAX_PRO_CONTENT_CHARS),
+        contentTruncated,
+      };
+    })(),
     htmlUrl: officialHtmlUrl(detail)
       || officialHtmlUrl(hit as unknown as Record<string, unknown>),
     pdfUrl: officialPdfUrl(stringValue(detail, "dokumentPdfMediaUrl")),

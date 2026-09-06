@@ -1,6 +1,6 @@
 # findog.at
 
-Next.js application for Findog/Fred, a German-language tax-law assistant using WeKnora for Fred, Gemini via OpenRouter for Scanning, DeepSeek for BFG Suche PRO, and Supabase for authentication and durable chat history.
+Next.js application for Findog/Fred, a German-language tax-law assistant using WeKnora for Fred, Gemini via OpenRouter for Scanning, OmniRoute (codex/gpt-5.6-luna) for BFG Suche PRO, and Supabase for authentication and durable chat history.
 
 ## Local Setup
 
@@ -21,8 +21,10 @@ Copy `.env.example` to `.env.local` and configure Supabase Auth before using the
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Browser-safe Supabase anon key for Auth calls. Do not use a service role key here. |
 | `SUPABASE_URL` | Yes | Server-side Supabase project URL for validating Auth access tokens and chat persistence. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Server-only Supabase service role key. Never expose it to the browser. |
-| `DEEPSEEK_API_KEY` | For BFG Suche PRO | Server-only DeepSeek API key used for BFG Suche PRO. Never expose it to the browser. |
+| `DEEPSEEK_API_KEY` | Optional | Server-only DeepSeek API key. Never expose it to the browser. |
 | `GLOBAL_DEEPSEEK_API_KEY` | Optional | Fallback server-only DeepSeek key if `DEEPSEEK_API_KEY` is unset or blank. |
+| `OMNIROUTE_BASE_URL` | For BFG Suche PRO | Server-only base URL for OmniRoute API calls. |
+| `OMNIROUTE_API_KEY` | For BFG Suche PRO | Server-only API key for OmniRoute API calls (`codex/gpt-5.6-luna`). |
 | `WEKNORA_FRED_CHANNEL_ID` | For native Fred chat | Identifier of Fred's enabled WeKnora embed channel. It remains server-side. |
 | `WEKNORA_FRED_PUBLISH_TOKEN` | For native Fred chat | Server-only long-lived channel publish token with the `em_` prefix. This is not an account API key (`sk_`) and must never use a `NEXT_PUBLIC_` prefix. |
 | `WEKNORA_FRED_EXCHANGE_ORIGIN` | For native Fred chat | Exact Findog origin registered in the channel allowlist; production defaults to `https://findog.at`. |
@@ -84,7 +86,7 @@ npm run build
 
 ## Deployment
 
-Deploy the Next.js application through Coolify. Configure the Supabase variables, `DEEPSEEK_API_KEY` for BFG Suche PRO, `OPENROUTER_API_KEY` for Scanning and image-assisted forms, and the required `WEKNORA_FRED_*` values as protected runtime environment variables. For QuickFred, configure all four `WEKNORA_QUICKFRED_*` values and bind its dedicated channel to the expected agent UUID. Both channel allowlists must include the exact Findog exchange origin and use the same message webhook URL and HMAC secret. Do not expose provider keys as build arguments or `NEXT_PUBLIC_` variables. Restart or redeploy the application after changing a runtime variable. The Coolify reverse proxy must accept request bodies of at least 100 MiB so that a valid maximum Scanning batch, including multipart overhead, reaches the application. BFG Suche PRO plans Findok queries with deepseek-v4-flash and reranks the official candidates with deepseek-v4-pro at maximum reasoning effort, so a single PRO request can take several minutes; the reverse proxy read/response timeout for `/api/findok/bfg/pro` must allow at least 600 seconds. That route streams newline-delimited JSON progress events (query planning, Findok retrieval, sorting, reranking) before the final result, so the reverse proxy must forward the response unbuffered and must not compress or rewrite `application/x-ndjson`.
+Deploy the Next.js application through Coolify. Configure the Supabase variables, `OMNIROUTE_BASE_URL` and `OMNIROUTE_API_KEY` for BFG Suche PRO, `OPENROUTER_API_KEY` for Scanning and image-assisted forms, and the required `WEKNORA_FRED_*` values as protected runtime environment variables. For QuickFred, configure all four `WEKNORA_QUICKFRED_*` values and bind its dedicated channel to the expected agent UUID. Both channel allowlists must include the exact Findog exchange origin and use the same message webhook URL and HMAC secret. Do not expose provider keys as build arguments or `NEXT_PUBLIC_` variables. Restart or redeploy the application after changing a runtime variable. The Coolify reverse proxy must accept request bodies of at least 100 MiB so that a valid maximum Scanning batch, including multipart overhead, reaches the application. BFG Suche PRO plans Findok queries and evaluates official decisions on full texts with `codex/gpt-5.6-luna` via OmniRoute at medium reasoning effort, so a single PRO request can take several minutes; the reverse proxy read/response timeout for `/api/findok/bfg/pro` must allow at least 600 seconds. That route streams newline-delimited JSON progress events (query planning, Findok retrieval, sorting, summarizing) before the final result, so the reverse proxy must forward the response unbuffered and must not compress or rewrite `application/x-ndjson`.
 
 The native Fred chat mirrors the WeKnora embed capabilities configured for its channel and agent. When enabled upstream, users can request web search and attach up to five images (JPEG, PNG, GIF, or WebP; 10 MB each) plus five documents (`pdf`, `doc`, `docx`, `txt`, `md`, `csv`, `xlsx`, `xls`, `ppt`, or `pptx`; 20 MB each), subject to a combined 35 MiB attachment limit per request. Files are forwarded to WeKnora for the current request only. Findog stores auditable attachment metadata (name, MIME type, size, SHA-256) and the web-search flag with the user message, but not the binary file or data URI.
 
