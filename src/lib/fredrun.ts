@@ -521,6 +521,16 @@ function collidingObstacleIds(
   return ids;
 }
 
+// Match the press silhouette: broad grip, narrow neck, and metal/rubber sole.
+// Insets retain the existing four-pixel horizontal collision forgiveness.
+export function fredRunStampCollisionBoxes(stamp: Pick<FredRunStampHazard, "x" | "y" | "width" | "height">) {
+  return [
+    { x: stamp.x - stamp.width / 2 + 4, y: stamp.y + 3, width: stamp.width - 8, height: 15 },
+    { x: stamp.x - 9, y: stamp.y + 18, width: 18, height: 14 },
+    { x: stamp.x - stamp.width / 2 + 4, y: stamp.y + 32, width: stamp.width - 8, height: stamp.height - 32 },
+  ];
+}
+
 function collidingStampIds(
   state: FredRunState,
   stamps: FredRunStampHazard[],
@@ -536,18 +546,17 @@ function collidingStampIds(
   for (const stamp of stamps) {
     if (stamp.phase === "dormant" || stamp.phase === "recovering" || stamp.colliderDisabled) continue;
     const prev = previousStampPositions.get(stamp.id) ?? { x: stamp.x, y: stamp.y };
-    const sweptX = Math.min(stamp.x, prev.x) - stamp.width / 2 + 4;
-    const sweptWidth = Math.abs(prev.x - stamp.x) + stamp.width - 8;
-    const sweptY = Math.min(stamp.y, prev.y);
-    const sweptHeight = Math.abs(prev.y - stamp.y) + stamp.height;
-    if (rectanglesOverlap(player, {
-      x: sweptX,
-      y: sweptY + 3,
-      width: sweptWidth,
-      height: sweptHeight - 3,
-    })) {
-      ids.add(stamp.id);
-    }
+    const boxes = fredRunStampCollisionBoxes(stamp);
+    const previousBoxes = fredRunStampCollisionBoxes({ ...stamp, ...prev });
+    if (boxes.some((box, index) => {
+      const previous = previousBoxes[index];
+      return rectanglesOverlap(player, {
+        x: Math.min(box.x, previous.x),
+        y: Math.min(box.y, previous.y),
+        width: box.width + Math.abs(box.x - previous.x),
+        height: box.height + Math.abs(box.y - previous.y),
+      });
+    })) ids.add(stamp.id);
   }
   return ids;
 }
