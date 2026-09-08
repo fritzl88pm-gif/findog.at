@@ -4,15 +4,10 @@ import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import {
   BFG_NEWSLETTER_SELECT,
   mapBfgNewsletterItem,
-  type BfgNewsletterItem,
   type BfgNewsletterRow,
 } from "@/lib/bfg-newsletters";
 import { UserVisibleError } from "@/lib/errors";
-import {
-  extractBfgGzCandidates,
-  linkVerifiedBfgCitations,
-  verifyBfgCitations,
-} from "@/lib/findok/bfg-citations";
+import { linkNewsletterItems } from "@/lib/bfg-newsletter-links";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -25,29 +20,6 @@ function json(payload: unknown, status = 200): NextResponse {
       Vary: "Authorization",
     },
   });
-}
-
-export async function linkNewsletterItems(
-  items: BfgNewsletterItem[],
-  fetchImpl: typeof fetch = fetch,
-): Promise<BfgNewsletterItem[]> {
-  const candidates = new Set<string>();
-  for (const item of items) {
-    for (const gz of extractBfgGzCandidates(item.contentMarkdown)) {
-      candidates.add(gz);
-    }
-  }
-  if (candidates.size === 0) return items;
-
-  const { verified } = await verifyBfgCitations([...candidates], fetchImpl);
-  if (verified.length === 0) return items;
-
-  return items.map((item) => ({
-    ...item,
-    contentMarkdown: linkVerifiedBfgCitations(item.contentMarkdown, verified, {
-      target: "fullText",
-    }),
-  }));
 }
 
 export async function GET(request: Request): Promise<NextResponse> {

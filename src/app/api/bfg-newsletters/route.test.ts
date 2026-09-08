@@ -4,7 +4,8 @@ import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import * as bfgCitations from "@/lib/findok/bfg-citations";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { GET, linkNewsletterItems } from "./route";
+import { GET } from "./route";
+import { linkNewsletterItems } from "@/lib/bfg-newsletter-links";
 
 vi.mock("@/lib/auth/server", () => ({ authenticateSupabaseRequest: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));

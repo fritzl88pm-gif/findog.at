@@ -1,20 +1,32 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  FREDRUN_ALPS_CRUMBLE_DURATION,
+  FREDRUN_ALPS_FATAL_FALL_DEPTH,
+  FREDRUN_ALPS_PLATFORM_Y,
   FREDRUN_COIN_SCORE,
   FREDRUN_COLLECTIBLE_SPAWN_CLEARANCE,
   FREDRUN_GROUND_Y,
   FREDRUN_HIGH_SCORE_KEY,
+  FREDRUN_JUMP_AIR_TIME,
   FREDRUN_JUMP_BUFFER_SECONDS,
   FREDRUN_MAGNET_SECONDS,
+  FREDRUN_MAX_SEQUENCE_SPEED,
   FREDRUN_NEAR_MISS_COMBO_SECONDS,
+  FREDRUN_PLAYER_X,
   FREDRUN_RESUME_COUNTDOWN_SECONDS,
+  FREDRUN_SCORE_PULSE_POINTS,
+  FREDRUN_STAMP_HEAD_IMPACT_Y,
+  FREDRUN_STAMP_HEAD_REST_Y,
+  FREDRUN_STAMP_HEIGHT,
+  FREDRUN_STAMP_WIDTH,
   advanceFredRun,
   createFredRunState,
   fredRunContinuousScoreForDistance,
   fredRunEnvironmentForDistance,
   fredRunPowerUpDistanceMultiplierForScore,
   fredRunReactionTimeFactorForScore,
+  fredRunSequenceClearance,
   fredRunShieldDurationForScore,
   fredRunShieldSpawnRateForScore,
   fredRunSpeedForDistance,
@@ -24,10 +36,32 @@ import {
   readFredRunHighScore,
   restartFredRun,
   resumeFredRun,
+  scheduleViennaSequence,
   startFredRun,
+  type FredRunChasm,
+  type FredRunPlatform,
+  type FredRunStampHazard,
   type FredRunState,
   writeFredRunHighScore,
 } from "./fredrun";
+
+const MAX_BEHAVIOR_STEPS = 2_000;
+
+function advanceUntil(
+  initial: FredRunState,
+  shouldContinue: (state: FredRunState) => boolean,
+  label: string,
+): FredRunState {
+  let state = initial;
+  for (let step = 0; step < MAX_BEHAVIOR_STEPS; step += 1) {
+    if (state.phase === "game-over") {
+      throw new Error(`${label}: unexpected game-over at step ${step} (height=${state.playerHeight}, grounded=${state.grounded}, obstacles=${state.obstacles.map((obstacle) => `${obstacle.id}:${obstacle.x.toFixed(1)}`).join(",")})`);
+    }
+    if (!shouldContinue(state)) return state;
+    state = advanceFredRun(state, 0.02);
+  }
+  throw new Error(`${label}: exceeded ${MAX_BEHAVIOR_STEPS} steps`);
+}
 import {
   FREDRUN_WORLDS,
   fredRunFluorescentFlicker,
@@ -311,7 +345,8 @@ describe("Fredrun simulation", () => {
 
     for (const expected of cases) {
       const state = startFredRun({ ...createFredRunState(), spawnDistance: 0 });
-      const advanced = advanceFredRun(state, 1 / 120, () => expected.roll);
+      const stream = [expected.roll, 0.99];
+      const advanced = advanceFredRun(state, 1 / 120, () => stream.shift() ?? expected.roll);
       expect(advanced.obstacles).toHaveLength(1);
       expect(advanced.obstacles[0]).toMatchObject({
         kind: expected.kind,
@@ -760,5 +795,1013 @@ describe("Fredrun local high score", () => {
     expect(writeFredRunHighScore(storage, 12, 0)).toBe(12);
     expect(readFredRunHighScore(null)).toBe(0);
     expect(writeFredRunHighScore(null, 15, 12)).toBe(15);
+  });
+});
+
+describe("Vienna obstacle sequences", () => {
+  it("schedules varied jump rhythms across score tiers with gentle introduction", () => {
+    // Score < 400: spaced-pair or tight-pair
+    const lowScoreSpaced = scheduleViennaSequence(400, 200, () => 0.1);
+    expect(lowScoreSpaced).not.toBeNull();
+    expect(lowScoreSpaced?.sequence.kind).toBe("spaced-pair");
+    expect(lowScoreSpaced?.sequence.steps).toHaveLength(1);
+
+    const lowScoreTight = scheduleViennaSequence(400, 200, () => 0.45);
+    expect(lowScoreTight).not.toBeNull();
+    expect(lowScoreTight?.sequence.kind).toBe("tight-pair");
+    expect(lowScoreTight?.sequence.steps).toHaveLength(1);
+
+    // Score 400 - 1200: introduces triple-cadence
+    const midScoreTriple = scheduleViennaSequence(500, 800, () => 0.7);
+    expect(midScoreTriple).not.toBeNull();
+    expect(midScoreTriple?.sequence.kind).toBe("triple-cadence");
+    expect(midScoreTriple?.sequence.steps).toHaveLength(2);
+
+    // Score >= 1200: introduces combined-gauntlet with moving obstacles
+    const highScoreGauntlet = scheduleViennaSequence(600, 1500, () => 0.1);
+    expect(highScoreGauntlet).not.toBeNull();
+    expect(highScoreGauntlet?.sequence.kind).toBe("combined-gauntlet");
+    expect(highScoreGauntlet?.sequence.steps).toHaveLength(2);
+  });
+
+  it("respects finite-speed scheduling limits and returns null above FREDRUN_MAX_SEQUENCE_SPEED", () => {
+    expect(scheduleViennaSequence(FREDRUN_MAX_SEQUENCE_SPEED + 1, 1000, () => 0.1)).toBeNull();
+    expect(scheduleViennaSequence(2000, 2000, () => 0.1)).toBeNull();
+    // Below or at max speed, sequences can schedule
+    expect(scheduleViennaSequence(FREDRUN_MAX_SEQUENCE_SPEED, 200, () => 0.1)).not.toBeNull();
+  });
+
+  it("calculates clearance for spaced pairs ensuring fixed jump physics and ground reaction time", () => {
+    const speed = 400;
+    const clearance = fredRunSequenceClearance(speed, 0.38, 1);
+    expect(clearance).toBeCloseTo(speed * (FREDRUN_JUMP_AIR_TIME + 0.38));
+    expect(clearance).toBeGreaterThan(speed * FREDRUN_JUMP_AIR_TIME);
+
+    const movingClearance = fredRunSequenceClearance(speed, 0.38, 1.35);
+    expect(movingClearance).toBeGreaterThan(clearance);
+  });
+
+  it("reproduces issue 2 fix: random stream [0, 0.45] spawns planned paragraph first obstacle instead of odo", () => {
+    let state = startFredRun(createFredRunState("vienna"));
+    state = { ...state, spawnDistance: 0 };
+    const stream = [0, 0.45];
+    const advanced = advanceFredRun(state, 0.05, () => stream.shift() ?? 0);
+    expect(advanced.obstacles[0].kind).toBe("paragraph");
+    expect(advanced.activeSequence?.kind).toBe("tight-pair");
+  });
+
+  it("proves safe jump schedules for each authored pattern at representative supported speeds (300, 540, 900)", () => {
+    // 1. Spaced pair at low speed (300 px/s): two distinct jumps with grounded reaction time
+    {
+      const clearance = fredRunSequenceClearance(300, 0.38, 1, 1);
+      let state = startFredRun(createFredRunState("vienna"));
+      state = {
+        ...state,
+        obstacles: [
+          { id: 1, kind: "paragraph", x: 220, width: 42, height: 68 },
+          { id: 2, kind: "reihe100", x: 220 + clearance, width: 56, height: 60 },
+        ],
+        spawnDistance: 10_000,
+      };
+
+      state = advanceUntil(state, (next) => {
+        const obstacle = next.obstacles.find((candidate) => candidate.id === 1);
+        expect(obstacle).toBeDefined();
+        return (obstacle?.x ?? -Infinity) - FREDRUN_PLAYER_X > 60;
+      }, "spaced-pair first obstacle approach");
+      state = jumpFredRun(state);
+      expect(state.grounded).toBe(false);
+
+      state = advanceUntil(state, (next) => !next.grounded, "spaced-pair first jump");
+
+      let reactionTime = 0;
+      state = advanceUntil(state, (next) => {
+        const obstacle = next.obstacles.find((candidate) => candidate.id === 2);
+        expect(obstacle).toBeDefined();
+        if ((obstacle?.x ?? -Infinity) - FREDRUN_PLAYER_X <= 60) return false;
+        reactionTime += 0.02;
+        return true;
+      }, "spaced-pair reaction gap");
+      // The 60px approach threshold is reached on the 17th 20ms tick.
+      expect(reactionTime).toBeGreaterThanOrEqual(0.34);
+
+      state = jumpFredRun(state);
+      state = advanceUntil(state, (next) => {
+        const obstacle = next.obstacles.find((candidate) => candidate.id === 2);
+        expect(obstacle).toBeDefined();
+        return (obstacle?.x ?? -Infinity) + (obstacle?.width ?? 0) > FREDRUN_PLAYER_X - 24;
+      }, "spaced-pair second jump");
+    }
+
+    // 2. Tight pair at low (300), mid (540), and high (900) speeds: cleared in a single leap
+    for (const speed of [300, 540, 900]) {
+      let state = startFredRun(createFredRunState("vienna"));
+      const scoreForSpeed = ((speed - 300) / 120) * FREDRUN_SCORE_PULSE_POINTS;
+      const initialDist = 300;
+      state = {
+        ...state,
+        score: scoreForSpeed,
+        distance: scoreForSpeed * 34,
+        speed,
+        obstacles: [
+          { id: 10, kind: "paragraph", x: initialDist, width: 42, height: 68 },
+          { id: 11, kind: "reihe100", x: initialDist + 18, width: 56, height: 60 },
+        ],
+        spawnDistance: 10_000,
+      };
+
+      state = advanceUntil(state, (next) => {
+        const obstacle = next.obstacles.find((candidate) => candidate.id === 10);
+        expect(obstacle).toBeDefined();
+        return (obstacle?.x ?? -Infinity) - FREDRUN_PLAYER_X > Math.max(130, speed * 0.43);
+      }, `tight-pair ${speed} approach`);
+
+      state = jumpFredRun(state);
+      expect(state.grounded).toBe(false);
+
+      state = advanceUntil(state, (next) => {
+        const obstacle = next.obstacles.find((candidate) => candidate.id === 11);
+        expect(obstacle).toBeDefined();
+        return (obstacle?.x ?? -Infinity) + (obstacle?.width ?? 0) > FREDRUN_PLAYER_X - 24;
+      }, `tight-pair ${speed} traversal`);
+    }
+
+    // 3. Triple cadence at mid speed (540 px/s): 3 rhythmic jumps
+    {
+      const speed = 540;
+      const score = 600;
+      const gap1 = fredRunSequenceClearance(speed, 0.38, 1, 1);
+      const gap2 = fredRunSequenceClearance(speed, 0.38, 1, 1);
+      let state = startFredRun(createFredRunState("vienna"));
+      state = {
+        ...state,
+        score,
+        distance: score * 34,
+        speed,
+        obstacles: [
+          { id: 20, kind: "reihe100", x: 260, width: 56, height: 60 },
+          { id: 21, kind: "paragraph", x: 260 + gap1, width: 42, height: 68 },
+          { id: 22, kind: "steuerkodex", x: 260 + gap1 + gap2, width: 45, height: 70 },
+        ],
+        spawnDistance: 10_000,
+      };
+
+      for (let step = 0; step < 3; step += 1) {
+        const targetId = 20 + step;
+        state = advanceUntil(state, (next) => {
+          const targetObstacle = next.obstacles.find((candidate) => candidate.id === targetId);
+          expect(targetObstacle).toBeDefined();
+          return (targetObstacle?.x ?? -Infinity) - FREDRUN_PLAYER_X > Math.max(90, speed * 0.30);
+        }, `triple-cadence ${targetId} approach`);
+        state = jumpFredRun(state);
+        state = advanceUntil(state, (next) => {
+          const targetObstacle = next.obstacles.find((candidate) => candidate.id === targetId);
+          expect(targetObstacle).toBeDefined();
+          return !next.grounded && (targetObstacle?.x ?? -Infinity) + (targetObstacle?.width ?? 0) > FREDRUN_PLAYER_X - 24;
+        }, `triple-cadence ${targetId} traversal`);
+      }
+      expect(state.phase).toBe("running");
+    }
+
+    // 4. Combined gauntlet at high speed (900 px/s): tight-pair leap followed by moving obstacle leap
+    {
+      const speed = 900;
+      const score = 1500;
+      const odoMult = 1.18;
+      const gapToMoving = fredRunSequenceClearance(speed, 0.43, odoMult, 1);
+      let state = startFredRun(createFredRunState("vienna"));
+      state = {
+        ...state,
+        score,
+        distance: score * 34,
+        speed,
+        obstacles: [
+          { id: 30, kind: "paragraph", x: 300, width: 42, height: 68 },
+          { id: 31, kind: "reihe100", x: 300 + 18, width: 56, height: 60 },
+          { id: 32, kind: "odo", x: 800 + gapToMoving, width: 38, height: 78 },
+        ],
+        spawnDistance: 10_000,
+      };
+
+      state = advanceUntil(state, (next) => {
+        const obstacle = next.obstacles.find((candidate) => candidate.id === 30);
+        expect(obstacle).toBeDefined();
+        return (obstacle?.x ?? -Infinity) - FREDRUN_PLAYER_X > Math.max(120, speed * 0.30);
+      }, "combined-gauntlet first approach");
+      state = jumpFredRun(state);
+      state = advanceUntil(state, (next) => !next.grounded, "combined-gauntlet first jump");
+
+      let reactionTime = 0;
+      state = advanceUntil(state, (next) => {
+        const obstacle = next.obstacles.find((candidate) => candidate.id === 32);
+        expect(obstacle).toBeDefined();
+        if ((obstacle?.x ?? -Infinity) - FREDRUN_PLAYER_X <= Math.max(180, speed * 0.45)) return false;
+        reactionTime += 0.02;
+        return true;
+      }, "combined-gauntlet reaction gap");
+      // The moving target is already closing while the first jump is in flight;
+      // the authored schedule still leaves a measured 0.24s grounded window here.
+      expect(reactionTime).toBeGreaterThanOrEqual(0.24 - Number.EPSILON * 8);
+
+      state = jumpFredRun(state);
+      state = advanceUntil(state, (next) => {
+        const obstacle = next.obstacles.find((candidate) => candidate.id === 32);
+        expect(obstacle).toBeDefined();
+        return (obstacle?.x ?? -Infinity) + (obstacle?.width ?? 0) > FREDRUN_PLAYER_X - 24;
+      }, "combined-gauntlet moving obstacle");
+      expect(state.phase).toBe("running");
+    }
+  });
+
+  it("ensures clusters cannot be made impossible by preceding and following random encounters", () => {
+    const speed = 500;
+    const score = 400;
+    const clearance = fredRunSequenceClearance(speed, 0.38, 1, 1);
+    const followingClearance = fredRunSequenceClearance(speed, 0.38, 1.18, 1);
+
+    let state = startFredRun(createFredRunState("vienna"));
+    state = {
+      ...state,
+      score,
+      distance: score * 34,
+      speed,
+      obstacles: [
+        { id: 40, kind: "madinger", x: 220, width: 42, height: 82 },
+        { id: 41, kind: "paragraph", x: 220 + clearance, width: 42, height: 68 },
+        { id: 42, kind: "reihe100", x: 220 + clearance * 2, width: 56, height: 60 },
+        { id: 43, kind: "odo", x: 220 + clearance * 2 + followingClearance, width: 38, height: 78 },
+      ],
+      spawnDistance: 10_000,
+    };
+
+    for (let i = 0; i < 4; i += 1) {
+      const targetId = 40 + i;
+      state = advanceUntil(state, (next) => {
+        const target = next.obstacles.find((candidate) => candidate.id === targetId);
+        expect(target).toBeDefined();
+        return (target?.x ?? -Infinity) - FREDRUN_PLAYER_X > Math.max(90, speed * 0.30);
+      }, `cluster ${targetId} approach`);
+      state = jumpFredRun(state);
+      state = advanceUntil(state, (next) => {
+        const target = next.obstacles.find((candidate) => candidate.id === targetId);
+        expect(target).toBeDefined();
+        return !next.grounded && (target?.x ?? -Infinity) + (target?.width ?? 0) > FREDRUN_PLAYER_X - 24;
+      }, `cluster ${targetId} traversal`);
+    }
+    expect(state.phase).toBe("running");
+  });
+
+  it("prevents random obstacles from interrupting an active authored sequence", () => {
+    let state = startFredRun(createFredRunState("vienna"));
+    state = {
+      ...state,
+      activeSequence: {
+        kind: "spaced-pair",
+        steps: [
+          { gap: 300, kind: "paragraph" },
+          { gap: 400, kind: "reihe100" },
+        ],
+      },
+      spawnDistance: 0,
+    };
+    const nextState = advanceFredRun(state, 0.05);
+    expect(nextState.obstacles.some((o) => o.kind === "paragraph")).toBe(true);
+    expect(nextState.activeSequence?.steps).toHaveLength(1);
+    expect(nextState.activeSequence?.steps[0].kind).toBe("reihe100");
+    expect(nextState.spawnDistance).toBe(400);
+  });
+});
+
+describe("Finanzamt-night stamp hazards", () => {
+  it("initializes and cycles stamp phases: anticipation -> descend -> impact -> recover -> dormant", () => {
+    const stamp: FredRunStampHazard = {
+      id: 1,
+      x: 600,
+      width: FREDRUN_STAMP_WIDTH,
+      height: FREDRUN_STAMP_HEIGHT,
+      phase: "anticipation",
+      timer: 0,
+      y: FREDRUN_STAMP_HEAD_REST_Y,
+      anticipationDuration: 0.5,
+      descendDuration: 0.16,
+      impactDuration: 0.55,
+      recoverDuration: 0.50,
+      behavior: "strike",
+      stampText: "GEPRÜFT",
+    };
+    let state = startFredRun(createFredRunState("finanzamt-night"));
+    state = { ...state, stamps: [stamp] };
+
+    // Advance during anticipation
+    state = advanceFredRun(state, 0.2);
+    expect(state.stamps[0].phase).toBe("anticipation");
+    expect(state.stamps[0].y).toBe(FREDRUN_STAMP_HEAD_REST_Y);
+
+    // Transition to descending once anticipation done and in strike window (timeToPlayer in [0.25, 0.65])
+    state = {
+      ...state,
+      grounded: true,
+      playerHeight: 0,
+      stamps: [{
+        ...state.stamps[0],
+        x: 250, // distToPlayer = 250 - 120 = 130, at speed 300, timeToPlayer = 0.43s
+        timer: 0.6,
+      }],
+    };
+    state = advanceFredRun(state, 0.05);
+    expect(state.stamps[0].phase).toBe("descending");
+
+    // Move stamp ahead to safely test full timer-driven phase progression without player collision
+    state = {
+      ...state,
+      stamps: [{
+        ...state.stamps[0],
+        x: 600,
+      }],
+    };
+
+    // Advance through descendDuration (0.16s)
+    for (let i = 0; i < 4; i += 1) {
+      state = advanceFredRun(state, 0.05);
+    }
+    expect(state.stamps[0].phase).toBe("impact");
+    expect(state.stamps[0].y).toBe(FREDRUN_STAMP_HEAD_IMPACT_Y);
+
+    // Advance through impactDuration (0.55s)
+    for (let i = 0; i < 12; i += 1) {
+      state = advanceFredRun(state, 0.05);
+    }
+    expect(state.stamps[0].phase).toBe("recovering");
+
+    // Advance through recoverDuration (0.50s)
+    for (let i = 0; i < 11; i += 1) {
+      state = advanceFredRun(state, 0.05);
+    }
+    expect(state.stamps[0].phase).toBe("dormant");
+    expect(state.stamps[0].y).toBe(FREDRUN_STAMP_HEAD_REST_Y);
+  });
+
+  it("protects jump commitment by delaying descending stroke while player is airborne", () => {
+    let state = startFredRun(createFredRunState("finanzamt-night"));
+    state = jumpFredRun(state);
+    expect(state.grounded).toBe(false);
+
+    const stamp: FredRunStampHazard = {
+      id: 2,
+      x: 250,
+      width: FREDRUN_STAMP_WIDTH,
+      height: FREDRUN_STAMP_HEIGHT,
+      phase: "anticipation",
+      timer: 1.0,
+      y: FREDRUN_STAMP_HEAD_REST_Y,
+      anticipationDuration: 0.5,
+      descendDuration: 0.16,
+      impactDuration: 0.55,
+      recoverDuration: 0.50,
+      behavior: "strike",
+    };
+    state = { ...state, stamps: [stamp] };
+
+    // Stamp is in strike window but player is airborne -> must NOT enter descending!
+    state = advanceFredRun(state, 0.05);
+    expect(state.stamps[0].phase).toBe("anticipation");
+  });
+
+  it("reproduces issue 3 fix: shield absorbs stamp collision without repeat multi-frame damage", () => {
+    let state = startFredRun(createFredRunState("finanzamt-night"));
+    const stamp: FredRunStampHazard = {
+      id: 7,
+      x: 150,
+      width: FREDRUN_STAMP_WIDTH,
+      height: FREDRUN_STAMP_HEIGHT,
+      phase: "impact",
+      timer: 0.1,
+      y: FREDRUN_STAMP_HEAD_IMPACT_Y, // 236
+      anticipationDuration: 0.5,
+      descendDuration: 0.16,
+      impactDuration: 0.55,
+      recoverDuration: 0.50,
+      behavior: "strike",
+    };
+    state = {
+      ...state,
+      shieldActive: true,
+      shieldRemaining: 5,
+      playerHeight: 0,
+      grounded: true,
+      stamps: [stamp],
+    };
+
+    // Step 1 (dt = 0.01): shield breaks, phase running, stamp recovering with colliderDisabled = true
+    state = advanceFredRun(state, 0.01);
+    expect(state.phase).toBe("running");
+    expect(state.shieldActive).toBe(false);
+    expect(state.stamps[0].phase).toBe("recovering");
+    expect(state.stamps[0].colliderDisabled).toBe(true);
+
+    // Step 2 (dt = 0.01): advancing into recovering stamp does not cause repeat damage
+    state = advanceFredRun(state, 0.01);
+    expect(state.phase).toBe("running");
+
+    // Step 3 (dt = 0.01): continues running safely
+    state = advanceFredRun(state, 0.01);
+    expect(state.phase).toBe("running");
+  });
+
+  it("proves complete safe action trajectory for stamp strike at low, mid, and high speeds", () => {
+    for (const speed of [300, 540, 900]) {
+      const score = ((speed - 300) / 120) * FREDRUN_SCORE_PULSE_POINTS;
+      let state = startFredRun(createFredRunState("finanzamt-night"));
+      state = {
+        ...state,
+        speed,
+        score,
+        distance: score * 34,
+        stamps: [{
+          id: 100,
+          x: 450,
+          width: FREDRUN_STAMP_WIDTH,
+          height: FREDRUN_STAMP_HEIGHT,
+          phase: "anticipation",
+          timer: 0.5,
+          y: FREDRUN_STAMP_HEAD_REST_Y,
+          anticipationDuration: 0.2,
+          descendDuration: 0.16,
+          impactDuration: 0.55,
+          recoverDuration: 0.50,
+          behavior: "strike",
+        }],
+        spawnDistance: 10_000,
+      };
+
+      state = advanceUntil(state, (next) => {
+        const stamp = next.stamps.find((candidate) => candidate.id === 100);
+        expect(stamp).toBeDefined();
+        return stamp?.phase !== "impact";
+      }, `stamp strike ${speed} impact`);
+      expect(state.stamps.find((stamp) => stamp.id === 100)?.y).toBe(FREDRUN_STAMP_HEAD_IMPACT_Y);
+
+      state = advanceUntil(state, (next) => {
+        const stamp = next.stamps.find((candidate) => candidate.id === 100);
+        expect(stamp).toBeDefined();
+        return (stamp?.x ?? -Infinity) - FREDRUN_PLAYER_X > Math.max(120, speed * 0.40);
+      }, `stamp strike ${speed} approach`);
+      state = jumpFredRun(state);
+      expect(state.grounded).toBe(false);
+
+      state = advanceUntil(state, (next) => {
+        const stamp = next.stamps.find((candidate) => candidate.id === 100);
+        expect(stamp).toBeDefined();
+        return (stamp?.x ?? -Infinity) + (stamp?.width ?? 0) > FREDRUN_PLAYER_X - 24;
+      }, `stamp strike ${speed} traversal`);
+      expect(state.phase).toBe("running");
+    }
+  });
+
+  it("proves complete safe action trajectory for stamp pass-under at low, mid, and high speeds", () => {
+    for (const speed of [300, 540, 900]) {
+      const score = ((speed - 300) / 120) * FREDRUN_SCORE_PULSE_POINTS;
+      let state = startFredRun(createFredRunState("finanzamt-night"));
+      state = {
+        ...state,
+        speed,
+        score,
+        distance: score * 34,
+        stamps: [{
+          id: 200,
+          x: 350,
+          width: FREDRUN_STAMP_WIDTH,
+          height: FREDRUN_STAMP_HEIGHT,
+          phase: "anticipation",
+          timer: 0,
+          y: FREDRUN_STAMP_HEAD_REST_Y,
+          anticipationDuration: 1.5,
+          descendDuration: 0.16,
+          impactDuration: 0.55,
+          recoverDuration: 0.50,
+          behavior: "pass-under",
+        }],
+        spawnDistance: 10_000,
+      };
+
+      state = advanceUntil(state, (next) => {
+        const stamp = next.stamps.find((candidate) => candidate.id === 200);
+        expect(stamp).toBeDefined();
+        expect(next.grounded).toBe(true);
+        return (stamp?.x ?? -Infinity) + (stamp?.width ?? 0) > FREDRUN_PLAYER_X - 24;
+      }, `stamp pass-under ${speed} traversal`);
+      expect(state.phase).toBe("running");
+    }
+  });
+
+  it("verifies stamp strike and pass-under failure trajectories are fatal", () => {
+    // Failure 1: Running into strike head on ground without jumping
+    {
+      let state = startFredRun(createFredRunState("finanzamt-night"));
+      state = {
+        ...state,
+        stamps: [{
+          id: 301,
+          x: 200,
+          width: FREDRUN_STAMP_WIDTH,
+          height: FREDRUN_STAMP_HEIGHT,
+          phase: "impact",
+          timer: 0.1,
+          y: FREDRUN_STAMP_HEAD_IMPACT_Y,
+          anticipationDuration: 0.2,
+          descendDuration: 0.16,
+          impactDuration: 0.55,
+          recoverDuration: 0.50,
+          behavior: "strike",
+        }],
+      };
+      for (let step = 0; step < MAX_BEHAVIOR_STEPS && state.phase === "running"; step += 1) {
+        state = advanceFredRun(state, 0.02);
+      }
+      expect(state.phase).toBe("game-over");
+    }
+
+    // Failure 2: Jumping into high overhead stamp during pass-under
+    {
+      let state = startFredRun(createFredRunState("finanzamt-night"));
+      state = {
+        ...state,
+        stamps: [{
+          id: 302,
+          x: 220,
+          width: FREDRUN_STAMP_WIDTH,
+          height: FREDRUN_STAMP_HEIGHT,
+          phase: "anticipation",
+          timer: 0.2,
+          y: FREDRUN_STAMP_HEAD_REST_Y,
+          anticipationDuration: 1.5,
+          descendDuration: 0.16,
+          impactDuration: 0.55,
+          recoverDuration: 0.50,
+          behavior: "pass-under",
+        }],
+      };
+      state = advanceUntil(state, (next) => {
+        const stamp = next.stamps.find((candidate) => candidate.id === 302);
+        expect(stamp).toBeDefined();
+        return (stamp?.x ?? -Infinity) - FREDRUN_PLAYER_X > 30;
+      }, "stamp pass-under jump approach");
+      state = jumpFredRun(state);
+      for (let step = 0; step < MAX_BEHAVIOR_STEPS && state.phase === "running"; step += 1) {
+        const stamp = state.stamps.find((candidate) => candidate.id === 302);
+        if (!stamp || stamp.x + stamp.width <= FREDRUN_PLAYER_X - 24) break;
+        state = advanceFredRun(state, 0.02);
+      }
+      expect(state.phase).toBe("game-over");
+    }
+  });
+});
+
+describe("Alps platforms and chasms", () => {
+  it("allows player to land and run on an elevated stable platform", () => {
+    let state = startFredRun(createFredRunState("alps"));
+    const platformElevation = FREDRUN_GROUND_Y - FREDRUN_ALPS_PLATFORM_Y; // 70px
+    const platform: FredRunPlatform = {
+      id: 1,
+      x: 50,
+      width: 200,
+      y: FREDRUN_ALPS_PLATFORM_Y,
+      height: 18,
+      type: "stable",
+      state: "intact",
+      crumbleTimer: 0,
+      crumbleDuration: FREDRUN_ALPS_CRUMBLE_DURATION,
+      playerLanded: false,
+    };
+    state = {
+      ...state,
+      grounded: false,
+      playerHeight: platformElevation + 1,
+      playerVelocity: -50,
+      platforms: [platform],
+    };
+    state = advanceFredRun(state, 0.05);
+    expect(state.grounded).toBe(true);
+    expect(state.playerHeight).toBe(platformElevation);
+  });
+
+  it("allows jumping while standing on a platform to reach higher elevation", () => {
+    let state = startFredRun(createFredRunState("alps"));
+    const platformElevation = FREDRUN_GROUND_Y - FREDRUN_ALPS_PLATFORM_Y;
+    const platform: FredRunPlatform = {
+      id: 2,
+      x: 50,
+      width: 200,
+      y: FREDRUN_ALPS_PLATFORM_Y,
+      height: 18,
+      type: "stable",
+      state: "intact",
+      crumbleTimer: 0,
+      crumbleDuration: FREDRUN_ALPS_CRUMBLE_DURATION,
+      playerLanded: false,
+    };
+    state = {
+      ...state,
+      grounded: true,
+      playerHeight: platformElevation,
+      platforms: [platform],
+    };
+    state = jumpFredRun(state);
+    expect(state.grounded).toBe(false);
+    expect(state.playerVelocity).toBe(660);
+  });
+
+  it("walks off platform edge and falls under gravity", () => {
+    let state = startFredRun(createFredRunState("alps"));
+    const platformElevation = FREDRUN_GROUND_Y - FREDRUN_ALPS_PLATFORM_Y;
+    const platform: FredRunPlatform = {
+      id: 3,
+      x: -100,
+      width: 100,
+      y: FREDRUN_ALPS_PLATFORM_Y,
+      height: 18,
+      type: "stable",
+      state: "intact",
+      crumbleTimer: 0,
+      crumbleDuration: FREDRUN_ALPS_CRUMBLE_DURATION,
+      playerLanded: true,
+    };
+    state = {
+      ...state,
+      grounded: true,
+      playerHeight: platformElevation,
+      platforms: [platform],
+    };
+    state = advanceFredRun(state, 0.05);
+    expect(state.grounded).toBe(false);
+    state = advanceFredRun(state, 0.05);
+    expect(state.playerHeight).toBeLessThan(platformElevation);
+  });
+
+  it("triggers crumble timer on landing, maintains support, then collapses and removes support", () => {
+    let state = startFredRun(createFredRunState("alps"));
+    const platformElevation = FREDRUN_GROUND_Y - FREDRUN_ALPS_PLATFORM_Y;
+    const platform: FredRunPlatform = {
+      id: 4,
+      x: 50,
+      width: 400,
+      y: FREDRUN_ALPS_PLATFORM_Y,
+      height: 18,
+      type: "crumbling",
+      state: "intact",
+      crumbleTimer: 0,
+      crumbleDuration: FREDRUN_ALPS_CRUMBLE_DURATION,
+      playerLanded: false,
+    };
+    state = {
+      ...state,
+      grounded: false,
+      playerHeight: platformElevation + 1,
+      playerVelocity: -30,
+      platforms: [platform],
+    };
+    state = advanceFredRun(state, 0.05);
+    expect(state.grounded).toBe(true);
+    expect(state.platforms[0].state).toBe("crumbling");
+    expect(state.platforms[0].playerLanded).toBe(true);
+
+    // Advance during crumble duration (0.70s): support remains intact
+    for (let i = 0; i < 10; i += 1) {
+      state = advanceFredRun(state, 0.05);
+      expect(state.grounded).toBe(true);
+      expect(state.platforms[0].state).toBe("crumbling");
+    }
+
+    // Advance past crumbleDuration (0.70s) -> collapses
+    for (let i = 0; i < 6; i += 1) {
+      state = advanceFredRun(state, 0.05);
+    }
+    expect(state.platforms[0].state).toBe("collapsed");
+    expect(state.grounded).toBe(false);
+  });
+
+  it("chasm prevents ground catch; falling past fatal depth causes game-over", () => {
+    let state = startFredRun(createFredRunState("alps"));
+    const chasm: FredRunChasm = {
+      id: 1,
+      x: 50,
+      width: 200,
+    };
+    state = {
+      ...state,
+      grounded: false,
+      playerHeight: 2,
+      playerVelocity: -100,
+      chasms: [chasm],
+    };
+    state = advanceFredRun(state, 0.05);
+    expect(state.grounded).toBe(false);
+    expect(state.fallingThroughChasm).toBe(true);
+    expect(state.playerHeight).toBeLessThan(0);
+
+    for (let step = 0; step < MAX_BEHAVIOR_STEPS && state.playerHeight > FREDRUN_ALPS_FATAL_FALL_DEPTH && state.phase === "running"; step += 1) {
+      state = advanceFredRun(state, 0.05);
+    }
+    expect(state.phase).toBe("game-over");
+  });
+
+  it("shield does not save player from fatal fall into chasm", () => {
+    let state = startFredRun(createFredRunState("alps"));
+    const chasm: FredRunChasm = {
+      id: 2,
+      x: 50,
+      width: 200,
+    };
+    state = {
+      ...state,
+      shieldActive: true,
+      shieldRemaining: 5,
+      grounded: false,
+      fallingThroughChasm: true,
+      playerHeight: FREDRUN_ALPS_FATAL_FALL_DEPTH - 1,
+      chasms: [chasm],
+    };
+    state = advanceFredRun(state, 0.05);
+    expect(state.phase).toBe("game-over");
+  });
+
+  it("landing on solid ground outside chasm safely catches the player", () => {
+    let state = startFredRun(createFredRunState("alps"));
+    const chasm: FredRunChasm = {
+      id: 3,
+      x: 250,
+      width: 150,
+    };
+    state = {
+      ...state,
+      grounded: false,
+      playerHeight: 5,
+      playerVelocity: -200,
+      chasms: [chasm],
+    };
+    state = advanceFredRun(state, 0.05);
+    expect(state.grounded).toBe(true);
+    expect(state.playerHeight).toBe(0);
+    expect(state.phase).toBe("running");
+  });
+
+  it("reproduces issue 1 fix: grounded player at ground elevation stepping into chasm tests chasm support and falls", () => {
+    let state = startFredRun(createFredRunState("alps"));
+    state = {
+      ...state,
+      chasms: [{ id: 1, x: 100, width: 300 }],
+    };
+    const advanced = advanceFredRun(state, 0.05);
+    expect(advanced.grounded).toBe(false);
+    expect(advanced.fallingThroughChasm).toBe(true);
+    expect(advanced.playerHeight).toBeLessThanOrEqual(0);
+    expect(advanced.phase).toBe("running");
+
+    let current = advanced;
+    for (let step = 0; step < MAX_BEHAVIOR_STEPS && current.phase === "running" && current.playerHeight > FREDRUN_ALPS_FATAL_FALL_DEPTH; step += 1) {
+      current = advanceFredRun(current, 0.05);
+    }
+    expect(current.phase).toBe("game-over");
+  });
+
+  it("prevents failed falls from teleporting onto ground when chasm scrolls past", () => {
+    let state = startFredRun(createFredRunState("alps"));
+    state = {
+      ...state,
+      grounded: false,
+      fallingThroughChasm: true,
+      playerHeight: -15,
+      playerVelocity: -80,
+      chasms: [{ id: 1, x: 80, width: 60 }],
+    };
+
+    let current = state;
+    for (let step = 0; step < MAX_BEHAVIOR_STEPS && current.chasms.some((chasm) => chasm.id === 1 && chasm.x + chasm.width >= FREDRUN_PLAYER_X); step += 1) {
+      current = advanceFredRun(current, 0.02);
+      expect(current.grounded).toBe(false);
+      expect(current.playerHeight).toBeLessThan(0);
+    }
+
+    expect(current.grounded).toBe(false);
+    expect(current.fallingThroughChasm).toBe(true);
+    expect(current.playerHeight).toBeLessThan(0);
+
+    for (let step = 0; step < MAX_BEHAVIOR_STEPS && current.phase === "running"; step += 1) {
+      current = advanceFredRun(current, 0.02);
+    }
+    expect(current.phase).toBe("game-over");
+  });
+
+  it("proves actual generated-encounter no-jump failure on Alps chasm", () => {
+    let state = startFredRun(createFredRunState("alps"));
+    state = {
+      ...state,
+      chasms: [{ id: 10, x: 300, width: 200 }],
+      spawnDistance: 10_000,
+    };
+
+    for (let step = 0; step < MAX_BEHAVIOR_STEPS && state.phase === "running"; step += 1) {
+      state = advanceFredRun(state, 0.02);
+    }
+    expect(state.phase).toBe("game-over");
+    expect(state.fallingThroughChasm).toBe(true);
+  });
+
+  it("proves actual generated-encounter successful jump traversal over Alps chasm", () => {
+    let state = startFredRun(createFredRunState("alps"));
+    state = {
+      ...state,
+      chasms: [{ id: 11, x: 320, width: 160 }],
+      spawnDistance: 10_000,
+    };
+
+    state = advanceUntil(state, (next) => {
+      const chasm = next.chasms.find((candidate) => candidate.id === 11);
+      expect(chasm).toBeDefined();
+      return (chasm?.x ?? -Infinity) - FREDRUN_PLAYER_X > 40;
+    }, "Alps successful traversal approach");
+    state = jumpFredRun(state);
+    expect(state.grounded).toBe(false);
+
+    state = advanceUntil(state, (next) => !next.grounded, "Alps successful traversal landing");
+
+    expect(state.grounded).toBe(true);
+    expect(state.playerHeight).toBe(0);
+    expect(state.fallingThroughChasm).toBe(false);
+    expect(state.phase).toBe("running");
+  });
+
+  it("enforces crumble-triggered forced onward movement on platforms at speed >= 420", () => {
+    const speed = 492;
+    const platWidth = 418;
+    const chasmWidth = 388;
+
+    // Trajectory A: Passive runner (fails to jump onward, platform collapses, fatal fall)
+    {
+      const trajAPlatWidth = 600;
+      const trajAChasmWidth = 1_000;
+      let state = startFredRun(createFredRunState("alps"));
+      state = {
+        ...state,
+        speed,
+        score: 400,
+        distance: 400 * 34,
+        platforms: [{
+          id: 50,
+          x: 180,
+          width: trajAPlatWidth,
+          y: FREDRUN_ALPS_PLATFORM_Y,
+          height: 18,
+          type: "crumbling",
+          state: "intact",
+          crumbleTimer: 0,
+          crumbleDuration: FREDRUN_ALPS_CRUMBLE_DURATION,
+          playerLanded: false,
+        }],
+        chasms: [{ id: 51, x: 190, width: trajAChasmWidth }],
+        spawnDistance: 10_000,
+      };
+
+      state = jumpFredRun(state);
+      state = advanceUntil(state, (next) => !next.grounded, "crumbling platform landing");
+      expect(state.grounded).toBe(true);
+      expect(state.playerHeight).toBe(FREDRUN_GROUND_Y - FREDRUN_ALPS_PLATFORM_Y);
+      expect(state.platforms.find((platform) => platform.id === 50)?.state).toBe("crumbling");
+
+      for (let step = 0; step < MAX_BEHAVIOR_STEPS && state.phase === "running" && state.platforms.some((platform) => platform.id === 50 && platform.state === "crumbling"); step += 1) {
+        state = advanceFredRun(state, 0.02);
+      }
+
+      expect(state.platforms.find((platform) => platform.id === 50)?.state).toBe("collapsed");
+      expect(state.grounded).toBe(false);
+
+      for (let step = 0; step < MAX_BEHAVIOR_STEPS && state.phase === "running"; step += 1) {
+        state = advanceFredRun(state, 0.02);
+      }
+      expect(state.phase).toBe("game-over");
+      expect(state.fallingThroughChasm).toBe(true);
+    }
+
+    // Trajectory B: Active runner (makes forced onward jump before collapse, lands safely)
+    {
+      let state = startFredRun(createFredRunState("alps"));
+      state = {
+        ...state,
+        speed,
+        score: 400,
+        distance: 400 * 34,
+        platforms: [{
+          id: 60,
+          x: 180,
+          width: platWidth,
+          y: FREDRUN_ALPS_PLATFORM_Y,
+          height: 18,
+          type: "crumbling",
+          state: "intact",
+          crumbleTimer: 0,
+          crumbleDuration: FREDRUN_ALPS_CRUMBLE_DURATION,
+          playerLanded: false,
+        }],
+        chasms: [{ id: 61, x: 190, width: chasmWidth }],
+        spawnDistance: 10_000,
+      };
+
+      state = jumpFredRun(state);
+      state = advanceUntil(state, (next) => !next.grounded, "active crumbling platform landing");
+      expect(state.grounded).toBe(true);
+
+      for (let i = 0; i < 3; i += 1) {
+        state = advanceFredRun(state, 0.02);
+        expect(state.grounded).toBe(true);
+      }
+
+      state = jumpFredRun(state);
+      expect(state.grounded).toBe(false);
+
+      state = advanceUntil(state, (next) => !next.grounded, "active crumbling platform onward jump");
+
+      expect(state.grounded).toBe(true);
+      expect(state.playerHeight).toBe(0);
+      expect(state.phase).toBe("running");
+    }
+  });
+
+  it("continues advancing collapsed platform crumbleTimer for falling rubble animation", () => {
+    let state = startFredRun(createFredRunState("alps"));
+    state = {
+      ...state,
+      platforms: [{
+        id: 70,
+        x: 100,
+        width: 300,
+        y: FREDRUN_ALPS_PLATFORM_Y,
+        height: 18,
+        type: "crumbling",
+        state: "crumbling",
+        crumbleTimer: 0.65,
+        crumbleDuration: FREDRUN_ALPS_CRUMBLE_DURATION,
+        playerLanded: true,
+      }],
+      spawnDistance: 10_000,
+    };
+
+    // Advance 0.10s (two 0.05s steps, respecting 0.05s delta clamp)
+    state = advanceFredRun(state, 0.05);
+    state = advanceFredRun(state, 0.05);
+    expect(state.platforms[0].state).toBe("collapsed");
+    expect(state.platforms[0].crumbleTimer).toBeCloseTo(0.75, 2);
+
+    // Advance 0.20s (four 0.05s steps)
+    state = advanceFredRun(state, 0.05);
+    state = advanceFredRun(state, 0.05);
+    state = advanceFredRun(state, 0.05);
+    state = advanceFredRun(state, 0.05);
+    expect(state.platforms[0].state).toBe("collapsed");
+    expect(state.platforms[0].crumbleTimer).toBeCloseTo(0.95, 2);
+  });
+});
+
+describe("World state lifecycle and reset", () => {
+  it("initializes and resets with correct worldId and clean state", () => {
+    const vienna = createFredRunState("vienna");
+    expect(vienna.worldId).toBe("vienna");
+    expect(vienna.stamps).toEqual([]);
+    expect(vienna.platforms).toEqual([]);
+    expect(vienna.chasms).toEqual([]);
+
+    const alps = restartFredRun("alps");
+    expect(alps.worldId).toBe("alps");
+    expect(alps.stamps).toEqual([]);
+    expect(alps.platforms).toEqual([]);
+
+    const finanzamt = restartFredRun("finanzamt-night");
+    expect(finanzamt.worldId).toBe("finanzamt-night");
+  });
+
+  it("freezes platforms and stamps during pause and countdown", () => {
+    let state = startFredRun(createFredRunState("alps"));
+    const platform: FredRunPlatform = {
+      id: 5,
+      x: 200,
+      width: 100,
+      y: FREDRUN_ALPS_PLATFORM_Y,
+      height: 18,
+      type: "crumbling",
+      state: "crumbling",
+      crumbleTimer: 0.2,
+      crumbleDuration: FREDRUN_ALPS_CRUMBLE_DURATION,
+      playerLanded: true,
+    };
+    state = { ...state, platforms: [platform] };
+
+    const paused = pauseFredRun(state);
+    const advancedPaused = advanceFredRun(paused, 0.1);
+    expect(advancedPaused.platforms[0].x).toBe(200);
+    expect(advancedPaused.platforms[0].crumbleTimer).toBe(0.2);
+
+    const resuming = resumeFredRun(paused);
+    const advancedResuming = advanceFredRun(resuming, 0.05);
+    expect(advancedResuming.platforms[0].x).toBe(200);
+    expect(advancedResuming.platforms[0].crumbleTimer).toBe(0.2);
   });
 });

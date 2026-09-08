@@ -32,13 +32,16 @@ import {
   resumeFredRun,
   startFredRun,
   writeFredRunHighScore,
+  type FredRunChasm,
   type FredRunCoin,
   type FredRunObstacle,
   type FredRunObstacleKind,
   type FredRunEnvironment,
   type FredRunPhase,
+  type FredRunPlatform,
   type FredRunPowerUp,
   type FredRunPowerUpKind,
+  type FredRunStampHazard,
   type FredRunState,
 } from "@/lib/fredrun";
 import {
@@ -805,6 +808,256 @@ function drawBackground(
   }
 }
 
+function drawStampHazard(
+  context: CanvasRenderingContext2D,
+  stamp: FredRunStampHazard,
+  elapsed: number,
+  reducedMotion: boolean,
+) {
+  const headX = stamp.x - stamp.width / 2;
+  const headY = stamp.y;
+  const headWidth = stamp.width;
+  const headHeight = stamp.height;
+  const centerX = stamp.x;
+
+  context.save();
+
+  // 1. Visible anticipation telegraph beam & floor warning frame
+  if (stamp.phase === "anticipation") {
+    const pulse = reducedMotion ? 0.35 : 0.25 + 0.18 * Math.sin(elapsed * 12);
+    const beamGrad = context.createLinearGradient(centerX, 0, centerX, FREDRUN_GROUND_Y);
+    beamGrad.addColorStop(0, `rgba(255, 60, 60, ${pulse * 0.35})`);
+    beamGrad.addColorStop(1, `rgba(255, 30, 30, ${pulse})`);
+    context.fillStyle = beamGrad;
+    context.beginPath();
+    context.moveTo(centerX - 10, 0);
+    context.lineTo(centerX + 10, 0);
+    context.lineTo(centerX + headWidth / 2 + 8, FREDRUN_GROUND_Y);
+    context.lineTo(centerX - headWidth / 2 - 8, FREDRUN_GROUND_Y);
+    context.closePath();
+    context.fill();
+
+    context.strokeStyle = `rgba(255, 50, 50, ${reducedMotion ? 0.9 : 0.7 + 0.3 * Math.sin(elapsed * 10)})`;
+    context.lineWidth = 2.5;
+    context.setLineDash([5, 4]);
+    context.strokeRect(headX - 4, FREDRUN_GROUND_Y - 2, headWidth + 8, 8);
+    context.setLineDash([]);
+
+    context.fillStyle = "rgba(255, 70, 70, 0.9)";
+    context.font = "900 11px system-ui, sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "bottom";
+    context.fillText("ACHTUNG!", centerX, FREDRUN_GROUND_Y - 4);
+  }
+
+  // 2. Ink stamp imprint on office desk
+  if (stamp.phase === "impact" || stamp.phase === "recovering") {
+    const inkAlpha = stamp.phase === "impact" ? 0.88 : Math.max(0, 0.88 * (1 - stamp.timer / stamp.recoverDuration));
+    context.save();
+    context.fillStyle = `rgba(215, 25, 25, ${inkAlpha})`;
+    context.strokeStyle = `rgba(215, 25, 25, ${inkAlpha})`;
+    context.lineWidth = 2;
+    context.strokeRect(headX, FREDRUN_GROUND_Y - 4, headWidth, 8);
+    context.font = "900 10px system-ui, sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(stamp.stampText ?? "GEPRÜFT", centerX, FREDRUN_GROUND_Y + 1);
+    context.restore();
+  }
+
+  // 3. Stamp mechanism and downward stroke
+  const shake = (stamp.phase === "anticipation" && !reducedMotion) ? Math.sin(elapsed * 45) * 1.5 : 0;
+  const drawHeadX = headX + shake;
+  const drawCenterX = centerX + shake;
+
+  // Mechanical overhead shaft
+  context.strokeStyle = "#80929d";
+  context.lineWidth = 6;
+  context.beginPath();
+  context.moveTo(drawCenterX, 0);
+  context.lineTo(drawCenterX, headY - 14);
+  context.stroke();
+
+  // Brass handle knob
+  context.fillStyle = "#c59942";
+  context.beginPath();
+  context.arc(drawCenterX, headY - 18, 9, 0, Math.PI * 2);
+  context.fill();
+  context.strokeStyle = "#825d19";
+  context.lineWidth = 1.5;
+  context.stroke();
+
+  // Downward motion blur lines
+  if (stamp.phase === "descending" && !reducedMotion) {
+    context.strokeStyle = "rgba(255, 255, 255, 0.4)";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(drawHeadX + 6, headY - 20);
+    context.lineTo(drawHeadX + 6, headY);
+    context.moveTo(drawHeadX + headWidth - 6, headY - 20);
+    context.lineTo(drawHeadX + headWidth - 6, headY);
+    context.stroke();
+  }
+
+  // Stamp block body
+  context.fillStyle = "#4a3319";
+  context.fillRect(drawHeadX, headY, headWidth, headHeight - 12);
+  context.fillStyle = "#6b4923";
+  context.fillRect(drawHeadX + 3, headY + 3, headWidth - 6, 6);
+
+  // Brass collar
+  context.fillStyle = "#d4a94a";
+  context.fillRect(drawHeadX, headY + headHeight - 12, headWidth, 4);
+
+  // Red rubber ink layer
+  context.fillStyle = "#a81c1c";
+  context.fillRect(drawHeadX, headY + headHeight - 8, headWidth, 8);
+
+  // Impact dust / burst particles
+  if (stamp.phase === "impact" && stamp.timer < 0.18 && !reducedMotion) {
+    context.fillStyle = "rgba(220, 230, 245, 0.7)";
+    context.beginPath();
+    context.arc(drawHeadX - 4, FREDRUN_GROUND_Y - 2, 4, 0, Math.PI * 2);
+    context.arc(drawHeadX + headWidth + 4, FREDRUN_GROUND_Y - 2, 4, 0, Math.PI * 2);
+    context.fill();
+  }
+
+  context.restore();
+}
+
+function drawChasm(
+  context: CanvasRenderingContext2D,
+  chasm: FredRunChasm,
+) {
+  const left = Math.max(0, chasm.x);
+  const right = Math.min(FREDRUN_WORLD_WIDTH, chasm.x + chasm.width);
+  if (right <= left) return;
+
+  context.save();
+  // Clear ground meadow in chasm gap
+  context.clearRect(left, FREDRUN_GROUND_Y, right - left, FREDRUN_WORLD_HEIGHT - FREDRUN_GROUND_Y);
+
+  // Deep gorge gradient
+  const chasmGrad = context.createLinearGradient(0, FREDRUN_GROUND_Y, 0, FREDRUN_WORLD_HEIGHT);
+  chasmGrad.addColorStop(0, "#1f291e");
+  chasmGrad.addColorStop(0.35, "#151e24");
+  chasmGrad.addColorStop(1, "#0a0e13");
+  context.fillStyle = chasmGrad;
+  context.fillRect(left, FREDRUN_GROUND_Y, right - left, FREDRUN_WORLD_HEIGHT - FREDRUN_GROUND_Y);
+
+  // Rocky cliff edges
+  context.fillStyle = "#3d3224";
+  context.beginPath();
+  context.moveTo(left, FREDRUN_GROUND_Y);
+  context.lineTo(left + 8, FREDRUN_GROUND_Y + 16);
+  context.lineTo(left + 3, FREDRUN_GROUND_Y + 36);
+  context.lineTo(left, FREDRUN_WORLD_HEIGHT);
+  context.closePath();
+  context.fill();
+
+  context.beginPath();
+  context.moveTo(right, FREDRUN_GROUND_Y);
+  context.lineTo(right - 8, FREDRUN_GROUND_Y + 16);
+  context.lineTo(right - 3, FREDRUN_GROUND_Y + 36);
+  context.lineTo(right, FREDRUN_WORLD_HEIGHT);
+  context.closePath();
+  context.fill();
+
+  // Mountain mist at the bottom
+  const mistGrad = context.createLinearGradient(0, FREDRUN_GROUND_Y + 25, 0, FREDRUN_WORLD_HEIGHT);
+  mistGrad.addColorStop(0, "rgba(215, 235, 245, 0)");
+  mistGrad.addColorStop(1, "rgba(185, 215, 235, 0.45)");
+  context.fillStyle = mistGrad;
+  context.fillRect(left, FREDRUN_GROUND_Y + 25, right - left, FREDRUN_WORLD_HEIGHT - (FREDRUN_GROUND_Y + 25));
+
+  context.restore();
+}
+
+function drawPlatform(
+  context: CanvasRenderingContext2D,
+  platform: FredRunPlatform,
+  elapsed: number,
+  reducedMotion: boolean,
+) {
+  if (platform.x + platform.width < -30 || platform.x > FREDRUN_WORLD_WIDTH + 30) return;
+
+  context.save();
+  const shake = (platform.state === "crumbling" && !reducedMotion) ? Math.sin(elapsed * 50) * 1.5 : 0;
+  const drawX = platform.x + shake;
+  const drawY = platform.y;
+  const width = platform.width;
+  const height = platform.height;
+
+  if (platform.state === "collapsed") {
+    const fallTime = platform.crumbleTimer - platform.crumbleDuration;
+    const alpha = Math.max(0, 1 - fallTime * 1.5);
+    if (alpha <= 0) {
+      context.restore();
+      return;
+    }
+    const fallY = drawY + fallTime * fallTime * 600;
+    context.fillStyle = `rgba(90, 80, 70, ${alpha})`;
+    for (let i = 0; i < 4; i += 1) {
+      const fragX = drawX + (i * width) / 4 + 10;
+      const fragY = fallY + (i % 2) * 12;
+      context.fillRect(fragX, fragY, width / 5, height);
+    }
+    context.restore();
+    return;
+  }
+
+  // Stone slab body
+  const stoneGrad = context.createLinearGradient(drawX, drawY, drawX, drawY + height);
+  stoneGrad.addColorStop(0, platform.type === "crumbling" ? "#5a5043" : "#63696e");
+  stoneGrad.addColorStop(1, platform.type === "crumbling" ? "#342d24" : "#3b4045");
+  context.fillStyle = stoneGrad;
+  context.beginPath();
+  context.roundRect(drawX, drawY, width, height, 4);
+  context.fill();
+
+  // Top alpine grass trim
+  context.fillStyle = "#6fa43b";
+  context.fillRect(drawX + 2, drawY, width - 4, 4);
+  context.fillStyle = "#8ec54f";
+  context.fillRect(drawX + 4, drawY, width - 8, 1.5);
+
+  // Stone outline
+  context.strokeStyle = platform.type === "crumbling" ? "#2b2219" : "#24282b";
+  context.lineWidth = 1.5;
+  context.stroke();
+
+  // Cracks if crumbling
+  if (platform.state === "crumbling") {
+    const progress = Math.min(1, platform.crumbleTimer / platform.crumbleDuration);
+    context.strokeStyle = `rgba(20, 12, 6, ${0.7 + 0.3 * progress})`;
+    context.lineWidth = 1.8;
+    context.beginPath();
+    context.moveTo(drawX + width * 0.28, drawY);
+    context.lineTo(drawX + width * 0.32, drawY + height * 0.55 * progress);
+    context.lineTo(drawX + width * 0.26, drawY + height * progress);
+    context.moveTo(drawX + width * 0.65, drawY);
+    context.lineTo(drawX + width * 0.62, drawY + height * 0.45 * progress);
+    context.lineTo(drawX + width * 0.68, drawY + height * progress);
+    if (progress > 0.4) {
+      context.moveTo(drawX + width * 0.32, drawY + height * 0.3);
+      context.lineTo(drawX + width * 0.42, drawY + height * 0.65);
+    }
+    context.stroke();
+
+    // Falling stone dust
+    if (!reducedMotion) {
+      context.fillStyle = "rgba(160, 140, 120, 0.75)";
+      for (let i = 0; i < 3; i += 1) {
+        const pebbleX = drawX + width * (0.25 + i * 0.25);
+        const pebbleY = drawY + height + ((elapsed * 60 + i * 15) % 30);
+        context.fillRect(pebbleX, pebbleY, 2, 2);
+      }
+    }
+  }
+
+  context.restore();
+}
+
 function drawObstacle(
   context: CanvasRenderingContext2D,
   obstacle: FredRunObstacle,
@@ -1556,7 +1809,10 @@ function renderFredRun(
   context.setTransform(canvas.width / FREDRUN_WORLD_WIDTH, 0, 0, canvas.height / FREDRUN_WORLD_HEIGHT, 0, 0);
   context.clearRect(0, 0, FREDRUN_WORLD_WIDTH, FREDRUN_WORLD_HEIGHT);
   context.imageSmoothingEnabled = true;
-  drawBackground(context, state, images?.backgrounds ?? null, reducedMotion, worldId);
+  const effectiveWorldId = state.worldId ?? worldId;
+  drawBackground(context, state, images?.backgrounds ?? null, reducedMotion, effectiveWorldId);
+  state.chasms?.forEach((chasm) => drawChasm(context, chasm));
+  state.platforms?.forEach((platform) => drawPlatform(context, platform, state.elapsed, reducedMotion));
   state.coins.forEach((coin) => drawCoin(context, coin, images?.coin ?? null, state.elapsed, reducedMotion));
   state.powerUps?.forEach((powerUp) => drawPowerUp(
     context,
@@ -1574,6 +1830,7 @@ function renderFredRun(
       reducedMotion,
     ));
   }
+  state.stamps?.forEach((stamp) => drawStampHazard(context, stamp, state.elapsed, reducedMotion));
 
   if (images) {
     drawPlayerPowerEffects(context, state, reducedMotion);
@@ -1976,6 +2233,9 @@ export default function FredRunView({
 
   const replaceGame = useCallback((state: FredRunState) => {
     gameRef.current = state;
+    if (state.worldId) {
+      currentRunWorldRef.current = state.worldId;
+    }
     publish(state);
     if (canvasRef.current) {
       renderFredRun(
@@ -1994,6 +2254,10 @@ export default function FredRunView({
     selectedCharacterRef.current = nextProfile.selectedCharacter;
     if (gameRef.current.phase === "ready") {
       currentRunWorldRef.current = nextProfile.selectedWorld;
+      if (gameRef.current.worldId !== nextProfile.selectedWorld) {
+        gameRef.current = restartFredRun(nextProfile.selectedWorld);
+        publish(gameRef.current);
+      }
     }
     setProfile(nextProfile);
     setStorageAvailable(accessToken
@@ -2009,7 +2273,7 @@ export default function FredRunView({
         currentRunWorldRef.current,
       );
     }
-  }, [accessToken]);
+  }, [accessToken, publish]);
 
   const applyServerProgressAction = useCallback(async (
     action: FredRunProgressAction,
@@ -2125,7 +2389,7 @@ export default function FredRunView({
       state = resumeFredRun(state);
     } else if (state.phase === "game-over") {
       prepareNewRun();
-      state = startFredRun(restartFredRun());
+      state = startFredRun(restartFredRun(profileRef.current.selectedWorld));
     }
     replaceGame(jumpFredRun(state));
   }, [assetState, prepareNewRun, replaceGame]);
@@ -2133,7 +2397,11 @@ export default function FredRunView({
   const startRound = useCallback(() => {
     if (assetState !== "ready" || !profileReady || progressMutationPendingRef.current) return;
     prepareNewRun();
-    replaceGame(startFredRun(gameRef.current.phase === "ready" ? gameRef.current : restartFredRun()));
+    const activeWorld = profileRef.current.selectedWorld;
+    const readyState = gameRef.current.phase === "ready" && gameRef.current.worldId === activeWorld
+      ? gameRef.current
+      : restartFredRun(activeWorld);
+    replaceGame(startFredRun(readyState));
   }, [assetState, prepareNewRun, profileReady, replaceGame]);
 
   const returnToMenu = useCallback(() => {
@@ -2148,13 +2416,13 @@ export default function FredRunView({
     setLastAwardedCoins(0);
     setMenuTab("play");
     currentRunWorldRef.current = profileRef.current.selectedWorld;
-    replaceGame(restartFredRun());
+    replaceGame(restartFredRun(profileRef.current.selectedWorld));
   }, [replaceGame]);
 
   const playAgain = useCallback(() => {
     if (assetState !== "ready" || progressMutationPendingRef.current) return;
     prepareNewRun();
-    replaceGame(startFredRun(restartFredRun()));
+    replaceGame(startFredRun(restartFredRun(profileRef.current.selectedWorld)));
   }, [assetState, prepareNewRun, replaceGame]);
 
   const togglePause = useCallback(() => {
