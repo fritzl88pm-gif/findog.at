@@ -24,9 +24,6 @@ export const FREDRUN_JUMP_VELOCITY = 660;
 export const FREDRUN_JUMP_AIR_TIME = 2 * FREDRUN_JUMP_VELOCITY / FREDRUN_GRAVITY; // 0.825 s
 export const FREDRUN_JUMP_APEX_HEIGHT = (FREDRUN_JUMP_VELOCITY * FREDRUN_JUMP_VELOCITY) / (2 * FREDRUN_GRAVITY); // 136.125 px
 
-// Speed limit for multi-part authored sequences to guarantee fair human reaction time within finite 960px screen view
-export const FREDRUN_MAX_SEQUENCE_SPEED = 1500;
-
 // Alps platform & chasm constants
 export const FREDRUN_ALPS_PLATFORM_Y = 230; // 70px above ground Y (300)
 export const FREDRUN_ALPS_PLATFORM_ELEVATION = FREDRUN_GROUND_Y - FREDRUN_ALPS_PLATFORM_Y; // 70 px
@@ -86,21 +83,20 @@ export type FredRunPowerUp = {
   radius: number;
 };
 
-// --- Vienna Authored Sequences ---
-export type FredRunSequenceKind =
-  | "spaced-pair"
-  | "tight-pair"
-  | "triple-cadence"
-  | "combined-gauntlet";
+// Vienna lightning strikes ahead, leaving a jumpable ground discharge.
+export const FREDRUN_LIGHTNING_WARNING_SECONDS = 0.3;
+export const FREDRUN_LIGHTNING_ACTIVE_SECONDS = 0.85;
+export const FREDRUN_LIGHTNING_WIDTH = 48;
+export const FREDRUN_LIGHTNING_HEIGHT = 22;
+const LIGHTNING_APPROACH_SECONDS = 0.6;
+const LIGHTNING_CLEAR_SECONDS = 1.35;
+const LIGHTNING_MAX_SPEED = 950;
 
-export type FredRunSequenceStep = {
-  gap: number;
-  kind: FredRunObstacleKind;
-};
-
-export type FredRunActiveSequence = {
-  kind: FredRunSequenceKind;
-  steps: FredRunSequenceStep[];
+export type FredRunLightning = {
+  id: number;
+  x: number;
+  age: number;
+  absorbed: boolean;
 };
 
 // --- Finanzamt-night Stamp Hazards ---
@@ -198,7 +194,9 @@ export type FredRunState = {
   coins: FredRunCoin[];
   powerUps: FredRunPowerUp[];
   // World challenge mechanics
-  activeSequence: FredRunActiveSequence | null;
+  lightning: FredRunLightning[];
+  lightningWait: number | null;
+  nextLightningId: number;
   stamps: FredRunStampHazard[];
   platforms: FredRunPlatform[];
   chasms: FredRunChasm[];
@@ -247,7 +245,9 @@ export function createFredRunState(worldId: FredRunWorldId = "vienna"): FredRunS
     obstacles: [],
     coins: [],
     powerUps: [],
-    activeSequence: null,
+    lightning: [],
+    lightningWait: null,
+    nextLightningId: 1,
     stamps: [],
     platforms: [],
     chasms: [],
@@ -396,35 +396,6 @@ export function fredRunEnvironmentForDistance(distance: number): FredRunEnvironm
   const embers = ramp(progress, 3.2, 4.8) * (1 - 0.75 * ramp(progress, 6, 7));
   const ash = ramp(progress, 5.2, 7);
   return { fromStage, toStage, blend, progress, darkness, storm, rain, smoke, embers, ash };
-}
-
-function getObstacleSpec(kind: FredRunObstacleKind): { kind: FredRunObstacleKind; width: number; height: number } {
-  if (kind === "odo") return FREDRUN_ODO_SPEC;
-  if (kind === "madinger") return FREDRUN_MADINGER_SPEC;
-  if (kind === "jqa") return FREDRUN_JQA_SPEC;
-  if (kind === "luki") return FREDRUN_LUKI_SPEC;
-  const staticSpec = FREDRUN_STATIC_OBSTACLE_SPECS.find((s) => s.kind === kind);
-  if (staticSpec) return staticSpec;
-  return FREDRUN_STATIC_OBSTACLE_SPECS[0];
-}
-
-export function fredRunJumpAirTime(): number {
-  return FREDRUN_JUMP_AIR_TIME;
-}
-
-export function fredRunJumpDistance(speed: number): number {
-  return speed * FREDRUN_JUMP_AIR_TIME;
-}
-
-export function fredRunSequenceClearance(
-  speed: number,
-  groundReactionTime: number = 0.38,
-  secondMultiplier: number = 1,
-  firstMultiplier: number = 1,
-): number {
-  const travelDistance = (FREDRUN_WORLD_WIDTH + 40) - FREDRUN_PLAYER_X;
-  const catchup = Math.max(0, travelDistance * (1 / firstMultiplier - 1 / secondMultiplier));
-  return speed * (FREDRUN_JUMP_AIR_TIME + groundReactionTime) + catchup;
 }
 
 function obstacleFor(random: () => number, id: number): FredRunObstacle {
@@ -601,138 +572,32 @@ function collectibleTouchesPlayer(
   });
 }
 
-// Authored sequence generator for Vienna
-export function scheduleViennaSequence(
+function lightningHasSafeSpace(
   speed: number,
-  score: number,
-  random: () => number,
-): { firstObstacleKind: FredRunObstacleKind; sequence: FredRunActiveSequence } | null {
-  if (speed > FREDRUN_MAX_SEQUENCE_SPEED) {
-    return null;
-  }
-
-  const roll = Math.min(0.999999, Math.max(0, random()));
-  const groundReaction = 0.38;
-
-  // Gentle introduction (< 400 pts): introduce spaced-pair and tight-pair
-  if (score < 400) {
-    if (roll < 0.35) {
-      const secondKind: FredRunObstacleKind = random() > 0.5 ? "reihe100" : "paragraph";
-      const secondMultiplier = obstacleSpeedMultiplier(secondKind);
-      const gap = fredRunSequenceClearance(speed, groundReaction, secondMultiplier);
-      return {
-        firstObstacleKind: "paragraph",
-        sequence: {
-          kind: "spaced-pair",
-          steps: [{ gap, kind: secondKind }],
-        },
-      };
-    }
-    if (roll < 0.65) {
-      return {
-        firstObstacleKind: "paragraph",
-        sequence: {
-          kind: "tight-pair",
-          steps: [{ gap: 18, kind: "reihe100" }],
-        },
-      };
-    }
-    return null;
-  }
-
-  // Mid score (400 - 1200 pts): spaced pair, tight pair, triple cadence
-  if (score < 1200) {
-    if (roll < 0.28) {
-      const secondKind: FredRunObstacleKind = random() > 0.5 ? "madinger" : "steuerkodex";
-      const secondMultiplier = obstacleSpeedMultiplier(secondKind);
-      const gap = fredRunSequenceClearance(speed, groundReaction, secondMultiplier);
-      return {
-        firstObstacleKind: "reihe100",
-        sequence: {
-          kind: "spaced-pair",
-          steps: [{ gap, kind: secondKind }],
-        },
-      };
-    }
-    if (roll < 0.56) {
-      return {
-        firstObstacleKind: "paragraph",
-        sequence: {
-          kind: "tight-pair",
-          steps: [{ gap: 18, kind: "paragraph" }],
-        },
-      };
-    }
-    if (roll < 0.84) {
-      const gap1 = fredRunSequenceClearance(speed, groundReaction, 1);
-      const gap2 = fredRunSequenceClearance(speed, groundReaction, 1);
-      return {
-        firstObstacleKind: "reihe100",
-        sequence: {
-          kind: "triple-cadence",
-          steps: [
-            { gap: gap1, kind: "paragraph" },
-            { gap: gap2, kind: "steuerkodex" },
-          ],
-        },
-      };
-    }
-    return null;
-  }
-
-  // High score (1200+ pts): combined gauntlet and varied triples
-  if (roll < 0.32) {
-    const movingKind: FredRunObstacleKind = random() > 0.5 ? "odo" : "luki";
-    const movingMult = obstacleSpeedMultiplier(movingKind);
-    const gapToMoving = fredRunSequenceClearance(speed, groundReaction + 0.05, movingMult);
-    return {
-      firstObstacleKind: "paragraph",
-      sequence: {
-        kind: "combined-gauntlet",
-        steps: [
-          { gap: 42 + 24, kind: "reihe100" },
-          { gap: gapToMoving, kind: movingKind },
-        ],
-      },
-    };
-  }
-  if (roll < 0.64) {
-    const k2: FredRunObstacleKind = random() > 0.5 ? "steuerkodex" : "jqa";
-    const k3: FredRunObstacleKind = random() > 0.5 ? "paragraph" : "reihe100";
-    const m2 = obstacleSpeedMultiplier(k2);
-    const m3 = obstacleSpeedMultiplier(k3);
-    const gap1 = fredRunSequenceClearance(speed, groundReaction, m2, 1);
-    const gap2 = fredRunSequenceClearance(speed, groundReaction, m3, m2);
-    return {
-      firstObstacleKind: "reihe100",
-      sequence: {
-        kind: "triple-cadence",
-        steps: [
-          { gap: gap1, kind: k2 },
-          { gap: gap2, kind: k3 },
-        ],
-      },
-    };
-  }
-  if (roll < 0.88) {
-    const k2: FredRunObstacleKind = random() > 0.5 ? "luki" : "madinger";
-    const gap = fredRunSequenceClearance(speed, groundReaction, obstacleSpeedMultiplier(k2));
-    return {
-      firstObstacleKind: "steuerkodex",
-      sequence: {
-        kind: "spaced-pair",
-        steps: [{ gap, kind: k2 }],
-      },
-    };
-  }
-
-  return null;
+  grounded: boolean,
+  obstacles: FredRunObstacle[],
+  spawnDistance: number,
+): boolean {
+  if (!grounded || speed > LIGHTNING_MAX_SPEED) return false;
+  // Speed grows by less than 2% over this horizon. Include that growth and a
+  // full 50 ms step; reserve time for a 0.3 s reaction, jump, landing and exit.
+  const travel = speed * 1.03 * LIGHTNING_CLEAR_SECONDS;
+  const playerRight = FREDRUN_PLAYER_X + 24;
+  const playerLeft = FREDRUN_PLAYER_X - 24;
+  if (obstacles.some((obstacle) => (
+    obstacle.x + obstacle.width >= playerLeft
+    && obstacle.x - travel * obstacleSpeedMultiplier(obstacle.kind) <= playerRight
+  ))) return false;
+  // The next unscheduled obstacle could be Odo. Never move its spawn to make space.
+  const futureTravel = Math.max(0, travel - Math.max(0, spawnDistance));
+  return FREDRUN_WORLD_WIDTH + 40 - futureTravel * ODO_SPEED_MULTIPLIER > playerRight;
 }
 
 export function advanceFredRun(
   state: FredRunState,
   deltaSeconds: number,
   random: () => number = Math.random,
+  lightningRandom: () => number = Math.random,
 ): FredRunState {
   const delta = Math.min(0.05, Math.max(0, deltaSeconds));
   if (delta === 0) {
@@ -974,7 +839,6 @@ export function advanceFredRun(
   let nextStampId = state.nextStampId ?? 1;
   let nextPlatformId = state.nextPlatformId ?? 1;
   let nextChasmId = state.nextChasmId ?? 1;
-  let activeSequence = state.activeSequence ?? null;
 
   const previousObstaclePositions = new Map(
     state.obstacles.map((obstacle) => [obstacle.id, obstacle.x]),
@@ -1012,45 +876,12 @@ export function advanceFredRun(
 
   // Challenge and obstacle scheduling
   if (spawnDistance <= 0) {
-    if (activeSequence !== null && activeSequence.steps.length > 0) {
-      // Advance active authored sequence
-      const [nextStep, ...remainingSteps] = activeSequence.steps;
-      const spec = getObstacleSpec(nextStep.kind);
-      const obstacle: FredRunObstacle = {
-        id: nextObstacleId++,
-        ...spec,
-        x: FREDRUN_WORLD_WIDTH + 40,
-      };
+    if (worldId === "vienna") {
+      const obstacle = obstacleFor(random, nextObstacleId);
       obstacles.push(obstacle);
       collisionObstacles.push(obstacle);
-
-      if (remainingSteps.length > 0) {
-        activeSequence = {
-          ...activeSequence,
-          steps: remainingSteps,
-        };
-        spawnDistance = remainingSteps[0].gap;
-      } else {
-        activeSequence = null;
-        const defaultGap = nextGap(baseNextSpeed, currentScore, random);
-        const safeGauntletClearance = fredRunSequenceClearance(baseNextSpeed, 0.38, ODO_SPEED_MULTIPLIER, 1);
-        spawnDistance = Math.max(defaultGap, safeGauntletClearance);
-      }
-    } else if (worldId === "vienna") {
-      const obstacle = obstacleFor(random, nextObstacleId++);
-      const planned = scheduleViennaSequence(baseNextSpeed, currentScore, random);
-      if (planned && planned.sequence.steps.length > 0) {
-        const spec = getObstacleSpec(planned.firstObstacleKind);
-        obstacle.kind = spec.kind;
-        obstacle.width = spec.width;
-        obstacle.height = spec.height;
-        activeSequence = planned.sequence;
-        spawnDistance = planned.sequence.steps[0].gap;
-      } else {
-        spawnDistance = nextGap(baseNextSpeed, currentScore, random);
-      }
-      obstacles.push(obstacle);
-      collisionObstacles.push(obstacle);
+      nextObstacleId += 1;
+      spawnDistance = nextGap(baseNextSpeed, currentScore, random);
     } else if (worldId === "finanzamt-night") {
       const stampRoll = Math.min(0.999999, Math.max(0, random()));
       if (stampRoll < 0.38) {
@@ -1194,6 +1025,30 @@ export function advanceFredRun(
     }
   }
 
+  // Keep lightning randomness separate from the original obstacle/collectible stream.
+  const previousLightning = new Map(state.lightning.map((hazard) => [hazard.id, hazard]));
+  let lightning = worldId === "vienna" ? state.lightning.map((hazard) => ({
+    ...hazard,
+    x: hazard.x - currentSpeed * delta,
+    age: hazard.age + delta,
+  })) : [];
+  let lightningWait = state.lightningWait;
+  let nextLightningId = state.nextLightningId;
+  if (worldId === "vienna") {
+    const roll = () => Math.min(1, Math.max(0, lightningRandom()));
+    lightningWait = Math.max(0, (lightningWait ?? (0.1 + roll() * 0.05)) - delta);
+    if (lightningWait === 0 && lightning.length === 0
+      && state.grounded && lightningHasSafeSpace(baseNextSpeed, grounded, obstacles, spawnDistance)) {
+      lightning.push({
+        id: nextLightningId++,
+        x: FREDRUN_PLAYER_X + 24 + baseNextSpeed * LIGHTNING_APPROACH_SECONDS,
+        age: 0,
+        absorbed: false,
+      });
+      lightningWait = 2.5 + roll() * 2;
+    }
+  }
+
   const collectedCoinIds = new Set<number>();
   for (const coin of collisionCoins) {
     if (collectibleTouchesPlayer(
@@ -1244,7 +1099,30 @@ export function advanceFredRun(
     previousStampPositions,
   );
 
-  let fatalCollision = collisionIds.size > 0 || stampCollisionIds.size > 0 || fatalFall;
+  const lightningCollisionIds = new Set<number>();
+  for (const hazard of lightning) {
+    const previous = previousLightning.get(hazard.id);
+    if (!previous || hazard.absorbed) continue;
+    // Clip the swept segment to active time, including a step crossing expiry.
+    const activeStart = Math.max(previous.age, FREDRUN_LIGHTNING_WARNING_SECONDS);
+    const activeEnd = Math.min(hazard.age, FREDRUN_LIGHTNING_WARNING_SECONDS + FREDRUN_LIGHTNING_ACTIVE_SECONDS);
+    if (activeEnd <= activeStart) continue;
+    const startX = previous.x - currentSpeed * (activeStart - previous.age);
+    const endX = previous.x - currentSpeed * (activeEnd - previous.age);
+    if (rectanglesOverlap({
+      x: FREDRUN_PLAYER_X - 24,
+      y: FREDRUN_GROUND_Y - playerHeight - 76,
+      width: 48,
+      height: 72,
+    }, {
+      x: endX,
+      y: FREDRUN_GROUND_Y - FREDRUN_LIGHTNING_HEIGHT,
+      width: startX - endX + FREDRUN_LIGHTNING_WIDTH,
+      height: FREDRUN_LIGHTNING_HEIGHT,
+    })) lightningCollisionIds.add(hazard.id);
+  }
+
+  let fatalCollision = collisionIds.size > 0 || stampCollisionIds.size > 0 || lightningCollisionIds.size > 0 || fatalFall;
   if (fatalCollision && shieldActive && !fatalFall) {
     shieldActive = false;
     shieldRemaining = 0;
@@ -1257,6 +1135,9 @@ export function advanceFredRun(
         stampCollisionIds.has(s.id) ? { ...s, phase: "recovering", timer: 0, colliderDisabled: true } : s
       ));
     }
+    lightning = lightning.map((hazard) => (
+      lightningCollisionIds.has(hazard.id) ? { ...hazard, absorbed: true } : hazard
+    ));
     fatalCollision = false;
   }
 
@@ -1331,7 +1212,12 @@ export function advanceFredRun(
     obstacles,
     coins,
     powerUps,
-    activeSequence,
+    lightning: lightning.filter((hazard) => (
+      hazard.age < FREDRUN_LIGHTNING_WARNING_SECONDS + FREDRUN_LIGHTNING_ACTIVE_SECONDS
+      && hazard.x + FREDRUN_LIGHTNING_WIDTH > -20
+    )),
+    lightningWait,
+    nextLightningId,
     stamps,
     platforms,
     chasms,

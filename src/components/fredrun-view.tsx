@@ -1,5 +1,6 @@
 "use client";
 
+import { drawFredRunLightning } from "@/lib/fredrun-lightning-render";
 import NextImage from "next/image";
 import {
   memo,
@@ -1831,6 +1832,9 @@ function renderFredRun(
     ));
   }
   state.stamps?.forEach((stamp) => drawStampHazard(context, stamp, state.elapsed, reducedMotion));
+  if (effectiveWorldId === "vienna") {
+    state.lightning.forEach((hazard) => drawFredRunLightning(context, hazard, reducedMotion));
+  }
 
   if (images) {
     drawPlayerPowerEffects(context, state, reducedMotion);

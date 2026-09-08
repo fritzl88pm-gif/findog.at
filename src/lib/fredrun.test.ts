@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { originalObstacleFor, originalNextGap } from "./__fixtures__/fredrun-vienna-1da060f";
 
 import {
   FREDRUN_ALPS_CRUMBLE_DURATION,
@@ -8,10 +9,10 @@ import {
   FREDRUN_COLLECTIBLE_SPAWN_CLEARANCE,
   FREDRUN_GROUND_Y,
   FREDRUN_HIGH_SCORE_KEY,
-  FREDRUN_JUMP_AIR_TIME,
   FREDRUN_JUMP_BUFFER_SECONDS,
   FREDRUN_MAGNET_SECONDS,
-  FREDRUN_MAX_SEQUENCE_SPEED,
+  FREDRUN_LIGHTNING_WARNING_SECONDS,
+  FREDRUN_LIGHTNING_WIDTH,
   FREDRUN_NEAR_MISS_COMBO_SECONDS,
   FREDRUN_PLAYER_X,
   FREDRUN_RESUME_COUNTDOWN_SECONDS,
@@ -26,7 +27,6 @@ import {
   fredRunEnvironmentForDistance,
   fredRunPowerUpDistanceMultiplierForScore,
   fredRunReactionTimeFactorForScore,
-  fredRunSequenceClearance,
   fredRunShieldDurationForScore,
   fredRunShieldSpawnRateForScore,
   fredRunSpeedForDistance,
@@ -36,7 +36,6 @@ import {
   readFredRunHighScore,
   restartFredRun,
   resumeFredRun,
-  scheduleViennaSequence,
   startFredRun,
   type FredRunChasm,
   type FredRunPlatform,
@@ -250,8 +249,9 @@ describe("Fredrun simulation", () => {
     let landed = jumping;
     let peakHeight = 0;
     let airTime = 0;
-    while (!landed.grounded && airTime < 2) {
+    for (let step = 0; step < 240 && !landed.grounded; step += 1) {
       landed = advanceFredRun(landed, 1 / 120, () => 0.5);
+      expect(landed.phase).toBe("running");
       peakHeight = Math.max(peakHeight, landed.playerHeight);
       airTime += 1 / 120;
     }
@@ -265,9 +265,7 @@ describe("Fredrun simulation", () => {
 
   it("buffers a jump shortly before landing and launches immediately on touchdown", () => {
     let falling = jumpFredRun(startFredRun(createFredRunState()));
-    while (!(falling.playerVelocity < 0 && falling.playerHeight < 12)) {
-      falling = advanceFredRun(falling, 1 / 120, () => 0.5);
-    }
+    falling = advanceUntil(falling, (next) => !(next.playerVelocity < 0 && next.playerHeight < 12), "jump buffer approach");
     let buffered = jumpFredRun(falling);
     expect(buffered.jumpBufferRemaining).toBe(FREDRUN_JUMP_BUFFER_SECONDS);
 
@@ -287,10 +285,8 @@ describe("Fredrun simulation", () => {
   it("spawns only ground obstacles with a positive following distance", () => {
     let state = startFredRun(createFredRunState());
     for (let index = 0; index < 320; index += 1) {
-      state = advanceFredRun(state, 0.05, () => 0);
-      if (state.phase === "game-over") {
-        state = { ...state, phase: "running", obstacles: [] };
-      }
+      state = advanceFredRun(evadeGeneratedHazards(state), 0.05, () => 0, () => 0);
+      expect(state.phase).toBe("running");
     }
     expect(state.nextObstacleId).toBeGreaterThan(2);
     expect(state.spawnDistance).toBeGreaterThan(0);
@@ -507,7 +503,8 @@ describe("Fredrun simulation", () => {
       comboMultiplier: 3,
     });
 
-    let expired: FredRunState = { ...second, obstacles: [], spawnDistance: 10_000 };
+    // This unit test isolates combo expiry; generated lightning is exercised below.
+    let expired: FredRunState = { ...second, obstacles: [], spawnDistance: 10_000, lightningWait: 10 };
     for (let index = 0; index < 61; index += 1) {
       expired = advanceFredRun(expired, 0.05, () => 0.5);
     }
@@ -795,280 +792,6 @@ describe("Fredrun local high score", () => {
     expect(writeFredRunHighScore(storage, 12, 0)).toBe(12);
     expect(readFredRunHighScore(null)).toBe(0);
     expect(writeFredRunHighScore(null, 15, 12)).toBe(15);
-  });
-});
-
-describe("Vienna obstacle sequences", () => {
-  it("schedules varied jump rhythms across score tiers with gentle introduction", () => {
-    // Score < 400: spaced-pair or tight-pair
-    const lowScoreSpaced = scheduleViennaSequence(400, 200, () => 0.1);
-    expect(lowScoreSpaced).not.toBeNull();
-    expect(lowScoreSpaced?.sequence.kind).toBe("spaced-pair");
-    expect(lowScoreSpaced?.sequence.steps).toHaveLength(1);
-
-    const lowScoreTight = scheduleViennaSequence(400, 200, () => 0.45);
-    expect(lowScoreTight).not.toBeNull();
-    expect(lowScoreTight?.sequence.kind).toBe("tight-pair");
-    expect(lowScoreTight?.sequence.steps).toHaveLength(1);
-
-    // Score 400 - 1200: introduces triple-cadence
-    const midScoreTriple = scheduleViennaSequence(500, 800, () => 0.7);
-    expect(midScoreTriple).not.toBeNull();
-    expect(midScoreTriple?.sequence.kind).toBe("triple-cadence");
-    expect(midScoreTriple?.sequence.steps).toHaveLength(2);
-
-    // Score >= 1200: introduces combined-gauntlet with moving obstacles
-    const highScoreGauntlet = scheduleViennaSequence(600, 1500, () => 0.1);
-    expect(highScoreGauntlet).not.toBeNull();
-    expect(highScoreGauntlet?.sequence.kind).toBe("combined-gauntlet");
-    expect(highScoreGauntlet?.sequence.steps).toHaveLength(2);
-  });
-
-  it("respects finite-speed scheduling limits and returns null above FREDRUN_MAX_SEQUENCE_SPEED", () => {
-    expect(scheduleViennaSequence(FREDRUN_MAX_SEQUENCE_SPEED + 1, 1000, () => 0.1)).toBeNull();
-    expect(scheduleViennaSequence(2000, 2000, () => 0.1)).toBeNull();
-    // Below or at max speed, sequences can schedule
-    expect(scheduleViennaSequence(FREDRUN_MAX_SEQUENCE_SPEED, 200, () => 0.1)).not.toBeNull();
-  });
-
-  it("calculates clearance for spaced pairs ensuring fixed jump physics and ground reaction time", () => {
-    const speed = 400;
-    const clearance = fredRunSequenceClearance(speed, 0.38, 1);
-    expect(clearance).toBeCloseTo(speed * (FREDRUN_JUMP_AIR_TIME + 0.38));
-    expect(clearance).toBeGreaterThan(speed * FREDRUN_JUMP_AIR_TIME);
-
-    const movingClearance = fredRunSequenceClearance(speed, 0.38, 1.35);
-    expect(movingClearance).toBeGreaterThan(clearance);
-  });
-
-  it("reproduces issue 2 fix: random stream [0, 0.45] spawns planned paragraph first obstacle instead of odo", () => {
-    let state = startFredRun(createFredRunState("vienna"));
-    state = { ...state, spawnDistance: 0 };
-    const stream = [0, 0.45];
-    const advanced = advanceFredRun(state, 0.05, () => stream.shift() ?? 0);
-    expect(advanced.obstacles[0].kind).toBe("paragraph");
-    expect(advanced.activeSequence?.kind).toBe("tight-pair");
-  });
-
-  it("proves safe jump schedules for each authored pattern at representative supported speeds (300, 540, 900)", () => {
-    // 1. Spaced pair at low speed (300 px/s): two distinct jumps with grounded reaction time
-    {
-      const clearance = fredRunSequenceClearance(300, 0.38, 1, 1);
-      let state = startFredRun(createFredRunState("vienna"));
-      state = {
-        ...state,
-        obstacles: [
-          { id: 1, kind: "paragraph", x: 220, width: 42, height: 68 },
-          { id: 2, kind: "reihe100", x: 220 + clearance, width: 56, height: 60 },
-        ],
-        spawnDistance: 10_000,
-      };
-
-      state = advanceUntil(state, (next) => {
-        const obstacle = next.obstacles.find((candidate) => candidate.id === 1);
-        expect(obstacle).toBeDefined();
-        return (obstacle?.x ?? -Infinity) - FREDRUN_PLAYER_X > 60;
-      }, "spaced-pair first obstacle approach");
-      state = jumpFredRun(state);
-      expect(state.grounded).toBe(false);
-
-      state = advanceUntil(state, (next) => !next.grounded, "spaced-pair first jump");
-
-      let reactionTime = 0;
-      state = advanceUntil(state, (next) => {
-        const obstacle = next.obstacles.find((candidate) => candidate.id === 2);
-        expect(obstacle).toBeDefined();
-        if ((obstacle?.x ?? -Infinity) - FREDRUN_PLAYER_X <= 60) return false;
-        reactionTime += 0.02;
-        return true;
-      }, "spaced-pair reaction gap");
-      // The 60px approach threshold is reached on the 17th 20ms tick.
-      expect(reactionTime).toBeGreaterThanOrEqual(0.34);
-
-      state = jumpFredRun(state);
-      state = advanceUntil(state, (next) => {
-        const obstacle = next.obstacles.find((candidate) => candidate.id === 2);
-        expect(obstacle).toBeDefined();
-        return (obstacle?.x ?? -Infinity) + (obstacle?.width ?? 0) > FREDRUN_PLAYER_X - 24;
-      }, "spaced-pair second jump");
-    }
-
-    // 2. Tight pair at low (300), mid (540), and high (900) speeds: cleared in a single leap
-    for (const speed of [300, 540, 900]) {
-      let state = startFredRun(createFredRunState("vienna"));
-      const scoreForSpeed = ((speed - 300) / 120) * FREDRUN_SCORE_PULSE_POINTS;
-      const initialDist = 300;
-      state = {
-        ...state,
-        score: scoreForSpeed,
-        distance: scoreForSpeed * 34,
-        speed,
-        obstacles: [
-          { id: 10, kind: "paragraph", x: initialDist, width: 42, height: 68 },
-          { id: 11, kind: "reihe100", x: initialDist + 18, width: 56, height: 60 },
-        ],
-        spawnDistance: 10_000,
-      };
-
-      state = advanceUntil(state, (next) => {
-        const obstacle = next.obstacles.find((candidate) => candidate.id === 10);
-        expect(obstacle).toBeDefined();
-        return (obstacle?.x ?? -Infinity) - FREDRUN_PLAYER_X > Math.max(130, speed * 0.43);
-      }, `tight-pair ${speed} approach`);
-
-      state = jumpFredRun(state);
-      expect(state.grounded).toBe(false);
-
-      state = advanceUntil(state, (next) => {
-        const obstacle = next.obstacles.find((candidate) => candidate.id === 11);
-        expect(obstacle).toBeDefined();
-        return (obstacle?.x ?? -Infinity) + (obstacle?.width ?? 0) > FREDRUN_PLAYER_X - 24;
-      }, `tight-pair ${speed} traversal`);
-    }
-
-    // 3. Triple cadence at mid speed (540 px/s): 3 rhythmic jumps
-    {
-      const speed = 540;
-      const score = 600;
-      const gap1 = fredRunSequenceClearance(speed, 0.38, 1, 1);
-      const gap2 = fredRunSequenceClearance(speed, 0.38, 1, 1);
-      let state = startFredRun(createFredRunState("vienna"));
-      state = {
-        ...state,
-        score,
-        distance: score * 34,
-        speed,
-        obstacles: [
-          { id: 20, kind: "reihe100", x: 260, width: 56, height: 60 },
-          { id: 21, kind: "paragraph", x: 260 + gap1, width: 42, height: 68 },
-          { id: 22, kind: "steuerkodex", x: 260 + gap1 + gap2, width: 45, height: 70 },
-        ],
-        spawnDistance: 10_000,
-      };
-
-      for (let step = 0; step < 3; step += 1) {
-        const targetId = 20 + step;
-        state = advanceUntil(state, (next) => {
-          const targetObstacle = next.obstacles.find((candidate) => candidate.id === targetId);
-          expect(targetObstacle).toBeDefined();
-          return (targetObstacle?.x ?? -Infinity) - FREDRUN_PLAYER_X > Math.max(90, speed * 0.30);
-        }, `triple-cadence ${targetId} approach`);
-        state = jumpFredRun(state);
-        state = advanceUntil(state, (next) => {
-          const targetObstacle = next.obstacles.find((candidate) => candidate.id === targetId);
-          expect(targetObstacle).toBeDefined();
-          return !next.grounded && (targetObstacle?.x ?? -Infinity) + (targetObstacle?.width ?? 0) > FREDRUN_PLAYER_X - 24;
-        }, `triple-cadence ${targetId} traversal`);
-      }
-      expect(state.phase).toBe("running");
-    }
-
-    // 4. Combined gauntlet at high speed (900 px/s): tight-pair leap followed by moving obstacle leap
-    {
-      const speed = 900;
-      const score = 1500;
-      const odoMult = 1.18;
-      const gapToMoving = fredRunSequenceClearance(speed, 0.43, odoMult, 1);
-      let state = startFredRun(createFredRunState("vienna"));
-      state = {
-        ...state,
-        score,
-        distance: score * 34,
-        speed,
-        obstacles: [
-          { id: 30, kind: "paragraph", x: 300, width: 42, height: 68 },
-          { id: 31, kind: "reihe100", x: 300 + 18, width: 56, height: 60 },
-          { id: 32, kind: "odo", x: 800 + gapToMoving, width: 38, height: 78 },
-        ],
-        spawnDistance: 10_000,
-      };
-
-      state = advanceUntil(state, (next) => {
-        const obstacle = next.obstacles.find((candidate) => candidate.id === 30);
-        expect(obstacle).toBeDefined();
-        return (obstacle?.x ?? -Infinity) - FREDRUN_PLAYER_X > Math.max(120, speed * 0.30);
-      }, "combined-gauntlet first approach");
-      state = jumpFredRun(state);
-      state = advanceUntil(state, (next) => !next.grounded, "combined-gauntlet first jump");
-
-      let reactionTime = 0;
-      state = advanceUntil(state, (next) => {
-        const obstacle = next.obstacles.find((candidate) => candidate.id === 32);
-        expect(obstacle).toBeDefined();
-        if ((obstacle?.x ?? -Infinity) - FREDRUN_PLAYER_X <= Math.max(180, speed * 0.45)) return false;
-        reactionTime += 0.02;
-        return true;
-      }, "combined-gauntlet reaction gap");
-      // The moving target is already closing while the first jump is in flight;
-      // the authored schedule still leaves a measured 0.24s grounded window here.
-      expect(reactionTime).toBeGreaterThanOrEqual(0.24 - Number.EPSILON * 8);
-
-      state = jumpFredRun(state);
-      state = advanceUntil(state, (next) => {
-        const obstacle = next.obstacles.find((candidate) => candidate.id === 32);
-        expect(obstacle).toBeDefined();
-        return (obstacle?.x ?? -Infinity) + (obstacle?.width ?? 0) > FREDRUN_PLAYER_X - 24;
-      }, "combined-gauntlet moving obstacle");
-      expect(state.phase).toBe("running");
-    }
-  });
-
-  it("ensures clusters cannot be made impossible by preceding and following random encounters", () => {
-    const speed = 500;
-    const score = 400;
-    const clearance = fredRunSequenceClearance(speed, 0.38, 1, 1);
-    const followingClearance = fredRunSequenceClearance(speed, 0.38, 1.18, 1);
-
-    let state = startFredRun(createFredRunState("vienna"));
-    state = {
-      ...state,
-      score,
-      distance: score * 34,
-      speed,
-      obstacles: [
-        { id: 40, kind: "madinger", x: 220, width: 42, height: 82 },
-        { id: 41, kind: "paragraph", x: 220 + clearance, width: 42, height: 68 },
-        { id: 42, kind: "reihe100", x: 220 + clearance * 2, width: 56, height: 60 },
-        { id: 43, kind: "odo", x: 220 + clearance * 2 + followingClearance, width: 38, height: 78 },
-      ],
-      spawnDistance: 10_000,
-    };
-
-    for (let i = 0; i < 4; i += 1) {
-      const targetId = 40 + i;
-      state = advanceUntil(state, (next) => {
-        const target = next.obstacles.find((candidate) => candidate.id === targetId);
-        expect(target).toBeDefined();
-        return (target?.x ?? -Infinity) - FREDRUN_PLAYER_X > Math.max(90, speed * 0.30);
-      }, `cluster ${targetId} approach`);
-      state = jumpFredRun(state);
-      state = advanceUntil(state, (next) => {
-        const target = next.obstacles.find((candidate) => candidate.id === targetId);
-        expect(target).toBeDefined();
-        return !next.grounded && (target?.x ?? -Infinity) + (target?.width ?? 0) > FREDRUN_PLAYER_X - 24;
-      }, `cluster ${targetId} traversal`);
-    }
-    expect(state.phase).toBe("running");
-  });
-
-  it("prevents random obstacles from interrupting an active authored sequence", () => {
-    let state = startFredRun(createFredRunState("vienna"));
-    state = {
-      ...state,
-      activeSequence: {
-        kind: "spaced-pair",
-        steps: [
-          { gap: 300, kind: "paragraph" },
-          { gap: 400, kind: "reihe100" },
-        ],
-      },
-      spawnDistance: 0,
-    };
-    const nextState = advanceFredRun(state, 0.05);
-    expect(nextState.obstacles.some((o) => o.kind === "paragraph")).toBe(true);
-    expect(nextState.activeSequence?.steps).toHaveLength(1);
-    expect(nextState.activeSequence?.steps[0].kind).toBe("reihe100");
-    expect(nextState.spawnDistance).toBe(400);
   });
 });
 
@@ -1803,5 +1526,227 @@ describe("World state lifecycle and reset", () => {
     const advancedResuming = advanceFredRun(resuming, 0.05);
     expect(advancedResuming.platforms[0].x).toBe(200);
     expect(advancedResuming.platforms[0].crumbleTimer).toBe(0.2);
+  });
+});
+
+function seededRandom(seed: number): () => number {
+  return () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 0x100000000;
+  };
+}
+
+function lightningRun(speed = 300): FredRunState {
+  const distance = (speed - 300) / 120 * 250 * 34;
+  return startFredRun({ ...createFredRunState("vienna"), distance, score: Math.floor(distance / 34), speed });
+}
+
+function evadeGeneratedHazards(state: FredRunState): FredRunState {
+  if (!state.grounded) return state;
+  const playerRight = FREDRUN_PLAYER_X + 24;
+  const obstacleDue = state.obstacles.some((obstacle) => {
+    const multiplier = obstacle.kind === "odo" ? 1.18 : obstacle.kind === "madinger" ? 1.12 : obstacle.kind === "luki" ? 1.15 : 1;
+    const arrival = (obstacle.x + 4 - playerRight) / (state.speed * multiplier);
+    return obstacle.x + obstacle.width > FREDRUN_PLAYER_X - 24 && arrival <= 0.23;
+  });
+  const lightningDue = state.lightning.some((hazard) => (
+    !hazard.absorbed && hazard.x + FREDRUN_LIGHTNING_WIDTH > FREDRUN_PLAYER_X - 24
+    && (hazard.x - playerRight) / state.speed <= 0.3
+  ));
+  return obstacleDue || lightningDue ? jumpFredRun(state) : state;
+}
+
+describe("Vienna original scheduling and jumpable lightning", () => {
+  it("matches the pre-feature obstacleFor/nextGap with the same stream across all kinds and score tiers", () => {
+    for (const score of [0, 400, 1200, 3000, 8000]) {
+      for (const roll of [-1, 0, 0.125, 0.25, 0.375, 0.5, 0.7, 0.9, 1]) {
+        const values = [roll, 0.37];
+        let consumed = 0;
+        const random = () => values[consumed++];
+        const state = { ...lightningRun(fredRunSpeedForScore(score)), spawnDistance: 0 };
+        const next = advanceFredRun(state, 0.01, random, () => 0);
+        expect(consumed).toBe(2);
+        expect(next.obstacles[0]).toEqual(originalObstacleFor(() => roll, 1));
+        expect(next.spawnDistance).toBe(originalNextGap(next.speed, Math.floor(next.distance / 34), () => 0.37));
+      }
+    }
+  });
+
+  it("retains the original generated order and gaps through a surviving run with lightning and collectibles", () => {
+    const random = seededRandom(17);
+    let state = lightningRun();
+    let scheduled = 0;
+    const kinds = new Set<string>();
+    const hazards = new Set<number>();
+    for (let step = 0; step < 1800; step += 1) {
+      state = evadeGeneratedHazards(state);
+      const before = state;
+      const rolls: number[] = [];
+      state = advanceFredRun(state, 0.02, () => { const value = random(); rolls.push(value); return value; }, () => 0);
+      expect(state.phase, `step ${step}`).toBe("running");
+      expect(state.shieldImpactRemaining).toBe(0);
+      expect(state.lightning.every((hazard) => !hazard.absorbed)).toBe(true);
+      if (state.nextObstacleId > before.nextObstacleId) {
+        const obstacle = state.obstacles.find((candidate) => candidate.id === before.nextObstacleId);
+        expect(obstacle).toEqual(originalObstacleFor(() => rolls[0], before.nextObstacleId));
+        const score = Math.max(before.score, Math.floor(state.distance / 34) + before.coinsCollected * FREDRUN_COIN_SCORE + before.nearMissScore);
+        expect(state.spawnDistance).toBe(originalNextGap(state.speed, score, () => rolls[1]));
+        kinds.add(obstacle!.kind);
+        scheduled += 1;
+      }
+      state.lightning.forEach((hazard) => hazards.add(hazard.id));
+    }
+    expect(scheduled).toBeGreaterThan(15);
+    expect(kinds.size).toBe(7);
+    expect(hazards.size).toBeGreaterThan(1);
+    expect(state.nextCoinId).toBeGreaterThan(1);
+    expect(state.nextPowerUpId).toBeGreaterThan(1);
+  });
+
+  for (const speed of [300, 540, 900]) {
+    for (const delta of [0.01, 0.02, 0.05]) {
+      it(`traverses a generated encounter and following old obstacles at ${speed} px/s, dt=${delta}`, () => {
+        const random = seededRandom(12);
+        let state = lightningRun(speed);
+        const seen = new Set<number>();
+        let jumped = false;
+        let crossed = false;
+        for (let step = 0; step < Math.ceil(6 / delta); step += 1) {
+          // Fresh lookup on every step: never wait on a stale hazard object.
+          const hazard = state.lightning.find((candidate) => candidate.id === 1);
+          if (hazard) {
+            seen.add(hazard.id);
+            if (hazard.x + FREDRUN_LIGHTNING_WIDTH < FREDRUN_PLAYER_X - 24) crossed = true;
+          }
+          const next = evadeGeneratedHazards(state);
+          if (hazard && next !== state) jumped = true;
+          state = advanceFredRun(next, delta, random, () => 0);
+          expect(state.phase, `step ${step}`).toBe("running");
+          expect(state.shieldImpactRemaining).toBe(0);
+          expect(state.lightning.every((candidate) => !candidate.absorbed)).toBe(true);
+        }
+        expect(seen.size).toBeGreaterThan(0);
+        expect(jumped).toBe(true);
+        expect(crossed).toBe(true);
+        expect(state.nextObstacleId).toBeGreaterThan(2);
+      });
+    }
+  }
+
+  it("shows the first warning within a bounded wait for every initial random extreme", () => {
+    const appearances: number[] = [];
+    for (const roll of [0, 0.5, 1]) {
+      let state = lightningRun();
+      for (let step = 0; step < 20 && state.lightning.length === 0; step += 1) {
+        state = advanceFredRun(state, 0.01, () => 0.5, () => roll);
+        expect(state.phase).toBe("running");
+      }
+      expect(state.lightning).toHaveLength(1);
+      expect(state.elapsed).toBeLessThanOrEqual(0.17);
+      expect(state.lightning[0].age).toBe(0);
+      appearances.push(state.elapsed);
+    }
+    expect(new Set(appearances).size).toBe(3);
+  });
+
+  it("warns before damage and kills a grounded player who takes no action", () => {
+    for (const speed of [300, 540, 900]) {
+      let state = lightningRun(speed);
+      let warningSteps = 0;
+      for (let step = 0; step < 150 && state.phase === "running"; step += 1) {
+        state = advanceFredRun(state, 0.01, () => 0.5, () => 0);
+        const hazard = state.lightning.find((candidate) => candidate.id === 1);
+        if (hazard && hazard.age < FREDRUN_LIGHTNING_WARNING_SECONDS) {
+          warningSteps += 1;
+          expect(state.phase).toBe("running");
+        }
+      }
+      expect(warningSteps).toBeGreaterThanOrEqual(29);
+      expect(state.phase).toBe("game-over");
+      expect(state.lightning.find((candidate) => candidate.id === 1)?.age).toBeGreaterThan(FREDRUN_LIGHTNING_WARNING_SECONDS);
+      expect(state.obstacles.every((obstacle) => obstacle.x > FREDRUN_PLAYER_X + 24)).toBe(true);
+    }
+  });
+
+  it("absorbs one entire generated strike with a shield, including later overlapping frames", () => {
+    let state = { ...lightningRun(), shieldActive: true };
+    let absorbedFrames = 0;
+    for (let step = 0; step < 135; step += 1) {
+      state = advanceFredRun(state, 0.01, () => 0.5, () => 0);
+      const hazard = state.lightning.find((candidate) => candidate.id === 1);
+      if (hazard?.absorbed) {
+        absorbedFrames += 1;
+        expect(state.shieldActive).toBe(false);
+      }
+      expect(state.phase).toBe("running");
+    }
+    expect(absorbedFrames).toBeGreaterThan(20);
+    expect(state.lightning).toEqual([]);
+  });
+
+  it("never damages during warning or after expiry, including swept boundary steps", () => {
+    const base = { ...lightningRun(), lightningWait: 10 };
+    const hazard = { id: 1, x: FREDRUN_PLAYER_X, age: 0, absorbed: false };
+    expect(advanceFredRun({ ...base, lightning: [hazard] }, 0.05).phase).toBe("running");
+    expect(advanceFredRun({ ...base, lightning: [{ ...hazard, age: 1.16 }] }, 0.05).phase).toBe("running");
+    expect(advanceFredRun({ ...base, lightning: [{ ...hazard, age: 1.14 }] }, 0.05).phase).toBe("game-over");
+    expect(advanceFredRun({ ...base, lightning: [{ ...hazard, age: 0.29 }] }, 0.05).phase).toBe("game-over");
+  });
+
+  it("defers for airborne commitment, neighboring obstacles, and an unsafe future spawn without rescheduling obstacles", () => {
+    const cases = [
+      jumpFredRun(lightningRun()),
+      { ...lightningRun(), obstacles: [{ id: 99, kind: "odo" as const, x: 400, width: 38, height: 78 }] },
+      { ...lightningRun(900), spawnDistance: 0 },
+      lightningRun(1600),
+    ];
+    for (const initial of cases) {
+      const next = advanceFredRun({ ...initial, lightningWait: 0 }, 0.01, () => 0, () => 0);
+      expect(next.lightning).toEqual([]);
+      if (initial.spawnDistance === 0) {
+        expect(next.obstacles[0]).toEqual(originalObstacleFor(() => 0, 1));
+        expect(next.spawnDistance).toBe(originalNextGap(next.speed, Math.floor(next.distance / 34), () => 0));
+      } else {
+        expect(next.spawnDistance).toBeCloseTo(initial.spawnDistance - initial.speed * 0.01);
+      }
+    }
+  });
+
+  it("does not add lightning or consume its random stream in other worlds", () => {
+    for (const worldId of ["alps", "finanzamt-night"] as const) {
+      let state = startFredRun(createFredRunState(worldId));
+      let frames = 0;
+      for (let step = 0; step < 400 && state.phase === "running"; step += 1) {
+        state = advanceFredRun(evadeGeneratedHazards(state), 0.02, () => 0.9, () => { throw new Error("unexpected lightning RNG"); });
+        expect(state.lightning).toEqual([]);
+        expect(state.lightningWait).toBeNull();
+        frames += 1;
+      }
+      expect(frames).toBe(400);
+      expect(state.nextObstacleId).toBeGreaterThan(2);
+    }
+  });
+
+  it("freezes warning, active discharge and waiting timers during pause/countdown; reset and world switch clear them", () => {
+    let state = lightningRun();
+    for (let step = 0; step < 12; step += 1) state = advanceFredRun(state, 0.01, () => 0.5, () => 0);
+    expect(state.lightning).toHaveLength(1);
+    for (const age of [0.1, 0.4]) {
+      const active = { ...state, lightning: state.lightning.map((hazard) => ({ ...hazard, age })) };
+      const paused = pauseFredRun(active);
+      expect(advanceFredRun(paused, 0.05)).toBe(paused);
+      let countdown = resumeFredRun(paused);
+      for (let step = 0; step < 60; step += 1) {
+        countdown = advanceFredRun(countdown, 0.05);
+        expect(countdown.lightning).toEqual(active.lightning);
+        expect(countdown.lightningWait).toBe(active.lightningWait);
+        expect(countdown.elapsed).toBe(active.elapsed);
+      }
+      expect(countdown.phase).toBe("running");
+      expect(advanceFredRun(countdown, 0.01).lightning[0].age).toBeCloseTo(age + 0.01);
+    }
+    for (const worldId of ["vienna", "alps", "finanzamt-night"] as const) {
+      expect(restartFredRun(worldId)).toMatchObject({ worldId, lightning: [], lightningWait: null, nextLightningId: 1 });
+    }
   });
 });

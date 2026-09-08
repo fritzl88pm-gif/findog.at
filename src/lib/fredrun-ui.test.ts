@@ -6,6 +6,7 @@ import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
 import { fredRunEnvironmentForDistance } from "./fredrun";
+import { drawFredRunLightning } from "./fredrun-lightning-render";
 import {
   FREDRUN_WORLD_IDS,
   FREDRUN_WORLDS,
@@ -1435,5 +1436,43 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toMatch(/if \(accessBlockMessage\) \{[\s\S]*?className="fredrun-access-block"[\s\S]*?\{accessBlockMessage\}/u);
     expect(viewSource).not.toMatch(/@[a-z0-9.-]+\.[a-z]{2,}/iu);
     expect(stylesSource).toContain(".fredrun-access-block");
+  });
+});
+
+describe("Vienna lightning hazard rendering", () => {
+  function render(age: number, reducedMotion = false, x = 400) {
+    const operations: unknown[][] = [];
+    const context = new Proxy({}, {
+      get: (_target, name) => (...args: unknown[]) => operations.push([name, ...args]),
+      set: (_target, name, value) => { operations.push([name, value]); return true; },
+    }) as CanvasRenderingContext2D;
+    drawFredRunLightning(context, { id: 1, x, age, absorbed: false }, reducedMotion);
+    return operations;
+  }
+
+  it("connects the actual canvas renderer to Vienna simulation hazards", () => {
+    expect(viewSource).toContain('if (effectiveWorldId === "vienna") {\n    state.lightning.forEach((hazard) => drawFredRunLightning(context, hazard, reducedMotion));');
+  });
+
+  it("draws a German ground warning followed by a bright jagged bolt and discharge", () => {
+    const warning = render(0.1);
+    expect(warning).toContainEqual(["fillText", "BLITZ – SPRINGEN!", 424, 251]);
+    expect(warning).toContainEqual(["strokeRect", 400, 278, 48, 22]);
+    const strike = render(0.32);
+    expect(strike).toContainEqual(["moveTo", 432, 8]);
+    expect(strike).toContainEqual(["lineTo", 424, 300]);
+    expect(strike).toContainEqual(["strokeStyle", "#ffffff"]);
+    expect(strike).toContainEqual(["moveTo", 400, 293]);
+    expect(strike).toContainEqual(["lineTo", 406, 282]);
+    expect(strike.filter(([name]) => name === "lineTo").length).toBeGreaterThan(10);
+  });
+
+  it("uses repeatable state rendering and static reduced-motion warnings, with no tall bolt near the player", () => {
+    expect(render(0.32)).toEqual(render(0.32));
+    expect(render(0.1, true)).toEqual(render(0.2, true));
+    expect(render(0.31, true)).toEqual(render(0.4, true));
+    expect(render(0.32, true)).not.toContainEqual(["moveTo", 432, 8]);
+    expect(render(0.32, false, 132)).not.toContainEqual(["moveTo", 164, 8]);
+    expect(render(0.32, true)).toContainEqual(["moveTo", 400, 293]);
   });
 });
