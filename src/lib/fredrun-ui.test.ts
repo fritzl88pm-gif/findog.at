@@ -5,7 +5,13 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
-import { fredRunEnvironmentForDistance } from "./fredrun";
+import {
+  FREDRUN_GROUND_Y,
+  FREDRUN_LIGHTNING_HEIGHT,
+  FREDRUN_LIGHTNING_WIDTH,
+  FREDRUN_PLAYER_X,
+  fredRunEnvironmentForDistance,
+} from "./fredrun";
 import { drawFredRunLightning } from "./fredrun-lightning-render";
 import {
   FREDRUN_WORLD_IDS,
@@ -1440,39 +1446,108 @@ describe("Fredrun UI surface", () => {
 });
 
 describe("Vienna lightning hazard rendering", () => {
-  function render(age: number, reducedMotion = false, x = 400) {
+  function render(age: number, reducedMotion = false, x = 400, absorbed = false, id = 1) {
     const operations: unknown[][] = [];
+    const initial = { globalAlpha: 0.8, lineCap: "butt", lineJoin: "miter", shadowBlur: 3,
+      shadowOffsetX: 2, shadowOffsetY: 2, strokeStyle: "#123456", lineWidth: 4, shadowColor: "#000000" };
+    let state: Record<string, unknown> = { ...initial };
+    const stack: Record<string, unknown>[] = [];
     const context = new Proxy({}, {
-      get: (_target, name) => (...args: unknown[]) => operations.push([name, ...args]),
-      set: (_target, name, value) => { operations.push([name, value]); return true; },
+      get: (_target, name: string) => name in state ? state[name] : (...args: unknown[]) => {
+        operations.push([name, ...args]);
+        if (name === "save") stack.push({ ...state });
+        if (name === "restore") state = stack.pop()!;
+      },
+      set: (_target, name: string, value) => {
+        state[name] = value;
+        operations.push([name, value]);
+        return true;
+      },
     }) as CanvasRenderingContext2D;
-    drawFredRunLightning(context, { id: 1, x, age, absorbed: false }, reducedMotion);
+    drawFredRunLightning(context, { id, x, age, absorbed }, reducedMotion);
+    expect(state).toEqual(initial);
+    expect(stack).toHaveLength(0);
     return operations;
+  }
+
+  function paths(operations: unknown[][]) {
+    const result: number[][][] = [];
+    for (const [name, x, y] of operations) {
+      if (name === "moveTo") result.push([[x as number, y as number]]);
+      if (name === "lineTo") result.at(-1)!.push([x as number, y as number]);
+    }
+    return result;
   }
 
   it("connects the actual canvas renderer to Vienna simulation hazards", () => {
     expect(viewSource).toContain('if (effectiveWorldId === "vienna") {\n    state.lightning.forEach((hazard) => drawFredRunLightning(context, hazard, reducedMotion));');
   });
 
-  it("draws a German ground warning followed by a bright jagged bolt and discharge", () => {
-    const warning = render(0.1);
-    expect(warning).toContainEqual(["fillText", "BLITZ – SPRINGEN!", 424, 251]);
-    expect(warning).toContainEqual(["strokeRect", 400, 278, 48, 22]);
-    const strike = render(0.32);
-    expect(strike).toContainEqual(["moveTo", 432, 8]);
-    expect(strike).toContainEqual(["lineTo", 424, 300]);
-    expect(strike).toContainEqual(["strokeStyle", "#ffffff"]);
-    expect(strike).toContainEqual(["moveTo", 400, 293]);
-    expect(strike).toContainEqual(["lineTo", 406, 282]);
-    expect(strike.filter(([name]) => name === "lineTo").length).toBeGreaterThan(10);
+  it("draws layered ground arcs with daylight contrast and localized glow, without overlay shapes or text", () => {
+    for (const operations of [render(0.1), render(0.32), render(0.8), render(0.32, true)]) {
+      expect(operations.some(([name]) => ["fillRect", "strokeRect", "rect", "fillText", "strokeText"].includes(String(name)))).toBe(false);
+      expect(operations).toContainEqual(["strokeStyle", "#163e50"]);
+      expect(operations).toContainEqual(["strokeStyle", "#62dfff"]);
+      expect(operations).toContainEqual(["strokeStyle", "#edfdff"]);
+      const blurs = operations.filter(([name]) => name === "shadowBlur").map(([, value]) => Number(value));
+      expect(Math.max(...blurs)).toBeGreaterThan(0);
+      expect(Math.max(...blurs)).toBeLessThanOrEqual(8);
+    }
+    const warning = paths(render(0.1));
+    expect(warning).toHaveLength(4);
+    expect(warning.flat().every(([, y]) => y >= FREDRUN_GROUND_Y - 10)).toBe(true);
   });
 
-  it("uses repeatable state rendering and static reduced-motion warnings, with no tall bolt near the player", () => {
+  it("covers the collision width and low height with irregular active arcs and small ground veins", () => {
+    for (const operations of [render(0.32), render(0.8), render(0.32, true)]) {
+      const [discharge, ...branches] = paths(operations);
+      const xs = discharge.map(([x]) => x);
+      const ys = discharge.map(([, y]) => y);
+      expect(Math.min(...xs)).toBe(400);
+      expect(Math.max(...xs)).toBe(400 + FREDRUN_LIGHTNING_WIDTH);
+      expect(Math.min(...ys)).toBe(FREDRUN_GROUND_Y - FREDRUN_LIGHTNING_HEIGHT);
+      expect(Math.max(...ys)).toBeGreaterThan(FREDRUN_GROUND_Y - 7);
+      expect(new Set(ys).size).toBeGreaterThan(4);
+      expect(branches.slice(0, 3).every((branch) => branch.at(-1)![1] > FREDRUN_GROUND_Y)).toBe(true);
+      expect(Math.max(...branches.slice(0, 3).flat().map(([, y]) => y))).toBeLessThanOrEqual(FREDRUN_GROUND_Y + 7);
+    }
+  });
+
+  it("briefly branches a bright tall strike only ahead of the player", () => {
+    const strikePaths = paths(render(0.32));
+    const bolt = strikePaths.find((path) => path[0][1] === 8)!;
+    expect(bolt.length).toBeGreaterThan(6);
+    expect(bolt.at(-1)).toEqual([424, FREDRUN_GROUND_Y]);
+    expect(strikePaths.filter((path) => bolt.some(([x, y]) => path[0][0] === x && path[0][1] === y))).toHaveLength(3);
+    for (const operations of [render(0.1), render(0.43), render(0.32, true),
+      render(0.32, false, FREDRUN_PLAYER_X + 64), render(0.32, false, FREDRUN_PLAYER_X)]) {
+      expect(paths(operations).flat().every(([, y]) => y > FREDRUN_GROUND_Y - 40)).toBe(true);
+    }
+    expect(paths(render(0.32, false, FREDRUN_PLAYER_X + 65)).flat().some(([, y]) => y === 8)).toBe(true);
+  });
+
+  it("uses hazard identity and simulation age deterministically, with static reduced-motion arcs", () => {
     expect(render(0.32)).toEqual(render(0.32));
+    expect(render(0.32)).not.toEqual(render(0.32, false, 400, false, 2));
+    expect(paths(render(0.5))).not.toEqual(paths(render(0.6)));
     expect(render(0.1, true)).toEqual(render(0.2, true));
     expect(render(0.31, true)).toEqual(render(0.4, true));
-    expect(render(0.32, true)).not.toContainEqual(["moveTo", 432, 8]);
-    expect(render(0.32, false, 132)).not.toContainEqual(["moveTo", 164, 8]);
-    expect(render(0.32, true)).toContainEqual(["moveTo", 400, 293]);
+    expect(paths(render(0.45))).toHaveLength(7);
+    expect(paths(render(0.45, true))).toHaveLength(4);
+    expect(paths(render(0.45, true))).toEqual(paths(render(0.8, true)));
+  });
+
+  it("fades residual and absorbed electricity without alarming absorbed sparks, and restores canvas state", () => {
+    const alpha = (operations: unknown[][]) => Number(operations.find(([name]) => name === "globalAlpha")![1]);
+    expect(paths(render(0.8))).toHaveLength(4);
+    expect(alpha(render(1.1))).toBeLessThan(alpha(render(0.8)));
+    for (const reducedMotion of [false, true]) {
+      const absorbed = render(0.32, reducedMotion, 400, true);
+      expect(paths(absorbed)).toHaveLength(4);
+      expect(alpha(absorbed)).toBeLessThan(0.2);
+      expect(alpha(render(0.8, reducedMotion, 400, true))).toBeLessThan(alpha(absorbed));
+      expect(paths(absorbed)).toEqual(paths(render(0.8, reducedMotion, 400, true)));
+      expect(render(1.15, reducedMotion)).toEqual([]);
+    }
   });
 });
