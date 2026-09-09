@@ -327,7 +327,8 @@ describe("reasonings UI integration", () => {
     expect(viewSource).toContain('method: "DELETE"');
     expect(viewSource).toContain('fetch("/api/reasoning-categories"');
     expect(viewSource).toContain("toggleEditorCategory");
-    expect(viewSource).toContain("getChildCategoryIds(activeCategoryId, childIdsByParent)");
+    expect(viewSource).toContain("filterAndSortReasonings(reasonings, {");
+    expect(viewSource).toContain("categoryId: activeCategoryId,");
     expect(viewSource).toContain("Kategorie wurde gelöscht. Die Textbausteine bleiben erhalten.");
   });
 

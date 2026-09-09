@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   getChildCategoryIds,
@@ -10,6 +10,13 @@ import {
   orderReasoningCategories,
   reasoningCategoryLabel,
 } from "@/lib/reasonings";
+import {
+  filterAndSortReasonings,
+  getReasoningPreview,
+  type ReasoningLibraryItem,
+  type ReasoningSortBy,
+  resolveSelectedReasoningId,
+} from "@/lib/reasonings-library";
 import CopyIconButton from "@/components/copy-icon-button";
 
 type ReasoningCategory = {
@@ -20,14 +27,7 @@ type ReasoningCategory = {
   updatedAt: string;
 };
 
-type ReasoningCard = {
-  id: string;
-  title: string;
-  content: string;
-  categoryIds: string[];
-  createdAt: string;
-  updatedAt: string;
-};
+type ReasoningCard = ReasoningLibraryItem;
 
 type EditorState = {
   id: string | null;
@@ -136,6 +136,9 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
   const [categories, setCategories] = useState<ReasoningCategory[]>([]);
   const [reasonings, setReasonings] = useState<ReasoningCard[]>([]);
   const [activeCategoryId, setActiveCategoryId] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState<ReasoningSortBy>("updated");
+  const [selectedReasoningId, setSelectedReasoningId] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [isCategoriesOpen, setIsCategoriesOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
@@ -148,12 +151,57 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
   const [notice, setNotice] = useState("");
   const [isTitleOnly, setIsTitleOnly] = useState(false);
   const [expandedReasoningIds, setExpandedReasoningIds] = useState<Set<string>>(() => new Set());
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [menuPlacement, setMenuPlacement] = useState<"top" | "bottom">("bottom");
+  const [editorSession, setEditorSession] = useState(0);
+
+  const menuContainerRef = useRef<HTMLDivElement | null>(null);
+  const activeTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const editorTitleInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (getTitleOnlyStoredPreference()) {
       setIsTitleOnly(true);
     }
   }, []);
+
+  // Close open action menu on outside click or Escape
+  useEffect(() => {
+    if (!openMenuId) return;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpenMenuId(null);
+        activeTriggerRef.current?.focus();
+      }
+    }
+
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        menuContainerRef.current
+        && !menuContainerRef.current.contains(event.target as Node)
+      ) {
+        setOpenMenuId(null);
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [openMenuId]);
+
+  // Focus editor title field when a create/edit session is explicitly opened
+  useEffect(() => {
+    if (editorSession > 0 && editorTitleInputRef.current) {
+      editorTitleInputRef.current.focus();
+      if (typeof editorTitleInputRef.current.scrollIntoView === "function") {
+        editorTitleInputRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }
+  }, [editorSession]);
 
   const loadReasonings = useCallback(async () => {
     if (!accessToken) {
@@ -202,6 +250,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
     () => new Map(categories.map((category) => [category.id, category])),
     [categories],
   );
+
   const childIdsByParent = useMemo(() => {
     const map = new Map<string, string[]>();
     for (const category of categories) {
@@ -224,14 +273,24 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
     [categories],
   );
 
-  const visibleReasonings = useMemo(
-    () => activeCategoryId
-      ? reasonings.filter((reasoning) => {
-          const allowedIds = getChildCategoryIds(activeCategoryId, childIdsByParent);
-          return reasoning.categoryIds.some((id) => allowedIds.includes(id));
-        })
-      : reasonings,
-    [activeCategoryId, reasonings, childIdsByParent],
+  const filteredReasonings = useMemo(() => {
+    return filterAndSortReasonings(reasonings, {
+      query: searchQuery,
+      categoryId: activeCategoryId,
+      childIdsByParent,
+      sortBy,
+    });
+  }, [reasonings, searchQuery, activeCategoryId, childIdsByParent, sortBy]);
+
+  // Safely resolve the currently selected reasoning
+  const activeSelectedId = useMemo(
+    () => resolveSelectedReasoningId(selectedReasoningId, filteredReasonings),
+    [selectedReasoningId, filteredReasonings],
+  );
+
+  const selectedReasoning = useMemo(
+    () => filteredReasonings.find((r) => r.id === activeSelectedId) ?? null,
+    [filteredReasonings, activeSelectedId],
   );
 
   function categoryDisplayName(category: ReasoningCategory): string {
@@ -249,6 +308,8 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
     setEditor({ ...EMPTY_EDITOR, categoryIds: activeCategoryId ? [activeCategoryId] : [] });
     setNotice("");
     setError("");
+    setOpenMenuId(null);
+    setEditorSession((prev) => prev + 1);
   }
 
   function openEditEditor(reasoning: ReasoningCard) {
@@ -260,14 +321,15 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
     });
     setNotice("");
     setError("");
+    setOpenMenuId(null);
+    setEditorSession((prev) => prev + 1);
   }
 
   function toggleTitleOnly() {
-    setIsTitleOnly((current) => {
-      const next = !current;
-      persistTitleOnlyPreference(next);
-      return next;
-    });
+    const next = !isTitleOnly;
+    setIsTitleOnly(next);
+    // Explicit storage write outside state updater callback
+    persistTitleOnlyPreference(next);
   }
 
   function toggleReasoningExpansion(id: string) {
@@ -280,6 +342,11 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
       }
       return next;
     });
+    setSelectedReasoningId(id);
+  }
+
+  function handleSelectRow(id: string) {
+    setSelectedReasoningId(id);
   }
 
   function toggleEditorCategory(categoryId: string) {
@@ -325,8 +392,12 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
         );
       }
       const wasEditing = Boolean(editor.id);
+      const savedId = editor.id;
       setEditor(null);
       await loadReasonings();
+      if (savedId) {
+        setSelectedReasoningId(savedId);
+      }
       setNotice(wasEditing ? "Textbaustein wurde gespeichert." : "Textbaustein wurde angelegt.");
     } catch (saveError) {
       setError(saveError instanceof Error
@@ -365,6 +436,9 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
         next.delete(reasoning.id);
         return next;
       });
+      if (selectedReasoningId === reasoning.id) {
+        setSelectedReasoningId(null);
+      }
       await loadReasonings();
       setNotice("Textbaustein wurde gelöscht.");
     } catch (deleteError) {
@@ -659,6 +733,7 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
             </div>
             <label htmlFor="reasoning-title">Titel</label>
             <input
+              ref={editorTitleInputRef}
               id="reasoning-title"
               value={editor.title}
               onChange={(event) =>
@@ -720,9 +795,14 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
 
         <section className="reasoning-library" aria-labelledby="reasoning-library-title">
           <div className="reasoning-library-toolbar">
-            <div className="reasoning-library-title-group">
-              <div className="reasoning-library-title-row">
+            <div className="reasoning-library-title-row">
+              <div className="reasoning-library-title-group">
                 <h2 id="reasoning-library-title">Meine Textbausteine</h2>
+                <p className="reasoning-library-counter">
+                  {filteredReasonings.length} von {reasonings.length} angezeigt
+                </p>
+              </div>
+              <div className="reasoning-toolbar-controls">
                 <button
                   type="button"
                   role="switch"
@@ -736,42 +816,84 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
                   <span>Nur Titel</span>
                 </button>
               </div>
-              <p>
-                {visibleReasonings.length} von {reasonings.length} angezeigt
-              </p>
             </div>
-            <div className="reasoning-category-filters" aria-label="Nach Kategorie filtern">
-              <button
-                className={activeCategoryId === "" ? "active" : ""}
-                type="button"
-                onClick={() => setActiveCategoryId("")}
-                aria-pressed={activeCategoryId === ""}
-              >
-                Alle
-              </button>
-              {orderedCategories.map((category) => (
-                <button
-                  className={activeCategoryId === category.id ? "active" : ""}
-                  type="button"
-                  key={category.id}
-                  onClick={() => setActiveCategoryId(category.id)}
-                  aria-pressed={activeCategoryId === category.id}
+
+            <div className="reasoning-library-filters">
+              <div className="reasoning-filter-group reasoning-search-group">
+                <label htmlFor="reasonings-search-input">Textbausteine durchsuchen</label>
+                <div className="reasoning-search-wrapper">
+                  <svg
+                    className="reasoning-search-icon"
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="m21 21-4.35-4.35" />
+                  </svg>
+                  <input
+                    id="reasonings-search-input"
+                    type="search"
+                    placeholder="Titel oder Inhalt suchen …"
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                  />
+                  {searchQuery ? (
+                    <button
+                      type="button"
+                      className="reasoning-search-clear"
+                      aria-label="Suche zurücksetzen"
+                      onClick={() => setSearchQuery("")}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="reasoning-filter-group">
+                <label htmlFor="reasonings-category-select">Kategorie</label>
+                <select
+                  id="reasonings-category-select"
+                  value={activeCategoryId}
+                  onChange={(event) => setActiveCategoryId(event.target.value)}
                 >
-                  {categoryDisplayName(category)}
-                </button>
-              ))}
+                  <option value="">Alle Kategorien</option>
+                  {orderedCategories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {categoryDisplayName(category)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="reasoning-filter-group">
+                <label htmlFor="reasonings-sort-select">Sortierung</label>
+                <select
+                  id="reasonings-sort-select"
+                  value={sortBy}
+                  onChange={(event) => setSortBy(event.target.value as ReasoningSortBy)}
+                >
+                  <option value="updated">Zuletzt geändert</option>
+                  <option value="alpha">A–Z</option>
+                </select>
+              </div>
             </div>
           </div>
 
           {isLoading ? (
             <p className="reasonings-empty-state" role="status">Textbausteine werden geladen …</p>
-          ) : visibleReasonings.length === 0 ? (
+          ) : filteredReasonings.length === 0 ? (
             <div className="reasonings-empty-state">
               <h3>{reasonings.length === 0 ? "Noch keine Textbausteine" : "Keine Treffer"}</h3>
               <p>
                 {reasonings.length === 0
                   ? "Lege deinen ersten Textbaustein als persönliche Karte an."
-                  : "In dieser Kategorie ist noch kein Textbaustein gespeichert."}
+                  : "Keine Textbausteine entsprechen deinen Suchkriterien."}
               </p>
               {reasonings.length === 0 ? (
                 <button className="primary-button" type="button" onClick={openNewEditor}>
@@ -780,25 +902,32 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
               ) : null}
             </div>
           ) : (
-            <div className={`reasoning-card-grid ${isTitleOnly ? "is-title-only" : ""}`}>
-              {visibleReasonings.map((reasoning) => {
-                const isExpanded = isTitleOnly && expandedReasoningIds.has(reasoning.id);
-                const contentId = `reasoning-entry-content-${reasoning.id}`;
+            <div className="reasoning-library-layout">
+              <div className="reasoning-list" role="list">
+                {filteredReasonings.map((reasoning) => {
+                  const isSelected = selectedReasoning?.id === reasoning.id;
+                  const isExpanded = expandedReasoningIds.has(reasoning.id);
+                  const isMenuOpen = openMenuId === reasoning.id;
+                  const contentId = `reasoning-entry-content-${reasoning.id}`;
 
-                return (
-                  <article
-                    className={`reasoning-card ${isTitleOnly ? "is-title-only" : ""}`}
-                    key={reasoning.id}
-                  >
-                    <div className="reasoning-card-heading">
-                      {isTitleOnly ? (
-                        <h3 className="reasoning-card-title-heading">
+                  return (
+                    <article
+                      className={`reasoning-row ${isSelected ? "is-selected" : ""} ${isTitleOnly ? "is-title-only" : ""}`}
+                      key={reasoning.id}
+                      role="listitem"
+                      onClick={() => handleSelectRow(reasoning.id)}
+                    >
+                      <div className="reasoning-row-main">
+                        <div className="reasoning-row-header">
                           <button
                             type="button"
-                            className="reasoning-title-disclosure-button"
+                            className="reasoning-row-title-btn"
                             aria-expanded={isExpanded}
                             aria-controls={contentId}
-                            onClick={() => toggleReasoningExpansion(reasoning.id)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleReasoningExpansion(reasoning.id);
+                            }}
                           >
                             <svg
                               className={`reasoning-disclosure-chevron ${isExpanded ? "is-expanded" : ""}`}
@@ -812,102 +941,187 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
                             >
                               <polyline points="9 18 15 12 9 6" />
                             </svg>
-                            <span className="reasoning-card-title-text">{reasoning.title}</span>
+                            <span className="reasoning-row-title-text">{reasoning.title}</span>
                           </button>
-                        </h3>
-                      ) : (
-                        <h3>{reasoning.title}</h3>
-                      )}
-                      <div className="reasoning-card-actions">
+
+                          <div className="reasoning-row-actions" onClick={(e) => e.stopPropagation()}>
+                            <CopyIconButton
+                              className="reasoning-copy-button"
+                              text={reasoning.content}
+                              label={`Textbaustein „${reasoning.title}“ kopieren`}
+                            />
+
+                            <div
+                              ref={isMenuOpen ? menuContainerRef : null}
+                              className="reasoning-menu-wrapper"
+                            >
+                              <button
+                                ref={isMenuOpen ? activeTriggerRef : null}
+                                className="reasoning-menu-trigger"
+                                type="button"
+                                aria-label={`Weitere Aktionen für „${reasoning.title}“`}
+                                aria-haspopup="true"
+                                aria-expanded={isMenuOpen}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  activeTriggerRef.current = event.currentTarget;
+                                  if (openMenuId === reasoning.id) {
+                                    setOpenMenuId(null);
+                                  } else {
+                                    const rect = event.currentTarget.getBoundingClientRect();
+                                    const spaceBelow = window.innerHeight - rect.bottom;
+                                    setMenuPlacement(spaceBelow < 120 ? "top" : "bottom");
+                                    setOpenMenuId(reasoning.id);
+                                  }
+                                }}
+                                title="Weitere Aktionen"
+                              >
+                                <svg
+                                  aria-hidden="true"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2.2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                >
+                                  <circle cx="12" cy="12" r="1" />
+                                  <circle cx="19" cy="12" r="1" />
+                                  <circle cx="5" cy="12" r="1" />
+                                </svg>
+                              </button>
+
+                              {isMenuOpen ? (
+                                <div
+                                  className={`reasoning-action-menu is-${menuPlacement}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <button
+                                    type="button"
+                                    className="reasoning-card-icon-button"
+                                    aria-label={`Textbaustein „${reasoning.title}“ bearbeiten`}
+                                    onClick={() => openEditEditor(reasoning)}
+                                    disabled={isSaving}
+                                  >
+                                    <svg
+                                      aria-hidden="true"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="1.9"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    >
+                                      <path d="m4 20 4.4-1 9.8-9.8-3.4-3.4L5 15.6 4 20Z" />
+                                      <path d="m13.8 6.8 3.4 3.4M14.8 5.8l1.4-1.4a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8l-1.4 1.4" />
+                                    </svg>
+                                    <span>Bearbeiten</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="reasoning-card-icon-button is-danger"
+                                    aria-label={`Textbaustein „${reasoning.title}“ löschen`}
+                                    onClick={() => {
+                                      setOpenMenuId(null);
+                                      void deleteReasoning(reasoning);
+                                    }}
+                                    disabled={isSaving}
+                                  >
+                                    <svg
+                                      aria-hidden="true"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="1.9"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    >
+                                      <path d="M4 7h16" />
+                                      <path d="M9 7V4h6v3" />
+                                      <path d="m6 7 1 13h10l1-13" />
+                                      <path d="M10 11v5M14 11v5" />
+                                    </svg>
+                                    <span>Löschen</span>
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+
+                        {!isTitleOnly ? (
+                          <p className="reasoning-row-preview">
+                            {getReasoningPreview(reasoning.content)}
+                          </p>
+                        ) : null}
+
+                        {/* Mobile accordion body with hidden panel when collapsed to prevent dangling aria-controls */}
+                        <div
+                          id={contentId}
+                          hidden={!isExpanded}
+                          className="reasoning-row-mobile-body"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <p className="reasoning-row-full-content">{reasoning.content}</p>
+                          <div className="reasoning-row-footer">
+                            <div className="reasoning-card-categories">
+                              {reasoning.categoryIds.flatMap((categoryId) => {
+                                const cat = categoriesById.get(categoryId);
+                                return cat ? <span key={cat.id}>{cat.name}</span> : [];
+                              })}
+                            </div>
+                            {reasoning.updatedAt ? (
+                              <small className="reasoning-row-date">
+                                Aktualisiert {formatUpdatedAt(reasoning.updatedAt)}
+                              </small>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+
+              {/* Desktop full-text reader */}
+              <aside className="reasoning-reader-panel" aria-label="Ausgewählter Textbaustein">
+                {selectedReasoning ? (
+                  <div className="reasoning-reader-card">
+                    <header className="reasoning-reader-header">
+                      <div className="reasoning-reader-heading">
+                        <h3 className="reasoning-reader-title">{selectedReasoning.title}</h3>
+                        <div className="reasoning-reader-meta">
+                          {selectedReasoning.updatedAt ? (
+                            <small className="reasoning-reader-date">
+                              Aktualisiert {formatUpdatedAt(selectedReasoning.updatedAt)}
+                            </small>
+                          ) : null}
+                          <div className="reasoning-card-categories">
+                            {selectedReasoning.categoryIds.flatMap((categoryId) => {
+                              const cat = categoriesById.get(categoryId);
+                              return cat ? <span key={cat.id}>{cat.name}</span> : [];
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="reasoning-reader-actions">
                         <CopyIconButton
-                          className="reasoning-copy-button"
-                          text={reasoning.content}
-                          label={`Textbaustein „${reasoning.title}“ kopieren`}
+                          className="reasoning-copy-button reasoning-reader-copy-button"
+                          text={selectedReasoning.content}
+                          label={`Textbaustein „${selectedReasoning.title}“ kopieren`}
                         />
-                        <button
-                          className="reasoning-card-icon-button"
-                          type="button"
-                          onClick={() => openEditEditor(reasoning)}
-                          disabled={isSaving}
-                          aria-label={`Textbaustein „${reasoning.title}“ bearbeiten`}
-                          title="Textbaustein bearbeiten"
-                        >
-                          <svg
-                            aria-hidden="true"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.9"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d="m4 20 4.4-1 9.8-9.8-3.4-3.4L5 15.6 4 20Z" />
-                            <path d="m13.8 6.8 3.4 3.4M14.8 5.8l1.4-1.4a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8l-1.4 1.4" />
-                          </svg>
-                        </button>
-                        <button
-                          className="reasoning-card-icon-button is-danger"
-                          type="button"
-                          onClick={() => void deleteReasoning(reasoning)}
-                          disabled={isSaving}
-                          aria-label={`Textbaustein „${reasoning.title}“ löschen`}
-                          title="Textbaustein löschen"
-                        >
-                          <svg
-                            aria-hidden="true"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.9"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d="M4 7h16" />
-                            <path d="M9 7V4h6v3" />
-                            <path d="m6 7 1 13h10l1-13" />
-                            <path d="M10 11v5M14 11v5" />
-                          </svg>
-                        </button>
                       </div>
+                    </header>
+                    <div className="reasoning-reader-body">
+                      <p className="reasoning-reader-content">{selectedReasoning.content}</p>
                     </div>
-                    {!isTitleOnly ? (
-                      <>
-                        <p className="reasoning-card-content">{reasoning.content}</p>
-                        <footer>
-                          <div className="reasoning-card-categories">
-                            {reasoning.categoryIds.flatMap((categoryId) => {
-                              const category = categoriesById.get(categoryId);
-                              return category ? <span key={category.id}>{category.name}</span> : [];
-                            })}
-                          </div>
-                          <small>
-                            {reasoning.updatedAt
-                              ? `Aktualisiert ${formatUpdatedAt(reasoning.updatedAt)}`
-                              : ""}
-                          </small>
-                        </footer>
-                      </>
-                    ) : isExpanded ? (
-                      <div id={contentId} className="reasoning-card-expanded-body">
-                        <p className="reasoning-card-content">{reasoning.content}</p>
-                        <footer>
-                          <div className="reasoning-card-categories">
-                            {reasoning.categoryIds.flatMap((categoryId) => {
-                              const category = categoriesById.get(categoryId);
-                              return category ? <span key={category.id}>{category.name}</span> : [];
-                            })}
-                          </div>
-                          <small>
-                            {reasoning.updatedAt
-                              ? `Aktualisiert ${formatUpdatedAt(reasoning.updatedAt)}`
-                              : ""}
-                          </small>
-                        </footer>
-                      </div>
-                    ) : null}
-                  </article>
-                );
-              })}
+                  </div>
+                ) : (
+                  <div className="reasoning-reader-empty">
+                    <p>Kein Textbaustein ausgewählt.</p>
+                  </div>
+                )}
+              </aside>
             </div>
           )}
         </section>
