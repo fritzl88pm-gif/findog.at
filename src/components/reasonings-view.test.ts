@@ -241,11 +241,11 @@ describe("Task 1: Searchable, filterable, sortable compact list", () => {
     expect(sortLabel?.textContent).toContain("Sortierung");
     expect(sortSelect.value).toBe("updated");
 
-    // Compact rows rendered with preview by default
+    // Stream cards rendered with full readable content by default
     const rows = host.querySelectorAll(".reasoning-row");
     expect(rows).toHaveLength(3);
-    const previews = host.querySelectorAll(".reasoning-row-preview");
-    expect(previews.length).toBeGreaterThan(0);
+    const contents = host.querySelectorAll(".reasoning-card-content");
+    expect(contents).toHaveLength(3);
   });
 
   it("filters items by search query matching title or content case-insensitively with whitespace trim", async () => {
@@ -348,19 +348,19 @@ describe("Task 1: Searchable, filterable, sortable compact list", () => {
     expect(host.textContent).toContain("Ersten Textbaustein anlegen");
   });
 
-  it("preserves findog_reasonings_title_view_enabled localStorage semantics (true => no preview, default false => preview)", async () => {
+  it("preserves findog_reasonings_title_view_enabled localStorage semantics (true => collapsed bodies, default false => full readable content)", async () => {
     await render(createElement(ReasoningsView, { accessToken: "test-token" }));
 
     const toggle = buttonByText("Nur Titel");
     expect(toggle.getAttribute("aria-checked")).toBe("false");
-    // In preview mode (default false), preview is rendered
-    expect(host.querySelectorAll(".reasoning-row-preview").length).toBeGreaterThan(0);
+    // In default reading mode, all card bodies are visible
+    expect(host.querySelectorAll(".reasoning-card-body:not([hidden])")).toHaveLength(3);
 
-    // Toggle to title-only (no preview)
+    // Toggle to title-only (bodies collapsed by default)
     await click(toggle);
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     expect(mockStorage.getItem(STORAGE_KEY)).toBe("true");
-    expect(host.querySelectorAll(".reasoning-row-preview")).toHaveLength(0);
+    expect(host.querySelectorAll(".reasoning-card-body:not([hidden])")).toHaveLength(0);
 
     // Remount restores saved preference
     await act(async () => {
@@ -373,7 +373,7 @@ describe("Task 1: Searchable, filterable, sortable compact list", () => {
     await render(createElement(ReasoningsView, { accessToken: "test-token" }));
     const remountedToggle = buttonByText("Nur Titel");
     expect(remountedToggle.getAttribute("aria-checked")).toBe("true");
-    expect(host.querySelectorAll(".reasoning-row-preview")).toHaveLength(0);
+    expect(host.querySelectorAll(".reasoning-card-body:not([hidden])")).toHaveLength(0);
   });
 
   it("gracefully tolerates unavailable or malformed localStorage", async () => {
@@ -405,63 +405,35 @@ describe("Task 1: Searchable, filterable, sortable compact list", () => {
   });
 });
 
-describe("Task 2: Responsive reader and selection", () => {
-  it("renders reader panel with selected entry full content, metadata, and copy button", async () => {
+describe("Task 2: Responsive readability, full content, and title-only disclosure", () => {
+  it("renders cards in unified stream with entry full content, metadata, and 1-click copy button", async () => {
     await render(createElement(ReasoningsView, { accessToken: "test-token" }));
 
-    const reader = host.querySelector(".reasoning-reader-panel");
-    expect(reader).not.toBeNull();
+    const cards = host.querySelectorAll(".reasoning-card");
+    expect(cards).toHaveLength(3);
 
-    // Default selected is first item: snip-3 (most recently updated: 2026-01-04)
-    expect(reader?.textContent).toContain("Änderung der Veranlagung");
-    expect(reader?.textContent).toContain("Verfahrensrechtliche Wiederaufnahme gemäß § 303 BAO.");
-    expect(reader?.textContent).toContain("Aktualisiert");
-    expect(reader?.textContent).toContain("Steuerrecht");
+    // Default first item: snip-3 (most recently updated: 2026-01-04)
+    const firstCard = cards[0];
+    expect(firstCard.textContent).toContain("Änderung der Veranlagung");
+    expect(firstCard.textContent).toContain("Verfahrensrechtliche Wiederaufnahme gemäß § 303 BAO.");
+    expect(firstCard.textContent).toContain("Aktualisiert");
+    expect(firstCard.textContent).toContain("Steuerrecht");
 
-    // Clear copy action in reader
-    const readerCopy = reader?.querySelector<HTMLButtonElement>(".reasoning-reader-copy-button");
-    expect(readerCopy).not.toBeNull();
-    await click(readerCopy!);
+    // 1-click copy action on the card
+    const copyBtn = firstCard.querySelector<HTMLButtonElement>(".reasoning-copy-button");
+    expect(copyBtn).not.toBeNull();
+    await click(copyBtn!);
     expect(writeTextMock).toHaveBeenCalledWith(testReasonings[2].content);
   });
 
-  it("updates reader when clicking another row", async () => {
+  it("supports inline disclosure accordion in title-only mode without dangling aria-controls or nested buttons", async () => {
     await render(createElement(ReasoningsView, { accessToken: "test-token" }));
 
-    const rows = host.querySelectorAll<HTMLElement>(".reasoning-row");
-    // Click second row: snip-2
-    await click(rows[1]);
-
-    const reader = host.querySelector(".reasoning-reader-panel");
-    expect(reader?.textContent).toContain("Betriebsausgabenpauschalierung Basisregel");
-    expect(reader?.textContent).toContain(testReasonings[1].content);
-    expect(rows[1].classList.contains("is-selected")).toBe(true);
-  });
-
-  it("safely falls back to first visible item when selected item is filtered out", async () => {
-    await render(createElement(ReasoningsView, { accessToken: "test-token" }));
-
-    const rows = host.querySelectorAll<HTMLElement>(".reasoning-row");
-    // Select snip-3 (row 0)
-    await click(rows[0]);
-    let reader = host.querySelector(".reasoning-reader-panel");
-    expect(reader?.textContent).toContain("Änderung der Veranlagung");
-
-    // Filter to category "cat-2" which only contains snip-1 (Vorsteuerabzug)
-    const catSelect = getCategorySelect();
-    await changeInput(catSelect, "cat-2");
-
-    // Selection must safely fallback to snip-1; never show filtered-out snip-3
-    reader = host.querySelector(".reasoning-reader-panel");
-    expect(reader?.textContent).toContain("Vorsteuerabzug bei Kleinunternehmern");
-    expect(reader?.textContent).not.toContain("Änderung der Veranlagung");
-  });
-
-  it("supports mobile disclosure accordion without dangling aria-controls or nested buttons", async () => {
-    await render(createElement(ReasoningsView, { accessToken: "test-token" }));
+    // Switch to title-only mode
+    await click(buttonByText("Nur Titel"));
 
     const disclosureButtons = host.querySelectorAll<HTMLButtonElement>(".reasoning-row-title-btn");
-    expect(disclosureButtons.length).toBeGreaterThan(0);
+    expect(disclosureButtons.length).toBe(3);
 
     // Verify native button semantics: no nested buttons within buttons
     disclosureButtons.forEach((btn) => {
@@ -478,7 +450,7 @@ describe("Task 2: Responsive reader and selection", () => {
     expect(controlledPanel?.hidden).toBe(true);
     expect(firstBtn.getAttribute("aria-expanded")).toBe("false");
 
-    // Click to expand on mobile
+    // Click to expand inline
     await click(firstBtn);
     expect(firstBtn.getAttribute("aria-expanded")).toBe("true");
     expect(controlledPanel?.hidden).toBe(false);
@@ -489,21 +461,24 @@ describe("Task 2: Responsive reader and selection", () => {
     expect(controlledPanel?.hidden).toBe(true);
   });
 
-  it("leaves no stale content in reader when filter yields zero results", async () => {
+  it("leaves no stale content or cards when filter yields zero results", async () => {
     await render(createElement(ReasoningsView, { accessToken: "test-token" }));
 
     const searchInput = getSearchInput();
     await changeInput(searchInput, "unbekannter-suchbegriff-12345");
 
-    // No library layout or reader is rendered when 0 results
-    expect(host.querySelectorAll(".reasoning-row")).toHaveLength(0);
-    expect(host.querySelector(".reasoning-reader-card")).toBeNull();
+    // No cards rendered when 0 results
+    expect(host.querySelectorAll(".reasoning-card")).toHaveLength(0);
     expect(host.textContent).not.toContain("Verfahrensrechtliche Wiederaufnahme");
     expect(host.textContent).toContain("Keine Treffer");
   });
 
-  it("preserves exact full text unmodified with whitespaces in reader", async () => {
-    const formattedContent = "Absatz 1:\n  - Aufwand A\n  - Aufwand B\n\nAbsatz 2 mit  mehreren   Leerzeichen.";
+  it("preserves exact full text unmodified with whitespaces in snippet card", async () => {
+    const formattedContent = `Absatz 1:
+  - Aufwand A
+  - Aufwand B
+
+Absatz 2 mit  mehreren   Leerzeichen.`;
     fetchMock.mockImplementation(() =>
       reply({
         categories: testCategories,
@@ -517,18 +492,18 @@ describe("Task 2: Responsive reader and selection", () => {
     );
 
     await render(createElement(ReasoningsView, { accessToken: "test-token" }));
-    const readerContent = host.querySelector(".reasoning-reader-content");
-    expect(readerContent?.textContent).toBe(formattedContent);
+    const cardContent = host.querySelector(".reasoning-card-content");
+    expect(cardContent?.textContent).toBe(formattedContent);
   });
 });
 
 describe("Task 3: Action menu, delete/edit CRUD, and on-demand forms", () => {
-  it("copies full original content while preview is hidden (title-only mode)", async () => {
+  it("copies full original content while in title-only mode without expanding", async () => {
     await render(createElement(ReasoningsView, { accessToken: "test-token" }));
     await click(buttonByText("Nur Titel"));
 
-    // Verify preview is hidden
-    expect(host.querySelectorAll(".reasoning-row-preview")).toHaveLength(0);
+    // Verify card bodies are collapsed
+    expect(host.querySelectorAll(".reasoning-card-body:not([hidden])")).toHaveLength(0);
 
     const copyButtons = host.querySelectorAll<HTMLButtonElement>(".reasoning-row .reasoning-copy-button");
     expect(copyButtons.length).toBeGreaterThan(0);
@@ -657,12 +632,12 @@ describe("Task 3: Action menu, delete/edit CRUD, and on-demand forms", () => {
     expect(host.querySelector(".reasoning-action-menu")).toBeNull();
   });
 
-  it("updates reader when selected reasoning is deleted", async () => {
+  it("updates snippet stream when reasoning is deleted", async () => {
     await render(createElement(ReasoningsView, { accessToken: "test-token" }));
 
-    // Selected item is snip-3
-    let reader = host.querySelector(".reasoning-reader-panel");
-    expect(reader?.textContent).toContain("Änderung der Veranlagung");
+    // Initial first item is snip-3
+    expect(host.textContent).toContain("Änderung der Veranlagung");
+    expect(host.querySelectorAll(".reasoning-card")).toHaveLength(3);
 
     // After deleting snip-3, next fetch returns remaining 2 snippets
     fetchMock.mockImplementation((url, init) => {
@@ -681,10 +656,10 @@ describe("Task 3: Action menu, delete/edit CRUD, and on-demand forms", () => {
     const deleteBtn = buttonByText("Löschen", ".reasoning-action-menu button");
     await click(deleteBtn);
 
-    // Reader updates to the new first item: snip-2 (updated: 2026-01-03)
-    reader = host.querySelector(".reasoning-reader-panel");
-    expect(reader?.textContent).not.toContain("Änderung der Veranlagung");
-    expect(reader?.textContent).toContain("Betriebsausgabenpauschalierung Basisregel");
+    // Stream updates to remove deleted item; remaining 2 items rendered
+    expect(host.textContent).not.toContain("Änderung der Veranlagung");
+    expect(host.textContent).toContain("Betriebsausgabenpauschalierung Basisregel");
+    expect(host.querySelectorAll(".reasoning-card")).toHaveLength(2);
   });
 
   it("keeps create/edit form hidden until user action", async () => {
