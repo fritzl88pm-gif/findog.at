@@ -1,3 +1,4 @@
+import { URBAN_PATTERNS, urbanPackage } from "./fredrun-urban-event";
 import { describe, expect, it } from "vitest";
 import { originalObstacleFor, originalNextGap } from "./__fixtures__/fredrun-vienna-1da060f";
 
@@ -1553,7 +1554,12 @@ function evadeGeneratedHazards(state: FredRunState): FredRunState {
     !hazard.absorbed && hazard.x + FREDRUN_LIGHTNING_WIDTH > FREDRUN_PLAYER_X - 24
     && (hazard.x - playerRight) / state.speed <= 0.3
   ));
-  return obstacleDue || lightningDue ? jumpFredRun(state) : state;
+  const event = state.urbanEvent;
+  const stormDue = event?.phase === "action" && URBAN_PATTERNS[event.variant].releases.some((_, i) => {
+    const b = urbanPackage(event, i);
+    return b.age >= 0.7 && b.x > FREDRUN_PLAYER_X && (b.x - FREDRUN_PLAYER_X) / event.speed <= 0.36;
+  });
+  return obstacleDue || lightningDue || stormDue ? jumpFredRun(state) : state;
 }
 
 describe("Vienna original scheduling and jumpable lightning", () => {
@@ -1578,11 +1584,16 @@ describe("Vienna original scheduling and jumpable lightning", () => {
     let scheduled = 0;
     const kinds = new Set<string>();
     const hazards = new Set<number>();
-    for (let step = 0; step < 1800; step += 1) {
+    // Include the authorized storm pause and resume while preserving every
+    // original obstacle kind/gap assertion against the historical fixture.
+    const eventPhases = new Set<string>();
+    let resumedSpawns = 0;
+    for (let step = 0; step < 2600; step += 1) {
       state = evadeGeneratedHazards(state);
       const before = state;
       const rolls: number[] = [];
-      state = advanceFredRun(state, 0.02, () => { const value = random(); rolls.push(value); return value; }, () => 0);
+      state = advanceFredRun(state, 0.02, () => { const value = random(); rolls.push(value); return value; }, () => 0, () => { throw Error("Alpine RNG"); }, () => 0);
+      eventPhases.add(state.urbanEvent!.phase);
       expect(state.phase, `step ${step}`).toBe("running");
       expect(state.shieldImpactRemaining).toBe(0);
       expect(state.lightning.every((hazard) => !hazard.absorbed)).toBe(true);
@@ -1593,9 +1604,12 @@ describe("Vienna original scheduling and jumpable lightning", () => {
         expect(state.spawnDistance).toBe(originalNextGap(state.speed, score, () => rolls[1]));
         kinds.add(obstacle!.kind);
         scheduled += 1;
+        if (eventPhases.has("recovery")) resumedSpawns++;
       }
       state.lightning.forEach((hazard) => hazards.add(hazard.id));
     }
+    expect(eventPhases).toEqual(new Set(["quiet", "clearance", "anticipation", "action", "recovery"]));
+    expect(resumedSpawns).toBeGreaterThan(2);
     expect(scheduled).toBeGreaterThan(15);
     expect(kinds.size).toBe(7);
     expect(hazards.size).toBeGreaterThan(1);

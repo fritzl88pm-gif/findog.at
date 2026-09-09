@@ -2,6 +2,7 @@
 
 import { drawStampHazard, drawChasm, drawPlatform, drawFilingCabinet, isFredRunCabinet } from "@/lib/fredrun-world-hazard-render";
 import { drawFredRunLightning } from "@/lib/fredrun-lightning-render";
+import { drawFredRunUrbanEvent } from "@/lib/fredrun-urban-event-render";
 import { drawFredRunRockfall } from "@/lib/fredrun-rockfall-render";
 import NextImage from "next/image";
 import {
@@ -1583,6 +1584,7 @@ function renderFredRun(
     state.lightning.forEach((hazard) => drawFredRunLightning(context, hazard, reducedMotion));
   }
   if (effectiveWorldId === "alps") drawFredRunRockfall(context, state.rockfall, reducedMotion);
+  else drawFredRunUrbanEvent(context, state.urbanEvent, reducedMotion);
 
   if (images) {
     drawPlayerPowerEffects(context, state, reducedMotion);

@@ -3,6 +3,8 @@ import {
 } from "./fredrun-worlds";
 import { advanceRockfall, rockfallBlocksSpawns, rockfallHitsPlayer, ROCKFALL_PATTERNS, type FredRunRockfall } from "./fredrun-rockfall";
 
+import { advanceUrbanEvent, urbanBlocksSpawns, urbanHitsPlayer, URBAN_PATTERNS, type FredRunUrbanEvent } from "./fredrun-urban-event";
+
 export const FREDRUN_WORLD_WIDTH = 960;
 export const FREDRUN_WORLD_HEIGHT = 360;
 export const FREDRUN_GROUND_Y = 300;
@@ -206,6 +208,7 @@ export type FredRunState = {
   nextChasmId: number;
   fallingThroughChasm?: boolean;
   rockfall: FredRunRockfall | null;
+  urbanEvent: FredRunUrbanEvent | null;
 };
 
 export type FredRunStorage = Pick<Storage, "getItem" | "setItem">;
@@ -258,6 +261,7 @@ export function createFredRunState(worldId: FredRunWorldId = "vienna"): FredRunS
     nextChasmId: 1,
     fallingThroughChasm: false,
     rockfall: null,
+    urbanEvent: null,
   };
 }
 
@@ -611,6 +615,7 @@ export function advanceFredRun(
   random: () => number = Math.random,
   lightningRandom: () => number = Math.random,
   rockfallRandom: () => number = Math.random,
+  urbanRandom: () => number = Math.random,
 ): FredRunState {
   const delta = Math.min(0.05, Math.max(0, deltaSeconds));
   if (delta === 0) {
@@ -844,11 +849,19 @@ export function advanceFredRun(
   }
 
   let rockfall = worldId === "alps" ? advanceRockfall(state, delta, rockfallRandom) : null;
-  const rockfallOwnsSpawning = rockfallBlocksSpawns(rockfall);
-  const spawnTravel = rockfallOwnsSpawning ? 0 : currentSpeed * delta;
+  let urbanEvent = worldId !== "alps" ? advanceUrbanEvent(state, delta, urbanRandom) : null;
+  const eventOwnsSpawning = rockfallBlocksSpawns(rockfall) || urbanBlocksSpawns(urbanEvent);
+  // Reserve a clean ordinary approach after the recovery, even if a clock was due.
+  const urbanResumed = state.urbanEvent?.phase === "recovery" && urbanEvent?.phase === "quiet";
+  const spawnTravel = eventOwnsSpawning ? 0 : currentSpeed * delta;
   let spawnDistance = state.spawnDistance - spawnTravel;
   let coinSpawnDistance = state.coinSpawnDistance - spawnTravel;
   let powerUpSpawnDistance = state.powerUpSpawnDistance - spawnTravel;
+  if (urbanResumed) {
+    spawnDistance = Math.max(spawnDistance, currentSpeed * 1.2);
+    coinSpawnDistance = Math.max(coinSpawnDistance, currentSpeed * 0.6);
+    powerUpSpawnDistance = Math.max(powerUpSpawnDistance, currentSpeed * 1.5);
+  }
   let nextObstacleId = state.nextObstacleId;
   let nextCoinId = state.nextCoinId;
   let nextPowerUpId = state.nextPowerUpId;
@@ -891,7 +904,7 @@ export function advanceFredRun(
   const collisionPowerUps = [...movedPowerUps];
 
   // Challenge and obstacle scheduling
-  if (spawnDistance <= 0 && !rockfallOwnsSpawning) {
+  if (spawnDistance <= 0 && !eventOwnsSpawning) {
     if (worldId === "vienna") {
       const obstacle = obstacleFor(random, nextObstacleId);
       obstacles.push(obstacle);
@@ -1017,7 +1030,7 @@ export function advanceFredRun(
   }
 
   // Collectibles
-  if (coinSpawnDistance <= 0 && !rockfallOwnsSpawning) {
+  if (coinSpawnDistance <= 0 && !eventOwnsSpawning) {
     const formation = coinFormation(random, nextCoinId);
     if (formation.every((coin) => collectibleSpawnIsClear(coin, powerUps))) {
       coins.push(...formation);
@@ -1029,7 +1042,7 @@ export function advanceFredRun(
     }
   }
 
-  if (powerUpSpawnDistance <= 0 && !rockfallOwnsSpawning) {
+  if (powerUpSpawnDistance <= 0 && !eventOwnsSpawning) {
     const powerUp = powerUpFor(random, nextPowerUpId, currentScore);
     if (collectibleSpawnIsClear(powerUp, coins)) {
       powerUps.push(powerUp);
@@ -1050,7 +1063,7 @@ export function advanceFredRun(
   })) : [];
   let lightningWait = state.lightningWait;
   let nextLightningId = state.nextLightningId;
-  if (worldId === "vienna") {
+  if (worldId === "vienna" && !eventOwnsSpawning) {
     const roll = () => Math.min(1, Math.max(0, lightningRandom()));
     lightningWait = Math.max(0, (lightningWait ?? (0.1 + roll() * 0.05)) - delta);
     if (lightningWait === 0 && lightning.length === 0
@@ -1146,7 +1159,19 @@ export function advanceFredRun(
       }
     }
   }
-  let fatalCollision = collisionIds.size > 0 || stampCollisionIds.size > 0 || lightningCollisionIds.size > 0 || rockfallCollisionMask !== 0 || fatalFall;
+  let urbanCollisionMask = 0;
+  if (urbanEvent?.phase === "action" && state.urbanEvent?.phase === "action") {
+    for (let index = 0; index < URBAN_PATTERNS[urbanEvent.variant].releases.length; index++) {
+      if (urbanHitsPlayer(urbanEvent, index, state.urbanEvent.timer, urbanEvent.timer, state.playerHeight, playerHeight)) urbanCollisionMask |= 1 << index;
+    }
+  }
+  // An absorbed group disappears immediately. Existing impact immunity also
+  // clears contacts during its short multi-frame window without another charge.
+  if (urbanEvent && urbanCollisionMask && shieldImpactRemaining > 0) {
+    urbanEvent = { ...urbanEvent, absorbed: urbanEvent.absorbed | urbanCollisionMask };
+    urbanCollisionMask = 0;
+  }
+  let fatalCollision = collisionIds.size > 0 || stampCollisionIds.size > 0 || lightningCollisionIds.size > 0 || rockfallCollisionMask !== 0 || urbanCollisionMask !== 0 || fatalFall;
   if (fatalCollision && shieldActive && !fatalFall) {
     shieldActive = false;
     shieldRemaining = 0;
@@ -1163,6 +1188,7 @@ export function advanceFredRun(
       lightningCollisionIds.has(hazard.id) ? { ...hazard, absorbed: true } : hazard
     ));
     if (rockfall && rockfallCollisionMask) rockfall = { ...rockfall, absorbed: rockfall.absorbed | rockfallCollisionMask };
+    if (urbanEvent && urbanCollisionMask) urbanEvent = { ...urbanEvent, absorbed: urbanEvent.absorbed | urbanCollisionMask };
     fatalCollision = false;
   }
 
@@ -1248,6 +1274,7 @@ export function advanceFredRun(
     chasms,
     fallingThroughChasm,
     rockfall,
+    urbanEvent,
   };
 
   if (fatalCollision) {
