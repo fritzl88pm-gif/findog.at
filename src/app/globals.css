@@ -1168,6 +1168,83 @@ textarea:focus {
   align-items: flex-end;
 }
 
+.reasoning-library-title-group {
+  display: grid;
+  gap: 5px;
+}
+
+.reasoning-library-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.reasoning-title-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--text-main);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 650;
+  cursor: pointer;
+  line-height: 1.2;
+  transition: var(--transition);
+}
+
+.reasoning-title-toggle:hover {
+  border-color: var(--bmf-blue);
+}
+
+.reasoning-title-toggle:focus-visible {
+  outline: none;
+  border-color: var(--bmf-blue);
+  box-shadow: 0 0 0 3px rgba(0, 82, 147, 0.15);
+}
+
+.reasoning-title-toggle.is-active {
+  border-color: var(--bmf-blue);
+  background: rgba(0, 82, 147, 0.08);
+  color: var(--bmf-blue-deep);
+}
+
+.reasoning-title-toggle-track {
+  position: relative;
+  display: inline-block;
+  width: 26px;
+  height: 15px;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.35);
+  flex-shrink: 0;
+  transition: background 0.18s ease;
+}
+
+.reasoning-title-toggle.is-active .reasoning-title-toggle-track {
+  background: var(--bmf-blue);
+}
+
+.reasoning-title-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 0.18s ease;
+}
+
+.reasoning-title-toggle.is-active .reasoning-title-toggle-thumb {
+  transform: translateX(11px);
+}
+
 .reasoning-category-filters {
   display: flex;
   flex-wrap: wrap;
@@ -1343,6 +1420,91 @@ textarea:focus {
   color: var(--bmf-blue-deep);
   font-size: 0.75rem;
   font-weight: 700;
+}
+
+/* Title-only mode: dense single-column list */
+.reasoning-card-grid.is-title-only {
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.reasoning-card.is-title-only {
+  min-height: auto;
+  grid-template-rows: auto;
+  gap: 0;
+  padding: 10px 14px;
+}
+
+.reasoning-card.is-title-only .reasoning-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-direction: row;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+}
+
+.reasoning-card-title-heading {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+.reasoning-title-disclosure-button {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.reasoning-title-disclosure-button:focus-visible {
+  outline: 2px solid var(--bmf-blue);
+  outline-offset: 2px;
+}
+
+.reasoning-disclosure-chevron {
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 0.18s ease;
+}
+
+.reasoning-disclosure-chevron.is-expanded {
+  transform: rotate(90deg);
+}
+
+.reasoning-card-title-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-size: 0.98rem;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--bmf-blue-deep);
+}
+
+.reasoning-card.is-title-only .reasoning-card-actions {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.reasoning-card-expanded-body {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
 }
 
 .reasonings-empty-state {
@@ -8226,6 +8388,26 @@ textarea:focus {
 
   .reasoning-card {
     min-height: 260px;
+  }
+
+  .reasoning-card.is-title-only {
+    min-height: auto;
+    padding: 10px 12px;
+  }
+
+  .reasoning-card.is-title-only .reasoning-card-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .reasoning-card.is-title-only .reasoning-card-title-heading {
+    width: 100%;
+  }
+
+  .reasoning-card.is-title-only .reasoning-card-actions {
+    align-self: flex-end;
+    justify-content: flex-end;
   }
 
   .reasoning-category-create > div,

@@ -40,6 +40,29 @@ type ReasoningsViewProps = {
   accessToken: string;
 };
 
+const REASONINGS_TITLE_VIEW_STORAGE_KEY = "findog_reasonings_title_view_enabled";
+
+function getTitleOnlyStoredPreference(): boolean {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return false;
+    }
+    return window.localStorage.getItem(REASONINGS_TITLE_VIEW_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function persistTitleOnlyPreference(value: boolean): void {
+  try {
+    if (typeof window !== "undefined" && window.localStorage) {
+      window.localStorage.setItem(REASONINGS_TITLE_VIEW_STORAGE_KEY, String(value));
+    }
+  } catch {
+    // Storage can be unavailable in private browsing or restricted environments.
+  }
+}
+
 const EMPTY_EDITOR: EditorState = {
   id: null,
   title: "",
@@ -123,6 +146,14 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [isTitleOnly, setIsTitleOnly] = useState(false);
+  const [expandedReasoningIds, setExpandedReasoningIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    if (getTitleOnlyStoredPreference()) {
+      setIsTitleOnly(true);
+    }
+  }, []);
 
   const loadReasonings = useCallback(async () => {
     if (!accessToken) {
@@ -231,6 +262,26 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
     setError("");
   }
 
+  function toggleTitleOnly() {
+    setIsTitleOnly((current) => {
+      const next = !current;
+      persistTitleOnlyPreference(next);
+      return next;
+    });
+  }
+
+  function toggleReasoningExpansion(id: string) {
+    setExpandedReasoningIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
   function toggleEditorCategory(categoryId: string) {
     setEditor((current) => {
       if (!current) return current;
@@ -308,6 +359,12 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
         );
       }
       if (editor?.id === reasoning.id) setEditor(null);
+      setExpandedReasoningIds((current) => {
+        if (!current.has(reasoning.id)) return current;
+        const next = new Set(current);
+        next.delete(reasoning.id);
+        return next;
+      });
       await loadReasonings();
       setNotice("Textbaustein wurde gelöscht.");
     } catch (deleteError) {
@@ -663,8 +720,22 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
 
         <section className="reasoning-library" aria-labelledby="reasoning-library-title">
           <div className="reasoning-library-toolbar">
-            <div>
-              <h2 id="reasoning-library-title">Meine Textbausteine</h2>
+            <div className="reasoning-library-title-group">
+              <div className="reasoning-library-title-row">
+                <h2 id="reasoning-library-title">Meine Textbausteine</h2>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={isTitleOnly}
+                  className={`reasoning-title-toggle ${isTitleOnly ? "is-active" : ""}`}
+                  onClick={toggleTitleOnly}
+                >
+                  <span className="reasoning-title-toggle-track" aria-hidden="true">
+                    <span className="reasoning-title-toggle-thumb" />
+                  </span>
+                  <span>Nur Titel</span>
+                </button>
+              </div>
               <p>
                 {visibleReasonings.length} von {reasonings.length} angezeigt
               </p>
@@ -709,79 +780,134 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
               ) : null}
             </div>
           ) : (
-            <div className="reasoning-card-grid">
-              {visibleReasonings.map((reasoning) => (
-                <article className="reasoning-card" key={reasoning.id}>
-                  <div className="reasoning-card-heading">
-                    <h3>{reasoning.title}</h3>
-                    <div className="reasoning-card-actions">
-                      <CopyIconButton
-                        className="reasoning-copy-button"
-                        text={reasoning.content}
-                        label={`Textbaustein „${reasoning.title}“ kopieren`}
-                      />
-                      <button
-                        className="reasoning-card-icon-button"
-                        type="button"
-                        onClick={() => openEditEditor(reasoning)}
-                        disabled={isSaving}
-                        aria-label={`Textbaustein „${reasoning.title}“ bearbeiten`}
-                        title="Textbaustein bearbeiten"
-                      >
-                        <svg
-                          aria-hidden="true"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.9"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
+            <div className={`reasoning-card-grid ${isTitleOnly ? "is-title-only" : ""}`}>
+              {visibleReasonings.map((reasoning) => {
+                const isExpanded = isTitleOnly && expandedReasoningIds.has(reasoning.id);
+                const contentId = `reasoning-entry-content-${reasoning.id}`;
+
+                return (
+                  <article
+                    className={`reasoning-card ${isTitleOnly ? "is-title-only" : ""}`}
+                    key={reasoning.id}
+                  >
+                    <div className="reasoning-card-heading">
+                      {isTitleOnly ? (
+                        <h3 className="reasoning-card-title-heading">
+                          <button
+                            type="button"
+                            className="reasoning-title-disclosure-button"
+                            aria-expanded={isExpanded}
+                            aria-controls={contentId}
+                            onClick={() => toggleReasoningExpansion(reasoning.id)}
+                          >
+                            <svg
+                              className={`reasoning-disclosure-chevron ${isExpanded ? "is-expanded" : ""}`}
+                              aria-hidden="true"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <polyline points="9 18 15 12 9 6" />
+                            </svg>
+                            <span className="reasoning-card-title-text">{reasoning.title}</span>
+                          </button>
+                        </h3>
+                      ) : (
+                        <h3>{reasoning.title}</h3>
+                      )}
+                      <div className="reasoning-card-actions">
+                        <CopyIconButton
+                          className="reasoning-copy-button"
+                          text={reasoning.content}
+                          label={`Textbaustein „${reasoning.title}“ kopieren`}
+                        />
+                        <button
+                          className="reasoning-card-icon-button"
+                          type="button"
+                          onClick={() => openEditEditor(reasoning)}
+                          disabled={isSaving}
+                          aria-label={`Textbaustein „${reasoning.title}“ bearbeiten`}
+                          title="Textbaustein bearbeiten"
                         >
-                          <path d="m4 20 4.4-1 9.8-9.8-3.4-3.4L5 15.6 4 20Z" />
-                          <path d="m13.8 6.8 3.4 3.4M14.8 5.8l1.4-1.4a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8l-1.4 1.4" />
-                        </svg>
-                      </button>
-                      <button
-                        className="reasoning-card-icon-button is-danger"
-                        type="button"
-                        onClick={() => void deleteReasoning(reasoning)}
-                        disabled={isSaving}
-                        aria-label={`Textbaustein „${reasoning.title}“ löschen`}
-                        title="Textbaustein löschen"
-                      >
-                        <svg
-                          aria-hidden="true"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.9"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
+                          <svg
+                            aria-hidden="true"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.9"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="m4 20 4.4-1 9.8-9.8-3.4-3.4L5 15.6 4 20Z" />
+                            <path d="m13.8 6.8 3.4 3.4M14.8 5.8l1.4-1.4a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8l-1.4 1.4" />
+                          </svg>
+                        </button>
+                        <button
+                          className="reasoning-card-icon-button is-danger"
+                          type="button"
+                          onClick={() => void deleteReasoning(reasoning)}
+                          disabled={isSaving}
+                          aria-label={`Textbaustein „${reasoning.title}“ löschen`}
+                          title="Textbaustein löschen"
                         >
-                          <path d="M4 7h16" />
-                          <path d="M9 7V4h6v3" />
-                          <path d="m6 7 1 13h10l1-13" />
-                          <path d="M10 11v5M14 11v5" />
-                        </svg>
-                      </button>
+                          <svg
+                            aria-hidden="true"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.9"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M4 7h16" />
+                            <path d="M9 7V4h6v3" />
+                            <path d="m6 7 1 13h10l1-13" />
+                            <path d="M10 11v5M14 11v5" />
+                          </svg>
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  <p className="reasoning-card-content">{reasoning.content}</p>
-                  <footer>
-                    <div className="reasoning-card-categories">
-                      {reasoning.categoryIds.flatMap((categoryId) => {
-                        const category = categoriesById.get(categoryId);
-                        return category ? <span key={category.id}>{category.name}</span> : [];
-                      })}
-                    </div>
-                    <small>
-                      {reasoning.updatedAt
-                        ? `Aktualisiert ${formatUpdatedAt(reasoning.updatedAt)}`
-                        : ""}
-                    </small>
-                  </footer>
-                </article>
-              ))}
+                    {!isTitleOnly ? (
+                      <>
+                        <p className="reasoning-card-content">{reasoning.content}</p>
+                        <footer>
+                          <div className="reasoning-card-categories">
+                            {reasoning.categoryIds.flatMap((categoryId) => {
+                              const category = categoriesById.get(categoryId);
+                              return category ? <span key={category.id}>{category.name}</span> : [];
+                            })}
+                          </div>
+                          <small>
+                            {reasoning.updatedAt
+                              ? `Aktualisiert ${formatUpdatedAt(reasoning.updatedAt)}`
+                              : ""}
+                          </small>
+                        </footer>
+                      </>
+                    ) : isExpanded ? (
+                      <div id={contentId} className="reasoning-card-expanded-body">
+                        <p className="reasoning-card-content">{reasoning.content}</p>
+                        <footer>
+                          <div className="reasoning-card-categories">
+                            {reasoning.categoryIds.flatMap((categoryId) => {
+                              const category = categoriesById.get(categoryId);
+                              return category ? <span key={category.id}>{category.name}</span> : [];
+                            })}
+                          </div>
+                          <small>
+                            {reasoning.updatedAt
+                              ? `Aktualisiert ${formatUpdatedAt(reasoning.updatedAt)}`
+                              : ""}
+                          </small>
+                        </footer>
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              })}
             </div>
           )}
         </section>
