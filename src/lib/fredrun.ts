@@ -1,6 +1,7 @@
 import {
   type FredRunWorldId,
 } from "./fredrun-worlds";
+import { advanceRockfall, rockfallBlocksSpawns, rockfallHitsPlayer, ROCKFALL_PATTERNS, type FredRunRockfall } from "./fredrun-rockfall";
 
 export const FREDRUN_WORLD_WIDTH = 960;
 export const FREDRUN_WORLD_HEIGHT = 360;
@@ -204,6 +205,7 @@ export type FredRunState = {
   nextPlatformId: number;
   nextChasmId: number;
   fallingThroughChasm?: boolean;
+  rockfall: FredRunRockfall | null;
 };
 
 export type FredRunStorage = Pick<Storage, "getItem" | "setItem">;
@@ -255,6 +257,7 @@ export function createFredRunState(worldId: FredRunWorldId = "vienna"): FredRunS
     nextPlatformId: 1,
     nextChasmId: 1,
     fallingThroughChasm: false,
+    rockfall: null,
   };
 }
 
@@ -607,6 +610,7 @@ export function advanceFredRun(
   deltaSeconds: number,
   random: () => number = Math.random,
   lightningRandom: () => number = Math.random,
+  rockfallRandom: () => number = Math.random,
 ): FredRunState {
   const delta = Math.min(0.05, Math.max(0, deltaSeconds));
   if (delta === 0) {
@@ -839,9 +843,12 @@ export function advanceFredRun(
     }
   }
 
-  let spawnDistance = state.spawnDistance - currentSpeed * delta;
-  let coinSpawnDistance = state.coinSpawnDistance - currentSpeed * delta;
-  let powerUpSpawnDistance = state.powerUpSpawnDistance - currentSpeed * delta;
+  let rockfall = worldId === "alps" ? advanceRockfall(state, delta, rockfallRandom) : null;
+  const rockfallOwnsSpawning = rockfallBlocksSpawns(rockfall);
+  const spawnTravel = rockfallOwnsSpawning ? 0 : currentSpeed * delta;
+  let spawnDistance = state.spawnDistance - spawnTravel;
+  let coinSpawnDistance = state.coinSpawnDistance - spawnTravel;
+  let powerUpSpawnDistance = state.powerUpSpawnDistance - spawnTravel;
   let nextObstacleId = state.nextObstacleId;
   let nextCoinId = state.nextCoinId;
   let nextPowerUpId = state.nextPowerUpId;
@@ -884,7 +891,7 @@ export function advanceFredRun(
   const collisionPowerUps = [...movedPowerUps];
 
   // Challenge and obstacle scheduling
-  if (spawnDistance <= 0) {
+  if (spawnDistance <= 0 && !rockfallOwnsSpawning) {
     if (worldId === "vienna") {
       const obstacle = obstacleFor(random, nextObstacleId);
       obstacles.push(obstacle);
@@ -1010,7 +1017,7 @@ export function advanceFredRun(
   }
 
   // Collectibles
-  if (coinSpawnDistance <= 0) {
+  if (coinSpawnDistance <= 0 && !rockfallOwnsSpawning) {
     const formation = coinFormation(random, nextCoinId);
     if (formation.every((coin) => collectibleSpawnIsClear(coin, powerUps))) {
       coins.push(...formation);
@@ -1022,7 +1029,7 @@ export function advanceFredRun(
     }
   }
 
-  if (powerUpSpawnDistance <= 0) {
+  if (powerUpSpawnDistance <= 0 && !rockfallOwnsSpawning) {
     const powerUp = powerUpFor(random, nextPowerUpId, currentScore);
     if (collectibleSpawnIsClear(powerUp, coins)) {
       powerUps.push(powerUp);
@@ -1131,7 +1138,15 @@ export function advanceFredRun(
     })) lightningCollisionIds.add(hazard.id);
   }
 
-  let fatalCollision = collisionIds.size > 0 || stampCollisionIds.size > 0 || lightningCollisionIds.size > 0 || fatalFall;
+  let rockfallCollisionMask = 0;
+  if (rockfall?.phase === "action" && state.rockfall?.phase === "action") {
+    for (let index = 0; index < ROCKFALL_PATTERNS[rockfall.variant].releases.length; index++) {
+      if (rockfallHitsPlayer(rockfall, index, state.rockfall.timer, rockfall.timer, state.playerHeight, playerHeight)) {
+        rockfallCollisionMask |= 1 << index;
+      }
+    }
+  }
+  let fatalCollision = collisionIds.size > 0 || stampCollisionIds.size > 0 || lightningCollisionIds.size > 0 || rockfallCollisionMask !== 0 || fatalFall;
   if (fatalCollision && shieldActive && !fatalFall) {
     shieldActive = false;
     shieldRemaining = 0;
@@ -1147,6 +1162,7 @@ export function advanceFredRun(
     lightning = lightning.map((hazard) => (
       lightningCollisionIds.has(hazard.id) ? { ...hazard, absorbed: true } : hazard
     ));
+    if (rockfall && rockfallCollisionMask) rockfall = { ...rockfall, absorbed: rockfall.absorbed | rockfallCollisionMask };
     fatalCollision = false;
   }
 
@@ -1231,6 +1247,7 @@ export function advanceFredRun(
     platforms,
     chasms,
     fallingThroughChasm,
+    rockfall,
   };
 
   if (fatalCollision) {

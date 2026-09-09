@@ -2,6 +2,7 @@
 
 import { drawStampHazard, drawChasm, drawPlatform, drawFilingCabinet, isFredRunCabinet } from "@/lib/fredrun-world-hazard-render";
 import { drawFredRunLightning } from "@/lib/fredrun-lightning-render";
+import { drawFredRunRockfall } from "@/lib/fredrun-rockfall-render";
 import NextImage from "next/image";
 import {
   memo,
@@ -1581,6 +1582,7 @@ function renderFredRun(
   if (effectiveWorldId === "vienna") {
     state.lightning.forEach((hazard) => drawFredRunLightning(context, hazard, reducedMotion));
   }
+  if (effectiveWorldId === "alps") drawFredRunRockfall(context, state.rockfall, reducedMotion);
 
   if (images) {
     drawPlayerPowerEffects(context, state, reducedMotion);
