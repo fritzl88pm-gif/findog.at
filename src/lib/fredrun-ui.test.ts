@@ -485,13 +485,15 @@ describe("Fredrun UI surface", () => {
     expect(stylesSource).toContain("@keyframes fredrun-shield-flash");
   });
 
-  it("offers authenticated score submission and a global top ten", () => {
+  it("offers authenticated run-world submission and a separate world leaderboard", () => {
     expect(viewSource).toContain('fetch("/api/fredrun/highscores"');
     expect(viewSource).toContain('Authorization: `Bearer ${accessToken}`');
     expect(viewSource).toContain('maxLength={FREDRUN_PLAYER_NAME_MAX_LENGTH}');
     expect(viewSource).toContain('Score einreichen');
-    expect(viewSource).toContain('id="fredrun-leaderboard-title">Top 10');
-    expect(viewSource).toContain('fredrun-leaderboard-entry--rank-${entry.rank}');
+    expect(viewSource).toContain("const world = currentRunWorldRef.current;");
+    expect(viewSource).toContain("JSON.stringify({ runId, world, name: normalizedName, score: snapshot.score })");
+    expect(viewSource).toContain("<FredRunLeaderboard {...leaderboard} />");
+    expect(viewSource).toContain("controller.signal.aborted || currentRunIdRef.current !== runId");
     expect(viewSource).toContain('input, textarea, button, [contenteditable=\'true\']');
   });
 

@@ -19,16 +19,19 @@ describe("Fredrun highscore validation", () => {
 
   it("accepts only complete, bounded score submissions", () => {
     expect(parseFredRunScoreSubmission({
+      world: "alps",
       runId: "123e4567-e89b-42d3-a456-426614174000",
       name: "  Fredi  ",
       score: 250,
     })).toEqual({
+      world: "alps",
       runId: "123e4567-e89b-42d3-a456-426614174000",
       name: "Fredi",
       score: 250,
     });
-    expect(parseFredRunScoreSubmission({ runId: "invalid", name: "Fredi", score: 2 })).toBeNull();
+    expect(parseFredRunScoreSubmission({ world: "alps", runId: "invalid", name: "Fredi", score: 2 })).toBeNull();
     expect(parseFredRunScoreSubmission({
+      world: "alps",
       runId: "123e4567-e89b-42d3-a456-426614174000",
       name: "Fredi",
       score: 1_000_001,
@@ -54,6 +57,7 @@ describe("Fredrun highscore validation", () => {
 
   it("accepts the public API response and preserves an empty optional alias", () => {
     expect(parseFredRunHighscoresResponse({
+      world: "alps",
       entries: [
         { rank: 1, name: "Fred", score: 120 },
         { rank: 2, name: "Odo", score: 95 },
@@ -61,6 +65,7 @@ describe("Fredrun highscore validation", () => {
       playerName: "",
       submitted: true,
     })).toEqual({
+      world: "alps",
       entries: [
         { rank: 1, name: "Fred", score: 120 },
         { rank: 2, name: "Odo", score: 95 },
@@ -72,14 +77,17 @@ describe("Fredrun highscore validation", () => {
 
   it("rejects malformed public API responses", () => {
     expect(parseFredRunHighscoresResponse({
+      world: "alps",
       entries: [{ rank: 2, name: "Fred", score: 120 }],
       playerName: "Fred",
     })).toBeNull();
     expect(parseFredRunHighscoresResponse({
+      world: "alps",
       entries: [{ rank: 1, name: " Fred ", score: 120 }],
       playerName: "Fred",
     })).toBeNull();
     expect(parseFredRunHighscoresResponse({
+      world: "alps",
       entries: [{ rank: 1, name: "Fred", score: 1_000_001 }],
       playerName: "Fred",
     })).toBeNull();
@@ -87,5 +95,24 @@ describe("Fredrun highscore validation", () => {
       entries: Array.from({ length: 11 }, (_, index) => ({ rank: index + 1, name: "Fred", score: 1 })),
       playerName: "Fred",
     })).toBeNull();
+  });
+});
+
+
+describe("world contract", () => {
+  it("fails closed for missing and unknown submission/response worlds", () => {
+    for (const world of [undefined, null, "", "Vienna", "vienna,alps", 1]) {
+      expect(parseFredRunScoreSubmission({ world, runId: "123e4567-e89b-42d3-a456-426614174000", name: "Fred", score: 3 })).toBeNull();
+      expect(parseFredRunHighscoresResponse({ world, entries: [], playerName: "" })).toBeNull();
+    }
+    for (const world of ["vienna", "finanzamt-night", "alps"]) {
+      expect(parseFredRunScoreSubmission({ world, runId: "123e4567-e89b-42d3-a456-426614174000", name: "Fred", score: 3 })?.world).toBe(world);
+      expect(parseFredRunHighscoresResponse({ world, entries: [], playerName: "" })?.world).toBe(world);
+    }
+  });
+  it("preserves tied multiple runs by the same player in database order", () => {
+    expect(normalizeFredRunLeaderboardRows([100, 100, 90].map(score => ({ score, fredrun_player_profiles: { player_name: "Fred" } })))).toEqual([
+      { rank: 1, name: "Fred", score: 100 }, { rank: 2, name: "Fred", score: 100 }, { rank: 3, name: "Fred", score: 90 },
+    ]);
   });
 });

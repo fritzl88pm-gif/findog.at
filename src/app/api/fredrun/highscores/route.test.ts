@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { UserVisibleError } from "@/lib/errors";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import {
   assertFredRunAccessAllowed,
@@ -29,10 +30,12 @@ function createSupabaseMock(options: {
   const scoreBuilder = {
     select: vi.fn(),
     order: vi.fn(),
+    eq: vi.fn(),
     limit: vi.fn(),
   };
   scoreBuilder.select.mockReturnValue(scoreBuilder);
   scoreBuilder.order.mockReturnValue(scoreBuilder);
+  scoreBuilder.eq.mockReturnValue(scoreBuilder);
   scoreBuilder.limit.mockResolvedValue({ data: scoreRows, error: options.scoresError ?? null });
 
   const profileBuilder = {
@@ -53,7 +56,7 @@ function createSupabaseMock(options: {
 }
 
 function request(method = "GET", body?: unknown) {
-  return new Request("https://findog.at/api/fredrun/highscores", {
+  return new Request("https://findog.at/api/fredrun/highscores?world=alps", {
     method,
     headers: {
       Authorization: "Bearer token",
@@ -63,11 +66,22 @@ function request(method = "GET", body?: unknown) {
   });
 }
 
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "user-1" });
+  vi.mocked(assertFredRunAccessAllowed).mockResolvedValue();
+});
+
 describe("/api/fredrun/highscores", () => {
-  beforeEach(() => {
-    vi.resetAllMocks();
-    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "user-1" });
-    vi.mocked(assertFredRunAccessAllowed).mockResolvedValue();
+
+  it("rejects unauthenticated access before score reads and writes", async () => {
+    const mock = createSupabaseMock();
+    vi.mocked(getSupabaseServerClient).mockReturnValue(mock.client as never);
+    vi.mocked(authenticateSupabaseRequest).mockRejectedValue(new UserVisibleError("Bitte anmelden.", 401));
+    expect((await GET(request())).status).toBe(401);
+    expect((await POST(request("POST", { world: "alps", runId: "123e4567-e89b-42d3-a456-426614174000", name: "Fred", score: 1 }))).status).toBe(401);
+    expect(mock.from).not.toHaveBeenCalled();
+    expect(mock.rpc).not.toHaveBeenCalled();
   });
 
   it("returns the stored alias and deterministic top ten", async () => {
@@ -77,6 +91,7 @@ describe("/api/fredrun/highscores", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toContain("no-store");
     await expect(response.json()).resolves.toEqual({
+      world: "alps",
       playerName: "Fredi",
       entries: [
         { rank: 1, name: "Anna", score: 500 },
@@ -87,24 +102,27 @@ describe("/api/fredrun/highscores", () => {
     expect(mock.scoreBuilder.order).toHaveBeenNthCalledWith(2, "created_at", { ascending: true });
     expect(mock.scoreBuilder.order).toHaveBeenNthCalledWith(3, "id", { ascending: true });
     expect(mock.scoreBuilder.limit).toHaveBeenCalledWith(10);
+    expect(mock.scoreBuilder.eq).toHaveBeenCalledWith("world_id", "alps");
   });
 
   it("submits the authenticated user's exact round and refreshes the list", async () => {
     const mock = createSupabaseMock();
     vi.mocked(getSupabaseServerClient).mockReturnValue(mock.client as never);
     const response = await POST(request("POST", {
+      world: "alps",
       runId: "123e4567-e89b-42d3-a456-426614174000",
       name: "  Fredi  ",
       score: 321,
     }));
     expect(response.status).toBe(200);
-    expect(mock.rpc).toHaveBeenCalledWith("submit_fredrun_score", {
+    expect(mock.rpc).toHaveBeenCalledWith("submit_fredrun_world_score", {
+      submitted_world: "alps",
       player_id: "user-1",
       submitted_run_id: "123e4567-e89b-42d3-a456-426614174000",
       submitted_name: "Fredi",
       submitted_score: 321,
     });
-    await expect(response.json()).resolves.toMatchObject({ submitted: true, playerName: "Fredi" });
+    await expect(response.json()).resolves.toMatchObject({ world: "alps", submitted: true, playerName: "Fredi" });
   });
 
   it("returns the configured block before reading or submitting highscores", async () => {
@@ -116,7 +134,8 @@ describe("/api/fredrun/highscores", () => {
     for (const response of [
       await GET(request()),
       await POST(request("POST", {
-        runId: "123e4567-e89b-42d3-a456-426614174000",
+        world: "alps",
+      runId: "123e4567-e89b-42d3-a456-426614174000",
         name: "Fredi",
         score: 1,
       })),
@@ -132,6 +151,7 @@ describe("/api/fredrun/highscores", () => {
     const mock = createSupabaseMock({ rpcData: false });
     vi.mocked(getSupabaseServerClient).mockReturnValue(mock.client as never);
     const response = await POST(request("POST", {
+      world: "alps",
       runId: "123e4567-e89b-42d3-a456-426614174000",
       name: "Fredi",
       score: 321,
@@ -144,14 +164,14 @@ describe("/api/fredrun/highscores", () => {
     const mock = createSupabaseMock();
     vi.mocked(getSupabaseServerClient).mockReturnValue(mock.client as never);
     for (const body of [
-      { runId: "invalid", name: "Fredi", score: 1 },
-      { runId: "123e4567-e89b-42d3-a456-426614174000", name: "", score: 1 },
-      { runId: "123e4567-e89b-42d3-a456-426614174000", name: "x".repeat(21), score: 1 },
-      { runId: "123e4567-e89b-42d3-a456-426614174000", name: "Fredi", score: 1_000_001 },
+      { world: "alps", runId: "invalid", name: "Fredi", score: 1 },
+      { world: "alps", runId: "123e4567-e89b-42d3-a456-426614174000", name: "", score: 1 },
+      { world: "alps", runId: "123e4567-e89b-42d3-a456-426614174000", name: "x".repeat(21), score: 1 },
+      { world: "alps", runId: "123e4567-e89b-42d3-a456-426614174000", name: "Fredi", score: 1_000_001 },
     ]) {
       expect((await POST(request("POST", body))).status).toBe(400);
     }
-    expect((await POST(new Request("https://findog.at/api/fredrun/highscores", {
+    expect((await POST(new Request("https://findog.at/api/fredrun/highscores?world=alps", {
       method: "POST",
       headers: { Authorization: "Bearer token", "Content-Type": "application/json" },
       body: "not-json",
@@ -163,6 +183,7 @@ describe("/api/fredrun/highscores", () => {
     const limited = createSupabaseMock({ rpcError: { message: "fredrun submission rate limit exceeded" } });
     vi.mocked(getSupabaseServerClient).mockReturnValue(limited.client as never);
     expect((await POST(request("POST", {
+      world: "alps",
       runId: "123e4567-e89b-42d3-a456-426614174000",
       name: "Fredi",
       score: 1,
@@ -178,5 +199,39 @@ describe("/api/fredrun/highscores", () => {
     const response = await GET(request());
     expect(response.status).toBe(503);
     expect(await response.text()).not.toContain("private database detail");
+  });
+});
+
+
+describe("explicit world boundary", () => {
+  it("rejects absent, invalid and ambiguous GET worlds before reading scores", async () => {
+    const mock = createSupabaseMock();
+    vi.mocked(getSupabaseServerClient).mockReturnValue(mock.client as never);
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "user-1" });
+    vi.mocked(assertFredRunAccessAllowed).mockResolvedValue();
+    for (const query of ["", "?world=unknown", "?world=", "?world=vienna&world=alps"]) {
+      expect((await GET(new Request(`https://findog.at/api/fredrun/highscores${query}`))).status).toBe(400);
+    }
+    expect(mock.from).not.toHaveBeenCalled();
+  });
+  it("rejects missing and unknown POST worlds without calling the RPC", async () => {
+    const mock = createSupabaseMock();
+    vi.mocked(getSupabaseServerClient).mockReturnValue(mock.client as never);
+    for (const world of [undefined, null, "unknown"]) {
+      expect((await POST(request("POST", {world, runId: "123e4567-e89b-42d3-a456-426614174000", name: "Fred", score: 3}))).status).toBe(400);
+    }
+    expect(mock.rpc).not.toHaveBeenCalled();
+  });
+  it("uses a separate filter and response world for each board, including empty boards", async () => {
+    const mock = createSupabaseMock();
+    vi.mocked(getSupabaseServerClient).mockReturnValue(mock.client as never);
+    let selected: string;
+    mock.scoreBuilder.eq.mockImplementation((_column, world) => { selected = world; return mock.scoreBuilder; });
+    mock.scoreBuilder.limit.mockImplementation(async () => ({data: selected === "vienna" ? scoreRows : [], error: null}));
+    for (const world of ["vienna", "finanzamt-night", "alps"]) {
+      const response = await GET(new Request(`https://findog.at/api/fredrun/highscores?world=${world}`));
+      expect(await response.json()).toMatchObject({world, entries: world === "vienna" ? [{rank: 1, name: "Anna", score: 500}, {rank: 2, name: "Berta", score: 450}] : []});
+      expect(mock.scoreBuilder.eq).toHaveBeenLastCalledWith("world_id", world);
+    }
   });
 });

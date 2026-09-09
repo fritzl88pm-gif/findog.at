@@ -4,6 +4,8 @@ import { drawStampHazard, drawChasm, drawPlatform, drawFilingCabinet, isFredRunC
 import { drawFredRunLightning } from "@/lib/fredrun-lightning-render";
 import { drawFredRunUrbanEvent } from "@/lib/fredrun-urban-event-render";
 import { drawFredRunRockfall } from "@/lib/fredrun-rockfall-render";
+import { FredRunLeaderboard } from "@/components/fredrun-leaderboard";
+import { useFredRunLeaderboard } from "@/lib/fredrun-leaderboard-client";
 import NextImage from "next/image";
 import {
   memo,
@@ -74,7 +76,6 @@ import {
   FREDRUN_PLAYER_NAME_MAX_LENGTH,
   normalizeFredRunPlayerName,
   parseFredRunHighscoresResponse,
-  type FredRunLeaderboardEntry,
 } from "@/lib/fredrun-highscores";
 import {
   parseFredRunProgressApiResponse,
@@ -1934,20 +1935,17 @@ export default function FredRunView({
   const [bestScore, setBestScore] = useState(0);
   const [assetState, setAssetState] = useState<"loading" | "ready" | "error">("loading");
   const [assetAttempt, setAssetAttempt] = useState(0);
-  const [leaderboard, setLeaderboard] = useState<FredRunLeaderboardEntry[]>([]);
-  const [leaderboardState, setLeaderboardState] = useState<"loading" | "ready" | "error">(
-    accessToken ? "loading" : "error",
-  );
-  const [leaderboardError, setLeaderboardError] = useState(
-    accessToken ? "" : "Die Topliste kann ohne aktive Anmeldung nicht geladen werden.",
-  );
-  const [leaderboardAttempt, setLeaderboardAttempt] = useState(0);
   const [playerName, setPlayerName] = useState("");
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [isSubmittingScore, setIsSubmittingScore] = useState(false);
   const [submittedRunId, setSubmittedRunId] = useState<string | null>(null);
   const [scoreSubmissionMessage, setScoreSubmissionMessage] = useState("");
   const [scoreSubmissionError, setScoreSubmissionError] = useState("");
+  const receiveLeaderboardName = useCallback((name: string) => {
+    setPlayerName(current => current.trim() ? current : name);
+  }, []);
+  const leaderboard = useFredRunLeaderboard(accessToken, profile.selectedWorld, receiveLeaderboardName, setAccessBlockMessage);
+
   const [fullscreenAvailable, setFullscreenAvailable] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const selectedCharacter = profile.selectedCharacter;
@@ -2120,6 +2118,8 @@ export default function FredRunView({
   }, [accessToken, applyServerProgressAction, commitProfile]);
 
   const prepareNewRun = useCallback(() => {
+    scoreSubmissionAbortRef.current?.abort();
+    setIsSubmittingScore(false);
     const runId = createRunId();
     setScorePulseToken(0);
     setCoinPulseToken(0);
@@ -2159,6 +2159,8 @@ export default function FredRunView({
   }, [assetState, prepareNewRun, profileReady, replaceGame]);
 
   const returnToMenu = useCallback(() => {
+    scoreSubmissionAbortRef.current?.abort();
+    setIsSubmittingScore(false);
     setScorePulseToken(0);
     setCoinPulseToken(0);
     currentRunIdRef.current = null;
@@ -2320,36 +2322,6 @@ export default function FredRunView({
     });
     return () => controller.abort();
   }, [accessToken, commitProfile]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    if (!accessToken) return () => controller.abort();
-    void fetch("/api/fredrun/highscores", {
-      cache: "no-store",
-      credentials: "same-origin",
-      headers: { Authorization: `Bearer ${accessToken}` },
-      signal: controller.signal,
-    }).then(async (response) => {
-      const payload = await response.json().catch(() => null) as unknown;
-      if (!response.ok) {
-        throw fredRunRequestError(response, payload, "Die Topliste konnte nicht geladen werden.");
-      }
-      const parsed = parseFredRunHighscoresResponse(payload);
-      if (!parsed) throw new Error("Die Topliste lieferte ein ungültiges Antwortformat.");
-      setLeaderboard(parsed.entries);
-      setPlayerName((current) => current.trim() ? current : parsed.playerName);
-      setLeaderboardState("ready");
-    }).catch((error: unknown) => {
-      if (controller.signal.aborted) return;
-      if (error instanceof FredRunAccessBlockedError) {
-        setAccessBlockMessage(error.message);
-      }
-      setLeaderboardState("error");
-      setLeaderboardError(error instanceof Error ? error.message : "Die Topliste konnte nicht geladen werden.");
-    });
-
-    return () => controller.abort();
-  }, [accessToken, leaderboardAttempt]);
 
   useEffect(() => () => scoreSubmissionAbortRef.current?.abort(), []);
 
@@ -2520,6 +2492,7 @@ export default function FredRunView({
     event.preventDefault();
     const normalizedName = normalizeFredRunPlayerName(playerName);
     const runId = currentRunId;
+    const world = currentRunWorldRef.current;
     if (!normalizedName) {
       setScoreSubmissionError(`Bitte einen Namen mit höchstens ${FREDRUN_PLAYER_NAME_MAX_LENGTH} Zeichen eingeben.`);
       return;
@@ -2541,25 +2514,24 @@ export default function FredRunView({
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ runId, name: normalizedName, score: snapshot.score }),
+        body: JSON.stringify({ runId, world, name: normalizedName, score: snapshot.score }),
         signal: controller.signal,
       });
       const payload = await response.json().catch(() => null) as unknown;
       if (!response.ok) {
         throw fredRunRequestError(response, payload, "Der Score konnte nicht eingereicht werden.");
       }
+      if (controller.signal.aborted || currentRunIdRef.current !== runId) return;
       const parsed = parseFredRunHighscoresResponse(payload);
-      if (!parsed) throw new Error("Die Topliste lieferte ein ungültiges Antwortformat.");
-      setLeaderboard(parsed.entries);
-      setLeaderboardState("ready");
-      setLeaderboardError("");
+      if (!parsed || parsed.world !== world) throw new Error("Die Topliste lieferte ein ungültiges Antwortformat.");
+      leaderboard.refreshWorld(world);
       setPlayerName(parsed.playerName || normalizedName);
       setSubmittedRunId(runId);
       setScoreSubmissionMessage(
         parsed.submitted === false ? "Dieser Score wurde bereits eingereicht." : "Score eingereicht.",
       );
     } catch (error) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || currentRunIdRef.current !== runId) return;
       if (error instanceof FredRunAccessBlockedError) {
         setAccessBlockMessage(error.message);
       }
@@ -2956,49 +2928,7 @@ export default function FredRunView({
         </div>
 
         {standalone ? null : (
-          <section className="fredrun-leaderboard" aria-labelledby="fredrun-leaderboard-title">
-          <div className="fredrun-leaderboard-header">
-            <div>
-              <p className="eyebrow">Beste Runden</p>
-              <h2 id="fredrun-leaderboard-title">Top 10</h2>
-            </div>
-            <span>Global</span>
-          </div>
-
-          {leaderboardState === "loading" ? (
-            <p className="fredrun-leaderboard-state" role="status">Topliste wird geladen …</p>
-          ) : leaderboardState === "error" ? (
-            <div className="fredrun-leaderboard-state" role="alert">
-              <p>{leaderboardError}</p>
-              <button
-                className="secondary-button compact-button"
-                type="button"
-                onClick={() => {
-                  setLeaderboardState("loading");
-                  setLeaderboardError("");
-                  setLeaderboardAttempt((attempt) => attempt + 1);
-                }}
-              >
-                Erneut versuchen
-              </button>
-            </div>
-          ) : leaderboard.length === 0 ? (
-            <p className="fredrun-leaderboard-state">Noch kein Score eingereicht – hol dir Platz 1.</p>
-          ) : (
-            <ol className="fredrun-leaderboard-list">
-              {leaderboard.map((entry) => (
-                <li
-                  className={`fredrun-leaderboard-entry${entry.rank <= 3 ? ` fredrun-leaderboard-entry--rank-${entry.rank}` : ""}`}
-                  key={`${entry.rank}-${entry.name}-${entry.score}`}
-                >
-                  <span className="fredrun-leaderboard-rank" aria-label={`Platz ${entry.rank}`}>{entry.rank}</span>
-                  <strong>{entry.name}</strong>
-                  <span>{entry.score.toLocaleString("de-AT")} Punkte</span>
-                </li>
-              ))}
-            </ol>
-          )}
-          </section>
+          <FredRunLeaderboard {...leaderboard} />
         )}
       </div>
     </section>

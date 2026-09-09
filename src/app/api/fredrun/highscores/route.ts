@@ -8,11 +8,14 @@ import {
   FredRunAccessBlockedServerError,
 } from "@/lib/fredrun-access-server";
 import {
+  isFredRunLeaderboardWorld,
   normalizeFredRunLeaderboardRows,
   normalizeFredRunPlayerName,
   parseFredRunScoreSubmission,
 } from "@/lib/fredrun-highscores";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+
+import type { FredRunWorldId } from "@/lib/fredrun-worlds";
 
 export const runtime = "nodejs";
 
@@ -44,11 +47,13 @@ async function authenticatedContext(request: Request) {
 async function loadHighscores(
   supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
   userId: string,
+  world: FredRunWorldId,
 ) {
   const [scoresResult, profileResult] = await Promise.all([
     supabase
       .from("fredrun_scores")
       .select("id,score,created_at,fredrun_player_profiles!inner(player_name)")
+      .eq("world_id", world)
       .order("score", { ascending: false })
       .order("created_at", { ascending: true })
       .order("id", { ascending: true })
@@ -66,6 +71,7 @@ async function loadHighscores(
 
   const profile = profileResult.data as { player_name?: unknown } | null;
   return {
+    world,
     entries: normalizeFredRunLeaderboardRows(scoresResult.data),
     playerName: normalizeFredRunPlayerName(profile?.player_name) ?? "",
   };
@@ -83,7 +89,11 @@ export async function GET(request: Request) {
   try {
     const { supabase, user } = await authenticatedContext(request);
     await assertFredRunAccessAllowed(supabase, user.id);
-    return json(await loadHighscores(supabase, user.id));
+    const worlds = new URL(request.url).searchParams.getAll("world");
+    if (worlds.length !== 1 || !isFredRunLeaderboardWorld(worlds[0])) {
+      throw new UserVisibleError("Bitte eine gültige Welt für die Topliste auswählen.", 400);
+    }
+    return json(await loadHighscores(supabase, user.id, worlds[0]));
   } catch (error) {
     return errorResponse(error);
   }
@@ -102,12 +112,13 @@ export async function POST(request: Request) {
     const submission = parseFredRunScoreSubmission(body);
     if (!submission) {
       throw new UserVisibleError(
-        "Bitte einen Namen mit höchstens 20 Zeichen und einen gültigen Score eingeben.",
+        "Bitte einen Namen mit höchstens 20 Zeichen und einen gültigen Score samt Spielwelt eingeben.",
         400,
       );
     }
 
-    const { data, error } = await supabase.rpc("submit_fredrun_score", {
+    const { data, error } = await supabase.rpc("submit_fredrun_world_score", {
+      submitted_world: submission.world,
       player_id: user.id,
       submitted_run_id: submission.runId,
       submitted_name: submission.name,
@@ -121,7 +132,7 @@ export async function POST(request: Request) {
     }
 
     return json({
-      ...(await loadHighscores(supabase, user.id)),
+      ...(await loadHighscores(supabase, user.id, submission.world)),
       submitted: data === true,
     });
   } catch (error) {

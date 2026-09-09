@@ -1,3 +1,5 @@
+import { FREDRUN_WORLD_IDS, type FredRunWorldId } from "./fredrun-worlds";
+
 export const FREDRUN_PLAYER_NAME_MAX_LENGTH = 20;
 export const FREDRUN_SCORE_MAX = 1_000_000;
 export const FREDRUN_LEADERBOARD_LIMIT = 10;
@@ -12,16 +14,22 @@ export type FredRunLeaderboardEntry = {
 };
 
 export type FredRunHighscoresResponse = {
+  world: FredRunWorldId;
   entries: FredRunLeaderboardEntry[];
   playerName: string;
   submitted?: boolean;
 };
 
 export type FredRunScoreSubmission = {
+  world: FredRunWorldId;
   runId: string;
   name: string;
   score: number;
 };
+
+export function isFredRunLeaderboardWorld(value: unknown): value is FredRunWorldId {
+  return typeof value === "string" && FREDRUN_WORLD_IDS.some(world => world === value);
+}
 
 export function normalizeFredRunPlayerName(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -42,6 +50,7 @@ export function parseFredRunScoreSubmission(value: unknown): FredRunScoreSubmiss
   const name = normalizeFredRunPlayerName(candidate.name);
   if (
     !name
+    || !isFredRunLeaderboardWorld(candidate.world)
     || typeof candidate.runId !== "string"
     || !UUID_PATTERN.test(candidate.runId)
     || typeof candidate.score !== "number"
@@ -51,7 +60,7 @@ export function parseFredRunScoreSubmission(value: unknown): FredRunScoreSubmiss
   ) {
     return null;
   }
-  return { runId: candidate.runId, name, score: candidate.score };
+  return { world: candidate.world, runId: candidate.runId, name, score: candidate.score };
 }
 
 type FredRunScoreRow = {
@@ -91,6 +100,7 @@ export function normalizeFredRunLeaderboardRows(value: unknown): FredRunLeaderbo
 export function parseFredRunHighscoresResponse(value: unknown): FredRunHighscoresResponse | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
+  if (!isFredRunLeaderboardWorld(candidate.world)) return null;
   if (!Array.isArray(candidate.entries) || candidate.entries.length > FREDRUN_LEADERBOARD_LIMIT) return null;
 
   const entries: FredRunLeaderboardEntry[] = [];
@@ -119,6 +129,7 @@ export function parseFredRunHighscoresResponse(value: unknown): FredRunHighscore
   if (candidate.submitted !== undefined && typeof candidate.submitted !== "boolean") return null;
 
   return {
+    world: candidate.world,
     entries,
     playerName,
     ...(typeof candidate.submitted === "boolean" ? { submitted: candidate.submitted } : {}),
