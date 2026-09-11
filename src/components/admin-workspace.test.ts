@@ -50,9 +50,9 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("administration workspace interactions", () => {
-  it("opens every area without fetching overview data, closes the mobile selector and focuses the title", async () => {
+  it("opens all seven areas without fetching overview data, closes the mobile selector and focuses the title", async () => {
     await render(createElement(Harness));
-    expect(host.querySelectorAll(".admin-area-card")).toHaveLength(ADMIN_AREAS.length);
+    expect(host.querySelectorAll(".admin-area-card")).toHaveLength(7);
     expect(fetchMock).not.toHaveBeenCalled();
     for (const area of ADMIN_AREAS) {
       const selector = host.querySelector(".admin-mobile-navigation") as HTMLDetailsElement;

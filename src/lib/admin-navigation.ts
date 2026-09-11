@@ -21,8 +21,6 @@ export const ADMIN_AREAS = [
   { id: "bfg-newsletters", group: "Inhalte", title: "BFG Newsletter", description: "Datierte Ausgaben anlegen und bearbeiten.", icon: "mail" },
   { id: "scanning", group: "System", title: "Dokumentverarbeitung", description: "Fred-Anhänge, OCR und Belegauswertung konfigurieren.", icon: "scan" },
   { id: "omniroute", group: "System", title: "Nutzung & Systemstatus", description: "OmniRoute-Nutzung, Modelle und Systemzustand prüfen.", icon: "chart" },
-  { id: "findog-agent", group: "System", title: "Findog Agent", description: "Recherche-Agent (Preview) befragen und laufende Recherchen verfolgen.", icon: "agent" },
-  { id: "findog-agent-settings", group: "System", title: "Agent-Einstellungen", description: "Modell-, Wissens-, Web- und MCP-Verbindungen des Findog-Agent konfigurieren.", icon: "agent-config" },
 ] as const;
 
 export type AdminArea = "overview" | typeof ADMIN_AREAS[number]["id"];

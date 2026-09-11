@@ -8,8 +8,8 @@ const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.
 const cssSource = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
 describe("Administration workspace and scanning settings", () => {
-  it("exposes the grouped admin areas plus the Findog Agent entries and starts on overview", () => {
-    expect(ADMIN_AREAS.map((area) => area.id)).toEqual(["benutzer", "feedback", "downloads", "dashboard-news", "bfg-newsletters", "scanning", "omniroute", "findog-agent", "findog-agent-settings"]);
+  it("exposes seven areas through the grouped workspace and starts on overview", () => {
+    expect(ADMIN_AREAS.map((area) => area.id)).toEqual(["benutzer", "feedback", "downloads", "dashboard-news", "bfg-newsletters", "scanning", "omniroute"]);
     expect(pageSource).toContain('useState<AdminArea>("overview")');
     expect(pageSource).toContain('<AdminWorkspace area={adminTab} onNavigate={navigateAdminArea}');
     expect(pageSource).not.toContain('role="tab"');
