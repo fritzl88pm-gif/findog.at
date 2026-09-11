@@ -13,7 +13,11 @@
     "telegram:worker:dev": "node scripts/build-telegram-worker.mjs --watch",
     "telegram:build": "node scripts/build-telegram-worker.mjs",
     "telegram:typecheck": "tsc -p tsconfig.telegram-worker.json --noEmit",
-    "telegram:worker": "node dist/telegram-worker.mjs"
+    "telegram:worker": "node dist/telegram-worker.mjs",
+    "findog-agent:worker:dev": "node scripts/build-findog-agent-worker.mjs --watch",
+    "findog-agent:build": "node scripts/build-findog-agent-worker.mjs",
+    "findog-agent:typecheck": "tsc -p tsconfig.findog-agent-worker.json --noEmit",
+    "findog-agent:worker": "node dist/findog-agent-worker.mjs"
   },
   "dependencies": {
     "@fastify/busboy": "3.2.2",
@@ -30,6 +34,7 @@
     "server-only": "0.0.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
     "@types/node": "24.10.1",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",

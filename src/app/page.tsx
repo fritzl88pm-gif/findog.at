@@ -97,6 +97,8 @@ import AdminDownloads from "@/components/admin-downloads";
 import AdminDashboardNews from "@/components/admin-dashboard-news";
 import AdminBfgNewsletters from "@/components/admin-bfg-newsletters";
 import AdminOmniRouteUsage from "@/components/admin-omniroute-usage";
+import FindogAgentChat from "@/components/findog-agent/chat";
+import FindogAgentSettings from "@/components/findog-agent/settings";
 import DownloadsView from "@/components/downloads-view";
 import BfgNewsletterView from "@/components/bfg-newsletter-view";
 import AdminWorkspace from "@/components/admin-workspace";
@@ -4412,6 +4414,10 @@ export default function Home() {
               <AdminBfgNewsletters accessToken={session?.access_token ?? ""} />
             ) : adminTab === "omniroute" ? (
               <AdminOmniRouteUsage accessToken={session?.access_token ?? ""} />
+            ) : adminTab === "findog-agent" ? (
+              <FindogAgentChat key={session?.user.id ?? "anonymous"} accessToken={session?.access_token ?? ""} />
+            ) : adminTab === "findog-agent-settings" ? (
+              <FindogAgentSettings key={session?.user.id ?? "anonymous"} accessToken={session?.access_token ?? ""} />
             ) : null}
           </AdminWorkspace>
         </AdminGuardContext.Provider>
