@@ -385,4 +385,20 @@ describe("approved release surface", () => {
     expect(fredPos).toBeLessThan(passwordPos);
     expect(passwordPos).toBeLessThan(telegramPos);
   });
+
+  it("ships the supplied maintenance mascot unchanged and renders it on the maintenance page", () => {
+    const maintenanceImagePath = fileURLToPath(new URL("../../public/fred-maintenance.png", import.meta.url));
+    const maintenanceHelperPath = fileURLToPath(new URL("./maintenance-mode.ts", import.meta.url));
+    const illustration = readFileSync(maintenanceImagePath);
+
+    expect(illustration.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    expect(createHash("sha256").update(illustration).digest("hex")).toBe(
+      "c510cc2a7fe40206c9a2debdd15f72bf65705a7458c677804ae77fa10ca51dcd",
+    );
+    expect({ width: illustration.readUInt32BE(16), height: illustration.readUInt32BE(20) }).toEqual({
+      width: 1254,
+      height: 1254,
+    });
+    expect(readFileSync(maintenanceHelperPath, "utf8")).toContain('src="/fred-maintenance.png"');
+  });
 });

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { MAINTENANCE_MESSAGE, isMaintenanceModeEnabled } from "@/lib/maintenance-mode";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { parseSlashCommand } from "@/lib/telegram/commands";
 import { hashToken, timingSafeDigestEqual } from "@/lib/telegram/pairing";
@@ -147,6 +148,43 @@ export async function POST(
   }
 
   const status = integration.status as string;
+
+  if (isMaintenanceModeEnabled()) {
+    if (status === "active") {
+      const message = body.message;
+      const pairedUser = integration.paired_telegram_user_id as number | null;
+      const pairedChat = integration.paired_telegram_chat_id as number | null;
+
+      if (
+        message?.chat?.type === "private"
+        && typeof message.chat.id === "number"
+        && message.from?.id === pairedUser
+        && message.chat.id === pairedChat
+      ) {
+        return okJson({
+          method: "sendMessage",
+          chat_id: message.chat.id,
+          text: MAINTENANCE_MESSAGE,
+        });
+      }
+      return okJson({ ok: true });
+    }
+
+    if (
+      status === "awaiting_pairing"
+      && body.message?.chat?.type === "private"
+      && typeof body.message.chat.id === "number"
+      && body.message.text?.startsWith("/start")
+    ) {
+      return okJson({
+        method: "sendMessage",
+        chat_id: body.message.chat.id,
+        text: MAINTENANCE_MESSAGE,
+      });
+    }
+
+    return okJson({ ok: true });
+  }
 
   if (
     status === "awaiting_pairing" &&

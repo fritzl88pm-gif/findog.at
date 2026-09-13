@@ -87,7 +87,10 @@ describe("POST /api/webhooks/telegram/[webhookId]", () => {
     vi.resetAllMocks();
     process.env.TELEGRAM_CREDENTIALS_KEY = ENV_KEY;
   });
-  afterEach(() => { delete process.env.TELEGRAM_CREDENTIALS_KEY; });
+  afterEach(() => {
+    delete process.env.TELEGRAM_CREDENTIALS_KEY;
+    delete process.env.FINDOG_MAINTENANCE_MODE;
+  });
 
   it("returns 404 for unknown webhook ID", async () => {
     const ms = mockQuery({ data: null, error: null });
@@ -380,6 +383,127 @@ describe("POST /api/webhooks/telegram/[webhookId]", () => {
       p_telegram_chat_id: 222,
       p_update_kind: "command",
     }));
+  });
+
+  it("acknowledges maintenance with the exact Telegram sendMessage payload without RPC work", async () => {
+    process.env.FINDOG_MAINTENANCE_MODE = "on";
+    const integrationId = randomUUID();
+    const ms = mockQuery({
+      data: { id: integrationId, webhook_secret_sha256: webhookSecretHash, status: "active", paired_telegram_user_id: 123, paired_telegram_chat_id: 456 },
+      error: null,
+    });
+    const rpc = mockRpc({ data: { id: 1, status: "pending" }, error: null });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from: vi.fn().mockReturnValue(ms), rpc } as never);
+
+    const response = await POST(
+      buildRequest({
+        update_id: 300,
+        message: {
+          message_id: 400,
+          from: { id: 123, is_bot: false, first_name: "User" },
+          chat: { id: 456, type: "private" },
+          date: Math.floor(Date.now() / 1000),
+          text: "Hallo Fred",
+        },
+      }, webhookSecret),
+      { params: Promise.resolve({ webhookId }) },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      method: "sendMessage",
+      chat_id: 456,
+      text: "Findog/Fred wird gerade gewartet. Bitte versuche es später noch einmal.",
+    });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges a foreign private chat during maintenance without RPC work", async () => {
+    process.env.FINDOG_MAINTENANCE_MODE = "on";
+    const ms = mockQuery({
+      data: { id: randomUUID(), webhook_secret_sha256: webhookSecretHash, status: "active", paired_telegram_user_id: 123, paired_telegram_chat_id: 456 },
+      error: null,
+    });
+    const rpc = mockRpc({ data: { id: 1, status: "pending" }, error: null });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from: vi.fn().mockReturnValue(ms), rpc } as never);
+
+    const response = await POST(
+      buildRequest({
+        update_id: 303,
+        message: {
+          message_id: 403,
+          from: { id: 999, is_bot: false, first_name: "Stranger" },
+          chat: { id: 999, type: "private" },
+          date: Math.floor(Date.now() / 1000),
+          text: "Hallo Fred",
+        },
+      }, webhookSecret),
+      { params: Promise.resolve({ webhookId }) },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges non-message maintenance updates without RPC work", async () => {
+    process.env.FINDOG_MAINTENANCE_MODE = "true";
+    const ms = mockQuery({
+      data: { id: "int-1", webhook_secret_sha256: webhookSecretHash, status: "active", paired_telegram_user_id: 123, paired_telegram_chat_id: 456 },
+      error: null,
+    });
+    const rpc = mockRpc({ data: { id: 1, status: "pending" }, error: null });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from: vi.fn().mockReturnValue(ms), rpc } as never);
+
+    const response = await POST(
+      buildRequest({ update_id: 301, my_chat_member: { chat: { id: 456, type: "private" }, from: { id: 123 } } }, webhookSecret),
+      { params: Promise.resolve({ webhookId }) },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges maintenance pairing attempts without pairing or enqueue RPCs", async () => {
+    process.env.FINDOG_MAINTENANCE_MODE = "1";
+    const pairingToken = randomBytes(32).toString("base64url");
+    const ms = mockQuery({
+      data: {
+        id: randomUUID(),
+        webhook_secret_sha256: webhookSecretHash,
+        status: "awaiting_pairing",
+        pairing_token_sha256: hashToken(pairingToken),
+        pairing_expires_at: new Date(Date.now() + 600000).toISOString(),
+        paired_telegram_user_id: null,
+        paired_telegram_chat_id: null,
+      },
+      error: null,
+    });
+    const rpc = mockRpc({ data: true, error: null });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from: vi.fn().mockReturnValue(ms), rpc } as never);
+
+    const response = await POST(
+      buildRequest({
+        update_id: 302,
+        message: {
+          message_id: 402,
+          from: { id: 111, is_bot: false, first_name: "Pairer" },
+          chat: { id: 222, type: "private" },
+          date: Math.floor(Date.now() / 1000),
+          text: `/start ${pairingToken}`,
+        },
+      }, webhookSecret),
+      { params: Promise.resolve({ webhookId }) },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      method: "sendMessage",
+      chat_id: 222,
+      text: "Findog/Fred wird gerade gewartet. Bitte versuche es später noch einmal.",
+    });
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it("returns 200 but does NOT enqueue when atomic pairing RPC returns false (race/reuse)", async () => {
