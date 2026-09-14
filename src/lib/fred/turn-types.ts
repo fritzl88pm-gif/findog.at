@@ -3,7 +3,7 @@ import type {
   FredResearchStep,
   FredSourceReference,
 } from "@/lib/weknora/fred-research";
-import type { FredNativeConversation } from "@/lib/fred-native-stream";
+import type { FredGeneratedArtifact, FredNativeConversation } from "@/lib/fred-native-stream";
 import type { FredExecutionStep } from "@/lib/fred/execution-trace";
 
 /** Attachment metadata for persistence – never carries raw bytes. */
@@ -108,6 +108,7 @@ export type FredTurnEvent =
       researchTrace?: FredResearchStep[];
       executionTrace?: FredExecutionStep[];
       sourceReferences?: FredSourceReference[];
+      artifacts?: FredGeneratedArtifact[];
     }
   | { type: "cancelled"; conversation: FredNativeConversation }
   | { type: "error"; error: string };
@@ -128,6 +129,7 @@ export interface FredTurnResult {
   executionTrace?: FredExecutionStep[];
   /** Source references. */
   sourceReferences: FredSourceReference[];
+  artifacts?: FredGeneratedArtifact[];
   /** Whether the upstream was explicitly stopped (via `request.signal`). */
   stopped: boolean;
 }

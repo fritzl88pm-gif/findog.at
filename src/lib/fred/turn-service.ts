@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 
 import { UserVisibleError } from "@/lib/errors";
 import {
+  normalizeGeneratedArtifactLinks,
+  parseGeneratedArtifacts,
+  type ParsedGeneratedArtifact,
+} from "@/lib/fred-generated-artifacts";
+import {
   extractStreamStableBfgGzCandidates,
   linkVerifiedBfgCitations,
   verifyBfgCitations,
@@ -27,6 +32,8 @@ import {
   parseWeKnoraExecutionEvent,
   type FredExecutionStep,
 } from "./execution-trace";
+
+import type { FredGeneratedArtifact } from "@/lib/fred-native-stream";
 
 import type {
   FredTurnAttachmentMeta,
@@ -113,6 +120,17 @@ export interface TurnServiceUpstreamDeps {
     messageId: string;
     signal: AbortSignal;
   }): Promise<void>;
+  /** Read artifacts from the exact completed assistant message in Embed history. */
+  fetchCompletedArtifacts?: (params: {
+    sessionToken: string;
+    channelId: string;
+    publishToken: string;
+    exchangeOrigin: string;
+    sessionId: string;
+    sessionSignature: string;
+    assistantMessageId: string;
+    signal: AbortSignal;
+  }) => Promise<unknown[]>;
 }
 
 export interface TurnServicePersistenceDeps {
@@ -152,6 +170,14 @@ export interface TurnServicePersistenceDeps {
     agent_key: string;
     weknora_agent_id: string | null;
   } | null>;
+  /** Persist validated artifact metadata and return client-safe DTOs. */
+  persistGeneratedArtifacts?: (params: {
+    clientId: string;
+    conversationId: string;
+    messageId: number;
+    upstreamMessageId: string;
+    artifacts: ParsedGeneratedArtifact[];
+  }) => Promise<FredGeneratedArtifact[]>;
 }
 
 export interface TurnServiceConfigDeps {
@@ -176,6 +202,7 @@ export interface TurnServiceConfigDeps {
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_LIVE_BFG_CITATIONS = 20;
+const ARTIFACT_LOOKUP_TIMEOUT_MS = 5_000;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -257,7 +284,6 @@ export async function* executeFredTurn(
   let researchTrace: FredResearchStep[] = [];
   let executionTrace: FredExecutionStep[] = [];
   let sourceReferences: FredSourceReference[] = [];
-
   let acceptingCitationUpdates = true;
   const selectedAgentName = fredAgentName(request.agentKey);
   let requestTerminal = false;
@@ -447,6 +473,7 @@ export async function* executeFredTurn(
     let sawUpstreamCompletion = false;
     const externalAbort = abortSignalPromise(request.signal);
     let stoppedByCaller = false;
+    let generatedArtifacts: ParsedGeneratedArtifact[] = [];
 
     // ── BFG citation pipeline ───────────────────────────────────────────────
     const verifiedCitations = new Map<string, VerifiedBfgCitation>();
@@ -513,7 +540,8 @@ export async function* executeFredTurn(
           upstreamEvent.response_type === "agent_query"
           && typeof upstreamEvent.assistant_message_id === "string"
         ) {
-          upstreamMsgId = upstreamEvent.assistant_message_id;
+          const messageId = upstreamEvent.assistant_message_id.trim();
+          if (messageId) upstreamMsgId = messageId;
         }
       }
       const research = parseWeKnoraResearchEvent(parsed, { includeDirectSources: isAdvanced });
@@ -543,6 +571,14 @@ export async function* executeFredTurn(
       }
       if (isUpstreamCompleteEvent(parsed)) {
         sawUpstreamCompletion = true;
+        if (persistence.persistGeneratedArtifacts) {
+          const parsedArtifacts = parseGeneratedArtifacts(parsed);
+          if (parsedArtifacts.length > 0) generatedArtifacts = parsedArtifacts;
+        }
+        if (!upstreamMsgId && parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          const envelopeId = (parsed as Record<string, unknown>).id;
+          if (typeof envelopeId === "string" && envelopeId.trim()) upstreamMsgId = envelopeId.trim();
+        }
       }
       const event = upstreamDelta(parsed);
       if (event.content) {
@@ -632,6 +668,37 @@ export async function* executeFredTurn(
       throw new UserVisibleError(`${selectedAgentName} hat keine Antwort geliefert.`, 502);
     }
 
+    // Embed completion frames may omit artifacts even though the exact
+    // completed assistant message persisted them. This lookup is optional,
+    // bounded, authenticated by the adapter, and fail-open for text answers.
+    if (
+      generatedArtifacts.length === 0
+      && upstreamMsgId
+      && upstream.fetchCompletedArtifacts
+      && persistence.persistGeneratedArtifacts
+      && !request.signal?.aborted
+    ) {
+      const artifactAbort = new AbortController();
+      const timeoutHandle = setTimeout(() => artifactAbort.abort(), ARTIFACT_LOOKUP_TIMEOUT_MS);
+      const onRequestAbort = () => artifactAbort.abort(request.signal?.reason);
+      request.signal?.addEventListener("abort", onRequestAbort, { once: true });
+      try {
+        const metadata = await upstream.fetchCompletedArtifacts({
+          ...sessionConfigCache!,
+          assistantMessageId: upstreamMsgId,
+          signal: artifactAbort.signal,
+        });
+        if (!artifactAbort.signal.aborted) {
+          generatedArtifacts = parseGeneratedArtifacts({ data: { artifacts: metadata } });
+        }
+      } catch {
+        // Artifact discovery is an enhancement; preserve the text-only answer.
+      } finally {
+        clearTimeout(timeoutHandle);
+        request.signal?.removeEventListener("abort", onRequestAbort);
+      }
+    }
+
     // A final unterminated SSE frame may have added a research step after the
     // stream loop's regular flush. Emit any such upstream update before the
     // citation verification adds its own steps.
@@ -671,11 +738,11 @@ export async function* executeFredTurn(
       }
     }
 
-    const finalAnswer = linkVerifiedBfgCitations(
+    const finalAnswer = normalizeGeneratedArtifactLinks(linkVerifiedBfgCitations(
       plainFinalAnswer,
       [...verifiedCitations.values()],
       { target: "fullText" },
-    );
+    ), generatedArtifacts);
 
     const { conversation: finalConversation, messageId: assistantMessageId } = await persistence.recordEvent({
       clientId: request.clientId,
@@ -695,6 +762,22 @@ export async function* executeFredTurn(
       agentKey,
       weknoraAgentId: upstreamConfig.agentId,
     });
+
+    let persistedArtifacts: FredGeneratedArtifact[] = [];
+    if (
+      generatedArtifacts.length > 0
+      && upstreamMsgId
+      && assistantMessageId !== undefined
+      && persistence.persistGeneratedArtifacts
+    ) {
+      persistedArtifacts = await persistence.persistGeneratedArtifacts({
+        clientId: request.clientId,
+        conversationId: finalConversation.id,
+        messageId: assistantMessageId,
+        upstreamMessageId: upstreamMsgId,
+        artifacts: generatedArtifacts,
+      });
+    }
 
     if (request.onRequestTransition) {
       if (assistantMessageId === undefined) {
@@ -722,6 +805,7 @@ export async function* executeFredTurn(
       researchTrace,
       executionTrace: isAdvanced ? executionTrace : undefined,
       sourceReferences,
+      ...(persistedArtifacts.length > 0 ? { artifacts: persistedArtifacts } : {}),
     };
 
     return {
@@ -732,6 +816,7 @@ export async function* executeFredTurn(
       researchTrace,
       executionTrace: isAdvanced ? executionTrace : undefined,
       sourceReferences,
+      ...(persistedArtifacts.length > 0 ? { artifacts: persistedArtifacts } : {}),
       stopped: stopRequested,
     };
   } catch (error) {

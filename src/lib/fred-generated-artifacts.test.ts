@@ -7,6 +7,7 @@ const upstreamFrame = {
     { index: 3, file_name: "notiz.txt", file_size: 12, file_type: ".txt", handle: "resource://notiz" },
     { index: 7, file_name: "bericht.pdf", file_size: 4, file_type: ".pdf", handle: "resource://bericht" },
     { index: 8, file_name: "fake.bin", file_size: 4, file_type: "application/octet-stream", handle: "resource://fake" },
+    { index: 9, file_name: "word.docx", file_size: 4, file_type: ".docx", url: "resource://word" },
   ] },
 };
 const withoutSourceUri = (artifact: { sourceUri: string; id: string; fileName: string; fileSize: number; fileType: string; upstreamIndex: number }) => {
@@ -19,7 +20,7 @@ describe("generated artifact completion pipeline", () => {
   it("keeps genuine extension artifacts from completion frame through persistence, final, and history", () => {
     const parsed = parseGeneratedArtifacts(upstreamFrame);
     expect(parsed.map(({ upstreamIndex, fileType }) => ({ upstreamIndex, fileType }))).toEqual([
-      { upstreamIndex: 3, fileType: ".txt" }, { upstreamIndex: 7, fileType: ".pdf" },
+      { upstreamIndex: 3, fileType: ".txt" }, { upstreamIndex: 7, fileType: ".pdf" }, { upstreamIndex: 9, fileType: ".docx" },
     ]);
     const persisted = parsed.map((artifact, n) => ({ ...artifact, id: `artifact-${n}` }));
     const final = parseFredNativeStreamLine(encodeFredNativeStreamEvent({
@@ -45,5 +46,8 @@ describe("generated artifact completion pipeline", () => {
     expect(normalizeGeneratedArtifactLinks(
       "[notiz.txt](sandbox:/mnt/data/notiz.txt) [fake](sandbox:/tmp/fake.bin)", artifacts,
     )).toBe("notiz.txt [fake](sandbox:/tmp/fake.bin)");
+    expect(normalizeGeneratedArtifactLinks(
+      "[Download](sandbox:notiz.txt) [PDF](resource://bericht) [Unknown](resource://untrusted)", artifacts,
+    )).toBe("Download PDF [Unknown](resource://untrusted)");
   });
 });

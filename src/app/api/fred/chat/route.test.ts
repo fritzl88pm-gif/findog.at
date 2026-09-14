@@ -19,6 +19,7 @@ import {
   createFredUpstreamSession,
   deriveFredSessionSignature,
   fetchFredRecentEmbedImages,
+  fetchFredCompletedEmbedArtifacts,
   fetchFredUpstreamConfig,
   openFredUpstreamStream,
   relayFredWebhookEvent,
@@ -98,6 +99,7 @@ vi.mock("@/lib/weknora/fred-native", async (importOriginal) => {
     createFredUpstreamSession: vi.fn(),
     deriveFredSessionSignature: vi.fn(),
     fetchFredRecentEmbedImages: vi.fn(async () => []),
+    fetchFredCompletedEmbedArtifacts: vi.fn(async () => []),
     fetchFredUpstreamConfig: vi.fn(),
     fredVisitorId: vi.fn(() => "visitor-hash"),
     openFredUpstreamStream: vi.fn(),
@@ -253,6 +255,7 @@ describe("POST /api/fred/chat", () => {
       id: "session-1",
       signature: "session-signature",
     });
+    vi.mocked(fetchFredCompletedEmbedArtifacts).mockResolvedValue([]);
     vi.mocked(openFredUpstreamStream).mockImplementation(async () => upstreamStream());
     vi.mocked(extractStreamStableBfgGzCandidates).mockImplementation((text, streamComplete) => {
       if (!streamComplete) return [];
@@ -335,6 +338,51 @@ describe("POST /api/fred/chat", () => {
     });
     expect(relayFredWebhookEvent).toHaveBeenCalledTimes(2);
     expect(stopFredUpstreamSession).not.toHaveBeenCalled();
+  });
+
+  it("recovers Embed-persisted url artifacts from the exact completed message", async () => {
+    const artifact = {
+      id: "artifact-1", fileName: "findog-release-stream-20260914.txt", fileSize: 30,
+      fileType: ".txt", upstreamIndex: 0,
+    };
+    const artifactUpdate = vi.fn().mockReturnValue({
+      eq: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            select: vi.fn().mockReturnValue({ maybeSingle: vi.fn().mockResolvedValue({
+              data: { artifacts: [artifact] }, error: null,
+            }) }),
+          }),
+        }),
+      }),
+    });
+    const rpc = rpcForTurn();
+    const from = vi.fn().mockReturnValue({ update: artifactUpdate });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+    vi.mocked(fetchFredCompletedEmbedArtifacts).mockResolvedValue([{
+      url: "resource://4P2-Gq_68QTMZ9MhZ7szVg",
+      file_name: "findog-release-stream-20260914.txt",
+      file_size: 30,
+      file_type: ".txt",
+    }]);
+    vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+      'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+      'data: {"response_type":"answer","content":"[Datei](sandbox:/workspace/output/findog-release-stream-20260914.txt)","done":true}\n\n',
+      'data: {"response_type":"complete","id":"request-1","data":{}}\n\n',
+    ].join(""), { headers: { "Content-Type": "text/event-stream" } }));
+
+    const response = await POST(request({ query: "Erzeuge die Datei" }));
+    const events = (await response.text()).split("\n").filter(Boolean).map(parseFredNativeStreamLine);
+    const finalEvent = events.find((event) => event?.type === "final");
+    expect(fetchFredCompletedEmbedArtifacts).toHaveBeenCalledWith(expect.objectContaining({
+      assistantMessageId: "answer-1",
+    }));
+    expect(finalEvent).toEqual(expect.objectContaining({
+      type: "final",
+      answer: "Datei",
+      artifacts: [artifact],
+    }));
+    expect(artifactUpdate).toHaveBeenCalled();
   });
 
   it("streams German research steps and persists structured source provenance", async () => {

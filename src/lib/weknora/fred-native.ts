@@ -427,3 +427,43 @@ export async function fetchFredRecentEmbedImages(options: {
   }
   return trustedImages;
 }
+
+export async function fetchFredCompletedEmbedArtifacts(options: {
+  session: FredEmbedSession;
+  config: FredEmbedServerConfig;
+  upstreamSession: FredUpstreamSession;
+  assistantMessageId: string;
+  signal: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<unknown[]> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const messageId = options.assistantMessageId.trim();
+  if (!IDENTIFIER_PATTERN.test(messageId)) return [];
+  const url = `${FRED_EMBED_ORIGIN}/api/v1/embed/${encodeURIComponent(options.config.channelId)}/messages/${encodeURIComponent(options.upstreamSession.id)}/load?limit=2`;
+  const response = await fetchImpl(url, {
+    method: "GET",
+    headers: {
+      ...embedHeaders(options.session.token, options.config),
+      "X-Embed-Session": options.upstreamSession.signature,
+    },
+    cache: "no-store",
+    signal: options.signal,
+  });
+  ensureUpstreamOk(response);
+  const payload = await boundedJson(response, MAX_EMBED_MESSAGES_LOAD_JSON_BYTES);
+  if (!isRecord(payload) || payload.success !== true) {
+    throw new UserVisibleError("Fred hat eine ungültige Antwort geliefert.", 502);
+  }
+  const rawMessages = Array.isArray(payload.data)
+    ? payload.data
+    : isRecord(payload.data) && Array.isArray(payload.data.messages) ? payload.data.messages : [];
+  const message = rawMessages.find((candidate) => {
+    if (!isRecord(candidate) || candidate.role !== "assistant") return false;
+    const candidateId = typeof candidate.id === "string"
+      ? candidate.id.trim()
+      : typeof candidate.assistant_message_id === "string" ? candidate.assistant_message_id.trim() : "";
+    return candidateId === messageId && candidate.is_completed === true;
+  });
+  if (!isRecord(message) || !Array.isArray(message.artifacts)) return [];
+  return message.artifacts;
+}

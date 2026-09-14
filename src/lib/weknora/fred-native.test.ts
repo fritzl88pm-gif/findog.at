@@ -10,6 +10,7 @@ import {
   deriveFredSessionSignature,
   fetchFredUpstreamConfig,
   fetchFredRecentEmbedImages,
+  fetchFredCompletedEmbedArtifacts,
   fredVisitorId,
   MAX_NATIVE_ATTACHMENT_TOTAL_BYTES,
   openFredUpstreamStream,
@@ -438,5 +439,29 @@ describe("Fred native WeKnora client", () => {
         fetchImpl: authErrorFetch,
       })).rejects.toThrowError(/abgelaufen/);
     });
+  });
+
+  it("reads artifacts only from the exact completed assistant message in embed history", async () => {
+    const signature = deriveFredSessionSignature(config, "session-456");
+    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+      expect(url).toBe("https://taxdog.cloud/api/v1/embed/fred-channel/messages/session-456/load?limit=2");
+      expect(init?.headers).toEqual({
+        Accept: "application/json",
+        Authorization: `Embed ${session.token}`,
+        Origin: config.exchangeOrigin,
+        "X-Embed-Session": signature,
+      });
+      return new Response(JSON.stringify({ success: true, data: [
+        { id: "other", role: "assistant", is_completed: true, artifacts: [{ url: "resource://wrong" }] },
+        { id: "answer-1", role: "assistant", is_completed: true, artifacts: [{
+          url: "resource://right", file_name: "report.docx", file_size: 12, file_type: ".docx",
+        }] },
+      ] }), { status: 200 });
+    });
+
+    await expect(fetchFredCompletedEmbedArtifacts({
+      session, config, upstreamSession: { id: "session-456", signature },
+      assistantMessageId: "answer-1", signal: new AbortController().signal, fetchImpl,
+    })).resolves.toEqual([{ url: "resource://right", file_name: "report.docx", file_size: 12, file_type: ".docx" }]);
   });
 });

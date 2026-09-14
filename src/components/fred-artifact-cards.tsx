@@ -8,6 +8,7 @@ function kindFor(artifact: FredGeneratedArtifact): { label: string; icon: string
   if (extension === ".pdf") return { label: "PDF", icon: "PDF" };
   if (extension === ".md") return { label: "Markdown", icon: "MD" };
   if (extension === ".txt") return { label: "Text", icon: "TXT" };
+  if (extension === ".doc" || extension === ".docx") return { label: "Word", icon: "W" };
   return { label: "Datei", icon: "FILE" };
 }
 

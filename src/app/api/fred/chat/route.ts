@@ -81,6 +81,7 @@ import {
   createFredUpstreamSession,
   deriveFredSessionSignature,
   fetchFredRecentEmbedImages,
+  fetchFredCompletedEmbedArtifacts,
   fetchFredUpstreamConfig,
   fredVisitorId,
   openFredUpstreamStream,
@@ -690,6 +691,20 @@ function buildWebTurnUpstream(
         signal: params.signal,
       });
     },
+    async fetchCompletedArtifacts(params) {
+      return fetchFredCompletedEmbedArtifacts({
+        session: {
+          token: params.sessionToken,
+          expiresIn: 0,
+          channelId: params.channelId,
+          embedOrigin: FRED_EMBED_ORIGIN,
+        },
+        config: serverConfig(params.channelId),
+        upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
+        assistantMessageId: params.assistantMessageId,
+        signal: params.signal,
+      });
+    },
   };
 }
 
@@ -723,6 +738,16 @@ function buildWebTurnPersistence(
         supabase,
         userId: params.clientId,
         conversationId: params.conversationId,
+      });
+    },
+    async persistGeneratedArtifacts(params) {
+      return persistGeneratedArtifacts({
+        supabase,
+        userId: params.clientId,
+        conversationId: params.conversationId,
+        messageId: params.messageId,
+        upstreamMessageId: params.upstreamMessageId,
+        artifacts: params.artifacts,
       });
     },
   };
@@ -1430,7 +1455,13 @@ export async function POST(request: Request) {
               sawCompleteEvent = true;
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
                 const envelopeId = (parsed as Record<string, unknown>).id;
-                if (typeof envelopeId === "string" && envelopeId.trim()) upstreamMsgId = envelopeId.trim();
+                // WeKnora's complete-event id is the request/stream id. The
+                // artifact endpoint needs the assistant message id carried by
+                // the earlier agent_query event; use the envelope only as a
+                // fallback for providers that omit that event.
+                if (!upstreamMsgId && typeof envelopeId === "string" && envelopeId.trim()) {
+                  upstreamMsgId = envelopeId.trim();
+                }
               }
               const parsedArtifacts = parseGeneratedArtifacts(parsed);
               if (parsedArtifacts.length > 0) generatedArtifacts = parsedArtifacts.map((artifact) => ({ ...artifact, id: "" }));
@@ -1459,6 +1490,38 @@ export async function POST(request: Request) {
           }
           buffer += decoder.decode();
           if (buffer.trim()) processFrame(buffer);
+
+          // Embed completion frames can omit the artifact list even though
+          // the exact completed assistant message has persisted it. Read only
+          // that message through the authenticated embed history endpoint;
+          // failure deliberately leaves a text-only answer.
+          const artifactLifetimeSignal = lifetimeAbort?.signal;
+          if (sawCompleteEvent && generatedArtifacts.length === 0 && upstreamMsgId && artifactLifetimeSignal && !artifactLifetimeSignal.aborted) {
+            try {
+              const artifactAbort = new AbortController();
+              const timeoutHandle = setTimeout(() => artifactAbort.abort(), 5_000);
+              const onArtifactAbort = () => artifactAbort.abort(artifactLifetimeSignal.reason);
+              artifactLifetimeSignal.addEventListener("abort", onArtifactAbort, { once: true });
+              try {
+                const metadata = await fetchFredCompletedEmbedArtifacts({
+                  session: embedSession,
+                  config,
+                  upstreamSession,
+                  assistantMessageId: upstreamMsgId,
+                  signal: artifactAbort.signal,
+                });
+                const parsedArtifacts = parseGeneratedArtifacts({ data: { artifacts: metadata } });
+                if (parsedArtifacts.length > 0) {
+                  generatedArtifacts = parsedArtifacts.map((artifact) => ({ ...artifact, id: "" }));
+                }
+              } finally {
+                clearTimeout(timeoutHandle);
+                artifactLifetimeSignal.removeEventListener("abort", onArtifactAbort);
+              }
+            } catch {
+              // Artifact discovery is an enhancement; never lose the answer.
+            }
+          }
 
           // EOF detection: stream ended without a complete/final answer
           if (!sawCompleteEvent && !errorAlreadyEmitted) {

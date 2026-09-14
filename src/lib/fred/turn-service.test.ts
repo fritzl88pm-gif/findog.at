@@ -120,6 +120,22 @@ function baseRequest(overrides: Partial<FredTurnRequest> = {}): FredTurnRequest 
   };
 }
 
+function artifactStream(answer: string, completeData: Record<string, unknown> = {}): ReadableStream<Uint8Array> {
+  const events = [
+    { response_type: "agent_query", assistant_message_id: "answer-artifact" },
+    { response_type: "answer", content: answer, done: true },
+    { response_type: "complete", data: completeData },
+  ];
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(
+        events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+      ));
+      controller.close();
+    },
+  });
+}
+
 async function collectEvents(
   gen: AsyncGenerator<FredTurnEvent, FredTurnResult>,
 ): Promise<{ events: FredTurnEvent[]; result: FredTurnResult }> {
@@ -187,6 +203,94 @@ describe("executeFredTurn", () => {
       content: "Hallo Welt",
       displayContent: "Hallo Welt",
     }));
+  });
+
+  it("persists and propagates artifacts carried by the completion event", async () => {
+    const persistedArtifact = {
+      id: "artifact-1",
+      fileName: "report.txt",
+      fileSize: 12,
+      fileType: ".txt",
+      upstreamIndex: 0,
+    };
+    upstream = makeUpstreamDeps({
+      openStream: vi.fn().mockResolvedValue(artifactStream(
+        "[Report](sandbox:/workspace/output/report.txt)",
+        { artifacts: [{ file_name: "report.txt", file_size: 12, file_type: ".txt", handle: "resource://report" }] },
+      )),
+    });
+    persistence = makePersistenceDeps({
+      persistGeneratedArtifacts: vi.fn().mockResolvedValue([persistedArtifact]),
+    });
+
+    const { events, result } = await collectEvents(
+      executeFredTurn(baseRequest(), upstream, persistence, config),
+    );
+
+    expect(persistence.persistGeneratedArtifacts).toHaveBeenCalledWith(expect.objectContaining({
+      upstreamMessageId: "answer-artifact",
+      artifacts: [{
+        fileName: "report.txt", fileSize: 12, fileType: ".txt", upstreamIndex: 0, sourceUri: "resource://report",
+      }],
+    }));
+    expect(events.at(-1)).toMatchObject({ type: "final", answer: "Report", artifacts: [persistedArtifact] });
+    expect(result).toMatchObject({ answer: "Report", artifacts: [persistedArtifact] });
+  });
+
+  it("recovers artifacts from trusted completed-message metadata", async () => {
+    const persistedArtifact = {
+      id: "artifact-2",
+      fileName: "report.docx",
+      fileSize: 20,
+      fileType: ".docx",
+      upstreamIndex: 0,
+    };
+    const fetchCompletedArtifacts = vi.fn().mockResolvedValue([{
+      url: "resource://report-docx",
+      file_name: "report.docx",
+      file_size: 20,
+      file_type: ".docx",
+    }]);
+    upstream = makeUpstreamDeps({
+      openStream: vi.fn().mockResolvedValue(artifactStream("[Report](sandbox:/workspace/output/report.docx)")),
+      fetchCompletedArtifacts,
+    });
+    persistence = makePersistenceDeps({
+      persistGeneratedArtifacts: vi.fn().mockResolvedValue([persistedArtifact]),
+    });
+
+    const { events } = await collectEvents(
+      executeFredTurn(baseRequest(), upstream, persistence, config),
+    );
+
+    expect(fetchCompletedArtifacts).toHaveBeenCalledWith(expect.objectContaining({
+      assistantMessageId: "answer-artifact",
+      sessionId: "session-1",
+      signal: expect.any(AbortSignal),
+    }));
+    expect(events.at(-1)).toMatchObject({ type: "final", answer: "Report", artifacts: [persistedArtifact] });
+  });
+
+  it("keeps a text-only answer when completed-message metadata lookup fails", async () => {
+    const fetchCompletedArtifacts = vi.fn().mockRejectedValue(new Error("metadata unavailable"));
+    upstream = makeUpstreamDeps({
+      openStream: vi.fn().mockResolvedValue(artifactStream("[Report](sandbox:/workspace/output/report.txt)")),
+      fetchCompletedArtifacts,
+    });
+    persistence = makePersistenceDeps({
+      persistGeneratedArtifacts: vi.fn(),
+    });
+
+    const { events, result } = await collectEvents(
+      executeFredTurn(baseRequest(), upstream, persistence, config),
+    );
+
+    expect(events.at(-1)).toMatchObject({
+      type: "final",
+      answer: "[Report](sandbox:/workspace/output/report.txt)",
+    });
+    expect(result.artifacts).toBeUndefined();
+    expect(persistence.persistGeneratedArtifacts).not.toHaveBeenCalled();
   });
 
   it("advances the durable request receipt with exact persisted message IDs", async () => {
