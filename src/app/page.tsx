@@ -109,6 +109,7 @@ import TelegramSettings, {
   type TelegramIntegrationPublicState,
 } from "@/components/telegram-settings";
 import FredResearchDisplaySettings from "@/components/fred-research-display-settings";
+import { parseStoredFredArtifacts, type FredGeneratedArtifact } from "@/lib/fred-native-stream";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -116,6 +117,7 @@ type ChatMessage = {
   createdAt: string;
   agentKey: FredAgentKey;
   attachments?: FredNativeAttachment[];
+  artifacts?: FredGeneratedArtifact[];
   webSearchEnabled?: boolean;
   proModeEnabled?: boolean;
 };
@@ -315,6 +317,7 @@ function normalizeFredMessages(value: unknown): ChatMessage[] {
       createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString(),
       agentKey: isFredAgentKey(item.agentKey) ? item.agentKey : "fred",
       ...(attachments.length ? { attachments } : {}),
+      ...(item.role === "assistant" ? { artifacts: parseStoredFredArtifacts(item.artifacts) } : {}),
       ...(item.role === "user" && item.webSearchEnabled === true
         ? { webSearchEnabled: true }
         : {}),
