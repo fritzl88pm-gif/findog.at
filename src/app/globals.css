@@ -6932,6 +6932,17 @@ textarea:focus {
   min-width: 0;
 }
 
+.fred-artifact-list { display: grid; gap: 8px; margin-top: 12px; max-width: 420px; }
+.fred-artifact-card { display: flex; align-items: center; width: 100%; gap: 10px; min-width: 0; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--border-color, #d8dce5) 75%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--surface, #fff) 86%, #edf2ff); color: inherit; text-align: left; cursor: pointer; transition: border-color .15s ease, transform .15s ease; }
+.fred-artifact-card:hover:not(:disabled), .fred-artifact-card:focus-visible { border-color: #5775d8; transform: translateY(-1px); outline: none; }
+.fred-artifact-card:disabled { cursor: wait; opacity: .75; }
+.fred-artifact-icon { display: grid; place-items: center; flex: 0 0 34px; height: 34px; border-radius: 9px; background: #e8edff; color: #3155bb; font-size: 9px; font-weight: 800; letter-spacing: -.02em; }
+.fred-artifact-copy { display: grid; min-width: 0; gap: 2px; }
+.fred-artifact-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .88rem; }
+.fred-artifact-copy small { color: #687184; font-size: .74rem; }
+.fred-artifact-download { margin-left: auto; color: #3155bb; font-size: 1.25rem; line-height: 1; }
+@media (max-width: 560px) { .fred-artifact-list { max-width: 100%; } .fred-artifact-card { padding: 8px 9px; } }
+
 .fred-reasoning-context-menu {
   position: fixed;
   z-index: 1350;

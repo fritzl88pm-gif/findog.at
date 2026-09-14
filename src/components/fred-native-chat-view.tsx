@@ -24,6 +24,7 @@ import {
 import { createStreamingTextBuffer } from "@/lib/chat/streaming-text-buffer";
 import {
   parseFredNativeStreamLine,
+  type FredGeneratedArtifact,
   type FredNativeConversation,
 } from "@/lib/fred-native-stream";
 import {
@@ -36,6 +37,7 @@ import {
 } from "@/lib/chat/fred-actions";
 import { downloadFredPdfFile } from "@/lib/chat/pdf-download";
 import { getWelcomeGreeting } from "@/lib/chat/welcome";
+import FredArtifactCards from "@/components/fred-artifact-cards";
 import {
   MAX_REASONING_CATEGORY_NAME_CHARS,
   MAX_REASONING_CONTENT_CHARS,
@@ -69,6 +71,7 @@ export type FredNativeMessage = {
   researchTrace?: FredResearchStep[];
   executionTrace?: FredExecutionStep[];
   sourceReferences?: FredSourceReference[];
+  artifacts?: FredGeneratedArtifact[];
 };
 export type FredNativeAttachment = {
   kind: "image" | "file";
@@ -114,6 +117,15 @@ const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image
 const FILE_EXTENSIONS = new Set([
   ".pdf", ".doc", ".docx", ".txt", ".md", ".csv", ".xlsx", ".xls", ".ppt", ".pptx",
 ]);
+
+function fileExtension(name: string): string {
+  return /\.[^.]+$/u.exec(name.toLowerCase())?.[0] ?? "";
+}
+
+function displayFileSize(bytes: number): string {
+  if (bytes < 1_024 * 1_024) return `${Math.max(1, Math.round(bytes / 1_024))} KB`;
+  return `${(bytes / (1_024 * 1_024)).toFixed(1)} MB`;
+}
 
 type FredNativeChatViewProps = {
   accessToken: string;
@@ -169,15 +181,6 @@ function categoryOptions(payload: unknown): ReasoningCategoryOption[] {
     return option ? [option] : [];
   });
   return orderReasoningCategories(normalized);
-}
-
-function displayFileSize(bytes: number): string {
-  if (bytes < 1_024 * 1_024) return `${Math.max(1, Math.round(bytes / 1_024))} KB`;
-  return `${(bytes / (1_024 * 1_024)).toFixed(1)} MB`;
-}
-
-function fileExtension(name: string): string {
-  return /\.[^.]+$/u.exec(name.toLowerCase())?.[0] ?? "";
 }
 
 export type ResearchTraceDisplayState = {
@@ -888,6 +891,7 @@ export default function FredNativeChatView({
           researchTrace,
           executionTrace,
           sourceReferences,
+          artifacts: streamEvent.artifacts,
         };
         if (streamEvent.assistantMessageId !== undefined) {
           completedMessage.id = streamEvent.assistantMessageId;
@@ -1666,6 +1670,9 @@ export default function FredNativeChatView({
                       />
                     ) : null))
                   : renderUserContent(message.content)}
+                {message.role === "assistant" ? (
+                  <FredArtifactCards accessToken={accessToken} artifacts={message.artifacts ?? []} conversationId={conversationId} messageId={message.id} />
+                ) : null}
                 {message.role === "assistant" ? (
                   <ResearchTrace
                     steps={message.researchTrace ?? []}

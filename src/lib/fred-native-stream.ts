@@ -23,6 +23,14 @@ export type FredNativeConversation = {
   agentKey: FredAgentKey;
 };
 
+export type FredGeneratedArtifact = {
+  id: string;
+  fileName: string;
+  fileSize: number;
+  fileType: string;
+  upstreamIndex: number;
+};
+
 export type FredNativeStreamEvent =
   | { type: "conversation"; conversation: FredNativeConversation }
   | { type: "delta"; content: string }
@@ -39,6 +47,7 @@ export type FredNativeStreamEvent =
     researchTrace?: FredResearchStep[];
     executionTrace?: FredExecutionStep[];
     sourceReferences?: FredSourceReference[];
+    artifacts?: FredGeneratedArtifact[];
   }
   | { type: "error"; error: string };
 
@@ -149,6 +158,7 @@ export function parseFredNativeStreamLine(line: string): FredNativeStreamEvent |
         executionTrace: parseStoredFredExecutionTrace(value.executionTrace),
       } : {}),
       sourceReferences: parseStoredFredSources(value.sourceReferences),
+      ...(value.artifacts !== undefined ? { artifacts: parseStoredFredArtifacts(value.artifacts) } : {}),
     };
   }
   if (value.type === "error") {
@@ -159,4 +169,19 @@ export function parseFredNativeStreamLine(line: string): FredNativeStreamEvent |
   }
 
   throw new Error("Unbekanntes Fred-Streaming-Ereignis.");
+}
+
+export function parseStoredFredArtifacts(value: unknown): FredGeneratedArtifact[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    if (!isRecord(candidate)) return [];
+    const fileSize = Number(candidate.fileSize);
+    const upstreamIndex = Number(candidate.upstreamIndex);
+    if (typeof candidate.id !== "string" || !candidate.id
+      || typeof candidate.fileName !== "string" || !candidate.fileName
+      || typeof candidate.fileType !== "string" || !candidate.fileType
+      || !Number.isSafeInteger(fileSize) || fileSize < 0
+      || !Number.isSafeInteger(upstreamIndex) || upstreamIndex < 0 || upstreamIndex > 99) return [];
+    return [{ id: candidate.id, fileName: candidate.fileName, fileSize, fileType: candidate.fileType, upstreamIndex }];
+  });
 }

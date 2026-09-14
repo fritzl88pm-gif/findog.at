@@ -35,6 +35,7 @@ import {
   createDeadline,
   runWithTimeout,
 } from "@/lib/deadline";
+import { normalizeGeneratedArtifactLinks, parseGeneratedArtifacts } from "@/lib/fred-generated-artifacts";
 import { UserVisibleError } from "@/lib/errors";
 import {
   extractStreamStableBfgGzCandidates,
@@ -45,6 +46,7 @@ import {
 import {
   FRED_NATIVE_STREAM_CONTENT_TYPE,
   encodeFredNativeStreamEvent,
+  type FredGeneratedArtifact,
 } from "@/lib/fred-native-stream";
 import {
   executeFredTurn,
@@ -529,6 +531,34 @@ async function resolveUpstreamSession(options: {
       row.weknora_session_id,
     ),
   };
+}
+
+async function persistGeneratedArtifacts(options: {
+  supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>;
+  userId: string;
+  conversationId: string;
+  messageId: number;
+  upstreamMessageId: string;
+  artifacts: Array<Omit<FredGeneratedArtifact, "id"> & { sourceUri: string }>;
+}): Promise<FredGeneratedArtifact[]> {
+  const rows = options.artifacts.map((artifact) => ({
+    id: crypto.randomUUID(), fileName: artifact.fileName, fileSize: artifact.fileSize,
+    fileType: artifact.fileType, upstreamIndex: artifact.upstreamIndex,
+    upstreamMessageId: options.upstreamMessageId, sourceUri: artifact.sourceUri,
+  }));
+  const { data, error } = await options.supabase.from("fred_messages")
+    .update({ artifacts: rows })
+    .eq("id", options.messageId).eq("conversation_id", options.conversationId).eq("client_id", options.userId)
+    .select("artifacts").maybeSingle();
+  if (error || !data) throw new UserVisibleError("Die erzeugten Dateien konnten nicht gespeichert werden.", 503);
+  return Array.isArray(data.artifacts) ? data.artifacts.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const row = item as Record<string, unknown>;
+    return typeof row.id === "string" && typeof row.fileName === "string" && typeof row.fileType === "string"
+      && Number.isSafeInteger(row.fileSize) && Number.isSafeInteger(row.upstreamIndex)
+      ? [{ id: row.id, fileName: row.fileName, fileSize: row.fileSize as number, fileType: row.fileType, upstreamIndex: row.upstreamIndex as number }]
+      : [];
+  }) : [];
 }
 
 function upstreamDelta(value: unknown): { content?: string } {
@@ -1309,6 +1339,8 @@ export async function POST(request: Request) {
           let researchTrace: FredResearchStep[] = [];
           let executionTrace: FredExecutionStep[] = [];
           let sourceReferences: FredSourceReference[] = [];
+          let generatedArtifacts: Array<Omit<FredGeneratedArtifact, "id"> & { sourceUri: string }> = [];
+          let persistedGeneratedArtifacts: FredGeneratedArtifact[] = [];
           const verifiedCitations = new Map<string, VerifiedBfgCitation>();
           const verifyFinalCitations = async (text: string) => {
             const candidates = [
@@ -1396,6 +1428,12 @@ export async function POST(request: Request) {
             // Track upstream complete event for EOF detection
             if (isUpstreamCompleteEvent(parsed)) {
               sawCompleteEvent = true;
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                const envelopeId = (parsed as Record<string, unknown>).id;
+                if (typeof envelopeId === "string" && envelopeId.trim()) upstreamMsgId = envelopeId.trim();
+              }
+              const parsedArtifacts = parseGeneratedArtifacts(parsed);
+              if (parsedArtifacts.length > 0) generatedArtifacts = parsedArtifacts.map((artifact) => ({ ...artifact, id: "" }));
             }
 
             const event = upstreamDelta(parsed);
@@ -1466,7 +1504,7 @@ export async function POST(request: Request) {
             [...verifiedCitations.values()],
             { target: "fullText" },
           );
-          let displayAnswer = finalAnswer;
+          let displayAnswer = normalizeGeneratedArtifactLinks(finalAnswer, generatedArtifacts);
           const hasImageAttachments = (body.attachments ?? []).some((a) => a.kind === "image");
           if (
             fredAttachmentMode === "weknora_native"
@@ -1527,6 +1565,12 @@ export async function POST(request: Request) {
           if (assistantMessageId === undefined) {
             throw new UserVisibleError("Die gespeicherte Antwort hat keine Nachrichten-ID.", 503);
           }
+          if (generatedArtifacts.length > 0 && upstreamMsgId) {
+            persistedGeneratedArtifacts = await persistGeneratedArtifacts({
+              supabase, userId: user.id, conversationId: finalConversation.id,
+              messageId: assistantMessageId, upstreamMessageId: upstreamMsgId, artifacts: generatedArtifacts,
+            });
+          }
           await transitionFredRequestReceipt({
             supabase,
             requestId: requestReceipt.requestId,
@@ -1561,6 +1605,7 @@ export async function POST(request: Request) {
             researchTrace,
             executionTrace: isAdvanced ? executionTrace : undefined,
             sourceReferences,
+            ...(persistedGeneratedArtifacts.length > 0 ? { artifacts: persistedGeneratedArtifacts } : {}),
           };
           if (assistantMessageId !== undefined) {
             finalEvent.assistantMessageId = assistantMessageId;
