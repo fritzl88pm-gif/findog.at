@@ -55,7 +55,7 @@ export default function FredArtifactCards({ accessToken, artifacts, conversation
       };
       return <button className="fred-artifact-card" type="button" onClick={() => void download()} disabled={state === "loading"} key={artifact.id} aria-label={`${artifact.fileName} herunterladen`}>
         <span className="fred-artifact-icon" aria-hidden="true">{kind.icon}</span>
-        <span className="fred-artifact-copy"><strong>{artifact.fileName}</strong><small>{state === "loading" ? "Wird geladen …" : state === "error" ? "Download fehlgeschlagen · erneut versuchen" : `${kind.label} · ${displayFileSize(artifact.fileSize)}`}</small></span>
+        <span className="fred-artifact-copy"><strong>{artifact.fileName}</strong><small>{state === "loading" ? "Wird geladen …" : state === "error" ? "Download fehlgeschlagen · erneut versuchen" : `${kind.label} · ${displayFileSize(artifact.fileSize)} · 24 h verfügbar`}</small></span>
         <span className="fred-artifact-download" aria-hidden="true">{state === "loading" ? "…" : "↓"}</span>
       </button>;
     })}

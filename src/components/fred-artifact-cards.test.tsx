@@ -27,6 +27,7 @@ describe("FredArtifactCards", () => {
     ]} />));
     expect(container.textContent).toContain("TXT");
     expect(container.textContent).toContain("PDF");
+    expect(container.textContent).toContain("24 h verfügbar");
     const pdfButton = container.querySelector('[aria-label="b.pdf herunterladen"]') as HTMLButtonElement;
     await act(async () => pdfButton.click());
     expect(fetchMock).toHaveBeenCalledWith("/api/fred/conversations/conv/messages/9/artifacts/8", expect.objectContaining({
