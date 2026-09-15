@@ -6,6 +6,8 @@ export type DashboardNewsSourceSystem = "ris" | "evi";
 export type DashboardLegalDocumentKind = "norm" | "rechtssatz" | "entscheidungsdokument";
 export type DashboardKnowledgeState = "current" | "processing" | "stale" | "unavailable";
 
+export const DASHBOARD_NEWS_SUMMARY_MAX_LENGTH = 2000;
+
 export type DashboardNewsItem = {
   id: string;
   kind: DashboardNewsKind;
@@ -237,7 +239,7 @@ export function parseDashboardNewsInput(body: unknown): DashboardNewsInput {
   return {
     kind,
     title: requiredString(record.title, "Der Titel", 160),
-    summary: requiredString(record.summary, "Der Kurztext", 600),
+    summary: requiredString(record.summary, "Der Kurztext", DASHBOARD_NEWS_SUMMARY_MAX_LENGTH),
     status,
     pinned: record.pinned,
     publishedAt: parsePublishedAt(record.publishedAt, status),

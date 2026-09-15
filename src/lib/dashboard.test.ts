@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DASHBOARD_NEWS_SUMMARY_MAX_LENGTH,
   assertDashboardNewsStatusTransition,
   formatDashboardDate,
   getDashboardGreeting,
@@ -93,6 +94,16 @@ describe("dashboard news validation", () => {
   it("prevents legal fields on product news and invalid calendar dates", () => {
     expect(() => parseDashboardNewsInput(productInput({ sourceSystem: "ris" }))).toThrow(/Produktmeldungen/u);
     expect(() => parseDashboardNewsInput(legalInput({ asOfDate: "2026-02-30" }))).toThrow(/gültiges Datum/u);
+  });
+
+  it("accepts platform update summaries up to the raised limit and rejects longer ones", () => {
+    const atLimit = "x".repeat(DASHBOARD_NEWS_SUMMARY_MAX_LENGTH);
+    expect(parseDashboardNewsInput(productInput({ summary: atLimit })).summary).toHaveLength(
+      DASHBOARD_NEWS_SUMMARY_MAX_LENGTH,
+    );
+    expect(() => parseDashboardNewsInput(productInput({ summary: `${atLimit}x` }))).toThrow(
+      new RegExp(`zwischen 1 und ${DASHBOARD_NEWS_SUMMARY_MAX_LENGTH} Zeichen`, "u"),
+    );
   });
 
   it("requires publication timestamps exactly for published and archived items", () => {

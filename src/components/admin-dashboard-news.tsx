@@ -4,10 +4,11 @@ import { useAdminEditorGuard } from "@/components/admin-editor-guard";
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
-import type {
-  DashboardNewsInput,
-  DashboardNewsItem,
-  DashboardNewsStatus,
+import {
+  DASHBOARD_NEWS_SUMMARY_MAX_LENGTH,
+  type DashboardNewsInput,
+  type DashboardNewsItem,
+  type DashboardNewsStatus,
 } from "@/lib/dashboard";
 
 type Props = {
@@ -318,13 +319,13 @@ export default function AdminDashboardNews({ accessToken }: Props) {
             <textarea
               id="dashboard-news-summary"
               value={form.summary}
-              maxLength={600}
+              maxLength={DASHBOARD_NEWS_SUMMARY_MAX_LENGTH}
               rows={5}
               required
               onChange={(event) => setForm((current) => ({ ...current, summary: event.target.value }))}
               disabled={isSaving}
             />
-            <span className="field-help">Administrativ gepflegter Klartext, maximal 600 Zeichen.</span>
+            <span className="field-help">Administrativ gepflegter Klartext, maximal {DASHBOARD_NEWS_SUMMARY_MAX_LENGTH} Zeichen.</span>
           </div>
 
           <div className="admin-news-editor-actions">
