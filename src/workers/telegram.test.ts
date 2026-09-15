@@ -79,6 +79,50 @@ describe("buildStorage.loadIntegration", () => {
   });
 });
 
+describe("buildStorage.loadGeneratedArtifacts", () => {
+  function storageForArtifacts(artifacts: unknown) {
+    const maybeSingle = vi.fn().mockResolvedValue({ data: { artifacts }, error: null });
+    const eqClient = vi.fn().mockReturnValue({ maybeSingle });
+    const eqConversation = vi.fn().mockReturnValue({ eq: eqClient });
+    const eqMessage = vi.fn().mockReturnValue({ eq: eqConversation });
+    const select = vi.fn().mockReturnValue({ eq: eqMessage });
+    const supabase = fakeSupabase({ from: vi.fn().mockReturnValue({ select }) });
+    return buildStorage(supabase as never);
+  }
+
+  it("maps a valid persisted camelCase artifact to one safe DTO", async () => {
+    const storage = storageForArtifacts([{
+      id: "artifact_1",
+      fileName: "bericht.pdf",
+      fileSize: 3,
+      fileType: ".pdf",
+      upstreamIndex: 4,
+      upstreamMessageId: "message-1",
+      sourceUri: "resource://artifact/1",
+    }]);
+
+    await expect(storage.loadGeneratedArtifacts({ clientId: "client-1", conversationId: "conversation-1", messageId: 9 }))
+      .resolves.toEqual([{
+        id: "artifact_1",
+        fileName: "bericht.pdf",
+        fileSize: 3,
+        fileType: ".pdf",
+        upstreamIndex: 4,
+      }]);
+  });
+
+  it("rejects malformed persisted artifact rows", async () => {
+    const storage = storageForArtifacts([
+      { id: "bad id", fileName: "bericht.pdf", fileSize: 3, fileType: ".pdf", upstreamIndex: 0, sourceUri: "resource://ok" },
+      { id: "duplicate", fileName: "bericht.exe", fileSize: 3, fileType: ".exe", upstreamIndex: 0, sourceUri: "resource://bad" },
+      { id: "missing-uri", fileName: "bericht.pdf", fileSize: 3, fileType: ".pdf", upstreamIndex: 1 },
+    ]);
+
+    await expect(storage.loadGeneratedArtifacts({ clientId: "client-1", conversationId: "conversation-1", messageId: 9 }))
+      .resolves.toEqual([]);
+  });
+});
+
 describe("buildStorage.setMode", () => {
   it("updates pro_mode_enabled column and reads back both states", async () => {
     const eqUpdate = vi.fn().mockResolvedValue({ error: null });

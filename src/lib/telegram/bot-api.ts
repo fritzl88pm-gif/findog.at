@@ -84,6 +84,12 @@ export interface SendMessageDraftParams {
   reply_to_message_id?: number;
 }
 
+export interface SendDocumentParams {
+  chat_id: number;
+  document: Blob;
+  filename: string;
+}
+
 export interface SendChatActionParams {
   chat_id: number;
   action: string;
@@ -107,6 +113,7 @@ export interface BotApi {
   sendMessage(params: SendMessageParams, options?: BotApiOptions): Promise<TelegramMessageResult>;
   sendRichMessage(params: SendRichMessageParams, options?: BotApiOptions): Promise<TelegramMessageResult>;
   sendMessageDraft(params: SendMessageDraftParams, options?: BotApiOptions): Promise<TelegramMessageResult>;
+  sendDocument(params: SendDocumentParams, options?: BotApiOptions): Promise<TelegramMessageResult>;
   sendChatAction(params: SendChatActionParams, options?: BotApiOptions): Promise<boolean>;
   getFile(params: GetFileParams, options?: BotApiOptions): Promise<TelegramFileInfo>;
   downloadFile(filePath: string, params: DownloadFileParams): Promise<Uint8Array>;
@@ -164,6 +171,13 @@ class BotApiImpl implements BotApi {
 
   async sendMessageDraft(params: SendMessageDraftParams, options?: BotApiOptions): Promise<TelegramMessageResult> {
     return this.post<TelegramMessageResult>("sendMessageDraft", params as unknown as Record<string, unknown>, options);
+  }
+
+  async sendDocument(params: SendDocumentParams, options?: BotApiOptions): Promise<TelegramMessageResult> {
+    const form = new FormData();
+    form.append("chat_id", String(params.chat_id));
+    form.append("document", params.document, params.filename);
+    return this.postMultipart<TelegramMessageResult>("sendDocument", form, options);
   }
 
   async sendChatAction(params: SendChatActionParams, options?: BotApiOptions): Promise<boolean> {
@@ -271,6 +285,31 @@ class BotApiImpl implements BotApi {
       });
     }
 
+    return json.result as T;
+  }
+
+  private async postMultipart<T>(method: string, body: FormData, options?: BotApiOptions): Promise<T> {
+    const url = `${this.baseUrl}/${method}`;
+    let response: Response;
+    try {
+      response = await this.fetchFn(url, { method: "POST", body, signal: options?.signal });
+    } catch (err) {
+      throw sanitizeTelegramError(this.token, err);
+    }
+    let json: TelegramApiResponse<T>;
+    try {
+      json = (await response.json()) as TelegramApiResponse<T>;
+    } catch {
+      throw new SanitizedTelegramError({ message: "Telegram API returned non-JSON response", deliveryUncertain: true });
+    }
+    if (!json.ok) {
+      throw new SanitizedTelegramError({
+        message: json.description ?? (json.error_code ? String(json.error_code) : "Telegram API error"),
+        errorCode: json.error_code,
+        description: json.description,
+        retryAfter: json.parameters?.retry_after,
+      });
+    }
     return json.result as T;
   }
 }

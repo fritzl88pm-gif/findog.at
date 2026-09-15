@@ -188,6 +188,21 @@ describe("createBotApi", () => {
     expect(body.text).toBe("Hello");
   });
 
+  it("sendDocument sends multipart chat id, filename, and bytes", async () => {
+    const api = createBotApi(TOKEN, fetchMock as never);
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      ok: true, result: { message_id: 44, date: 123, chat: { id: 123, type: "private" } },
+    }), { status: 200 }));
+    await api.sendDocument({ chat_id: 123, document: new Blob([new Uint8Array([7, 8, 9])]), filename: "bericht.pdf" });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBeUndefined();
+    const form = init.body as FormData;
+    expect(form.get("chat_id")).toBe("123");
+    const file = form.get("document") as File;
+    expect(file.name).toBe("bericht.pdf");
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(new Uint8Array([7, 8, 9]));
+  });
+
   it("sendRichMessage calls the correct endpoint with raw Markdown", async () => {
     const api = createBotApi(TOKEN, fetchMock as never);
     fetchMock.mockResolvedValue(

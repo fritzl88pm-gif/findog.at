@@ -38,8 +38,10 @@ import {
   openFredUpstreamStream,
   relayFredWebhookEvent,
   stopFredUpstreamSession,
+  fetchFredCompletedEmbedArtifacts,
 } from "@/lib/weknora/fred-native";
 import { parseFredConversationSummary } from "@/lib/weknora/fred-history";
+import type { FredGeneratedArtifact } from "@/lib/fred-native-stream";
 import { FRED_CONTENT_TRANSFORMATION } from "@/lib/weknora/fred-research";
 import type {
   TurnServiceConfigDeps,
@@ -142,6 +144,76 @@ export function buildPreprocessorProviders(supabase: Supabase): AttachmentPrepro
 
 function dbError(code: string): Error {
   return new Error(code);
+}
+
+const MAX_GENERATED_ARTIFACT_BYTES = 50 * 1024 * 1024;
+const MAX_GENERATED_ARTIFACTS = 10;
+const ARTIFACT_EXTENSION = /^\.(?:txt|md|pdf|doc|docx)$/u;
+const SAFE_ARTIFACT_ID = /^[A-Za-z0-9_-]{1,128}$/u;
+const RESOURCE_URI = /^resource:\/\/[^\u0000-\u001f\u007f]+$/u;
+
+function parsePersistedGeneratedArtifacts(value: unknown): FredGeneratedArtifact[] {
+  if (!Array.isArray(value)) return [];
+  const seenIndexes = new Set<number>();
+  return value.slice(0, MAX_GENERATED_ARTIFACTS).flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const row = candidate as Record<string, unknown>;
+    const id = typeof row.id === "string" ? row.id : "";
+    const fileName = typeof row.fileName === "string" ? row.fileName.trim() : "";
+    const fileType = typeof row.fileType === "string" ? row.fileType.trim().toLowerCase() : "";
+    const fileSize = row.fileSize;
+    const upstreamIndex = row.upstreamIndex;
+    const sourceUri = typeof row.sourceUri === "string" ? row.sourceUri.trim() : "";
+    if (!SAFE_ARTIFACT_ID.test(id) || !fileName || fileName.length > 255 || /[\u0000-\u001f\u007f]/u.test(fileName)
+      || !ARTIFACT_EXTENSION.test(fileType) || typeof fileSize !== "number" || !Number.isSafeInteger(fileSize)
+      || fileSize < 0 || fileSize > MAX_GENERATED_ARTIFACT_BYTES || typeof upstreamIndex !== "number"
+      || !Number.isSafeInteger(upstreamIndex) || upstreamIndex < 0 || upstreamIndex > 99
+      || seenIndexes.has(upstreamIndex) || !RESOURCE_URI.test(sourceUri)) return [];
+    seenIndexes.add(upstreamIndex);
+    return [{ id, fileName, fileSize, fileType, upstreamIndex }];
+  });
+}
+
+async function downloadGeneratedArtifact(supabase: Supabase, fetchImpl: typeof fetch, params: {
+  clientId: string; conversationId: string; messageId: number; artifact: FredGeneratedArtifact; signal: AbortSignal;
+}): Promise<Uint8Array> {
+  const { data: conversation, error: conversationError } = await supabase.from("fred_conversations")
+    .select("id,weknora_session_id,client_id").eq("id", params.conversationId).eq("client_id", params.clientId).maybeSingle();
+  if (conversationError || !conversation || typeof conversation.weknora_session_id !== "string") throw dbError("FRED_ARTIFACT_NOT_FOUND");
+  const { data: message, error: messageError } = await supabase.from("fred_messages")
+    .select("artifacts,conversation_id,client_id").eq("id", params.messageId).eq("conversation_id", params.conversationId).eq("client_id", params.clientId).maybeSingle();
+  if (messageError || !message || !Array.isArray(message.artifacts)) throw dbError("FRED_ARTIFACT_NOT_FOUND");
+  const row = message.artifacts.find((candidate: unknown) => candidate && typeof candidate === "object" && !Array.isArray(candidate)
+    && (candidate as Record<string, unknown>).id === params.artifact.id
+    && (candidate as Record<string, unknown>).upstreamIndex === params.artifact.upstreamIndex) as Record<string, unknown> | undefined;
+  const upstreamMessageId = row?.upstreamMessageId;
+  const sourceUri = row?.sourceUri;
+  if (typeof upstreamMessageId !== "string" || !/^[-A-Za-z0-9_]{1,128}$/u.test(upstreamMessageId)
+    || typeof sourceUri !== "string" || !/^resource:\/\/[^\u0000-\u001f\u007f]+$/u.test(sourceUri)
+    || row?.fileName !== params.artifact.fileName || row?.fileType !== params.artifact.fileType
+    || row?.fileSize !== params.artifact.fileSize
+    || !/^\.(?:txt|md|pdf|doc|docx)$/u.test(String(row?.fileType))) throw dbError("FRED_ARTIFACT_NOT_FOUND");
+  const apiKey = process.env.WEKNORA_API_KEY?.trim();
+  if (!apiKey) throw dbError("FRED_ARTIFACT_DOWNLOAD_NOT_CONFIGURED");
+  const url = new URL(`https://taxdog.cloud/api/v1/sessions/${encodeURIComponent(conversation.weknora_session_id)}/messages/${encodeURIComponent(upstreamMessageId)}/artifacts/${params.artifact.upstreamIndex}/download`);
+  const response = await fetchImpl(url, { headers: { "X-API-Key": apiKey, Accept: "application/octet-stream" }, redirect: "error", signal: params.signal });
+  if (!response.ok || !response.body) throw dbError("FRED_ARTIFACT_DOWNLOAD_FAILED");
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_GENERATED_ARTIFACT_BYTES) throw dbError("FRED_ARTIFACT_TOO_LARGE");
+  const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let total = 0;
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      total += part.value.byteLength;
+      if (total > MAX_GENERATED_ARTIFACT_BYTES) throw dbError("FRED_ARTIFACT_TOO_LARGE");
+      chunks.push(part.value);
+    }
+  } finally { reader.releaseLock(); }
+  if (total !== params.artifact.fileSize) throw dbError("FRED_ARTIFACT_SIZE_MISMATCH");
+  const bytes = new Uint8Array(total); let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
 }
 
 export function buildStorage(supabase: Supabase): WorkerStorage {
@@ -289,6 +361,13 @@ export function buildStorage(supabase: Supabase): WorkerStorage {
         throw dbError("TELEGRAM_DELIVERY_FINISH_FAILED");
       }
       return data;
+    },
+
+    async loadGeneratedArtifacts(params) {
+      const { data, error } = await supabase.from("fred_messages")
+        .select("artifacts").eq("id", params.messageId).eq("conversation_id", params.conversationId).eq("client_id", params.clientId).maybeSingle();
+      if (error || !data) throw dbError("FRED_ARTIFACT_READ_FAILED");
+      return parsePersistedGeneratedArtifacts((data as Record<string, unknown>).artifacts);
     },
 
     async setMode(integrationId, mode, enabled) {
@@ -440,6 +519,16 @@ function buildTurnUpstream(fetchImpl: typeof fetch): TurnServiceUpstreamDeps {
         fetchImpl,
       });
     },
+    async fetchCompletedArtifacts(params) {
+      return fetchFredCompletedEmbedArtifacts({
+        session: { token: params.sessionToken, expiresIn: 0, channelId: params.channelId, embedOrigin: FRED_EMBED_ORIGIN },
+        config: { channelId: params.channelId, publishToken: params.publishToken, exchangeOrigin: params.exchangeOrigin },
+        upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
+        assistantMessageId: params.assistantMessageId,
+        signal: params.signal,
+        fetchImpl,
+      });
+    },
   };
 }
 
@@ -485,6 +574,23 @@ function buildTurnPersistence(supabase: Supabase): TurnServicePersistenceDeps {
         .maybeSingle();
       if (error) throw dbError("FRED_CONVERSATION_READ_FAILED");
       return data ? (data as unknown as ConversationRow) : null;
+    },
+    async persistGeneratedArtifacts(params) {
+      const rows = params.artifacts.map((artifact) => ({
+        id: crypto.randomUUID(), fileName: artifact.fileName, fileSize: artifact.fileSize, fileType: artifact.fileType,
+        upstreamIndex: artifact.upstreamIndex, upstreamMessageId: params.upstreamMessageId, sourceUri: artifact.sourceUri,
+      }));
+      const { data, error } = await supabase.from("fred_messages").update({ artifacts: rows })
+        .eq("id", params.messageId).eq("conversation_id", params.conversationId).eq("client_id", params.clientId)
+        .select("artifacts").maybeSingle();
+      if (error || !data) throw dbError("FRED_ARTIFACT_WRITE_FAILED");
+      return Array.isArray(data.artifacts) ? data.artifacts.flatMap((candidate: unknown): FredGeneratedArtifact[] => {
+        if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+        const row = candidate as Record<string, unknown>;
+        return typeof row.id === "string" && typeof row.fileName === "string" && typeof row.fileType === "string"
+          && Number.isSafeInteger(row.fileSize) && Number.isSafeInteger(row.upstreamIndex)
+          ? [{ id: row.id, fileName: row.fileName, fileSize: row.fileSize as number, fileType: row.fileType, upstreamIndex: row.upstreamIndex as number }] : [];
+      }) : [];
     },
   };
 }
@@ -576,6 +682,7 @@ async function main(): Promise<void> {
     storage: buildStorage(supabase),
     turnUpstream: buildTurnUpstream(fetch),
     turnPersistence: buildTurnPersistence(supabase),
+    downloadGeneratedArtifact: (params) => downloadGeneratedArtifact(supabase, fetch, params),
     turnConfig: buildTurnConfig(),
     attachmentPreprocessor: createAttachmentPreprocessor(preprocessorProviders),
     decryptToken: decryptTelegramToken,

@@ -44,6 +44,7 @@ function fakeBotApi(
     sendMessage: overrides.sendMessage
       ? vi.fn(overrides.sendMessage)
       : vi.fn().mockResolvedValue({ message_id: 2, date: 1, chat: { id: 123, type: "private" } }),
+    sendDocument: vi.fn().mockResolvedValue({ message_id: 4, date: 1, chat: { id: 123, type: "private" } }),
     sendRichMessage: overrides.sendRichMessage
       ? vi.fn(overrides.sendRichMessage)
       : vi.fn().mockResolvedValue({ message_id: 3, date: 1, chat: { id: 123, type: "private" } }),

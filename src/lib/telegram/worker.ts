@@ -23,6 +23,7 @@ import { chunkTelegramMessage, hasGfmTable, normalizeFredMarkdown } from "./text
 import type { EncryptionAad } from "./credentials";
 import type { TelegramUpdate } from "./types";
 import type { FredTurnAttachmentMeta, FredTurnEvent, FredTurnRequest, FredTurnResult } from "../fred/turn-types";
+import type { FredGeneratedArtifact } from "../fred-native-stream";
 import type {
   FredRequestFailurePhase,
   FredOptionalReceiptTransition,
@@ -107,6 +108,7 @@ export interface WorkerStorage {
     telegramMessageId?: number;
     lastErrorCode?: string;
   }): Promise<boolean>;
+  loadGeneratedArtifacts(params: { clientId: string; conversationId: string; messageId: number }): Promise<FredGeneratedArtifact[]>;
   setMode(integrationId: string, mode: "pro" | "web", enabled: boolean): Promise<Pick<WorkerIntegration, "proModeEnabled" | "webSearchEnabled">>;
 }
 
@@ -149,6 +151,13 @@ export interface WorkerConfig {
   generationTimeoutMs?: number;
   generationIdleTimeoutMs?: number;
   onUnresponsiveGeneration?: () => void;
+  downloadGeneratedArtifact?: (params: {
+    clientId: string;
+    conversationId: string;
+    messageId: number;
+    artifact: FredGeneratedArtifact;
+    signal: AbortSignal;
+  }) => Promise<Uint8Array>;
   /** Overridable sleep for deterministic loop tests. */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -174,6 +183,7 @@ export interface WorkerLoopOptions {
 const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 const RICH_MESSAGE_MAX_LENGTH = 32_768;
+const DOCUMENT_DELIVERY_INDEX_BASE = 1_000_000;
 
 const START_TEXT =
   "Willkommen bei Findog! 🐕\n\nStelle deine Frage zum österreichischen Steuerrecht und Fred wird sie beantworten.\n\nBefehle:\n/help – Alle Befehle anzeigen\n/new – Neue Unterhaltung\n/stop – Aktuelle Antwort abbrechen\n/status – Verbindungsstatus\n/settings – Einstellungen\n/pro – Pro-Modus einstellen\n/web – Websuche einstellen";
@@ -1084,6 +1094,15 @@ async function handleFredTurn(
       resume.answer,
     );
     if (deliveryInterruption) return deliveryInterruption;
+    if (resume.assistantMessageId && resume.conversationId) {
+      const artifacts = await storage.loadGeneratedArtifacts({
+        clientId: integration.clientId,
+        conversationId: resume.conversationId,
+        messageId: resume.assistantMessageId,
+      });
+      const artifactInterruption = await deliverArtifacts(config, botApi, update, handle, lifecycle, chatId, integration.clientId, resume.conversationId, resume.assistantMessageId, artifacts);
+      if (artifactInterruption) return artifactInterruption;
+    }
     await completeUpdate(rpc, handle);
     return { updateId: update.updateId, status: "completed" };
   }
@@ -1197,6 +1216,10 @@ async function handleFredTurn(
           terminalResume.answer,
         );
         if (deliveryInterruption) return deliveryInterruption;
+        if (terminalResume.assistantMessageId && terminalResume.conversationId) {
+          const artifactInterruption = await deliverArtifacts(config, botApi, update, handle, lifecycle, chatId, integration.clientId, terminalResume.conversationId, terminalResume.assistantMessageId, await storage.loadGeneratedArtifacts({ clientId: integration.clientId, conversationId: terminalResume.conversationId, messageId: terminalResume.assistantMessageId }));
+          if (artifactInterruption) return artifactInterruption;
+        }
         await completeUpdate(rpc, handle);
         return { updateId: update.updateId, status: "completed" };
       }
@@ -1227,8 +1250,80 @@ async function handleFredTurn(
     finalResult.answer,
   );
   if (deliveryInterruption) return deliveryInterruption;
+  if (finalResult.artifacts?.length && finalResult.assistantMessageId !== undefined) {
+    const artifactInterruption = await deliverArtifacts(
+      config, botApi, update, handle, lifecycle, chatId, integration.clientId,
+      finalResult.conversation.id, finalResult.assistantMessageId, finalResult.artifacts,
+    );
+    if (artifactInterruption) return artifactInterruption;
+  }
   await completeUpdate(rpc, handle);
   return { updateId: update.updateId, status: "completed" };
+}
+
+async function deliverArtifacts(
+  config: WorkerConfig,
+  botApi: BotApi,
+  update: ClaimedUpdate,
+  handle: UpdateHandle,
+  lifecycle: TurnLifecycle,
+  chatId: number,
+  clientId: string,
+  conversationId: string,
+  messageId: number,
+  artifacts: FredGeneratedArtifact[],
+): Promise<ProcessedUpdateResult | undefined> {
+  if (artifacts.length === 0) return undefined;
+  if (!config.downloadGeneratedArtifact) throw new Error("Fred artifact delivery is not configured");
+  for (const artifact of artifacts) {
+    const chunkIndex = DOCUMENT_DELIVERY_INDEX_BASE + artifact.upstreamIndex;
+    const content = `fred-artifact:${artifact.id}:${artifact.upstreamIndex}:${artifact.fileName}`;
+    await refreshDeliveryLifecycle(config, handle, lifecycle);
+    const interruption = await lifecycleInterruptionResult(config, update, handle, lifecycle);
+    if (interruption) return interruption;
+    const claim = await config.storage.claimDelivery({ updateRowId: update.id, chunkIndex, content, leaseId: update.leaseId });
+    if (claim === "lease_lost") throw new TelegramUpdateLeaseLostError("claim artifact delivery");
+    if (claim === "cancelled") return { updateId: update.updateId, status: "cancelled" };
+    if (claim === "uncertain") throw new UncertainDeliveryError();
+    if (claim === "sent") continue;
+
+    let status: "sent" | "uncertain" | "failed" = "failed";
+    let messageIdSent: number | undefined;
+    let errorCode = "ARTIFACT_DELIVERY_FAILED";
+    let bytes: Uint8Array;
+    try {
+      bytes = await config.downloadGeneratedArtifact({
+        clientId,
+        conversationId,
+        messageId,
+        artifact,
+        signal: lifecycle.controller.signal,
+      });
+    } catch {
+      const finished = await config.storage.finishDelivery({ updateRowId: update.id, chunkIndex, leaseId: update.leaseId, status: "failed", lastErrorCode: "ARTIFACT_DOWNLOAD_FAILED" });
+      if (!finished) throw new TelegramUpdateLeaseLostError("finish artifact download failure");
+      throw new Error("Telegram artifact download failed");
+    }
+    try {
+      const result = await botApi.sendDocument({
+        chat_id: chatId,
+        document: new Blob([new Uint8Array(bytes).buffer as ArrayBuffer], { type: "application/octet-stream" }),
+        filename: artifact.fileName,
+      }, { signal: lifecycle.controller.signal });
+      status = "sent";
+      messageIdSent = result.message_id;
+    } catch (error) {
+      const uncertain = error instanceof TypeError
+        || (error instanceof Error && (error as Error & { telegramDeliveryUncertain?: boolean }).telegramDeliveryUncertain === true);
+      status = uncertain ? "uncertain" : "failed";
+      errorCode = uncertain ? "DELIVERY_UNCERTAIN" : sanitizeErrorCode(errorMessage(error));
+    }
+    const finished = await config.storage.finishDelivery({ updateRowId: update.id, chunkIndex, leaseId: update.leaseId, status, ...(messageIdSent === undefined ? {} : { telegramMessageId: messageIdSent }), lastErrorCode: status === "sent" ? undefined : errorCode });
+    if (!finished) throw new TelegramUpdateLeaseLostError("finish artifact delivery");
+    if (status === "uncertain") throw new UncertainDeliveryError();
+    if (status !== "sent") throw new Error("Telegram artifact delivery failed");
+  }
+  return undefined;
 }
 
 async function createTelegramRequestReceipt(
@@ -1513,6 +1608,14 @@ async function handleProcessingError(
               persistedAnswer,
             );
             if (interruption) return interruption;
+            if (terminalOutcome.assistantMessageId && terminalOutcome.conversationId) {
+              const integration = await config.storage.loadIntegration(update.integrationId);
+              if (integration) {
+                const artifacts = await config.storage.loadGeneratedArtifacts({ clientId: integration.clientId, conversationId: terminalOutcome.conversationId, messageId: terminalOutcome.assistantMessageId });
+                const artifactInterruption = await deliverArtifacts(config, botApi, update, { rowId: update.id, leaseId: update.leaseId }, lifecycle, chatId, integration.clientId, terminalOutcome.conversationId, terminalOutcome.assistantMessageId, artifacts);
+                if (artifactInterruption) return artifactInterruption;
+              }
+            }
             await completeUpdate(rpc, { rowId: update.id, leaseId: update.leaseId });
             return { updateId: update.updateId, status: "completed" };
           },

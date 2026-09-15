@@ -92,6 +92,7 @@ function fakeBotApi(): BotApi {
     sendMessageDraft: vi.fn().mockResolvedValue({ message_id: 1, date: 1, chat: { id: telegramChatId, type: "private" } }),
     sendChatAction: vi.fn().mockResolvedValue(true),
     sendMessage: vi.fn().mockResolvedValue({ message_id: 2, date: 1, chat: { id: telegramChatId, type: "private" } }),
+    sendDocument: vi.fn().mockResolvedValue({ message_id: 4, date: 1, chat: { id: telegramChatId, type: "private" } }),
     sendRichMessage: vi.fn().mockResolvedValue({ message_id: 3, date: 1, chat: { id: telegramChatId, type: "private" } }),
     getFile: vi.fn().mockResolvedValue({ file_id: "f", file_unique_id: "u", file_path: "path" }),
     downloadFile: vi.fn().mockResolvedValue(new Uint8Array(100)),
@@ -165,6 +166,7 @@ function fakeStorage(overrides: Partial<WorkerStorage> = {}): WorkerStorage {
     }),
     claimDelivery: vi.fn().mockResolvedValue("claimed"),
     finishDelivery: vi.fn().mockResolvedValue(true),
+    loadGeneratedArtifacts: vi.fn().mockResolvedValue([]),
     setMode: vi.fn().mockImplementation(async (_integrationId: string, mode: string, enabled: boolean) => {
       return { proModeEnabled: mode === "pro" ? enabled : false, webSearchEnabled: mode === "web" ? enabled : false };
     }),
@@ -217,6 +219,24 @@ function answerTurn(answer = "Hallo Welt", stopped = false) {
       researchTrace: [],
       sourceReferences: [],
       stopped,
+    };
+  });
+}
+
+function artifactTurn() {
+  return capturingTurn(async function* (request) {
+    yield { type: "conversation", conversation: fakeConversation };
+    await request.onConversationEvent?.(fakeConversation);
+    yield { type: "delta", content: "Antwort mit Datei" };
+    return {
+      answer: "Antwort mit Datei",
+      rawAnswer: "Antwort mit Datei",
+      conversation: fakeConversation,
+      assistantMessageId: 91,
+      researchTrace: [],
+      sourceReferences: [],
+      artifacts: [{ id: "artifact-1", fileName: "bericht.pdf", fileSize: 3, fileType: ".pdf", upstreamIndex: 0 }],
+      stopped: false,
     };
   });
 }
@@ -748,6 +768,105 @@ describe("processUpdate: free text routed to Fred", () => {
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(rpc.complete).toHaveBeenCalled();
+  });
+
+  it("delivers persisted Fred artifacts after text and skips both on retry", async () => {
+    const rpc = fakeRpc();
+    const botApi = fakeBotApi();
+    const artifact = { id: "artifact-1", fileName: "bericht.pdf", fileSize: 3, fileType: ".pdf", upstreamIndex: 0 };
+    const deliveryState = new Map<string, "sent">();
+    const deliveryContent = new Map<number, string>();
+    const storage = fakeStorage({
+      claimDelivery: vi.fn().mockImplementation(async ({ content, chunkIndex }: { content: string; chunkIndex: number }) => {
+        deliveryContent.set(chunkIndex, content);
+        if (deliveryState.has(content)) return "sent";
+        return "claimed";
+      }),
+      finishDelivery: vi.fn().mockImplementation(async ({ chunkIndex, status }: { chunkIndex: number; status: string }) => {
+        if (status === "sent") deliveryState.set(deliveryContent.get(chunkIndex) ?? "", "sent");
+        return true;
+      }),
+      loadGeneratedArtifacts: vi.fn().mockResolvedValue([artifact]),
+      resumeRequestReceipt: vi.fn().mockResolvedValue({
+        status: "received", contentDeleted: false, webSearchEnabled: false, proModeEnabled: false,
+      }),
+    });
+    const { executeTurn } = artifactTurn();
+    const config = fakeConfig({
+      rpc, storage, createBotApiForToken: () => botApi, executeTurn,
+      downloadGeneratedArtifact: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+    });
+
+    const first = await processUpdate(config, makeUpdate());
+    expect(first.status).toBe("completed");
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendDocument).toHaveBeenCalledTimes(1);
+    expect((vi.mocked(botApi.sendMessage).mock.invocationCallOrder[0] ?? 0)).toBeLessThan(vi.mocked(botApi.sendDocument).mock.invocationCallOrder[0] ?? 0);
+
+    vi.mocked(storage.resumeRequestReceipt).mockResolvedValue({
+      status: "completed", contentDeleted: false, conversationId: fakeConversation.id, assistantMessageId: 91,
+      answer: "Antwort mit Datei", webSearchEnabled: false, proModeEnabled: false,
+    });
+    const second = await processUpdate(config, makeUpdate({ attemptCount: 1 }));
+    expect(second.status).toBe("completed");
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it("records deterministic artifact download failure without calling sendDocument", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const { executeTurn } = artifactTurn();
+    const config = fakeConfig({
+      rpc, storage, createBotApiForToken: () => botApi, executeTurn,
+      downloadGeneratedArtifact: vi.fn().mockRejectedValue(new Error("download failed")),
+    });
+
+    const result = await processUpdate(config, makeUpdate());
+
+    expect(result.status).toBe("failed");
+    expect(botApi.sendDocument).not.toHaveBeenCalled();
+    expect(storage.finishDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      chunkIndex: 1_000_000,
+      status: "failed",
+      lastErrorCode: "ARTIFACT_DOWNLOAD_FAILED",
+    }));
+    expect(rpc.retry).toHaveBeenCalledWith(expect.objectContaining({ p_last_error_code: "Telegram artifact download failed" }));
+  });
+
+  it("records an uncertain artifact send and does not resend it on retry", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    let artifactClaimed = false;
+    vi.mocked(storage.claimDelivery).mockImplementation(async ({ chunkIndex }) => {
+      if (chunkIndex === 1_000_000) {
+        if (artifactClaimed) return "uncertain";
+        artifactClaimed = true;
+      }
+      return "claimed";
+    });
+    vi.mocked(storage.finishDelivery).mockResolvedValue(true);
+    vi.mocked(botApi.sendDocument).mockRejectedValue(new TypeError("socket closed after write"));
+    const { executeTurn } = artifactTurn();
+    const config = fakeConfig({
+      rpc, storage, createBotApiForToken: () => botApi, executeTurn,
+      downloadGeneratedArtifact: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+    });
+
+    const first = await processUpdate(config, makeUpdate());
+    const second = await processUpdate(config, makeUpdate({ attemptCount: 1 }));
+
+    expect(first.status).toBe("failed");
+    expect(second.status).toBe("failed");
+    expect(botApi.sendDocument).toHaveBeenCalledTimes(1);
+    expect(storage.finishDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      chunkIndex: 1_000_000,
+      status: "uncertain",
+      lastErrorCode: "DELIVERY_UNCERTAIN",
+    }));
+    expect(rpc.fail).toHaveBeenCalledWith(expect.objectContaining({ p_last_error_code: "DELIVERY_UNCERTAIN" }));
   });
 
   it("passes an existing conversation binding through to the Fred request", async () => {
