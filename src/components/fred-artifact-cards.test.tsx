@@ -37,4 +37,16 @@ describe("FredArtifactCards", () => {
     expect(downloadedBlob).toBeInstanceOf(Blob);
     expect(new Uint8Array(await downloadedBlob!.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
   });
+
+  it("renders PowerPoint and Excel cards for delivered office files", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    await act(async () => createRoot(container).render(<FredArtifactCards accessToken="jwt-123" conversationId="conv" messageId={9} artifacts={[
+      { id: "a", fileName: "AVAB_2025_Uebersicht.pptx", fileSize: 2048, fileType: ".pptx", upstreamIndex: 0 },
+      { id: "b", fileName: "Betragstabellen.xlsx", fileSize: 4096, fileType: ".xlsx", upstreamIndex: 1 },
+    ]} />));
+    expect(container.textContent).toContain("PowerPoint");
+    expect(container.textContent).toContain("Excel");
+    expect(container.textContent).toContain("24 h verfügbar");
+  });
 });

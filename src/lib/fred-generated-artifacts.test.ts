@@ -41,6 +41,21 @@ describe("generated artifact completion pipeline", () => {
     expect(result.map((item) => item.upstreamIndex)).toEqual([4]);
   });
 
+  it("keeps delivered office files and drops lock files and code artifacts", () => {
+    const parsed = parseGeneratedArtifacts({ data: { artifacts: [
+      { index: 1, file_name: "AVAB_2025_Uebersicht.pptx", file_size: 5, file_type: ".pptx", handle: "resource://avab" },
+      { index: 2, file_name: "Betragstabellen.xlsx", file_size: 5, file_type: ".xlsx", handle: "resource://xlsx" },
+      { index: 3, file_name: "Liste.csv", file_size: 5, file_type: ".csv", handle: "resource://csv" },
+      { index: 4, file_name: ".~lock.AVAB_2025_Uebersicht.pptx#", file_size: 5, file_type: ".pptx#", handle: "resource://lock" },
+      { index: 5, file_name: "create_avab.js", file_size: 5, file_type: ".js", handle: "resource://js" },
+    ] } });
+    expect(parsed.map(({ upstreamIndex, fileType }) => ({ upstreamIndex, fileType }))).toEqual([
+      { upstreamIndex: 1, fileType: ".pptx" },
+      { upstreamIndex: 2, fileType: ".xlsx" },
+      { upstreamIndex: 3, fileType: ".csv" },
+    ]);
+  });
+
   it("turns only genuine-card pseudo-links into plain filenames", () => {
     const artifacts = parseGeneratedArtifacts(upstreamFrame);
     expect(normalizeGeneratedArtifactLinks(

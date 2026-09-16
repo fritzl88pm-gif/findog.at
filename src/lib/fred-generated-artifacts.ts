@@ -1,8 +1,8 @@
+import { isGeneratedArtifactFileType } from "./generated-artifact-types";
 import type { FredGeneratedArtifact } from "./fred-native-stream";
 
 const MAX_GENERATED_ARTIFACTS = 10;
 const MAX_ARTIFACT_BYTES = 50 * 1024 * 1024;
-const ARTIFACT_EXTENSION = /^\.(?:txt|md|pdf|doc|docx)$/u;
 
 export type ParsedGeneratedArtifact = Omit<FredGeneratedArtifact, "id"> & { sourceUri: string };
 
@@ -30,7 +30,7 @@ export function parseGeneratedArtifacts(value: unknown): ParsedGeneratedArtifact
     const suppliedIndex = item.index;
     const upstreamIndex = suppliedIndex === undefined ? arrayIndex : Number(suppliedIndex);
     if (!fileName || fileName.length > 255 || /[\u0000-\u001f\u007f]/u.test(fileName)
-      || !ARTIFACT_EXTENSION.test(fileType) || !Number.isSafeInteger(fileSize) || fileSize < 0
+      || !isGeneratedArtifactFileType(fileType) || !Number.isSafeInteger(fileSize) || fileSize < 0
       || fileSize > MAX_ARTIFACT_BYTES || !Number.isSafeInteger(upstreamIndex) || upstreamIndex < 0
       || upstreamIndex > 99 || seenIndexes.has(upstreamIndex)
       || !/^resource:\/\/[^\u0000-\u001f\u007f]+$/u.test(sourceUri)) return [];

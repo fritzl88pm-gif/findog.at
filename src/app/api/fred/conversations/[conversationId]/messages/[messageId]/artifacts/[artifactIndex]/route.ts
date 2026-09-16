@@ -4,6 +4,7 @@ import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { runWithTimeout } from "@/lib/deadline";
+import { isGeneratedArtifactFileType } from "@/lib/generated-artifact-types";
 
 export const runtime = "nodejs";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -48,7 +49,7 @@ export async function GET(request: Request, context: { params: Promise<{ convers
       if (typeof artifact.upstreamMessageId !== "string" || !/^[-A-Za-z0-9_]{1,128}$/u.test(artifact.upstreamMessageId)
         || !Number.isSafeInteger(upstreamIndex) || upstreamIndex < 0 || upstreamIndex > 99
         || typeof artifact.fileName !== "string" || !artifact.fileName || artifact.fileName.length > 255
-        || typeof artifact.fileType !== "string" || !/^\.(?:txt|md|pdf|doc|docx)$/u.test(artifact.fileType)
+        || typeof artifact.fileType !== "string" || !isGeneratedArtifactFileType(artifact.fileType)
         || typeof artifact.sourceUri !== "string" || !/^resource:\/\/[^\u0000-\u001f\u007f]+$/u.test(artifact.sourceUri)) return [];
       return [{
         upstreamMessageId: artifact.upstreamMessageId,

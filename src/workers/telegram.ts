@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getScanningSettings } from "@/lib/scanning/settings";
+import { isGeneratedArtifactFileType } from "@/lib/generated-artifact-types";
 
 import type { JobQueueRpc } from "@/lib/telegram/jobs";
 import { createWorkerHealth } from "@/lib/telegram/worker-health";
@@ -148,7 +149,6 @@ function dbError(code: string): Error {
 
 const MAX_GENERATED_ARTIFACT_BYTES = 50 * 1024 * 1024;
 const MAX_GENERATED_ARTIFACTS = 10;
-const ARTIFACT_EXTENSION = /^\.(?:txt|md|pdf|doc|docx)$/u;
 const SAFE_ARTIFACT_ID = /^[A-Za-z0-9_-]{1,128}$/u;
 const RESOURCE_URI = /^resource:\/\/[^\u0000-\u001f\u007f]+$/u;
 
@@ -165,7 +165,7 @@ function parsePersistedGeneratedArtifacts(value: unknown): FredGeneratedArtifact
     const upstreamIndex = row.upstreamIndex;
     const sourceUri = typeof row.sourceUri === "string" ? row.sourceUri.trim() : "";
     if (!SAFE_ARTIFACT_ID.test(id) || !fileName || fileName.length > 255 || /[\u0000-\u001f\u007f]/u.test(fileName)
-      || !ARTIFACT_EXTENSION.test(fileType) || typeof fileSize !== "number" || !Number.isSafeInteger(fileSize)
+      || !isGeneratedArtifactFileType(fileType) || typeof fileSize !== "number" || !Number.isSafeInteger(fileSize)
       || fileSize < 0 || fileSize > MAX_GENERATED_ARTIFACT_BYTES || typeof upstreamIndex !== "number"
       || !Number.isSafeInteger(upstreamIndex) || upstreamIndex < 0 || upstreamIndex > 99
       || seenIndexes.has(upstreamIndex) || !RESOURCE_URI.test(sourceUri)) return [];
@@ -192,7 +192,7 @@ async function downloadGeneratedArtifact(supabase: Supabase, fetchImpl: typeof f
     || typeof sourceUri !== "string" || !/^resource:\/\/[^\u0000-\u001f\u007f]+$/u.test(sourceUri)
     || row?.fileName !== params.artifact.fileName || row?.fileType !== params.artifact.fileType
     || row?.fileSize !== params.artifact.fileSize
-    || !/^\.(?:txt|md|pdf|doc|docx)$/u.test(String(row?.fileType))) throw dbError("FRED_ARTIFACT_NOT_FOUND");
+    || !isGeneratedArtifactFileType(row?.fileType)) throw dbError("FRED_ARTIFACT_NOT_FOUND");
   const apiKey = process.env.WEKNORA_API_KEY?.trim();
   if (!apiKey) throw dbError("FRED_ARTIFACT_DOWNLOAD_NOT_CONFIGURED");
   const url = new URL(`https://taxdog.cloud/api/v1/sessions/${encodeURIComponent(conversation.weknora_session_id)}/messages/${encodeURIComponent(upstreamMessageId)}/artifacts/${params.artifact.upstreamIndex}/download`);

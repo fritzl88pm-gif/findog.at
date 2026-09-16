@@ -111,6 +111,27 @@ describe("buildStorage.loadGeneratedArtifacts", () => {
       }]);
   });
 
+  it("maps a persisted PowerPoint artifact instead of dropping it", async () => {
+    const storage = storageForArtifacts([{
+      id: "artifact_2",
+      fileName: "AVAB_2025_Uebersicht.pptx",
+      fileSize: 5,
+      fileType: ".pptx",
+      upstreamIndex: 6,
+      upstreamMessageId: "message-2",
+      sourceUri: "resource://artifact/2",
+    }]);
+
+    await expect(storage.loadGeneratedArtifacts({ clientId: "client-1", conversationId: "conversation-1", messageId: 9 }))
+      .resolves.toEqual([{
+        id: "artifact_2",
+        fileName: "AVAB_2025_Uebersicht.pptx",
+        fileSize: 5,
+        fileType: ".pptx",
+        upstreamIndex: 6,
+      }]);
+  });
+
   it("rejects malformed persisted artifact rows", async () => {
     const storage = storageForArtifacts([
       { id: "bad id", fileName: "bericht.pdf", fileSize: 3, fileType: ".pdf", upstreamIndex: 0, sourceUri: "resource://ok" },

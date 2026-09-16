@@ -1,16 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { generatedArtifactKind } from "@/lib/generated-artifact-types";
 import type { FredGeneratedArtifact } from "@/lib/fred-native-stream";
-
-function kindFor(artifact: FredGeneratedArtifact): { label: string; icon: string } {
-  const extension = /\.[^.]+$/u.exec(artifact.fileName.toLowerCase())?.[0] ?? artifact.fileType;
-  if (extension === ".pdf") return { label: "PDF", icon: "PDF" };
-  if (extension === ".md") return { label: "Markdown", icon: "MD" };
-  if (extension === ".txt") return { label: "Text", icon: "TXT" };
-  if (extension === ".doc" || extension === ".docx") return { label: "Word", icon: "W" };
-  return { label: "Datei", icon: "FILE" };
-}
 
 function displayFileSize(bytes: number): string {
   if (bytes < 1_024 * 1_024) return `${Math.max(1, Math.round(bytes / 1_024))} KB`;
@@ -29,7 +21,7 @@ export default function FredArtifactCards({ accessToken, artifacts, conversation
   if (!messageId || artifacts.length === 0) return null;
   return <div className="fred-artifact-list" aria-label="Erzeugte Dateien">
     {artifacts.map((artifact) => {
-      const kind = kindFor(artifact);
+      const kind = generatedArtifactKind(artifact.fileName, artifact.fileType);
       const state = states[artifact.id];
       const href = `/api/fred/conversations/${encodeURIComponent(conversationId)}/messages/${messageId}/artifacts/${artifact.upstreamIndex}`;
       const download = async () => {
