@@ -130,53 +130,33 @@ function sanitizedImageAltText(value: string): string {
     .slice(0, 255);
 }
 
-const TAXDOG_PDF_PATH_PREFIX = "/pendlerrechner/pdf/";
-const TAXDOG_PDF_FILENAME_PATTERN = /^[A-Za-z0-9_-]{20,128}\.pdf$/u;
+const MAX_LINK_HREF_LENGTH = 2_048;
 
-function isSafePendlerrechnerPdfHref(value: string): boolean {
+/**
+ * Fred answers cite arbitrary web sources, so every well-formed web link must render
+ * clickable. Only the target stays restricted: non-web schemes (`javascript:`, `data:`,
+ * `file:`), credentials embedded in the URL, and control characters or whitespace are
+ * rejected and stay plain text.
+ */
+function isSafeWebHref(value: string): boolean {
+  if (!value || value.length > MAX_LINK_HREF_LENGTH) return false;
+  if (/[\u0000-\u0020\u007f]/u.test(value)) return false;
   try {
     const url = new URL(value);
-    if (
-      url.protocol !== "https:"
-      || url.hostname !== "taxdog.cloud"
-      || url.username
-      || url.password
-      || url.hash
-      || [...url.searchParams.keys()].length > 0
-    ) return false;
-    if (!url.pathname.startsWith(TAXDOG_PDF_PATH_PREFIX)) return false;
-    const filename = url.pathname.slice(TAXDOG_PDF_PATH_PREFIX.length);
-    return TAXDOG_PDF_FILENAME_PATTERN.test(filename);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+    return Boolean(url.hostname) && !url.username && !url.password;
   } catch {
     return false;
   }
 }
 
-function isSafeFindokHref(value: string): boolean {
-  try {
-    const url = new URL(value);
-    if (
-      url.protocol !== "https:"
-      || url.hostname !== "findok.bmf.gv.at"
-      || url.username
-      || url.password
-      || url.hash
-    ) return false;
-    if (
-      url.pathname.startsWith("/findok/resources/pdf/")
-      && url.pathname.toLowerCase().endsWith(".pdf")
-    ) return true;
-    const parameters = [...url.searchParams.keys()];
-    const gz = url.searchParams.get("gz") ?? "";
-    return (
-      url.pathname === "/findok/volltext"
-      && parameters.length === 1
-      && parameters[0] === "gz"
-      && /^(?:RV|RS|RM|AW|VH)\/[A-Z0-9ÄÖÜ-]+\/\d{2,4}$/iu.test(gz)
-    );
-  } catch {
-    return false;
-  }
+/** Accept `[label](<url>)` and `[label](url "title")` next to the plain `[label](url)` form. */
+function normalizedMarkdownHref(raw: string): string {
+  const value = raw.trim();
+  const angled = /^<([^<>]+)>$/u.exec(value);
+  if (angled) return angled[1].trim();
+  const titled = /^(\S+)\s+("[^"]*"|'[^']*')$/u.exec(value);
+  return titled ? titled[1] : value;
 }
 
 function findNextMarkdownImage(text: string, start: number): InlineToken | null {
@@ -242,8 +222,8 @@ function findNextMarkdownLink(text: string, start: number): InlineToken | null {
     }
 
     const label = text.slice(index + 1, labelEnd);
-    const href = text.slice(hrefStart, hrefEnd);
-    if (label && (isSafeFindokHref(href) || isSafePendlerrechnerPdfHref(href))) {
+    const href = normalizedMarkdownHref(text.slice(hrefStart, hrefEnd));
+    if (label && isSafeWebHref(href)) {
       return { type: "link", index, label, href, end: hrefEnd + 1 };
     }
 

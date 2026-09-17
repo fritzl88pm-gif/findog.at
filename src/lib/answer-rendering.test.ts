@@ -315,9 +315,9 @@ Keine Bindungswirkung.
     });
   });
 
-  it("parses official Findok Markdown links and leaves other links as text", () => {
+  it("renders Markdown links of any host as clickable", () => {
     const blocks = parseRichAnswer(
-      "Siehe [RV/7103053/2014](https://findok.bmf.gv.at/findok/resources/pdf/segment/121623.pdf), [Findok Volltext](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F7103053%2F2014), [unsicher](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F7103053%2F2014&redirect=https%3A%2F%2Fexample.test) und [extern](https://example.test).",
+      "Siehe [RV/7103053/2014](https://findok.bmf.gv.at/findok/resources/pdf/segment/121623.pdf), [Findok Volltext](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F7103053%2F2014&indexName=findok-bfg), [Route](https://www.google.com/maps/dir/Eggenburg,+Austria/Wien,+Austria) und [extern](https://example.test).",
     );
 
     expect(blocks).toMatchObject([
@@ -333,18 +333,30 @@ Keine Bindungswirkung.
           { type: "text", text: ", " },
           {
             type: "link",
-            href: "https://findok.bmf.gv.at/findok/volltext?gz=RV%2F7103053%2F2014",
+            href: "https://findok.bmf.gv.at/findok/volltext?gz=RV%2F7103053%2F2014&indexName=findok-bfg",
             children: [{ type: "text", text: "Findok Volltext" }],
           },
-          { type: "text", text: ", [unsicher](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F7103053%2F2014&redirect=https%3A%2F%2Fexample.test) und [extern](https://example.test)." },
+          { type: "text", text: ", " },
+          {
+            type: "link",
+            href: "https://www.google.com/maps/dir/Eggenburg,+Austria/Wien,+Austria",
+            children: [{ type: "text", text: "Route" }],
+          },
+          { type: "text", text: " und " },
+          {
+            type: "link",
+            href: "https://example.test",
+            children: [{ type: "text", text: "extern" }],
+          },
+          { type: "text", text: "." },
         ],
       },
     ]);
   });
 
-  it("parses time-limited Pendlerrechner PDF links on taxdog.cloud only", () => {
+  it("renders Pendlerrechner and other taxdog.cloud links as clickable", () => {
     const blocks = parseRichAnswer(
-      "Formular: [Pendlerrechner-Formular (PDF)](https://taxdog.cloud/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf) und [gefälscht](https://taxdog.cloud/pendlerrechner/pdf/short.pdf) und [falsche Domain](https://evil.example/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf).",
+      "Formular: [Pendlerrechner-Formular (PDF)](https://taxdog.cloud/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf) und [Kurzform](https://taxdog.cloud/pendlerrechner/pdf/short.pdf).",
     );
 
     expect(blocks).toMatchObject([
@@ -357,30 +369,45 @@ Keine Bindungswirkung.
             href: "https://taxdog.cloud/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf",
             children: [{ type: "text", text: "Pendlerrechner-Formular (PDF)" }],
           },
+          { type: "text", text: " und " },
           {
-            type: "text",
-            text: " und [gefälscht](https://taxdog.cloud/pendlerrechner/pdf/short.pdf) und [falsche Domain](https://evil.example/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf).",
+            type: "link",
+            href: "https://taxdog.cloud/pendlerrechner/pdf/short.pdf",
+            children: [{ type: "text", text: "Kurzform" }],
           },
+          { type: "text", text: "." },
         ],
       },
     ]);
   });
 
-  it("rejects taxdog.cloud PDF links with query, hash, or other paths", () => {
+  it("normalizes angle-bracket and optional title link targets", () => {
     const blocks = parseRichAnswer(
-      "Links: [a](https://taxdog.cloud/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf?x=1), [b](https://taxdog.cloud/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf#top), [c](https://taxdog.cloud/other/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf).",
+      `Links: [Winkel](<https://example.test/a>), [Titel](https://example.test/b "Beschreibung") und [Titel einfach](https://example.test/c 'Beschreibung').`,
     );
 
     expect(blocks).toMatchObject([
       {
         type: "paragraph",
         children: [
-          {
-            type: "text",
-            text: "Links: [a](https://taxdog.cloud/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf?x=1), [b](https://taxdog.cloud/pendlerrechner/pdf/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf#top), [c](https://taxdog.cloud/other/AbC123_-xYz0123456789abcdefghijklmnopqrstuv.pdf).",
-          },
+          { type: "text", text: "Links: " },
+          { type: "link", href: "https://example.test/a", children: [{ type: "text", text: "Winkel" }] },
+          { type: "text", text: ", " },
+          { type: "link", href: "https://example.test/b", children: [{ type: "text", text: "Titel" }] },
+          { type: "text", text: " und " },
+          { type: "link", href: "https://example.test/c", children: [{ type: "text", text: "Titel einfach" }] },
+          { type: "text", text: "." },
         ],
       },
+    ]);
+  });
+
+  it("leaves link targets without a web scheme as plain Markdown text", () => {
+    const markdown =
+      "Links: [script](javascript:alert(1)), [daten](data:text/html;base64,PHNjcmlwdD4=), [mail](mailto:office@example.test), [login](https://user:secret@example.test/x), [leer](https://) und [lücke](https://example.test/a b).";
+
+    expect(parseRichAnswer(markdown)).toEqual([
+      { type: "paragraph", children: [{ type: "text", text: markdown }] },
     ]);
   });
 
