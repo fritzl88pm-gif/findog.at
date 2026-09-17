@@ -167,9 +167,16 @@ describe("getWelcomeImage", () => {
     expect(getWelcomeImage(afternoon, 1)).toBe("/fred-welcome-nachmittag-1.png");
   });
 
-  it("falls back to the shared image for periods without their own motifs", () => {
+  it("serves the single late night motif for every draw", () => {
+    const lateNight = new Date("2026-01-13T23:00:00.000Z");
+
+    expect(getWelcomeImage(lateNight, 0)).toBe("/fred-welcome-nacht-1.png");
+    expect(getWelcomeImage(lateNight, 0.5)).toBe("/fred-welcome-nacht-1.png");
+    expect(getWelcomeImage(lateNight, 1)).toBe("/fred-welcome-nacht-1.png");
+  });
+
+  it("falls back to the shared image while the evening has no motif of its own", () => {
     expect(getWelcomeImage(new Date("2026-01-13T19:00:00.000Z"))).toBe(FALLBACK_WELCOME_IMAGE);
-    expect(getWelcomeImage(new Date("2026-01-13T23:00:00.000Z"))).toBe(FALLBACK_WELCOME_IMAGE);
   });
 
   it("uses a real random draw when no explicit pick is given", () => {

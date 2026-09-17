@@ -83,7 +83,9 @@ const AFTERNOON_IMAGES = [
 
 const EVENING_IMAGES = [] as const;
 
-const LATE_NIGHT_IMAGES = [] as const;
+const LATE_NIGHT_IMAGES = [
+  "/fred-welcome-nacht-1.png",
+] as const;
 
 type WelcomePeriod = "morning" | "midday" | "afternoon" | "evening" | "lateNight";
 
