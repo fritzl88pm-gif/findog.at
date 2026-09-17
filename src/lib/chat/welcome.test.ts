@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -175,13 +178,54 @@ describe("getWelcomeImage", () => {
     expect(getWelcomeImage(lateNight, 1)).toBe("/fred-welcome-nacht-1.png");
   });
 
-  it("falls back to the shared image while the evening has no motif of its own", () => {
-    expect(getWelcomeImage(new Date("2026-01-13T19:00:00.000Z"))).toBe(FALLBACK_WELCOME_IMAGE);
+  it("serves the single evening motif for every draw", () => {
+    const evening = new Date("2026-01-13T19:00:00.000Z");
+
+    expect(getWelcomeImage(evening, 0)).toBe("/fred-welcome-abend-1.png");
+    expect(getWelcomeImage(evening, 0.5)).toBe("/fred-welcome-abend-1.png");
+    expect(getWelcomeImage(evening, 1)).toBe("/fred-welcome-abend-1.png");
+  });
+
+  it("gives every period a motif of its own, so the fallback stays unused", () => {
+    const oneTimestampPerPeriod = [
+      "2026-01-13T07:00:00.000Z",
+      "2026-01-13T11:30:00.000Z",
+      "2026-01-13T15:00:00.000Z",
+      "2026-01-13T19:00:00.000Z",
+      "2026-01-13T23:00:00.000Z",
+    ];
+
+    for (const timestamp of oneTimestampPerPeriod) {
+      expect(getWelcomeImage(new Date(timestamp))).not.toBe(FALLBACK_WELCOME_IMAGE);
+    }
   });
 
   it("uses a real random draw when no explicit pick is given", () => {
     const drawn = new Set(Array.from({ length: 200 }, () => getWelcomeImage(MIDDAY)));
 
     expect(drawn.size).toBe(3);
+  });
+
+  it("ships every motif it can serve", () => {
+    const oneTimestampPerPeriod = [
+      "2026-01-13T07:00:00.000Z",
+      "2026-01-13T11:30:00.000Z",
+      "2026-01-13T15:00:00.000Z",
+      "2026-01-13T19:00:00.000Z",
+      "2026-01-13T23:00:00.000Z",
+    ];
+    const referenced = new Set(
+      oneTimestampPerPeriod.flatMap((timestamp) =>
+        Array.from({ length: 50 }, (_unused, index) =>
+          getWelcomeImage(new Date(timestamp), index / 50),
+        ),
+      ),
+    );
+
+    expect(referenced.size).toBe(8);
+    for (const image of referenced) {
+      const file = fileURLToPath(new URL(`../../../public${image}`, import.meta.url));
+      expect(existsSync(file), `${image} fehlt in public/`).toBe(true);
+    }
   });
 });

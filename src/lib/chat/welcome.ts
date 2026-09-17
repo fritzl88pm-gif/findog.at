@@ -81,7 +81,9 @@ const AFTERNOON_IMAGES = [
   "/fred-welcome-nachmittag-1.png",
 ] as const;
 
-const EVENING_IMAGES = [] as const;
+const EVENING_IMAGES = [
+  "/fred-welcome-abend-1.png",
+] as const;
 
 const LATE_NIGHT_IMAGES = [
   "/fred-welcome-nacht-1.png",
