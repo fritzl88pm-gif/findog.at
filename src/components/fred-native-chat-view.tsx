@@ -14,6 +14,7 @@ import {
   useImperativeHandle,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 
 import CopyIconButton, { copyToClipboard } from "@/components/copy-icon-button";
@@ -36,7 +37,11 @@ import {
   precedingUserMessage,
 } from "@/lib/chat/fred-actions";
 import { downloadFredPdfFile } from "@/lib/chat/pdf-download";
-import { getWelcomeGreeting } from "@/lib/chat/welcome";
+import {
+  FALLBACK_WELCOME_IMAGE,
+  getWelcomeGreeting,
+  getWelcomeImage,
+} from "@/lib/chat/welcome";
 import FredArtifactCards from "@/components/fred-artifact-cards";
 import {
   MAX_REASONING_CATEGORY_NAME_CHARS,
@@ -108,6 +113,10 @@ type ReasoningSaveDraft = {
   categoryId: string;
   newCategoryName: string;
 };
+
+/** Das Begruessungsmotiv aendert sich nach der Auswahl nicht mehr. */
+const subscribeToStableValue = () => () => {};
+const readFallbackWelcomeImage = () => FALLBACK_WELCOME_IMAGE;
 
 const MAX_IMAGE_UPLOADS = 5;
 const MAX_FILE_UPLOADS = 5;
@@ -517,6 +526,19 @@ export default function FredNativeChatView({
   const [feedbackError, setFeedbackError] = useState("");
   const [isFeedbackSaving, setIsFeedbackSaving] = useState(false);
   const [welcomeGreeting] = useState(() => getWelcomeGreeting());
+  // Das Motiv wird zufaellig gezogen, darf im vorgerenderten HTML also noch
+  // nicht feststehen. useSyncExternalStore liefert serverseitig das
+  // Standardbild und erst im Client die Zufallsauswahl - einmal gezogen und
+  // danach stabil, damit kein Hydration-Mismatch entsteht.
+  const [readWelcomeImage] = useState(() => {
+    let chosenImage: string | null = null;
+    return () => (chosenImage ??= getWelcomeImage());
+  });
+  const welcomeImage = useSyncExternalStore(
+    subscribeToStableValue,
+    readWelcomeImage,
+    readFallbackWelcomeImage,
+  );
   const activeConversationIdRef = useRef(conversationId);
   const shareStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -1530,7 +1552,7 @@ export default function FredNativeChatView({
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   className="fred-welcome-image"
-                  src="/fred.png"
+                  src={welcomeImage}
                   alt="Fred, der Findog-Steuerassistent"
                 />
                 <h1 className="welcome-greeting">{welcomeGreeting}</h1>

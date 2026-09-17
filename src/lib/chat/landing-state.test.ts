@@ -43,7 +43,7 @@ describe("authenticated dashboard landing", () => {
     const group = fredViewSource.slice(groupStart, groupEnd);
 
     expect(groupStart).toBeGreaterThanOrEqual(0);
-    expect(group).toContain('src="/fred.png"');
+    expect(group).toContain("src={welcomeImage}");
     expect(group).toContain('alt="Fred, der Findog-Steuerassistent"');
     expect(group).toContain("welcomeGreeting");
     expect(group).toContain('<form className="composer"');

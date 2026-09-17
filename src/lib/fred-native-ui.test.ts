@@ -84,10 +84,10 @@ describe("Fred native Findog UI", () => {
   });
 
   it("renders Fred's image and greeting in the existing centered empty state", () => {
-    expect(viewSource).toContain('src="/fred.png"');
+    expect(viewSource).toContain('src={welcomeImage}');
     expect(viewSource).toContain('className="empty-state"');
     expect(viewSource).toContain('<h1 className="welcome-greeting">{welcomeGreeting}</h1>');
-    expect(viewSource.indexOf('src="/fred.png"')).toBeLessThan(
+    expect(viewSource.indexOf('src={welcomeImage}')).toBeLessThan(
       viewSource.indexOf('className="welcome-greeting"'),
     );
     expect(cssSource).toMatch(/\.empty-state \{[\s\S]*?align-items: center;[\s\S]*?text-align: center;/u);

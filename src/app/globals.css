@@ -6782,6 +6782,10 @@ textarea:focus {
   width: clamp(120px, 18vw, 180px);
   max-width: 36%;
   height: auto;
+  /* Quadratische Box, damit hoch- und querformatige Motive der Rotation
+     gleich viel Platz einnehmen und die Begruessung nicht springt. */
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
 }
 
 .welcome-greeting {

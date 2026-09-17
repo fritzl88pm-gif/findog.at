@@ -11,7 +11,20 @@ const MORNING_GREETINGS = [
   "Guten Morgen! Ich hab schon die Zeitung geholt – jetzt bist du dran.",
 ] as const;
 
-const DAYTIME_GREETINGS = [
+const MIDDAY_GREETINGS = [
+  "Mahlzeit! Ich hab schon zweimal um den Tisch geschlichen. Was gibt's bei dir?",
+  "Mahlzeit! Die Jause ist gesichert, die Ohren sind frei. Wobei kann ich helfen?",
+  "Hallo! Mittagspause – ich teile alles, außer der Wurstsemmel.",
+  "Mahlzeit! Kurz durchgeatmet, Napf geleert, volle Konzentration für dich.",
+  "Servus! Ich sitz mit treuem Blick neben dem Tisch. Funktioniert erstaunlich oft.",
+  "Mahlzeit! Zwischen zwei Bissen hab ich immer Zeit für deine Frage.",
+  "Hallo! Ich hab das Mittagessen im Blick und dich im Ohr. Leg los.",
+  "Mahlzeit! Erst die Pause, dann die Arbeit – oder beides gleichzeitig, das ist meine Spezialität.",
+  "Servus! Mittagszeit ist der beste Moment, um Unangenehmes zu erledigen. Was steht an?",
+  "Mahlzeit! Ich kau noch, aber ich hör dir schon zu.",
+] as const;
+
+const AFTERNOON_GREETINGS = [
   "Hallo! Mittagsschlaf verschoben, deine Frage ist wichtiger.",
   "Servus! Ich sitz brav neben dem Ordner und wedle. Wobei kann ich helfen?",
   "Hallo! Ich hab die Nase tief im Papierstapel – wirf mir was zu.",
@@ -50,6 +63,39 @@ const LATE_NIGHT_GREETINGS = [
   "Späte Stunde, wache Nase. Was beschäftigt dich?",
 ] as const;
 
+/** Bild, das gezeigt wird, solange eine Tageszeit noch keine eigenen Motive hat. */
+export const FALLBACK_WELCOME_IMAGE = "/fred.png";
+
+const MORNING_IMAGES = [
+  "/fred-welcome-morgen-1.png",
+  "/fred-welcome-morgen-2.png",
+] as const;
+
+const MIDDAY_IMAGES = [
+  "/fred-welcome-mittag-1.png",
+  "/fred-welcome-mittag-2.png",
+  "/fred-welcome-mittag-3.png",
+] as const;
+
+const AFTERNOON_IMAGES = [] as const;
+
+const EVENING_IMAGES = [] as const;
+
+const LATE_NIGHT_IMAGES = [] as const;
+
+type WelcomePeriod = "morning" | "midday" | "afternoon" | "evening" | "lateNight";
+
+const PERIOD_CONTENT: Record<
+  WelcomePeriod,
+  { greetings: readonly string[]; images: readonly string[] }
+> = {
+  morning: { greetings: MORNING_GREETINGS, images: MORNING_IMAGES },
+  midday: { greetings: MIDDAY_GREETINGS, images: MIDDAY_IMAGES },
+  afternoon: { greetings: AFTERNOON_GREETINGS, images: AFTERNOON_IMAGES },
+  evening: { greetings: EVENING_GREETINGS, images: EVENING_IMAGES },
+  lateNight: { greetings: LATE_NIGHT_GREETINGS, images: LATE_NIGHT_IMAGES },
+};
+
 const VIENNA_DATE_TIME = new Intl.DateTimeFormat("de-AT", {
   timeZone: "Europe/Vienna",
   year: "numeric",
@@ -59,23 +105,49 @@ const VIENNA_DATE_TIME = new Intl.DateTimeFormat("de-AT", {
   hourCycle: "h23",
 });
 
-export function getWelcomeGreeting(instant: Date = new Date()): string {
+function readViennaParts(instant: Date) {
   const parts = VIENNA_DATE_TIME.formatToParts(instant);
   const valueOf = (type: Intl.DateTimeFormatPartTypes) =>
     Number(parts.find((part) => part.type === type)?.value);
-  const year = valueOf("year");
-  const month = valueOf("month");
-  const day = valueOf("day");
-  const hour = valueOf("hour");
 
-  const greetings = hour >= 5 && hour < 11
-    ? MORNING_GREETINGS
-    : hour >= 11 && hour < 18
-      ? DAYTIME_GREETINGS
-      : hour >= 18 && hour < 22
-        ? EVENING_GREETINGS
-        : LATE_NIGHT_GREETINGS;
+  return {
+    year: valueOf("year"),
+    month: valueOf("month"),
+    day: valueOf("day"),
+    hour: valueOf("hour"),
+  };
+}
+
+export function getWelcomePeriod(instant: Date = new Date()): WelcomePeriod {
+  const { hour } = readViennaParts(instant);
+
+  if (hour >= 5 && hour < 11) return "morning";
+  if (hour >= 11 && hour < 14) return "midday";
+  if (hour >= 14 && hour < 18) return "afternoon";
+  if (hour >= 18 && hour < 22) return "evening";
+  return "lateNight";
+}
+
+export function getWelcomeGreeting(instant: Date = new Date()): string {
+  const { year, month, day } = readViennaParts(instant);
+  const { greetings } = PERIOD_CONTENT[getWelcomePeriod(instant)];
   const greetingIndex = (year + month + day) % greetings.length;
 
   return greetings[greetingIndex];
+}
+
+/**
+ * Wählt zufällig eines der Motive der aktuellen Tageszeit. `pick` ist nur für
+ * Tests da und erwartet einen Wert aus [0, 1).
+ */
+export function getWelcomeImage(
+  instant: Date = new Date(),
+  pick: number = Math.random(),
+): string {
+  const { images } = PERIOD_CONTENT[getWelcomePeriod(instant)];
+  if (images.length === 0) return FALLBACK_WELCOME_IMAGE;
+
+  const imageIndex = Math.min(images.length - 1, Math.max(0, Math.floor(pick * images.length)));
+
+  return images[imageIndex];
 }
