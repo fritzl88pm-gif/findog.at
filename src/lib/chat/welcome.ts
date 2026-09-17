@@ -77,7 +77,9 @@ const MIDDAY_IMAGES = [
   "/fred-welcome-mittag-3.png",
 ] as const;
 
-const AFTERNOON_IMAGES = [] as const;
+const AFTERNOON_IMAGES = [
+  "/fred-welcome-nachmittag-1.png",
+] as const;
 
 const EVENING_IMAGES = [] as const;
 

@@ -159,8 +159,15 @@ describe("getWelcomeImage", () => {
     expect(getWelcomeImage(MORNING, 1)).toBe("/fred-welcome-morgen-2.png");
   });
 
+  it("serves the single afternoon motif for every draw", () => {
+    const afternoon = new Date("2026-01-13T15:00:00.000Z");
+
+    expect(getWelcomeImage(afternoon, 0)).toBe("/fred-welcome-nachmittag-1.png");
+    expect(getWelcomeImage(afternoon, 0.5)).toBe("/fred-welcome-nachmittag-1.png");
+    expect(getWelcomeImage(afternoon, 1)).toBe("/fred-welcome-nachmittag-1.png");
+  });
+
   it("falls back to the shared image for periods without their own motifs", () => {
-    expect(getWelcomeImage(new Date("2026-01-13T15:00:00.000Z"))).toBe(FALLBACK_WELCOME_IMAGE);
     expect(getWelcomeImage(new Date("2026-01-13T19:00:00.000Z"))).toBe(FALLBACK_WELCOME_IMAGE);
     expect(getWelcomeImage(new Date("2026-01-13T23:00:00.000Z"))).toBe(FALLBACK_WELCOME_IMAGE);
   });
