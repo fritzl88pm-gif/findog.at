@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   describeFredLiveStartError,
+  fredLiveDelegationReply,
   isFredLiveConnectionActive,
   reduceFredLiveEvent,
   type FredLiveTranscriptState,
@@ -44,6 +45,10 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
         try {
           const parsed = JSON.parse(event.data) as Record<string, unknown>;
           setLiveState((current) => reduceFredLiveEvent(current, parsed));
+          const reply = fredLiveDelegationReply(parsed);
+          if (reply && channel.readyState === "open") {
+            channel.send(JSON.stringify(reply));
+          }
         } catch {
           setError("Ein Live-Ereignis konnte nicht verarbeitet werden.");
         }
@@ -102,10 +107,15 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
           <button className="primary-button" type="button" onClick={() => void start()} disabled={isRunning || !accessToken}>Starten</button>
           <button className="secondary-button" type="button" onClick={stop} disabled={!isRunning}>Stoppen</button>
         </div>
-        <p aria-live="polite">Status: {liveState.status}</p>
+        <p aria-live="polite">
+          Status: {liveState.status}
+          {liveState.usageSeconds !== undefined ? ` · ${liveState.usageSeconds} s` : ""}
+        </p>
         {error ? <div className="error-box" role="alert">{error}</div> : null}
         <ol aria-label="Gesprächsprotokoll">
-          {liveState.transcript.map((entry, index) => <li key={`${index}-${entry.speaker}-${entry.text}`}>{entry.speaker ? `${entry.speaker}: ${entry.text}` : entry.text}</li>)}
+          {liveState.transcript.map((row, index) => (
+            <li key={`${index}-${row.speaker}-${row.startMs}`}>{row.speaker}: {row.text}</li>
+          ))}
         </ol>
         <audio ref={audioRef} autoPlay />
       </div>

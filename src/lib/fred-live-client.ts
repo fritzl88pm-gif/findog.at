@@ -1,15 +1,31 @@
-export type FredLiveTranscriptState = {
-  status: string;
-  transcript: FredLiveTranscriptEntry[];
-  usage?: unknown;
-  turnClosed?: boolean;
+export type FredLiveSpeaker = "Du" | "Fred";
+
+export type FredLiveTranscriptRow = {
+  speaker: FredLiveSpeaker;
+  text: string;
+  startMs: number;
+  endMs: number;
 };
 
-export type FredLiveTranscriptEntry = { speaker: string; text: string };
+export type FredLiveTranscriptState = {
+  status: string;
+  transcript: FredLiveTranscriptRow[];
+  usageSeconds?: number;
+};
 
-export function fredLiveSpeakerFor(type: string): "Fred" | "Du" | undefined {
-  if (type.startsWith("response.")) return "Fred";
-  if (type.includes("input_audio_transcription") || type.startsWith("conversation.item.input")) return "Du";
+/**
+ * A speaker keeps the same row while their fragments follow each other within this gap.
+ * GPT-Live emits no turn-completed event, so rows are grouped from the timeline intervals
+ * (verified against real events: input/output transcript deltas carry `start_ms`/`end_ms`).
+ */
+export const FRED_LIVE_ROW_GAP_MS = 2_500;
+
+export const FRED_LIVE_NO_BACKEND_REPLY =
+  "In dieser Version ist kein Backend-Agent verbunden. Antworte aus deinem eigenen Wissen und sage offen, wenn du etwas nicht prüfen kannst.";
+
+export function fredLiveSpeakerFor(type: string): FredLiveSpeaker | undefined {
+  if (type === "session.input_transcript.delta") return "Du";
+  if (type === "session.output_transcript.delta") return "Fred";
   return undefined;
 }
 
@@ -57,29 +73,76 @@ export function waitForIceGathering(
   });
 }
 
+/**
+ * Client delegation: GPT-Live may still ask for a backend. This version has none, so the request
+ * is answered immediately instead of leaving the spoken conversation waiting.
+ */
+export function fredLiveDelegationReply(
+  event: Record<string, unknown>,
+): { type: "session.commentary.append"; event_id: string; delegation_id: string; content: string } | null {
+  if (event.type !== "session.delegation.created") return null;
+  const delegation = event.delegation as { id?: unknown } | undefined;
+  const id = delegation && typeof delegation.id === "string" ? delegation.id : "";
+  if (!id) return null;
+  return {
+    type: "session.commentary.append",
+    event_id: `no-backend-${id}`,
+    delegation_id: id,
+    content: FRED_LIVE_NO_BACKEND_REPLY,
+  };
+}
+
+function usageSeconds(event: Record<string, unknown>): number | undefined {
+  const usage = event.usage as { seconds?: unknown } | undefined;
+  return typeof usage?.seconds === "number" ? usage.seconds : undefined;
+}
+
 export function reduceFredLiveEvent(
   state: FredLiveTranscriptState,
   event: Record<string, unknown>,
 ): FredLiveTranscriptState {
   const type = typeof event.type === "string" ? event.type : "";
   if (type === "session.started") return { ...state, status: "Verbunden" };
-  if (type === "session.closed") return { ...state, status: "Beendet", usage: event.usage };
-  if (
-    type.endsWith("transcript.done") || type.endsWith("transcript.completed") ||
-    type.endsWith("transcription.done") || type.endsWith("transcription.completed")
-  ) {
-    return { ...state, turnClosed: true };
+  if (type === "session.closed") {
+    return { ...state, status: "Beendet", usageSeconds: usageSeconds(event) ?? state.usageSeconds };
   }
-  if (!type.endsWith("transcript.delta") && !type.endsWith("transcription.delta")) return state;
+  if (type === "session.usage.updated") {
+    const seconds = usageSeconds(event);
+    return seconds === undefined ? state : { ...state, usageSeconds: seconds };
+  }
+
+  const speaker = fredLiveSpeakerFor(type);
+  if (!speaker) return state;
   const text = typeof event.delta === "string" ? event.delta : typeof event.text === "string" ? event.text : "";
   if (!text) return state;
-  const transcript = [...state.transcript];
-  const speaker = fredLiveSpeakerFor(type);
-  const last = transcript[transcript.length - 1];
-  if (!state.turnClosed && last && (!speaker || last.speaker === speaker)) {
-    transcript[transcript.length - 1] = { ...last, text: `${last.text}${text}` };
-  } else {
-    transcript.push({ speaker: speaker ?? "", text });
+
+  const startMs = typeof event.start_ms === "number" ? event.start_ms : undefined;
+  const endMs = typeof event.end_ms === "number" ? event.end_ms : undefined;
+  // Each speaker keeps growing its own row during overlapping speech; a new row starts only
+  // when that speaker resumes after a longer gap.
+  const rows = [...state.transcript];
+  let index = -1;
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    if (rows[i].speaker === speaker) {
+      index = i;
+      break;
+    }
   }
-  return { ...state, transcript, turnClosed: false };
+  const target: FredLiveTranscriptRow | undefined = index >= 0 ? rows[index] : undefined;
+  if (target && startMs !== undefined && startMs - target.endMs <= FRED_LIVE_ROW_GAP_MS) {
+    rows[index] = {
+      ...target,
+      // Fragments are concatenated exactly as received, without trimming or inserted spaces.
+      text: target.text + text,
+      endMs: endMs ?? target.endMs,
+    };
+  } else {
+    rows.push({
+      speaker,
+      text,
+      startMs: startMs ?? target?.endMs ?? 0,
+      endMs: endMs ?? startMs ?? 0,
+    });
+  }
+  return { ...state, transcript: rows };
 }
