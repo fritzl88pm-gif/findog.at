@@ -218,6 +218,11 @@ describe("approved release surface", () => {
     expect(chatRouteSource).toContain('retiredApiResponse');
   });
 
+  it("allows the microphone for the first-party Fred Live voice session", () => {
+    expect(nextConfigSource).toContain("microphone=(self)");
+    expect(nextConfigSource).not.toContain("microphone=()");
+  });
+
   it("uses Fred without model administration and keeps provider images constrained", () => {
     expect(pageSource).toContain('fetch("/api/settings"');
     expect(nextConfigSource).toContain("img-src 'self' data: blob: ${supabaseImageSources.join(\" \")}");

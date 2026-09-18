@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  describeFredLiveStartError,
   isFredLiveConnectionActive,
   reduceFredLiveEvent,
   type FredLiveTranscriptState,
@@ -85,7 +86,7 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
     } catch (startError) {
       stop();
       setLiveState((current) => ({ ...current, status: "Bereit" }));
-      setError(startError instanceof Error ? startError.message : "Fred Live konnte nicht gestartet werden.");
+      setError(describeFredLiveStartError(startError));
     }
   };
 

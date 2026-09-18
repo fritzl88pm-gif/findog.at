@@ -13,6 +13,23 @@ export function fredLiveSpeakerFor(type: string): "Fred" | "Du" | undefined {
   return undefined;
 }
 
+export function describeFredLiveStartError(error: unknown): string {
+  if (typeof DOMException !== "undefined" && error instanceof DOMException) {
+    if (error.name === "NotAllowedError" || error.name === "SecurityError") {
+      return "Der Browser blockiert den Mikrofonzugriff. Im Adressfeld das Schloss-Symbol öffnen, Mikrofon auf Erlauben stellen und die Seite neu laden.";
+    }
+    if (error.name === "NotFoundError" || error.name === "OverconstrainedError") {
+      return "Es wurde kein Mikrofon gefunden.";
+    }
+    if (error.name === "NotReadableError" || error.name === "AbortError") {
+      return "Das Mikrofon ist gerade nicht verfügbar, möglicherweise verwendet es ein anderes Programm.";
+    }
+  }
+  return error instanceof Error && error.message
+    ? error.message
+    : "Fred Live konnte nicht gestartet werden.";
+}
+
 export function isFredLiveConnectionActive(
   activeConnection: RTCPeerConnection | null,
   capturedConnection: RTCPeerConnection,

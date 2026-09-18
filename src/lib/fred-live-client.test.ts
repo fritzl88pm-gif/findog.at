@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  describeFredLiveStartError,
   isFredLiveConnectionActive,
   reduceFredLiveEvent,
   type FredLiveTranscriptState,
@@ -74,5 +75,17 @@ describe("Fred Live browser helpers", () => {
     const connection = {} as RTCPeerConnection;
     expect(isFredLiveConnectionActive(connection, connection)).toBe(true);
     expect(isFredLiveConnectionActive(null, connection)).toBe(false);
+  });
+
+  it("explains blocked microphone access instead of repeating the browser message", () => {
+    expect(describeFredLiveStartError(new DOMException("Permission denied", "NotAllowedError")))
+      .toContain("Schloss-Symbol");
+    expect(describeFredLiveStartError(new DOMException("no device", "NotFoundError")))
+      .toContain("kein Mikrofon");
+    expect(describeFredLiveStartError(new DOMException("busy", "NotReadableError")))
+      .toContain("anderes Programm");
+    expect(describeFredLiveStartError(new Error("Fred Live konnte nicht gestartet werden.")))
+      .toBe("Fred Live konnte nicht gestartet werden.");
+    expect(describeFredLiveStartError(undefined)).toContain("konnte nicht gestartet werden");
   });
 });
