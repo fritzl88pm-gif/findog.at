@@ -12,6 +12,7 @@ zwischen Verlauf und Anwendungen und deren gespeicherte Einstellung bleiben erha
 „Scanning“ und „Daten“. Auch die eingeklappte Symbolleiste verwendet diese Namen
 und dieselbe Reihenfolge. Administration steht bei den Kontofunktionen; die
 bestehenden Berechtigungen für Administration und Quiz gelten weiterhin.
+Der zusätzliche Admin-Bereich „Fred Live“ ist nur für Administratoren sichtbar.
 
 Im Verlauf aktiviert „Auswählen“ die Checkboxen und Löschaktionen. „Fertig“
 beendet die Auswahl und leert ausgewählte IDs. Abmeldung, Kontolöschung und eine

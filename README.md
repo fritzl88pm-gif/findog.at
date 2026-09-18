@@ -40,6 +40,9 @@ Copy `.env.example` to `.env.local` and configure Supabase Auth before using the
 | `TELEGRAM_WORKER_PORT` | Telegram worker | Private health-listener port. The worker must not have a public domain. |
 | `FINDOG_HEAVY_ATTACHMENT_CONCURRENCY` | Optional | Process-wide admission limit for memory-heavy multipart attachment requests. Defaults to `1`; keep this conservative unless the container memory budget is measured. |
 | `OPENROUTER_API_KEY` | For Scanning and image-assisted forms | Server-only OpenRouter key used by Gemini 3.5 Flash for Scanning and by the form image extraction flow. Never expose it to the browser. |
+| `OPENAI_LIVE_API_KEY` | For admin-only Fred Live | Server-only OpenAI project key for GPT-Live WebRTC sessions. Falls back to `OPENAI_API_KEY` when unset or blank; never expose either key to the browser. |
+
+Fred Live is billed by OpenAI per second of voice duration.
 
 Fred uses Findog's native chat surface. The authenticated `/api/fred/chat` proxy exchanges the long-lived `em_` publish token server-side, creates or resumes the user-owned WeKnora session, streams Fred's answer and structured research events as NDJSON, and persists both sides of the turn. Findog renders deterministic German research summaries instead of exposing raw model reasoning or tool arguments. Complete BFG business numbers are verified against the official Findok API while the answer streams; verified citations become official Findok full-text links, while unresolved citations remain unchanged and unlinked. WeKnora's internal `<kb ... />` and `<web ... />` citation tags are removed from the visible answer while their source metadata and the unchanged provider answer remain stored for provenance. Neither the short-lived `ems_` token nor the signed WeKnora session handle reaches the browser. There is no Taxdog iframe or cross-origin browser storage.
 

@@ -79,6 +79,7 @@ import {
   type FredAgentKey,
 } from "@/lib/weknora/fred-agent";
 import FredRunView from "@/components/fredrun-view";
+import FredLiveView from "@/components/fred-live-view";
 import L17bCountrySelect from "@/components/l17b-country-select";
 import ScanningView from "@/components/scanning-view";
 import {
@@ -132,7 +133,7 @@ type ConversationSummary = {
   telegramIntegrationId?: string | null;
 };
 
-type AppView = "home" | "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "bfg-newsletters" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data" | "reasonings";
+type AppView = "home" | "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "bfg-newsletters" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "fred-live" | "administration" | "data" | "reasonings";
 
 const TELEGRAM_BOT_USERNAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{4,31}$/u;
 
@@ -1970,6 +1971,14 @@ export default function Home() {
     }
   }
 
+  function openFredLiveView() {
+    if (!isAdmin || !leaveAdministration()) return;
+    setAppView("fred-live");
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
   function openFredView() {
     if (!leaveAdministration()) return;
     setAppView("chat");
@@ -3264,6 +3273,17 @@ export default function Home() {
                         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9 9a3 3 0 0 1 6 0c0 2-3 3-3 5"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
                         Quiz
                       </button>) : null}
+                      {isAdmin ? (<button
+                        className={`sidebar-view-button ${appView === "fred-live" ? "active" : ""}`}
+                        type="button"
+                        onClick={openFredLiveView}
+                        aria-current={appView === "fred-live" ? "page" : undefined}
+                        title="Fred Live"
+                        aria-label="Fred Live"
+                      >
+                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 10a8 8 0 0 1 16 0v4a2 2 0 0 1-2 2h-2v-6h4M4 10v6H2v-4a2 2 0 0 1 2-2M8 19h8"></path></svg>
+                        Fred Live
+                      </button>) : null}
                     </SidebarNavigationGroup>
                   </nav>
                 ) : null}
@@ -3412,6 +3432,18 @@ export default function Home() {
                 aria-current={appView === "quiz" ? "page" : undefined}
               >
                 <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9 9a3 3 0 0 1 6 0c0 2-3 3-3 5"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+              </button>
+            ) : null}
+            {isAdmin ? (
+              <button
+                className={`icon-button rail-icon-btn ${appView === "fred-live" ? "active" : ""}`}
+                type="button"
+                onClick={openFredLiveView}
+                title="Fred Live"
+                aria-label="Fred Live"
+                aria-current={appView === "fred-live" ? "page" : undefined}
+              >
+                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 10a8 8 0 0 1 16 0v4a2 2 0 0 1-2 2h-2v-6h4M4 10v6H2v-4a2 2 0 0 1 2-2M8 19h8"></path></svg>
               </button>
             ) : null}
           </div>
@@ -3999,6 +4031,8 @@ export default function Home() {
         <FredRunView key={user?.id ?? "fredrun"} accessToken={session?.access_token ?? ""} />
       ) : appView === "quiz" && isAdmin ? (
         <QuizView accessToken={session?.access_token ?? ""} />
+      ) : appView === "fred-live" && isAdmin ? (
+        <FredLiveView accessToken={session?.access_token ?? ""} />
       ) : appView === "scanning" ? (
         <ScanningView accessToken={session?.access_token ?? ""} />
       ) : appView === "german-sv-pension" ? (
