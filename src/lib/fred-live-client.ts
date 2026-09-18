@@ -19,9 +19,45 @@ export type FredLiveTranscriptState = {
  * (verified against real events: input/output transcript deltas carry `start_ms`/`end_ms`).
  */
 export const FRED_LIVE_ROW_GAP_MS = 2_500;
+export const FRED_LIVE_QUESTION_GRACE_MS = 700;
 
 export const FRED_LIVE_NO_BACKEND_REPLY =
   "In dieser Version ist kein Backend-Agent verbunden. Antworte aus deinem eigenen Wissen und sage offen, wenn du etwas nicht prüfen kannst.";
+
+export function fredLiveQuestionFromTranscript(rows: readonly FredLiveTranscriptRow[], fromIndex: number): string {
+  return rows.slice(Math.max(0, fromIndex))
+    .filter((row) => row.speaker === "Du")
+    .map((row) => row.text)
+    .join("")
+    .trim()
+    .slice(0, 2_000);
+}
+
+/** Request body for the admin ask route; a known upstream session makes follow-ups work. */
+export function fredLiveAskBody(
+  question: string,
+  upstreamSessionId?: string,
+): { question: string; upstreamSessionId?: string } {
+  return upstreamSessionId ? { question, upstreamSessionId } : { question };
+}
+
+export function fredLiveDelegationFollowUp(
+  delegationId: string,
+  answer: string,
+): [{ type: "session.commentary.append"; event_id: string; delegation_id: string; content: string }, { type: "session.commentary.append"; event_id: string; delegation_id: string; content: string }] {
+  const interim = {
+    type: "session.commentary.append" as const,
+    event_id: `fred-live-interim-${delegationId}`,
+    delegation_id: delegationId,
+    content: "Ich schaue kurz in der Wissensbasis nach und melde mich gleich mit der Antwort.",
+  };
+  return [interim, {
+    type: "session.commentary.append" as const,
+    event_id: `fred-live-answer-${delegationId}`,
+    delegation_id: delegationId,
+    content: answer,
+  }];
+}
 
 export function fredLiveSpeakerFor(type: string): FredLiveSpeaker | undefined {
   if (type === "session.input_transcript.delta") return "Du";

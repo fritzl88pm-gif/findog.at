@@ -192,3 +192,16 @@ export function isAnswerDelta(parsed: unknown): boolean {
   }
   return false;
 }
+
+export function upstreamDelta(value: unknown): { content?: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const event = value as Record<string, unknown>;
+  const responseType = typeof event.response_type === "string" ? event.response_type : "";
+  if (responseType === "answer" || event.type === "answer") {
+    return { content: typeof event.content === "string" ? event.content : undefined };
+  }
+  if (!responseType && typeof event.content === "string") {
+    return { content: event.content };
+  }
+  return {};
+}

@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   describeFredLiveStartError,
+  fredLiveAskBody,
+  fredLiveDelegationFollowUp,
   fredLiveDelegationReply,
+  FRED_LIVE_QUESTION_GRACE_MS,
+  fredLiveQuestionFromTranscript,
   isFredLiveConnectionActive,
   reduceFredLiveEvent,
   type FredLiveTranscriptState,
@@ -36,6 +40,26 @@ function reduceAll(events: [string, string, number, number][]): FredLiveTranscri
 }
 
 describe("Fred Live browser helpers", () => {
+  it("uses the transcript grace period required by GPT-Live", () => {
+    expect(FRED_LIVE_QUESTION_GRACE_MS).toBe(700);
+  });
+
+  it("assembles only new user transcript rows and caps the question", () => {
+    expect(fredLiveQuestionFromTranscript([
+      { speaker: "Du", text: "alt", startMs: 0, endMs: 1 },
+      { speaker: "Fred", text: "Antwort", startMs: 2, endMs: 3 },
+      { speaker: "Du", text: " Neue", startMs: 4, endMs: 5 },
+    ], 2)).toBe("Neue");
+    expect(fredLiveQuestionFromTranscript([{ speaker: "Du", text: "x".repeat(2_100), startMs: 0, endMs: 1 }], 0)).toHaveLength(2_000);
+  });
+
+  it("builds interim and unchanged answer commentary payloads", () => {
+    expect(fredLiveDelegationFollowUp("del-1", "Die Antwort.")).toEqual([
+      expect.objectContaining({ type: "session.commentary.append", delegation_id: "del-1", content: expect.stringContaining("Wissensbasis") }),
+      { type: "session.commentary.append", event_id: "fred-live-answer-del-1", delegation_id: "del-1", content: "Die Antwort." },
+    ]);
+  });
+
   it("waits for complete ICE gathering", async () => {
     const connection = {
       iceGatheringState: "gathering",
@@ -116,6 +140,12 @@ describe("Fred Live browser helpers", () => {
       delegation_id: "item_9tA2bF3h7K9m2P5q8R1s4",
       content: expect.stringContaining("kein Backend-Agent"),
     });
+  });
+
+  it("sends a follow-up on the same upstream session when one is known", () => {
+    expect(fredLiveAskBody("Wie hoch ist der Betrag?")).toEqual({ question: "Wie hoch ist der Betrag?" });
+    expect(fredLiveAskBody("Und für 2025?", "session-1"))
+      .toEqual({ question: "Und für 2025?", upstreamSessionId: "session-1" });
   });
 
   it("checks whether the captured connection is still active", () => {

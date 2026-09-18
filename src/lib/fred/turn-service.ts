@@ -15,6 +15,7 @@ import {
 import {
   EOF_WITHOUT_FINAL_CLIENT_MESSAGE,
   isUpstreamCompleteEvent,
+  upstreamDelta,
 } from "@/lib/fred/run-diagnostics";
 import {
   fredAgentName,
@@ -205,19 +206,6 @@ const MAX_LIVE_BFG_CITATIONS = 20;
 const ARTIFACT_LOOKUP_TIMEOUT_MS = 5_000;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-function upstreamDelta(value: unknown): { content?: string } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const event = value as Record<string, unknown>;
-  const responseType = typeof event.response_type === "string" ? event.response_type : "";
-  if (responseType === "answer" || event.type === "answer") {
-    return { content: typeof event.content === "string" ? event.content : undefined };
-  }
-  if (!responseType && typeof event.content === "string") {
-    return { content: event.content };
-  }
-  return {};
-}
 
 function sseData(frame: string): string | null {
   const lines = frame.split(/\r?\n/u);
