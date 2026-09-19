@@ -3,9 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildFredLiveSessionConfig,
   createFredLiveSession,
+  FRED_LIVE_DEFAULT_VOICE,
   FRED_LIVE_INSTRUCTIONS,
   FRED_LIVE_MODEL,
+  FRED_LIVE_VOICES,
   resolveFredLiveApiKey,
+  resolveFredLiveVoice,
 } from "./fred-live";
 
 describe("Fred Live session", () => {
@@ -13,13 +16,22 @@ describe("Fred Live session", () => {
     vi.unstubAllEnvs();
   });
 
-  it("builds the fixed client-delegated session config", () => {
-    expect(buildFredLiveSessionConfig()).toEqual({
+  it("builds the client-delegated session config with the configured voice", () => {
+    expect(buildFredLiveSessionConfig("vesper")).toEqual({
       model: FRED_LIVE_MODEL,
       instructions: FRED_LIVE_INSTRUCTIONS,
+      audio: { output: { voice: "vesper" } },
       delegation: { type: "client" },
     });
+    expect(buildFredLiveSessionConfig().audio.output.voice).toBe(FRED_LIVE_DEFAULT_VOICE);
     expect(FRED_LIVE_INSTRUCTIONS.trim()).not.toBe("");
+  });
+
+  it("accepts only voices GPT-Live knows and falls back to the male default", () => {
+    expect(FRED_LIVE_VOICES).toContain(FRED_LIVE_DEFAULT_VOICE);
+    expect(resolveFredLiveVoice({ OPENAI_LIVE_VOICE: " Vesper " })).toBe("vesper");
+    expect(resolveFredLiveVoice({ OPENAI_LIVE_VOICE: "darth-vader" })).toBe(FRED_LIVE_DEFAULT_VOICE);
+    expect(resolveFredLiveVoice({})).toBe(FRED_LIVE_DEFAULT_VOICE);
   });
 
   it("resolves the dedicated key before the fallback", () => {

@@ -16,7 +16,8 @@ export type FredLiveTranscriptState = {
 export type FredLiveAppendEvent = {
   type: "session.commentary.append";
   event_id: string;
-  delegation_id: string;
+  /** The delegation this append belongs to, or null for general session context. */
+  delegation_id: string | null;
   content: string;
 };
 
@@ -51,6 +52,27 @@ export const FRED_LIVE_INTERIM_REPLY =
 
 export const FRED_LIVE_EMPTY_QUESTION_REPLY =
   "Ich habe die Frage akustisch nicht sicher verstanden. Bitte frage kurz noch einmal nach.";
+
+/**
+ * GPT-Live stays quiet until it is spoken to, so the opening line is requested once the session
+ * has started. A context append guides the model, so it may paraphrase the greeting.
+ */
+export const FRED_LIVE_GREETING =
+  "Die Verbindung steht und die Person hört bereits zu. Begrüße sie jetzt als Erster, kurz und freundlich: Du bist Fred, der Steuerassistent von findog, und fragst, worum es heute geht. Sprich sofort und warte danach auf die Antwort.";
+
+/**
+ * Spoken while the knowledge base runs. The first line comes late and the rest are spaced widely,
+ * because a filler that arrives mid-sentence talks over Fred.
+ */
+export const FRED_LIVE_FILLER_LINES = [
+  "Sag kurz, dass du noch in der Wissensbasis nachliest.",
+  "Sag kurz, dass es noch einen Moment dauert und du gleich so weit bist.",
+  "Sag kurz, dass es heute etwas länger dauert und du dranbleibst.",
+  "Sag kurz, dass du die Antwort gleich hast und um etwas Geduld bittest.",
+] as const;
+
+/** Delay before the first filler, then between the following ones, in milliseconds. */
+export const FRED_LIVE_FILLER_DELAYS_MS = [7_000, 9_000, 12_000] as const;
 
 export const FRED_LIVE_BACKEND_ERROR_REPLY =
   "Die Wissensbasis ist gerade nicht erreichbar. Sage das offen und biete an, es gleich noch einmal zu versuchen.";
@@ -131,7 +153,7 @@ export function splitFredLiveAppend(
   return chunks;
 }
 
-function commentary(eventId: string, delegationId: string, content: string): FredLiveAppendEvent {
+function commentary(eventId: string, delegationId: string | null, content: string): FredLiveAppendEvent {
   return {
     type: "session.commentary.append",
     event_id: eventId,
@@ -161,6 +183,40 @@ export function fredLiveNoticeCommentary(
   eventId = `fred-live-notice-${delegationId}`,
 ): FredLiveAppendEvent {
   return commentary(eventId, delegationId, splitFredLiveAppend(content)[0] ?? content);
+}
+
+/** Asks GPT-Live for the opening line; it belongs to the session, not to a delegation. */
+export function fredLiveGreetingCommentary(): FredLiveAppendEvent {
+  return commentary("fred-live-greeting", null, FRED_LIVE_GREETING);
+}
+
+export function fredLiveFillerCommentary(delegationId: string, index: number): FredLiveAppendEvent {
+  const line = FRED_LIVE_FILLER_LINES[Math.min(index, FRED_LIVE_FILLER_LINES.length - 1)];
+  return commentary(`fred-live-filler-${delegationId}-${index + 1}`, delegationId, line);
+}
+
+/**
+ * Keeps the line alive while the knowledge base runs, until the answer arrives and aborts it.
+ * Stops after the last filler line so a hung request cannot make Fred talk forever.
+ */
+export async function runFredLiveFillers(options: {
+  delegationId: string;
+  send: (event: FredLiveAppendEvent) => void;
+  signal: AbortSignal;
+  delaysMs?: readonly number[];
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+}): Promise<void> {
+  const delays = options.delaysMs ?? FRED_LIVE_FILLER_DELAYS_MS;
+  const sleep = options.sleep ?? fredLiveSleep;
+  for (let index = 0; index < FRED_LIVE_FILLER_LINES.length; index += 1) {
+    try {
+      await sleep(delays[Math.min(index, delays.length - 1)], options.signal);
+    } catch {
+      return;
+    }
+    if (options.signal.aborted) return;
+    options.send(fredLiveFillerCommentary(options.delegationId, index));
+  }
 }
 
 /** The user's spoken text so far; rows only ever grow at the end, so offsets stay stable. */

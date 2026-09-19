@@ -9,6 +9,8 @@ import {
   fredLiveDelegationId,
   fredLiveDelegationReply,
   fredLiveErrorMessage,
+  fredLiveFillerCommentary,
+  fredLiveGreetingCommentary,
   fredLiveInterimCommentary,
   fredLiveNoticeCommentary,
   fredLiveQuestionFromTranscript,
@@ -18,7 +20,9 @@ import {
   FRED_LIVE_QUESTION_MAX_WAIT_MS,
   isFredLiveConnectionActive,
   reduceFredLiveEvent,
+  runFredLiveFillers,
   splitFredLiveAppend,
+  FRED_LIVE_FILLER_LINES,
   type FredLiveTranscriptState,
   waitForIceGathering,
 } from "./fred-live-client";
@@ -132,6 +136,45 @@ describe("Fred Live browser helpers", () => {
         delegation_id: "del-1",
         content: "Kurzer Hinweis.",
       });
+  });
+
+  it("asks for an opening line that belongs to the session, not to a delegation", () => {
+    expect(fredLiveGreetingCommentary()).toEqual({
+      type: "session.commentary.append",
+      event_id: "fred-live-greeting",
+      delegation_id: null,
+      content: expect.stringContaining("Begrüße"),
+    });
+  });
+
+  it("fills the wait with spaced lines and stops after the last one", async () => {
+    const sent: string[] = [];
+    const waits: number[] = [];
+    await runFredLiveFillers({
+      delegationId: "del-1",
+      signal: new AbortController().signal,
+      send: (event) => sent.push(event.event_id),
+      sleep: async (ms) => { waits.push(ms); },
+    });
+    expect(sent).toEqual(FRED_LIVE_FILLER_LINES.map((_, index) => `fred-live-filler-del-1-${index + 1}`));
+    expect(waits[0]).toBeGreaterThanOrEqual(5_000);
+    expect(waits).toHaveLength(FRED_LIVE_FILLER_LINES.length);
+    expect(fredLiveFillerCommentary("del-1", 99).content).toBe(FRED_LIVE_FILLER_LINES.at(-1));
+  });
+
+  it("stops filling as soon as the answer arrives", async () => {
+    const controller = new AbortController();
+    const sent: string[] = [];
+    await runFredLiveFillers({
+      delegationId: "del-1",
+      signal: controller.signal,
+      send: (event) => sent.push(event.event_id),
+      sleep: async (_ms, signal) => {
+        controller.abort();
+        if (signal.aborted) throw new Error("aborted");
+      },
+    });
+    expect(sent).toEqual([]);
   });
 
   it("collects the question until the transcript stops growing", async () => {

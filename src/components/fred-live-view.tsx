@@ -10,6 +10,7 @@ import {
   fredLiveDelegationId,
   fredLiveDelegationReply,
   fredLiveErrorMessage,
+  fredLiveGreetingCommentary,
   fredLiveInterimCommentary,
   fredLiveNoticeCommentary,
   fredLiveQuestionFromTranscript,
@@ -18,6 +19,7 @@ import {
   FRED_LIVE_EMPTY_QUESTION_REPLY,
   isFredLiveConnectionActive,
   reduceFredLiveEvent,
+  runFredLiveFillers,
   type FredLiveAppendEvent,
   type FredLiveTranscriptState,
   waitForIceGathering,
@@ -39,6 +41,7 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
   const delegationAbortRef = useRef<AbortController | null>(null);
   const transcriptCursorRef = useRef(0);
   const upstreamSessionRef = useRef("");
+  const greetedRef = useRef(false);
   const connectionRef = useRef<RTCPeerConnection | null>(null);
   const channelRef = useRef<RTCDataChannel | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -69,6 +72,7 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
     setSources([]);
     transcriptCursorRef.current = 0;
     upstreamSessionRef.current = "";
+    greetedRef.current = false;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const connection = new RTCPeerConnection();
@@ -85,9 +89,24 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
         delegationAbortRef.current?.abort();
         const controller = new AbortController();
         delegationAbortRef.current = controller;
+        const fillers = new AbortController();
+        const stopFillers = () => fillers.abort();
+        controller.signal.addEventListener("abort", stopFillers, { once: true });
         try {
           // Fred keeps the floor while the knowledge base runs; without this the line falls silent.
           sendCommentary(fredLiveInterimCommentary(delegationId));
+          // The knowledge base takes seconds, so the wait is filled with spaced short lines.
+          void runFredLiveFillers({
+            delegationId,
+            signal: fillers.signal,
+            send: (filler) => {
+              try {
+                sendCommentary(filler);
+              } catch {
+                stopFillers();
+              }
+            },
+          });
           setActivity("Frage wird aus dem Gesprächsverlauf gelesen…");
           const question = await collectFredLiveQuestion({
             readQuestion: () =>
@@ -107,6 +126,7 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
             body: JSON.stringify(fredLiveAskBody(question, upstreamSessionRef.current || undefined)),
             signal: controller.signal,
           });
+          stopFillers();
           const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
           if (!response.ok || typeof payload.answer !== "string") {
             if (response.status === 404 || response.status === 405) {
@@ -139,6 +159,8 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
             // The data channel is gone; the message above already explains the failure.
           }
         } finally {
+          stopFillers();
+          controller.signal.removeEventListener("abort", stopFillers);
           if (delegationAbortRef.current === controller) delegationAbortRef.current = null;
         }
       };
@@ -150,6 +172,14 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
           setLiveState(nextState);
           const liveError = fredLiveErrorMessage(parsed);
           if (liveError) setError(liveError);
+          if (parsed.type === "session.started" && !greetedRef.current) {
+            greetedRef.current = true;
+            try {
+              sendCommentary(fredLiveGreetingCommentary());
+            } catch {
+              // The channel closed before the greeting; the status line already shows the state.
+            }
+          }
           if (parsed.type === "session.delegation.created") void handleDelegation(parsed);
         } catch {
           setError("Ein Live-Ereignis konnte nicht verarbeitet werden.");

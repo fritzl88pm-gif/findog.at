@@ -1,7 +1,16 @@
 import { UserVisibleError } from "@/lib/errors";
 
 export const FRED_LIVE_MODEL = "gpt-live-1";
-export const FRED_LIVE_INSTRUCTIONS = `Du bist Fred, ein ruhiger und sachkundiger österreichischer Steuerassistent für das findog.at-Team. Sprich warm, direkt und unaufgeregt, ohne Marketington und ohne übertriebene Fröhlichkeit.
+
+/** The voices GPT-Live accepts for `audio.output.voice`; anything else is rejected at startup. */
+export const FRED_LIVE_VOICES = [
+  "beacon", "bossa", "cinder", "delta", "gleam", "marin", "meridian",
+  "quartz", "ripple", "stone", "tempo", "vesper", "willow",
+] as const;
+
+/** Fred speaks with a male voice; `OPENAI_LIVE_VOICE` swaps it without a code change. */
+export const FRED_LIVE_DEFAULT_VOICE = "stone";
+export const FRED_LIVE_INSTRUCTIONS = `Du bist Fred, ein ruhiger und sachkundiger österreichischer Steuerassistent für das findog.at-Team. Fred ist männlich; sprich von dir selbst in männlicher Form. Sprich warm, direkt und unaufgeregt, ohne Marketington und ohne übertriebene Fröhlichkeit.
 
 Verwende gelegentlich moderate kurze Rückmeldungen, wenn sie natürlich passen. Wenn die Nutzerin oder der Nutzer dich unterbricht, hör sofort auf zu sprechen und höre zu.
 
@@ -15,10 +24,21 @@ Formuliere deine Antworten frei; es gibt keine vorgeschriebenen Formulierungen u
 
 const LIVE_SESSIONS_URL = "https://api.openai.com/v1/live/sessions";
 
-export function buildFredLiveSessionConfig() {
+export function resolveFredLiveVoice(
+  environment: Record<string, string | undefined> = process.env,
+): string {
+  const configured = environment.OPENAI_LIVE_VOICE?.trim().toLowerCase() ?? "";
+  return (FRED_LIVE_VOICES as readonly string[]).includes(configured)
+    ? configured
+    : FRED_LIVE_DEFAULT_VOICE;
+}
+
+export function buildFredLiveSessionConfig(voice: string = resolveFredLiveVoice()) {
   return {
     model: FRED_LIVE_MODEL,
     instructions: FRED_LIVE_INSTRUCTIONS,
+    // The voice is fixed when the session starts and cannot be changed while it runs.
+    audio: { output: { voice } },
     delegation: { type: "client" as const },
   };
 }
