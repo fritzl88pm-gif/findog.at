@@ -3,23 +3,38 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  collectFredLiveQuestion,
   describeFredLiveStartError,
+  fredLiveAnswerCommentary,
   fredLiveAskBody,
-  fredLiveDelegationFollowUp,
+  fredLiveDelegationId,
   fredLiveDelegationReply,
-  FRED_LIVE_QUESTION_GRACE_MS,
+  fredLiveErrorMessage,
+  fredLiveInterimCommentary,
+  fredLiveNoticeCommentary,
   fredLiveQuestionFromTranscript,
+  fredLiveUserTranscript,
+  FRED_LIVE_BACKEND_ERROR_REPLY,
+  FRED_LIVE_EMPTY_QUESTION_REPLY,
   isFredLiveConnectionActive,
   reduceFredLiveEvent,
+  type FredLiveAppendEvent,
   type FredLiveTranscriptState,
   waitForIceGathering,
 } from "@/lib/fred-live-client";
 
+type FredLiveSource = { title: string; channel?: string; knowledgeBaseId?: string };
+
+function isFredLiveSource(value: unknown): value is FredLiveSource {
+  return Boolean(value && typeof value === "object" && typeof (value as { title?: unknown }).title === "string");
+}
+
 export default function FredLiveView({ accessToken }: { accessToken: string }) {
   const [liveState, setLiveState] = useState<FredLiveTranscriptState>({ status: "Bereit", transcript: [] });
   const [error, setError] = useState("");
+  const [activity, setActivity] = useState("");
   const [isRunning, setIsRunning] = useState(false);
-  const [sources, setSources] = useState<{ title: string; channel?: string; knowledgeBaseId?: string }[]>([]);
+  const [sources, setSources] = useState<FredLiveSource[]>([]);
   const liveStateRef = useRef(liveState);
   const delegationAbortRef = useRef<AbortController | null>(null);
   const transcriptCursorRef = useRef(0);
@@ -39,6 +54,7 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
     connectionRef.current?.close();
     connectionRef.current = null;
     if (audioRef.current) audioRef.current.srcObject = null;
+    setActivity("");
     setIsRunning(false);
   }, []);
 
@@ -47,6 +63,7 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
   const start = async () => {
     if (isRunning) return;
     setError("");
+    setActivity("");
     setLiveState({ status: "Mikrofon wird vorbereitet…", transcript: [] });
     liveStateRef.current = { status: "Mikrofon wird vorbereitet…", transcript: [] };
     setSources([]);
@@ -56,31 +73,34 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const connection = new RTCPeerConnection();
       const channel = connection.createDataChannel("oai-events");
-      const sendCommentary = (payload: ReturnType<typeof fredLiveDelegationFollowUp>[number]) => {
-        if (channel.readyState === "open") channel.send(JSON.stringify(payload));
+      const sendCommentary = (payload: FredLiveAppendEvent) => {
+        if (channel.readyState !== "open") {
+          throw new Error("Die Live-Verbindung zu Fred ist unterbrochen.");
+        }
+        channel.send(JSON.stringify(payload));
       };
       const handleDelegation = async (parsed: Record<string, unknown>) => {
-        const delegation = parsed.delegation as { id?: unknown } | undefined;
-        const delegationId = typeof delegation?.id === "string" ? delegation.id : "";
+        const delegationId = fredLiveDelegationId(parsed);
         if (!delegationId) return;
         delegationAbortRef.current?.abort();
         const controller = new AbortController();
         delegationAbortRef.current = controller;
-        const fromIndex = transcriptCursorRef.current;
-        transcriptCursorRef.current = liveStateRef.current.transcript.length;
-        const interim = fredLiveDelegationFollowUp(delegationId, "")[0];
-        sendCommentary(interim);
         try {
-          await new Promise<void>((resolve, reject) => {
-            const timeout = window.setTimeout(resolve, FRED_LIVE_QUESTION_GRACE_MS);
-            const abort = () => {
-              window.clearTimeout(timeout);
-              reject(controller.signal.reason ?? new DOMException("Aborted", "AbortError"));
-            };
-            controller.signal.addEventListener("abort", abort, { once: true });
+          // Fred keeps the floor while the knowledge base runs; without this the line falls silent.
+          sendCommentary(fredLiveInterimCommentary(delegationId));
+          setActivity("Frage wird aus dem Gesprächsverlauf gelesen…");
+          const question = await collectFredLiveQuestion({
+            readQuestion: () =>
+              fredLiveQuestionFromTranscript(liveStateRef.current.transcript, transcriptCursorRef.current),
+            signal: controller.signal,
           });
-          const question = fredLiveQuestionFromTranscript(liveStateRef.current.transcript, fromIndex);
-          if (!question) throw new Error("empty-question");
+          if (!question) {
+            setActivity("");
+            sendCommentary(fredLiveNoticeCommentary(delegationId, FRED_LIVE_EMPTY_QUESTION_REPLY));
+            return;
+          }
+          transcriptCursorRef.current = fredLiveUserTranscript(liveStateRef.current.transcript).length;
+          setActivity(`Wissensbasis wird gefragt: „${question}“`);
           const response = await fetch("/api/fred-live/ask", {
             method: "POST",
             headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
@@ -98,13 +118,25 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
           if (typeof payload.upstreamSessionId === "string" && payload.upstreamSessionId) {
             upstreamSessionRef.current = payload.upstreamSessionId;
           }
-          const [, answer] = fredLiveDelegationFollowUp(delegationId, payload.answer);
-          sendCommentary(answer);
-          setSources(Array.isArray(payload.sources) ? payload.sources.filter((source): source is { title: string; channel?: string; knowledgeBaseId?: string } => Boolean(source && typeof source === "object" && typeof (source as { title?: unknown }).title === "string")) : []);
-        } catch (error) {
-          if (!controller.signal.aborted) {
-            sendCommentary({ type: "session.commentary.append", event_id: `fred-live-error-${delegationId}`, delegation_id: delegationId, content: "Ich konnte die Wissensbasis gerade nicht erreichen. Bitte versuche es später noch einmal." });
-            setError(error instanceof Error && error.message !== "empty-question" ? error.message : "Die delegierte Frage war leer.");
+          // A single append above the provider limit is dropped unspoken, so the answer is
+          // handed over in several appends that share the delegation id.
+          const appends = fredLiveAnswerCommentary(delegationId, payload.answer);
+          if (appends.length === 0) throw new Error("Die Wissensbasis hat eine leere Antwort geliefert.");
+          for (const append of appends) sendCommentary(append);
+          setActivity(appends.length > 1
+            ? `Antwort an Fred übergeben (${appends.length} Teile).`
+            : "Antwort an Fred übergeben.");
+          setSources(Array.isArray(payload.sources) ? payload.sources.filter(isFredLiveSource) : []);
+        } catch (delegationError) {
+          if (controller.signal.aborted) return;
+          setActivity("");
+          setError(delegationError instanceof Error && delegationError.message
+            ? delegationError.message
+            : "Die Wissensbasis konnte die Frage nicht beantworten.");
+          try {
+            sendCommentary(fredLiveNoticeCommentary(delegationId, FRED_LIVE_BACKEND_ERROR_REPLY));
+          } catch {
+            // The data channel is gone; the message above already explains the failure.
           }
         } finally {
           if (delegationAbortRef.current === controller) delegationAbortRef.current = null;
@@ -116,6 +148,8 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
           const nextState = reduceFredLiveEvent(liveStateRef.current, parsed);
           liveStateRef.current = nextState;
           setLiveState(nextState);
+          const liveError = fredLiveErrorMessage(parsed);
+          if (liveError) setError(liveError);
           if (parsed.type === "session.delegation.created") void handleDelegation(parsed);
         } catch {
           setError("Ein Live-Ereignis konnte nicht verarbeitet werden.");
@@ -179,6 +213,7 @@ export default function FredLiveView({ accessToken }: { accessToken: string }) {
           Status: {liveState.status}
           {liveState.usageSeconds !== undefined ? ` · ${liveState.usageSeconds} s` : ""}
         </p>
+        {activity ? <p aria-live="polite">Wissensbasis: {activity}</p> : null}
         {error ? <div className="error-box" role="alert">{error}</div> : null}
         <ol aria-label="Gesprächsprotokoll">
           {liveState.transcript.map((row, index) => (

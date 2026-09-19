@@ -1,14 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  collectFredLiveQuestion,
   describeFredLiveStartError,
+  estimateFredLiveTokens,
+  fredLiveAnswerCommentary,
   fredLiveAskBody,
-  fredLiveDelegationFollowUp,
+  fredLiveDelegationId,
   fredLiveDelegationReply,
-  FRED_LIVE_QUESTION_GRACE_MS,
+  fredLiveErrorMessage,
+  fredLiveInterimCommentary,
+  fredLiveNoticeCommentary,
   fredLiveQuestionFromTranscript,
+  fredLiveUserTranscript,
+  FRED_LIVE_APPEND_TOKEN_BUDGET,
+  FRED_LIVE_QUESTION_GRACE_MS,
+  FRED_LIVE_QUESTION_MAX_WAIT_MS,
   isFredLiveConnectionActive,
   reduceFredLiveEvent,
+  splitFredLiveAppend,
   type FredLiveTranscriptState,
   waitForIceGathering,
 } from "./fred-live-client";
@@ -40,24 +50,136 @@ function reduceAll(events: [string, string, number, number][]): FredLiveTranscri
 }
 
 describe("Fred Live browser helpers", () => {
-  it("uses the transcript grace period required by GPT-Live", () => {
+  it("uses the transcript timings required by GPT-Live", () => {
     expect(FRED_LIVE_QUESTION_GRACE_MS).toBe(700);
+    expect(FRED_LIVE_QUESTION_MAX_WAIT_MS).toBeGreaterThan(FRED_LIVE_QUESTION_GRACE_MS);
   });
 
-  it("assembles only new user transcript rows and caps the question", () => {
-    expect(fredLiveQuestionFromTranscript([
-      { speaker: "Du", text: "alt", startMs: 0, endMs: 1 },
-      { speaker: "Fred", text: "Antwort", startMs: 2, endMs: 3 },
-      { speaker: "Du", text: " Neue", startMs: 4, endMs: 5 },
-    ], 2)).toBe("Neue");
-    expect(fredLiveQuestionFromTranscript([{ speaker: "Du", text: "x".repeat(2_100), startMs: 0, endMs: 1 }], 0)).toHaveLength(2_000);
+  it("assembles only the unconsumed user speech and caps the question", () => {
+    const rows = [
+      { speaker: "Du" as const, text: "Alte Frage.", startMs: 0, endMs: 1 },
+      { speaker: "Fred" as const, text: "Antwort", startMs: 2, endMs: 3 },
+      { speaker: "Du" as const, text: " Neue Frage.", startMs: 4, endMs: 5 },
+    ];
+    expect(fredLiveUserTranscript(rows)).toBe("Alte Frage. Neue Frage.");
+    expect(fredLiveQuestionFromTranscript(rows, "Alte Frage.".length)).toBe("Neue Frage.");
+    expect(fredLiveQuestionFromTranscript(rows, 0)).toBe("Alte Frage. Neue Frage.");
+    expect(fredLiveQuestionFromTranscript(rows, 9_999)).toBe("");
+    expect(fredLiveQuestionFromTranscript([{ speaker: "Du", text: "x".repeat(2_100), startMs: 0, endMs: 1 }], 0))
+      .toHaveLength(2_000);
   });
 
-  it("builds interim and unchanged answer commentary payloads", () => {
-    expect(fredLiveDelegationFollowUp("del-1", "Die Antwort.")).toEqual([
-      expect.objectContaining({ type: "session.commentary.append", delegation_id: "del-1", content: expect.stringContaining("Wissensbasis") }),
-      { type: "session.commentary.append", event_id: "fred-live-answer-del-1", delegation_id: "del-1", content: "Die Antwort." },
+  it("keeps the follow-up question when the running row grew after the last delegation", () => {
+    // The user's row keeps growing, so a row index would consume the follow-up unseen.
+    const state = reduceAll([
+      ["session.input_transcript.delta", "Erste Frage.", 0, 1_000],
+      ["session.input_transcript.delta", " Und für 2025?", 1_200, 2_000],
     ]);
+    expect(state.transcript).toHaveLength(1);
+    expect(fredLiveQuestionFromTranscript(state.transcript, "Erste Frage.".length)).toBe("Und für 2025?");
+  });
+
+  it("estimates four ASCII characters and one umlaut to the token", () => {
+    expect(estimateFredLiveTokens("abcd")).toBe(1);
+    expect(estimateFredLiveTokens("ä")).toBe(1);
+    expect(estimateFredLiveTokens("")).toBe(0);
+  });
+
+  it("splits a long answer into appends below the provider limit, on sentence ends", () => {
+    const sentence = "Die Pendlerpauschale betraegt im Jahr 2026 einen festen Betrag. ";
+    const chunks = splitFredLiveAppend(sentence.repeat(60));
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(estimateFredLiveTokens(chunk)).toBeLessThanOrEqual(FRED_LIVE_APPEND_TOKEN_BUDGET);
+      expect(chunk.trim()).toBe(chunk);
+    }
+    expect(chunks.join(" ")).toBe(sentence.repeat(60).trim().replace(/\s+/gu, " "));
+    expect(chunks.every((chunk) => chunk.endsWith("."))).toBe(true);
+  });
+
+  it("splits a sentence that exceeds the limit on its own", () => {
+    const chunks = splitFredLiveAppend("wort ".repeat(1_000));
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(estimateFredLiveTokens(chunk)).toBeLessThanOrEqual(FRED_LIVE_APPEND_TOKEN_BUDGET);
+    }
+    expect(splitFredLiveAppend("   ")).toEqual([]);
+  });
+
+  it("builds interim, notice and chunked answer commentary payloads", () => {
+    expect(fredLiveInterimCommentary("del-1")).toEqual({
+      type: "session.commentary.append",
+      event_id: "fred-live-interim-del-1",
+      delegation_id: "del-1",
+      content: expect.stringContaining("Wissensbasis"),
+    });
+    expect(fredLiveAnswerCommentary("del-1", "Die Antwort.")).toEqual([{
+      type: "session.commentary.append",
+      event_id: "fred-live-answer-del-1-1",
+      delegation_id: "del-1",
+      content: "Die Antwort.",
+    }]);
+    const long = fredLiveAnswerCommentary("del-1", "Ein ganzer Satz mit Inhalt. ".repeat(200));
+    expect(long.length).toBeGreaterThan(1);
+    expect(long.map((append) => append.event_id))
+      .toEqual(long.map((_, index) => `fred-live-answer-del-1-${index + 1}`));
+    expect(long.every((append) => append.delegation_id === "del-1")).toBe(true);
+    expect(fredLiveAnswerCommentary("del-1", "   ")).toEqual([]);
+    expect(fredLiveNoticeCommentary("del-1", "Kurzer Hinweis."))
+      .toEqual({
+        type: "session.commentary.append",
+        event_id: "fred-live-notice-del-1",
+        delegation_id: "del-1",
+        content: "Kurzer Hinweis.",
+      });
+  });
+
+  it("collects the question until the transcript stops growing", async () => {
+    const samples = ["Wie", "Wie hoch", "Wie hoch ist der Betrag?", "Wie hoch ist der Betrag?"];
+    let call = 0;
+    const sleep = vi.fn(async () => undefined);
+    const question = await collectFredLiveQuestion({
+      readQuestion: () => samples[Math.min(call++, samples.length - 1)],
+      signal: new AbortController().signal,
+      graceMs: 300,
+      maxWaitMs: 3_000,
+      pollMs: 150,
+      sleep,
+    });
+    expect(question).toBe("Wie hoch ist der Betrag?");
+    expect(sleep).toHaveBeenCalled();
+  });
+
+  it("gives up on an empty transcript after the maximum wait", async () => {
+    const sleep = vi.fn(async () => undefined);
+    await expect(collectFredLiveQuestion({
+      readQuestion: () => "",
+      signal: new AbortController().signal,
+      graceMs: 300,
+      maxWaitMs: 600,
+      pollMs: 150,
+      sleep,
+    })).resolves.toBe("");
+    expect(sleep).toHaveBeenCalledTimes(4);
+  });
+
+  it("stops collecting when the delegation is aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(collectFredLiveQuestion({
+      readQuestion: () => "Frage",
+      signal: controller.signal,
+      sleep: (_ms, signal) => Promise.reject(signal.reason ?? new Error("aborted")),
+    })).rejects.toBeDefined();
+  });
+
+  it("surfaces rejected events instead of leaving the session silently stuck", () => {
+    expect(fredLiveErrorMessage({ type: "session.started" })).toBeUndefined();
+    expect(fredLiveErrorMessage({ type: "session.error", error: { message: "append too long" } }))
+      .toBe("append too long");
+    expect(fredLiveErrorMessage({ type: "error", error: { code: "invalid_request_error" } }))
+      .toBe("invalid_request_error");
+    expect(fredLiveErrorMessage({ type: "session.error" })).toContain("abgelehnt");
   });
 
   it("waits for complete ICE gathering", async () => {
@@ -128,7 +250,9 @@ describe("Fred Live browser helpers", () => {
       .toMatchObject({ status: "Beendet", usageSeconds: 31 });
   });
 
-  it("answers a client delegation instead of leaving the conversation waiting", () => {
+  it("reads the delegation id and falls back when no ask route is deployed", () => {
+    expect(fredLiveDelegationId({ type: "session.delegation.created", delegation: { id: " del-7 " } })).toBe("del-7");
+    expect(fredLiveDelegationId({ type: "session.delegation.created", delegation: {} })).toBe("");
     expect(fredLiveDelegationReply({ type: "session.started" })).toBeNull();
     expect(fredLiveDelegationReply({ type: "session.delegation.created", delegation: {} })).toBeNull();
     expect(fredLiveDelegationReply({

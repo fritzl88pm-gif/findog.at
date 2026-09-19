@@ -34,12 +34,39 @@ type AnswerEvent = Record<string, unknown>;
 
 const MAX_ANSWER_CHARS = 6_000;
 
+/**
+ * QuickFred answers in Markdown. The live answer is spoken, not rendered, so the markup is
+ * reduced to plain sentences: link labels replace their URL, list and heading markers and
+ * emphasis characters are dropped, and code fences lose their delimiters.
+ */
+export function toSpokenAnswer(markdown: string): string {
+  return markdown
+    .replace(/```[^\n]*\n?/gu, "")
+    .replace(/~~~[^\n]*\n?/gu, "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/gu, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
+    .replace(/<https?:\/\/[^>\s]+>/gu, "")
+    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gmu, "")
+    .replace(/^[ \t]{0,3}>[ \t]?/gmu, "")
+    .replace(/^[ \t]{0,3}(?:[-*+]|\d{1,3}[.)])[ \t]+/gmu, "")
+    // Table delimiter rows carry no words; they are dropped with their line break.
+    .replace(/^[ \t]{0,3}\|?(?:[ \t]*:?-{3,}:?[ \t]*\|)+[ \t]*\|?[ \t]*(?:\n|$)/gmu, "")
+    .replace(/^[ \t]{0,3}(?:[-*_][ \t]?){3,}[ \t]*(?:\n|$)/gmu, "")
+    .replace(/\|/gu, " ")
+    .replace(/(\*\*|__|\*|`)/gu, "")
+    .replace(/[ \t]{2,}/gu, " ")
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
+}
+
 export function assembleFredLiveAnswer(events: readonly AnswerEvent[]): string {
-  const answer = events
+  const answer = toSpokenAnswer(events
     .map(upstreamDelta)
     .map((event) => event.content ?? "")
-    .join("")
-    .trim();
+    .join(""));
   return answer.length > MAX_ANSWER_CHARS
     ? `${answer.slice(0, MAX_ANSWER_CHARS - 1)}…`
     : answer;

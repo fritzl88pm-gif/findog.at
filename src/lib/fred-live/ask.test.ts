@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createFredUpstreamSession, fetchFredUpstreamConfig, openFredUpstreamStream, stopFredUpstreamSession } from "@/lib/weknora/fred-native";
 import { mintFredEmbedSession, readQuickFredEmbedServerConfig } from "@/lib/weknora/fred-embed";
-import { askQuickFred, assembleFredLiveAnswer, projectFredLiveSources } from "./ask";
+import { askQuickFred, assembleFredLiveAnswer, projectFredLiveSources, toSpokenAnswer } from "./ask";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/weknora/fred-embed", () => ({
@@ -55,6 +55,28 @@ describe("askQuickFred", () => {
     expect(result.upstreamSessionId).toBe("old-session");
     expect(createFredUpstreamSession).not.toHaveBeenCalled();
     expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({ upstreamSession: { id: "old-session", signature: "derived" } }));
+  });
+
+  it("reduces the markdown answer to speakable sentences", () => {
+    expect(toSpokenAnswer([
+      "## Pendlerpauschale",
+      "",
+      "- **Grosse** Pauschale: siehe [Paragraf 16 EStG](https://www.ris.bka.gv.at/estg).",
+      "1. Antrag beim `Finanzamt` stellen.",
+      "",
+      "| Jahr | Betrag |",
+      "| --- | --- |",
+      "| 2026 | 100 |",
+    ].join("\n"))).toBe([
+      "Pendlerpauschale",
+      "",
+      "Grosse Pauschale: siehe Paragraf 16 EStG.",
+      "Antrag beim Finanzamt stellen.",
+      "",
+      "Jahr Betrag",
+      "2026 100",
+    ].join("\n"));
+    expect(assembleFredLiveAnswer([{ response_type: "answer", content: "**Hallo** Welt" }])).toBe("Hallo Welt");
   });
 
   it("caps and deduplicates answer and sources", () => {
