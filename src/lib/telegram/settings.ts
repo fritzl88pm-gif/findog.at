@@ -546,7 +546,12 @@ export async function deleteTelegramIntegration(
 
   const { data: integration, error } = await selectIntegrationRow(supabase, clientId);
 
-  if (error || !integration) {
+  // Account deletion proceeds on 404, so a failed lookup must not look like
+  // "no integration" or the credential row would cascade away uncleaned.
+  if (error) {
+    throw new UserVisibleError("Telegram-Integration konnte nicht geladen werden.", 503);
+  }
+  if (!integration) {
     throw new UserVisibleError("Keine Telegram-Integration gefunden.", 404);
   }
   requireEncryptionKeyEnv();
@@ -609,45 +614,59 @@ export async function deleteTelegramIntegration(
   }
 
   const api = botApi ?? createBotApi(token);
+  // Telegram answers 401/404 once the token was revoked or the bot deleted. No
+  // retry can succeed then and this credential can no longer reach the webhook
+  // or commands, so keeping the row would only block disconnect and account
+  // deletion for good.
+  const tokenRejected = (error: { error_code?: number }) =>
+    error.error_code === 401 || error.error_code === 404;
+  let botUnreachable = false;
 
   // Call Telegram to clean up
   try {
     await api.deleteWebhook(true);
   } catch (err) {
     const sanitized = sanitizeTelegramError(token, err);
-    // Preserve the integration, update error state
-    await supabase
-      .from("telegram_integrations")
-      .update({
-        status: "error",
-        last_error_code: sanitized.error_code,
-        last_error_description: sanitized.description ?? sanitized.message,
-        last_error_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", integrationId);
+    botUnreachable = tokenRejected(sanitized);
+    if (!botUnreachable) {
+      // Preserve the integration, update error state
+      await supabase
+        .from("telegram_integrations")
+        .update({
+          status: "error",
+          last_error_code: sanitized.error_code,
+          last_error_description: sanitized.description ?? sanitized.message,
+          last_error_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", integrationId);
 
-    return {
-      deleted: false,
-      error: `Telegram konnte nicht erreicht werden: ${sanitized.message}`,
-    };
+      return {
+        deleted: false,
+        error: `Telegram konnte nicht erreicht werden: ${sanitized.message}`,
+      };
+    }
   }
 
-  try {
-    await api.deleteMyCommands();
-  } catch (err) {
-    const sanitized = sanitizeTelegramError(token, err);
-    await supabase
-      .from("telegram_integrations")
-      .update({
-        status: "error",
-        last_error_code: sanitized.error_code,
-        last_error_description: (sanitized.description ?? sanitized.message).slice(0, 500),
-        last_error_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", integrationId);
-    return { deleted: false, error: "Telegram-Befehle konnten nicht entfernt werden." };
+  if (!botUnreachable) {
+    try {
+      await api.deleteMyCommands();
+    } catch (err) {
+      const sanitized = sanitizeTelegramError(token, err);
+      if (!tokenRejected(sanitized)) {
+        await supabase
+          .from("telegram_integrations")
+          .update({
+            status: "error",
+            last_error_code: sanitized.error_code,
+            last_error_description: (sanitized.description ?? sanitized.message).slice(0, 500),
+            last_error_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", integrationId);
+        return { deleted: false, error: "Telegram-Befehle konnten nicht entfernt werden." };
+      }
+    }
   }
 
   // Delete the integration

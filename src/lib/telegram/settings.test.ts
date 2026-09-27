@@ -12,7 +12,7 @@ import {
   registerTelegramIntegration,
   rotatePairingToken,
 } from "./settings";
-import type { BotApi } from "./bot-api";
+import { SanitizedTelegramError, type BotApi } from "./bot-api";
 import { encryptTelegramToken } from "./credentials";
 import { hashToken } from "./pairing";
 
@@ -334,6 +334,70 @@ describe("deleteTelegramIntegration", () => {
 
     expect(result.deleted).toBe(false);
     expect(botApi.deleteWebhook).toHaveBeenCalledWith(true);
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed integration lookup instead of 'no integration'", async () => {
+    const ms = mockSelectMaybeSingle({ data: null, error: { message: "upstream timeout" } });
+    const mockRpc = vi.fn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from: vi.fn().mockReturnValue(ms), rpc: mockRpc } as never);
+
+    await expect(deleteTelegramIntegration(CLIENT_ID)).rejects.toMatchObject({ status: 503 });
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a revoked token (401) on deleteWebhook", { deleteWebhook: 401 }],
+    ["a deleted bot (404) on deleteWebhook", { deleteWebhook: 404 }],
+    ["a revoked token (401) on deleteMyCommands", { deleteMyCommands: 401 }],
+  ])("deletes the row after %s", async (_name, failing: { deleteWebhook?: number; deleteMyCommands?: number }) => {
+    const integrationId = randomUUID();
+    const botUserId = 123456789;
+    const encryptedToken = makeEncryptedToken(integrationId, botUserId);
+    const ms = mockSelectMaybeSingle({ data: { id: integrationId, client_id: CLIENT_ID, bot_user_id: botUserId, encrypted_token: encryptedToken, status: "active" }, error: null });
+    const eqOk = vi.fn().mockResolvedValue({ error: null });
+    const mockUpdate = vi.fn().mockReturnValue({ eq: eqOk });
+    const mockDelete = vi.fn().mockReturnValue({ eq: eqOk });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({
+      from: vi.fn().mockReturnValue({ ...ms, update: mockUpdate, delete: mockDelete }),
+      rpc: vi.fn().mockResolvedValue({ data: 1, error: null }),
+    } as never);
+    const telegramError = (errorCode: number) => new SanitizedTelegramError({
+      message: errorCode === 401 ? "Unauthorized" : "Not Found",
+      errorCode,
+      description: errorCode === 401 ? "Unauthorized" : "Not Found",
+    });
+    const botApi = mockBotApi({
+      ...(failing.deleteWebhook ? { deleteWebhook: vi.fn().mockRejectedValue(telegramError(failing.deleteWebhook)) } : {}),
+      ...(failing.deleteMyCommands ? { deleteMyCommands: vi.fn().mockRejectedValue(telegramError(failing.deleteMyCommands)) } : {}),
+    });
+
+    const result = await deleteTelegramIntegration(CLIENT_ID, botApi);
+
+    expect(result.deleted).toBe(true);
+    expect(mockDelete).toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ status: "error" }));
+    if (failing.deleteWebhook) expect(botApi.deleteMyCommands).not.toHaveBeenCalled();
+  });
+
+  it("keeps the row for a retry when Telegram is only temporarily unavailable", async () => {
+    const integrationId = randomUUID();
+    const botUserId = 123456789;
+    const encryptedToken = makeEncryptedToken(integrationId, botUserId);
+    const ms = mockSelectMaybeSingle({ data: { id: integrationId, client_id: CLIENT_ID, bot_user_id: botUserId, encrypted_token: encryptedToken, status: "active" }, error: null });
+    const eqOk = vi.fn().mockResolvedValue({ error: null });
+    const mockDelete = vi.fn().mockReturnValue({ eq: eqOk });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({
+      from: vi.fn().mockReturnValue({ ...ms, update: vi.fn().mockReturnValue({ eq: eqOk }), delete: mockDelete }),
+      rpc: vi.fn().mockResolvedValue({ data: 1, error: null }),
+    } as never);
+    const botApi = mockBotApi({
+      deleteWebhook: vi.fn().mockRejectedValue(new SanitizedTelegramError({ message: "Too Many Requests", errorCode: 429, retryAfter: 5 })),
+    });
+
+    const result = await deleteTelegramIntegration(CLIENT_ID, botApi);
+
+    expect(result.deleted).toBe(false);
     expect(mockDelete).not.toHaveBeenCalled();
   });
 
