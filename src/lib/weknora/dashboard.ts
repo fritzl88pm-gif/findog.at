@@ -88,6 +88,7 @@ type CachedFetchOptions = {
 
 let dashboardCache: DashboardCacheEntry | null = null;
 let dashboardRefresh: Promise<WeKnoraDashboard> | null = null;
+let dashboardUnavailableUntil = 0;
 
 function availabilityError(): UserVisibleError {
   return new UserVisibleError(AVAILABILITY_MESSAGE, 503);
@@ -398,6 +399,11 @@ export async function getWeKnoraDashboard(
   if (dashboardCache && currentTime < dashboardCache.expiresAt) {
     return dashboardCache.dashboard;
   }
+  // With no snapshot to serve stale, a failed refresh is remembered for the stale retry
+  // interval so an MCP outage does not hold every caller for the full request timeout.
+  if (!dashboardCache && currentTime < dashboardUnavailableUntil) {
+    throw availabilityError();
+  }
   if (dashboardRefresh) return dashboardRefresh;
 
   const previous = dashboardCache;
@@ -423,6 +429,7 @@ export async function getWeKnoraDashboard(
         };
         return staleDashboard;
       }
+      dashboardUnavailableUntil = now() + DASHBOARD_STALE_RETRY_MS;
       throw availabilityError();
     } finally {
       dashboardRefresh = null;
@@ -435,4 +442,5 @@ export async function getWeKnoraDashboard(
 export function __resetWeKnoraDashboardCacheForTests(): void {
   dashboardCache = null;
   dashboardRefresh = null;
+  dashboardUnavailableUntil = 0;
 }

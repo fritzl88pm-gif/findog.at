@@ -234,6 +234,42 @@ describe("WeKnora dashboard cache", () => {
     expect(fetchMock).toHaveBeenCalledTimes(10);
   });
 
+  it("fails fast after a cold refresh timed out instead of waiting for the MCP timeout again", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = Date.parse("2026-07-20T00:00:00.000Z");
+      const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }));
+      const load = () => getWeKnoraDashboard({ fetchImpl: fetchMock as typeof fetch, now: () => now });
+
+      const first = load().catch((reason: unknown) => reason);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(first).resolves.toMatchObject({ status: 503 });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      now += DASHBOARD_STALE_RETRY_MS - 1;
+      let settled = false;
+      const second = load().catch((reason: unknown) => {
+        settled = true;
+        return reason;
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      await expect(second).resolves.toMatchObject({ status: 503 });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      now += 1;
+      fetchMock.mockReset();
+      queueSuccessfulSnapshot(fetchMock, 129);
+      const recovered = await load();
+      expect(recovered.stale).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects a missing or blank server token with a controlled 503", async () => {
     vi.stubEnv("WEKNORA_READONLY_MCP_BEARER_TOKEN", "   ");
     const error = await getWeKnoraDashboard({ fetchImpl: vi.fn() as typeof fetch }).catch((reason) => reason);
