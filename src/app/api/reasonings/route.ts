@@ -3,9 +3,12 @@ import { NextResponse } from "next/server";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { parseReasoningInput } from "@/lib/reasonings";
+import { loadAllRows } from "@/lib/supabase/load-all-rows";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
+
+const UNAVAILABLE = "Textbausteine konnten nicht geladen werden.";
 
 type CategoryRow = {
   id: string;
@@ -28,10 +31,6 @@ type CategoryLinkRow = {
   category_id: string;
 };
 
-// PostgREST returns at most 1000 rows per request. A card whose links fell past that cap
-// would load without its categories, and saving it would then delete them.
-const REASONING_PAGE_SIZE = 1_000;
-
 function json(payload: unknown, status = 200): NextResponse {
   return NextResponse.json(payload, {
     status,
@@ -48,21 +47,6 @@ async function authenticatedContext(request: Request) {
   return { supabase, user };
 }
 
-async function loadAllRows<Row>(
-  loadPage: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>,
-): Promise<Row[]> {
-  const rows: Row[] = [];
-  for (let from = 0; ; from += REASONING_PAGE_SIZE) {
-    const { data, error } = await loadPage(from, from + REASONING_PAGE_SIZE - 1);
-    if (error) {
-      throw new UserVisibleError("Textbausteine konnten nicht geladen werden.", 503);
-    }
-    const page = (data ?? []) as Row[];
-    rows.push(...page);
-    if (page.length < REASONING_PAGE_SIZE) return rows;
-  }
-}
-
 async function requestBody(request: Request): Promise<unknown> {
   try {
     return await request.json();
@@ -74,6 +58,8 @@ async function requestBody(request: Request): Promise<unknown> {
 export async function GET(request: Request) {
   try {
     const { supabase, user } = await authenticatedContext(request);
+    // Paged: a card whose links fell past the 1000-row cap would load without its
+    // categories, and saving it would then delete them.
     const [categories, reasonings, links] = await Promise.all([
       loadAllRows<CategoryRow>((from, to) => supabase
         .from("user_reasoning_categories")
@@ -81,21 +67,21 @@ export async function GET(request: Request) {
         .eq("client_id", user.id)
         .order("name", { ascending: true })
         .order("id", { ascending: true })
-        .range(from, to)),
+        .range(from, to), UNAVAILABLE),
       loadAllRows<ReasoningRow>((from, to) => supabase
         .from("user_reasonings")
         .select("id,title,content,created_at,updated_at")
         .eq("client_id", user.id)
         .order("updated_at", { ascending: false })
         .order("id", { ascending: false })
-        .range(from, to)),
+        .range(from, to), UNAVAILABLE),
       loadAllRows<CategoryLinkRow>((from, to) => supabase
         .from("user_reasoning_category_links")
         .select("reasoning_id,category_id")
         .eq("client_id", user.id)
         .order("reasoning_id", { ascending: true })
         .order("category_id", { ascending: true })
-        .range(from, to)),
+        .range(from, to), UNAVAILABLE),
     ]);
 
     const linksByReasoning = new Map<string, string[]>();

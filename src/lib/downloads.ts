@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { UserVisibleError } from "./errors";
+import { loadAllRows } from "./supabase/load-all-rows";
 
 export const DOWNLOAD_BUCKET = "downloads";
 export const DOWNLOAD_PAGE_SIZE = 7;
@@ -183,39 +184,35 @@ export function mapDownloadDocument(row: DocumentRow): DownloadDocument {
 }
 
 export async function getDownloadCatalog(supabase: SupabaseClient): Promise<DownloadCatalog> {
-  const [categoryResult, documentResult] = await Promise.all([
-    supabase
+  const unavailable = "Downloads konnten nicht geladen werden.";
+  const [categoryRows, documentRows] = await Promise.all([
+    loadAllRows<CategoryRow>((from, to) => supabase
       .from("download_categories")
       .select("id,name,description,sort_order,created_at,updated_at")
       .is("deleted_at", null)
       .order("sort_order", { ascending: true })
       .order("name", { ascending: true })
-      .order("id", { ascending: true }),
-    supabase
+      .order("id", { ascending: true })
+      .range(from, to), unavailable),
+    loadAllRows<DocumentRow>((from, to) => supabase
       .from("download_documents")
       .select("id,category_id,title,description,original_filename,mime_type,file_extension,file_size,sort_order,created_at,updated_at")
       .is("deleted_at", null)
       .order("category_id", { ascending: true })
       .order("sort_order", { ascending: true })
       .order("title", { ascending: true })
-      .order("id", { ascending: true }),
+      .order("id", { ascending: true })
+      .range(from, to), unavailable),
   ]);
 
-  if (categoryResult.error || documentResult.error) {
-    throw new UserVisibleError("Downloads konnten nicht geladen werden.", 503);
-  }
-
-  const documents = (documentResult.data ?? []).map((row) => mapDownloadDocument(row as DocumentRow));
+  const documents = documentRows.map(mapDownloadDocument);
   const counts = new Map<string, number>();
   for (const document of documents) {
     counts.set(document.categoryId, (counts.get(document.categoryId) ?? 0) + 1);
   }
 
   return {
-    categories: (categoryResult.data ?? []).map((row) => {
-      const categoryRow = row as CategoryRow;
-      return mapDownloadCategory(categoryRow, counts.get(categoryRow.id) ?? 0);
-    }),
+    categories: categoryRows.map((row) => mapDownloadCategory(row, counts.get(row.id) ?? 0)),
     documents,
   };
 }
