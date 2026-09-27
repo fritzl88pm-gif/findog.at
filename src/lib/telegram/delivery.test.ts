@@ -405,6 +405,30 @@ describe("deliverFinalAnswer", () => {
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("resends a chunk once as plain text when Telegram cannot parse its HTML", async () => {
+    const api = fakeBotApi({
+      sendMessage: vi.fn().mockImplementation(async (params: SendMessageParams) => {
+        if (params.parse_mode === "HTML") {
+          throw new SanitizedTelegramError({
+            message: "Bad Request: can't parse entities: Unmatched end tag at byte offset 30",
+            errorCode: 400,
+            description: "Bad Request: can't parse entities: Unmatched end tag at byte offset 30",
+          });
+        }
+        return { message_id: 7, date: 1, chat: { id: 123, type: "private" } };
+      }),
+    });
+    const ledger: DeliveryLedger = { chunks: [], uncertainChunks: [] };
+    const content = "<b>Wichtig: <code>§ 16</b> EStG</code> &lt;&amp;&gt;";
+
+    const result = await deliverFinalAnswer(api, chatId, content, { ledger, maxRetries: 5, sleep: async () => {} });
+
+    expect(result).toEqual({ sent: true, uncertain: false });
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenLastCalledWith({ chat_id: chatId, text: "Wichtig: § 16 EStG <&>" });
+    expect(ledger.chunks[0]).toMatchObject({ status: "sent", messageId: 7, content });
+  });
+
   it("does not send empty messages", async () => {
     const api = fakeBotApi();
     const ledger: DeliveryLedger = { chunks: [], uncertainChunks: [] };

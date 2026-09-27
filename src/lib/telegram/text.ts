@@ -6,6 +6,7 @@ const HTML_TABLE_RE = /<table\b[^>]*>([\s\S]*?)<\/table>/giu;
 const HTML_ROW_RE = /<tr\b[^>]*>([\s\S]*?)<\/tr>/giu;
 const HTML_CELL_RE = /<(th|td)\b[^>]*>([\s\S]*?)<\/\1>/giu;
 const PRE_PLACEHOLDER = /\u0000PRE(\d+)\u0000/gu;
+const CODE_PLACEHOLDER = /\u0000CODE(\d+)\u0000/gu;
 
 /**
  * Normalize Fred's answer for Telegram HTML delivery.
@@ -113,14 +114,40 @@ function processPreSections(text: string): string {
 }
 
 function convertMarkdownToHtml(text: string): string {
-  let result = text;
+  // Code spans are literal: take them out first so `**` or `[..](..)` inside
+  // them cannot open tags that cross the <code> boundary.
+  const codeSpans: string[] = [];
+  const withoutCode = text.replace(/`(.+?)`/gu, (_m, code: string) => {
+    codeSpans.push(`<code>${code}</code>`);
+    return `\u0000CODE${codeSpans.length - 1}\u0000`;
+  });
+  const restoreCode = (value: string) =>
+    value.replace(CODE_PLACEHOLDER, (_m, i: string) => codeSpans[Number(i)] ?? "");
+
+  let result = withoutCode;
   result = result.replace(/^#{1,6}\s+(.+)$/gmu, "<b>$1</b>");
   result = result.replace(/\*\*(.+?)\*\*/gu, "<b>$1</b>");
-  result = result.replace(/`(.+?)`/gu, "<code>$1</code>");
-  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/gu, (_m, label: string, url: string) => {
+  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/gu, (_m, label: string, target: string) => {
+    // Drop an optional Markdown link title and keep the attribute quoted safely.
+    const url = target.trim().split(/\s+/u)[0]!.replace(/"/gu, "&quot;");
     return `<a href="${url}">${label}</a>`;
   });
-  return result;
+  // Telegram rejects the whole message on crossed tags (e.g. bold spanning a
+  // link boundary); keep only the literal code spans in that case.
+  return restoreCode(isWellNestedHtml(result) ? result : withoutCode);
+}
+
+function isWellNestedHtml(html: string): boolean {
+  const stack: string[] = [];
+  for (const match of html.matchAll(/<(\/?)([a-z]+)\b[^>]*>/giu)) {
+    const tag = match[2]!.toLowerCase();
+    if (!match[1]) {
+      stack.push(tag);
+    } else if (stack.pop() !== tag) {
+      return false;
+    }
+  }
+  return stack.length === 0;
 }
 
 // ── Code fence handling ─────────────────────────────────────────────────────
@@ -269,7 +296,8 @@ function renderTable(headers: string[], rows: string[][]): string {
 
 export function chunkTelegramMessage(text: string): string[] {
   if (text.length <= MAX_CHUNK_LENGTH) {
-    return text.length > 0 ? [text] : [];
+    // Telegram rejects a message without visible text (e.g. "<pre> </pre>").
+    return hasVisibleText(text) ? [text] : [];
   }
 
   if (/<\/?(?:b|i|u|s|code|pre|a)(?:\s[^<>]*?)?>/iu.test(text)) {
@@ -312,8 +340,8 @@ function chunkTelegramHtml(text: string): string[] {
   const closingTags = () => [...openTags].reverse().map((tag) => tag.closing).join("");
   const openingTags = () => openTags.map((tag) => tag.opening).join("");
   const flush = () => {
-    if (!hasRenderedContent) return;
-    chunks.push(chunk + closingTags());
+    // Whitespace alone never becomes a chunk: Telegram rejects it as empty.
+    if (hasRenderedContent) chunks.push(chunk + closingTags());
     chunk = openingTags();
     hasRenderedContent = false;
   };
@@ -357,7 +385,7 @@ function chunkTelegramHtml(text: string): string[] {
       flush();
     }
     chunk += token;
-    hasRenderedContent = true;
+    if (/\S/u.test(token)) hasRenderedContent = true;
   }
 
   if (hasRenderedContent || chunk.length > 0) {
@@ -365,6 +393,10 @@ function chunkTelegramHtml(text: string): string[] {
     if (hasRenderedContent && balanced.length > 0) chunks.push(balanced);
   }
   return chunks;
+}
+
+function hasVisibleText(html: string): boolean {
+  return /\S/u.test(html.replace(/<[^>]*>/gu, ""));
 }
 
 function safePlainTextBoundary(text: string, index: number): number {

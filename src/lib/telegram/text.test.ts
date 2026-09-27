@@ -44,6 +44,28 @@ describe("normalizeFredMarkdown", () => {
     );
   });
 
+  it("keeps bold and link markers inside code spans literal", () => {
+    expect(normalizeFredMarkdown("Beispiel: `a**b` und `c**d` Ende")).toBe(
+      "Beispiel: <code>a**b</code> und <code>c**d</code> Ende",
+    );
+    expect(normalizeFredMarkdown("**Wichtig: `§ 16** EStG` gilt")).toBe(
+      "**Wichtig: <code>§ 16** EStG</code> gilt",
+    );
+    expect(normalizeFredMarkdown("**Hinweis:** Potenz `2**10` und **fett**")).toBe(
+      "<b>Hinweis:</b> Potenz <code>2**10</code> und <b>fett</b>",
+    );
+  });
+
+  it("drops a Markdown link title instead of breaking the href attribute", () => {
+    expect(normalizeFredMarkdown('[BFG](https://x "Titel")')).toBe('<a href="https://x">BFG</a>');
+  });
+
+  it("leaves Markdown unconverted rather than emitting crossed tags", () => {
+    expect(normalizeFredMarkdown("**a [b** c](https://x) `d`")).toBe(
+      "**a [b** c](https://x) <code>d</code>",
+    );
+  });
+
   it("converts Markdown headings to HTML bold", () => {
     expect(normalizeFredMarkdown("### Title")).toBe("<b>Title</b>");
   });
@@ -322,6 +344,16 @@ describe("chunkTelegramMessage", () => {
     const codeBlock = "<pre>" + "x".repeat(3000) + "</pre>";
     const result = chunkTelegramMessage("Before\n\n" + codeBlock + "\n\nAfter");
     expect(result.some((chunk) => chunk.includes(codeBlock))).toBe(true);
+  });
+
+  it("never emits a chunk without visible text", () => {
+    const normalized = normalizeFredMarkdown(`\`\`\`\n${"A".repeat(3_987)}${" ".repeat(20)}\n\`\`\``);
+    const chunks = chunkTelegramMessage(normalized);
+
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.every((chunk) => /\S/u.test(chunk.replace(/<[^>]*>/gu, "")))).toBe(true);
+    chunks.forEach(expectBalancedTelegramHtml);
+    expect(chunkTelegramMessage("<pre>   </pre>")).toEqual([]);
   });
 
   it("returns no empty chunks", () => {

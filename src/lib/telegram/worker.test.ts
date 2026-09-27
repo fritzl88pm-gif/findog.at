@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { TelegramFileTooLargeError, type BotApi } from "./bot-api";
+import { SanitizedTelegramError, TelegramFileTooLargeError, type BotApi } from "./bot-api";
 import { TelegramUpdateLeaseLostError, type ClaimedUpdate, type JobQueueRpc } from "./jobs";
 import {
   processUpdate,
@@ -1278,6 +1278,51 @@ describe("processUpdate: free text routed to Fred", () => {
     }));
     expect(rpc.retry).not.toHaveBeenCalled();
     expect(rpc.complete).not.toHaveBeenCalled();
+    // Telegram may have shown the answer, so no failure notice follows it.
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells the user when Telegram rejects a reconciled final-attempt answer", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      transitionRequestReceiptIfPresent: vi.fn().mockResolvedValue({
+        leaseValid: true,
+        receiptPresent: true,
+        status: "completed",
+        contentDeleted: false,
+        conversationId: "frozen-conversation-id",
+        userMessageId: 81,
+        assistantMessageId: 82,
+        answer: "Abgelehnte Antwort",
+        webSearchEnabled: false,
+        proModeEnabled: false,
+      }),
+    });
+    const botApi = fakeBotApi();
+    vi.mocked(botApi.sendMessage).mockImplementation(async (params) => {
+      if (params.parse_mode === "HTML") {
+        throw new SanitizedTelegramError({ message: "Bad Request: message is too long", errorCode: 400 });
+      }
+      return { message_id: 9, date: 1, chat: { id: telegramChatId, type: "private" } };
+    });
+    const config = fakeConfig({
+      rpc,
+      storage,
+      createBotApiForToken: () => botApi,
+      maxDeliveryRetries: 1,
+    });
+
+    const result = await processUpdate(config, makeUpdate({ attemptCount: 5, maxAttempts: 5 }));
+
+    expect(result.status).toBe("failed");
+    expect(rpc.fail).toHaveBeenCalledWith(expect.objectContaining({
+      p_update_id: updateRowId,
+      p_last_error_code: "DELIVERY_FAILED",
+    }));
+    expect(botApi.sendMessage).toHaveBeenLastCalledWith({
+      chat_id: telegramChatId,
+      text: "Entschuldigung, bei der Verarbeitung ist ein Fehler aufgetreten. Bitte versuche es später erneut.",
+    });
   });
 
   it("keeps a transient failed attempt nonterminal before retrying the queue row", async () => {

@@ -178,6 +178,7 @@ export async function deliverFinalAnswer(
     }
 
     let lastError: unknown;
+    let plainText = false;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       if (options.signal?.aborted) {
         entry.status = "failed";
@@ -185,7 +186,9 @@ export async function deliverFinalAnswer(
         return { sent: anySent, uncertain: anyUncertain };
       }
       try {
-        const messageParams = { chat_id: chatId, text: content, parse_mode: "HTML" as const };
+        const messageParams = plainText
+          ? { chat_id: chatId, text: htmlToPlainText(content) }
+          : { chat_id: chatId, text: content, parse_mode: "HTML" as const };
         const result = options.signal
           ? await api.sendMessage(messageParams, { signal: options.signal })
           : await api.sendMessage(messageParams);
@@ -200,6 +203,13 @@ export async function deliverFinalAnswer(
           entry.status = "uncertain";
           ledger.uncertainChunks.push(entry);
           return { sent: anySent, uncertain: true };
+        }
+        if (!plainText && isEntityParseError(err) && /\S/u.test(htmlToPlainText(content))) {
+          // Resending markup Telegram cannot parse fails the same way every
+          // time; deliver the same chunk once more without formatting instead.
+          plainText = true;
+          attempt--;
+          continue;
         }
         const retryAfter = extractRetryAfter(err);
 
@@ -290,6 +300,22 @@ function extractErrorCode(error: unknown): number | undefined {
 function isPermanentRichRejection(error: unknown): boolean {
   const errorCode = extractErrorCode(error);
   return errorCode === 400 || errorCode === 404;
+}
+
+function isEntityParseError(error: unknown): boolean {
+  if (extractErrorCode(error) !== 400 || !error || typeof error !== "object") return false;
+  const err = error as { telegramDescription?: unknown; message?: unknown };
+  const description = typeof err.telegramDescription === "string" ? err.telegramDescription : err.message;
+  return typeof description === "string" && /can't parse entities/iu.test(description);
+}
+
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<[^>]*>/gu, "")
+    .replace(/&lt;/gu, "<")
+    .replace(/&gt;/gu, ">")
+    .replace(/&quot;/gu, "\"")
+    .replace(/&amp;/gu, "&");
 }
 
 function isServerError(error: unknown): boolean {

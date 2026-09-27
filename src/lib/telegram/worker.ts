@@ -1628,6 +1628,14 @@ async function handleProcessingError(
           leaseId: update.leaseId,
           lastErrorCode: uncertain ? "DELIVERY_UNCERTAIN" : "DELIVERY_FAILED",
         });
+        if (!uncertain) {
+          // Telegram rejected the answer; tell the user instead of going silent.
+          try {
+            await botApi.sendMessage({ chat_id: chatId, text: GENERIC_FAILURE_TEXT });
+          } catch {
+            // Best-effort — the update is already terminally failed.
+          }
+        }
         return {
           updateId: update.updateId,
           status: "failed",
