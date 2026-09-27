@@ -14,7 +14,8 @@ Findog-Navigation bleibt erreichbar. Bereichswechsel fokussieren die Überschrif
   kann weiterhin nicht über die Benutzerverwaltung gelöscht werden.
 - **Rückmeldungen:** ausschließlich negative Fred-Rückmeldungen, mit Suche und
   Benutzerfilter. Eine Auswahlliste öffnet den vollständigen Kontext daneben
-  beziehungsweise darunter.
+  beziehungsweise darunter. Löscht der User die Unterhaltung oder sein Konto,
+  wird die Rückmeldung samt Frage und Antwort mitgelöscht.
 - **Downloads:** Kategorien und Dateiliste, Suche nach Titel oder Dateiname,
   Metadatenbearbeitung und separater Uploaddialog.
 - **Plattformupdates:** nach Status gefilterte Meldungsliste und Editor mit
