@@ -91,6 +91,12 @@ export interface FredTurnRequest {
    * and resolves normally with `stopped: true` instead of throwing.
    */
   signal?: AbortSignal;
+  /**
+   * Caller-owned total deadline that also aborts `signal` when it expires.
+   * Such an abort is recorded and surfaced as a timeout failure, not as a
+   * cancellation.
+   */
+  deadlineSignal?: AbortSignal;
 }
 
 /** A single event emitted during a Fred turn. */

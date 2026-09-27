@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { UserVisibleError } from "@/lib/errors";
 import { parseFredWebhookEvent } from "@/lib/weknora/fred-history";
 import { EOF_WITHOUT_FINAL_CLIENT_MESSAGE } from "./run-diagnostics";
 import type {
@@ -602,6 +603,50 @@ describe("executeFredTurn", () => {
     ]);
     expect(upstream.openStream).not.toHaveBeenCalled();
     expect(upstream.relayEvent).not.toHaveBeenCalled();
+  });
+
+  it("records a deadline abort as a timeout failure instead of a caller cancellation", async () => {
+    const deadline = new AbortController();
+    const turnAbort = new AbortController();
+    deadline.signal.addEventListener("abort", () => turnAbort.abort(deadline.signal.reason), { once: true });
+    const onRequestTransition = vi.fn().mockResolvedValue(undefined);
+    persistence = makePersistenceDeps({
+      recordEvent: vi.fn().mockResolvedValueOnce({ conversation: summaryConv(), messageId: 41 }),
+    });
+    upstream.openStream = vi.fn().mockResolvedValue(new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        ctrl.enqueue(new TextEncoder().encode(
+          'data: {"response_type":"agent_query","assistant_message_id":"answer-deadline"}\n\n',
+        ));
+      },
+    }));
+
+    const gen = executeFredTurn(
+      baseRequest({ signal: turnAbort.signal, deadlineSignal: deadline.signal, onRequestTransition }),
+      upstream,
+      persistence,
+      config,
+    );
+    expect((await gen.next()).value).toMatchObject({ type: "conversation" });
+    const pending = gen.next();
+    await vi.waitFor(() => expect(upstream.openStream).toHaveBeenCalled());
+    deadline.abort(new UserVisibleError("Die Verarbeitung der Anfrage hat zu lange gedauert.", 504));
+
+    await expect(pending).resolves.toEqual({
+      done: false,
+      value: { type: "error", error: "Die Verarbeitung der Anfrage hat zu lange gedauert." },
+    });
+    await expect(gen.next()).rejects.toThrow("zu lange gedauert");
+    expect(onRequestTransition).toHaveBeenLastCalledWith({
+      status: "failed",
+      failurePhase: "streaming",
+      errorCode: "timeout",
+    });
+    expect(onRequestTransition).not.toHaveBeenCalledWith(expect.objectContaining({ status: "cancelled" }));
+    expect(upstream.stopSession).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: "answer-deadline",
+    }));
+    expect(persistence.recordEvent).toHaveBeenCalledTimes(1);
   });
 
   it("uses the caller-provided assistant event id", async () => {

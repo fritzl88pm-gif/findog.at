@@ -851,6 +851,7 @@ function streamTextOnlyTurn(options: {
                 ...transition,
               }),
             signal: streamAbort.signal,
+            deadlineSignal: deadline.signal,
           },
           buildWebTurnUpstream(registeredConfigs),
           buildWebTurnPersistence(options.supabase),

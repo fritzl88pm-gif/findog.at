@@ -808,6 +808,74 @@ describe("POST /api/fred/chat", () => {
     expect(openFredUpstreamStream).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["the upstream read rejects on abort", (signal: AbortSignal) => rejectReadOnAbort(signal)],
+    ["the upstream read never settles", () => new Promise<ReadableStreamReadResult<Uint8Array>>(() => undefined)],
+  ])("records a text-only turn at the 720-second deadline as a timeout when %s", async (_case, pendingRead) => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+        id: "77777777-7777-4777-8777-777777777702",
+      });
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+      let upstreamSignal!: AbortSignal;
+      const cancel = vi.fn().mockResolvedValue(undefined);
+      vi.mocked(openFredUpstreamStream).mockImplementation(async (options) => {
+        upstreamSignal = options.signal;
+        const read = vi.fn()
+          .mockResolvedValueOnce({
+            done: false,
+            value: new TextEncoder().encode(
+              'data: {"response_type":"agent_query","assistant_message_id":"answer-text-timeout"}\n\n',
+            ),
+          })
+          .mockResolvedValueOnce({
+            done: false,
+            value: new TextEncoder().encode(
+              'data: {"response_type":"answer","content":"Teil","done":false}\n\n',
+            ),
+          })
+          .mockImplementationOnce(() => pendingRead(upstreamSignal));
+        return responseFromReader({ read, cancel });
+      });
+
+      const response = await POST(request({ query: "Sehr lange Recherche" }));
+      const reader = response.body!.getReader();
+      const events: Array<Awaited<ReturnType<typeof nextEvent>>> = [];
+      while (!events.some((event) => event?.type === "delta")) {
+        events.push(await nextEvent(reader));
+      }
+      await vi.advanceTimersByTimeAsync(720_000);
+      while (true) {
+        const event = await nextEvent(reader);
+        if (!event) break;
+        events.push(event);
+      }
+
+      expect(events.filter((event) => event?.type === "error")).toEqual([{
+        type: "error",
+        error: "Die Verarbeitung der Anfrage hat zu lange gedauert.",
+      }]);
+      expect(events.some((event) => event?.type === "final")).toBe(false);
+      expect(mockTransitionFredRequestReceipt.mock.calls.map(([transition]) => [
+        transition.status,
+        transition.failurePhase,
+        transition.errorCode,
+      ])).toEqual([
+        ["user_persisted", undefined, undefined],
+        ["generating", undefined, undefined],
+        ["failed", "streaming", "timeout"],
+      ]);
+      expect(stopFredUpstreamSession).toHaveBeenCalledWith(expect.objectContaining({
+        messageId: "answer-text-timeout",
+      }));
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("persists and relays the trimmed attachment answer that the webhook echo stores", async () => {
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
       id: "77777777-7777-4777-8777-777777777703",

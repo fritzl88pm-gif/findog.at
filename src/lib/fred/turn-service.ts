@@ -14,6 +14,7 @@ import {
 } from "@/lib/findok/bfg-citations";
 import {
   EOF_WITHOUT_FINAL_CLIENT_MESSAGE,
+  ERROR_CODES,
   isUpstreamCompleteEvent,
   upstreamDelta,
 } from "@/lib/fred/run-diagnostics";
@@ -626,6 +627,8 @@ export async function* executeFredTurn(
     }
 
     if (stoppedByCaller) {
+      // A deadline abort shares the signal but is a failure, not a cancellation.
+      if (request.deadlineSignal?.aborted) throw request.deadlineSignal.reason;
       acceptingCitationUpdates = false;
       if (!request.deferUnsuccessfulTerminalTransition) {
         await request.onRequestTransition?.({
@@ -814,6 +817,8 @@ export async function* executeFredTurn(
     };
   } catch (error) {
     acceptingCitationUpdates = false;
+    const timedOut = request.deadlineSignal?.aborted === true;
+    const cancelled = !timedOut && request.signal?.aborted === true;
     if (
       !requestTerminal
       && request.onRequestTransition
@@ -821,9 +826,11 @@ export async function* executeFredTurn(
     ) {
       try {
         await request.onRequestTransition({
-          status: request.signal?.aborted ? "cancelled" : "failed",
+          status: cancelled ? "cancelled" : "failed",
           failurePhase: requestFailurePhase,
-          errorCode: request.signal?.aborted ? "request_cancelled" : "turn_failed",
+          errorCode: timedOut
+            ? ERROR_CODES.TIMEOUT
+            : cancelled ? "request_cancelled" : "turn_failed",
         });
         requestTerminal = true;
       } catch {
@@ -845,8 +852,9 @@ export async function* executeFredTurn(
     if (activeUpstreamReader) {
       try { await activeUpstreamReader.cancel(error); } catch { /* already closed */ }
     }
-    if (error instanceof UserVisibleError) {
-      yield { type: "error", error: error.message };
+    const visibleError = timedOut ? request.deadlineSignal?.reason : error;
+    if (visibleError instanceof UserVisibleError) {
+      yield { type: "error", error: visibleError.message };
     } else {
       yield { type: "error", error: `${selectedAgentName} konnte die Anfrage nicht abschließen.` };
     }
