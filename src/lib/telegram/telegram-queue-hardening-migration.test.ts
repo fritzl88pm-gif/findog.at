@@ -12,7 +12,7 @@ const migration = readFileSync(
 ).toLowerCase();
 
 function functionBody(name: string): string {
-  const start = migration.indexOf(`create or replace function public.${name}(`);
+  const start = migration.search(new RegExp(`create (or replace )?function public\\.${name}\\(`));
   expect(start).toBeGreaterThanOrEqual(0);
   const end = migration.indexOf("\n$$;", start);
   return migration.slice(start, end);
@@ -30,7 +30,7 @@ describe("telegram queue hardening migration", () => {
   });
 
   it("lets /stop cancel older queued or backing-off questions of its chat", () => {
-    const cancel = functionBody("request_cancel_telegram_update_for_chat");
+    const cancel = functionBody("request_stop_for_telegram_chat");
     const queued = cancel.slice(cancel.indexOf("update public.telegram_updates as queued_update"));
     expect(queued).toContain("set cancel_requested = true");
     expect(queued).toContain("available_at = least(queued_update.available_at, now())");
@@ -41,7 +41,38 @@ describe("telegram queue hardening migration", () => {
     // Queued rows are flagged before the processing lookup so a concurrent claim is still caught.
     expect(cancel.indexOf("update public.telegram_updates as queued_update"))
       .toBeLessThan(cancel.indexOf("telegram_update.status = 'processing'"));
-    expect(cancel).toContain("return found or queued_cancelled;");
+  });
+
+  it("makes /stop report a running answer that is already being delivered instead of a cancellation", () => {
+    const stop = functionBody("request_stop_for_telegram_chat");
+    expect(migration).toContain("create function public.request_stop_for_telegram_chat(");
+    expect(stop).toContain("returns text");
+    const tooLate = stop.slice(stop.indexOf("and delivery.status = 'pending'"));
+    expect(tooLate.slice(0, tooLate.indexOf("end if;")))
+      .toContain("return case when queued_cancelled then 'too_late_queued_cancelled' else 'too_late' end;");
+    expect(stop).toContain("return case when queued_cancelled then 'cancelled' else 'nothing' end;");
+    expect(stop).toContain("return case when found or queued_cancelled then 'cancelled' else 'nothing' end;");
+    // Workers deployed before the status RPC keep their boolean contract.
+    const legacy = functionBody("request_cancel_telegram_update_for_chat");
+    expect(legacy).toContain("returns boolean");
+    expect(legacy).toMatch(/select public\.request_stop_for_telegram_chat\(\s+p_integration_id,\s+p_telegram_chat_id,\s+p_exclude_update_id\s+\) = 'cancelled';/);
+  });
+
+  it("serializes /stop with disconnect and bot swap on the integration row before any queue row", () => {
+    const stop = functionBody("request_stop_for_telegram_chat");
+    const stopLock = stop.indexOf("from public.telegram_integrations as integration\n  where integration.id = p_integration_id\n  for share;");
+    expect(stopLock).toBeGreaterThan(0);
+    expect(stopLock).toBeLessThan(stop.indexOf("from public.telegram_updates"));
+
+    const cancelAll = functionBody("cancel_all_telegram_updates_for_integration");
+    const cancelAllLock = cancelAll.indexOf("where integration.id = p_integration_id\n  for no key update;");
+    expect(cancelAllLock).toBeGreaterThan(cancelAll.indexOf("lock_existing_findog_account(v_client_id)"));
+    expect(cancelAllLock).toBeLessThan(cancelAll.indexOf("update public.telegram_updates"));
+
+    const swap = functionBody("swap_telegram_bot");
+    const swapLock = swap.indexOf("from public.telegram_integrations\n  where id = p_integration_id");
+    expect(swap.slice(swapLock, swap.indexOf(";", swapLock))).toContain("for update");
+    expect(swapLock).toBeLessThan(swap.indexOf("update public.telegram_updates"));
   });
 
   it.each([
@@ -67,6 +98,7 @@ describe("telegram queue hardening migration", () => {
 
   it("keeps the service-role-only grants of every replaced function", () => {
     for (const signature of [
+      "request_stop_for_telegram_chat(uuid, bigint, bigint)",
       "request_cancel_telegram_update_for_chat(uuid, bigint, bigint)",
       "cancel_all_telegram_updates_for_integration(uuid)",
     ]) {

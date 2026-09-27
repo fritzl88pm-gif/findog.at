@@ -33,7 +33,7 @@ begin
     'control lane must not claim normal messages or a leased stop twice';
   select * into claimed from public.claim_pending_telegram_updates(gen_random_uuid(),60,1);
   assert claimed.id = other_id, 'normal lane must preserve busy-chat exclusion';
-  assert public.request_cancel_telegram_update_for_chat(integration,1,stop_id), 'stop must flag active generation';
+  assert public.request_stop_for_telegram_chat(integration,1,stop_id) = 'cancelled', 'stop must flag active generation';
   assert (select cancel_requested from public.telegram_updates where id=busy_id);
   assert (select status='pending' from public.telegram_updates where id=queued_id);
   assert not public.complete_telegram_update(stop_id,gen_random_uuid()), 'stale lease cannot complete stop';
@@ -81,7 +81,7 @@ begin
 
   select * into claimed from public.claim_pending_telegram_control_updates(gen_random_uuid(),60,1);
   assert claimed.id = stop_id, 'control lane claims /stop ahead of the older question';
-  assert public.request_cancel_telegram_update_for_chat(integration,1,stop_id),
+  assert public.request_stop_for_telegram_chat(integration,1,stop_id) = 'cancelled',
     '/stop must report the queued older question as cancelled';
   assert (select cancel_requested from public.telegram_updates where id=queued_id);
   assert (select cancel_requested and available_at <= now() from public.telegram_updates where id=backoff_id),
@@ -95,6 +95,48 @@ begin
   where cleanup.integration_id = integration;
   assert claimed.cancel_requested and claimed.id in (queued_id, backoff_id),
     'cancelled questions are claimed as cleanup despite the busy chat';
+end;
+$$;
+
+-- /stop never confirms a cancellation while the running answer is already
+-- being delivered, even when it cancels older queued questions.
+do $$
+declare
+  client uuid := gen_random_uuid();
+  integration uuid := gen_random_uuid();
+  lease uuid := gen_random_uuid();
+  delivering_id bigint;
+  queued_id bigint;
+  stop_id bigint;
+begin
+  insert into auth.users(id) values(client);
+  insert into public.telegram_integrations(id,client_id,bot_user_id,bot_username,encrypted_token,webhook_secret_sha256,status)
+  values(integration,client,104,'TooLateBot','test-only',repeat('a',64),'active');
+  insert into public.telegram_updates(integration_id,update_id,raw_update,telegram_chat_id,status,lease_id,lease_expires_at,attempt_count)
+  values(integration,1,'{}',1,'processing',lease,now()+interval '1 minute',1) returning id into delivering_id;
+  insert into public.telegram_deliveries(update_id,chunk_index,message_content,status,delivery_lease_id)
+  values(delivering_id,0,'Antwort','pending',lease);
+  insert into public.telegram_updates(integration_id,update_id,raw_update,telegram_chat_id)
+  values(integration,2,'{}',1) returning id into queued_id;
+  insert into public.telegram_updates(integration_id,update_id,raw_update,telegram_chat_id,update_kind,status,lease_id,lease_expires_at,attempt_count)
+  values(integration,3,'{"message":{"text":"/stop"}}',1,'command','processing',gen_random_uuid(),now()+interval '1 minute',1)
+  returning id into stop_id;
+
+  assert not public.request_cancel_telegram_update_for_chat(integration,1,stop_id),
+    'the boolean RPC of older workers must not confirm a cancellation either';
+  update public.telegram_updates set cancel_requested = false where id = queued_id;
+  assert public.request_stop_for_telegram_chat(integration,1,stop_id) = 'too_late_queued_cancelled',
+    '/stop must report the running answer as too late and the queued question as cancelled';
+  assert not (select cancel_requested from public.telegram_updates where id=delivering_id),
+    'an answer that is already being delivered is not flagged';
+  assert (select cancel_requested from public.telegram_updates where id=queued_id);
+  update public.telegram_updates set status = 'cancelled', cancelled_at = now() where id = queued_id;
+  assert public.request_stop_for_telegram_chat(integration,1,stop_id) = 'too_late',
+    'with nothing else waiting, /stop reports only that it was too late';
+  assert public.request_stop_for_telegram_chat(integration,2,null) = 'nothing',
+    'a chat without running or queued questions has nothing to cancel';
+  assert not has_function_privilege('authenticated','public.request_stop_for_telegram_chat(uuid,bigint,bigint)','execute');
+  assert has_function_privilege('service_role','public.request_stop_for_telegram_chat(uuid,bigint,bigint)','execute');
 end;
 $$;
 

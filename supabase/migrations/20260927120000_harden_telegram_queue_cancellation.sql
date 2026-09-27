@@ -5,6 +5,9 @@
 -- 2. /stop also cancels questions of the same chat that were sent before it
 --    and are still queued or waiting for a retry; the claim orders /stop ahead
 --    of them, so previously it found nothing running and they were answered.
+--    It now reports whether the running answer was cancelled or is already
+--    being delivered, and serializes with disconnect and bot swap on the
+--    integration row because it locks several queue rows.
 -- 3. Disconnect and bot swap cancel the open Fred receipts of the queue rows
 --    they cancel or delete. No worker can settle them afterwards: every
 --    receipt transition needs the queue lease, and deleting the queue row or
@@ -122,17 +125,25 @@ $$;
 revoke all on function public.claim_telegram_updates_for_lane(uuid, integer, integer, boolean) from public, anon, authenticated;
 grant execute on function public.claim_telegram_updates_for_lane(uuid, integer, integer, boolean) to service_role;
 
--- Linearize /stop against the durable delivery claim on the same queue-row
--- lock. If a current-lease chunk is already pending, the external send has
--- started and /stop must report that it was too late instead of promising a
--- cancellation. Otherwise cancel_requested is committed before any later
--- claim can pass its own locked check.
-create or replace function public.request_cancel_telegram_update_for_chat(
+-- /stop reports what it did, so the bot never confirms a cancellation it did
+-- not make:
+--   'cancelled'  the running answer was flagged, or none was running and
+--                questions sent before the /stop were cancelled;
+--   'too_late'   a current-lease chunk of the running answer is already
+--                pending: its external send has started, so the answer is
+--                still delivered;
+--   'too_late_queued_cancelled'  the same, but questions sent before the
+--                /stop were cancelled;
+--   'nothing'    there was nothing to cancel.
+-- The running answer is linearized against the durable delivery claim on the
+-- same queue-row lock; otherwise cancel_requested is committed before any
+-- later claim can pass its own locked check.
+create function public.request_stop_for_telegram_chat(
   p_integration_id uuid,
   p_telegram_chat_id bigint,
   p_exclude_update_id bigint default null
 )
-returns boolean
+returns text
 language plpgsql
 security invoker
 set search_path = ''
@@ -145,6 +156,15 @@ begin
   if p_integration_id is null or p_telegram_chat_id is null then
     raise exception 'telegram cancel-request payload fields are invalid' using errcode = '22023';
   end if;
+
+  -- /stop locks several queue rows of the chat. Disconnect and bot swap lock
+  -- the integration row exclusively before updating all of its queue rows in
+  -- scan order; sharing that lock first keeps the two from locking the same
+  -- queue rows in opposite order and deadlocking.
+  perform 1
+  from public.telegram_integrations as integration
+  where integration.id = p_integration_id
+  for share;
 
   -- Questions sent before this /stop (Telegram update ids are sequential per
   -- bot) that are still queued or waiting for a retry are cancelled too; the
@@ -189,7 +209,7 @@ begin
   for update;
 
   if not found then
-    return queued_cancelled;
+    return case when queued_cancelled then 'cancelled' else 'nothing' end;
   end if;
 
   if exists (
@@ -199,7 +219,7 @@ begin
       and delivery.status = 'pending'
       and delivery.delivery_lease_id = target.lease_id
   ) then
-    return queued_cancelled;
+    return case when queued_cancelled then 'too_late_queued_cancelled' else 'too_late' end;
   end if;
 
   update public.telegram_updates
@@ -209,8 +229,32 @@ begin
     and status = 'processing'
     and lease_id = target.lease_id;
 
-  return found or queued_cancelled;
+  return case when found or queued_cancelled then 'cancelled' else 'nothing' end;
 end;
+$$;
+
+revoke all on function public.request_stop_for_telegram_chat(uuid, bigint, bigint)
+from public, anon, authenticated;
+grant execute on function public.request_stop_for_telegram_chat(uuid, bigint, bigint)
+to service_role;
+
+-- Workers deployed before request_stop_for_telegram_chat keep calling this
+-- until they are replaced; it reports true only when an answer was cancelled.
+create or replace function public.request_cancel_telegram_update_for_chat(
+  p_integration_id uuid,
+  p_telegram_chat_id bigint,
+  p_exclude_update_id bigint default null
+)
+returns boolean
+language sql
+security invoker
+set search_path = ''
+as $$
+  select public.request_stop_for_telegram_chat(
+    p_integration_id,
+    p_telegram_chat_id,
+    p_exclude_update_id
+  ) = 'cancelled';
 $$;
 
 revoke all on function public.request_cancel_telegram_update_for_chat(uuid, bigint, bigint)
@@ -235,7 +279,8 @@ begin
   end if;
 
   -- Enter the global lock order at the account row before any queue row; the
-  -- receipt update below follows the queue update (account, queue, receipt).
+  -- receipt update below follows the queue update (account, integration,
+  -- queue, receipt).
   select integration.client_id into v_client_id
   from public.telegram_integrations as integration
   where integration.id = p_integration_id;
@@ -243,6 +288,14 @@ begin
   if v_client_id is not null then
     perform public.lock_existing_findog_account(v_client_id);
   end if;
+
+  -- Wait for a running /stop of this integration, which shares this lock
+  -- while it locks several queue rows of a chat; the bulk update below would
+  -- otherwise lock them in scan order and could deadlock with it.
+  perform 1
+  from public.telegram_integrations as integration
+  where integration.id = p_integration_id
+  for no key update;
 
   with cancelled as (
     update public.telegram_updates
@@ -334,11 +387,14 @@ begin
   end if;
 
   -- Enter the global lock order at the account row; open receipts are
-  -- cancelled below after the queue rows (account, queue, receipt).
+  -- cancelled below after the queue rows (account, integration, queue,
+  -- receipt).
   perform public.lock_existing_findog_account(p_client_id);
 
-  -- Lock and verify the current integration before deleting any queue state.
-  -- A stale/concurrent replacement attempt returns false without side effects.
+  -- Lock and verify the current integration before deleting any queue state;
+  -- this also waits for a running /stop, which shares the lock while it locks
+  -- queue rows. A stale/concurrent replacement attempt returns false without
+  -- side effects.
   perform 1
   from public.telegram_integrations
   where id = p_integration_id

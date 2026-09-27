@@ -124,7 +124,7 @@ export function buildRpc(supabase: Supabase): JobQueueRpc {
     cancel: (params) => invokeRpc(supabase, "cancel_telegram_update", params),
     cancelAll: (params) => invokeRpc(supabase, "cancel_all_telegram_updates_for_integration", params),
     fail: (params) => invokeRpc(supabase, "fail_telegram_update", params),
-    requestCancelForChat: (params) => invokeRpc(supabase, "request_cancel_telegram_update_for_chat", params),
+    requestCancelForChat: (params) => invokeRpc(supabase, "request_stop_for_telegram_chat", params),
     checkCancelled: (params) => invokeRpc(supabase, "check_telegram_update_cancelled", params),
     enqueue: (params) => invokeRpc(supabase, "enqueue_telegram_update", params),
   };

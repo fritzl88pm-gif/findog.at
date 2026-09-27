@@ -15,6 +15,7 @@ import {
   requestCancelForChat,
   retryUpdate,
   TelegramUpdateLeaseLostError,
+  type ChatCancelOutcome,
   type ClaimedUpdate,
   type JobQueueRpc,
   type UpdateHandle,
@@ -210,8 +211,13 @@ function buildWebStatusText(enabled: boolean): string {
   return "Websuche: deaktiviert.\nAktivieren: /web on";
 }
 const NEW_CONVERSATION_TEXT = "Neue Unterhaltung gestartet. Stelle deine nächste Frage!";
-const STOP_STOPPED_TEXT = "⏹️ Die laufende Antwort wurde abgebrochen.";
-const STOP_NOTHING_TEXT = "Es läuft gerade keine Antwort, die abgebrochen werden könnte.";
+const STOP_TEXT: Record<ChatCancelOutcome, string> = {
+  cancelled: "⏹️ Die laufende Antwort wurde abgebrochen.",
+  too_late: "Die laufende Antwort wird bereits zugestellt und kann nicht mehr abgebrochen werden.",
+  too_late_queued_cancelled:
+    "⏹️ Wartende Fragen wurden abgebrochen. Die laufende Antwort wird bereits zugestellt und kann nicht mehr abgebrochen werden.",
+  nothing: "Es läuft gerade keine Antwort, die abgebrochen werden könnte.",
+};
 const DEFAULT_ATTACHMENT_QUESTION = "Bitte analysiere diesen Anhang.";
 const UNSUPPORTED_MEDIA_TEXT = "Dieser Nachrichtentyp wird nicht unterstützt. Bitte sende deine Frage als Text.";
 const UNKNOWN_COMMAND_TEXT = "Unbekannter Befehl. Nutze /help für eine Übersicht aller Befehle.";
@@ -510,12 +516,12 @@ async function handleSlashCommand(
       break;
 
     case "stop": {
-      const stopped = await requestCancelForChat(rpc, {
+      const outcome = await requestCancelForChat(rpc, {
         integrationId: integration.id,
         telegramChatId: chatId,
         excludeRowId: update.id,
       });
-      await botApi.sendMessage({ chat_id: chatId, text: stopped ? STOP_STOPPED_TEXT : STOP_NOTHING_TEXT });
+      await botApi.sendMessage({ chat_id: chatId, text: STOP_TEXT[outcome] });
       break;
     }
 

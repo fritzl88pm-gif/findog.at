@@ -24,7 +24,7 @@ function makeRpc(behavior: Record<string, ReturnType<typeof vi.fn>> = {}): JobQu
     cancel: (behavior.cancel ?? vi.fn().mockResolvedValue({ data: true, error: null })) as never,
     cancelAll: (behavior.cancelAll ?? vi.fn().mockResolvedValue({ data: true, error: null })) as never,
     fail: (behavior.fail ?? vi.fn().mockResolvedValue({ data: true, error: null })) as never,
-    requestCancelForChat: (behavior.requestCancelForChat ?? vi.fn().mockResolvedValue({ data: true, error: null })) as never,
+    requestCancelForChat: (behavior.requestCancelForChat ?? vi.fn().mockResolvedValue({ data: "cancelled", error: null })) as never,
     checkCancelled: (behavior.checkCancelled ?? vi.fn().mockResolvedValue({ data: false, error: null })) as never,
     enqueue: (behavior.enqueue ?? vi.fn().mockResolvedValue({ data: true, error: null })) as never,
   };
@@ -299,28 +299,44 @@ describe("lifecycle stale-lease/no-match results", () => {
 });
 
 describe("requestCancelForChat", () => {
-  it("returns true when an in-flight job was flagged for cancellation", async () => {
+  it("returns cancelled when an in-flight job was flagged for cancellation", async () => {
     const rpc = makeRpc({
-      requestCancelForChat: vi.fn().mockResolvedValue({ data: true, error: null }),
+      requestCancelForChat: vi.fn().mockResolvedValue({ data: "cancelled", error: null }),
     });
     const result = await requestCancelForChat(rpc, {
       integrationId, telegramChatId: 123, excludeRowId: 999,
     });
-    expect(result).toBe(true);
+    expect(result).toBe("cancelled");
     expect(rpc.requestCancelForChat).toHaveBeenCalledWith(expect.objectContaining({
       p_integration_id: integrationId, p_telegram_chat_id: 123, p_exclude_update_id: 999,
     }));
   });
 
-  it("returns false when nothing was in flight", async () => {
+  it("returns nothing when nothing was in flight", async () => {
     const rpc = makeRpc({
-      requestCancelForChat: vi.fn().mockResolvedValue({ data: false, error: null }),
+      requestCancelForChat: vi.fn().mockResolvedValue({ data: "nothing", error: null }),
     });
     const result = await requestCancelForChat(rpc, { integrationId, telegramChatId: 123 });
-    expect(result).toBe(false);
+    expect(result).toBe("nothing");
     expect(rpc.requestCancelForChat).toHaveBeenCalledWith(
       expect.objectContaining({ p_exclude_update_id: null }),
     );
+  });
+
+  it.each(["too_late", "too_late_queued_cancelled"])("passes through the %s outcome of an answer already being delivered", async (outcome) => {
+    const rpc = makeRpc({
+      requestCancelForChat: vi.fn().mockResolvedValue({ data: outcome, error: null }),
+    });
+    await expect(requestCancelForChat(rpc, { integrationId, telegramChatId: 123, excludeRowId: 999 }))
+      .resolves.toBe(outcome);
+  });
+
+  it("rejects an unknown outcome instead of guessing what /stop achieved", async () => {
+    const rpc = makeRpc({
+      requestCancelForChat: vi.fn().mockResolvedValue({ data: true, error: null }),
+    });
+    await expect(requestCancelForChat(rpc, { integrationId, telegramChatId: 123 }))
+      .rejects.toThrow("cancel request returned an unknown outcome");
   });
 
   it("surfaces a bounded sanitized RPC error instead of reporting that nothing was running", async () => {

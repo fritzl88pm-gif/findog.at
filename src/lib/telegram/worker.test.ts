@@ -109,7 +109,7 @@ function fakeRpc(overrides: Partial<Record<keyof JobQueueRpc, ReturnType<typeof 
     cancel: overrides.cancel ?? vi.fn().mockResolvedValue({ data: true, error: null }),
     cancelAll: overrides.cancelAll ?? vi.fn().mockResolvedValue({ data: true, error: null }),
     fail: overrides.fail ?? vi.fn().mockResolvedValue({ data: true, error: null }),
-    requestCancelForChat: overrides.requestCancelForChat ?? vi.fn().mockResolvedValue({ data: true, error: null }),
+    requestCancelForChat: overrides.requestCancelForChat ?? vi.fn().mockResolvedValue({ data: "cancelled", error: null }),
     checkCancelled: overrides.checkCancelled ?? vi.fn().mockResolvedValue({ data: false, error: null }),
     enqueue: overrides.enqueue ?? vi.fn().mockResolvedValue({ data: true, error: null }),
   } as JobQueueRpc;
@@ -568,7 +568,7 @@ describe("processUpdate: slash commands", () => {
   });
 
   it("/stop requests cancellation for the chat, excludes its own update, and completes (not cancels) itself", async () => {
-    const rpc = fakeRpc({ requestCancelForChat: vi.fn().mockResolvedValue({ data: true, error: null }) });
+    const rpc = fakeRpc({ requestCancelForChat: vi.fn().mockResolvedValue({ data: "cancelled", error: null }) });
     const storage = fakeStorage();
     const botApi = fakeBotApi();
     const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
@@ -585,11 +585,11 @@ describe("processUpdate: slash commands", () => {
     expect(rpc.cancel).not.toHaveBeenCalled();
     expect(rpc.complete).toHaveBeenCalled();
     const sentText = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
-    expect(sentText).toContain("abgebrochen");
+    expect(sentText).toBe("⏹️ Die laufende Antwort wurde abgebrochen.");
   });
 
   it("/stop reports nothing running when no job was cancelled", async () => {
-    const rpc = fakeRpc({ requestCancelForChat: vi.fn().mockResolvedValue({ data: false, error: null }) });
+    const rpc = fakeRpc({ requestCancelForChat: vi.fn().mockResolvedValue({ data: "nothing", error: null }) });
     const storage = fakeStorage();
     const botApi = fakeBotApi();
     const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi });
@@ -601,6 +601,22 @@ describe("processUpdate: slash commands", () => {
     expect(sentText).toContain("keine Antwort");
   });
 
+  it.each([
+    ["too_late", "Die laufende Antwort wird bereits zugestellt und kann nicht mehr abgebrochen werden."],
+    [
+      "too_late_queued_cancelled",
+      "⏹️ Wartende Fragen wurden abgebrochen. Die laufende Antwort wird bereits zugestellt und kann nicht mehr abgebrochen werden.",
+    ],
+  ])("/stop does not confirm a cancellation when the running answer is already being delivered (%s)", async (outcome, text) => {
+    const rpc = fakeRpc({ requestCancelForChat: vi.fn().mockResolvedValue({ data: outcome, error: null }) });
+    const botApi = fakeBotApi();
+    const config = fakeConfig({ rpc, createBotApiForToken: () => botApi });
+
+    const result = await processUpdate(config, makeUpdate({ rawUpdate: textUpdate("/stop") }));
+
+    expect(result.status).toBe("completed");
+    expect(botApi.sendMessage).toHaveBeenCalledWith({ chat_id: telegramChatId, text });
+  });
 
   it("replies with an unknown-command notice and never calls Fred for unrecognized commands", async () => {
     const rpc = fakeRpc();

@@ -242,10 +242,19 @@ export async function failUpdate(
 }
 
 /**
+ * What /stop achieved: `cancelled` when the running answer (or, with none
+ * running, a question still waiting) was flagged; `too_late` when the running
+ * answer is already being delivered, `too_late_queued_cancelled` when waiting
+ * questions were cancelled all the same; `nothing` otherwise.
+ */
+export type ChatCancelOutcome = "cancelled" | "too_late" | "too_late_queued_cancelled" | "nothing";
+
+const CHAT_CANCEL_OUTCOMES: readonly unknown[] = ["cancelled", "too_late", "too_late_queued_cancelled", "nothing"];
+
+/**
  * Request cancellation of whichever *other* update is currently being
  * processed for the same integration + Telegram chat (used by /stop), and of
  * questions sent before `excludeRowId` that are still queued or backing off.
- * Returns true if any such job was found and flagged.
  */
 export async function requestCancelForChat(
   rpc: JobQueueRpc,
@@ -254,13 +263,15 @@ export async function requestCancelForChat(
     telegramChatId: number;
     excludeRowId?: number;
   },
-): Promise<boolean> {
+): Promise<ChatCancelOutcome> {
   const result = await rpc.requestCancelForChat({
     p_integration_id: params.integrationId,
     p_telegram_chat_id: params.telegramChatId,
     p_exclude_update_id: params.excludeRowId ?? null,
   });
-  return requireRpcData("cancel request", result) === true;
+  const data = requireRpcData("cancel request", result);
+  if (CHAT_CANCEL_OUTCOMES.includes(data)) return data as ChatCancelOutcome;
+  throw new Error("cancel request returned an unknown outcome");
 }
 
 /**
