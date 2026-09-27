@@ -771,6 +771,43 @@ describe("POST /api/fred/chat", () => {
     expect(cancel).toHaveBeenCalledWith("browser-request-cancel");
   });
 
+  it("settles a text-only receipt as cancelled when the browser leaves during user persistence", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "77777777-7777-4777-8777-777777777701",
+    });
+    let markUserEventStarted!: () => void;
+    const userEventStarted = new Promise<void>((resolve) => {
+      markUserEventStarted = resolve;
+    });
+    let releaseUserEvent!: () => void;
+    const userEventReleased = new Promise<void>((resolve) => {
+      releaseUserEvent = resolve;
+    });
+    const rpc = vi.fn().mockImplementationOnce(async () => {
+      markUserEventStarted();
+      await userEventReleased;
+      return { data: summaryRow, error: null };
+    });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+
+    const response = await POST(request({ query: "Gleich wieder weg" }));
+    const reader = response.body!.getReader();
+    await userEventStarted;
+    const cancelled = reader.cancel("browser-cancel");
+    releaseUserEvent();
+    await cancelled;
+
+    expect(mockTransitionFredRequestReceipt.mock.calls.map(([transition]) => [
+      transition.status,
+      transition.failurePhase,
+      transition.errorCode,
+    ])).toEqual([
+      ["user_persisted", undefined, undefined],
+      ["cancelled", "connecting", "request_cancelled"],
+    ]);
+    expect(openFredUpstreamStream).not.toHaveBeenCalled();
+  });
+
   it("persists and relays the trimmed attachment answer that the webhook echo stores", async () => {
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
       id: "77777777-7777-4777-8777-777777777703",

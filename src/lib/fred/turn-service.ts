@@ -424,6 +424,9 @@ export async function* executeFredTurn(
 
     yield { type: "conversation", conversation };
     await request.onConversationEvent?.(conversation);
+    // The persistence calls above are not bound to the signal. Do not start
+    // generation for a caller that left meanwhile; the catch settles the receipt.
+    request.signal?.throwIfAborted();
 
     // Relay webhook event (best-effort)
     void upstream.relayEvent({

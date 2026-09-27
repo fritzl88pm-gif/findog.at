@@ -819,9 +819,15 @@ function streamTextOnlyTurn(options: {
     if (!streamAbort.signal.aborted) streamAbort.abort(deadline.signal.reason);
   };
   deadline.signal.addEventListener("abort", onDeadlineAbort, { once: true });
+  let consumerCancelled = false;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let errorSent = false;
+      // After the browser cancels, keep draining the turn so it reaches its
+      // own abort handling and settles the request receipt; only stop sending.
+      const send = (event: Parameters<typeof encodeFredNativeStreamEvent>[0]) => {
+        if (!consumerCancelled) controller.enqueue(encoder.encode(encodeFredNativeStreamEvent(event)));
+      };
       try {
         const turn = executeFredTurn(
           {
@@ -855,16 +861,16 @@ function streamTextOnlyTurn(options: {
           if (done) break;
           if (value.type === "cancelled") continue;
           if (value.type === "error") errorSent = true;
-          controller.enqueue(encoder.encode(encodeFredNativeStreamEvent(value)));
+          send(value);
         }
       } catch (error) {
         if (!errorSent && !options.request.signal.aborted) {
-          controller.enqueue(encoder.encode(encodeFredNativeStreamEvent({
+          send({
             type: "error",
             error: error instanceof UserVisibleError
               ? error.message
               : "Fred konnte die Anfrage nicht abschließen.",
-          })));
+          });
         }
       } finally {
         deadline.signal.removeEventListener("abort", onDeadlineAbort);
@@ -875,6 +881,7 @@ function streamTextOnlyTurn(options: {
       }
     },
     async cancel(reason) {
+      consumerCancelled = true;
       streamAbort.abort(reason);
       deadline.dispose();
       await turnFinished;

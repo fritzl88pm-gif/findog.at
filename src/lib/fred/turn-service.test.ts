@@ -581,6 +581,29 @@ describe("executeFredTurn", () => {
     }, channelId).content).toBe(persisted.content);
   });
 
+  it("does not start generation when the caller aborts while the user message is persisted", async () => {
+    const abortController = new AbortController();
+    const onRequestTransition = vi.fn().mockResolvedValue(undefined);
+    persistence = makePersistenceDeps({
+      recordEvent: vi.fn().mockImplementationOnce(async () => {
+        abortController.abort();
+        return { conversation: summaryConv(), messageId: 41 };
+      }),
+    });
+
+    await expect(collectEvents(executeFredTurn(baseRequest({
+      signal: abortController.signal,
+      onRequestTransition,
+    }), upstream, persistence, config))).rejects.toThrow();
+
+    expect(onRequestTransition.mock.calls).toEqual([
+      [{ status: "user_persisted", conversationId, userMessageId: 41 }],
+      [{ status: "cancelled", failurePhase: "connecting", errorCode: "request_cancelled" }],
+    ]);
+    expect(upstream.openStream).not.toHaveBeenCalled();
+    expect(upstream.relayEvent).not.toHaveBeenCalled();
+  });
+
   it("uses the caller-provided assistant event id", async () => {
     const assistantEventId = "22222222-2222-4222-8222-222222222222";
     const gen = executeFredTurn(
