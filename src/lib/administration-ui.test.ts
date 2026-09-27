@@ -15,6 +15,14 @@ describe("Administration workspace and scanning settings", () => {
     expect(pageSource).not.toContain('role="tab"');
   });
 
+  it("accepts a capped user request history with the exact total and says so", () => {
+    expect(pageSource).toContain("payload.requestCount < requests.length");
+    expect(pageSource).not.toContain("payload.requestCount !== requests.length");
+    expect(pageSource).toMatch(
+      /adminUserProfile\.requestCount > adminUserProfile\.requests\.length \? \([\s\S]*?Angezeigt werden die neuesten \{adminUserProfile\.requests\.length\} von \{adminUserProfile\.requestCount\} Anfragen\./u,
+    );
+  });
+
   it("loads settings and users only when their area opens", () => {
     const overview = pageSource.slice(pageSource.indexOf("async function openAdministrationView"), pageSource.indexOf("function navigateAdminArea"));
     expect(overview).not.toMatch(/loadScanningSettings|loadAdminUsers|fetch\(/u);

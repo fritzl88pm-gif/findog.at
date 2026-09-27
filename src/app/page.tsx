@@ -409,7 +409,8 @@ function normalizeAdminUserProfile(value: unknown): AdminUserProfile | null {
       createdAt: item.createdAt,
     }];
   });
-  if (requests.length !== payload.requests.length || payload.requestCount !== requests.length) {
+  // The history is capped server-side; the count covers every request.
+  if (requests.length !== payload.requests.length || payload.requestCount < requests.length) {
     return null;
   }
   return { user: profileUser, requestCount: payload.requestCount, requests };
@@ -4340,6 +4341,11 @@ export default function Home() {
                       </dl>
                       <div className="admin-request-history">
                         <h3>Anfrageverlauf</h3>
+                        {adminUserProfile.requestCount > adminUserProfile.requests.length ? (
+                          <p className="admin-empty-state">
+                            Angezeigt werden die neuesten {adminUserProfile.requests.length} von {adminUserProfile.requestCount} Anfragen.
+                          </p>
+                        ) : null}
                         {adminUserProfile.requests.length === 0 ? (
                           <p className="admin-empty-state">Keine Anfragen in den vorhandenen Unterhaltungen.</p>
                         ) : (

@@ -12,6 +12,8 @@ import { deleteTelegramIntegration } from "@/lib/telegram/settings";
 
 export const runtime = "nodejs";
 
+const REQUEST_HISTORY_LIMIT = 1000;
+
 type RequestHistoryRow = {
   id: number;
   conversation_id: string;
@@ -41,14 +43,24 @@ export async function GET(
       throw new UserVisibleError("Benutzer wurde nicht gefunden.", 404);
     }
 
-    const { data, error } = await supabase
-      .from("fred_messages")
-      .select("id,conversation_id,content,created_at")
-      .eq("client_id", userId)
-      .eq("role", "user")
-      .order("created_at", { ascending: false })
-      .order("id", { ascending: false });
-    if (error) {
+    // PostgREST caps every row response at max-rows, so the total is counted
+    // separately and the history is limited explicitly to the newest entries.
+    const [{ count, error: countError }, { data, error }] = await Promise.all([
+      supabase
+        .from("fred_messages")
+        .select("id", { count: "exact", head: true })
+        .eq("client_id", userId)
+        .eq("role", "user"),
+      supabase
+        .from("fred_messages")
+        .select("id,conversation_id,content,created_at")
+        .eq("client_id", userId)
+        .eq("role", "user")
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(REQUEST_HISTORY_LIMIT),
+    ]);
+    if (countError || count === null || error) {
       throw new UserVisibleError("Anfrageverlauf konnte nicht geladen werden.", 503);
     }
 
@@ -61,7 +73,7 @@ export async function GET(
 
     return NextResponse.json({
       user: managedUserSummary(authData.user),
-      requestCount: requests.length,
+      requestCount: Math.max(count, requests.length),
       requests,
     });
   } catch (error) {

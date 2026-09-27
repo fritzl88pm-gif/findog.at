@@ -30,11 +30,16 @@ function request(method: "GET" | "DELETE") {
 describe("/api/admin/users/:userId", () => {
   const getUserById = vi.fn();
   const rpc = vi.fn();
-  const orderId = vi.fn();
+  const limit = vi.fn();
+  const orderId = vi.fn(() => ({ limit }));
   const orderCreated = vi.fn(() => ({ order: orderId }));
   const eqRole = vi.fn(() => ({ order: orderCreated }));
   const eq = vi.fn(() => ({ eq: eqRole }));
-  const select = vi.fn(() => ({ eq }));
+  const countEqRole = vi.fn();
+  const countEq = vi.fn(() => ({ eq: countEqRole }));
+  const select = vi.fn((_columns: string, options?: { count?: string; head?: boolean }) => (
+    options?.head ? { eq: countEq } : { eq }
+  ));
   const from = vi.fn(() => ({ select }));
   const supabase = { auth: { admin: { getUserById } }, from, rpc };
 
@@ -43,8 +48,21 @@ describe("/api/admin/users/:userId", () => {
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase as never);
     vi.mocked(authenticateAdminRequest).mockResolvedValue({ id: ADMIN_ID });
     vi.mocked(deleteTelegramIntegration).mockResolvedValue({ deleted: true });
-    orderId.mockResolvedValue({ data: [], error: null });
+    limit.mockResolvedValue({ data: [], error: null });
+    countEqRole.mockResolvedValue({ count: 0, error: null });
   });
+
+  function mockProfileUser() {
+    getUserById.mockResolvedValue({
+      data: { user: {
+        id: USER_ID,
+        email: "user@example.com",
+        created_at: "2026-01-01T00:00:00Z",
+        last_sign_in_at: "2026-01-02T00:00:00Z",
+      } },
+      error: null,
+    });
+  }
 
   it("returns auth metadata and existing user messages without copying content", async () => {
     getUserById.mockResolvedValue({
@@ -57,7 +75,7 @@ describe("/api/admin/users/:userId", () => {
       } },
       error: null,
     });
-    orderId.mockResolvedValue({
+    limit.mockResolvedValue({
       data: [{
         id: 7,
         conversation_id: "33333333-3333-4333-8333-333333333333",
@@ -68,11 +86,12 @@ describe("/api/admin/users/:userId", () => {
       }],
       error: null,
     });
+    countEqRole.mockResolvedValue({ count: 1, error: null });
 
     const response = await GET(request("GET"), context());
 
     expect(response.status).toBe(200);
-    expect(from).toHaveBeenCalledTimes(1);
+    expect(from).toHaveBeenCalledTimes(2);
     expect(from).toHaveBeenCalledWith("fred_messages");
     expect(eq).toHaveBeenCalledWith("client_id", USER_ID);
     expect(eqRole).toHaveBeenCalledWith("role", "user");
@@ -91,6 +110,43 @@ describe("/api/admin/users/:userId", () => {
         content: "Nur die Benutzerfrage",
         createdAt: "2026-01-03T00:00:00Z",
       }],
+    });
+  });
+
+  it("counts every user message exactly while the history is capped explicitly", async () => {
+    mockProfileUser();
+    limit.mockResolvedValue({
+      data: Array.from({ length: 1000 }, (_, index) => ({
+        id: 5000 - index,
+        conversation_id: "33333333-3333-4333-8333-333333333333",
+        content: `Frage ${index}`,
+        created_at: "2026-01-03T00:00:00Z",
+      })),
+      error: null,
+    });
+    countEqRole.mockResolvedValue({ count: 1500, error: null });
+
+    const response = await GET(request("GET"), context());
+
+    expect(response.status).toBe(200);
+    expect(select).toHaveBeenCalledWith("id", { count: "exact", head: true });
+    expect(countEq).toHaveBeenCalledWith("client_id", USER_ID);
+    expect(countEqRole).toHaveBeenCalledWith("role", "user");
+    expect(limit).toHaveBeenCalledWith(1000);
+    const payload = await response.json() as { requestCount: number; requests: unknown[] };
+    expect(payload.requestCount).toBe(1500);
+    expect(payload.requests).toHaveLength(1000);
+  });
+
+  it("fails the profile when the exact request count is unavailable", async () => {
+    mockProfileUser();
+    countEqRole.mockResolvedValue({ count: null, error: new Error("count failed") });
+
+    const response = await GET(request("GET"), context());
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "Anfrageverlauf konnte nicht geladen werden.",
     });
   });
 
