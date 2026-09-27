@@ -147,6 +147,43 @@ describe("Findok BFG citation verification", () => {
     ).toEqual(["RV/7103080/2015", "RS/7100001/2020"]);
   });
 
+  it("leaves citations inside code, URLs and citation tags untouched", () => {
+    const verified = {
+      status: "verified" as const,
+      gz: "RV/7100001/2020",
+      title: "Pendlerpauschale",
+      documentTitle: "BFG 01.01.2021, RV/7100001/2020",
+      dokumentId: "1",
+      segmentId: "segment",
+      indexName: "findok-bfg" as const,
+      fullTextUrl: "https://findok.bmf.gv.at/findok/volltext?gz=RV%2F7100001%2F2020",
+      pdfUrl: "https://findok.bmf.gv.at/findok/resources/pdf/segment/1.pdf",
+    };
+    const link = "[RV/7100001/2020](https://findok.bmf.gv.at/findok/volltext?gz=RV%2F7100001%2F2020)";
+    const untouched = [
+      "Code `RV/7100001/2020` und ``RV/7100001/2020 mit ` Tick``.",
+      "```text\nRV/7100001/2020\n```",
+      "~~~\nRV/7100001/2020\n~~~",
+      "<https://findok.bmf.gv.at/findok/volltext?gz=RV/7100001/2020>",
+      "https://findok.bmf.gv.at/findok/volltext?gz=RV/7100001/2020",
+      "www.findok.bmf.gv.at/findok/volltext?gz=RV/7100001/2020",
+      "<kb doc=\"BFG RV/7100001/2020\" chunk_id=\"c1\"/>",
+    ].join("\n\n");
+
+    expect(linkVerifiedBfgCitations(
+      `Siehe RV/7100001/2020 und [RV/7100001/2020](https://example.test/alt).\n\n${untouched}\n\nZuletzt RV/7100001/2020.`,
+      [verified],
+      { target: "fullText" },
+    )).toBe(`Siehe ${link} und ${link}.\n\n${untouched}\n\nZuletzt ${link}.`);
+    expect(linkVerifiedBfgCitations(
+      "`[RV/7100001/2020](https://example.test/alt)`\n```\noffen RV/7100001/2020",
+      [verified],
+    )).toBe("`[RV/7100001/2020](https://example.test/alt)`\n```\noffen RV/7100001/2020");
+    expect(linkVerifiedBfgCitations("Ein ` loser Tick und RV/7100001/2020.", [verified], {
+      target: "fullText",
+    })).toBe(`Ein \` loser Tick und ${link}.`);
+  });
+
   it("caches verified resolutions until their TTL expires", async () => {
     let now = 1_000;
     const cache = new BfgCitationCache({ now: () => now, verifiedTtlMs: 100, negativeTtlMs: 20 });

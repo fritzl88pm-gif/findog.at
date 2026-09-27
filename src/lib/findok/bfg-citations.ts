@@ -234,19 +234,31 @@ function verifiedCitationMap(verified: VerifiedBfgCitation[]): Map<string, Verif
   return byGz;
 }
 
-function markdownLinkPattern(): RegExp {
-  return /\[([^\]\n]+)\]\(([^)\s]+)\)/g;
-}
+// Segments that must never gain a nested link: fenced and inline code, markdown
+// links, autolinks, WeKnora citation tags and bare URLs. Rewriting a GZ inside
+// them would show literal markdown in code or break the surrounding URL.
+const PROTECTED_MARKDOWN_SEGMENT = new RegExp([
+  /^[ \t]*(?<fence>(?<fenceChar>[`~])\k<fenceChar>{2,})[^`\n]*$(?:[\s\S]*?\n[ \t]*\k<fence>\k<fenceChar>*[ \t]*$|[\s\S]*)/,
+  /(?<!`)(?<ticks>`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?[^`]\k<ticks>(?!`)/,
+  /\[(?<linkLabel>[^\]\n]+)\]\([^)\s]+\)/,
+  /<(?:https?:\/\/[^<>\s]*|(?:kb|web)\b[^>]*)>/,
+  /(?:https?:\/\/|www\.)[^\s<>]+/,
+].map((pattern) => pattern.source).join("|"), "gimu");
 
-function replaceOutsideMarkdownLinks(text: string, transform: (chunk: string) => string): string {
-  const pattern = markdownLinkPattern();
+function replaceOutsideProtectedSegments(
+  text: string,
+  transform: (chunk: string) => string,
+  transformLink: (link: string, label: string) => string,
+): string {
+  const pattern = new RegExp(PROTECTED_MARKDOWN_SEGMENT);
   let cursor = 0;
   let output = "";
   let match: RegExpExecArray | null;
 
   while ((match = pattern.exec(text)) !== null) {
     output += transform(text.slice(cursor, match.index));
-    output += match[0];
+    const linkLabel = match.groups?.linkLabel;
+    output += linkLabel === undefined ? match[0] : transformLink(match[0], linkLabel);
     cursor = match.index + match[0].length;
   }
 
@@ -464,19 +476,20 @@ export function linkVerifiedBfgCitations(
     return answer;
   }
 
-  const relinked = answer.replace(markdownLinkPattern(), (full, label: string) => {
-    const normalizedLabel = normalizeBfgGz(label);
-    const citation = byGz.get(normalizedLabel);
-    return citation && normalizedLabel === label.trim().toUpperCase()
-      ? markdownLinkForCitation(citation, target)
-      : full;
-  });
-
-  return replaceOutsideMarkdownLinks(relinked, (chunk) =>
-    chunk.replace(createGzPattern(), (full, prefix: string, gz: string) => {
-      const citation = byGz.get(normalizeBfgGz(gz));
-      return citation ? `${prefix}${markdownLinkForCitation(citation, target)}` : full;
-    }),
+  return replaceOutsideProtectedSegments(
+    answer,
+    (chunk) =>
+      chunk.replace(createGzPattern(), (full, prefix: string, gz: string) => {
+        const citation = byGz.get(normalizeBfgGz(gz));
+        return citation ? `${prefix}${markdownLinkForCitation(citation, target)}` : full;
+      }),
+    (link, label) => {
+      const normalizedLabel = normalizeBfgGz(label);
+      const citation = byGz.get(normalizedLabel);
+      return citation && normalizedLabel === label.trim().toUpperCase()
+        ? markdownLinkForCitation(citation, target)
+        : link;
+    },
   );
 }
 
