@@ -443,6 +443,18 @@ function searchHits(value: unknown): FindokSearchHit[] {
   });
 }
 
+// A single unavailable decision must not discard every other official hit;
+// only a page whose details all failed counts as a Findok failure.
+function survivingDetails<T>(settled: Array<PromiseSettledResult<T | null>>): Array<T | null> {
+  const failures = settled.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failures.length > 0 && failures.length === settled.length) {
+    throw failures[0].reason;
+  }
+  return settled.map((result) => (result.status === "fulfilled" ? result.value : null));
+}
+
 async function fetchSearchDetail(hit: FindokSearchHit, fetchImpl: FetchLike): Promise<BfgDecision | null> {
   const url = fixedApiUrl("/volltext");
   url.searchParams.set("documentId", hit.dokumentId);
@@ -538,7 +550,7 @@ async function fetchProDetails(
   hits: FindokSearchHit[],
   fetchImpl: FetchLike,
 ): Promise<Array<Omit<BfgProCandidate, "candidateId"> | null>> {
-  return Promise.all(hits.map(async (hit) => {
+  return survivingDetails(await Promise.allSettled(hits.map(async (hit) => {
     const url = fixedApiUrl("/volltext");
     url.searchParams.set("documentId", hit.dokumentId);
     url.searchParams.set("segmentId", hit.segmentId);
@@ -550,7 +562,7 @@ async function fetchProDetails(
       throw new FindokUpstreamError(error instanceof Error ? error.message : undefined);
     }
     return mapProDetail(await readJsonResponse(response), hit);
-  }));
+  })));
 }
 
 export async function fetchBfgProCandidates({
@@ -630,9 +642,9 @@ async function fetchSearch(
     throw new FindokUpstreamError();
   }
   const pageResults = payload.pageResults;
-  const details = await Promise.all(
+  const details = survivingDetails(await Promise.allSettled(
     searchHits(pageResults.searchResults).map((hit) => fetchSearchDetail(hit, fetchImpl)),
-  );
+  ));
 
   return {
     results: details.filter((item): item is BfgDecision => item !== null),

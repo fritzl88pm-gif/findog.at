@@ -4,6 +4,7 @@ import {
   detectExactFindokGz,
   fetchBfgDecisions,
   fetchBfgProCandidates,
+  FindokUpstreamError,
   normalizeFindokQuery,
   parseFindokSseData,
 } from "./bfg-decisions";
@@ -21,6 +22,58 @@ function sseResponse(value: unknown): Response {
     headers: { "Content-Type": "text/event-stream" },
   });
 }
+
+function searchPageWith(documentIds: string[]): unknown {
+  return {
+    pageResults: {
+      searchResults: documentIds.map((dokumentId) => ({
+        dokumentId,
+        segmentId: `seg-${dokumentId}`,
+        indexName: "findok",
+        title: `Treffer ${dokumentId}`,
+        dokumenttyp: "Erkenntnis",
+        snippet: `Snippet ${dokumentId}`,
+      })),
+      currentPage: 0,
+      pageSize: 10,
+      totalPages: 1,
+      totalSize: documentIds.length,
+    },
+  };
+}
+
+function detailFetch(
+  documentIds: string[],
+  failures: Record<string, () => Promise<Response>>,
+) {
+  return vi.fn<typeof fetch>(async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/dokumente")) {
+      return sseResponse(searchPageWith(documentIds));
+    }
+    const documentId = url.searchParams.get("documentId") ?? "";
+    const failure = failures[documentId];
+    if (failure) {
+      return failure();
+    }
+    return jsonResponse({
+      bfg: true,
+      dokumentId: documentId,
+      segmentId: `seg-${documentId}`,
+      indexName: "findok",
+      titel: `Entscheidung ${documentId}`,
+      geschaeftszahl: `RV/${documentId}/2025`,
+      content: `Volltext ${documentId}`,
+    });
+  });
+}
+
+const failingDetails = {
+  "doc-2": async () => new Response("Fehler", { status: 500 }),
+  "doc-3": async () => {
+    throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  },
+};
 
 describe("Findok BFG request normalization", () => {
   it("collapses whitespace and recognizes normalized RV/RM business numbers", () => {
@@ -568,6 +621,46 @@ describe("Findok BFG result mapping", () => {
         withHeadnote: [],
       },
     });
+  });
+
+  it("keeps the other PRO candidates when single Findok details fail", async () => {
+    const fetchMock = detailFetch(["doc-1", "doc-2", "doc-3"], failingDetails);
+
+    const result = await fetchBfgProCandidates({ query: "Arbeitszimmer", fetchImpl: fetchMock });
+
+    expect(result.map((candidate) => candidate.title)).toEqual(["Entscheidung doc-1"]);
+  });
+
+  it("reports Findok as unavailable when every PRO detail fails", async () => {
+    const fetchMock = detailFetch(["doc-2", "doc-3"], failingDetails);
+
+    await expect(fetchBfgProCandidates({ query: "Arbeitszimmer", fetchImpl: fetchMock }))
+      .rejects.toBeInstanceOf(FindokUpstreamError);
+  });
+
+  it("keeps the other search results when single Findok details fail", async () => {
+    const fetchMock = detailFetch(["doc-1", "doc-2", "doc-3"], failingDetails);
+
+    const result = await fetchBfgDecisions({
+      query: "Arbeitszimmer",
+      page: 1,
+      pageSize: 10,
+      fetchImpl: fetchMock,
+    });
+
+    expect(result.results.map((decision) => decision.title)).toEqual(["Entscheidung doc-1"]);
+    expect(result.totalCount).toBe(3);
+  });
+
+  it("reports Findok as unavailable when every search detail fails", async () => {
+    const fetchMock = detailFetch(["doc-2", "doc-3"], failingDetails);
+
+    await expect(fetchBfgDecisions({
+      query: "Arbeitszimmer",
+      page: 1,
+      pageSize: 10,
+      fetchImpl: fetchMock,
+    })).rejects.toBeInstanceOf(FindokUpstreamError);
   });
 
   it("drops unsafe PDF origins supplied by upstream data", async () => {
