@@ -107,4 +107,21 @@ describe("askQuickFred", () => {
     await expect(askQuickFred({ question: "Frage", signal: controller.signal })).rejects.toMatchObject({ status: 504 });
     expect(stopFredUpstreamSession).toHaveBeenCalled();
   });
+
+  it("bounds the stop call after a timeout so the 504 is not held back by a hanging backend", async () => {
+    const controller = new AbortController();
+    vi.mocked(openFredUpstreamStream).mockImplementationOnce(async () => {
+      controller.abort();
+      throw new DOMException("aborted", "AbortError");
+    });
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    try {
+      await expect(askQuickFred({ question: "Frage", signal: controller.signal })).rejects.toMatchObject({ status: 504 });
+      expect(timeout).toHaveBeenCalledWith(5_000);
+      const stopSignal = vi.mocked(stopFredUpstreamSession).mock.lastCall?.[0].signal;
+      expect(stopSignal).toBe(timeout.mock.results.at(-1)?.value);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
 });

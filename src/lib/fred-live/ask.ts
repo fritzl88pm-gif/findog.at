@@ -209,7 +209,8 @@ export async function askQuickFred(input: {
         config,
         upstreamSession,
         messageId: assistantMessageId,
-        signal: new AbortController().signal,
+        // The stop goes to the backend that just timed out; bounded, so the 504 is not held back.
+        signal: AbortSignal.timeout(5_000),
       });
     }
     throw toUpstreamError(error, input.signal);
