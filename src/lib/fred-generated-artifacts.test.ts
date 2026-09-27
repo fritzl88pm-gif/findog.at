@@ -56,6 +56,25 @@ describe("generated artifact completion pipeline", () => {
     ]);
   });
 
+  it("filters helper and lock files before applying the ten-card cap", () => {
+    const helpers = Array.from({ length: 10 }, (_, index) => index % 2 === 0
+      ? { index, file_name: `helper${index}.py`, file_size: 5, file_type: ".py", handle: `resource://h${index}` }
+      : { index, file_name: `.~lock.Bericht${index}.pptx#`, file_size: 5, file_type: ".pptx#", handle: `resource://l${index}` });
+    const parsed = parseGeneratedArtifacts({ data: { artifacts: [
+      ...helpers,
+      { index: 10, file_name: "Bericht.pptx", file_size: 5, file_type: ".pptx", handle: "resource://deck" },
+    ] } });
+    expect(parsed.map(({ upstreamIndex, fileType }) => ({ upstreamIndex, fileType }))).toEqual([
+      { upstreamIndex: 10, fileType: ".pptx" },
+    ]);
+
+    const deliverables = Array.from({ length: 15 }, (_, index) => (
+      { index, file_name: `teil${index}.pdf`, file_size: 5, file_type: ".pdf", handle: `resource://p${index}` }
+    ));
+    expect(parseGeneratedArtifacts({ data: { artifacts: deliverables } }).map((item) => item.upstreamIndex))
+      .toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
   it("turns only genuine-card pseudo-links into plain filenames", () => {
     const artifacts = parseGeneratedArtifacts(upstreamFrame);
     expect(normalizeGeneratedArtifactLinks(

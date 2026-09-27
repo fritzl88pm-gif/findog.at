@@ -2,6 +2,7 @@ import { isGeneratedArtifactFileType } from "./generated-artifact-types";
 import type { FredGeneratedArtifact } from "./fred-native-stream";
 
 const MAX_GENERATED_ARTIFACTS = 10;
+const MAX_UPSTREAM_INDEX = 99;
 const MAX_ARTIFACT_BYTES = 50 * 1024 * 1024;
 
 export type ParsedGeneratedArtifact = Omit<FredGeneratedArtifact, "id"> & { sourceUri: string };
@@ -15,8 +16,12 @@ export function parseGeneratedArtifacts(value: unknown): ParsedGeneratedArtifact
   if (!Array.isArray(raw)) return [];
 
   const seenIndexes = new Set<number>();
-  return raw.slice(0, MAX_GENERATED_ARTIFACTS).flatMap((candidate, arrayIndex) => {
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+  const artifacts: ParsedGeneratedArtifact[] = [];
+  // Filter before capping: helper scripts and lock files ahead of the real
+  // deliverable must not use up the card slots.
+  for (const [arrayIndex, candidate] of raw.slice(0, MAX_UPSTREAM_INDEX + 1).entries()) {
+    if (artifacts.length >= MAX_GENERATED_ARTIFACTS) break;
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
     const item = candidate as Record<string, unknown>;
     const fileName = typeof item.file_name === "string" ? item.file_name.trim() : "";
     const fileType = typeof item.file_type === "string" ? item.file_type.trim().toLowerCase() : "";
@@ -32,11 +37,12 @@ export function parseGeneratedArtifacts(value: unknown): ParsedGeneratedArtifact
     if (!fileName || fileName.length > 255 || /[\u0000-\u001f\u007f]/u.test(fileName)
       || !isGeneratedArtifactFileType(fileType) || !Number.isSafeInteger(fileSize) || fileSize < 0
       || fileSize > MAX_ARTIFACT_BYTES || !Number.isSafeInteger(upstreamIndex) || upstreamIndex < 0
-      || upstreamIndex > 99 || seenIndexes.has(upstreamIndex)
-      || !/^resource:\/\/[^\u0000-\u001f\u007f]+$/u.test(sourceUri)) return [];
+      || upstreamIndex > MAX_UPSTREAM_INDEX || seenIndexes.has(upstreamIndex)
+      || !/^resource:\/\/[^\u0000-\u001f\u007f]+$/u.test(sourceUri)) continue;
     seenIndexes.add(upstreamIndex);
-    return [{ fileName, fileSize, fileType, upstreamIndex, sourceUri }];
-  });
+    artifacts.push({ fileName, fileSize, fileType, upstreamIndex, sourceUri });
+  }
+  return artifacts;
 }
 
 /** Keep provider pseudo-links inert unless they name an artifact that has a genuine card. */
