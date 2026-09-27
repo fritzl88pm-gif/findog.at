@@ -316,6 +316,19 @@ function getColumnWeights(headers: string[], rows: string[][]): number[] {
   });
 }
 
+// react-pdf never splits a wrap={false} View that is taller than a page; it
+// paints the overflow below the page edge. Bullets and table rows therefore
+// stay unbroken only while a pessimistic estimate (every character one em
+// wide) keeps them within half of the A4 content area.
+const contentWidth = 595.28 - styles.page.paddingLeft - styles.page.paddingRight;
+const halfContentHeight = (841.89 - styles.page.paddingTop - styles.page.paddingBottom) / 2;
+const bulletTextWidth = contentWidth - styles.bulletRow.paddingLeft - styles.bulletMarker.width;
+
+function mayExceedPage(text: string, width: number, fontSize: number, lineHeight: number): boolean {
+  const charactersPerLine = Math.max(1, Math.floor(width / fontSize));
+  return Math.ceil(text.length / charactersPerLine) * fontSize * lineHeight > halfContentHeight;
+}
+
 function ChatPdfDocument({ title, content, date }: ChatPdfPayload) {
   const blocks = parsePdfContentBlocks(content);
   const safeTitle = pdfSafeText(title);
@@ -341,7 +354,11 @@ function ChatPdfDocument({ title, content, date }: ChatPdfPayload) {
             }
             if (block.type === "bullet") {
               return (
-                <View key={index} style={styles.bulletRow} wrap={false}>
+                <View
+                  key={index}
+                  style={styles.bulletRow}
+                  wrap={mayExceedPage(block.text, bulletTextWidth, styles.page.fontSize, styles.page.lineHeight)}
+                >
                   <Text style={styles.bulletMarker}>{block.ordered ? `${block.marker}.` : "-"}</Text>
                   <Text style={styles.bulletText}>{block.text}</Text>
                 </View>
@@ -349,6 +366,14 @@ function ChatPdfDocument({ title, content, date }: ChatPdfPayload) {
             }
             if (block.type === "table") {
               const columnWeights = getColumnWeights(block.headers, block.rows);
+              const totalWeight = columnWeights.reduce((sum, weight) => sum + weight, 0);
+              const rowMayExceedPage = (row: string[]) => row.some((cell, cellIndex) => mayExceedPage(
+                cell,
+                (contentWidth * (columnWeights[cellIndex] ?? 1)) / totalWeight
+                  - styles.tableCell.paddingLeft - styles.tableCell.paddingRight,
+                styles.tableCell.fontSize,
+                styles.tableCell.lineHeight,
+              ));
               const renderCell = (text: string, cellIndex: number, header = false) => (
                 <View
                   key={cellIndex}
@@ -382,7 +407,7 @@ function ChatPdfDocument({ title, content, date }: ChatPdfPayload) {
                     <View
                       key={rowIndex}
                       style={[styles.tableRow, ...(rowIndex % 2 === 1 ? [styles.tableAlternateRow] : [])]}
-                      wrap={false}
+                      wrap={rowMayExceedPage(row)}
                     >
                       {row.map((cell, cellIndex) => renderCell(cell, cellIndex))}
                     </View>

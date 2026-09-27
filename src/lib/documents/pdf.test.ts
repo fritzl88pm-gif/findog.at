@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { inflateSync } from "node:zlib";
 
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 import { parsePdfContentBlocks, renderChatPdf } from "./pdf";
 
@@ -158,6 +158,29 @@ it("keeps single asterisks and underscores in calculations, file names and URLs"
     { type: "paragraph", text: "Das ist kursiv und auch (hier), fett bleibt fett." },
   ]);
 });
+
+it("wraps bullets and table rows taller than a page instead of clipping them", async () => {
+  const words = Array.from({ length: 2_000 }, (_, index) => `W${String(index).padStart(4, "0")}`).join(" ");
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    for (const content of [
+      `Einleitung\n\n- ${words}\n\nNACHHER`,
+      `| Nr. | Beschreibung |\n| --- | --- |\n| 1 | ${words} |\n\nNACHHER`,
+    ]) {
+      const lines = pdfTextLines(await renderChatPdf({ title: "Lange Zeile", content, date: "11.07.2026" }));
+      const wordLines = lines.filter((line) => /W\d{4}/.test(line.text));
+      const renderedWords = new Set(wordLines.flatMap((line) => line.text.match(/W\d{4}/g) ?? []));
+
+      expect(renderedWords.size).toBe(2_000);
+      // Everything below the footer rule at top 800 lies outside the visible content.
+      expect(wordLines.filter((line) => line.top >= 800)).toEqual([]);
+      expect(lines.some((line) => line.text === "NACHHER")).toBe(true);
+    }
+    expect(warn.mock.calls.flat().join("\n")).not.toMatch(/can't wrap between pages/);
+  } finally {
+    warn.mockRestore();
+  }
+}, 30_000);
 
 it("repeats table headers when a table spans multiple pages", async () => {
   const source = await readFile(new URL("./pdf.tsx", import.meta.url), "utf8");
