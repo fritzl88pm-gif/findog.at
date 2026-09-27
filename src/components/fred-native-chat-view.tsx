@@ -799,6 +799,20 @@ export default function FredNativeChatView({
       setSelectedImages([]);
       setSelectedFiles([]);
     }
+    // A regeneration replaces the messages from this index on. Feedback that
+    // is open or still being saved for them must not land on the new answer.
+    const replacedFromIndex = options.messagesBeforeQuery?.length;
+    if (
+      replacedFromIndex !== undefined
+      && feedbackTargetIndex !== null
+      && feedbackTargetIndex >= replacedFromIndex
+    ) {
+      feedbackRequestRef.current += 1;
+      setFeedbackTargetIndex(null);
+      setFeedbackText("");
+      setFeedbackError("");
+      setIsFeedbackSaving(false);
+    }
     setError("");
     setIsSending(true);
 
@@ -927,6 +941,14 @@ export default function FredNativeChatView({
           ...baseMessages,
           completedMessage,
         ];
+        if (replacedFromIndex !== undefined) {
+          // The regenerated answer reuses the replaced answer's index and starts unrated.
+          const withoutReplaced = (current: Set<number>) => new Set(
+            [...current].filter((index) => index < replacedFromIndex),
+          );
+          setPositiveFeedbackIndexes(withoutReplaced);
+          setSubmittedNegativeFeedbackIndexes(withoutReplaced);
+        }
         streamingPreviewRef.current?.flush();
         setActiveAssistant(null);
         setMessages(completedMessages);

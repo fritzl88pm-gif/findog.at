@@ -211,3 +211,81 @@ describe("FredNativeChatView conversation switch", () => {
     expect(transcriptText()).toContain("Teilantwort A2");
   });
 });
+
+describe("FredNativeChatView feedback after regeneration", () => {
+  async function submitNegativeFeedback(reason: string) {
+    await act(async () => button("Antwort nicht korrekt").click());
+    await settle();
+    await typeInto(container.querySelector("form.feedback-inline-form textarea") as HTMLTextAreaElement, reason);
+    await act(async () => {
+      (container.querySelector("form.feedback-inline-form") as HTMLFormElement).requestSubmit();
+    });
+    await settle();
+  }
+
+  async function regenerate(finalAnswer: string) {
+    await act(async () => button("Antwort erneut erzeugen").click());
+    await settle();
+    chatRequests.at(-1)!.push({ type: "conversation", conversation: conversationA });
+    chatRequests.at(-1)!.push({
+      type: "final",
+      answer: finalAnswer,
+      assistantMessageId: 4,
+      conversation: conversationA,
+    });
+    chatRequests.at(-1)!.close();
+    await settle();
+  }
+
+  it("starts a regenerated answer unrated after negative feedback on the replaced one", async () => {
+    await renderView(conversationA.id, messagesA);
+    await submitNegativeFeedback("Falsch");
+    feedbackResponses[0](new Response("{}", { status: 200 }));
+    await settle();
+    expect(button("Antwort nicht korrekt").disabled).toBe(true);
+
+    await regenerate("Neue Antwort");
+
+    expect(transcriptText()).toContain("Neue Antwort");
+    expect(button("Antwort nicht korrekt").disabled).toBe(false);
+    expect(button("Antwort nicht korrekt").getAttribute("aria-pressed")).toBe("false");
+    expect(button("Antwort hilfreich").disabled).toBe(false);
+  });
+
+  it("does not carry a thumbs-up over to the regenerated answer", async () => {
+    await renderView(conversationA.id, messagesA);
+    await act(async () => button("Antwort hilfreich").click());
+    expect(button("Antwort hilfreich").getAttribute("aria-pressed")).toBe("true");
+
+    await regenerate("Neue Antwort");
+
+    expect(button("Antwort hilfreich").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("does not mark the regenerated answer when the replaced answer's feedback is saved late", async () => {
+    await renderView(conversationA.id, messagesA);
+    await submitNegativeFeedback("Falsch");
+
+    await regenerate("Neue Antwort");
+    feedbackResponses[0](new Response("{}", { status: 200 }));
+    await settle();
+
+    expect(transcriptText()).toContain("Neue Antwort");
+    expect(button("Antwort nicht korrekt").disabled).toBe(false);
+    expect(button("Antwort nicht korrekt").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("keeps the rating of the restored answer when the regeneration fails", async () => {
+    await renderView(conversationA.id, messagesA);
+    await act(async () => button("Antwort hilfreich").click());
+
+    await act(async () => button("Antwort erneut erzeugen").click());
+    await settle();
+    chatRequests[0].push({ type: "error", error: "Fred ist nicht erreichbar." });
+    chatRequests[0].close();
+    await settle();
+
+    expect(transcriptText()).toContain("Antwort A");
+    expect(button("Antwort hilfreich").getAttribute("aria-pressed")).toBe("true");
+  });
+});
