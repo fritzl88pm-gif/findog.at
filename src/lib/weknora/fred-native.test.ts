@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UserVisibleError } from "../errors";
 
@@ -14,6 +14,7 @@ import {
   fredVisitorId,
   MAX_NATIVE_ATTACHMENT_TOTAL_BYTES,
   openFredUpstreamStream,
+  FredSessionSigningConfigurationError,
   type FredNativeAttachmentUpload,
 } from "./fred-native";
 
@@ -28,6 +29,15 @@ const session = {
   channelId: "fred-channel",
   embedOrigin: "https://taxdog.cloud" as const,
 };
+const systemSigningKey = "findog-test-system-signing-key-2026";
+
+beforeEach(() => {
+  vi.stubEnv("WEKNORA_SYSTEM_SIGNING_KEY", systemSigningKey);
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("Fred native WeKnora client", () => {
   it("accepts the native attachment total boundary and rejects one additional raw byte", () => {
@@ -62,11 +72,11 @@ describe("Fred native WeKnora client", () => {
     } satisfies FredNativeAttachmentUpload;
     expect(() => assertFredNativeAttachmentTotalSize([attachment])).not.toThrow();
   });
-  it("derives the signed session handle exactly like WeKnora", () => {
-    const expected = createHmac("sha256", config.publishToken)
-      .update("fred-channel|session-123")
-      .digest("base64url");
-    expect(deriveFredSessionSignature(config, "session-123")).toBe(expected);
+  it("matches the independent WeKnora v2 known vector for an existing session ID", () => {
+    const signature = deriveFredSessionSignature(config, "session-123", systemSigningKey);
+    expect(signature).toBe("7o-Nx_0ou8adHrvrbg9wlOyC9tBN1PdXCzD6SfIoTuE");
+    expect(Buffer.from(signature, "base64url").toString("hex"))
+      .toBe("ee8f8dc7fd28bbc69d1ebbeb6e0f7094ec82f6d04dd4f7570b30fa49f2284ee1");
     expect(fredVisitorId(config.publishToken, "user-123")).not.toContain("user-123");
   });
 
@@ -81,9 +91,46 @@ describe("Fred native WeKnora client", () => {
     await expect(createFredUpstreamSession({
       session,
       config,
+      systemSigningKey,
       signal: new AbortController().signal,
       fetchImpl,
     })).resolves.toEqual({ id, signature });
+  });
+
+  it("rejects a session signed with the legacy publish-token scheme", async () => {
+    const id = "session-123";
+    const legacySignature = createHmac("sha256", config.publishToken)
+      .update(`${config.channelId}|${id}`)
+      .digest("base64url");
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      success: true,
+      data: { id, sig: legacySignature },
+    }), { status: 200 }));
+
+    await expect(createFredUpstreamSession({
+      session,
+      config,
+      systemSigningKey,
+      signal: new AbortController().signal,
+      fetchImpl,
+    })).rejects.toMatchObject({ status: 502 });
+  });
+
+  it("fails closed before creating a session when the signing key is missing", async () => {
+    vi.stubEnv("WEKNORA_SYSTEM_SIGNING_KEY", "");
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    expect(() => deriveFredSessionSignature(config, "session-123"))
+      .toThrow(FredSessionSigningConfigurationError);
+    expect(() => deriveFredSessionSignature(config, "session-123", "too-short"))
+      .toThrow(FredSessionSigningConfigurationError);
+    await expect(createFredUpstreamSession({
+      session,
+      config,
+      signal: new AbortController().signal,
+      fetchImpl,
+    })).rejects.toThrow(FredSessionSigningConfigurationError);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("loads the public agent binding and opens the correct embed agent stream without attachment fields", async () => {

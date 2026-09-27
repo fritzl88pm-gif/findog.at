@@ -41,6 +41,24 @@ export type FredNativeAttachmentSize = Pick<FredNativeAttachmentUpload, "bytes">
   byteLength: number;
 };
 
+export class FredSessionSigningConfigurationError extends UserVisibleError {
+  constructor() {
+    super(
+      "Die sichere WeKnora-Sitzungssignatur ist nicht konfiguriert. WEKNORA_SYSTEM_SIGNING_KEY muss mindestens 16 Zeichen enthalten.",
+      503,
+    );
+    this.name = "FredSessionSigningConfigurationError";
+  }
+}
+
+function resolveFredSessionSigningKey(value: string | undefined): string {
+  const key = value?.trim() ?? "";
+  if (Buffer.byteLength(key, "utf8") < 16) {
+    throw new FredSessionSigningConfigurationError();
+  }
+  return key;
+}
+
 export function assertFredNativeAttachmentTotalSize(
   attachments: readonly FredNativeAttachmentSize[],
 ): void {
@@ -163,12 +181,16 @@ function ensureUpstreamOk(response: Response): void {
 export function deriveFredSessionSignature(
   config: Pick<FredEmbedServerConfig, "channelId" | "publishToken">,
   sessionId: string,
+  systemSigningKey?: string,
 ): string {
   if (!IDENTIFIER_PATTERN.test(sessionId)) {
     throw new UserVisibleError("Die Fred-Sitzung ist ungültig.", 400);
   }
-  return createHmac("sha256", config.publishToken)
-    .update(`${config.channelId}|${sessionId}`)
+  const key = resolveFredSessionSigningKey(
+    systemSigningKey ?? process.env.WEKNORA_SYSTEM_SIGNING_KEY,
+  );
+  return createHmac("sha256", key)
+    .update(`embed-session:v2|${config.publishToken}|${config.channelId}|${sessionId}`)
     .digest("base64url");
 }
 
@@ -219,9 +241,14 @@ export async function fetchFredUpstreamConfig(options: {
 export async function createFredUpstreamSession(options: {
   session: FredEmbedSession;
   config: FredEmbedServerConfig;
+  /** Injected by tests; production reads WEKNORA_SYSTEM_SIGNING_KEY server-side. */
+  systemSigningKey?: string;
   signal: AbortSignal;
   fetchImpl?: typeof fetch;
 }): Promise<FredUpstreamSession> {
+  const systemSigningKey = resolveFredSessionSigningKey(
+    options.systemSigningKey ?? process.env.WEKNORA_SYSTEM_SIGNING_KEY,
+  );
   const fetchImpl = options.fetchImpl ?? fetch;
   const response = await fetchImpl(
     `${FRED_EMBED_ORIGIN}/api/v1/embed/${encodeURIComponent(options.config.channelId)}/sessions`,
@@ -246,7 +273,7 @@ export async function createFredUpstreamSession(options: {
   if (!IDENTIFIER_PATTERN.test(id)) {
     throw new UserVisibleError("Fred hat eine ungültige Sitzung geliefert.", 502);
   }
-  const expected = deriveFredSessionSignature(options.config, id);
+  const expected = deriveFredSessionSignature(options.config, id, systemSigningKey);
   const receivedBytes = Buffer.from(signature);
   const expectedBytes = Buffer.from(expected);
   if (
