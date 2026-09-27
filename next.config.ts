@@ -34,8 +34,17 @@ const supabaseImageSources = supabaseConnectSources.filter((source) => (
 ));
 const developmentScriptSources = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
 
+// src/proxy.ts runs for every request, so Next.js buffers each request body for it and
+// silently cuts it off after this limit (default 10 MB) before the route handler reads it.
+// Match the 100 MiB the reverse proxy must accept, which covers a full Scanning batch,
+// Fred attachments and 20 MiB download uploads including multipart overhead.
+const MAX_PROXIED_REQUEST_BODY_BYTES = 100 * 1_024 * 1_024;
+
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  experimental: {
+    proxyClientMaxBodySize: MAX_PROXIED_REQUEST_BODY_BYTES,
+  },
   turbopack: {
     root: process.cwd(),
   },

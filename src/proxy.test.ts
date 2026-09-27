@@ -1,7 +1,11 @@
 import { NextRequest } from "next/server";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { MAX_FRED_NATIVE_MULTIPART_BYTES } from "@/lib/attachments/fred-upload-limits";
+import { MAX_FILE_BYTES } from "@/lib/attachments/validation";
 import { buildMaintenanceHtml } from "@/lib/maintenance-mode";
+import { MAX_SCANNING_MULTIPART_BYTES } from "@/lib/scanning/config";
+import nextConfig from "../next.config";
 import { proxy } from "./proxy";
 
 function request(pathname: string): NextRequest {
@@ -61,5 +65,17 @@ describe("maintenance proxy", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("x-middleware-next")).toBe("1");
     expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+  });
+});
+
+describe("proxy request body buffering", () => {
+  it("lets every accepted upload body reach its route handler in full", () => {
+    // Next.js cuts proxied request bodies off at this limit (10 MB when unset).
+    const limit = nextConfig.experimental?.proxyClientMaxBodySize;
+
+    expect(typeof limit).toBe("number");
+    expect(limit).toBeGreaterThanOrEqual(MAX_SCANNING_MULTIPART_BYTES);
+    expect(limit).toBeGreaterThanOrEqual(MAX_FRED_NATIVE_MULTIPART_BYTES);
+    expect(limit).toBeGreaterThanOrEqual(MAX_FILE_BYTES + 1_024 * 1_024);
   });
 });
