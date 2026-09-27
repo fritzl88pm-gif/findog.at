@@ -1,21 +1,26 @@
 // @vitest-environment jsdom
-import { act, createElement } from "react";
+import { act, createElement, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { useFredRunLeaderboard } from "./fredrun-leaderboard-client";
 import type { FredRunWorldId } from "./fredrun-worlds";
 
 let root: Root;
-let board: ReturnType<typeof useFredRunLeaderboard>;
+type Leaderboard = ReturnType<typeof useFredRunLeaderboard>;
+let board: Leaderboard;
 let gameWorld: FredRunWorldId;
 const requests: {url: string; resolve: (response: Response) => void}[] = [];
 const onPlayerName = vi.fn();
 const onBlocked = vi.fn();
-function Harness() {
-  board = useFredRunLeaderboard("test-token", gameWorld, onPlayerName, onBlocked);
-  return createElement("div", null, `${board.world}:${board.state}:${board.entries.map(e => e.name).join()}`);
+// Hands each committed hook value out through an effect; act() flushes it before the assertions run.
+function Harness({ onBoard }: { onBoard: (value: Leaderboard) => void }) {
+  const current = useFredRunLeaderboard("test-token", gameWorld, onPlayerName, onBlocked);
+  useEffect(() => onBoard(current));
+  return createElement("div", null, `${current.world}:${current.state}:${current.entries.map(e => e.name).join()}`);
 }
-async function render() { await act(async () => root.render(createElement(Harness))); }
+async function render() {
+  await act(async () => root.render(createElement(Harness, { onBoard: (value) => { board = value; } })));
+}
 async function reply(index: number, world: FredRunWorldId, name: string = world, status = 200) {
   await act(async () => requests[index].resolve(new Response(JSON.stringify({world, entries: [{rank: 1, name, score: 10}], playerName: "Fred"}), {status})));
 }

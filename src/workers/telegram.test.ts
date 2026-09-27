@@ -156,11 +156,7 @@ describe("buildStorage.setMode", () => {
     const eqSelect = vi.fn().mockReturnValue({ maybeSingle });
     const select = vi.fn().mockReturnValue({ eq: eqSelect });
 
-    let tableName = "";
-    const from = vi.fn().mockImplementation((table: string) => {
-      tableName = table;
-      return { update, select };
-    });
+    const from = vi.fn().mockReturnValue({ update, select });
 
     const supabase = fakeSupabase({ from });
     const storage = buildStorage(supabase as never);

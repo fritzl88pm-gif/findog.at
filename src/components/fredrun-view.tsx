@@ -1393,11 +1393,6 @@ function drawCoin(
   context.restore();
 }
 
-const powerUpColors: Record<FredRunPowerUpKind, { light: string; dark: string }> = {
-  magnet: { light: "#ff5a73", dark: "#8d1235" },
-  shield: { light: "#56d8ff", dark: "#075a9d" },
-};
-
 function drawPowerUp(
   context: CanvasRenderingContext2D,
   powerUp: FredRunPowerUp,

@@ -263,10 +263,11 @@ async function main() {
     format: "webp",
   };
 
-  const portableStages = stages.map(({ output: { path: _outputPath, ...output }, ...stage }) => ({
-    ...stage,
-    output,
-  }));
+  const portableStages = stages.map(({ output, ...stage }) => {
+    const portableOutput = { ...output };
+    delete portableOutput.path;
+    return { ...stage, output: portableOutput };
+  });
   const manifest = {
     schemaVersion: 1,
     worldId: "alps",

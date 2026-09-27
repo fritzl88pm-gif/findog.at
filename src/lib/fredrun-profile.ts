@@ -1,5 +1,4 @@
 import {
-  FREDRUN_FINANZAMT_NIGHT_PRICE,
   FREDRUN_WORLDS,
   FREDRUN_WORLD_IDS,
   type FredRunWorldId,
