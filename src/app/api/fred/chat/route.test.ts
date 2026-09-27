@@ -28,6 +28,7 @@ import {
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getScanningSettings } from "@/lib/scanning/settings";
 import { parseFredNativeStreamLine } from "@/lib/fred-native-stream";
+import { mergeFredExecutionStep, type FredExecutionStep } from "@/lib/fred/execution-trace";
 import {
   extractStreamStableBfgGzCandidates,
   verifyBfgCitations,
@@ -2859,6 +2860,61 @@ describe("POST /api/fred/chat", () => {
       await response.text();
 
       expect(fetchFredRecentEmbedImages).not.toHaveBeenCalled();
+    });
+
+    it("streams merged execution steps for attachment turns so the live trace matches the final one", async () => {
+      const currentUserId = "abab1212-abab-4bab-8bab-abababababab";
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: currentUserId });
+      const rpc = rpcForTurn();
+      const prefChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({ data: { research_display_mode: "advanced" }, error: null }),
+      };
+      const from = vi.fn((table: string) => table === "fred_user_preferences" ? prefChain : {
+        insert: vi.fn().mockReturnValue({ select: vi.fn().mockResolvedValue({ data: [{ id: "run-1" }], error: null }) }),
+        update: vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ data: null, error: null }) }),
+      });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+      vi.mocked(getScanningSettings).mockResolvedValue({
+        documentPipeline: "mineru_with_omniroute_luna_fallback",
+        fredAttachmentMode: "weknora_native",
+        scanningProvider: "omniroute_luna",
+        modelId: "model/x",
+        prompt: "prompt",
+        updatedAt: "2026-07-19T10:00:00.000Z",
+        updatedBy: currentUserId,
+      });
+      vi.mocked(fetchFredRecentEmbedImages).mockResolvedValue([]);
+      const thinking = (content: string) => `data: ${JSON.stringify({ response_type: "thinking", content, data: { event_id: "think-1" } })}\n\n`;
+      vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+        'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+        thinking("Siehe https://w"),
+        thinking("ww.bmf.gv.at/themen"),
+        thinking("\n\n"),
+        thinking("Siehe"),
+        'data: {"response_type":"thinking","done":true,"data":{"event_id":"think-1","done":true}}\n\n',
+        'data: {"response_type":"answer","content":"Antwort","done":true}\n\n',
+        'data: {"response_type":"complete","data":{}}\n\n',
+      ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+      const response = await POST(multipartRequest({ query: "Frage mit Bild", image: pngFile() }));
+      const events = (await response.text()).split("\n").filter(Boolean).map(parseFredNativeStreamLine);
+      const liveTrace = events.reduce<FredExecutionStep[]>(
+        (trace, event) => event?.type === "execution" ? mergeFredExecutionStep(trace, event.step) : trace,
+        [],
+      );
+      const finalEvent = events.find((e) => e?.type === "final");
+
+      expect(finalEvent).toMatchObject({
+        type: "final",
+        executionTrace: [expect.objectContaining({
+          kind: "analysis",
+          status: "completed",
+          detail: "Siehe https://www.bmf.gv.at/themen\n\nSiehe",
+        })],
+      });
+      expect(liveTrace).toEqual(finalEvent?.type === "final" ? finalEvent.executionTrace : undefined);
     });
 
     it("preserves text answer and strips provider images to alt text when image discovery fails", async () => {

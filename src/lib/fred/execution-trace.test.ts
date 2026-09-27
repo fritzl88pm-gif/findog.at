@@ -411,6 +411,53 @@ describe("WeKnora execution trace projection and parser", () => {
     expect(longThinking.step?.detail?.endsWith("\n…[gekürzt]")).toBe(true);
   });
 
+  it("joins streamed reasoning deltas verbatim and redacts the joined text", () => {
+    const stream = (steps: FredExecutionStep[], responseType: string, eventId: string, chunks: string[]) =>
+      chunks.reduce((current, content) => mergeFredExecutionStep(
+        current,
+        parseWeKnoraExecutionEvent({ response_type: responseType, content, data: { event_id: eventId } }).step!,
+      ), steps);
+
+    // Whitespace-only chunks, a chunk equal to the start of the text and a URL
+    // split across chunks all survive.
+    let steps = stream([], "thinking", "think-delta-1", [
+      "Der Nutzer fragt.", "\n\n", "Der", " Anspruch von https://w", "ww.bmf.gv.at/x ab.",
+    ]);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]?.detail).toBe("Der Nutzer fragt.\n\nDer Anspruch von https://www.bmf.gv.at/x ab.");
+
+    // Real streams open with the agent_query step, which the first thinking
+    // block merges into; a later block is separated by a blank line.
+    const query = parseWeKnoraExecutionEvent({ response_type: "agent_query", assistant_message_id: "answer-1" });
+    steps = stream([query.step!], "thinking", "think-delta-2", ["Die", " Frage", ".", "\n", "Die", " Antwort", "."]);
+    steps = stream(steps, "thinking", "think-delta-3", ["Zweiter", " Block."]);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]?.detail).toBe("Die Frage.\nDie Antwort.\n\nZweiter Block.");
+
+    // Secrets and internal URLs split across chunks are redacted as a whole.
+    steps = stream([], "reflection", "refl-delta-1", [
+      "Prüfe Bearer eyJhbGciOi", "JIUzI1NiIsInR5cCI6IkpXVCJ9.e30.t-ID und intern https://intra", "net/x.",
+    ]);
+    expect(steps[0]?.detail).toBe("Prüfe Bearer [REDACTED] und intern [REDACTED_URL].");
+  });
+
+  it("lets the client mirror the server trace from streamed merged steps", () => {
+    let server: FredExecutionStep[] = [];
+    let client: FredExecutionStep[] = [];
+    for (const content of ["Siehe https://www.bmf", ".gv.at/themen", " und", "\n\n", "Siehe auch."]) {
+      const update = parseWeKnoraExecutionEvent({
+        response_type: "thinking",
+        content,
+        data: { event_id: "think-wire-1" },
+      }).step!;
+      server = mergeFredExecutionStep(server, update);
+      const streamed = server.find((step) => step.id === update.id) ?? server.at(-1);
+      client = mergeFredExecutionStep(client, parseStoredFredExecutionTrace([JSON.parse(JSON.stringify(streamed))])[0]!);
+      expect(client).toEqual(server);
+    }
+    expect(client[0]?.detail).toBe("Siehe https://www.bmf.gv.at/themen und\n\nSiehe auch.");
+  });
+
   it("redacts real GitHub and Google token formats from reasoning and search queries", () => {
     const githubToken = "ghp_1234567890abcdefghijklmnopqrstuvwxyzAB";
     const googleToken = "AIzaSyA1234567890abcdefghijklmnopqrstuv";

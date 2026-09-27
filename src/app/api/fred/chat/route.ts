@@ -1458,9 +1458,13 @@ export async function POST(request: Request) {
             if (isAdvanced) {
               const exec = parseWeKnoraExecutionEvent(parsed);
               if (exec.step) {
+                const stepId = exec.step.id;
                 executionTrace = mergeFredExecutionStep(executionTrace, exec.step);
                 clearAttachmentStatus();
-                send(controller, { type: "execution", step: exec.step });
+                // Like the text-only turn, stream the merged step: reasoning
+                // deltas are only redacted reliably as joined text.
+                const mergedStep = executionTrace.find((step) => step.id === stepId) ?? executionTrace.at(-1);
+                if (mergedStep) send(controller, { type: "execution", step: mergedStep });
               }
             }
             // Track upstream complete event for EOF detection

@@ -66,6 +66,40 @@ export {
   sanitizeAndRedactDetail,
 };
 
+// Streaming thinking/reflection events are deltas of one provider text. Their
+// raw text is kept only in server memory, keyed by step object, so deltas are
+// joined verbatim (whitespace-only chunks included) and redaction judges a URL
+// or secret split across chunks on the joined text. Steps that went through
+// JSON (stream events, stored traces) are not in these maps and carry only
+// their redacted detail.
+type ReasoningText = { raw: string; block: string };
+const reasoningDeltas = new WeakMap<FredExecutionStep, string>();
+const reasoningTexts = new WeakMap<FredExecutionStep, ReasoningText>();
+const MAX_REASONING_RAW_CHARS = MAX_EXECUTION_DETAIL_CHARS * 4;
+
+function withReasoningDelta(step: FredExecutionStep, rawContent: string | undefined): FredExecutionStep {
+  if (rawContent) reasoningDeltas.set(step, rawContent);
+  return step;
+}
+
+function extendReasoning(
+  step: FredExecutionStep,
+  block: string,
+  delta: string,
+  blockSeparator: string,
+): { reasoning: ReasoningText; detail: string | undefined } {
+  const previous = reasoningTexts.get(step);
+  const base = previous?.raw ?? step.detail ?? "";
+  // Once the detail is truncated (or the raw text is capped), later chunks
+  // cannot change it; skip re-redacting the whole text.
+  if (base.length >= MAX_REASONING_RAW_CHARS || (step.detail?.length ?? 0) > MAX_EXECUTION_DETAIL_CHARS) {
+    return { reasoning: previous ?? { raw: base, block }, detail: step.detail };
+  }
+  const separator = previous?.block === block || !base.trim() ? "" : blockSeparator;
+  const raw = `${base}${separator}${delta}`.slice(0, MAX_REASONING_RAW_CHARS);
+  return { reasoning: { raw, block }, detail: sanitizeAndRedactDetail(raw, MAX_EXECUTION_DETAIL_CHARS) };
+}
+
 
 function eventId(event: Record<string, unknown>, data: Record<string, unknown>, prefix: string): string {
   const upstreamId = boundedText(
@@ -819,14 +853,14 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
     return {
       fatalError: false,
       unsupported: false,
-      step: {
+      step: withReasoningDelta({
         id: eventId(event, data, "analysis"),
         kind: "analysis",
         status: done ? "completed" : "running",
         label: done ? "Anfrage analysiert" : "Anfrage wird analysiert",
         ...(detail ? { detail } : {}),
         ...(duration !== undefined ? { durationMs: duration } : {}),
-      },
+      }, rawContent),
     };
   }
 
@@ -838,14 +872,14 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
     return {
       fatalError: false,
       unsupported: false,
-      step: {
+      step: withReasoningDelta({
         id: eventId(event, data, "evaluation"),
         kind: "evaluation",
         status: done ? "completed" : "running",
         label: done ? "Rechercheergebnisse bewertet" : "Rechercheergebnisse werden bewertet",
         ...(detail ? { detail } : {}),
         ...(duration !== undefined ? { durationMs: duration } : {}),
-      },
+      }, rawContent),
     };
   }
 
@@ -945,10 +979,17 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
   return { fatalError: false, unsupported: false };
 }
 
+/**
+ * Merge one step into the trace. Reasoning deltas straight from
+ * parseWeKnoraExecutionEvent are appended; any other detail is a snapshot of
+ * the whole step (tool results, or steps the server already merged and
+ * streamed) and replaces the previous one.
+ */
 export function mergeFredExecutionStep(
   steps: FredExecutionStep[],
   update: FredExecutionStep,
 ): FredExecutionStep[] {
+  const delta = reasoningDeltas.get(update);
   const existingIndex = steps.findIndex((step) => step.id === update.id);
   if (existingIndex < 0) {
     // Merge consecutive analysis steps (mirroring native WeKnora buildFullEventList)
@@ -960,7 +1001,10 @@ export function mergeFredExecutionStep(
         const curDetail = update.detail || "";
 
         let mergedDetail: string | undefined;
-        if (curDetail && prevDetail && prevDetail.includes(curDetail)) {
+        let reasoning: ReasoningText | undefined;
+        if (delta !== undefined) {
+          ({ reasoning, detail: mergedDetail } = extendReasoning(lastStep, update.id, delta, "\n\n"));
+        } else if (curDetail && prevDetail && prevDetail.includes(curDetail)) {
           mergedDetail = prevDetail;
         } else if (curDetail && prevDetail && curDetail.includes(prevDetail)) {
           mergedDetail = curDetail;
@@ -968,6 +1012,9 @@ export function mergeFredExecutionStep(
           mergedDetail = sanitizeAndRedactDetail(`${prevDetail}\n\n${curDetail}`, MAX_EXECUTION_DETAIL_CHARS);
         } else {
           mergedDetail = curDetail || prevDetail || undefined;
+        }
+        if (delta === undefined && mergedDetail === lastStep.detail) {
+          reasoning = reasoningTexts.get(lastStep);
         }
 
         const merged: FredExecutionStep = {
@@ -980,28 +1027,29 @@ export function mergeFredExecutionStep(
         if (mergedDetail === undefined) {
           delete merged.detail;
         }
+        if (reasoning) reasoningTexts.set(merged, reasoning);
 
         const next = [...steps];
         next[lastIndex] = merged;
         return next;
       }
     }
+    if (delta !== undefined) {
+      reasoningTexts.set(update, { raw: delta.slice(0, MAX_REASONING_RAW_CHARS), block: update.id });
+    }
     return [...steps, update].slice(-MAX_EXECUTION_STEPS);
   }
 
   const existing = steps[existingIndex];
   let detail = existing.detail;
-  if (update.detail !== undefined && update.detail !== "") {
-    if (!existing.detail) {
+  let reasoning = reasoningTexts.get(existing);
+  if (delta !== undefined) {
+    ({ reasoning, detail } = extendReasoning(existing, update.id, delta, ""));
+  } else if (update.detail !== undefined && update.detail !== "") {
+    // Keep the current detail only against a stale, shorter copy of itself.
+    if (!existing.detail || !existing.detail.startsWith(update.detail)) {
       detail = update.detail;
-    } else if (update.detail.startsWith(existing.detail)) {
-      detail = update.detail;
-    } else if (existing.detail.startsWith(update.detail)) {
-      detail = existing.detail;
-    } else if (existing.kind === "analysis" || existing.kind === "evaluation") {
-      detail = sanitizeAndRedactDetail(existing.detail + update.detail, MAX_EXECUTION_DETAIL_CHARS);
-    } else {
-      detail = update.detail;
+      reasoning = undefined;
     }
   }
 
@@ -1013,6 +1061,7 @@ export function mergeFredExecutionStep(
   if (detail === undefined) {
     delete merged.detail;
   }
+  if (reasoning) reasoningTexts.set(merged, reasoning);
 
   const next = [...steps];
   next[existingIndex] = merged;
