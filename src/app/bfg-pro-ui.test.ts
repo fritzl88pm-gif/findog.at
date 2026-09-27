@@ -1,12 +1,17 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
   BfgProResultCard,
+  formatBfgDate,
   normalizeBfgProResults,
   type BfgProResult,
 } from "@/components/bfg-pro-result-card";
+
+const page = readFileSync(fileURLToPath(new URL("./page.tsx", import.meta.url)), "utf8");
 
 describe("BFG PRO UI normalizer", () => {
   const validResult: BfgProResult = {
@@ -126,5 +131,36 @@ describe("BFG PRO UI card rendering", () => {
 
     expect(markup).toContain("Hinweis:");
     expect(markup).toContain("Teilnachweis");
+  });
+
+  it("shows Findok dd.mm.yyyy dates as day.month.year", () => {
+    const decided = renderToStaticMarkup(createElement(BfgProResultCard, {
+      result: { ...baseResult, decisionDate: "03.04.2025" },
+    }));
+    const published = renderToStaticMarkup(createElement(BfgProResultCard, {
+      result: { ...baseResult, decisionDate: "", publicationDate: "11.07.2026" },
+    }));
+
+    expect(decided).toContain("Entscheidung vom 03.04.2025");
+    expect(published).toContain("Veröffentlicht am 11.07.2026");
+  });
+});
+
+describe("BFG date formatting", () => {
+  it.each([
+    ["03.04.2025", "03.04.2025"],
+    ["3.4.2025", "03.04.2025"],
+    ["13.04.2025", "13.04.2025"],
+    ["11.07.2026", "11.07.2026"],
+    ["2025-04-03", "03.04.2025"],
+    ["2025-04-03T00:00:00", "03.04.2025"],
+    ["", ""],
+  ])("formats %j as %j", (value, expected) => {
+    expect(formatBfgDate(value)).toBe(expected);
+  });
+
+  it("formats the normal BFG result list with the same helper", () => {
+    expect(page).toContain("`Veröffentlicht am ${formatBfgDate(result.publicationDate)}`");
+    expect(page).not.toContain("function formatBfgPublicationDate");
   });
 });

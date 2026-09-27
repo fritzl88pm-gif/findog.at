@@ -76,19 +76,16 @@ export function normalizeBfgProResults(value: unknown): BfgProResult[] | null {
   return results.length === payload.results.length ? results : null;
 }
 
-function formatBfgPublicationDate(value: string): string {
-  if (!value) {
-    return "";
+// Findok delivers dd.mm.yyyy or ISO dates. new Date() would read "03.04.2025"
+// as 4 March, so both are reformatted textually and without a time-zone shift.
+export function formatBfgDate(value: string): string {
+  const trimmed = value.trim();
+  const austrian = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(trimmed);
+  if (austrian) {
+    return `${austrian[1].padStart(2, "0")}.${austrian[2].padStart(2, "0")}.${austrian[3]}`;
   }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return new Intl.DateTimeFormat("de-AT", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  }).format(date);
+  const iso = /^(\d{4})-(\d{2})-(\d{2})(?:T|$)/.exec(trimmed);
+  return iso ? `${iso[3]}.${iso[2]}.${iso[1]}` : trimmed;
 }
 
 export function BfgProResultCard({ result }: { result: BfgProResult }) {
@@ -100,9 +97,9 @@ export function BfgProResultCard({ result }: { result: BfgProResult }) {
           result.gz,
           result.documentType,
           result.decisionDate
-            ? `Entscheidung vom ${formatBfgPublicationDate(result.decisionDate)}`
+            ? `Entscheidung vom ${formatBfgDate(result.decisionDate)}`
             : result.publicationDate
-              ? `Veröffentlicht am ${formatBfgPublicationDate(result.publicationDate)}`
+              ? `Veröffentlicht am ${formatBfgDate(result.publicationDate)}`
               : "",
         ].filter(Boolean).join(" · ")}
       </p>

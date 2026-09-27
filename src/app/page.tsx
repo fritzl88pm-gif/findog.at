@@ -26,6 +26,7 @@ import {
 } from "@/lib/findok/bfg-pro-stream";
 import {
   BfgProResultCard,
+  formatBfgDate,
   normalizeBfgProResults,
   type BfgProResult,
 } from "@/components/bfg-pro-result-card";
@@ -504,21 +505,6 @@ function normalizeBfgDecisionPage(value: unknown): BfgDecisionPage | null {
         facets,
       }
     : null;
-}
-
-function formatBfgPublicationDate(value: string): string {
-  if (!value) {
-    return "";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return new Intl.DateTimeFormat("de-AT", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  }).format(date);
 }
 
 function renderUserMessageContent(content: string): ReactNode {
@@ -3914,7 +3900,7 @@ export default function Home() {
                         <h2>{result.title}</h2>
                         <p className="bfg-result-meta">
                           {[result.gz, result.documentType, result.publicationDate
-                            ? `Veröffentlicht am ${formatBfgPublicationDate(result.publicationDate)}`
+                            ? `Veröffentlicht am ${formatBfgDate(result.publicationDate)}`
                             : ""].filter(Boolean).join(" · ")}
                         </p>
                         {result.snippet ? <p className="bfg-result-snippet">{result.snippet}</p> : null}
