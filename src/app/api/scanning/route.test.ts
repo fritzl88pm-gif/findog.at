@@ -175,6 +175,33 @@ describe("POST /api/scanning", () => {
     expect(analyzeScanningBatch).not.toHaveBeenCalled();
   });
 
+  it("counts a multi-line instruction like the client although FormData sends CRLF line breaks", async () => {
+    const instructions = "Nur Apotheke.\n".repeat(71) + "x".repeat(6);
+    expect(instructions).toHaveLength(1_000);
+    const response = await POST(multipart(
+      [{ field: "pdf", file: pdf("apotheke.pdf") }],
+      "multiline-instructions-user",
+      instructions,
+    ));
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(analyzeScanningBatch).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(AbortSignal),
+      instructions,
+      expect.any(String),
+      expect.any(String),
+      "omniroute_luna",
+    );
+
+    const tooLong = await POST(multipart(
+      [{ field: "pdf", file: pdf("apotheke.pdf") }],
+      "multiline-instructions-too-long-user",
+      `${instructions}y`,
+    ));
+    expect(tooLong.status).toBe(400);
+  });
+
   it("rejects empty batches, a sixth file and unknown form fields", async () => {
     expect((await POST(multipart([], "empty-user"))).status).toBe(400);
     expect((await POST(multipart(

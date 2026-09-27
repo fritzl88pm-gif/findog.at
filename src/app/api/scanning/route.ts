@@ -115,8 +115,11 @@ async function parseUploads(
   const images = multipart.files.filter((file) => file.fieldName === "image");
   const pdfs = multipart.files.filter((file) => file.fieldName === "pdf");
   const instructionEntry = multipart.fields.find((field) => field.name === "instructions");
+  // multipart/form-data serializes every textarea line break as CRLF; count it as the one
+  // character the client counter and maxLength saw.
   const instructions = instructionEntry
     ? instructionEntry.value
+      .replace(/\r\n?/gu, "\n")
       .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, "")
       .trim()
     : "";
