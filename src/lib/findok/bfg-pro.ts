@@ -395,8 +395,11 @@ export function buildDeterministicExcerpt(
   terms: string[],
   maximum = MAX_EXCERPT_CHARS,
 ): string {
+  return plainTextExcerpt(plainText(content), terms, maximum);
+}
+
+function plainTextExcerpt(text: string, terms: string[], maximum: number): string {
   const limit = Math.max(1, Math.floor(maximum));
-  const text = plainText(content);
   if (text.length <= limit) {
     return text;
   }
@@ -478,7 +481,9 @@ function reduceCandidates(
     .slice(0, MAX_RERANK_CANDIDATES)
     .map(({ candidate }) => ({
       ...candidate,
-      excerpt: buildDeterministicExcerpt(candidate.content, terms, MAX_EXCERPT_CHARS),
+      // Candidate content is already decoded plain text; stripping tags again
+      // would delete everything between a literal "<" and a later ">".
+      excerpt: plainTextExcerpt(candidate.content, terms, MAX_EXCERPT_CHARS),
     }));
 }
 

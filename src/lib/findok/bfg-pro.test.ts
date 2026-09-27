@@ -592,6 +592,31 @@ describe("BFG PRO query generation and full-text Luna Medium evaluation", () => 
     expect(finalText).toContain("DISTINCTIVE-PASSAGE-BEYOND-1800");
   });
 
+  it("keeps literal angle brackets and entities of decoded content in the preliminary excerpt", async () => {
+    const comparisonCandidate = candidate(1, {
+      content: [
+        "Das Einkommen betrug < 730 Euro.",
+        "Fülltext Sachverhalt. ".repeat(120),
+        "Die Grenze > 10.000 Euro wurde überschritten; zitiert wird &amp;lt; aus dem Original.",
+        "Rest ".repeat(400),
+      ].join(" "),
+    });
+    const pool = [comparisonCandidate, ...Array.from({ length: 11 }, (_v, i) => candidate(i + 2))];
+    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce(pool);
+
+    fetchMock
+      .mockResolvedValueOnce(mockLunaResponse('{"queries":["Einkommen Grenze"],"norm":null}'))
+      .mockResolvedValueOnce(mockLunaResponse(JSON.stringify({ selections: [] })));
+
+    await runBfgProSearch("Einkommen über der Grenze");
+
+    const prelimPayload = JSON.parse(fetchMock.mock.calls[1]?.[1]?.body);
+    const prelimExcerpt = JSON.parse(prelimPayload.messages[1].content).candidates[0].excerpt;
+    expect(prelimExcerpt).toContain("Das Einkommen betrug < 730 Euro.");
+    expect(prelimExcerpt).toContain("Die Grenze > 10.000 Euro wurde überschritten; zitiert wird &amp;lt;");
+    expect(prelimExcerpt.length).toBeLessThanOrEqual(1_800);
+  });
+
   it("verifies verbatim source quote with case-sensitive whitespace-normalized matching and rejects counterfeits", async () => {
     const text = "Das häusliche Arbeitszimmer  bildet  den Mittelpunkt.\nEs wurde voll anerkannt.";
     const cand = candidate(1, { content: text });
