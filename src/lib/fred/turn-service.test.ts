@@ -684,6 +684,18 @@ describe("executeFredTurn", () => {
     expect(upstream.relayEvent).not.toHaveBeenCalled();
   });
 
+  it("announces the stored conversation before a failing receipt transition", async () => {
+    const onRequestTransition = vi.fn()
+      .mockRejectedValueOnce(new Error("ledger unavailable"))
+      .mockResolvedValue(undefined);
+    const gen = executeFredTurn(baseRequest({ onRequestTransition }), upstream, persistence, config);
+
+    const first = await gen.next();
+    expect(first.value).toMatchObject({ type: "conversation", conversation: { id: conversationId } });
+    await expect(collectEvents(gen)).rejects.toThrow();
+    expect(upstream.openStream).not.toHaveBeenCalled();
+  });
+
   it("records a deadline abort as a timeout failure instead of a caller cancellation", async () => {
     const deadline = new AbortController();
     const turnAbort = new AbortController();

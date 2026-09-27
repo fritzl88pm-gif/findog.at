@@ -2040,10 +2040,14 @@ describe("POST /api/fred/chat", () => {
         .filter(Boolean);
 
       expect(response.status).toBe(200);
-      expect(events).toEqual([{
-        type: "error",
-        error: "Die gespeicherte Anfrage hat keine Nachrichten-ID.",
-      }]);
+      // The question is stored, so the conversation is announced before the turn fails closed.
+      expect(events).toEqual([
+        expect.objectContaining({ type: "conversation" }),
+        {
+          type: "error",
+          error: "Die gespeicherte Anfrage hat keine Nachrichten-ID.",
+        },
+      ]);
       expect(openFredUpstreamStream).not.toHaveBeenCalled();
       expect(rpc).toHaveBeenCalledTimes(1);
     });

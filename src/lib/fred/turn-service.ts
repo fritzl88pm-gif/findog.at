@@ -413,6 +413,9 @@ export async function* executeFredTurn(
       agentKey,
       weknoraAgentId: upstreamConfig.agentId,
     });
+    // Announced as soon as the question is stored: a client that sees an error without this
+    // event takes the question back into its composer, so a later failure must not hide it.
+    yield { type: "conversation", conversation };
 
     if (request.onRequestTransition) {
       if (userMessageId === undefined) {
@@ -425,7 +428,6 @@ export async function* executeFredTurn(
       });
     }
 
-    yield { type: "conversation", conversation };
     await request.onConversationEvent?.(conversation);
     // The persistence calls above are not bound to the signal. Do not start
     // generation for a caller that left meanwhile; the catch settles the receipt.

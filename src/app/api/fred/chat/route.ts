@@ -1305,6 +1305,8 @@ export async function POST(request: Request) {
             agentKey,
             weknoraAgentId: upstreamConfig.agentId,
           });
+          // Announced as soon as the question is stored (see executeFredTurn).
+          send(controller, { type: "conversation", conversation });
           if (userMessageId === undefined) {
             throw new UserVisibleError("Die gespeicherte Anfrage hat keine Nachrichten-ID.", 503);
           }
@@ -1315,7 +1317,6 @@ export async function POST(request: Request) {
             conversationId: conversation.id,
             userMessageId,
           });
-          send(controller, { type: "conversation", conversation });
           // Best-effort update run with conversation_id immediately
           if (runId && conversation?.id) {
             await updateGenerationRun({ supabase, runId, conversationId: conversation.id });
