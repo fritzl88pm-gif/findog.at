@@ -114,8 +114,14 @@ describe("Fred public share page", () => {
     expect(helpersSource).toContain("validateShareId");
   });
 
-  it("selects only question_content and answer_content from the share row", () => {
-    expect(helpersSource).toContain('select("question_content,answer_content")');
+  it("selects only the contents and the message ids needed for the supersession check", () => {
+    expect(helpersSource).toContain(
+      'select("question_content,answer_content,question_message_id,assistant_message_id")',
+    );
+    expect(helpersSource).toContain(`return {
+    question_content: row.question_content,
+    answer_content: row.answer_content,
+  };`);
   });
 
   it("returns the expected unavailable message for missing/deleted IDs", () => {

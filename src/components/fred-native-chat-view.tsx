@@ -34,6 +34,8 @@ import {
 } from "@/lib/chat/composer-height";
 import {
   messagesBeforeRegeneratedAnswer,
+  REGENERATE_ANSWER_LABEL,
+  regenerationBlockedReason,
   precedingUserMessage,
 } from "@/lib/chat/fred-actions";
 import { downloadFredPdfFile } from "@/lib/chat/pdf-download";
@@ -767,6 +769,7 @@ export default function FredNativeChatView({
     clearDraft: boolean;
     messagesBeforeQuery?: FredNativeMessage[];
     rollbackMessages?: FredNativeMessage[];
+    regenerateOfMessageId?: number;
   }) {
     const query = options.query.trim();
     if (readOnly || !query || isSending || !accessToken || abortControllerRef.current) return;
@@ -845,6 +848,9 @@ export default function FredNativeChatView({
       const requestPayload = {
         query,
         conversationId: activeConversationIdRef.current || undefined,
+        ...(options.regenerateOfMessageId !== undefined
+          ? { regenerateOfMessageId: options.regenerateOfMessageId }
+          : {}),
         webSearchEnabled: options.webSearchEnabled,
         proModeEnabled: isProMode,
         quickFredEnabled: agentKey === "quickfred",
@@ -1131,7 +1137,14 @@ export default function FredNativeChatView({
     if (readOnly) return;
     const question = precedingUserMessage(messages, assistantIndex);
     const messagesBeforeQuery = messagesBeforeRegeneratedAnswer(messages, assistantIndex);
-    if (!question || !messagesBeforeQuery || isSending) return;
+    const replacedAnswerId = messages[assistantIndex]?.id;
+    if (
+      !question
+      || !messagesBeforeQuery
+      || replacedAnswerId === undefined
+      || regenerationBlockedReason(messages, assistantIndex)
+      || isSending
+    ) return;
     const originalProMode = Boolean(question.proModeEnabled && capabilities.proMode);
     void submitQuery({
       query: question.content,
@@ -1143,6 +1156,7 @@ export default function FredNativeChatView({
       clearDraft: false,
       messagesBeforeQuery,
       rollbackMessages: messages,
+      regenerateOfMessageId: replacedAnswerId,
     });
   }
 
@@ -1582,6 +1596,9 @@ export default function FredNativeChatView({
     }
   }
 
+  // Only the latest answer offers regeneration.
+  const regenerateBlockedReason = regenerationBlockedReason(messages, messages.length - 1);
+
   return (
     <section className={`chat-panel ${messages.length === 0 ? "empty-chat" : ""}`} aria-label="Fred">
       <div className="chat-content-group">
@@ -1721,9 +1738,9 @@ export default function FredNativeChatView({
                             <button
                               className="message-action-button"
                               type="button"
-                              aria-label="Antwort erneut erzeugen"
-                              title="Antwort erneut erzeugen"
-                              disabled={isSending}
+                              aria-label={regenerateBlockedReason ?? REGENERATE_ANSWER_LABEL}
+                              title={regenerateBlockedReason ?? REGENERATE_ANSWER_LABEL}
+                              disabled={isSending || regenerateBlockedReason !== undefined}
                               onClick={() => regenerateAnswer(index)}
                             >
                               <svg viewBox="0 0 24 24" aria-hidden="true">

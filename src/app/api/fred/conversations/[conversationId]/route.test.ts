@@ -123,6 +123,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
     const messagesQuery = {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
+      is: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       range: vi.fn().mockReturnThis(),
       then: (resolve: (value: typeof messageResult) => unknown) => resolve(messageResult),
@@ -214,6 +215,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
     const messagesQuery = {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
+      is: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       range: vi.fn().mockReturnThis(),
       then: (resolve: (value: typeof messageResult) => unknown) => resolve(messageResult),
@@ -302,6 +304,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
     const messagesQuery = {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
+      is: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       range: vi.fn().mockReturnThis(),
       then: (resolve: (value: typeof messageResult) => unknown) => resolve(messageResult),
@@ -386,6 +389,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
     const messagesQuery = {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
+      is: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       range: vi.fn().mockReturnThis(),
       then: (resolve: (value: typeof messageResult) => unknown) => resolve(messageResult),
@@ -413,6 +417,79 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
       detail: "3 Aufgaben geplant",
       counts: { total: 3, completed: 3, inProgress: 0, open: 0 },
     }]);
+  });
+
+  it("hides the question and answer a regenerated answer superseded", async () => {
+    const conversationQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          id: "33333333-3333-4333-8333-333333333333",
+          title: "Frage",
+          created_at: "2026-07-18T07:00:00.000Z",
+          updated_at: "2026-07-18T07:01:00.000Z",
+          agent_key: "fred",
+          origin: "web",
+          telegram_integration_id: null,
+        },
+        error: null,
+      }),
+    };
+    const row = (id: number, role: "user" | "assistant", content: string, supersededAt: string | null) => ({
+      id,
+      role,
+      content,
+      display_content: null,
+      research_trace: [],
+      execution_trace: [],
+      source_references: [],
+      provider_created_at: `2026-07-18T07:00:0${id}.000Z`,
+      created_at: `2026-07-18T07:00:0${id}.000Z`,
+      attachments: [],
+      web_search_enabled: false,
+      pro_mode_enabled: false,
+      superseded_at: supersededAt,
+    });
+    const storedRows = [
+      row(1, "user", "Frage", "2026-07-18T07:00:05.000Z"),
+      row(2, "assistant", "Alte Antwort", "2026-07-18T07:00:05.000Z"),
+      row(3, "user", "Frage", null),
+      row(4, "assistant", "Neue Antwort", null),
+    ];
+    const filters: Array<[string, unknown]> = [];
+    const messagesQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      is: vi.fn((column: string, value: unknown) => {
+        filters.push([column, value]);
+        return messagesQuery;
+      }),
+      order: vi.fn().mockReturnThis(),
+      then: (resolve: (value: { data: typeof storedRows; error: null }) => unknown) => resolve({
+        data: storedRows.filter((message) => filters.every(([column, value]) => (
+          message[column as keyof typeof message] === value
+        ))),
+        error: null,
+      }),
+    };
+    vi.mocked(getSupabaseServerClient).mockReturnValue({
+      from: vi.fn((table: string) => (
+        table === "fred_conversations" ? conversationQuery : messagesQuery
+      )),
+    } as never);
+
+    const response = await GET(
+      new Request("https://findog.at/api/fred/conversations/33333333-3333-4333-8333-333333333333", {
+        headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
+      }),
+      { params: Promise.resolve({ conversationId: "33333333-3333-4333-8333-333333333333" }) },
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.messages.map((message: { id: number; content: string }) => [message.id, message.content]))
+      .toEqual([[3, "Frage"], [4, "Neue Antwort"]]);
   });
 });
 

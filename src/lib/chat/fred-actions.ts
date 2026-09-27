@@ -6,6 +6,7 @@ import {
 export const MAX_FRED_PDF_EXPORT_CHARS = 500_000;
 
 export type FredActionMessage = {
+  id?: number;
   role: "user" | "assistant";
   content: string;
   createdAt: string;
@@ -49,6 +50,26 @@ export function messagesBeforeRegeneratedAnswer<T extends FredActionMessage>(
   for (let index = assistantIndex - 1; index >= 0; index -= 1) {
     if (messages[index]?.role === "user") return messages.slice(0, index);
   }
+  return undefined;
+}
+
+export const REGENERATE_ANSWER_LABEL = "Antwort erneut erzeugen";
+export const REGENERATE_WITH_ATTACHMENTS_LABEL =
+  "Antwort erneut erzeugen ist bei Fragen mit Anhängen nicht möglich: Angehängte Dateien werden nicht gespeichert. Bitte sende die Frage mit den Dateien erneut.";
+export const REGENERATE_UNSAVED_ANSWER_LABEL =
+  "Antwort erneut erzeugen ist nur für gespeicherte Antworten möglich. Bitte sende die Frage erneut.";
+
+/**
+ * Why the answer at `assistantIndex` cannot be regenerated, or undefined.
+ * The server replaces the stored answer by its ID and cannot resend files.
+ */
+export function regenerationBlockedReason(
+  messages: ReadonlyArray<FredActionMessage>,
+  assistantIndex: number,
+): string | undefined {
+  const question = precedingUserMessage(messages, assistantIndex);
+  if ((question?.attachments?.length ?? 0) > 0) return REGENERATE_WITH_ATTACHMENTS_LABEL;
+  if (messages[assistantIndex]?.id === undefined) return REGENERATE_UNSAVED_ANSWER_LABEL;
   return undefined;
 }
 

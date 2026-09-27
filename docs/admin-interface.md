@@ -10,6 +10,8 @@ Findog-Navigation bleibt erreichbar. Bereichswechsel fokussieren die Überschrif
 
 - **Benutzer:** E-Mail-Suche, Kontoauswahl, Profil und bestehender Anfrageverlauf.
   Die Anfrageanzahl ist exakt; der Verlauf zeigt die neuesten 1000 Anfragen.
+  Als Audit enthält er jede gespeicherte Frage, auch Fragen, deren Antwort mit
+  „Antwort erneut erzeugen“ ersetzt und im Gesprächsverlauf ausgeblendet wurde.
   Neue Konten werden in einem Dialog angelegt. Das eigene Administratorkonto
   kann weiterhin nicht über die Benutzerverwaltung gelöscht werden.
 - **Rückmeldungen:** ausschließlich negative Fred-Rückmeldungen, mit Suche und

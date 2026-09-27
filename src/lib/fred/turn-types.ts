@@ -61,6 +61,12 @@ export interface FredTurnRequest {
   /** Attachment metadata for persistence. */
   attachments?: FredTurnAttachmentMeta[];
   /**
+   * Stored ID of the latest answer this web turn regenerates. The caller has
+   * validated it; the replaced question and answer are marked as superseded
+   * only after the new answer has been completed and persisted.
+   */
+  regenerateOfMessageId?: number;
+  /**
    * Deterministic event ID for the user's message. Callers that must be
    * idempotent under at-least-once delivery (e.g. the Telegram worker
    * retrying a claimed update) should derive this from a stable key

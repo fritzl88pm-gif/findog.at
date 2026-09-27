@@ -42,7 +42,9 @@ nur Resttexte bereits terminaler Queue-Einträge.
 
 Die Benutzerverwaltung liest Nutzernachrichten direkt aus `fred_messages`,
 gefiltert nach `client_id` und `role = 'user'`, sortiert nach Erstellungszeit und
-Nachrichten-ID absteigend. Sie enthält damit vorhandene Web- und Telegram-Fragen.
+Nachrichten-ID absteigend. Sie enthält damit vorhandene Web- und Telegram-Fragen,
+auch Fragen, die durch „Antwort erneut erzeugen“ als ersetzt markiert
+(`superseded_at`) und im Gesprächsverlauf ausgeblendet sind.
 Es gibt keinen separaten Textbestand und keinen separaten Löschknopf mehr.
 
 Das bestehende GET-Antwortformat bleibt erhalten; Eintrags-IDs sind jetzt

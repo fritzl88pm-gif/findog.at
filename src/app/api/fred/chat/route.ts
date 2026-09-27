@@ -51,6 +51,7 @@ import {
 } from "@/lib/fred-native-stream";
 import {
   executeFredTurn,
+  REGENERATION_REQUIRES_CONVERSATION_MESSAGE,
   type TurnServiceConfigDeps,
   type TurnServicePersistenceDeps,
   type TurnServiceUpstreamDeps,
@@ -141,6 +142,7 @@ type ParsedFredChatRequest = {
   webSearchEnabled: boolean;
   proModeEnabled: boolean;
   quickFredEnabled: boolean | undefined;
+  regenerateOfMessageId: number | undefined;
   attachments: FindogAttachment[];
 };
 type FredConversationRow = {
@@ -228,12 +230,27 @@ function validatedRequestFields(value: unknown): Omit<ParsedFredChatRequest, "at
   if (conversationId && !UUID_PATTERN.test(conversationId)) {
     throw new UserVisibleError("Die Fred-Unterhaltung ist ungültig.", 400);
   }
+  const regenerateOfMessageId = body.regenerateOfMessageId;
+  if (
+    regenerateOfMessageId !== undefined
+    && (
+      typeof regenerateOfMessageId !== "number"
+      || !Number.isSafeInteger(regenerateOfMessageId)
+      || regenerateOfMessageId <= 0
+    )
+  ) {
+    throw new UserVisibleError("Die erneut zu erzeugende Antwort ist ungültig.", 400);
+  }
+  if (regenerateOfMessageId !== undefined && !conversationId) {
+    throw new UserVisibleError(REGENERATION_REQUIRES_CONVERSATION_MESSAGE, 409);
+  }
   return {
     query,
     conversationId,
     webSearchEnabled,
     proModeEnabled,
     quickFredEnabled,
+    regenerateOfMessageId,
   };
 }
 
@@ -508,6 +525,78 @@ async function loadOwnedConversation(options: {
   return data as FredConversationRow;
 }
 
+const REGENERATION_TARGET_WINDOW = 20;
+const REGENERATION_TARGET_STALE_MESSAGE =
+  "Diese Antwort kann nicht mehr erneut erzeugt werden. Bitte lade die Unterhaltung neu.";
+
+// Regeneration replaces exactly the latest visible answer of the question sent
+// again, in the history route's order. Questions an earlier failed attempt
+// already stored may follow it; they are superseded together with it.
+async function assertRegenerationTarget(options: {
+  supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>;
+  userId: string;
+  conversationId: string;
+  replacedAssistantMessageId: number;
+  query: string;
+  hasAttachments: boolean;
+}): Promise<void> {
+  const { data, error } = await options.supabase
+    .from("fred_messages")
+    .select("id,role,content,attachments")
+    .eq("conversation_id", options.conversationId)
+    .eq("client_id", options.userId)
+    .is("superseded_at", null)
+    .order("provider_created_at", { ascending: false, nullsFirst: true })
+    .order("id", { ascending: false })
+    .limit(REGENERATION_TARGET_WINDOW);
+  if (error || !Array.isArray(data)) {
+    throw new UserVisibleError("Die Fred-Unterhaltung konnte nicht geladen werden.", 503);
+  }
+  const latest = data as Array<{ id: unknown; role: unknown; content: unknown; attachments: unknown }>;
+  let index = 0;
+  while (latest[index]?.role === "user" && latest[index]?.content === options.query) index += 1;
+  const answer = latest[index];
+  const question = latest[index + 1];
+  if (
+    Number(answer?.id) !== options.replacedAssistantMessageId
+    || answer?.role !== "assistant"
+    || question?.role !== "user"
+    || question.content !== options.query
+  ) {
+    throw new UserVisibleError(REGENERATION_TARGET_STALE_MESSAGE, 409);
+  }
+  // Only attachment metadata is stored, so a regeneration without the files
+  // would silently answer a different question.
+  if (
+    Array.isArray(question.attachments)
+    && question.attachments.length > 0
+    && !options.hasAttachments
+  ) {
+    throw new UserVisibleError(
+      "Angehängte Dateien werden nicht gespeichert. Bitte sende die Frage mit den Dateien erneut.",
+      409,
+    );
+  }
+}
+
+async function supersedeReplacedAnswer(options: {
+  supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>;
+  userId: string;
+  conversationId: string;
+  replacedAssistantMessageId: number;
+  userMessageId: number;
+  assistantMessageId: number;
+}): Promise<void> {
+  const { error } = await options.supabase.rpc("supersede_regenerated_fred_answer", {
+    p_client_id: options.userId,
+    p_conversation_id: options.conversationId,
+    p_replaced_assistant_message_id: options.replacedAssistantMessageId,
+    p_user_message_id: options.userMessageId,
+    p_assistant_message_id: options.assistantMessageId,
+  });
+  if (error) throw new Error(`supersede_regenerated_fred_answer failed: ${error.message ?? "unknown"}`);
+}
+
 async function resolveUpstreamSession(options: {
   conversation: FredConversationRow | null;
   channelId: string;
@@ -753,6 +842,16 @@ function buildWebTurnPersistence(
         artifacts: params.artifacts,
       });
     },
+    async supersedeReplacedAnswer(params) {
+      await supersedeReplacedAnswer({
+        supabase,
+        userId: params.clientId,
+        conversationId: params.conversationId,
+        replacedAssistantMessageId: params.replacedAssistantMessageId,
+        userMessageId: params.userMessageId,
+        assistantMessageId: params.assistantMessageId,
+      });
+    },
   };
 }
 
@@ -845,6 +944,9 @@ function streamTextOnlyTurn(options: {
             webSearchEnabled: options.body.webSearchEnabled,
             proModeEnabled: options.body.proModeEnabled,
             researchDisplayMode: options.researchDisplayMode,
+            ...(options.body.regenerateOfMessageId !== undefined
+              ? { regenerateOfMessageId: options.body.regenerateOfMessageId }
+              : {}),
             userEventId: options.receipt.userEventId,
             assistantEventId: options.receipt.assistantEventId,
             onRequestTransition: (transition: FredRequestLifecycleTransition) =>
@@ -994,6 +1096,23 @@ export async function POST(request: Request) {
         "Fred Pro ist in einer QuickFred-Unterhaltung nicht verfügbar.",
         400,
       );
+    }
+    if (body.regenerateOfMessageId !== undefined) {
+      if (!storedConversation) {
+        throw new UserVisibleError(REGENERATION_REQUIRES_CONVERSATION_MESSAGE, 409);
+      }
+      await awaitWithIngressSignal(
+        assertRegenerationTarget({
+          supabase,
+          userId: user.id,
+          conversationId: storedConversation.id,
+          replacedAssistantMessageId: body.regenerateOfMessageId,
+          query: body.query,
+          hasAttachments: body.attachments.length > 0,
+        }),
+        ingressDeadline?.signal,
+      );
+      requireActiveRequest(request);
     }
     pendingReceipt = createFredRequestReceipt({
       supabase,
@@ -1682,6 +1801,25 @@ export async function POST(request: Request) {
             assistantMessageId,
           });
           requestLedgerTerminal = true;
+          if (body.regenerateOfMessageId !== undefined) {
+            // As in executeFredTurn: only the completed, persisted answer hides
+            // the replaced pair, and a lost race keeps both visible.
+            try {
+              await supersedeReplacedAnswer({
+                supabase,
+                userId: user.id,
+                conversationId: finalConversation.id,
+                replacedAssistantMessageId: body.regenerateOfMessageId,
+                userMessageId,
+                assistantMessageId,
+              });
+            } catch (error) {
+              console.error("fred regenerated answer not marked", {
+                path: "fred_chat",
+                message: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+              });
+            }
+          }
           // Mark run completed
           if (runId) {
             lastTerminalStatus = "completed";

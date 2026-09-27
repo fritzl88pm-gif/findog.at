@@ -131,6 +131,9 @@ export async function GET(
       .select("id,role,content,display_content,research_trace,execution_trace,source_references,provider_created_at,created_at,attachments,web_search_enabled,pro_mode_enabled,artifacts")
       .eq("conversation_id", conversationId)
       .eq("client_id", user.id)
+      // A regenerated answer replaces its question and answer only in the
+      // visible transcript; the superseded rows stay stored for the audit.
+      .is("superseded_at", null)
       .order("provider_created_at", { ascending: true, nullsFirst: false })
       .order("id", { ascending: true })
       .range(from, to), "Fred-Nachrichten konnten nicht geladen werden.");

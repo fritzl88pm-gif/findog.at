@@ -182,6 +182,14 @@ export interface TurnServicePersistenceDeps {
     upstreamMessageId: string;
     artifacts: ParsedGeneratedArtifact[];
   }) => Promise<FredGeneratedArtifact[]>;
+  /** Mark the replaced question and answer of a completed regeneration as superseded. */
+  supersedeReplacedAnswer?: (params: {
+    clientId: string;
+    conversationId: string;
+    replacedAssistantMessageId: number;
+    userMessageId: number;
+    assistantMessageId: number;
+  }) => Promise<void>;
 }
 
 export interface TurnServiceConfigDeps {
@@ -207,6 +215,8 @@ export interface TurnServiceConfigDeps {
 
 const MAX_LIVE_BFG_CITATIONS = 20;
 const ARTIFACT_LOOKUP_TIMEOUT_MS = 5_000;
+export const REGENERATION_REQUIRES_CONVERSATION_MESSAGE =
+  "Eine Antwort kann nur in einer bestehenden Unterhaltung erneut erzeugt werden.";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -305,6 +315,13 @@ export async function* executeFredTurn(
 
     if (quickFredConfig && request.proModeEnabled) {
       throw new UserVisibleError("Fred Pro ist in einer QuickFred-Unterhaltung nicht verfügbar.", 400);
+    }
+
+    if (
+      request.regenerateOfMessageId !== undefined
+      && (request.origin !== "web" || !request.conversationId || !persistence.supersedeReplacedAnswer)
+    ) {
+      throw new UserVisibleError(REGENERATION_REQUIRES_CONVERSATION_MESSAGE, 409);
     }
 
     // ── Load stored conversation if continuing ──────────────────────────────
@@ -804,6 +821,28 @@ export async function* executeFredTurn(
         assistantMessageId,
       });
       requestTerminal = true;
+    }
+
+    if (request.regenerateOfMessageId !== undefined && persistence.supersedeReplacedAnswer) {
+      // Only a completed, persisted regeneration hides the replaced pair. The
+      // new answer stands either way, so a lost race only keeps both visible.
+      try {
+        if (userMessageId === undefined || assistantMessageId === undefined) {
+          throw new Error("regenerated turn has no message ids");
+        }
+        await persistence.supersedeReplacedAnswer({
+          clientId: request.clientId,
+          conversationId: finalConversation.id,
+          replacedAssistantMessageId: request.regenerateOfMessageId,
+          userMessageId,
+          assistantMessageId,
+        });
+      } catch (error) {
+        console.error("fred regenerated answer not marked", {
+          path: "fred_turn_service",
+          message: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+        });
+      }
     }
 
     void upstream.relayEvent({

@@ -91,7 +91,7 @@ export async function loadFredPublicShare(shareId: string): Promise<FredPublicSh
 
   const { data, error } = await supabase
     .from("fred_public_answer_shares")
-    .select("question_content,answer_content")
+    .select("question_content,answer_content,question_message_id,assistant_message_id")
     .eq("id", shareId)
     .maybeSingle();
 
@@ -102,7 +102,10 @@ export async function loadFredPublicShare(shareId: string): Promise<FredPublicSh
     );
   }
 
-  const row = data as FredPublicShareRow;
+  const row = data as FredPublicShareRow & {
+    question_message_id: unknown;
+    assistant_message_id: unknown;
+  };
   if (
     typeof row.question_content !== "string"
     || typeof row.answer_content !== "string"
@@ -115,5 +118,23 @@ export async function loadFredPublicShare(shareId: string): Promise<FredPublicSh
     );
   }
 
-  return row;
+  // An answer the owner regenerated is superseded together with its question
+  // and is no longer part of the visible transcript, so it is not shown here.
+  const { data: supersededMessages, error: supersededError } = await supabase
+    .from("fred_messages")
+    .select("id")
+    .in("id", [row.question_message_id, row.assistant_message_id])
+    .not("superseded_at", "is", null)
+    .limit(1);
+  if (supersededError || !Array.isArray(supersededMessages) || supersededMessages.length > 0) {
+    throw new UserVisibleError(
+      "Diese geteilte Fred-Antwort ist nicht mehr verfügbar.",
+      404,
+    );
+  }
+
+  return {
+    question_content: row.question_content,
+    answer_content: row.answer_content,
+  };
 }

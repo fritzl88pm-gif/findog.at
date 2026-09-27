@@ -280,7 +280,7 @@ describe("Fred native Findog UI", () => {
 
   it("supports editing, regenerating and authenticated answer or conversation PDF exports", () => {
     expect(viewSource).toContain('aria-label="Frage bearbeiten"');
-    expect(viewSource).toContain('aria-label="Antwort erneut erzeugen"');
+    expect(viewSource).toContain("aria-label={regenerateBlockedReason ?? REGENERATE_ANSWER_LABEL}");
     expect(viewSource).toContain('aria-label="Antwort als PDF exportieren"');
     expect(pageSource).toContain("Verlauf als PDF");
     expect(pageSource).toContain("className=\"conversation-export\"");

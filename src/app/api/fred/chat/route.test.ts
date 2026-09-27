@@ -590,6 +590,221 @@ describe("POST /api/fred/chat", () => {
     }));
   });
 
+  describe("answer regeneration", () => {
+    const storedConversationRow = {
+      id: conversationId,
+      title: "Alt",
+      created_at: "2026-07-19T09:00:00.000Z",
+      updated_at: "2026-07-19T09:00:00.000Z",
+      weknora_channel_id: "fred-channel",
+      weknora_session_id: "session-existing",
+      agent_key: "fred",
+      weknora_agent_id: "agent-1",
+    };
+    const visibleTranscript = [
+      { id: 12, role: "assistant", content: "Alte Antwort", attachments: [] },
+      { id: 11, role: "user", content: "Wie ist die Rechtslage?", attachments: [] },
+      { id: 10, role: "assistant", content: "Frühere Antwort", attachments: [] },
+    ];
+
+    function supabaseFor(options: {
+      latestMessages?: Array<Record<string, unknown>>;
+      rpc?: ReturnType<typeof vi.fn>;
+    } = {}) {
+      const conversationChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({ data: storedConversationRow, error: null }),
+      };
+      const messageChain = {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        is: vi.fn().mockReturnThis(),
+        order: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockResolvedValue({ data: options.latestMessages ?? visibleTranscript, error: null }),
+      };
+      const rpc = options.rpc ?? vi.fn()
+        .mockResolvedValueOnce({ data: { ...summaryRow, message_id: 13 }, error: null })
+        .mockResolvedValueOnce({ data: { ...summaryRow, message_id: 14 }, error: null })
+        .mockResolvedValueOnce({ data: { superseded_message_ids: [11, 12] }, error: null });
+      const from = vi.fn((table: string) => (table === "fred_messages" ? messageChain : conversationChain));
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+      vi.mocked(deriveFredSessionSignature).mockReturnValue("derived-signature");
+      return { rpc, from, messageChain };
+    }
+
+    function regenerationMultipartRequest(payload: Record<string, unknown>): Request {
+      const formData = new FormData();
+      formData.append("payload", JSON.stringify(payload));
+      formData.append("attachment", pdfFile(), "Beleg.pdf");
+      return new Request("https://findog.at/api/fred/chat", {
+        method: "POST",
+        headers: { Authorization: "Bearer access-token", "Sec-Fetch-Site": "same-origin" },
+        body: formData,
+      });
+    }
+
+    it("marks the replaced question and answer after the regenerated answer is completed", async () => {
+      const { rpc, messageChain } = supabaseFor();
+
+      const response = await POST(request({
+        query: "Wie ist die Rechtslage?",
+        conversationId,
+        regenerateOfMessageId: 12,
+      }));
+      const events = (await response.text()).split("\n").map(parseFredNativeStreamLine).filter(Boolean);
+
+      expect(response.status).toBe(200);
+      expect(events.at(-1)).toMatchObject({ type: "final", answer: "Hallo Welt", assistantMessageId: 14 });
+      expect(messageChain.eq).toHaveBeenCalledWith("conversation_id", conversationId);
+      expect(messageChain.eq).toHaveBeenCalledWith("client_id", userId);
+      expect(messageChain.is).toHaveBeenCalledWith("superseded_at", null);
+      expect(rpc).toHaveBeenCalledTimes(3);
+      expect(rpc).toHaveBeenNthCalledWith(3, "supersede_regenerated_fred_answer", {
+        p_client_id: userId,
+        p_conversation_id: conversationId,
+        p_replaced_assistant_message_id: 12,
+        p_user_message_id: 13,
+        p_assistant_message_id: 14,
+      });
+      const completedOrder = mockTransitionFredRequestReceipt.mock.invocationCallOrder[
+        mockTransitionFredRequestReceipt.mock.calls.findIndex(([call]) => call.status === "completed")
+      ];
+      expect(completedOrder).toBeLessThan(rpc.mock.invocationCallOrder[2]);
+    });
+
+    it("marks the replaced answer after a regenerated answer with attachments", async () => {
+      const { rpc } = supabaseFor({
+        latestMessages: [
+          visibleTranscript[0],
+          { ...visibleTranscript[1], attachments: [{ kind: "file", name: "Beleg.pdf" }] },
+        ],
+      });
+
+      const response = await POST(regenerationMultipartRequest({
+        query: "Wie ist die Rechtslage?",
+        conversationId,
+        regenerateOfMessageId: 12,
+      }));
+      const events = (await response.text()).split("\n").map(parseFredNativeStreamLine).filter(Boolean);
+
+      expect(events.at(-1)).toMatchObject({ type: "final", assistantMessageId: 14 });
+      expect(rpc).toHaveBeenNthCalledWith(3, "supersede_regenerated_fred_answer", expect.objectContaining({
+        p_replaced_assistant_message_id: 12,
+        p_user_message_id: 13,
+        p_assistant_message_id: 14,
+      }));
+    });
+
+    it("leaves the replaced answer unmarked when the regeneration fails", async () => {
+      const { rpc } = supabaseFor();
+      vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response(
+        'data: {"response_type":"answer","content":"Teil","done":false}\n\n',
+        { headers: { "Content-Type": "text/event-stream" } },
+      ));
+
+      const response = await POST(request({
+        query: "Wie ist die Rechtslage?",
+        conversationId,
+        regenerateOfMessageId: 12,
+      }));
+      const events = (await response.text()).split("\n").map(parseFredNativeStreamLine).filter(Boolean);
+
+      expect(events.at(-1)).toMatchObject({ type: "error" });
+      expect(rpc).not.toHaveBeenCalledWith("supersede_regenerated_fred_answer", expect.anything());
+    });
+
+    it("leaves the replaced answer unmarked when a regeneration with attachments fails", async () => {
+      const { rpc } = supabaseFor({
+        latestMessages: [
+          visibleTranscript[0],
+          { ...visibleTranscript[1], attachments: [{ kind: "file", name: "Beleg.pdf" }] },
+        ],
+      });
+      vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response(
+        'data: {"response_type":"answer","content":"Teil","done":false}\n\n',
+        { headers: { "Content-Type": "text/event-stream" } },
+      ));
+
+      const response = await POST(regenerationMultipartRequest({
+        query: "Wie ist die Rechtslage?",
+        conversationId,
+        regenerateOfMessageId: 12,
+      }));
+      await response.text();
+
+      expect(rpc).not.toHaveBeenCalledWith("supersede_regenerated_fred_answer", expect.anything());
+    });
+
+    it("accepts the question of an earlier failed attempt after the replaced answer", async () => {
+      supabaseFor({
+        latestMessages: [
+          { id: 13, role: "user", content: "Wie ist die Rechtslage?", attachments: [] },
+          ...visibleTranscript,
+        ],
+      });
+
+      const response = await POST(request({
+        query: "Wie ist die Rechtslage?",
+        conversationId,
+        regenerateOfMessageId: 12,
+      }));
+      await response.text();
+
+      expect(response.status).toBe(200);
+    });
+
+    it.each([
+      ["an answer of another conversation or user", { regenerateOfMessageId: 99 }, undefined],
+      ["an answer that is no longer the latest", { regenerateOfMessageId: 10 }, undefined],
+      ["a question that differs from the replaced one", { query: "Andere Frage" }, undefined],
+      ["a latest message that is a question", {}, [visibleTranscript[1], visibleTranscript[0]]],
+      [
+        "a question with attachments sent again without them",
+        {},
+        [visibleTranscript[0], { ...visibleTranscript[1], attachments: [{ kind: "file", name: "a.pdf" }] }],
+      ],
+    ])("rejects regenerating %s with 409", async (_label, overrides, latestMessages) => {
+      const { rpc } = supabaseFor({ latestMessages });
+
+      const response = await POST(request({
+        query: "Wie ist die Rechtslage?",
+        conversationId,
+        regenerateOfMessageId: 12,
+        ...overrides,
+      }));
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({ error: expect.any(String) });
+      expect(rpc).not.toHaveBeenCalled();
+      expect(openFredUpstreamStream).not.toHaveBeenCalled();
+    });
+
+    it("rejects a regeneration without an existing conversation", async () => {
+      const { rpc } = supabaseFor();
+
+      const response = await POST(request({ query: "Wie ist die Rechtslage?", regenerateOfMessageId: 12 }));
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({
+        error: "Eine Antwort kann nur in einer bestehenden Unterhaltung erneut erzeugt werden.",
+      });
+      expect(rpc).not.toHaveBeenCalled();
+    });
+
+    it.each([0, -1, 1.5, "12"])("rejects the invalid answer id %s", async (regenerateOfMessageId) => {
+      supabaseFor();
+
+      const response = await POST(request({
+        query: "Wie ist die Rechtslage?",
+        conversationId,
+        regenerateOfMessageId,
+      }));
+
+      expect(response.status).toBe(400);
+    });
+  });
+
   it("cancels an active upstream answer and requests an independent upstream stop", async () => {
     const rpc = rpcForTurn();
     vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);

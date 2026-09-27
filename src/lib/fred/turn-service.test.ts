@@ -1156,3 +1156,133 @@ describe("researchDisplayMode", () => {
     }));
   });
 });
+
+describe("executeFredTurn answer regeneration", () => {
+  function regenerationPersistence(overrides: Partial<TurnServicePersistenceDeps> = {}) {
+    return makePersistenceDeps({
+      loadConversation: vi.fn().mockResolvedValue(storedConvRow()),
+      recordEvent: vi.fn()
+        .mockResolvedValueOnce({ conversation: summaryConv(), messageId: 3 })
+        .mockResolvedValueOnce({ conversation: summaryConv(), messageId: 4 }),
+      supersedeReplacedAnswer: vi.fn().mockResolvedValue(undefined),
+      ...overrides,
+    });
+  }
+
+  function regenerationRequest(overrides: Partial<FredTurnRequest> = {}) {
+    return baseRequest({ conversationId, regenerateOfMessageId: 2, ...overrides });
+  }
+
+  it("marks the replaced answer only after the new answer is completed and persisted", async () => {
+    const calls: string[] = [];
+    const persistence = regenerationPersistence({
+      supersedeReplacedAnswer: vi.fn(async () => { calls.push("supersede"); }),
+    });
+    const onRequestTransition = vi.fn(async (transition: { status: string }) => {
+      calls.push(transition.status);
+    });
+
+    const { events } = await collectEvents(executeFredTurn(
+      regenerationRequest({ onRequestTransition }),
+      makeUpstreamDeps(),
+      persistence,
+      makeConfigDeps(),
+    ));
+
+    expect(events.at(-1)).toMatchObject({ type: "final", answer: "Hallo Welt", assistantMessageId: 4 });
+    expect(calls).toEqual(["user_persisted", "generating", "completed", "supersede"]);
+    expect(persistence.supersedeReplacedAnswer).toHaveBeenCalledWith({
+      clientId: userId,
+      conversationId,
+      replacedAssistantMessageId: 2,
+      userMessageId: 3,
+      assistantMessageId: 4,
+    });
+  });
+
+  it("keeps the replaced answer when the regeneration fails", async () => {
+    const persistence = regenerationPersistence();
+    const upstream = makeUpstreamDeps({
+      openStream: vi.fn().mockResolvedValue(new ReadableStream<Uint8Array>({
+        start(ctrl) {
+          ctrl.enqueue(new TextEncoder().encode(
+            'data: {"response_type":"answer","content":"Teil","done":false}\n\n',
+          ));
+          ctrl.close();
+        },
+      })),
+    });
+
+    await expect(collectEvents(executeFredTurn(
+      regenerationRequest(),
+      upstream,
+      persistence,
+      makeConfigDeps(),
+    ))).rejects.toThrow(EOF_WITHOUT_FINAL_CLIENT_MESSAGE);
+
+    expect(persistence.recordEvent).toHaveBeenCalledTimes(1);
+    expect(persistence.supersedeReplacedAnswer).not.toHaveBeenCalled();
+  });
+
+  it("keeps the replaced answer when the regeneration is cancelled", async () => {
+    const persistence = regenerationPersistence();
+    const abortController = new AbortController();
+    const upstream = makeUpstreamDeps({
+      openStream: vi.fn().mockResolvedValue(new ReadableStream<Uint8Array>({
+        start(ctrl) {
+          ctrl.enqueue(new TextEncoder().encode(
+            'data: {"response_type":"agent_query","assistant_message_id":"answer-stop"}\n\n',
+          ));
+        },
+      })),
+    });
+
+    const gen = executeFredTurn(
+      regenerationRequest({ signal: abortController.signal }),
+      upstream,
+      persistence,
+      makeConfigDeps(),
+    );
+    expect((await gen.next()).value).toMatchObject({ type: "conversation" });
+    const pending = collectEvents(gen);
+    await vi.waitFor(() => expect(upstream.openStream).toHaveBeenCalled());
+    abortController.abort();
+
+    await expect(pending).resolves.toMatchObject({ result: { stopped: true } });
+    expect(persistence.supersedeReplacedAnswer).not.toHaveBeenCalled();
+  });
+
+  it("completes the regenerated answer even when marking the replaced one fails", async () => {
+    const persistence = regenerationPersistence({
+      supersedeReplacedAnswer: vi.fn().mockRejectedValue(new Error("not latest")),
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const { events } = await collectEvents(executeFredTurn(
+      regenerationRequest(),
+      makeUpstreamDeps(),
+      persistence,
+      makeConfigDeps(),
+    ));
+
+    expect(events.at(-1)).toMatchObject({ type: "final", answer: "Hallo Welt" });
+    expect(consoleError).toHaveBeenCalledWith("fred regenerated answer not marked", expect.anything());
+    consoleError.mockRestore();
+  });
+
+  it("refuses a regeneration outside an existing web conversation", async () => {
+    for (const request of [
+      regenerationRequest({ conversationId: undefined }),
+      regenerationRequest({ origin: "telegram" }),
+    ]) {
+      const persistence = regenerationPersistence();
+      const gen = executeFredTurn(request, makeUpstreamDeps(), persistence, makeConfigDeps());
+      expect((await gen.next()).value).toEqual({
+        type: "error",
+        error: "Eine Antwort kann nur in einer bestehenden Unterhaltung erneut erzeugt werden.",
+      });
+      await expect(gen.next()).rejects.toMatchObject({ status: 409 });
+      expect(persistence.recordEvent).not.toHaveBeenCalled();
+    }
+  });
+});

@@ -299,6 +299,50 @@ describe("FredNativeChatView feedback after regeneration", () => {
   });
 });
 
+describe("FredNativeChatView regeneration request", () => {
+  it("asks the server to replace the stored answer by its message id", async () => {
+    await renderView(conversationA.id, messagesA);
+
+    await act(async () => button("Antwort erneut erzeugen").click());
+    await settle();
+
+    expect(JSON.parse(String(chatRequests[0].init.body))).toMatchObject({
+      query: "Frage A",
+      conversationId: conversationA.id,
+      regenerateOfMessageId: 2,
+    });
+  });
+
+  it("does not regenerate an answer to a question with attachments", async () => {
+    await renderView(conversationA.id, [
+      {
+        ...messagesA[0],
+        attachments: [{ kind: "file", name: "Bescheid.pdf", mimeType: "application/pdf", sizeBytes: 8 }],
+      },
+      messagesA[1],
+    ]);
+
+    const regenerate = container.querySelector(
+      'button[title^="Antwort erneut erzeugen ist bei Fragen mit Anhängen nicht möglich"]',
+    ) as HTMLButtonElement | null;
+    expect(regenerate).not.toBeNull();
+    expect(regenerate!.disabled).toBe(true);
+    expect(regenerate!.getAttribute("aria-label")).toContain("Bitte sende die Frage mit den Dateien erneut.");
+    await act(async () => regenerate!.click());
+    await settle();
+    expect(chatRequests).toHaveLength(0);
+  });
+
+  it("does not regenerate an answer that was not stored", async () => {
+    await renderView(conversationA.id, [messagesA[0], { ...messagesA[1], id: undefined }]);
+
+    const regenerate = container.querySelector(
+      'button[title^="Antwort erneut erzeugen ist nur für gespeicherte Antworten möglich"]',
+    ) as HTMLButtonElement | null;
+    expect(regenerate?.disabled).toBe(true);
+  });
+});
+
 describe("FredNativeChatView rejected questions", () => {
   async function attachFile(file: File) {
     const input = container.querySelector('input[type="file"][accept^=".pdf"]') as HTMLInputElement;
