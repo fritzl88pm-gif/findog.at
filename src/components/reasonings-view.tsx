@@ -146,7 +146,9 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [isTitleOnly, setIsTitleOnly] = useState(false);
+  // Only mounted after a client-side view switch, so reading storage during the
+  // first render cannot cause a hydration mismatch.
+  const [isTitleOnly, setIsTitleOnly] = useState(getTitleOnlyStoredPreference);
   const [expandedReasoningIds, setExpandedReasoningIds] = useState<Set<string>>(() => new Set());
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [menuPlacement, setMenuPlacement] = useState<"top" | "bottom">("bottom");
@@ -155,12 +157,6 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
   const menuContainerRef = useRef<HTMLDivElement | null>(null);
   const activeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const editorTitleInputRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    if (getTitleOnlyStoredPreference()) {
-      setIsTitleOnly(true);
-    }
-  }, []);
 
   // Close open action menu on outside click or Escape
   useEffect(() => {

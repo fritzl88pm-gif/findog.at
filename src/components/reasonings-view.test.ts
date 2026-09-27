@@ -376,6 +376,20 @@ describe("Task 1: Searchable, filterable, sortable compact list", () => {
     expect(host.querySelectorAll(".reasoning-card-body:not([hidden])")).toHaveLength(0);
   });
 
+  it("renders a stored title-only preference on the first commit without flipping the toggle", async () => {
+    mockStorage.setItem(STORAGE_KEY, "true");
+    const toggleChanges: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => toggleChanges.push(...records));
+    observer.observe(host, { attributes: true, attributeFilter: ["aria-checked"], subtree: true });
+
+    await render(createElement(ReasoningsView, { accessToken: "test-token" }));
+    toggleChanges.push(...observer.takeRecords());
+    observer.disconnect();
+
+    expect(buttonByText("Nur Titel").getAttribute("aria-checked")).toBe("true");
+    expect(toggleChanges).toEqual([]);
+  });
+
   it("gracefully tolerates unavailable or malformed localStorage", async () => {
     mockStorage.setItem(STORAGE_KEY, "corrupted-json");
     await render(createElement(ReasoningsView, { accessToken: "test-token" }));
