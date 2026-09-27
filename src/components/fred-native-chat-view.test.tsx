@@ -1,0 +1,213 @@
+// @vitest-environment jsdom
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import FredNativeChatView, { type FredNativeMessage } from "./fred-native-chat-view";
+import type { FredNativeConversation } from "@/lib/fred-native-stream";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const conversationA: FredNativeConversation = {
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  title: "A",
+  createdAt: "2026-01-01T00:00:00Z",
+  updatedAt: "2026-01-01T00:00:00Z",
+  agentKey: "fred",
+};
+const conversationBId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+const messagesA: FredNativeMessage[] = [
+  { id: 1, role: "user", content: "Frage A", createdAt: "2026-01-01T00:00:00Z", agentKey: "fred" },
+  { id: 2, role: "assistant", content: "Antwort A", createdAt: "2026-01-01T00:00:01Z", agentKey: "fred" },
+];
+const messagesB: FredNativeMessage[] = [
+  { id: 11, role: "user", content: "Frage B", createdAt: "2026-01-02T00:00:00Z", agentKey: "fred" },
+  { id: 12, role: "assistant", content: "Antwort B", createdAt: "2026-01-02T00:00:01Z", agentKey: "fred" },
+];
+
+type ChatRequest = {
+  init: RequestInit;
+  push: (event: Record<string, unknown>) => void;
+  close: () => void;
+};
+
+let container: HTMLDivElement;
+let root: Root;
+let chatRequests: ChatRequest[];
+let feedbackResponses: Array<(response: Response) => void>;
+let conversationUpdates: Array<{ id: string; messages?: FredNativeMessage[] }>;
+
+function installFetch() {
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
+    if (url === "/api/fred/capabilities") {
+      return new Response(JSON.stringify({
+        webSearch: true,
+        fileUpload: true,
+        imageUpload: true,
+        proMode: true,
+        quickFred: true,
+      }), { status: 200 });
+    }
+    if (url === "/api/feedback") {
+      return new Promise<Response>((resolve) => feedbackResponses.push(resolve));
+    }
+    if (url === "/api/fred/chat") {
+      const encoder = new TextEncoder();
+      let streamController!: ReadableStreamDefaultController<Uint8Array>;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+        },
+      });
+      init.signal?.addEventListener("abort", () => {
+        streamController.error(new DOMException("aborted", "AbortError"));
+      });
+      chatRequests.push({
+        init,
+        push: (event) => streamController.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)),
+        close: () => streamController.close(),
+      });
+      return new Response(body, { status: 200 });
+    }
+    return new Response("{}", { status: 404 });
+  }));
+}
+
+async function renderView(conversationId: string, messages: FredNativeMessage[]) {
+  // Re-rendering the same root with other props mirrors how page.tsx switches
+  // conversations: the view is updated in place, not remounted.
+  await act(async () => {
+    root.render(createElement(FredNativeChatView, {
+      accessToken: "token",
+      conversationId,
+      initialMessages: messages,
+      renderAssistantContent: (content: string) => content,
+      renderUserContent: (content: string) => content,
+      onConversationUpdated: (updated: FredNativeConversation, updatedMessages?: FredNativeMessage[]) => {
+        conversationUpdates.push({ id: updated.id, messages: updatedMessages });
+      },
+    }));
+  });
+  await settle();
+}
+
+async function settle() {
+  for (let index = 0; index < 5; index += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+}
+
+function transcriptText(): string {
+  return container.querySelector(".transcript")?.textContent ?? "";
+}
+
+function button(label: string): HTMLButtonElement {
+  const element = container.querySelector(`button[aria-label="${label}"]`);
+  if (!(element instanceof HTMLButtonElement)) throw new Error(`Button ${label} fehlt.`);
+  return element;
+}
+
+async function typeInto(textarea: HTMLTextAreaElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, value);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+function composer(): HTMLTextAreaElement {
+  return container.querySelector('textarea[aria-label="Nachricht an Fred"]') as HTMLTextAreaElement;
+}
+
+async function sendQuestion(question: string) {
+  await typeInto(composer(), question);
+  await act(async () => {
+    (container.querySelector("form.composer") as HTMLFormElement).requestSubmit();
+  });
+  await settle();
+}
+
+beforeEach(() => {
+  chatRequests = [];
+  feedbackResponses = [];
+  conversationUpdates = [];
+  window.requestAnimationFrame = ((callback: FrameRequestCallback) => (
+    setTimeout(() => callback(0), 0) as unknown as number
+  ));
+  window.cancelAnimationFrame = ((frame: number) => clearTimeout(frame));
+  installFetch();
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+});
+
+afterEach(async () => {
+  await act(async () => root.unmount());
+  container.remove();
+  vi.unstubAllGlobals();
+});
+
+describe("FredNativeChatView conversation switch", () => {
+  it("keeps the newly selected conversation when a regeneration of the previous one is aborted", async () => {
+    await renderView(conversationA.id, messagesA);
+    await act(async () => button("Antwort erneut erzeugen").click());
+    await settle();
+    chatRequests[0].push({ type: "conversation", conversation: conversationA });
+    await settle();
+
+    await renderView(conversationBId, messagesB);
+
+    expect(transcriptText()).toContain("Antwort B");
+    expect(transcriptText()).not.toContain("Antwort A");
+  });
+
+  it("keeps the newly selected conversation when a streaming follow-up of the previous one is aborted", async () => {
+    await renderView(conversationA.id, messagesA);
+    await sendQuestion("Folgefrage A");
+    chatRequests[0].push({ type: "conversation", conversation: conversationA });
+    chatRequests[0].push({ type: "delta", content: "Teilantwort A2" });
+    await settle();
+
+    await renderView(conversationBId, messagesB);
+
+    expect(transcriptText()).toContain("Antwort B");
+    expect(transcriptText()).not.toContain("Folgefrage A");
+    expect(transcriptText()).not.toContain("Teilantwort A2");
+
+    await sendQuestion("Folgefrage B");
+    expect(JSON.parse(String(chatRequests[1].init.body))).toMatchObject({
+      query: "Folgefrage B",
+      conversationId: conversationBId,
+    });
+    chatRequests[1].push({
+      type: "conversation",
+      conversation: { ...conversationA, id: conversationBId, title: "B" },
+    });
+    await settle();
+    expect(conversationUpdates.at(-1)?.messages?.map((message) => message.content)).toEqual([
+      "Frage B",
+      "Antwort B",
+      "Folgefrage B",
+    ]);
+  });
+
+  it("keeps the partial answer when the user stops the stream in the same conversation", async () => {
+    await renderView(conversationA.id, messagesA);
+    await sendQuestion("Folgefrage A");
+    chatRequests[0].push({ type: "conversation", conversation: conversationA });
+    chatRequests[0].push({ type: "delta", content: "Teilantwort A2" });
+    await settle();
+
+    await act(async () => {
+      Array.from(container.querySelectorAll("button"))
+        .find((element) => element.textContent?.trim() === "Stoppen")!
+        .click();
+    });
+    await settle();
+
+    expect(transcriptText()).toContain("Folgefrage A");
+    expect(transcriptText()).toContain("Teilantwort A2");
+  });
+});

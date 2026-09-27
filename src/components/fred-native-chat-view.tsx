@@ -542,6 +542,9 @@ export default function FredNativeChatView({
   const activeConversationIdRef = useRef(conversationId);
   const shareStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Bumped on every conversation switch so a request aborted by the switch
+  // cannot write its late error or partial answer into the new conversation.
+  const requestGenerationRef = useRef(0);
   const shareInFlightRef = useRef<Set<number>>(new Set());
   const shareAbortControllersRef = useRef<Map<number, AbortController>>(new Map());
   const streamingPreviewRef = useRef<StreamingAssistantPreviewHandle>(null);
@@ -569,6 +572,7 @@ export default function FredNativeChatView({
     shareInFlightRef.current.clear();
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    requestGenerationRef.current += 1;
     streamingPreviewRef.current?.cancel();
     followStreamGrowthRef.current = true;
     activeConversationIdRef.current = conversationId;
@@ -751,6 +755,7 @@ export default function FredNativeChatView({
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    const requestGeneration = requestGenerationRef.current;
     const agentKey: FredAgentKey = conversationAgentKey
       ?? (options.quickFredEnabled === true ? "quickfred" : "fred");
     const agentName = fredAgentName(agentKey);
@@ -943,6 +948,8 @@ export default function FredNativeChatView({
         throw new Error(`Der ${agentName}-Antwortstream wurde ohne Abschluss beendet.`);
       }
     } catch (sendError) {
+      // A conversation switch aborted this request and already reset the view.
+      if (requestGeneration !== requestGenerationRef.current) return;
       if (!controller.signal.aborted) {
         setError(sendError instanceof Error
           ? sendError.message
