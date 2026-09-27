@@ -377,6 +377,34 @@ describe("BFG PRO query generation and full-text Luna Medium evaluation", () => 
     ]);
   });
 
+  it("skips the norm filter when the planned norm contains Findok's comma list separator", async () => {
+    fetchMock
+      .mockResolvedValueOnce(mockLunaResponse(JSON.stringify({
+        queries: ["Arbeitszimmer"],
+        norm: "§ 16, § 20 EStG 1988",
+      })))
+      .mockResolvedValueOnce(mockLunaResponse(JSON.stringify({
+        selections: [{
+          candidateId: "candidate-1",
+          score: 80,
+          legalIssue: "Frage",
+          whyRelevant: "Passend.",
+          caseSummary: "Ein Arbeitszimmer war strittig.",
+          similarities: "Gleich",
+          differences: "Anders",
+          sourceQuote: null,
+          periodAssessment: "2020",
+        }],
+      })));
+
+    const response = await runBfgProSearch("Sachverhalt");
+
+    expect(vi.mocked(fetchBfgProCandidates).mock.calls).toEqual([
+      [{ query: "Arbeitszimmer", signal: expect.any(AbortSignal) }],
+    ]);
+    expect(response.results).toHaveLength(1);
+  });
+
   it("saturated first query still calls all variants and round robin fairly merges without starvation", async () => {
     const q1Results = Array.from({ length: 60 }, (_v, i) => candidate(i + 1));
     const normResults = [candidate(101), candidate(102), candidate(103)];

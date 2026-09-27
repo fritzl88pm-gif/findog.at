@@ -174,7 +174,9 @@ function parseGeneratedQueryPlan(content: string | null): BfgProQueryPlan {
   if (queries.length === 0 || (norm !== null && (!norm || norm.length > MAX_FINDOK_NORM_CHARS))) {
     throw new BfgProModelError();
   }
-  return { queries, norm };
+  // Findok splits aggregation values at commas (the normal search route rejects
+  // them), so such a norm cannot form a filter; the plain queries still run.
+  return { queries, norm: norm !== null && /[,\u0000-\u001f\u007f]/.test(norm) ? null : norm };
 }
 
 function parsePreliminarySelections(content: string | null): PreliminarySelection[] {
