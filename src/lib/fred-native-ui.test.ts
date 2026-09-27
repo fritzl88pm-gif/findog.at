@@ -19,6 +19,10 @@ const copyButtonSource = readFileSync(
   fileURLToPath(new URL("../components/copy-icon-button.tsx", import.meta.url)),
   "utf8",
 );
+const fredHistorySource = readFileSync(
+  fileURLToPath(new URL("./chat/fred-history.ts", import.meta.url)),
+  "utf8",
+);
 const pdfDownloadSource = readFileSync(
   fileURLToPath(new URL("./chat/pdf-download.ts", import.meta.url)),
   "utf8",
@@ -314,7 +318,8 @@ describe("Fred native Findog UI", () => {
     expect(attachmentValidationSource).toContain("MAX_IMAGE_UPLOADS = 5");
     expect(attachmentValidationSource).toContain("MAX_FILE_UPLOADS = 5");
     expect(routeSource).toContain('rpc("record_fred_native_event"');
-    expect(pageSource).toContain("normalizeFredAttachments");
+    expect(pageSource).toContain("normalizeFredMessages(payload.messages)");
+    expect(fredHistorySource).toContain("normalizeFredAttachments");
   });
 
   it("keeps WeKnora credentials server-side and tightens framing policy", () => {
