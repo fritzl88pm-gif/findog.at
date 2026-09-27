@@ -38,8 +38,12 @@ export default function FredArtifactCards({ accessToken, artifacts, conversation
           const link = document.createElement("a");
           link.href = objectUrl;
           link.download = artifact.fileName;
+          // Like the PDF download: attach the anchor and revoke later, because
+          // Safari may read the blob URL only after click() has returned.
+          document.body.append(link);
           link.click();
-          URL.revokeObjectURL(objectUrl);
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
           setStates((current) => { const next = { ...current }; delete next[artifact.id]; return next; });
         } catch {
           setStates((current) => ({ ...current, [artifact.id]: "error" }));
