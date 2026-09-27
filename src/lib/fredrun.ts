@@ -1306,9 +1306,11 @@ export function writeFredRunHighScore(
   previousBest: number,
 ): number {
   const normalizedScore = Number.isSafeInteger(score) && score >= 0 ? score : 0;
-  const nextBest = Math.max(previousBest, normalizedScore);
-  if (nextBest === previousBest) {
-    return previousBest;
+  // Another tab of this browser may have stored a higher best since previousBest was read.
+  const storedBest = readFredRunHighScore(storage);
+  const nextBest = Math.max(previousBest, storedBest, normalizedScore);
+  if (nextBest === storedBest) {
+    return nextBest;
   }
   if (storage) {
     try {

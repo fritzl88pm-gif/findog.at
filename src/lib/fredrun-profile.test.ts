@@ -11,6 +11,7 @@ import {
   purchaseFredRunCharacter,
   purchaseFredRunWorld,
   readFredRunProfile,
+  readLatestFredRunProfile,
   selectFredRunCharacter,
   selectFredRunWorld,
   settleFredRunCoins,
@@ -97,6 +98,41 @@ describe("Fredrun local profile", () => {
     expect(writeFredRunProfile(storage, profile)).toBe(true);
     expect(readFredRunProfile(storage)).toEqual({ profile, storageAvailable: true });
     expect(JSON.parse(values.get(FREDRUN_PROFILE_KEY) ?? "{}")).toMatchObject({ coinBalance: 250 });
+  });
+
+  it("applies each tab's change to the stored profile so two tabs keep each other's coins and unlocks", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+    writeFredRunProfile(storage, { ...createDefaultFredRunProfile(), coinBalance: 1_000 });
+    const tabA = readFredRunProfile(storage).profile;
+    const tabB = readFredRunProfile(storage).profile;
+
+    const purchase = purchaseFredRunWorld(readLatestFredRunProfile(storage, tabA), "finanzamt-night");
+    writeFredRunProfile(storage, purchase.profile);
+    const settledA = settleFredRunCoins(readLatestFredRunProfile(storage, tabA), "run-a", 300);
+    writeFredRunProfile(storage, settledA.profile);
+    const settledB = settleFredRunCoins(readLatestFredRunProfile(storage, tabB), "run-b", 20);
+    writeFredRunProfile(storage, settledB.profile);
+
+    expect(readFredRunProfile(storage).profile).toMatchObject({
+      coinBalance: 1_000 - FREDRUN_FINANZAMT_NIGHT_PRICE + 300 + 20,
+      unlockedWorlds: ["vienna", "finanzamt-night", "alps"],
+      lastSettledRunId: "run-b",
+    });
+  });
+
+  it("uses this tab's profile when nothing readable is stored", () => {
+    const current = { ...createDefaultFredRunProfile(), coinBalance: 70 };
+    expect(readLatestFredRunProfile(null, current)).toBe(current);
+    expect(readLatestFredRunProfile({ getItem: () => null, setItem: () => undefined }, current)).toBe(current);
+    expect(readLatestFredRunProfile({ getItem: () => "not-json", setItem: () => undefined }, current)).toBe(current);
+    expect(readLatestFredRunProfile({
+      getItem: () => { throw new Error("blocked"); },
+      setItem: () => undefined,
+    }, current)).toBe(current);
   });
 
   it("falls back safely when local storage is blocked or corrupt", () => {

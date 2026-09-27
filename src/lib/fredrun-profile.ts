@@ -170,6 +170,21 @@ export function readFredRunProfile(
   }
 }
 
+// All tabs of a browser share the stored profile. Local changes start from it, not from a
+// tab's in-memory copy, so they cannot overwrite coins or unlocks another tab has saved.
+export function readLatestFredRunProfile(
+  storage: FredRunProfileStorage | null | undefined,
+  fallback: FredRunProfile,
+): FredRunProfile {
+  if (!storage) return fallback;
+  try {
+    const stored = storage.getItem(FREDRUN_PROFILE_KEY);
+    return stored ? normalizeFredRunProfile(JSON.parse(stored) as unknown) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export function writeFredRunProfile(
   storage: FredRunProfileStorage | null | undefined,
   profile: FredRunProfile,

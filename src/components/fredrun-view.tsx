@@ -56,6 +56,7 @@ import {
   purchaseFredRunCharacter,
   purchaseFredRunWorld,
   readFredRunProfile,
+  readLatestFredRunProfile,
   selectFredRunCharacter,
   selectFredRunWorld,
   settleFredRunCoins,
@@ -2083,8 +2084,10 @@ export default function FredRunView({
       });
       return;
     }
-    const nextProfile = selectFredRunCharacter(profileRef.current, characterId);
-    if (nextProfile !== profileRef.current) commitProfile(nextProfile);
+    commitProfile(selectFredRunCharacter(
+      readLatestFredRunProfile(localHighScoreStorage(), profileRef.current),
+      characterId,
+    ));
   }, [accessToken, applyServerProgressAction, commitProfile]);
 
   const selectWorld = useCallback((worldId: FredRunWorldId) => {
@@ -2106,9 +2109,10 @@ export default function FredRunView({
       });
       return;
     }
-    const nextProfile = selectFredRunWorld(profileRef.current, worldId);
-    if (nextProfile === profileRef.current) return;
+    const latestProfile = readLatestFredRunProfile(localHighScoreStorage(), profileRef.current);
+    const nextProfile = selectFredRunWorld(latestProfile, worldId);
     commitProfile(nextProfile);
+    if (nextProfile === latestProfile) return;
     setPurchaseMessage(`${FREDRUN_WORLDS[worldId].name} ist ausgewählt.`);
   }, [accessToken, applyServerProgressAction, commitProfile]);
 
@@ -2218,11 +2222,12 @@ export default function FredRunView({
       }).finally(() => setPendingPurchase(null));
       return;
     }
+    const latestProfile = readLatestFredRunProfile(localHighScoreStorage(), profileRef.current);
     const result = pendingPurchase.kind === "character"
-      ? purchaseFredRunCharacter(profileRef.current, pendingPurchase.id)
-      : purchaseFredRunWorld(profileRef.current, pendingPurchase.id);
+      ? purchaseFredRunCharacter(latestProfile, pendingPurchase.id)
+      : purchaseFredRunWorld(latestProfile, pendingPurchase.id);
+    commitProfile(result.profile);
     if (result.status === "purchased") {
-      commitProfile(result.profile);
       setPurchaseMessage(`${definition.name} ist jetzt freigeschaltet und ausgewählt.`);
     } else if (result.status === "insufficient-funds") {
       setPurchaseMessage(`Für ${definition.name} fehlen noch Münzen.`);
@@ -2428,12 +2433,12 @@ export default function FredRunView({
               setBestScore(nextBest);
             }
             const settlement = settleFredRunCoins(
-              profileRef.current,
+              readLatestFredRunProfile(localHighScoreStorage(), profileRef.current),
               runId,
               state.coinsCollected,
             );
             setLastAwardedCoins(settlement.awardedCoins);
-            if (settlement.profile !== profileRef.current) commitProfile(settlement.profile);
+            commitProfile(settlement.profile);
           }
         }
       }

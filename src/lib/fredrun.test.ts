@@ -784,6 +784,19 @@ describe("Fredrun local high score", () => {
     expect(readFredRunHighScore(storage)).toBe(0);
   });
 
+  it("never lowers a higher best score another tab stored in the meantime", () => {
+    const values = new Map<string, string>([[FREDRUN_HIGH_SCORE_KEY, "9000"]]);
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+
+    expect(writeFredRunHighScore(storage, 800, 0)).toBe(9000);
+    expect(values.get(FREDRUN_HIGH_SCORE_KEY)).toBe("9000");
+    expect(writeFredRunHighScore(storage, 9500, 800)).toBe(9500);
+    expect(values.get(FREDRUN_HIGH_SCORE_KEY)).toBe("9500");
+  });
+
   it("keeps the game usable when storage access fails", () => {
     const storage = {
       getItem: () => { throw new Error("blocked"); },
