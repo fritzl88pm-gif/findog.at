@@ -25,7 +25,9 @@ Findog-Navigation bleibt erreichbar. Bereichswechsel fokussieren die Überschrif
   sie werden nicht mehr ausgeliefert. Dafür ist keine Migration erforderlich.
 - **BFG Newsletter:** datierte Ausgaben mit Editor und vorhandener Soft-Löschung.
 - **Dokumentverarbeitung:** getrennte Abschnitte für Fred-Anhänge, OCR und
-  Belegauswertung. Der Beleg-Prompt ist standardmäßig eingeklappt.
+  Belegauswertung. Der Beleg-Prompt ist standardmäßig eingeklappt. Gespeichert
+  wird nur auf dem geladenen Stand (`expectedUpdatedAt`); wurde die
+  Konfiguration inzwischen anderweitig gespeichert, antwortet die API mit 409.
 - **Nutzung & Systemstatus:** vorhandene OmniRoute-Zeiträume, Metriken,
   Kostenschätzungen, Routen und Providerzustände in einem einheitlichen Layout.
 

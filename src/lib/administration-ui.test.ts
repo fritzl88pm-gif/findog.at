@@ -60,6 +60,14 @@ describe("Administration workspace and scanning settings", () => {
     expect(pageSource).toContain("Dokumente werden ausschließlich über Luna via OmniRoute verarbeitet.");
   });
 
+  it("saves scanning settings only against the version it loaded", () => {
+    const load = pageSource.slice(pageSource.indexOf("async function loadScanningSettings"), pageSource.indexOf("async function saveScanningSettings"));
+    const save = pageSource.slice(pageSource.indexOf("async function saveScanningSettings"), pageSource.indexOf("async function openAdministrationView"));
+    expect(load).toContain("setScanningUpdatedAt(payload.updatedAt);");
+    expect(save).toContain("expectedUpdatedAt: scanningUpdatedAt,");
+    expect(save).toContain("setScanningUpdatedAt(payload.updatedAt);");
+  });
+
   it("loads, validates and saves the document pipeline with the scanning settings", () => {
     expect(pageSource).toMatch(/payload\.documentPipeline !== "mineru_with_omniroute_luna_fallback"[\s\S]*?payload\.documentPipeline !== "omniroute_luna_only"/u);
     expect(pageSource).toContain("setScanningDocumentPipeline(payload.documentPipeline)");

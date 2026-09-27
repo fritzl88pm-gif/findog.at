@@ -13,8 +13,11 @@ import {
   isValidFredAttachmentMode,
   isValidModelId,
   isValidScanningProvider,
+  UNSAVED_SCANNING_SETTINGS_UPDATED_AT,
   updateScanningSettings,
 } from "./settings";
+
+const LOADED_VERSION = "2026-07-19T08:00:00.123456+00:00";
 
 describe("Scanning settings resolver", () => {
   let supabase: ReturnType<typeof createMockSupabase>;
@@ -25,7 +28,8 @@ describe("Scanning settings resolver", () => {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn(),
-      upsert: vi.fn().mockReturnThis(),
+      insert: vi.fn().mockReturnThis(),
+      update: vi.fn().mockReturnThis(),
     };
   }
 
@@ -194,16 +198,99 @@ describe("Scanning settings resolver", () => {
       "omniroute_luna_only",
       "weknora_native",
       "openrouter",
+      LOADED_VERSION,
     );
     expect(result.modelId).toBe("anthropic/claude-sonnet-4-20250514");
     expect(result.documentPipeline).toBe("omniroute_luna_only");
     expect(result.prompt).toBe("New scanning prompt");
     expect(result.scanningProvider).toBe("openrouter");
-    expect(supabase.upsert).toHaveBeenCalledWith(expect.objectContaining({
+    expect(supabase.update).toHaveBeenCalledWith(expect.objectContaining({
       document_pipeline: "omniroute_luna_only",
       fred_attachment_mode: "weknora_native",
       scanning_provider: "openrouter",
-    }), expect.anything());
+      updated_by: "admin-1",
+    }));
+    expect(supabase.eq).toHaveBeenCalledWith("id", true);
+    expect(supabase.eq).toHaveBeenCalledWith("updated_at", LOADED_VERSION);
+    expect(supabase.insert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a save from a stale version instead of reverting a newer one", async () => {
+    supabase.maybeSingle.mockResolvedValue({ data: null, error: null });
+
+    await expect(updateScanningSettings(
+      supabase as never,
+      "admin-2",
+      "model/x",
+      "Nur der Prompt wurde geändert",
+      "mineru_with_omniroute_luna_fallback",
+      DEFAULT_FRED_ATTACHMENT_MODE,
+      DEFAULT_SCANNING_PROVIDER,
+      LOADED_VERSION,
+    )).rejects.toMatchObject({
+      status: 409,
+      message: "Die Scanning-Konfiguration wurde inzwischen an anderer Stelle geändert. Bitte den Bereich erneut laden.",
+    });
+    expect(supabase.eq).toHaveBeenCalledWith("updated_at", LOADED_VERSION);
+  });
+
+  it("creates the first row only while none exists", async () => {
+    supabase.maybeSingle.mockResolvedValue({
+      data: {
+        model_id: "model/x",
+        document_pipeline: DEFAULT_DOCUMENT_PIPELINE,
+        fred_attachment_mode: DEFAULT_FRED_ATTACHMENT_MODE,
+        scanning_provider: DEFAULT_SCANNING_PROVIDER,
+        prompt: "prompt",
+        updated_at: "2026-07-19T12:00:00.000Z",
+        updated_by: "admin-1",
+      },
+      error: null,
+    });
+
+    const result = await updateScanningSettings(
+      supabase as never,
+      "admin-1",
+      "model/x",
+      "prompt",
+      DEFAULT_DOCUMENT_PIPELINE,
+      DEFAULT_FRED_ATTACHMENT_MODE,
+      DEFAULT_SCANNING_PROVIDER,
+      UNSAVED_SCANNING_SETTINGS_UPDATED_AT,
+    );
+
+    expect(result.updatedAt).toBe("2026-07-19T12:00:00.000Z");
+    expect(supabase.insert).toHaveBeenCalledWith(expect.objectContaining({ id: true, updated_by: "admin-1" }));
+    expect(supabase.update).not.toHaveBeenCalled();
+
+    supabase.maybeSingle.mockResolvedValue({ data: null, error: { code: "23505" } });
+    await expect(updateScanningSettings(
+      supabase as never,
+      "admin-2",
+      "model/x",
+      "prompt",
+      DEFAULT_DOCUMENT_PIPELINE,
+      DEFAULT_FRED_ATTACHMENT_MODE,
+      DEFAULT_SCANNING_PROVIDER,
+      UNSAVED_SCANNING_SETTINGS_UPDATED_AT,
+    )).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("rejects a missing or malformed loaded version on update", async () => {
+    for (const version of ["", "gestern"]) {
+      await expect(updateScanningSettings(
+        supabase as never,
+        "admin-1",
+        "model/x",
+        "prompt",
+        DEFAULT_DOCUMENT_PIPELINE,
+        DEFAULT_FRED_ATTACHMENT_MODE,
+        DEFAULT_SCANNING_PROVIDER,
+        version,
+      )).rejects.toThrow("geladene Stand der Scanning-Konfiguration ist ungültig.");
+    }
+    expect(supabase.update).not.toHaveBeenCalled();
+    expect(supabase.insert).not.toHaveBeenCalled();
   });
 
   it("rejects an invalid document pipeline on update", async () => {
@@ -216,26 +303,27 @@ describe("Scanning settings resolver", () => {
         "local_ocr" as unknown as Parameters<typeof updateScanningSettings>[4],
         "findog_preprocess",
         DEFAULT_SCANNING_PROVIDER,
+        LOADED_VERSION,
       ),
     ).rejects.toThrow("Dokument-Pipeline ist ungültig.");
-    expect(supabase.upsert).not.toHaveBeenCalled();
+    expect(supabase.update).not.toHaveBeenCalled();
   });
 
   it("rejects invalid model IDs on update", async () => {
     await expect(
-      updateScanningSettings(supabase as never, "admin-1", "", "prompt", DEFAULT_DOCUMENT_PIPELINE, DEFAULT_FRED_ATTACHMENT_MODE, DEFAULT_SCANNING_PROVIDER),
+      updateScanningSettings(supabase as never, "admin-1", "", "prompt", DEFAULT_DOCUMENT_PIPELINE, DEFAULT_FRED_ATTACHMENT_MODE, DEFAULT_SCANNING_PROVIDER, LOADED_VERSION),
     ).rejects.toThrow("OpenRouter-Modell-ID ist ungültig.");
     await expect(
-      updateScanningSettings(supabase as never, "admin-1", "bad model", "prompt", DEFAULT_DOCUMENT_PIPELINE, DEFAULT_FRED_ATTACHMENT_MODE, DEFAULT_SCANNING_PROVIDER),
+      updateScanningSettings(supabase as never, "admin-1", "bad model", "prompt", DEFAULT_DOCUMENT_PIPELINE, DEFAULT_FRED_ATTACHMENT_MODE, DEFAULT_SCANNING_PROVIDER, LOADED_VERSION),
     ).rejects.toThrow("OpenRouter-Modell-ID ist ungültig.");
   });
 
   it("rejects empty or oversized prompts on update", async () => {
     await expect(
-      updateScanningSettings(supabase as never, "admin-1", "model/x", "", DEFAULT_DOCUMENT_PIPELINE, DEFAULT_FRED_ATTACHMENT_MODE, DEFAULT_SCANNING_PROVIDER),
+      updateScanningSettings(supabase as never, "admin-1", "model/x", "", DEFAULT_DOCUMENT_PIPELINE, DEFAULT_FRED_ATTACHMENT_MODE, DEFAULT_SCANNING_PROVIDER, LOADED_VERSION),
     ).rejects.toThrow("Scanning-Prompt ist ungültig");
     await expect(
-      updateScanningSettings(supabase as never, "admin-1", "model/x", "x".repeat(40001), DEFAULT_DOCUMENT_PIPELINE, DEFAULT_FRED_ATTACHMENT_MODE, DEFAULT_SCANNING_PROVIDER),
+      updateScanningSettings(supabase as never, "admin-1", "model/x", "x".repeat(40001), DEFAULT_DOCUMENT_PIPELINE, DEFAULT_FRED_ATTACHMENT_MODE, DEFAULT_SCANNING_PROVIDER, LOADED_VERSION),
     ).rejects.toThrow("Scanning-Prompt ist ungültig");
   });
 
@@ -249,9 +337,10 @@ describe("Scanning settings resolver", () => {
         DEFAULT_DOCUMENT_PIPELINE,
         "browser_choice" as unknown as Parameters<typeof updateScanningSettings>[5],
         DEFAULT_SCANNING_PROVIDER,
+        LOADED_VERSION,
       ),
     ).rejects.toThrow("Fred-Dateiverarbeitung ist ungültig.");
-    expect(supabase.upsert).not.toHaveBeenCalled();
+    expect(supabase.update).not.toHaveBeenCalled();
   });
 });
 

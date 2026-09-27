@@ -1101,6 +1101,7 @@ export default function Home() {
   const [scanningProvider, setScanningProvider] = useState<ScanningProvider>(DEFAULT_SCANNING_PROVIDER);
   const [scanningModelId, setScanningModelId] = useState("");
   const [scanningPrompt, setScanningPrompt] = useState("");
+  const [scanningUpdatedAt, setScanningUpdatedAt] = useState("");
   const [isScanningSettingsLoading, setIsScanningSettingsLoading] = useState(false);
   const [isScanningSettingsSaving, setIsScanningSettingsSaving] = useState(false);
   const [researchDisplayMode, setResearchDisplayMode] = useState<"simple" | "advanced">("simple");
@@ -2154,6 +2155,7 @@ export default function Home() {
       setScanningProvider(payload.scanningProvider);
       setScanningModelId(payload.modelId);
       setScanningPrompt(payload.prompt);
+      setScanningUpdatedAt(payload.updatedAt);
       setScanningBaseline(JSON.stringify([payload.documentPipeline, payload.fredAttachmentMode, payload.scanningProvider, payload.modelId, payload.prompt]));
     } catch (settingsError) {
       if (signal?.aborted) return;
@@ -2194,6 +2196,7 @@ export default function Home() {
           scanningProvider: scanningProvider,
           modelId: scanningModelId.trim(),
           prompt: scanningPrompt.trim(),
+          expectedUpdatedAt: scanningUpdatedAt,
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -2228,6 +2231,7 @@ export default function Home() {
       setScanningProvider(payload.scanningProvider);
       setScanningModelId(payload.modelId);
       setScanningPrompt(payload.prompt);
+      setScanningUpdatedAt(payload.updatedAt);
       setScanningBaseline(JSON.stringify([payload.documentPipeline, payload.fredAttachmentMode, payload.scanningProvider, payload.modelId, payload.prompt]));
       setAdminNotice("Die Scanning-Konfiguration wurde gespeichert und gilt für neue Auswertungen.");
     } catch (settingsError) {

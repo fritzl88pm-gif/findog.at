@@ -112,6 +112,14 @@ export function isValidModelId(value: string): boolean {
   );
 }
 
+// Version token of the defaults returned while no row exists yet; saving with
+// it creates the first row instead of updating an existing one.
+export const UNSAVED_SCANNING_SETTINGS_UPDATED_AT = new Date(0).toISOString();
+
+export function isValidScanningSettingsVersion(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 64 && !Number.isNaN(Date.parse(value));
+}
+
 function parseScanningSettingsRecord(value: unknown): ScanningSettingsRecord | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -164,7 +172,7 @@ export async function getScanningSettings(
       scanningProvider: DEFAULT_SCANNING_PROVIDER,
       modelId: DEFAULT_SCANNING_MODEL_ID,
       prompt: DEFAULT_SCANNING_PROMPT,
-      updatedAt: new Date(0).toISOString(),
+      updatedAt: UNSAVED_SCANNING_SETTINGS_UPDATED_AT,
       updatedBy: null,
     };
   }
@@ -186,6 +194,7 @@ export async function updateScanningSettings(
   documentPipeline: DocumentPipeline,
   fredAttachmentMode: FredAttachmentMode,
   scanningProvider: ScanningProvider,
+  expectedUpdatedAt: string,
 ): Promise<ScanningSettingsRecord> {
   if (!isValidDocumentPipeline(documentPipeline)) {
     throw new UserVisibleError("Die Dokument-Pipeline ist ungültig.", 400);
@@ -205,23 +214,40 @@ export async function updateScanningSettings(
       400,
     );
   }
+  if (!isValidScanningSettingsVersion(expectedUpdatedAt)) {
+    throw new UserVisibleError("Der geladene Stand der Scanning-Konfiguration ist ungültig.", 400);
+  }
 
-  const updatedAt = new Date().toISOString();
-  const { data, error } = await supabase
-    .from("scanning_settings")
-    .upsert({
-      id: true,
-      document_pipeline: documentPipeline,
-      fred_attachment_mode: fredAttachmentMode,
-      scanning_provider: scanningProvider,
-      model_id: modelId.trim(),
-      prompt: prompt.trim(),
-      updated_at: updatedAt,
-      updated_by: userId,
-    }, { onConflict: "id" })
+  const row = {
+    id: true,
+    document_pipeline: documentPipeline,
+    fred_attachment_mode: fredAttachmentMode,
+    scanning_provider: scanningProvider,
+    model_id: modelId.trim(),
+    prompt: prompt.trim(),
+    updated_at: new Date().toISOString(),
+    updated_by: userId,
+  };
+  // Every save names the version it was edited from, so a stale admin tab
+  // cannot silently revert a configuration saved in the meantime.
+  const isFirstSave = expectedUpdatedAt === UNSAVED_SCANNING_SETTINGS_UPDATED_AT;
+  const write = isFirstSave
+    ? supabase.from("scanning_settings").insert(row)
+    : supabase
+      .from("scanning_settings")
+      .update(row)
+      .eq("id", true)
+      .eq("updated_at", expectedUpdatedAt);
+  const { data, error } = await write
     .select("model_id,document_pipeline,fred_attachment_mode,scanning_provider,prompt,updated_at,updated_by")
     .maybeSingle();
 
+  if (isFirstSave ? error?.code === "23505" : !error && data === null) {
+    throw new UserVisibleError(
+      "Die Scanning-Konfiguration wurde inzwischen an anderer Stelle geändert. Bitte den Bereich erneut laden.",
+      409,
+    );
+  }
   const record = parseScanningSettingsRecord(data);
   if (error || !record) {
     throw new UserVisibleError("Die Scanning-Konfiguration konnte nicht gespeichert werden.", 503);

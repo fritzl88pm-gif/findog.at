@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { isAdminUser } from "@/lib/admin-auth";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
+import { UserVisibleError } from "@/lib/errors";
 import { getScanningSettings, updateScanningSettings } from "@/lib/scanning/settings";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { GET, PUT } from "./route";
@@ -17,6 +18,7 @@ vi.mock("@/lib/scanning/settings", async (importOriginal) => {
     isValidFredAttachmentMode: actual.isValidFredAttachmentMode,
     isValidModelId: actual.isValidModelId,
     isValidScanningProvider: actual.isValidScanningProvider,
+    isValidScanningSettingsVersion: actual.isValidScanningSettingsVersion,
   };
 });
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
@@ -84,6 +86,7 @@ describe("Admin scanning-settings API", () => {
       scanningProvider: "omniroute_luna",
       modelId: "anthropic/claude-sonnet-4-20250514",
       prompt: "New scanning prompt",
+      expectedUpdatedAt: "2026-07-19T08:00:00.000Z",
     }));
 
     expect(response.status).toBe(200);
@@ -95,6 +98,7 @@ describe("Admin scanning-settings API", () => {
       "omniroute_luna_only",
       "weknora_native",
       "omniroute_luna",
+      "2026-07-19T08:00:00.000Z",
     );
     await expect(response.json()).resolves.toEqual({
       documentPipeline: "omniroute_luna_only",
@@ -115,37 +119,78 @@ describe("Admin scanning-settings API", () => {
       prompt: "prompt",
       fredAttachmentMode: "findog_preprocess",
       scanningProvider: "omniroute_luna",
+      expectedUpdatedAt: "2026-07-19T08:00:00.000Z",
     }));
     expect(response.status).toBe(403);
     expect(updateScanningSettings).not.toHaveBeenCalled();
   });
 
   it.each([
-    ["missing pipeline", { modelId: "model/x", fredAttachmentMode: "findog_preprocess", scanningProvider: "omniroute_luna", prompt: "prompt" }],
-    ["missing model", { documentPipeline: "omniroute_luna_only", fredAttachmentMode: "findog_preprocess", scanningProvider: "omniroute_luna", prompt: "prompt" }],
-    ["missing prompt", { documentPipeline: "omniroute_luna_only", modelId: "model/x", fredAttachmentMode: "findog_preprocess", scanningProvider: "omniroute_luna" }],
+    ["missing pipeline", { modelId: "model/x", fredAttachmentMode: "findog_preprocess", scanningProvider: "omniroute_luna", prompt: "prompt", expectedUpdatedAt: "2026-07-19T08:00:00.000Z" }],
+    ["missing model", { documentPipeline: "omniroute_luna_only", fredAttachmentMode: "findog_preprocess", scanningProvider: "omniroute_luna", prompt: "prompt", expectedUpdatedAt: "2026-07-19T08:00:00.000Z" }],
+    ["missing prompt", { documentPipeline: "omniroute_luna_only", modelId: "model/x", fredAttachmentMode: "findog_preprocess", scanningProvider: "omniroute_luna", expectedUpdatedAt: "2026-07-19T08:00:00.000Z" }],
     ["extra field", {
       documentPipeline: "omniroute_luna_only",
       modelId: "model/x",
       prompt: "prompt",
       fredAttachmentMode: "findog_preprocess",
       scanningProvider: "omniroute_luna",
+      expectedUpdatedAt: "2026-07-19T08:00:00.000Z",
       extra: "field",
     }],
-    ["invalid pipeline", { documentPipeline: "local_ocr", fredAttachmentMode: "findog_preprocess", scanningProvider: "omniroute_luna", modelId: "model/x", prompt: "prompt" }],
-    ["invalid model", { documentPipeline: "omniroute_luna_only", modelId: "invalid model", fredAttachmentMode: "findog_preprocess", scanningProvider: "omniroute_luna", prompt: "prompt" }],
-    ["empty prompt", { documentPipeline: "omniroute_luna_only", modelId: "model/x", fredAttachmentMode: "findog_preprocess", scanningProvider: "omniroute_luna", prompt: "" }],
+    ["invalid pipeline", { documentPipeline: "local_ocr", fredAttachmentMode: "findog_preprocess", scanningProvider: "omniroute_luna", modelId: "model/x", prompt: "prompt", expectedUpdatedAt: "2026-07-19T08:00:00.000Z" }],
+    ["invalid model", { documentPipeline: "omniroute_luna_only", modelId: "invalid model", fredAttachmentMode: "findog_preprocess", scanningProvider: "omniroute_luna", prompt: "prompt", expectedUpdatedAt: "2026-07-19T08:00:00.000Z" }],
+    ["empty prompt", { documentPipeline: "omniroute_luna_only", modelId: "model/x", fredAttachmentMode: "findog_preprocess", scanningProvider: "omniroute_luna", prompt: "", expectedUpdatedAt: "2026-07-19T08:00:00.000Z" }],
     ["oversized prompt", {
       documentPipeline: "omniroute_luna_only",
       modelId: "model/x",
       fredAttachmentMode: "findog_preprocess",
       scanningProvider: "omniroute_luna",
       prompt: "x".repeat(40_001),
+      expectedUpdatedAt: "2026-07-19T08:00:00.000Z",
     }],
   ])("rejects PUT with %s", async (_label, body) => {
     const response = await PUT(putRequest(body));
     expect(response.status).toBe(400);
     expect(updateScanningSettings).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["unparseable", "gestern"],
+    ["non-string", 0],
+  ])("rejects PUT with a %s loaded version", async (_label, expectedUpdatedAt) => {
+    const response = await PUT(putRequest({
+      documentPipeline: "omniroute_luna_only",
+      fredAttachmentMode: "findog_preprocess",
+      scanningProvider: "omniroute_luna",
+      modelId: "model/x",
+      prompt: "prompt",
+      expectedUpdatedAt,
+    }));
+    expect(response.status).toBe(400);
+    expect(updateScanningSettings).not.toHaveBeenCalled();
+  });
+
+  it("reports a concurrent change instead of overwriting it", async () => {
+    vi.mocked(updateScanningSettings).mockRejectedValue(new UserVisibleError(
+      "Die Scanning-Konfiguration wurde inzwischen an anderer Stelle geändert. Bitte den Bereich erneut laden.",
+      409,
+    ));
+
+    const response = await PUT(putRequest({
+      documentPipeline: "mineru_with_omniroute_luna_fallback",
+      fredAttachmentMode: "findog_preprocess",
+      scanningProvider: "omniroute_luna",
+      modelId: "model/x",
+      prompt: "Nur der Prompt wurde geändert",
+      expectedUpdatedAt: "2026-07-19T08:00:00.000Z",
+    }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: "Die Scanning-Konfiguration wurde inzwischen an anderer Stelle geändert. Bitte den Bereich erneut laden.",
+    });
   });
 
   it("rejects PUT with an invalid Fred attachment mode", async () => {
@@ -155,6 +200,7 @@ describe("Admin scanning-settings API", () => {
       prompt: "prompt",
       fredAttachmentMode: "browser_choice",
       scanningProvider: "omniroute_luna",
+      expectedUpdatedAt: "2026-07-19T08:00:00.000Z",
     }));
     expect(response.status).toBe(400);
     expect(updateScanningSettings).not.toHaveBeenCalled();
@@ -166,6 +212,7 @@ describe("Admin scanning-settings API", () => {
       modelId: "model/x",
       prompt: "prompt",
       scanningProvider: "omniroute_luna",
+      expectedUpdatedAt: "2026-07-19T08:00:00.000Z",
     }));
     expect(response.status).toBe(400);
     expect(updateScanningSettings).not.toHaveBeenCalled();
@@ -177,6 +224,7 @@ describe("Admin scanning-settings API", () => {
       modelId: "model/x",
       prompt: "prompt",
       fredAttachmentMode: "findog_preprocess",
+      expectedUpdatedAt: "2026-07-19T08:00:00.000Z",
     }));
     expect(response.status).toBe(400);
     expect(updateScanningSettings).not.toHaveBeenCalled();
@@ -189,6 +237,7 @@ describe("Admin scanning-settings API", () => {
       prompt: "prompt",
       fredAttachmentMode: "findog_preprocess",
       scanningProvider: "browser_choice",
+      expectedUpdatedAt: "2026-07-19T08:00:00.000Z",
     }));
     expect(response.status).toBe(400);
     expect(updateScanningSettings).not.toHaveBeenCalled();

@@ -9,6 +9,7 @@ import {
   isValidFredAttachmentMode,
   isValidModelId,
   isValidScanningProvider,
+  isValidScanningSettingsVersion,
   updateScanningSettings,
 } from "@/lib/scanning/settings";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
@@ -76,9 +77,9 @@ export async function PUT(request: Request) {
       throw new UserVisibleError("Die Anfrage ist ungültig.", 400);
     }
     const fields = body as Record<string, unknown>;
-    if (Object.keys(fields).length !== 5) {
+    if (Object.keys(fields).length !== 6) {
       throw new UserVisibleError(
-        "Die Anfrage muss genau die Felder documentPipeline, fredAttachmentMode, scanningProvider, modelId und prompt enthalten.",
+        "Die Anfrage muss genau die Felder documentPipeline, fredAttachmentMode, scanningProvider, modelId, prompt und expectedUpdatedAt enthalten.",
         400,
       );
     }
@@ -88,9 +89,10 @@ export async function PUT(request: Request) {
       || typeof fields.scanningProvider !== "string"
       || typeof fields.modelId !== "string"
       || typeof fields.prompt !== "string"
+      || typeof fields.expectedUpdatedAt !== "string"
     ) {
       throw new UserVisibleError(
-        "Die Anfrage muss genau die Felder documentPipeline, fredAttachmentMode, scanningProvider, modelId und prompt enthalten.",
+        "Die Anfrage muss genau die Felder documentPipeline, fredAttachmentMode, scanningProvider, modelId, prompt und expectedUpdatedAt enthalten.",
         400,
       );
     }
@@ -112,6 +114,9 @@ export async function PUT(request: Request) {
         400,
       );
     }
+    if (!isValidScanningSettingsVersion(fields.expectedUpdatedAt)) {
+      throw new UserVisibleError("Der geladene Stand der Scanning-Konfiguration ist ungültig.", 400);
+    }
     const record = await updateScanningSettings(
       supabase,
       user.id,
@@ -120,6 +125,7 @@ export async function PUT(request: Request) {
       fields.documentPipeline,
       fields.fredAttachmentMode,
       fields.scanningProvider,
+      fields.expectedUpdatedAt,
     );
     return json({
       documentPipeline: record.documentPipeline,
