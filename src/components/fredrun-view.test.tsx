@@ -82,6 +82,22 @@ function storedProfile(): FredRunProfile {
   return JSON.parse(window.localStorage.getItem(FREDRUN_PROFILE_KEY) ?? "null") as FredRunProfile;
 }
 
+function progressResponse(profile: Partial<FredRunProfile>) {
+  return new Response(JSON.stringify({
+    progress: {
+      profile: { ...createDefaultFredRunProfile(), ...profile },
+      bestScore: 0,
+      version: 1,
+      updatedAt: "2026-09-27T10:00:00.000Z",
+    },
+    awardedCoins: 0,
+  }), { status: 200 });
+}
+
+function progressCalls() {
+  return calls.filter((call) => call.url === "/api/fredrun/progress");
+}
+
 beforeEach(() => {
   calls = [];
   frames = [];
@@ -158,5 +174,60 @@ describe("standalone FredRun progress in two tabs", () => {
     expect(storedProfile().unlockedWorlds).toContain("finanzamt-night");
     expect(window.localStorage.getItem(FREDRUN_HIGH_SCORE_KEY)).toBe("999999");
     expect(tabB.container.textContent).toContain("Bestwert: 999999");
+  });
+});
+
+describe("signed-in FredRun progress across a token refresh", () => {
+  function progressGets() {
+    return progressCalls().filter((call) => call.init.method === "GET");
+  }
+
+  async function mountSignedIn() {
+    const view = await mount("token-1");
+    progressGets()[0].reply.resolve(progressResponse({ coinBalance: 100 }));
+    await flush();
+    return view;
+  }
+
+  async function refreshToken(root: Root) {
+    await act(async () => root.render(<FredRunView accessToken="token-2" />));
+    await flush();
+    // Answer any reload the refresh triggered, as a fast server would.
+    progressGets().slice(1).forEach((call) => call.reply.resolve(progressResponse({ coinBalance: 100 })));
+    await flush();
+  }
+
+  it("does not reload progress and sends later mutations with the new token", async () => {
+    const view = await mountSignedIn();
+    await refreshToken(view.root);
+
+    expect(progressGets()).toHaveLength(1);
+    await click(view.container, "Charaktere");
+    await click(view.container, "Auswählen");
+    const select = progressCalls().at(-1)!;
+    expect(select.init.method).toBe("POST");
+    expect(JSON.parse(String(select.init.body))).toEqual({ action: "select", itemType: "character", itemId: "frida" });
+    expect(new Headers(select.init.headers).get("Authorization")).toBe("Bearer token-2");
+  });
+
+  it("keeps the retry for a failed settlement and retries the same run with the new token", async () => {
+    const view = await mountSignedIn();
+    await playUntilGameOver(view.container);
+    const settle = progressCalls().at(-1)!;
+    const settleBody = JSON.parse(String(settle.init.body)) as { action: string; runId: string };
+    expect(settleBody.action).toBe("settle_run");
+    settle.reply.resolve(new Response(JSON.stringify({ error: "Speicher kurz nicht erreichbar." }), { status: 503 }));
+    await flush();
+    expect(view.container.textContent).toContain("Speicher kurz nicht erreichbar.");
+
+    await refreshToken(view.root);
+
+    expect(view.container.textContent).toContain("Speicher kurz nicht erreichbar.");
+    await click(view.container, "Spielstand erneut speichern");
+    const retry = progressCalls().at(-1)!;
+    expect(retry).not.toBe(settle);
+    expect(JSON.parse(String(retry.init.body))).toMatchObject({ action: "settle_run", runId: settleBody.runId });
+    expect(new Headers(retry.init.headers).get("Authorization")).toBe("Bearer token-2");
+    expect(progressGets()).toHaveLength(1);
   });
 });

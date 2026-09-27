@@ -1913,6 +1913,9 @@ export default function FredRunView({
   const reducedMotionRef = useRef(false);
   const scoreSubmissionAbortRef = useRef<AbortController | null>(null);
   const progressMutationPendingRef = useRef(false);
+  // A token refresh must not reload progress; only a changed user does, via the view's key.
+  const accessTokenRef = useRef(accessToken);
+  const serverBacked = Boolean(accessToken);
   const [snapshot, setSnapshot] = useState<FredRunSnapshot>(() => snapshotFrom(createFredRunState()));
   const [profile, setProfile] = useState<FredRunProfile>(() => createDefaultFredRunProfile());
   const [profileReady, setProfileReady] = useState(false);
@@ -2008,7 +2011,7 @@ export default function FredRunView({
       }
     }
     setProfile(nextProfile);
-    setStorageAvailable(accessToken
+    setStorageAvailable(serverBacked
       ? true
       : writeFredRunProfile(localHighScoreStorage(), nextProfile));
     if (canvasRef.current) {
@@ -2021,7 +2024,7 @@ export default function FredRunView({
         currentRunWorldRef.current,
       );
     }
-  }, [accessToken, publish]);
+  }, [publish, serverBacked]);
 
   const applyServerProgressAction = useCallback(async (
     action: FredRunProgressAction,
@@ -2270,8 +2273,12 @@ export default function FredRunView({
   }, []);
 
   useEffect(() => {
+    accessTokenRef.current = accessToken;
+  }, [accessToken]);
+
+  useEffect(() => {
     const storage = localHighScoreStorage();
-    if (!accessToken) {
+    if (!serverBacked) {
       bestScoreRef.current = readFredRunHighScore(storage);
       setBestScore(bestScoreRef.current);
       const storedProfile = readFredRunProfile(storage);
@@ -2291,7 +2298,7 @@ export default function FredRunView({
 
     const controller = new AbortController();
     setProfileReady(false);
-    void requestFredRunProgress(accessToken, undefined, controller.signal).then((response) => {
+    void requestFredRunProgress(accessTokenRef.current, undefined, controller.signal).then((response) => {
       if (controller.signal.aborted) return;
       setAccessBlockMessage("");
       commitProfile(response.progress.profile);
@@ -2321,7 +2328,7 @@ export default function FredRunView({
       setProfileReady(true);
     });
     return () => controller.abort();
-  }, [accessToken, commitProfile]);
+  }, [commitProfile, serverBacked]);
 
   useEffect(() => () => scoreSubmissionAbortRef.current?.abort(), []);
 

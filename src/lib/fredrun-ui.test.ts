@@ -502,7 +502,7 @@ describe("Fredrun UI surface", () => {
     expect(viewSource).toContain('action: "settle_run"');
     expect(viewSource).toContain('action: "purchase"');
     expect(viewSource).toContain('action: "select"');
-    expect(viewSource).toContain('if (!accessToken) {');
+    expect(viewSource).toContain('if (!serverBacked) {');
     expect(viewSource).toContain("readFredRunProfile(storage)");
     expect(viewSource).toContain("serverBacked={Boolean(accessToken)}");
   });
