@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -601,6 +603,11 @@ describe("POST /api/fred/chat", () => {
       agent_key: "fred",
       weknora_agent_id: "agent-1",
     };
+    const storedPdfAttachment = {
+      kind: "file",
+      name: "Beleg.pdf",
+      sha256: createHash("sha256").update("%PDF-1.7\nfixture").digest("hex"),
+    };
     const visibleTranscript = [
       { id: 12, role: "assistant", content: "Alte Antwort", attachments: [] },
       { id: 11, role: "user", content: "Wie ist die Rechtslage?", attachments: [] },
@@ -633,10 +640,10 @@ describe("POST /api/fred/chat", () => {
       return { rpc, from, messageChain };
     }
 
-    function regenerationMultipartRequest(payload: Record<string, unknown>): Request {
+    function regenerationMultipartRequest(payload: Record<string, unknown>, file = pdfFile()): Request {
       const formData = new FormData();
       formData.append("payload", JSON.stringify(payload));
-      formData.append("attachment", pdfFile(), "Beleg.pdf");
+      formData.append("attachment", file, file.name);
       return new Request("https://findog.at/api/fred/chat", {
         method: "POST",
         headers: { Authorization: "Bearer access-token", "Sec-Fetch-Site": "same-origin" },
@@ -677,7 +684,7 @@ describe("POST /api/fred/chat", () => {
       const { rpc } = supabaseFor({
         latestMessages: [
           visibleTranscript[0],
-          { ...visibleTranscript[1], attachments: [{ kind: "file", name: "Beleg.pdf" }] },
+          { ...visibleTranscript[1], attachments: [storedPdfAttachment] },
         ],
       });
 
@@ -718,7 +725,7 @@ describe("POST /api/fred/chat", () => {
       const { rpc } = supabaseFor({
         latestMessages: [
           visibleTranscript[0],
-          { ...visibleTranscript[1], attachments: [{ kind: "file", name: "Beleg.pdf" }] },
+          { ...visibleTranscript[1], attachments: [storedPdfAttachment] },
         ],
       });
       vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response(
@@ -776,6 +783,35 @@ describe("POST /api/fred/chat", () => {
 
       expect(response.status).toBe(409);
       await expect(response.json()).resolves.toEqual({ error: expect.any(String) });
+      expect(rpc).not.toHaveBeenCalled();
+      expect(openFredUpstreamStream).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["files for a question stored without attachments", undefined, pdfFile()],
+      [
+        "a file other than the stored one",
+        [visibleTranscript[0], { ...visibleTranscript[1], attachments: [storedPdfAttachment] }],
+        new File([new TextEncoder().encode("%PDF-1.7\nanderer Beleg")], "Beleg.pdf", { type: "application/pdf" }),
+      ],
+      [
+        "a renamed file",
+        [visibleTranscript[0], { ...visibleTranscript[1], attachments: [storedPdfAttachment] }],
+        pdfFile("Rechnung.pdf"),
+      ],
+    ])("rejects a regeneration with %s with 409", async (_label, latestMessages, file) => {
+      const { rpc } = supabaseFor({ latestMessages });
+
+      const response = await POST(regenerationMultipartRequest({
+        query: "Wie ist die Rechtslage?",
+        conversationId,
+        regenerateOfMessageId: 12,
+      }, file));
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({
+        error: "Diese Antwort kann nicht mehr erneut erzeugt werden. Bitte lade die Unterhaltung neu.",
+      });
       expect(rpc).not.toHaveBeenCalled();
       expect(openFredUpstreamStream).not.toHaveBeenCalled();
     });

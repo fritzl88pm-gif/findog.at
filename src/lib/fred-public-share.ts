@@ -27,6 +27,23 @@ export async function createFredPublicShare(options: {
     throw new UserVisibleError("Fred ist derzeit nicht verfügbar.", 503);
   }
 
+  // A regenerated answer is superseded and hidden from the transcript and from
+  // public shares, so a stale tab must not receive a link that only shows 404.
+  const { data: supersededAnswers, error: supersededError } = await supabase
+    .from("fred_messages")
+    .select("id")
+    .eq("id", options.assistantMessageId)
+    .eq("conversation_id", options.conversationId)
+    .eq("client_id", options.clientId)
+    .not("superseded_at", "is", null)
+    .limit(1);
+  if (supersededError || !Array.isArray(supersededAnswers)) {
+    throw new UserVisibleError("Das Teilen der Fred-Antwort ist fehlgeschlagen.", 503);
+  }
+  if (supersededAnswers.length > 0) {
+    throw new UserVisibleError("Diese Fred-Antwort kann nicht geteilt werden.", 404);
+  }
+
   const { data, error } = await supabase.rpc("create_fred_public_answer_share", {
     payload: {
       client_id: options.clientId,

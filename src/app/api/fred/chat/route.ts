@@ -538,7 +538,7 @@ async function assertRegenerationTarget(options: {
   conversationId: string;
   replacedAssistantMessageId: number;
   query: string;
-  hasAttachments: boolean;
+  attachments: readonly Pick<FindogAttachment, "name" | "sha256">[];
 }): Promise<void> {
   const { data, error } = await options.supabase
     .from("fred_messages")
@@ -567,16 +567,32 @@ async function assertRegenerationTarget(options: {
   }
   // Only attachment metadata is stored, so a regeneration without the files
   // would silently answer a different question.
-  if (
-    Array.isArray(question.attachments)
-    && question.attachments.length > 0
-    && !options.hasAttachments
-  ) {
+  const storedAttachments: unknown[] = Array.isArray(question.attachments) ? question.attachments : [];
+  if (storedAttachments.length > 0 && options.attachments.length === 0) {
     throw new UserVisibleError(
       "Angehängte Dateien werden nicht gespeichert. Bitte sende die Frage mit den Dateien erneut.",
       409,
     );
   }
+  // Added, dropped or different files would also change the question that
+  // the replaced answer is superseded by.
+  if (
+    attachmentFingerprint(storedAttachments.map((attachment) => {
+      const meta = attachment && typeof attachment === "object"
+        ? attachment as Record<string, unknown>
+        : {};
+      return { name: meta.name, sha256: meta.sha256 };
+    }))
+    !== attachmentFingerprint(options.attachments)
+  ) {
+    throw new UserVisibleError(REGENERATION_TARGET_STALE_MESSAGE, 409);
+  }
+}
+
+function attachmentFingerprint(attachments: ReadonlyArray<{ name: unknown; sha256: unknown }>): string {
+  return JSON.stringify(
+    attachments.map(({ name, sha256 }) => JSON.stringify([String(name), String(sha256)])).sort(),
+  );
 }
 
 async function supersedeReplacedAnswer(options: {
@@ -1108,7 +1124,7 @@ export async function POST(request: Request) {
           conversationId: storedConversation.id,
           replacedAssistantMessageId: body.regenerateOfMessageId,
           query: body.query,
-          hasAttachments: body.attachments.length > 0,
+          attachments: body.attachments,
         }),
         ingressDeadline?.signal,
       );

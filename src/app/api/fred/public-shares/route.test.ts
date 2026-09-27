@@ -21,13 +21,34 @@ function request(body: Record<string, unknown> = {}, headers: Record<string, str
   });
 }
 
-function mockRpc(shareId = "11111111-1111-4111-8111-111111111111") {
-  vi.mocked(getSupabaseServerClient).mockReturnValue({
-    rpc: vi.fn().mockResolvedValue({
-      data: { share_id: shareId },
-      error: null,
+// Superseded-answer lookup that createFredPublicShare runs before the RPC.
+function supersededAnswerLookup(supersededIds: number[] = []) {
+  let answerId: unknown;
+  const query = {
+    select: vi.fn().mockReturnThis(),
+    eq: vi.fn((column: string, value: unknown) => {
+      if (column === "id") answerId = value;
+      return query;
     }),
+    not: vi.fn().mockReturnThis(),
+    limit: vi.fn(async () => ({
+      data: supersededIds.filter((id) => id === answerId).map((id) => ({ id })),
+      error: null,
+    })),
+  };
+  return vi.fn(() => query);
+}
+
+function mockRpc(shareId = "11111111-1111-4111-8111-111111111111", supersededIds: number[] = []) {
+  const rpc = vi.fn().mockResolvedValue({
+    data: { share_id: shareId },
+    error: null,
+  });
+  vi.mocked(getSupabaseServerClient).mockReturnValue({
+    from: supersededAnswerLookup(supersededIds),
+    rpc,
   } as never);
+  return rpc;
 }
 
 function mockSupabaseMissing() {
@@ -126,8 +147,17 @@ describe("POST /api/fred/public-shares", () => {
     expect(response.status).toBe(503);
   });
 
+  it("refuses to share an answer that was regenerated, without creating a link", async () => {
+    const rpc = mockRpc(undefined, [42]);
+
+    const response = await POST(request({ conversationId: "33333333-3333-4333-8333-333333333333", assistantMessageId: 42 }));
+    expect(response.status).toBe(404);
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
   it("returns 404 when RPC rejects with not-found error", async () => {
     vi.mocked(getSupabaseServerClient).mockReturnValue({
+      from: supersededAnswerLookup(),
       rpc: vi.fn().mockResolvedValue({
         data: null,
         error: { message: "fred public share conversation not found" },
