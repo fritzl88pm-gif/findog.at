@@ -23,9 +23,11 @@ import {
   type FredAgentKey,
 } from "@/lib/weknora/fred-agent";
 import {
+  createWeKnoraAnswerStream,
   mergeFredResearchStep,
   mergeFredSources,
   parseWeKnoraResearchEvent,
+  transformWeKnoraAnswer,
   type FredResearchStep,
   type FredSourceReference,
 } from "@/lib/weknora/fred-research";
@@ -583,6 +585,7 @@ export async function* executeFredTurn(
     const yieldedResearchSteps = new Map<string, string>();
     const yieldedExecutionSteps = new Map<string, string>();
     let yieldedChunkCount = 0;
+    const visibleAnswerDelta = createWeKnoraAnswerStream();
     while (true) {
       const readResult = request.signal
         ? await Promise.race([
@@ -618,9 +621,10 @@ export async function* executeFredTurn(
             }
           }
         }
-        // Yield any new content chunks from this frame
+        // Yield any new content chunks from this frame, without citation tags
         for (const chunk of answerChunks.slice(yieldedChunkCount)) {
-          yield { type: "delta", content: chunk };
+          const visibleChunk = visibleAnswerDelta(chunk);
+          if (visibleChunk) yield { type: "delta", content: visibleChunk };
         }
         yieldedChunkCount = answerChunks.length;
       }
@@ -658,9 +662,14 @@ export async function* executeFredTurn(
 
     const rawAnswer = answerChunks.join("");
     const plainFinalAnswer = rawAnswer.trim();
-    if (!plainFinalAnswer) {
+    // WeKnora's inline <kb/> and <web/> citation tags are provenance: only the
+    // stored provider answer keeps them; the visible answer carries their sources.
+    const citationTransformation = transformWeKnoraAnswer(plainFinalAnswer);
+    const visibleAnswer = citationTransformation.text.trim();
+    if (!visibleAnswer) {
       throw new UserVisibleError(`${selectedAgentName} hat keine Antwort geliefert.`, 502);
     }
+    sourceReferences = mergeFredSources(sourceReferences, citationTransformation.sources);
 
     // Embed completion frames may omit artifacts even though the exact
     // completed assistant message persisted them. This lookup is optional,
@@ -713,7 +722,7 @@ export async function* executeFredTurn(
       }
     }
 
-    await verifyFinalCitations(plainFinalAnswer);
+    await verifyFinalCitations(visibleAnswer);
     // Flush any pending citation research steps
     for (const step of pendingCitationSteps) {
       const signature = JSON.stringify(step);
@@ -733,7 +742,7 @@ export async function* executeFredTurn(
     }
 
     const finalAnswer = normalizeGeneratedArtifactLinks(linkVerifiedBfgCitations(
-      plainFinalAnswer,
+      visibleAnswer,
       [...verifiedCitations.values()],
       { target: "fullText" },
     ), generatedArtifacts);

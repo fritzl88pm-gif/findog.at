@@ -903,6 +903,42 @@ describe("POST /api/fred/chat", () => {
     }));
   });
 
+  it("keeps WeKnora citation tags out of the streamed, persisted and final attachment answer", async () => {
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+      ...["Laut Beleg gilt das.", ' <kb doc="LS', 'tR_2002.md" chunk_id="chunk-1" kb_id="kb-1" />', " Danach."]
+        .map((content) => `data: ${JSON.stringify({ response_type: "answer", content, done: false })}\n\n`),
+      'data: {"response_type":"complete","data":{}}\n\n',
+    ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+    const knowledgeSource = {
+      kind: "knowledge",
+      doc: "LStR_2002.md",
+      chunkId: "chunk-1",
+      knowledgeBaseId: "kb-1",
+    };
+
+    const response = await POST(multipartRequest({ query: "Beleg prüfen", attachment: pdfFile() }));
+    const events = (await response.text()).split("\n").filter(Boolean).map(parseFredNativeStreamLine);
+
+    const deltas = events.flatMap((event) => event?.type === "delta" ? [event.content] : []);
+    for (const delta of deltas) expect(delta).not.toContain("<");
+    expect(deltas.join("").trim()).toBe("Laut Beleg gilt das.  Danach.");
+    expect(events.at(-1)).toMatchObject({
+      type: "final",
+      answer: "Laut Beleg gilt das.  Danach.",
+      sourceReferences: [knowledgeSource],
+    });
+    expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
+      payload: expect.objectContaining({
+        event_type: "message_received",
+        content: 'Laut Beleg gilt das. <kb doc="LStR_2002.md" chunk_id="chunk-1" kb_id="kb-1" /> Danach.',
+        display_content: "Laut Beleg gilt das.  Danach.",
+        source_references: [knowledgeSource],
+      }),
+    });
+  });
+
   it("cleans deadline timers and the request abort listener after early provider failure", async () => {
     vi.useFakeTimers();
     const rpc = rpcForTurn();

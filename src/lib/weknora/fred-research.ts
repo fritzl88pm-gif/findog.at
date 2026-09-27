@@ -35,6 +35,9 @@ export type FredResearchUpdate = {
 };
 
 const COMPLETE_CITATION_TAG = /<(kb|web)\b([^>]{0,4096})\s*\/?>/giu;
+// An unfinished citation tag, or a prefix of one, at the end of streamed text.
+// A plain "<" followed by other text (e.g. "< 5.000 €") is not held back.
+const INCOMPLETE_CITATION_TAG = /<(?:(?:kb|web)\b[^>]{0,4096}|k|we?)?$/iu;
 const ATTRIBUTE = /([a-z_][a-z0-9_-]*)\s*=\s*(["'])(.*?)\2/giu;
 const TOOL_HINTS: Array<{ pattern: RegExp; kind: FredResearchStepKind; running: string; completed: string }> = [
   {
@@ -137,10 +140,7 @@ function citationSource(kind: string, rawAttributes: string): FredSourceReferenc
 }
 
 function incompleteCitationStart(value: string): number {
-  const start = value.lastIndexOf("<");
-  if (start < 0 || value.indexOf(">", start) >= 0) return -1;
-  const tail = value.slice(start).toLowerCase();
-  return /^(?:<|<k|<kb(?:\s|$)|<w|<we|<web(?:\s|$))/u.test(tail) ? start : -1;
+  return value.search(INCOMPLETE_CITATION_TAG);
 }
 
 export function transformWeKnoraAnswer(
@@ -161,6 +161,22 @@ export function transformWeKnoraAnswer(
     if (incompleteStart >= 0) text = text.slice(0, incompleteStart);
   }
   return { text, sources: mergeFredSources(sources) };
+}
+
+/**
+ * Turns raw answer chunks, in stream order, into the visible text to append.
+ * A possibly unfinished citation tag at the end is held back until the chunk
+ * that settles it, so tags never show and shown text is never taken back.
+ * Only the held-back tail is rescanned, keeping long answers linear.
+ */
+export function createWeKnoraAnswerStream(): (chunk: string) => string {
+  let heldBack = "";
+  return (chunk) => {
+    const text = heldBack + chunk;
+    const incompleteStart = incompleteCitationStart(text);
+    heldBack = incompleteStart < 0 ? "" : text.slice(incompleteStart);
+    return transformWeKnoraAnswer(incompleteStart < 0 ? text : text.slice(0, incompleteStart)).text;
+  };
 }
 
 function sourceFromObject(

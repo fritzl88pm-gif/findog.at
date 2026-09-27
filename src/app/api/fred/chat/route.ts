@@ -95,10 +95,12 @@ import {
   sanitizeProviderImageMarkupToAlt,
 } from "@/lib/fred/native-image-artifacts";
 import {
+  createWeKnoraAnswerStream,
   FRED_CONTENT_TRANSFORMATION,
   mergeFredResearchStep,
   mergeFredSources,
   parseWeKnoraResearchEvent,
+  transformWeKnoraAnswer,
   type FredResearchStep,
   type FredSourceReference,
 } from "@/lib/weknora/fred-research";
@@ -1371,6 +1373,7 @@ export async function POST(request: Request) {
           let buffer = "";
           const isAdvanced = researchDisplayMode === "advanced";
           const answerChunks: string[] = [];
+          const visibleAnswerDelta = createWeKnoraAnswerStream();
           let researchTrace: FredResearchStep[] = [];
           let executionTrace: FredExecutionStep[] = [];
           let sourceReferences: FredSourceReference[] = [];
@@ -1481,7 +1484,8 @@ export async function POST(request: Request) {
             if (event.content) {
               if (isAnswerDelta(parsed)) clearAttachmentStatus();
               answerChunks.push(event.content);
-              send(controller, { type: "delta", content: event.content });
+              const visibleChunk = visibleAnswerDelta(event.content);
+              if (visibleChunk) send(controller, { type: "delta", content: visibleChunk });
               // Record first real answer delta
               if (!firstDeltaRecorded && isAnswerDelta(parsed) && runId) {
                 firstDeltaRecorded = true;
@@ -1565,15 +1569,20 @@ export async function POST(request: Request) {
 
           const rawAnswer = answerChunks.join("");
           const plainFinalAnswer = rawAnswer.trim();
-          if (!plainFinalAnswer) {
+          // WeKnora's inline <kb/> and <web/> citation tags are provenance: only the
+          // stored provider answer keeps them; the visible answer carries their sources.
+          const citationTransformation = transformWeKnoraAnswer(plainFinalAnswer);
+          const visibleAnswer = citationTransformation.text.trim();
+          if (!visibleAnswer) {
             throw new UserVisibleError(
               `${selectedAgentName} hat keine Antwort geliefert.`,
               502,
             );
           }
-          await verifyFinalCitations(plainFinalAnswer);
+          sourceReferences = mergeFredSources(sourceReferences, citationTransformation.sources);
+          await verifyFinalCitations(visibleAnswer);
           const finalAnswer = linkVerifiedBfgCitations(
-            plainFinalAnswer,
+            visibleAnswer,
             [...verifiedCitations.values()],
             { target: "fullText" },
           );

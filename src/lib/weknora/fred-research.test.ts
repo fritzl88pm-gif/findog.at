@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createWeKnoraAnswerStream,
   mergeFredResearchStep,
   parseWeKnoraResearchEvent,
   sanitizePublicSourceUrl,
@@ -23,6 +24,25 @@ describe("WeKnora research presentation", () => {
     });
     expect(transformWeKnoraAnswer("Antwort <k", { streaming: true }).text).toBe("Antwort ");
     expect(transformWeKnoraAnswer('Antwort <kb doc="LStR', { streaming: true }).text).toBe("Antwort ");
+    expect(transformWeKnoraAnswer("Wenn E < 5.000 €, dann", { streaming: true }).text)
+      .toBe("Wenn E < 5.000 €, dann");
+    expect(transformWeKnoraAnswer('A <kb doc="a<b', { streaming: true }).text).toBe("A ");
+  });
+
+  it("streams only visible answer text, holding back unfinished citation tags", () => {
+    const raw = 'Gemäß § 16 EStG < 5.000 € gilt das. <kb doc="LStR_2002.md" chunk_id="chunk-1" kb_id="kb-1" />'
+      + ' Siehe <web url="https://ris.bka.gv.at/x" title="RIS" /> sowie <kbd>Strg</kbd>. Ende <';
+    const expected = transformWeKnoraAnswer(raw).text;
+    for (const size of [1, 2, 3, 7, 16, raw.length]) {
+      const visibleDelta = createWeKnoraAnswerStream();
+      const deltas: string[] = [];
+      for (let index = 0; index < raw.length; index += size) {
+        deltas.push(visibleDelta(raw.slice(index, index + size)));
+      }
+      for (const delta of deltas) expect(delta).not.toMatch(/<(?:kb|web)\b|<k$|<we?$/u);
+      // Only a trailing "<" that could still open a tag is held back.
+      expect(deltas.join("")).toBe(expected.slice(0, -1));
+    }
   });
 
   it("removes web tags and only accepts safe web source URLs", () => {

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UserVisibleError } from "@/lib/errors";
 import { parseFredWebhookEvent } from "@/lib/weknora/fred-history";
+import { transformWeKnoraAnswer } from "@/lib/weknora/fred-research";
 import { EOF_WITHOUT_FINAL_CLIENT_MESSAGE } from "./run-diagnostics";
 import type {
   FredTurnEvent,
@@ -293,6 +294,49 @@ describe("executeFredTurn", () => {
     });
     expect(result.artifacts).toBeUndefined();
     expect(persistence.persistGeneratedArtifacts).not.toHaveBeenCalled();
+  });
+
+  it("keeps WeKnora citation tags out of the streamed, persisted and final answer", async () => {
+    upstream.openStream = vi.fn().mockResolvedValue(new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        ctrl.enqueue(new TextEncoder().encode([
+          ...["\nGemäß § 16 EStG gilt das.", ' <kb doc="LS', 'tR_2002.md" chunk_id="chunk-1" kb_id="kb-1" />', " Danach."]
+            .map((content) => `data: ${JSON.stringify({ response_type: "answer", content, done: false })}\n\n`),
+          'data: {"response_type":"complete","data":{}}\n\n',
+        ].join("")));
+        ctrl.close();
+      },
+    }));
+    const knowledgeSource = {
+      kind: "knowledge",
+      doc: "LStR_2002.md",
+      chunkId: "chunk-1",
+      knowledgeBaseId: "kb-1",
+    };
+    const visibleAnswer = "Gemäß § 16 EStG gilt das.  Danach.";
+
+    const { events, result } = await collectEvents(
+      executeFredTurn(baseRequest(), upstream, persistence, config),
+    );
+
+    const deltas = events.flatMap((event) => event.type === "delta" ? [event.content] : []);
+    for (const delta of deltas) expect(delta).not.toContain("<");
+    expect(deltas.join("").trim()).toBe(visibleAnswer);
+    expect(events.at(-1)).toMatchObject({
+      type: "final",
+      answer: visibleAnswer,
+      sourceReferences: [knowledgeSource],
+    });
+    expect(result).toMatchObject({ answer: visibleAnswer, sourceReferences: [knowledgeSource] });
+    const persisted = vi.mocked(persistence.recordEvent).mock.calls[1][0];
+    expect(persisted).toMatchObject({
+      eventType: "message_received",
+      content: 'Gemäß § 16 EStG gilt das. <kb doc="LStR_2002.md" chunk_id="chunk-1" kb_id="kb-1" /> Danach.',
+      displayContent: visibleAnswer,
+      sourceReferences: [knowledgeSource],
+    });
+    // Reloading transforms the stored display text again; that must not change it.
+    expect(transformWeKnoraAnswer(persisted.displayContent!)).toEqual({ text: visibleAnswer, sources: [] });
   });
 
   it("advances the durable request receipt with exact persisted message IDs", async () => {
