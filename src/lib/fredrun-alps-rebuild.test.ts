@@ -99,6 +99,12 @@ const expectedStages = [
   },
 ] as const;
 
+// The archived generation sources and the QA previews live only on the image
+// generation host; elsewhere only the repository-side contract can be checked.
+const generationHostSources = "/opt/data/generated-images";
+const onGenerationHost = existsSync(generationHostSources);
+const hostOnly = `(generation host only: skipped when ${generationHostSources} is missing)`;
+
 function sha256(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
@@ -210,9 +216,6 @@ describe("Fredrun rebuilt Alpine runtime assets", () => {
           format: "webp",
         },
       });
-      expect(statSync(expected.sourcePath).size).toBe(stage.source.bytes);
-      expect(sha256(expected.sourcePath)).toBe(stage.source.sha256);
-
       const outputFile = path.join(root, "public", stage.output.runtimePath);
       expect(statSync(outputFile).size).toBe(stage.output.bytes);
       expect(sha256(outputFile)).toBe(stage.output.sha256);
@@ -232,8 +235,17 @@ describe("Fredrun rebuilt Alpine runtime assets", () => {
     expect(manifest.runtime.fallback.sha256).toBe(manifest.stages[0].output.sha256);
   });
 
+  it.skipIf(!onGenerationHost)(`matches the archived generation sources byte for byte ${hostOnly}`, () => {
+    for (const [index, expected] of expectedStages.entries()) {
+      const stage = manifest.stages[index];
+      expect(statSync(expected.sourcePath).size).toBe(stage.source.bytes);
+      expect(sha256(expected.sourcePath)).toBe(stage.source.sha256);
+    }
+  });
+
   it("uses the archived Linux sources explicitly and renders deliberate crops, not stretches", () => {
     for (const expected of expectedStages) {
+      expect(expected.sourcePath.startsWith(`${generationHostSources}/`)).toBe(true);
       expect(script).toContain(expected.sourcePath);
     }
     expect(script).toContain("--meadow");
@@ -248,7 +260,7 @@ describe("Fredrun rebuilt Alpine runtime assets", () => {
     expect(script).not.toContain('fit: "fill"');
   });
 
-  it("emits deterministic labeled QA previews outside the repository", async () => {
+  it("records deterministic labeled QA previews outside the repository", () => {
     expect(manifest.previews.directory).toBe("/opt/data/tmp/fredrun-alps-qa");
     expect(manifest.previews.threeTile.map(({ id }) => id))
       .toEqual(["meadow", "lake", "peaks", "plateau"]);
@@ -257,7 +269,9 @@ describe("Fredrun rebuilt Alpine runtime assets", () => {
       "lake->peaks",
       "peaks->plateau",
     ]);
+  });
 
+  it.skipIf(!onGenerationHost)(`emits the recorded QA previews at the preview size ${hostOnly}`, async () => {
     const previewFiles = [
       manifest.previews.contactSheet.file,
       ...manifest.previews.threeTile.map(({ file }) => file),
@@ -278,7 +292,7 @@ describe("Fredrun rebuilt Alpine runtime assets", () => {
     }
   });
 
-  it("fills the rightmost third of every midpoint preview with runtime imagery", async () => {
+  it.skipIf(!onGenerationHost)(`fills the rightmost third of every midpoint preview with runtime imagery ${hostOnly}`, async () => {
     for (const midpoint of manifest.previews.midpoints) {
       const { data, info } = await sharp(midpoint.file)
         .extract({ left: 1_448, top: 0, width: 724, height: 221 })
