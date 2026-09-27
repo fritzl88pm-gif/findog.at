@@ -3022,3 +3022,68 @@ it("reconciles an answer committed during timeout on the final attempt", async (
   expect(bot.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: "Bereits gespeicherte Antwort." }), expect.any(Object));
   expect(vi.getTimerCount()).toBe(0);
 });
+
+describe("processUpdate: rejected turns", () => {
+  function rejectingTurn(error: UserVisibleError) {
+    return capturingTurn(async function* () {
+      yield { type: "error", error: error.message };
+      throw error;
+    });
+  }
+
+  it("shows a changed-channel conflict at once and unbinds the stale conversation", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({ getActiveConversation: vi.fn().mockResolvedValue("old-conv") });
+    const botApi = fakeBotApi();
+    const message = "Diese Unterhaltung gehört zu einer älteren Kanalkonfiguration.";
+    const { executeTurn, calls } = rejectingTurn(new UserVisibleError(message, 409));
+    const config = fakeConfig({ rpc, storage, executeTurn, createBotApiForToken: () => botApi });
+
+    const result = await processUpdate(config, makeUpdate({ attemptCount: 1 }));
+
+    expect(result.status).toBe("failed");
+    expect(calls[0]?.conversationId).toBe("old-conv");
+    expect(rpc.retry).not.toHaveBeenCalled();
+    expect(storage.transitionRequestReceiptIfPresent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed", errorCode: "turn_rejected" }),
+    );
+    expect(rpc.fail).toHaveBeenCalledWith(expect.objectContaining({ p_last_error_code: "TURN_REJECTED" }));
+    expect(storage.clearActiveConversation).toHaveBeenCalledWith(integrationId, telegramChatId);
+    expect(botApi.sendMessage).toHaveBeenCalledWith({
+      chat_id: telegramChatId,
+      text: `${message} Deine nächste Frage startet eine neue Unterhaltung.`,
+    });
+  });
+
+  it("shows a disallowed web search at once without unbinding the conversation", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({ getActiveConversation: vi.fn().mockResolvedValue("old-conv") });
+    const botApi = fakeBotApi();
+    const message = "Die Websuche ist für Fred nicht freigeschaltet.";
+    const { executeTurn } = rejectingTurn(new UserVisibleError(message, 400));
+    const config = fakeConfig({ rpc, storage, executeTurn, createBotApiForToken: () => botApi });
+
+    const result = await processUpdate(config, makeUpdate({ attemptCount: 1 }));
+
+    expect(result.status).toBe("failed");
+    expect(rpc.retry).not.toHaveBeenCalled();
+    expect(storage.clearActiveConversation).not.toHaveBeenCalled();
+    expect(botApi.sendMessage).toHaveBeenCalledWith({ chat_id: telegramChatId, text: message });
+  });
+
+  it("keeps retrying a busy upstream (429)", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const { executeTurn } = rejectingTurn(
+      new UserVisibleError("Fred ist derzeit ausgelastet. Bitte versuche es gleich noch einmal.", 429),
+    );
+    const config = fakeConfig({ rpc, storage, executeTurn, createBotApiForToken: () => botApi });
+
+    await processUpdate(config, makeUpdate({ attemptCount: 1 }));
+
+    expect(rpc.retry).toHaveBeenCalled();
+    expect(rpc.fail).not.toHaveBeenCalled();
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+  });
+});

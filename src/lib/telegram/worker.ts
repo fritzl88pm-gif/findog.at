@@ -1184,12 +1184,21 @@ async function handleFredTurn(
   const interruption = await lifecycleInterruptionResult(config, update, handle, lifecycle);
   if (interruption) return interruption;
   if (turnError) {
-    if (receipt && update.attemptCount >= update.maxAttempts) {
+    // A 4xx turn error (changed channel/agent, web search not allowed) fails
+    // the same way on every retry; 408 and 429 stay transient.
+    const rejection = turnError instanceof UserVisibleError
+      && turnError.status >= 400
+      && turnError.status < 500
+      && turnError.status !== 408
+      && turnError.status !== 429
+      ? turnError
+      : undefined;
+    if (receipt && (rejection || update.attemptCount >= update.maxAttempts)) {
       await transitionRequestReceiptUnderLease(config, update, {
         requestId: receipt.requestId,
         status: "failed",
         failurePhase,
-        errorCode: "turn_failed",
+        errorCode: rejection ? "turn_rejected" : "turn_failed",
       });
 
       const terminalResume = await storage.resumeRequestReceipt({
@@ -1223,6 +1232,28 @@ async function handleFredTurn(
         await completeUpdate(rpc, handle);
         return { updateId: update.updateId, status: "completed" };
       }
+    }
+    if (rejection) {
+      let text = rejection.message;
+      // The bound conversation itself was rejected (missing, or created under
+      // another channel/agent) before the question was stored; without
+      // unbinding, every later question would fail the same way.
+      if (
+        conversationId
+        && failurePhase === "connecting"
+        && (rejection.status === 404 || rejection.status === 409)
+        && await storage.getActiveConversation(integration.id, chatId) === conversationId
+      ) {
+        await storage.clearActiveConversation(integration.id, chatId);
+        text = `${text} Deine nächste Frage startet eine neue Unterhaltung.`;
+      }
+      await failUpdate(rpc, { rowId: update.id, leaseId: update.leaseId, lastErrorCode: "TURN_REJECTED" });
+      try {
+        await botApi.sendMessage({ chat_id: chatId, text });
+      } catch {
+        // Best-effort — the update is already terminally failed.
+      }
+      return { updateId: update.updateId, status: "failed", error: rejection.message };
     }
     throw turnError;
   }
