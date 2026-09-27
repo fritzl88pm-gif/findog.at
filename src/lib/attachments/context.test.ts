@@ -306,6 +306,26 @@ describe("Attachment context builder", () => {
     await expect(buildAttachmentContext("Q", inputs, providers)).rejects.toThrow();
   });
 
+  it("rejects invalid local UTF-8 before any document or image provider is called", async () => {
+    const csv = {
+      ...txtInput("export.csv", "valid"),
+      kind: "csv" as const,
+      mimeType: "text/csv",
+      // Windows-1252 "März;1" as exported by Excel on German Windows.
+      bytes: new Uint8Array([0x4d, 0xe4, 0x72, 0x7a, 0x3b, 0x31]),
+    };
+    const documentProvider = vi.fn().mockResolvedValue(["PDF result"]);
+    const geminiProvider = vi.fn().mockResolvedValue("Image result");
+
+    await expect(buildAttachmentContext("Q", [pdfInput("scan.pdf"), pngInput("photo.png"), csv], {
+      documentProvider,
+      geminiProvider,
+    })).rejects.toThrow("export.csv: ungültige UTF-8-Codierung.");
+
+    expect(documentProvider).not.toHaveBeenCalled();
+    expect(geminiProvider).not.toHaveBeenCalled();
+  });
+
   it("maps invalid local UTF-8 to a controlled user-visible filename error", async () => {
     const invalid = txtInput("bad<script>.txt", "valid");
     const attachment = { ...invalid, bytes: new Uint8Array([0xc3, 0x28]) };

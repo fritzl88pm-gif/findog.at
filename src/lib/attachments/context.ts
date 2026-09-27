@@ -137,6 +137,12 @@ export async function buildAttachmentContext(
     throw new AttachmentsError("Gemini-Provider nicht verfügbar.");
   }
 
+  // Local text is a pure byte check; reject undecodable files before any paid provider call.
+  const contents = new Array<string>(attachments.length);
+  attachments.forEach((file, index) => {
+    if (LOCAL_KINDS.has(file.kind)) contents[index] = decodeLocalText(file);
+  });
+
   const mineruFiles = mineruEntries.map(({ file }) => file);
   const sharedDocumentProvider = options.documentProvider;
   const mineruPromise = mineruEntries.length === 0
@@ -175,15 +181,11 @@ export async function buildAttachmentContext(
     rawGeminiResults,
   );
 
-  const contents = new Array<string>(attachments.length);
   mineruEntries.forEach(({ index }, resultIndex) => {
     contents[index] = mineruResults[resultIndex];
   });
   geminiEntries.forEach(({ index }, resultIndex) => {
     contents[index] = geminiResults[resultIndex];
-  });
-  attachments.forEach((file, index) => {
-    if (LOCAL_KINDS.has(file.kind)) contents[index] = decodeLocalText(file);
   });
 
   const parts = [
