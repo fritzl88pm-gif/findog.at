@@ -7,6 +7,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getScanningSettings } from "@/lib/scanning/settings";
 import { isGeneratedArtifactFileType } from "@/lib/generated-artifact-types";
 
+import { isMaintenanceModeEnabled } from "@/lib/maintenance-flag";
 import type { JobQueueRpc } from "@/lib/telegram/jobs";
 import { createWorkerHealth } from "@/lib/telegram/worker-health";
 import {
@@ -616,17 +617,20 @@ function buildTurnConfig(): TurnServiceConfigDeps {
   };
 }
 
-export function createHealthHandler(isReady: () => boolean) {
+export function createHealthHandler(isReady: () => boolean, isMaintenance: () => boolean = () => false) {
   return (req: IncomingMessage, res: ServerResponse): void => {
+    // A worker paused for maintenance stays healthy (200) so the orchestrator
+    // does not restart it; the body tells operators why nothing is generated.
     if (req.url === "/healthz") {
       const healthy = isReady();
       res.writeHead(healthy ? 200 : 503, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end(healthy ? "ok" : "not ready");
+      res.end(healthy ? (isMaintenance() ? "ok (maintenance)" : "ok") : "not ready");
       return;
     }
     if (req.url === "/readyz") {
-      res.writeHead(isReady() ? 200 : 503, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end(isReady() ? "ready" : "not ready");
+      const ready = isReady();
+      res.writeHead(ready ? 200 : 503, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end(ready ? (isMaintenance() ? "ready (maintenance)" : "ready") : "not ready");
       return;
     }
     res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
@@ -670,7 +674,7 @@ async function main(): Promise<void> {
   let ready = false;
   const health = createWorkerHealth();
   const controller = new AbortController();
-  const server = createServer(createHealthHandler(() => ready && health.isHealthy()));
+  const server = createServer(createHealthHandler(() => ready && health.isHealthy(), health.isMaintenance));
   await listen(server, port);
 
   const probe = await supabase
@@ -703,6 +707,7 @@ async function main(): Promise<void> {
     maxDeliveryRetries: 5,
     generationTimeoutMs: 720_000,
     generationIdleTimeoutMs: 300_000,
+    isMaintenanceMode: isMaintenanceModeEnabled,
     onUnresponsiveGeneration: () => {
       health.fail();
       requestShutdown("generation_unresponsive");
@@ -730,7 +735,17 @@ async function main(): Promise<void> {
   console.info("telegram_worker_started", { port, concurrency });
 
   try {
-    await runWorkerLoop({ config, signal: controller.signal, onHealth: health.record });
+    await runWorkerLoop({
+      config,
+      signal: controller.signal,
+      onHealth: health.record,
+      onMaintenance: (active) => {
+        health.setMaintenance(active);
+        console.info(active ? "telegram_worker_generation_paused" : "telegram_worker_generation_resumed", {
+          reason: "maintenance",
+        });
+      },
+    });
   } finally {
     ready = false;
     if (forceTimer) clearTimeout(forceTimer);

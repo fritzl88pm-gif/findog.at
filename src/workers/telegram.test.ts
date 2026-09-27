@@ -341,3 +341,19 @@ it.each(["/healthz", "/readyz"])("returns 503 on %s when the worker is unrespons
   handler({ url } as never, response as never);
   expect(response.writeHead).toHaveBeenLastCalledWith(200, expect.any(Object));
 });
+
+it.each([["/healthz", "ok (maintenance)"], ["/readyz", "ready (maintenance)"]])(
+  "stays healthy on %s while generation is paused for maintenance",
+  (url, body) => {
+    let healthy = true;
+    const handler = createHealthHandler(() => healthy, () => true);
+    const response = { writeHead: vi.fn(), end: vi.fn() };
+    handler({ url } as never, response as never);
+    expect(response.writeHead).toHaveBeenLastCalledWith(200, expect.any(Object));
+    expect(response.end).toHaveBeenLastCalledWith(body);
+    healthy = false;
+    handler({ url } as never, response as never);
+    expect(response.writeHead).toHaveBeenLastCalledWith(503, expect.any(Object));
+    expect(response.end).toHaveBeenLastCalledWith("not ready");
+  },
+);

@@ -1,21 +1,15 @@
 import { NextResponse } from "next/server";
 
-export const MAINTENANCE_ENV_VAR = "FINDOG_MAINTENANCE_MODE";
+export {
+  MAINTENANCE_ENV_VAR,
+  isMaintenanceModeEnabled,
+  parseMaintenanceMode,
+} from "@/lib/maintenance-flag";
 
 export const MAINTENANCE_MESSAGE =
   "Findog/Fred wird gerade gewartet. Bitte versuche es später noch einmal.";
 
 export const MAINTENANCE_RETRY_AFTER_SECONDS = 300;
-
-const ENABLED_MAINTENANCE_VALUES = new Set(["1", "true", "on"]);
-
-export function parseMaintenanceMode(value: string | undefined): boolean {
-  return value !== undefined && ENABLED_MAINTENANCE_VALUES.has(value.trim().toLowerCase());
-}
-
-export function isMaintenanceModeEnabled(): boolean {
-  return parseMaintenanceMode(process.env[MAINTENANCE_ENV_VAR]);
-}
 
 export function maintenanceHeaders(contentType?: string): Headers {
   const headers = new Headers();

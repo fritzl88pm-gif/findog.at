@@ -163,6 +163,11 @@ export interface WorkerConfig {
   }) => Promise<Uint8Array>;
   /** Overridable sleep for deterministic loop tests. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * While true, the generation lane claims no jobs; they stay queued and are
+   * picked up once it turns false. The /stop control lane keeps running.
+   */
+  isMaintenanceMode?: () => boolean;
 }
 
 export interface ProcessedUpdateResult {
@@ -179,6 +184,8 @@ export interface WorkerLoopOptions {
   config: WorkerConfig;
   signal?: AbortSignal;
   onHealth?: (lane: "generation" | "control", healthy: boolean) => void;
+  /** Called once when the generation lane pauses for maintenance and once when it resumes. */
+  onMaintenance?: (active: boolean) => void;
 }
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -419,7 +426,8 @@ async function transitionRequestReceiptUnderLease(
 }
 
 export async function runWorkerLoop(options: WorkerLoopOptions): Promise<void> {
-  const { config, signal, onHealth } = options;
+  const { config, signal, onHealth, onMaintenance } = options;
+  let maintenancePaused = false;
   async function runLane(controlsOnly: boolean): Promise<void> {
     const lane = controlsOnly ? "control" : "generation";
     const capacity = controlsOnly ? 1 : config.concurrency;
@@ -441,6 +449,20 @@ export async function runWorkerLoop(options: WorkerLoopOptions): Promise<void> {
     });
     try {
       while (!signal?.aborted) {
+        if (!controlsOnly) {
+          const maintenance = config.isMaintenanceMode?.() === true;
+          if (maintenance !== maintenancePaused) {
+            maintenancePaused = maintenance;
+            onMaintenance?.(maintenance);
+          }
+          if (maintenance) {
+            // Paused on purpose, not stalled: keep the lane healthy so the
+            // container is not restarted during maintenance.
+            onHealth?.(lane, true);
+            await wait();
+            continue;
+          }
+        }
         const free = capacity - active.size;
         if (free === 0) {
           onHealth?.(lane, true);

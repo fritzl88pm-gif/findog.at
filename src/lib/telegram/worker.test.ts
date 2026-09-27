@@ -3096,6 +3096,42 @@ describe("worker capacity and generation deadlines", () => {
     }
   });
 
+  it("claims no generation jobs during maintenance, keeps /stop and health running, and resumes afterwards", async () => {
+    const control = new AbortController();
+    let maintenance = true;
+    const claimed = vi.fn().mockResolvedValueOnce({ data: [row(1)], error: null })
+      .mockResolvedValue({ data: [], error: null });
+    const controls = vi.fn().mockResolvedValueOnce({ data: [{ ...row(2, "/stop"), id: 4, update_id: 4 }], error: null })
+      .mockResolvedValue({ data: [], error: null });
+    const rpc = fakeRpc({ claimPending: claimed, claimControls: controls });
+    const storage = fakeStorage({ loadIntegration: vi.fn(async (id: string) =>
+      makeIntegration({ id, pairedTelegramChatId: Number(id.slice(4)) })) });
+    const onHealth = vi.fn();
+    const onMaintenance = vi.fn();
+    const loop = runWorkerLoop({
+      config: fakeConfig({ rpc, storage, isMaintenanceMode: () => maintenance }),
+      signal: control.signal,
+      onHealth,
+      onMaintenance,
+    });
+    try {
+      await vi.waitFor(() => expect(rpc.requestCancelForChat).toHaveBeenCalled());
+      await vi.waitFor(() => expect(controls.mock.calls.length).toBeGreaterThan(3));
+      expect(claimed).not.toHaveBeenCalled();
+      expect(onHealth).toHaveBeenCalledWith("generation", true);
+      expect(onHealth).not.toHaveBeenCalledWith("generation", false);
+      expect(onMaintenance.mock.calls).toEqual([[true]]);
+
+      maintenance = false;
+      await vi.waitFor(() => expect(rpc.complete).toHaveBeenCalledWith(expect.objectContaining({ p_update_id: 1 })));
+      await vi.waitFor(() => expect(claimed.mock.calls.length).toBeGreaterThan(2));
+      expect(onMaintenance.mock.calls).toEqual([[true], [false]]);
+    } finally {
+      control.abort();
+      await loop;
+    }
+  });
+
   it("times out a real stalled upstream stream, stops it and retries instead of recording user cancellation", async () => {
     vi.useFakeTimers();
     const rpc = fakeRpc();
