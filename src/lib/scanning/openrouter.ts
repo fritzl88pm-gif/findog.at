@@ -157,10 +157,15 @@ function stripThinkingBlocks(value: string): string {
     .replace(/<\s*\/?\s*(?:think|thinking)\b[^>]*>/giu, "");
 }
 
-function markdownTableCells(line: string): string[] | null {
+function rawMarkdownTableCells(line: string): string[] | null {
   const trimmed = line.trim();
   if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) return null;
-  return trimmed.slice(1, -1).split("|").map((cell) => cell.replace(/[*_`]/gu, "").trim());
+  // GFM escapes a literal pipe inside a cell as "\|"; it must not end the cell.
+  return trimmed.slice(1, -1).split(/(?<!\\)\|/u).map((cell) => cell.trim());
+}
+
+function markdownTableCells(line: string): string[] | null {
+  return rawMarkdownTableCells(line)?.map((cell) => cell.replace(/[*_`]/gu, "").trim()) ?? null;
 }
 
 function isScanningTableHeader(line: string): boolean {
@@ -208,17 +213,16 @@ function extractScanningTables(value: string): string {
     const heading = categoryHeadingBefore(lines, index);
     const tableLines = lines.slice(index, end).map((line, tableIndex) => {
       if (tableIndex < 2) return line;
-      const trimmed = line.trim();
-      const cells = trimmed.startsWith("|") && trimmed.endsWith("|")
-        ? trimmed.slice(1, -1).split("|").map((cell) => cell.trim())
-        : null;
-      if (!cells || cells.length !== 4) return line;
+      const rawCells = rawMarkdownTableCells(line);
+      if (!rawCells || rawCells.length !== 4) return line;
+      // The on-screen report renderer splits rows on every pipe, so an escaped pipe would
+      // shift the amount out of the Summe column.
+      const cells = rawCells.map((cell) => cell.replace(/\\\|/gu, "/"));
       const isTotal = cells[2]?.replace(/[*_`]/gu, "").trim().toLocaleLowerCase("de-AT") === "gesamtsumme";
-      if (!cells[1] && !isTotal) {
-        cells[1] = "–";
-        return `| ${cells.join(" | ")} |`;
-      }
-      return line;
+      if (!cells[1] && !isTotal) cells[1] = "–";
+      return cells.some((cell, cellIndex) => cell !== rawCells[cellIndex])
+        ? `| ${cells.join(" | ")} |`
+        : line;
     });
     tables.push([heading, tableLines.join("\n")].filter(Boolean).join("\n\n"));
     index = end - 1;

@@ -145,6 +145,30 @@ describe("OpenRouter scanning adapter", () => {
     expect(result).toContain("| | | Gesamtsumme | 12,00 EUR |");
   });
 
+  it("keeps every row and the total when a description contains an escaped pipe", async () => {
+    vi.mocked(fetch).mockResolvedValue(providerResponse(
+      "## Büromaterial\n\n| Pos. | Datum | Beschreibung | Summe |\n|---|---|---|---:|\n| 1 | 01.02.2026 | Papier A4 | 4,00 EUR |\n| 2 | 01.02.2026 | Kabel USB-C \\| 2 m | 5,00 EUR |\n| 3 | 02.02.2026 | Stifte | 3,00 EUR |\n| | | Gesamtsumme | 12,00 EUR |",
+    ));
+
+    const result = await analyzeScanningBatch([upload("pdf", "buero")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter");
+    expect(result).toContain("| 1 | 01.02.2026 | Papier A4 | 4,00 EUR |");
+    expect(result).toContain("| 2 | 01.02.2026 | Kabel USB-C / 2 m | 5,00 EUR |");
+    expect(result).toContain("| 3 | 02.02.2026 | Stifte | 3,00 EUR |");
+    expect(result).toContain("| | | Gesamtsumme | 12,00 EUR |");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a table whose first row contains an escaped pipe", async () => {
+    vi.mocked(fetch).mockImplementation(async () => providerResponse(
+      "| Pos. | Datum | Beschreibung | Summe |\n|---|---|---|---:|\n| 1 | 01.02.2026 | Anker Kabel \\| 2 m | 5,00 EUR |\n| | | Gesamtsumme | 5,00 EUR |",
+    ));
+
+    const result = await analyzeScanningBatch([upload("pdf", "amazon")], undefined, "", DEFAULT_SCANNING_MODEL_ID, DEFAULT_SCANNING_PROMPT, "openrouter");
+    expect(result).toContain("| 1 | 01.02.2026 | Anker Kabel / 2 m | 5,00 EUR |");
+    expect(result).toContain("| | | Gesamtsumme | 5,00 EUR |");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("removes HTML line-break fragments from Gemini table cells", async () => {
     vi.mocked(fetch).mockResolvedValue(providerResponse(
       "| Pos. | Datum | Beschreibung | Summe |\n|---:|---|---|---:|\n| 1 | 01.11.2024 | Betreuung<br>November<br />Wien | 2.060,00 EUR |",
