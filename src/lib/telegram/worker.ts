@@ -1137,7 +1137,13 @@ async function handleFredTurn(
     deferUnsuccessfulTerminalTransition: receipt !== undefined,
     onConversationEvent: async (conversation) => {
       await storage.markTelegramOrigin(integration.clientId, conversation.id, integration.id);
-      await storage.bindConversation(integration.id, chatId, conversation.id);
+      // A retried request continues its frozen conversation without moving the
+      // chat pointer, and a new one is bound only while the chat is unbound: a
+      // /new (or newer question) handled during the retry backoff must stay in
+      // effect. The chat's other messages wait while this row is processing.
+      if (!conversationId && await storage.getActiveConversation(integration.id, chatId) === null) {
+        await storage.bindConversation(integration.id, chatId, conversation.id);
+      }
     },
     signal: lifecycle.controller.signal,
   };

@@ -922,6 +922,49 @@ describe("processUpdate: free text routed to Fred", () => {
     expect(storage.bindConversation).toHaveBeenCalledWith(integrationId, telegramChatId, fakeConversation.id);
   });
 
+  it("does not move the chat back to a retried request's frozen conversation", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      getActiveConversation: vi.fn().mockResolvedValue("conv-Y"),
+      resumeRequestReceipt: vi.fn().mockResolvedValue({
+        status: "user_persisted",
+        contentDeleted: false,
+        conversationId: "conv-X",
+        webSearchEnabled: false,
+        proModeEnabled: false,
+      }),
+    });
+    const { executeTurn, calls } = capturingTurn(async function* (request) {
+      const conversation = { ...fakeConversation, id: request.conversationId! };
+      yield { type: "conversation", conversation };
+      await request.onConversationEvent?.(conversation);
+      return { answer: "Antwort", rawAnswer: "Antwort", conversation, researchTrace: [], sourceReferences: [], stopped: false };
+    });
+    const config = fakeConfig({ rpc, storage, executeTurn });
+
+    const result = await processUpdate(config, makeUpdate({ attemptCount: 2 }));
+
+    expect(result.status).toBe("completed");
+    expect(calls[0]?.conversationId).toBe("conv-X");
+    expect(storage.markTelegramOrigin).toHaveBeenCalledWith(clientId, "conv-X", integrationId);
+    expect(storage.bindConversation).not.toHaveBeenCalled();
+  });
+
+  it("does not overwrite a binding made while a request without conversation was backing off", async () => {
+    const rpc = fakeRpc();
+    const storage = fakeStorage({
+      getActiveConversation: vi.fn().mockResolvedValueOnce(null).mockResolvedValue("conv-Y"),
+    });
+    const { executeTurn, calls } = answerTurn();
+    const config = fakeConfig({ rpc, storage, executeTurn });
+
+    await processUpdate(config, makeUpdate({ attemptCount: 2 }));
+
+    expect(calls[0]?.conversationId).toBeUndefined();
+    expect(storage.markTelegramOrigin).toHaveBeenCalledWith(clientId, fakeConversation.id, integrationId);
+    expect(storage.bindConversation).not.toHaveBeenCalled();
+  });
+
   it("derives stable, deterministic event IDs from integrationId:updateId:role across retries", async () => {
     const rpc = fakeRpc();
     const storage = fakeStorage();
