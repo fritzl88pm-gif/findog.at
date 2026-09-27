@@ -36,6 +36,7 @@ let container: HTMLDivElement;
 let root: Root;
 let chatRequests: ChatRequest[];
 let feedbackResponses: Array<(response: Response) => void>;
+let chatRejections: Response[];
 let conversationUpdates: Array<{ id: string; messages?: FredNativeMessage[] }>;
 
 function installFetch() {
@@ -53,6 +54,8 @@ function installFetch() {
       return new Promise<Response>((resolve) => feedbackResponses.push(resolve));
     }
     if (url === "/api/fred/chat") {
+      const rejection = chatRejections.shift();
+      if (rejection) return rejection;
       const encoder = new TextEncoder();
       let streamController!: ReadableStreamDefaultController<Uint8Array>;
       const body = new ReadableStream<Uint8Array>({
@@ -132,6 +135,7 @@ async function sendQuestion(question: string) {
 beforeEach(() => {
   chatRequests = [];
   feedbackResponses = [];
+  chatRejections = [];
   conversationUpdates = [];
   window.requestAnimationFrame = ((callback: FrameRequestCallback) => (
     setTimeout(() => callback(0), 0) as unknown as number
@@ -287,5 +291,57 @@ describe("FredNativeChatView feedback after regeneration", () => {
 
     expect(transcriptText()).toContain("Antwort A");
     expect(button("Antwort hilfreich").getAttribute("aria-pressed")).toBe("true");
+  });
+});
+
+describe("FredNativeChatView rejected questions", () => {
+  async function attachFile(file: File) {
+    const input = container.querySelector('input[type="file"][accept^=".pdf"]') as HTMLInputElement;
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    await act(async () => {
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+
+  it("returns a question the server rejected before storing it to the composer", async () => {
+    await renderView(conversationA.id, messagesA);
+    await attachFile(new File(["%PDF-1.7"], "Bescheid.pdf", { type: "application/pdf" }));
+    chatRejections.push(new Response(
+      JSON.stringify({ error: "Zu viele Fred-Anfragen. Bitte kurz warten." }),
+      { status: 429 },
+    ));
+
+    await sendQuestion("Neue Frage");
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Zu viele Fred-Anfragen");
+    expect(transcriptText()).toContain("Antwort A");
+    expect(transcriptText()).not.toContain("Neue Frage");
+    expect(composer().value).toBe("Neue Frage");
+    expect(container.querySelector(".attachment-chips")?.textContent).toContain("Bescheid.pdf");
+    expect(conversationUpdates).toEqual([]);
+  });
+
+  it("returns the question when the stream fails before the conversation event", async () => {
+    await renderView("", []);
+    await sendQuestion("Erste Frage");
+    chatRequests[0].push({ type: "error", error: "Die Anhänge konnten nicht analysiert werden." });
+    chatRequests[0].close();
+    await settle();
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Die Anhänge konnten nicht analysiert werden.");
+    expect(container.querySelector(".transcript article")).toBeNull();
+    expect(composer().value).toBe("Erste Frage");
+  });
+
+  it("keeps a stored question in the transcript when the answer fails later", async () => {
+    await renderView(conversationA.id, messagesA);
+    await sendQuestion("Neue Frage");
+    chatRequests[0].push({ type: "conversation", conversation: conversationA });
+    chatRequests[0].push({ type: "error", error: "Fred ist nicht erreichbar." });
+    chatRequests[0].close();
+    await settle();
+
+    expect(transcriptText()).toContain("Neue Frage");
+    expect(composer().value).toBe("");
   });
 });

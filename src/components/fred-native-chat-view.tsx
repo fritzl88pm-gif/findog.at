@@ -821,6 +821,7 @@ export default function FredNativeChatView({
     let researchTrace: FredResearchStep[] = [];
     let executionTrace: FredExecutionStep[] = [];
     let sourceReferences: FredSourceReference[] = [];
+    let receivedConversation = false;
     let receivedFinal = false;
     try {
       const requestPayload = {
@@ -868,6 +869,7 @@ export default function FredNativeChatView({
         if (!streamEvent) return;
         if (streamEvent.type === "error") throw new Error(streamEvent.error);
         if (streamEvent.type === "conversation") {
+          receivedConversation = true;
           activeConversationIdRef.current = streamEvent.conversation.id;
           setConversationAgentKey(streamEvent.conversation.agentKey);
           setQuickFredEnabled(streamEvent.conversation.agentKey === "quickfred");
@@ -922,6 +924,7 @@ export default function FredNativeChatView({
         researchTrace = streamEvent.researchTrace ?? researchTrace;
         executionTrace = streamEvent.executionTrace ?? executionTrace;
         sourceReferences = streamEvent.sourceReferences ?? sourceReferences;
+        receivedConversation = true;
         receivedFinal = true;
         activeConversationIdRef.current = streamEvent.conversation.id;
         setConversationAgentKey(streamEvent.conversation.agentKey);
@@ -979,6 +982,16 @@ export default function FredNativeChatView({
       }
       if (options.rollbackMessages) {
         setMessages(options.rollbackMessages);
+      } else if (!receivedConversation && !controller.signal.aborted) {
+        // The conversation event confirms that the server stored the question.
+        // Without it the request was rejected (rate limit, validation, network),
+        // so the question leaves the transcript and returns to the composer.
+        setMessages(baseMessages.slice(0, -1));
+        if (options.clearDraft) {
+          setComposer(options.query);
+          setSelectedImages(options.images);
+          setSelectedFiles(options.files);
+        }
       } else if (hasAnswerContent || (
         researchDisplayMode === "advanced"
         && (executionTrace.length > 0 || researchTrace.length > 0 || sourceReferences.length > 0)
