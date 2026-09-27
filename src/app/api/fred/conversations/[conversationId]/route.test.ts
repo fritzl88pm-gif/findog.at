@@ -466,6 +466,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
         return messagesQuery;
       }),
       order: vi.fn().mockReturnThis(),
+      range: vi.fn().mockReturnThis(),
       then: (resolve: (value: { data: typeof storedRows; error: null }) => unknown) => resolve({
         data: storedRows.filter((message) => filters.every(([column, value]) => (
           message[column as keyof typeof message] === value
@@ -502,6 +503,7 @@ function cappedQuery(rows: unknown[]) {
   const builder: Record<string, unknown> = {};
   builder.select = vi.fn(() => builder);
   builder.eq = vi.fn(() => builder);
+  builder.is = vi.fn(() => builder);
   builder.order = vi.fn(() => builder);
   builder.range = vi.fn((rangeFrom: number, rangeTo: number) => {
     from = rangeFrom;
@@ -573,5 +575,6 @@ describe("GET /api/fred/conversations/[conversationId] — paging", () => {
     expect(payload.messages).toHaveLength(1_200);
     expect(payload.messages[1_199].content).toBe("Frage 1200");
     expect(messagesQuery.order).toHaveBeenLastCalledWith("id", { ascending: true });
+    expect(messagesQuery.is).toHaveBeenCalledWith("superseded_at", null);
   });
 });

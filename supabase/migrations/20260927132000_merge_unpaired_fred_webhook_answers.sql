@@ -47,6 +47,9 @@ begin
     where bridge_message.role = 'assistant'
       and bridge_message.bridge_event_id is not null
       and bridge_message.webhook_event_id is null
+      -- A regenerated answer already replaced one of them; leave that history as it is.
+      and bridge_message.superseded_at is null
+      and webhook_message.superseded_at is null
       and webhook_message.bridge_event_id is null
       and webhook_message.webhook_event_id is not null
       and webhook.event_type = 'message_received'
@@ -109,6 +112,11 @@ begin
       select 1
       from public.fred_native_image_artifacts as artifact
       where artifact.user_message_id = merge.webhook_message_id
+    )
+    or exists (
+      select 1
+      from public.fred_messages as successor
+      where successor.superseded_by_message_id = merge.webhook_message_id
     );
 
   -- Delete first: webhook_event_id is unique.
