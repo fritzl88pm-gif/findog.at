@@ -20,6 +20,7 @@ describe("approved release surface", () => {
   const l17bIllustrationPath = fileURLToPath(new URL("../../public/fred_l17b.png", import.meta.url));
   const germanSvPensionPath = fileURLToPath(new URL("./german-sv-pension.ts", import.meta.url));
   const l17bCountrySelectPath = fileURLToPath(new URL("../components/l17b-country-select.tsx", import.meta.url));
+  const bfgProResultCardPath = fileURLToPath(new URL("../components/bfg-pro-result-card.tsx", import.meta.url));
   const nextConfigPath = fileURLToPath(new URL("../../next.config.ts", import.meta.url));
   const pageSource = readFileSync(pagePath, "utf8");
   const globalsSource = readFileSync(globalsPath, "utf8");
@@ -28,6 +29,7 @@ describe("approved release surface", () => {
   const chatRouteSource = readFileSync(chatRoutePath, "utf8");
   const germanSvPensionSource = readFileSync(germanSvPensionPath, "utf8");
   const l17bCountrySelectSource = readFileSync(l17bCountrySelectPath, "utf8");
+  const bfgProResultCardSource = readFileSync(bfgProResultCardPath, "utf8");
   const nextConfigSource = readFileSync(nextConfigPath, "utf8");
 
   it("labels the standalone BFG view as BFG Suche in expanded and collapsed navigation", () => {
@@ -40,7 +42,7 @@ describe("approved release surface", () => {
   });
 
   it("adds a separate BFG Suche PRO view and controls without replacing the normal search", () => {
-    expect(pageSource).toContain('type AppView = "home" | "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "bfg-newsletters" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data"');
+    expect(pageSource).toContain('type AppView = "home" | "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "bfg-newsletters" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "fred-live" | "administration" | "data" | "reasonings"');
     expect(pageSource).toMatch(/className={`sidebar-view-button[\s\S]*?BFG Suche PRO\s*<\/button>/);
     expect(pageSource).toContain('title="BFG Suche PRO"');
     expect(pageSource).toContain('aria-label="BFG Suche PRO"');
@@ -50,14 +52,16 @@ describe("approved release surface", () => {
     expect(pageSource).toContain('htmlFor="bfg-pro-scenario"');
     expect(pageSource).toContain('<textarea');
     expect(pageSource).toContain('/api/findok/bfg/pro');
-    expect(pageSource).toContain('Warum relevant');
-    expect(pageSource).toContain('<span className="bfg-pro-score">Relevanz {result.score}/100</span>');
+    expect(pageSource).toContain('<BfgProResultCard result={result} />');
+    expect(bfgProResultCardSource).toContain('Warum relevant');
+    expect(bfgProResultCardSource).toContain('<span className="bfg-pro-score">Relevanz {result.score}/100</span>');
     expect(globalsSource).toMatch(/\.bfg-pro-score \{[\s\S]*?border-radius: 999px;[\s\S]*?\}/);
     expect(pageSource).toMatch(/id="bfg-pro-scenario"[\s\S]*?onKeyDown=\{\(event\) => \{\s*if \(event\.key === "Enter" && !event\.shiftKey && !event\.nativeEvent\.isComposing\) \{\s*event\.preventDefault\(\);\s*void searchBfgPro\(\);/);
     expect(pageSource).toMatch(/<div className="bfg-pro-loading-state" role="status" aria-live="polite">[\s\S]*?<strong className="bfg-pro-loading-status">\{bfgProStatus\}<\/strong>[\s\S]*?Die PRO-Suche kann einige Minuten dauern\./);
     expect(globalsSource).toMatch(/\.bfg-pro-loading-indicator \{[\s\S]*?animation: bfg-pro-loading-spin[\s\S]*?\}/);
-    expect(pageSource).toContain('<h3>Sachverhalt</h3>');
+    expect(bfgProResultCardSource).toContain('<h3>Sachverhalt</h3>');
     expect(pageSource).not.toContain('Originaltext-Auszug');
+    expect(bfgProResultCardSource).not.toContain('Originaltext-Auszug');
     expect(pageSource).toContain('Keine relevanten BFG-Entscheidungen gefunden.');
     expect(pageSource).toContain('/api/findok/bfg?');
   });
@@ -92,7 +96,7 @@ describe("approved release surface", () => {
     expect(pageSource).toContain('appView === "quiz" && isAdmin ?');
   });
 
-  it("adds the local Deutsche SV Rente AppView directly below BFG Suche PRO", () => {
+  it("adds the local Deutsche SV-Rente AppView as the first Rechner entry in both navigations", () => {
     const expandedNavigation = pageSource.slice(
       pageSource.indexOf('<nav className="forms-navigation"'),
       pageSource.indexOf('</nav>', pageSource.indexOf('<nav className="forms-navigation"')),
@@ -106,8 +110,10 @@ describe("approved release surface", () => {
       pageSource.indexOf('export default function Home()'),
     );
 
-    expect(expandedNavigation).toMatch(/BFG Suche PRO\s*<\/button>\s*<button[\s\S]*?appView === "german-sv-pension"[\s\S]*?Deutsche SV Rente\s*<\/button>/);
-    expect(collapsedRail).toMatch(/title="BFG Suche PRO"[\s\S]*?<\/button>\s*<button[\s\S]*?title="Deutsche SV Rente"[\s\S]*?aria-label="Deutsche SV Rente"/);
+    // docs/navigation.md: grouped navigation, and the collapsed rail keeps the same order.
+    expect(expandedNavigation).toMatch(/title="Recherche"[\s\S]*?title="Dokumente"[\s\S]*?title="Rechner"[\s\S]*?title="Lernen & Spiel"/);
+    expect(expandedNavigation).toMatch(/<SidebarNavigationGroup title="Rechner"[^>]*>\s*<button[\s\S]*?appView === "german-sv-pension"[\s\S]*?Deutsche SV-Rente\s*<\/button>/);
+    expect(collapsedRail).toMatch(/title="BFG Suche PRO"[\s\S]*?title="Downloads"[\s\S]*?<\/button>\s*<button[\s\S]*?title="Deutsche SV-Rente"\s*aria-label="Deutsche SV-Rente"[\s\S]*?<\/button>\s*<button[\s\S]*?title="L17b Währungsrechner"/);
     expect(pageSource).toContain('appView === "german-sv-pension"');
     expect(pageSource).toContain('<GermanSvPensionView');
     expect(pensionView).toContain('<fieldset className="german-sv-mode">');
