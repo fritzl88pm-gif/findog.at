@@ -3130,3 +3130,88 @@ describe("processUpdate: rejected turns", () => {
     expect(botApi.sendMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("processUpdate: transient control-plane errors", () => {
+  function slowAnswerTurn(ms: number) {
+    return capturingTurn(async function* (request) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, ms);
+        request.signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+      });
+      if (request.signal?.aborted) {
+        return { answer: "", rawAnswer: "", conversation: fakeConversation, researchTrace: [], sourceReferences: [], stopped: true };
+      }
+      yield { type: "delta", content: "Fertige Antwort" };
+      return { answer: "Fertige Antwort", rawAnswer: "Fertige Antwort", conversation: fakeConversation, researchTrace: [], sourceReferences: [], stopped: false };
+    });
+  }
+
+  it("keeps generating through a single failed heartbeat or cancel check", async () => {
+    vi.useFakeTimers();
+    const rpc = fakeRpc({
+      heartbeat: vi.fn()
+        .mockResolvedValueOnce({ data: true, error: null })
+        .mockResolvedValueOnce({ data: null, error: { message: "503" } })
+        .mockResolvedValue({ data: true, error: null }),
+      checkCancelled: vi.fn()
+        .mockResolvedValueOnce({ data: false, error: null })
+        .mockResolvedValueOnce({ data: null, error: { message: "timeout" } })
+        .mockResolvedValue({ data: false, error: null }),
+    });
+    const botApi = fakeBotApi();
+    const { executeTurn, calls } = slowAnswerTurn(5_000);
+    const config = fakeConfig({ rpc, storage: fakeStorage(), createBotApiForToken: () => botApi, executeTurn });
+
+    const pending = processUpdate(config, makeUpdate());
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await pending;
+
+    expect(calls[0]?.signal?.aborted).toBe(false);
+    expect(result.status).toBe("completed");
+    expect(rpc.retry).not.toHaveBeenCalled();
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Fertige Antwort" }),
+      expect.any(Object),
+    );
+  });
+
+  it("gives up once no heartbeat has been confirmed for most of the lease", async () => {
+    vi.useFakeTimers();
+    const rpc = fakeRpc({
+      heartbeat: vi.fn()
+        .mockResolvedValueOnce({ data: true, error: null })
+        .mockResolvedValue({ data: null, error: { message: "503" } }),
+    });
+    const { executeTurn, calls } = slowAnswerTurn(120_000);
+    const config = fakeConfig({ rpc, storage: fakeStorage(), executeTurn, leaseSeconds: 60 });
+
+    const pending = processUpdate(config, makeUpdate());
+    await vi.advanceTimersByTimeAsync(57_000);
+    expect(calls[0]?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const result = await pending;
+
+    expect(calls[0]?.signal?.aborted).toBe(true);
+    expect(result.status).toBe("failed");
+    expect(rpc.retry).toHaveBeenCalled();
+  });
+
+  it("delivers the answer when a pre-send heartbeat fails transiently", async () => {
+    const rpc = fakeRpc({
+      heartbeat: vi.fn()
+        .mockResolvedValueOnce({ data: true, error: null })
+        .mockResolvedValueOnce({ data: null, error: { message: "connection reset" } })
+        .mockResolvedValue({ data: true, error: null }),
+    });
+    const storage = fakeStorage();
+    const botApi = fakeBotApi();
+    const { executeTurn } = answerTurn("Kurze Antwort.");
+    const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+    const result = await processUpdate(config, makeUpdate());
+
+    expect(result.status).toBe("completed");
+    expect(rpc.retry).not.toHaveBeenCalled();
+    expect(storage.finishDelivery).toHaveBeenCalledWith(expect.objectContaining({ status: "sent" }));
+  });
+});

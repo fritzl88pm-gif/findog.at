@@ -559,6 +559,19 @@ interface TurnLifecycleState {
   shutdownRequested: boolean;
   controlPlaneError: unknown;
   generationError?: Error;
+  /** When the last successful heartbeat was sent. */
+  leaseConfirmedAt?: number;
+}
+
+/**
+ * A failed heartbeat RPC does not mean the lease is gone. Give up only when
+ * no heartbeat has been confirmed for so long that the lease may run out
+ * before the next tick; a single control-plane blip must neither abort a
+ * running generation nor turn an in-flight send into an uncertain delivery.
+ */
+function leaseConfirmationOverdue(config: WorkerConfig, state: TurnLifecycleState): boolean {
+  return state.leaseConfirmedAt === undefined
+    || Date.now() - state.leaseConfirmedAt >= config.leaseSeconds * 1000 - 2 * config.heartbeatIntervalMs;
 }
 
 interface TurnLifecycle {
@@ -616,23 +629,35 @@ async function createTurnLifecycle(
 
   const runHeartbeat = async (): Promise<void> => {
     if (cleaned || controller.signal.aborted) return;
+    const sentAt = Date.now();
+    let leaseOk: boolean;
     try {
-      const leaseOk = await heartbeatUpdate(config.rpc, handle);
-      if (cleaned) return;
-      if (!leaseOk) {
-        state.controlPlaneError = new TelegramUpdateLeaseLostError("heartbeat update");
-        controller.abort();
-        return;
-      }
-      const cancelled = await checkUpdateCancelled(config.rpc, handle);
-      if (cleaned) return;
-      if (cancelled) {
-        state.cancellationRequested = true;
-        controller.abort();
-      }
+      leaseOk = await heartbeatUpdate(config.rpc, handle);
     } catch (error) {
       if (cleaned) return;
-      state.controlPlaneError = error;
+      if (leaseConfirmationOverdue(config, state)) {
+        state.controlPlaneError = error;
+        controller.abort();
+      }
+      return;
+    }
+    if (cleaned) return;
+    if (!leaseOk) {
+      state.controlPlaneError = new TelegramUpdateLeaseLostError("heartbeat update");
+      controller.abort();
+      return;
+    }
+    state.leaseConfirmedAt = sentAt;
+    let cancelled: boolean;
+    try {
+      cancelled = await checkUpdateCancelled(config.rpc, handle);
+    } catch {
+      // Checked again on the next tick; the lease itself was just confirmed.
+      return;
+    }
+    if (cleaned) return;
+    if (cancelled) {
+      state.cancellationRequested = true;
       controller.abort();
     }
   };
@@ -1558,20 +1583,31 @@ async function refreshDeliveryLifecycle(
     return;
   }
 
+  const sentAt = Date.now();
+  let leaseOk: boolean;
   try {
-    const leaseOk = await heartbeatUpdate(config.rpc, handle);
-    if (!leaseOk) {
-      lifecycle.state.controlPlaneError = new TelegramUpdateLeaseLostError("delivery heartbeat");
+    leaseOk = await heartbeatUpdate(config.rpc, handle);
+  } catch (error) {
+    if (leaseConfirmationOverdue(config, lifecycle.state)) {
+      lifecycle.state.controlPlaneError = error;
       lifecycle.controller.abort();
-      return;
     }
+    return;
+  }
+  if (!leaseOk) {
+    lifecycle.state.controlPlaneError = new TelegramUpdateLeaseLostError("delivery heartbeat");
+    lifecycle.controller.abort();
+    return;
+  }
+  lifecycle.state.leaseConfirmedAt = sentAt;
+  try {
     if (await checkUpdateCancelled(config.rpc, handle)) {
       lifecycle.state.cancellationRequested = true;
       lifecycle.controller.abort();
     }
-  } catch (error) {
-    lifecycle.state.controlPlaneError = error;
-    lifecycle.controller.abort();
+  } catch {
+    // Checked again before the next chunk and by the running heartbeat; each
+    // chunk claim is lease-fenced and reports a cancelled row as well.
   }
 }
 
