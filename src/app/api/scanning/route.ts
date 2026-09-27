@@ -10,6 +10,7 @@ import {
 } from "@/lib/attachments/heavy-request-admission";
 import { createDeadline } from "@/lib/deadline";
 import { UserVisibleError } from "@/lib/errors";
+import { buildMaintenanceApiResponse, isMaintenanceModeEnabled } from "@/lib/maintenance-mode";
 import {
   matchesScanningFileSignature,
   MAX_SCANNING_IMAGE_BYTES,
@@ -191,6 +192,8 @@ function fileError(error: unknown): string {
 }
 
 export async function POST(request: Request) {
+  // src/proxy.ts skips this upload route so Next.js does not buffer its body; check maintenance here.
+  if (isMaintenanceModeEnabled()) return buildMaintenanceApiResponse();
   let admissionLease: HeavyAttachmentRequestLease | undefined;
   let ingressDeadline: ReturnType<typeof createDeadline> | undefined;
   try {

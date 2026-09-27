@@ -37,6 +37,7 @@ import {
 } from "@/lib/deadline";
 import { normalizeGeneratedArtifactLinks, parseGeneratedArtifacts } from "@/lib/fred-generated-artifacts";
 import { UserVisibleError } from "@/lib/errors";
+import { buildMaintenanceApiResponse, isMaintenanceModeEnabled } from "@/lib/maintenance-mode";
 import {
   extractStreamStableBfgGzCandidates,
   linkVerifiedBfgCitations,
@@ -902,6 +903,8 @@ function streamTextOnlyTurn(options: {
 }
 
 export async function POST(request: Request) {
+  // src/proxy.ts skips this upload route so Next.js does not buffer its body; check maintenance here.
+  if (isMaintenanceModeEnabled()) return buildMaintenanceApiResponse();
   let lifetimeAbort: AbortController | undefined;
   let onRequestAbort: (() => void) | undefined;
   let cleanupResources: (() => void) | undefined;

@@ -1,3 +1,5 @@
+import { NextResponse } from "next/server";
+
 export const MAINTENANCE_ENV_VAR = "FINDOG_MAINTENANCE_MODE";
 
 export const MAINTENANCE_MESSAGE =
@@ -13,6 +15,22 @@ export function parseMaintenanceMode(value: string | undefined): boolean {
 
 export function isMaintenanceModeEnabled(): boolean {
   return parseMaintenanceMode(process.env[MAINTENANCE_ENV_VAR]);
+}
+
+export function maintenanceHeaders(contentType?: string): Headers {
+  const headers = new Headers();
+  if (contentType) headers.set("Content-Type", contentType);
+  headers.set("Cache-Control", "no-store");
+  headers.set("Retry-After", String(MAINTENANCE_RETRY_AFTER_SECONDS));
+  headers.set("X-Robots-Tag", "noindex, nofollow");
+  return headers;
+}
+
+export function buildMaintenanceApiResponse(): NextResponse {
+  return NextResponse.json(
+    { error: MAINTENANCE_MESSAGE },
+    { status: 503, headers: maintenanceHeaders() },
+  );
 }
 
 export function buildMaintenanceHtml(): string {

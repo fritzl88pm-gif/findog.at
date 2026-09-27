@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateAdminRequest } from "@/lib/admin-users";
+import { MAINTENANCE_MESSAGE } from "@/lib/maintenance-mode";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { DELETE } from "./route";
+import { DELETE, POST, PUT } from "./route";
 
 vi.mock("@/lib/admin-users", async () => {
   const actual = await vi.importActual<typeof import("@/lib/admin-users")>("@/lib/admin-users");
@@ -115,5 +116,50 @@ describe("DELETE /api/admin/downloads/documents", () => {
     });
     expect(supabase.bucket.remove).not.toHaveBeenCalled();
     expect(supabase.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("/api/admin/downloads/documents during maintenance", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    process.env.FINDOG_MAINTENANCE_MODE = "1";
+  });
+
+  afterEach(() => {
+    delete process.env.FINDOG_MAINTENANCE_MODE;
+  });
+
+  function uploadRequest(): Request {
+    const body = new FormData();
+    body.append("file", new File(["%PDF-1.7"], "Formular.pdf", { type: "application/pdf" }));
+    return new Request("https://findog.at/api/admin/downloads/documents", { method: "POST", body });
+  }
+
+  function updateRequest(): Request {
+    return new Request("https://findog.at/api/admin/downloads/documents", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: DOCUMENT_ID }),
+    });
+  }
+
+  // The proxy skips this upload route, so every handler must answer like the proxy would.
+  it.each([
+    ["POST", POST, uploadRequest],
+    ["PUT", PUT, updateRequest],
+    ["DELETE", DELETE, deleteRequest],
+  ] as const)("answers %s with the maintenance response", async (_method, handler, build) => {
+    const request = build();
+
+    const response = await handler(request);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: MAINTENANCE_MESSAGE });
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Retry-After")).toBe("300");
+    expect(response.headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
+    expect(request.bodyUsed).toBe(false);
+    expect(getSupabaseServerClient).not.toHaveBeenCalled();
+    expect(authenticateAdminRequest).not.toHaveBeenCalled();
   });
 });

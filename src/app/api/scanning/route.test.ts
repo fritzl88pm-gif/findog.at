@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
+import { MAINTENANCE_MESSAGE } from "@/lib/maintenance-mode";
 import { analyzeScanningBatch, ScanningProviderError } from "@/lib/scanning/openrouter";
 import { getScanningSettings } from "@/lib/scanning/settings";
 import { parseScanningStreamLine } from "@/lib/scanning/stream";
@@ -73,6 +74,10 @@ describe("POST /api/scanning", () => {
       updatedAt: "2026-07-19T08:00:00.000Z",
       updatedBy: null,
     });
+  });
+
+  afterEach(() => {
+    delete process.env.FINDOG_MAINTENANCE_MODE;
   });
 
   it("sends five images and five PDFs together and streams the direct report", async () => {
@@ -270,6 +275,22 @@ describe("POST /api/scanning", () => {
       type: "error",
       error: "Scanning ist serverseitig nicht konfiguriert.",
     });
+  });
+
+  it("answers with the maintenance response itself because the proxy skips this route", async () => {
+    process.env.FINDOG_MAINTENANCE_MODE = "1";
+    const request = multipart([{ field: "pdf", file: pdf("wartung.pdf") }], "maintenance-user");
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: MAINTENANCE_MESSAGE });
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Retry-After")).toBe("300");
+    expect(response.headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
+    expect(request.bodyUsed).toBe(false);
+    expect(getSupabaseServerClient).not.toHaveBeenCalled();
+    expect(analyzeScanningBatch).not.toHaveBeenCalled();
   });
 
   it("enforces five batches per user in five minutes", async () => {

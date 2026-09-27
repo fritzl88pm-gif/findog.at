@@ -35,6 +35,7 @@ import {
 } from "@/lib/findok/bfg-citations";
 
 import { UserVisibleError } from "@/lib/errors";
+import { MAINTENANCE_MESSAGE } from "@/lib/maintenance-mode";
 import { POST } from "./route";
 
 const { recordAdminRequest: mockRecordAdminRequest } = vi.hoisted(() => ({
@@ -3154,5 +3155,32 @@ describe("POST /api/fred/chat", () => {
         }),
       });
     });
+  });
+});
+
+describe("POST /api/fred/chat during maintenance", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    process.env.FINDOG_MAINTENANCE_MODE = "1";
+  });
+
+  afterEach(() => {
+    delete process.env.FINDOG_MAINTENANCE_MODE;
+  });
+
+  it("answers with the maintenance response itself because the proxy skips this route", async () => {
+    const upload = multipartRequest({ query: "Bitte prüfen", attachment: pdfFile() });
+
+    const response = await POST(upload);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: MAINTENANCE_MESSAGE });
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Retry-After")).toBe("300");
+    expect(response.headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
+    expect(upload.bodyUsed).toBe(false);
+    expect(getSupabaseServerClient).not.toHaveBeenCalled();
+    expect(authenticateSupabaseRequest).not.toHaveBeenCalled();
+    expect(openFredUpstreamStream).not.toHaveBeenCalled();
   });
 });

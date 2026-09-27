@@ -12,6 +12,7 @@ import {
   requireDownloadUuid,
 } from "@/lib/downloads";
 import { UserVisibleError } from "@/lib/errors";
+import { buildMaintenanceApiResponse, isMaintenanceModeEnabled } from "@/lib/maintenance-mode";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -69,6 +70,8 @@ async function requireActiveCategory(
 }
 
 export async function POST(request: Request) {
+  // src/proxy.ts skips this upload route so Next.js does not buffer its body; check maintenance here.
+  if (isMaintenanceModeEnabled()) return buildMaintenanceApiResponse();
   let uploadedPath = "";
   let metadataCreated = false;
   let cleanupClient: NonNullable<ReturnType<typeof getSupabaseServerClient>> | null = null;
@@ -157,6 +160,7 @@ export async function POST(request: Request) {
 }
 
 export async function PUT(request: Request) {
+  if (isMaintenanceModeEnabled()) return buildMaintenanceApiResponse();
   try {
     const supabase = getSupabaseServerClient();
     if (!supabase) {
@@ -207,6 +211,7 @@ export async function PUT(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  if (isMaintenanceModeEnabled()) return buildMaintenanceApiResponse();
   try {
     const supabase = getSupabaseServerClient();
     if (!supabase) {

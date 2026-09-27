@@ -1,20 +1,20 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import {
-  MAINTENANCE_MESSAGE,
-  MAINTENANCE_RETRY_AFTER_SECONDS,
+  buildMaintenanceApiResponse,
   buildMaintenanceHtml,
   isMaintenanceModeEnabled,
+  maintenanceHeaders,
 } from "@/lib/maintenance-mode";
 
-function maintenanceHeaders(contentType?: string): Headers {
-  const headers = new Headers();
-  if (contentType) headers.set("Content-Type", contentType);
-  headers.set("Cache-Control", "no-store");
-  headers.set("Retry-After", String(MAINTENANCE_RETRY_AFTER_SECONDS));
-  headers.set("X-Robots-Tag", "noindex, nofollow");
-  return headers;
-}
+// Next.js buffers the body of every request this proxy matches and cuts it off after
+// experimental.proxyClientMaxBodySize (10 MB by default) before the route handler reads it.
+// The upload routes accept larger multipart bodies, so they bypass the proxy and apply the
+// maintenance check themselves; every other path keeps the small buffering cap.
+// Next.js reads this config statically, so the matcher must stay a string literal.
+export const config = {
+  matcher: ["/((?!api/scanning$|api/fred/chat$|api/admin/downloads/documents$).*)"],
+};
 
 export function proxy(request: NextRequest): NextResponse {
   if (!isMaintenanceModeEnabled()) {
@@ -33,10 +33,7 @@ export function proxy(request: NextRequest): NextResponse {
   }
 
   if (pathname.startsWith("/api/")) {
-    return NextResponse.json(
-      { error: MAINTENANCE_MESSAGE },
-      { status: 503, headers: maintenanceHeaders() },
-    );
+    return buildMaintenanceApiResponse();
   }
 
   return new NextResponse(buildMaintenanceHtml(), {
