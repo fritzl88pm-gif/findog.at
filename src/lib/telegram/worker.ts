@@ -109,6 +109,8 @@ export interface WorkerStorage {
     lastErrorCode?: string;
   }): Promise<boolean>;
   loadGeneratedArtifacts(params: { clientId: string; conversationId: string; messageId: number }): Promise<FredGeneratedArtifact[]>;
+  /** Whether the conversation holds a message stored before `messageId`. */
+  hasEarlierMessage(params: { clientId: string; conversationId: string; messageId: number }): Promise<boolean>;
   setMode(integrationId: string, mode: "pro" | "web", enabled: boolean): Promise<Pick<WorkerIntegration, "proModeEnabled" | "webSearchEnabled">>;
 }
 
@@ -1135,6 +1137,19 @@ async function handleFredTurn(
   const conversationId = receipt
     ? resume?.conversationId
     : (await storage.getActiveConversation(integration.id, chatId)) ?? undefined;
+  // Whether the request continues the conversation frozen from the chat
+  // binding at ingress rather than one it created. Once an earlier attempt
+  // stored the question, the receipt holds either; only a frozen conversation
+  // already had messages before that question.
+  const continuesFrozenConversation = async (): Promise<boolean> => {
+    if (!conversationId) return false;
+    if (!receipt || resume?.status === "received" || resume?.userMessageId === undefined) return true;
+    return storage.hasEarlierMessage({
+      clientId: integration.clientId,
+      conversationId,
+      messageId: resume.userMessageId,
+    });
+  };
   let failurePhase: FredRequestFailurePhase = "connecting";
   const request: FredTurnRequest = {
     clientId: integration.clientId,
@@ -1163,10 +1178,14 @@ async function handleFredTurn(
     onConversationEvent: async (conversation) => {
       await storage.markTelegramOrigin(integration.clientId, conversation.id, integration.id);
       // A retried request continues its frozen conversation without moving the
-      // chat pointer, and a new one is bound only while the chat is unbound: a
+      // chat pointer, and one it created (in this or an earlier attempt that
+      // failed before binding it) is bound only while the chat is unbound: a
       // /new (or newer question) handled during the retry backoff must stay in
       // effect. The chat's other messages wait while this row is processing.
-      if (!conversationId && await storage.getActiveConversation(integration.id, chatId) === null) {
+      if (
+        await storage.getActiveConversation(integration.id, chatId) === null
+        && !await continuesFrozenConversation()
+      ) {
         await storage.bindConversation(integration.id, chatId, conversation.id);
       }
     },

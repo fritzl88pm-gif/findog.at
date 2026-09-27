@@ -370,6 +370,13 @@ export function buildStorage(supabase: Supabase): WorkerStorage {
       return parsePersistedGeneratedArtifacts((data as Record<string, unknown>).artifacts);
     },
 
+    async hasEarlierMessage(params) {
+      const { data, error } = await supabase.from("fred_messages")
+        .select("id").eq("conversation_id", params.conversationId).eq("client_id", params.clientId).lt("id", params.messageId).limit(1);
+      if (error || !Array.isArray(data)) throw dbError("FRED_MESSAGE_READ_FAILED");
+      return data.length > 0;
+    },
+
     async setMode(integrationId, mode, enabled) {
       const column = mode === "pro" ? "pro_mode_enabled" : "web_search_enabled";
       const { error: updateError } = await supabase

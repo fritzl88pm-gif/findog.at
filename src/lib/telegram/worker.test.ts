@@ -167,6 +167,7 @@ function fakeStorage(overrides: Partial<WorkerStorage> = {}): WorkerStorage {
     claimDelivery: vi.fn().mockResolvedValue("claimed"),
     finishDelivery: vi.fn().mockResolvedValue(true),
     loadGeneratedArtifacts: vi.fn().mockResolvedValue([]),
+    hasEarlierMessage: vi.fn().mockResolvedValue(false),
     setMode: vi.fn().mockImplementation(async (_integrationId: string, mode: string, enabled: boolean) => {
       return { proModeEnabled: mode === "pro" ? enabled : false, webSearchEnabled: mode === "web" ? enabled : false };
     }),
@@ -600,6 +601,7 @@ describe("processUpdate: slash commands", () => {
     expect(sentText).toContain("keine Antwort");
   });
 
+
   it("replies with an unknown-command notice and never calls Fred for unrecognized commands", async () => {
     const rpc = fakeRpc();
     const storage = fakeStorage();
@@ -963,6 +965,84 @@ describe("processUpdate: free text routed to Fred", () => {
     expect(calls[0]?.conversationId).toBeUndefined();
     expect(storage.markTelegramOrigin).toHaveBeenCalledWith(clientId, fakeConversation.id, integrationId);
     expect(storage.bindConversation).not.toHaveBeenCalled();
+  });
+
+  it("binds the conversation an earlier attempt created when that attempt failed before binding it", async () => {
+    let bound: string | null = null;
+    let persisted: { conversationId?: string; userMessageId?: number } | undefined;
+    const storage = fakeStorage({
+      getActiveConversation: vi.fn().mockImplementation(async () => bound),
+      bindConversation: vi.fn().mockImplementation(async (_integrationId: string, _chatId: number, id: string) => {
+        bound = id;
+      }),
+      markTelegramOrigin: vi.fn()
+        .mockRejectedValueOnce(new Error("TELEGRAM_CONVERSATION_OWNERSHIP_FAILED"))
+        .mockResolvedValue(undefined),
+      transitionRequestReceipt: vi.fn().mockImplementation(async (params) => {
+        if (params.status === "user_persisted") {
+          persisted = { conversationId: params.conversationId, userMessageId: params.userMessageId };
+        }
+      }),
+      // Like resume_fred_request_receipt: once the question is stored, the
+      // receipt reports the conversation it was stored in.
+      resumeRequestReceipt: vi.fn().mockImplementation(async () => ({
+        status: persisted ? "user_persisted" : "received",
+        contentDeleted: false,
+        ...persisted,
+        webSearchEnabled: false,
+        proModeEnabled: false,
+      })),
+    });
+    const { executeTurn, calls } = capturingTurn(async function* (request) {
+      // The first attempt creates conv-A; the retry records the same user event in it.
+      const conversation = { ...fakeConversation, id: request.conversationId ?? "conv-A" };
+      yield { type: "conversation", conversation };
+      await request.onRequestTransition?.({ status: "user_persisted", conversationId: conversation.id, userMessageId: 81 });
+      await request.onConversationEvent?.(conversation);
+      return { answer: "Antwort", rawAnswer: "Antwort", conversation, researchTrace: [], sourceReferences: [], stopped: false };
+    });
+    const rpc = fakeRpc();
+    const config = fakeConfig({ rpc, storage, executeTurn });
+
+    await processUpdate(config, makeUpdate({ attemptCount: 1 }));
+    expect(rpc.retry).toHaveBeenCalledTimes(1);
+    expect(bound).toBeNull();
+
+    const second = await processUpdate(config, makeUpdate({ attemptCount: 2 }));
+
+    expect(second.status).toBe("completed");
+    expect(calls.map((call) => call.conversationId)).toEqual([undefined, "conv-A"]);
+    expect(bound).toBe("conv-A");
+    expect(storage.hasEarlierMessage).toHaveBeenCalledWith({ clientId, conversationId: "conv-A", messageId: 81 });
+  });
+
+  it("keeps a /new made during the backoff when a retried request continues its frozen conversation", async () => {
+    const storage = fakeStorage({
+      getActiveConversation: vi.fn().mockResolvedValue(null),
+      resumeRequestReceipt: vi.fn().mockResolvedValue({
+        status: "user_persisted",
+        contentDeleted: false,
+        conversationId: "conv-X",
+        userMessageId: 81,
+        webSearchEnabled: false,
+        proModeEnabled: false,
+      }),
+      hasEarlierMessage: vi.fn().mockResolvedValue(true),
+    });
+    const { executeTurn, calls } = capturingTurn(async function* (request) {
+      const conversation = { ...fakeConversation, id: request.conversationId! };
+      yield { type: "conversation", conversation };
+      await request.onConversationEvent?.(conversation);
+      return { answer: "Antwort", rawAnswer: "Antwort", conversation, researchTrace: [], sourceReferences: [], stopped: false };
+    });
+    const config = fakeConfig({ storage, executeTurn });
+
+    const result = await processUpdate(config, makeUpdate({ attemptCount: 2 }));
+
+    expect(result.status).toBe("completed");
+    expect(calls[0]?.conversationId).toBe("conv-X");
+    expect(storage.bindConversation).not.toHaveBeenCalled();
+    expect(storage.hasEarlierMessage).toHaveBeenCalledWith({ clientId, conversationId: "conv-X", messageId: 81 });
   });
 
   it("derives stable, deterministic event IDs from integrationId:updateId:role across retries", async () => {

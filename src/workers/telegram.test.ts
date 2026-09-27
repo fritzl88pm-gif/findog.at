@@ -144,6 +144,35 @@ describe("buildStorage.loadGeneratedArtifacts", () => {
   });
 });
 
+describe("buildStorage.hasEarlierMessage", () => {
+  function storageForMessages(result: { data: unknown; error: unknown }) {
+    const limit = vi.fn().mockResolvedValue(result);
+    const lt = vi.fn().mockReturnValue({ limit });
+    const eqClient = vi.fn().mockReturnValue({ lt });
+    const eqConversation = vi.fn().mockReturnValue({ eq: eqClient });
+    const select = vi.fn().mockReturnValue({ eq: eqConversation });
+    const from = vi.fn().mockReturnValue({ select });
+    return { storage: buildStorage(fakeSupabase({ from }) as never), from, eqConversation, eqClient, lt };
+  }
+  const params = { clientId: "client-1", conversationId: "conversation-1", messageId: 9 };
+
+  it("reports whether the conversation holds a message stored before the given one", async () => {
+    const earlier = storageForMessages({ data: [{ id: 3 }], error: null });
+    await expect(earlier.storage.hasEarlierMessage(params)).resolves.toBe(true);
+    expect(earlier.from).toHaveBeenCalledWith("fred_messages");
+    expect(earlier.eqConversation).toHaveBeenCalledWith("conversation_id", "conversation-1");
+    expect(earlier.eqClient).toHaveBeenCalledWith("client_id", "client-1");
+    expect(earlier.lt).toHaveBeenCalledWith("id", 9);
+
+    await expect(storageForMessages({ data: [], error: null }).storage.hasEarlierMessage(params)).resolves.toBe(false);
+  });
+
+  it("throws on DB error", async () => {
+    await expect(storageForMessages({ data: null, error: new Error("boom") }).storage.hasEarlierMessage(params))
+      .rejects.toThrow("FRED_MESSAGE_READ_FAILED");
+  });
+});
+
 describe("buildStorage.setMode", () => {
   it("updates pro_mode_enabled column and reads back both states", async () => {
     const eqUpdate = vi.fn().mockResolvedValue({ error: null });
