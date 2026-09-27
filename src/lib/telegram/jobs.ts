@@ -243,8 +243,9 @@ export async function failUpdate(
 
 /**
  * Request cancellation of whichever *other* update is currently being
- * processed for the same integration + Telegram chat (used by /stop).
- * Returns true if an in-flight job was found and flagged.
+ * processed for the same integration + Telegram chat (used by /stop), and of
+ * questions sent before `excludeRowId` that are still queued or backing off.
+ * Returns true if any such job was found and flagged.
  */
 export async function requestCancelForChat(
   rpc: JobQueueRpc,
