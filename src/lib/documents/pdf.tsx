@@ -132,13 +132,49 @@ const styles = StyleSheet.create({
 const decorativeEmojiPattern =
   /(?:\p{Regional_Indicator}{2}|[0-9#*]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:[\uFE0E\uFE0F\u{1F3FB}-\u{1F3FF}])*(?:\u200D\p{Extended_Pictographic}(?:[\uFE0E\uFE0F\u{1F3FB}-\u{1F3FF}])*)*)/gu;
 
+// Helvetica is WinAnsi-encoded and pdfkit writes any other character as its
+// raw low byte, so "≤ 12.000" would silently print as "d 12.000". The repo
+// bundles no font that covers German text plus these symbols, so common
+// symbols are spelled out in WinAnsi and anything else becomes "?".
+const greekLetterNames =
+  "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega".split(" ");
+const pdfTransliterations = new Map<string, string>([
+  ...[..."αβγδεζηθικλμνξοπρστυφχψω"].flatMap((letter, index): Array<[string, string]> => {
+    const name = greekLetterNames[index] ?? "?";
+    return [[letter, name], [letter.toUpperCase(), name.charAt(0).toUpperCase() + name.slice(1)]];
+  }),
+  ["ς", "sigma"], ["μ", "\u00B5"], ["Ω", "Ohm"], ["Σ", "Summe"], ["∑", "Summe"],
+  ["≤", "<="], ["⩽", "<="], ["≥", ">="], ["⩾", ">="], ["≠", "!="], ["≈", "~"], ["≙", "="],
+  ["\u2212", "-"], ["\u2010", "-"], ["\u2011", "-"], ["\u2012", "-"], ["′", "'"], ["″", "\""], ["\u2044", "/"],
+  ["→", "->"], ["⟶", "->"], ["➔", "->"], ["➜", "->"], ["⇒", "=>"],
+  ["←", "<-"], ["⇐", "<-"], ["↔", "<->"], ["⇔", "<=>"],
+  ["✓", "[x]"], ["✔", "[x]"], ["☑", "[x]"], ["☒", "[x]"], ["✗", "[ ]"], ["✘", "[ ]"], ["☐", "[ ]"],
+  ["∅", "Ø"], ["⌀", "Ø"], ["ł", "l"], ["Ł", "L"], ["đ", "d"], ["Đ", "D"], ["ı", "i"],
+  ["\u2007", "\u00A0"], ["\u202F", "\u00A0"],
+]);
+const winAnsiExtras = new Set("€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ");
+
+function winAnsiText(character: string): string {
+  if (winAnsiExtras.has(character)) {
+    return character;
+  }
+  // Letters such as č or ő keep their base letter, compatibility forms such as
+  // ﬁ or ㎡ their plain spelling.
+  const decomposed = character.normalize("NFKD").replace(/\p{M}/gu, "");
+  return /^[\x20-\x7e\xa0-\xff]+$/.test(decomposed) ? decomposed : "?";
+}
+
 function pdfSafeText(value: string): string {
   return value
     .normalize("NFC")
+    .replace(/[^\x00-\xff]/gu, (character) => pdfTransliterations.get(character) ?? character)
     .replace(decorativeEmojiPattern, "")
     .replace(/[\u200D\uFE0E\uFE0F\u{1F3FB}-\u{1F3FF}]/gu, "")
+    .replace(/[^\S\n\u00A0]/gu, " ")
+    .replace(/(?![\n\u00AD])[\p{M}\p{Cc}\p{Cf}]/gu, "")
     .replace(/[ \t]{2,}/g, " ")
     .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/[^\n\x20-\x7e\xa0-\xff]/gu, winAnsiText)
     .trim();
 }
 

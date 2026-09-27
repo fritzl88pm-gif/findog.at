@@ -1,8 +1,52 @@
 import { readFile } from "node:fs/promises";
+import { inflateSync } from "node:zlib";
 
 import { expect, it } from "vitest";
 
 import { parsePdfContentBlocks, renderChatPdf } from "./pdf";
+
+const winAnsiHighCharacters = "€\u0081‚ƒ„…†‡ˆ‰Š‹Œ\u008dŽ\u008f\u0090‘’“”•–—˜™š›œ\u009džŸ";
+
+// Decodes the text operators of the rendered content streams as WinAnsi and
+// tracks each text line's offset from the top of its page.
+function pdfTextLines(bytes: Uint8Array): Array<{ top: number; text: string; codes: number[] }> {
+  const source = Buffer.from(bytes).toString("latin1");
+  const lines: Array<{ top: number; text: string; codes: number[] }> = [];
+  for (const stream of source.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+    let content: string;
+    try {
+      content = inflateSync(Buffer.from(stream[1] ?? "", "latin1")).toString("latin1");
+    } catch {
+      continue;
+    }
+    const stack: number[] = [];
+    let top = 0;
+    for (const operator of content.split("\n").map((line) => line.trim())) {
+      if (operator === "q") {
+        stack.push(top);
+      } else if (operator === "Q") {
+        top = stack.pop() ?? 0;
+      }
+      const translation = /^1 0 0 1 -?[\d.]+ (-?[\d.]+) cm$/.exec(operator);
+      if (translation) {
+        top += Number(translation[1]);
+      }
+      const text = /^\[(.*)\] TJ$/.exec(operator);
+      if (text) {
+        const codes = [...(text[1] ?? "").matchAll(/<([0-9a-f]*)>/gi)]
+          .flatMap((part) => [...Buffer.from(part[1] ?? "", "hex")]);
+        lines.push({
+          top,
+          codes,
+          text: codes
+            .map((code) => (code >= 0x80 && code <= 0x9f ? winAnsiHighCharacters[code - 0x80] : String.fromCharCode(code)))
+            .join(""),
+        });
+      }
+    }
+  }
+  return lines;
+}
 
 it("uses a neutral PDF palette", async () => {
   const source = await readFile(new URL("./pdf.tsx", import.meta.url), "utf8");
@@ -47,6 +91,46 @@ it("removes decorative emoji without losing Austrian legal symbols", () => {
     { type: "paragraph", text: "§ 16 EStG und € 100 bleiben lesbar." },
     { type: "bullet", ordered: false, text: "Begründung" },
   ]);
+});
+
+it("spells out symbols the built-in PDF font cannot encode instead of printing wrong glyphs", () => {
+  expect(
+    parsePdfContentBlocks([
+      "Grenze ≤ 12.000 € → Anspruch ≥ 3 ≈ 10 Ω ✓ „Zitat“ – Test",
+      "",
+      "- ✗ Δ-Betrag − 5 %, Dvořák, Łukasz, 李",
+      "",
+      "| Kriterium | erfüllt |",
+      "| --- | :---: |",
+      "| Entfernung ⇒ Pauschale | ✔️ |",
+    ].join("\n")),
+  ).toEqual([
+    { type: "paragraph", text: "Grenze <= 12.000 € -> Anspruch >= 3 ~ 10 Ohm [x] „Zitat“ – Test" },
+    { type: "bullet", ordered: false, text: "[ ] Delta-Betrag - 5 %, Dvorák, Lukasz, ?" },
+    {
+      type: "table",
+      headers: ["Kriterium", "erfüllt"],
+      alignments: ["left", "center"],
+      rows: [["Entfernung => Pauschale", "[x]"]],
+    },
+  ]);
+});
+
+it("writes only WinAnsi characters to the PDF for symbols outside Helvetica", async () => {
+  const bytes = await renderChatPdf({
+    title: "Grenzwerte ≤ 3",
+    content: "Grenze ≤ 12.000 € → Anspruch ≥ 3 ✓",
+    date: "11.07.2026",
+  });
+  const lines = pdfTextLines(bytes);
+  const text = lines.map((line) => line.text).join("\n");
+  const undefinedWinAnsiCodes = [0x7f, 0x81, 0x8d, 0x8f, 0x90, 0x9d];
+
+  expect(text).toContain("Grenzwerte <= 3");
+  expect(text).toContain("Grenze <= 12.000 € -> Anspruch >= 3 [x]");
+  expect(lines.flatMap((line) => line.codes).filter(
+    (code) => code < 0x20 || undefinedWinAnsiCodes.includes(code),
+  )).toEqual([]);
 });
 
 it("repeats table headers when a table spans multiple pages", async () => {
