@@ -28,6 +28,10 @@ type CategoryLinkRow = {
   category_id: string;
 };
 
+// PostgREST returns at most 1000 rows per request. A card whose links fell past that cap
+// would load without its categories, and saving it would then delete them.
+const REASONING_PAGE_SIZE = 1_000;
+
 function json(payload: unknown, status = 200): NextResponse {
   return NextResponse.json(payload, {
     status,
@@ -44,6 +48,21 @@ async function authenticatedContext(request: Request) {
   return { supabase, user };
 }
 
+async function loadAllRows<Row>(
+  loadPage: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>,
+): Promise<Row[]> {
+  const rows: Row[] = [];
+  for (let from = 0; ; from += REASONING_PAGE_SIZE) {
+    const { data, error } = await loadPage(from, from + REASONING_PAGE_SIZE - 1);
+    if (error) {
+      throw new UserVisibleError("Textbausteine konnten nicht geladen werden.", 503);
+    }
+    const page = (data ?? []) as Row[];
+    rows.push(...page);
+    if (page.length < REASONING_PAGE_SIZE) return rows;
+  }
+}
+
 async function requestBody(request: Request): Promise<unknown> {
   try {
     return await request.json();
@@ -55,44 +74,46 @@ async function requestBody(request: Request): Promise<unknown> {
 export async function GET(request: Request) {
   try {
     const { supabase, user } = await authenticatedContext(request);
-    const [categoriesResult, reasoningsResult, linksResult] = await Promise.all([
-      supabase
+    const [categories, reasonings, links] = await Promise.all([
+      loadAllRows<CategoryRow>((from, to) => supabase
         .from("user_reasoning_categories")
         .select("id,name,parent_id,created_at,updated_at")
         .eq("client_id", user.id)
-        .order("name", { ascending: true }),
-      supabase
+        .order("name", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, to)),
+      loadAllRows<ReasoningRow>((from, to) => supabase
         .from("user_reasonings")
         .select("id,title,content,created_at,updated_at")
         .eq("client_id", user.id)
         .order("updated_at", { ascending: false })
-        .order("id", { ascending: false }),
-      supabase
+        .order("id", { ascending: false })
+        .range(from, to)),
+      loadAllRows<CategoryLinkRow>((from, to) => supabase
         .from("user_reasoning_category_links")
         .select("reasoning_id,category_id")
-        .eq("client_id", user.id),
+        .eq("client_id", user.id)
+        .order("reasoning_id", { ascending: true })
+        .order("category_id", { ascending: true })
+        .range(from, to)),
     ]);
 
-    if (categoriesResult.error || reasoningsResult.error || linksResult.error) {
-      throw new UserVisibleError("Textbausteine konnten nicht geladen werden.", 503);
-    }
-
     const linksByReasoning = new Map<string, string[]>();
-    for (const link of (linksResult.data ?? []) as CategoryLinkRow[]) {
+    for (const link of links) {
       const categoryIds = linksByReasoning.get(link.reasoning_id) ?? [];
       categoryIds.push(link.category_id);
       linksByReasoning.set(link.reasoning_id, categoryIds);
     }
 
     return json({
-      categories: ((categoriesResult.data ?? []) as CategoryRow[]).map((category) => ({
+      categories: categories.map((category) => ({
         id: category.id,
         name: category.name,
         parentId: category.parent_id,
         createdAt: category.created_at,
         updatedAt: category.updated_at,
       })),
-      reasonings: ((reasoningsResult.data ?? []) as ReasoningRow[]).map((reasoning) => ({
+      reasonings: reasonings.map((reasoning) => ({
         id: reasoning.id,
         title: reasoning.title,
         content: reasoning.content,

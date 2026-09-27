@@ -14,19 +14,35 @@ const PARENT_ID = "2c1f1ddf-1f2e-4cc9-9ee5-7d340006fc8d";
 
 type QueryResult = { data: unknown; error: unknown };
 
+// Hosted Supabase PostgREST returns at most this many rows per response.
+const POSTGREST_MAX_ROWS = 1_000;
+
 function queryBuilder(result: QueryResult, scopes: Array<[string, unknown]>) {
   const builder: Record<string, unknown> = {};
+  let from = 0;
+  let to = Number.POSITIVE_INFINITY;
   builder.select = vi.fn(() => builder);
   builder.eq = vi.fn((field: string, value: unknown) => {
     scopes.push([field, value]);
     return builder;
   });
   builder.order = vi.fn(() => builder);
+  builder.range = vi.fn((rangeFrom: number, rangeTo: number) => {
+    from = rangeFrom;
+    to = rangeTo;
+    return builder;
+  });
   builder.then = (
     resolve: (value: QueryResult) => unknown,
     reject: (reason: unknown) => unknown,
-  ) => Promise.resolve(result).then(resolve, reject);
+  ) => Promise.resolve(Array.isArray(result.data)
+    ? { ...result, data: result.data.slice(from, Math.min(to + 1, from + POSTGREST_MAX_ROWS)) }
+    : result).then(resolve, reject);
   return builder;
+}
+
+function uuid(prefix: string, index: number): string {
+  return `${prefix}-0000-4000-8000-${String(index).padStart(12, "0")}`;
 }
 
 describe("reasonings API", () => {
@@ -92,6 +108,53 @@ describe("reasonings API", () => {
         updatedAt: "2026-07-27T13:00:00.000Z",
       }],
     });
+  });
+
+  it("loads every card with all its categories past the PostgREST row cap", async () => {
+    const categoryIds = [0, 1, 2].map((index) => uuid("cccccccc", index));
+    const reasoningIds = Array.from({ length: 1_001 }, (_, index) => uuid("aaaaaaaa", index));
+    const results: Record<string, QueryResult> = {
+      user_reasoning_categories: {
+        data: categoryIds.map((id, index) => ({
+          id,
+          name: `Kategorie ${index}`,
+          parent_id: null,
+          created_at: "2026-07-27T12:00:00.000Z",
+          updated_at: "2026-07-27T12:00:00.000Z",
+        })),
+        error: null,
+      },
+      user_reasonings: {
+        data: reasoningIds.map((id, index) => ({
+          id,
+          title: `Textbaustein ${index}`,
+          content: "Inhalt",
+          created_at: "2026-07-27T12:00:00.000Z",
+          updated_at: "2026-07-27T12:00:00.000Z",
+        })),
+        error: null,
+      },
+      user_reasoning_category_links: {
+        data: reasoningIds.flatMap((reasoningId) => categoryIds.map((categoryId) => ({
+          reasoning_id: reasoningId,
+          category_id: categoryId,
+        }))),
+        error: null,
+      },
+    };
+    const from = vi.fn((table: string) => queryBuilder(results[table], []));
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ auth: {}, from } as never);
+
+    const response = await GET(new Request("https://findog.at/api/reasonings"));
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      reasonings: Array<{ id: string; categoryIds: string[] }>;
+    };
+    expect(body.reasonings.map((reasoning) => reasoning.id)).toEqual(reasoningIds);
+    for (const reasoning of body.reasonings) {
+      expect(reasoning.categoryIds).toEqual(categoryIds);
+    }
   });
 
   it("saves through the atomic RPC with the authenticated user id", async () => {
