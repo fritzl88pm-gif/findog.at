@@ -40,6 +40,21 @@ describe("public auth surface", () => {
     }
   });
 
+  it("clears typed passwords and account messages on sign-out and account switch", () => {
+    const signedOutReset = /if \(!user\?\.id\) \{([\s\S]*?)\n {6}\}/u.exec(source)?.[1] ?? "";
+    const accountSwitchReset = /if \(isFreshAuthenticatedLanding\) \{([\s\S]*?)\n {6}\}/u.exec(source)?.[1] ?? "";
+
+    for (const reset of [signedOutReset, accountSwitchReset]) {
+      expect(reset).toContain("setIsSettingsDialogOpen(false);");
+      expect(reset).toContain(
+        'setPasswordChangeForm({ currentPassword: "", newPassword: "", confirmation: "" });',
+      );
+      expect(reset).toContain('setPasswordChangeError("");');
+      expect(reset).toContain('setPasswordChangeNotice("");');
+      expect(reset).toContain('setAccountDeletionError("");');
+    }
+  });
+
   it("shows the Fred login illustration directly above the existing auth copy", () => {
     const login = unauthenticatedLoginSource();
 

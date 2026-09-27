@@ -1365,6 +1365,12 @@ export default function Home() {
 
       if (!user?.id) {
         authenticatedUserIdRef.current = null;
+        // Typed passwords and account messages must not reach the next account.
+        setIsSettingsDialogOpen(false);
+        setPasswordChangeForm({ currentPassword: "", newPassword: "", confirmation: "" });
+        setPasswordChangeError("");
+        setPasswordChangeNotice("");
+        setAccountDeletionError("");
         setFredConversationId("");
         setFredMessages([]);
         setFredConversations([]);
@@ -1396,6 +1402,11 @@ export default function Home() {
       const isFreshAuthenticatedLanding = authenticatedUserIdRef.current !== user.id;
       authenticatedUserIdRef.current = user.id;
       if (isFreshAuthenticatedLanding) {
+        setIsSettingsDialogOpen(false);
+        setPasswordChangeForm({ currentPassword: "", newPassword: "", confirmation: "" });
+        setPasswordChangeError("");
+        setPasswordChangeNotice("");
+        setAccountDeletionError("");
         setAppView("home");
         setFredConversationId("");
         setActiveConversationOrigin("web");
