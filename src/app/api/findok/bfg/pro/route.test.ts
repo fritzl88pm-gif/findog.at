@@ -109,7 +109,7 @@ describe("POST /api/findok/bfg/pro", () => {
     expect(response.headers.get("x-accel-buffering")).toBe("no");
     expect(runBfgProSearch).toHaveBeenCalledWith(
       "Beruflich genutztes Arbeitszimmer",
-      { onProgress: expect.any(Function) },
+      { onProgress: expect.any(Function), signal: expect.any(AbortSignal) },
     );
     await expect(streamEvents(response)).resolves.toEqual([{ type: "result", results }]);
   });
@@ -172,6 +172,44 @@ describe("POST /api/findok/bfg/pro", () => {
     await expect(streamEvents(response)).resolves.toEqual([
       { type: "error", error: "Zu viele Anfragen." },
     ]);
+  });
+
+  it.each([
+    ["the request is aborted", "request"],
+    ["the response stream is cancelled", "stream"],
+  ] as const)("aborts the running PRO search when %s", async (_label, disconnect) => {
+    let searchSignal: AbortSignal | undefined;
+    vi.mocked(runBfgProSearch).mockImplementationOnce((_scenario, options) => {
+      searchSignal = options?.signal;
+      options?.onProgress?.({ stage: "queries" });
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+      });
+    });
+    const client = new AbortController();
+    const incoming = new Request("http://localhost/api/findok/bfg/pro", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer access-token",
+        "Content-Type": "application/json",
+        "X-Forwarded-For": `192.0.2.${disconnect === "request" ? 11 : 12}`,
+      },
+      body: JSON.stringify({ scenario: "Beruflich genutztes Arbeitszimmer" }),
+      signal: client.signal,
+    });
+
+    const response = await POST(incoming);
+    const reader = response.body!.getReader();
+    await reader.read();
+    expect(searchSignal?.aborted).toBe(false);
+
+    if (disconnect === "request") {
+      client.abort();
+    } else {
+      await reader.cancel();
+    }
+
+    expect(searchSignal?.aborted).toBe(true);
   });
 
   it("applies a route-local limit lower than normal chat", async () => {

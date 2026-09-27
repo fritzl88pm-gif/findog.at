@@ -1,4 +1,4 @@
-import { runWithTimeout } from "@/lib/deadline";
+import { type Deadline, runWithTimeout } from "@/lib/deadline";
 import { BfgProModelError } from "./bfg-pro";
 
 export const BFG_PRO_LUNA_MODEL = "codex/gpt-5.6-luna" as const;
@@ -16,6 +16,7 @@ export type CompleteBfgProLunaOptions = {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   maxTokens?: number;
+  deadline?: Deadline;
 };
 
 export function normalizeOmnirouteChatCompletionsUrl(baseUrl: string): string {
@@ -120,7 +121,7 @@ export async function completeBfgProLuna(options: CompleteBfgProLunaOptions): Pr
 
         return message.content;
       },
-      { timeoutMs, timeoutMessage: "OmniRoute request timed out." },
+      { deadline: options.deadline, timeoutMs, timeoutMessage: "OmniRoute request timed out." },
     );
 
     return rawContent;

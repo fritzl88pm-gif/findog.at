@@ -115,6 +115,11 @@ export async function POST(request: Request) {
 
   const encoder = new TextEncoder();
   let open = true;
+  // A client that leaves mid-stream stops the model calls and Findok requests.
+  const searchAbort = new AbortController();
+  const onRequestAbort = () => searchAbort.abort(request.signal.reason);
+  if (request.signal.aborted) onRequestAbort();
+  else request.signal.addEventListener("abort", onRequestAbort, { once: true });
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (event: BfgProStreamEvent) => {
@@ -130,12 +135,14 @@ export async function POST(request: Request) {
       try {
         const { results } = await runBfgProSearch(scenario, {
           onProgress: (progress) => send({ type: "status", ...progress }),
+          signal: searchAbort.signal,
         });
         send({ type: "result", results });
       } catch (error) {
         send({ type: "error", error: searchErrorMessage(error) });
       } finally {
         open = false;
+        request.signal.removeEventListener("abort", onRequestAbort);
         try {
           controller.close();
         } catch {
@@ -143,8 +150,9 @@ export async function POST(request: Request) {
         }
       }
     },
-    cancel() {
+    cancel(reason) {
       open = false;
+      searchAbort.abort(reason);
     },
   });
 

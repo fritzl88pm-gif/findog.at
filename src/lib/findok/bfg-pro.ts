@@ -1,3 +1,4 @@
+import { createDeadline, type Deadline } from "@/lib/deadline";
 import {
   fetchBfgProCandidates,
   type BfgProCandidate,
@@ -15,6 +16,11 @@ const MAX_MERGED_CANDIDATES = 60;
 const MAX_RESULTS = 10;
 const MAX_EXCERPT_CHARS = 1_800;
 const MAX_AGGREGATE_CONTENT_CHARS = 600_000;
+// The whole run must fit the documented 600 s proxy budget with time left to
+// stream the timeout message; each model call alone may otherwise take 600 s.
+const BFG_PRO_TOTAL_TIMEOUT_MS = 590_000;
+const BFG_PRO_TIMEOUT_MESSAGE =
+  "Die BFG Suche PRO hat zu lange gedauert. Bitte den Sachverhalt eingrenzen oder erneut versuchen.";
 
 const MAX_LEGAL_ISSUE_CHARS = 300;
 const MAX_CASE_SUMMARY_CHARS = 500;
@@ -62,6 +68,7 @@ export type BfgProResponse = {
 
 export type BfgProSearchOptions = {
   onProgress?: (progress: BfgProProgress) => void;
+  signal?: AbortSignal;
 };
 
 type PreliminarySelection = {
@@ -669,6 +676,28 @@ export async function runBfgProSearch(
   scenario: string,
   options: BfgProSearchOptions = {},
 ): Promise<BfgProResponse> {
+  // The caller's signal ends the run when the client disconnects, so no model
+  // call or Findok request keeps running for a result nobody receives.
+  const deadline = createDeadline(BFG_PRO_TOTAL_TIMEOUT_MS, {
+    parentSignal: options.signal,
+    timeoutMessage: BFG_PRO_TIMEOUT_MESSAGE,
+  });
+  try {
+    return await searchWithinDeadline(scenario, options, deadline);
+  } catch (error) {
+    // A model or Findok request cut off by the deadline reports the timeout.
+    deadline.throwIfExpired();
+    throw error;
+  } finally {
+    deadline.dispose();
+  }
+}
+
+async function searchWithinDeadline(
+  scenario: string,
+  options: BfgProSearchOptions,
+  deadline: Deadline,
+): Promise<BfgProResponse> {
   const report = (progress: BfgProProgress): void => {
     options.onProgress?.(progress);
   };
@@ -679,6 +708,7 @@ export async function runBfgProSearch(
       messages: queryMessages(scenario),
       timeoutMs: 600_000,
       maxTokens: 2_048,
+      deadline,
     }),
   );
 
@@ -695,14 +725,18 @@ export async function runBfgProSearch(
   };
 
   report({ stage: "fetching" });
-  addList(await fetchBfgProCandidates({ query: primaryQuery }));
+  addList(await fetchBfgProCandidates({ query: primaryQuery, signal: deadline.signal }));
 
   if (queryPlan.norm) {
-    addList(await fetchBfgProCandidates({ query: primaryQuery, norm: queryPlan.norm }));
+    addList(await fetchBfgProCandidates({
+      query: primaryQuery,
+      norm: queryPlan.norm,
+      signal: deadline.signal,
+    }));
   }
 
   for (const alternativeQuery of queryPlan.queries.slice(1)) {
-    addList(await fetchBfgProCandidates({ query: alternativeQuery }));
+    addList(await fetchBfgProCandidates({ query: alternativeQuery, signal: deadline.signal }));
   }
 
   const officialCandidates = fairRoundRobinMerge(queryResultLists, MAX_MERGED_CANDIDATES);
@@ -721,6 +755,7 @@ export async function runBfgProSearch(
       messages: preliminaryShortlistMessages(scenario, excerptCandidates),
       timeoutMs: 600_000,
       maxTokens: 4_000,
+      deadline,
     });
     const prelimSelections = parsePreliminarySelections(prelimRaw);
     const candidateMap = new Map(excerptCandidates.map((c) => [c.candidateId, c]));
@@ -758,6 +793,7 @@ export async function runBfgProSearch(
     messages: finalEvaluationMessages(scenario, allocatedCandidates),
     timeoutMs: 600_000,
     maxTokens: 16_000,
+    deadline,
   });
   const finalSelections = parseFinalSelections(finalRaw);
 

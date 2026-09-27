@@ -289,12 +289,13 @@ async function readJsonResponse(response: Response): Promise<Record<string, unkn
   }
 }
 
-function requestOptions(accept: string): RequestInit {
+function requestOptions(accept: string, signal?: AbortSignal): RequestInit {
+  const timeout = AbortSignal.timeout(10_000);
   return {
     headers: { Accept: accept },
     cache: "no-store",
     redirect: "error",
-    signal: AbortSignal.timeout(10_000),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   };
 }
 
@@ -515,6 +516,7 @@ async function fetchProSearchPage(
   norm: string,
   page: number,
   fetchImpl: FetchLike,
+  signal?: AbortSignal,
 ): Promise<{ hits: FindokSearchHit[]; totalPages: number }> {
   const url = fixedApiUrl("/dokumente");
   url.searchParams.set("page", String(page));
@@ -529,7 +531,7 @@ async function fetchProSearchPage(
 
   let response: Response;
   try {
-    response = await fetchImpl(url.toString(), requestOptions("text/event-stream"));
+    response = await fetchImpl(url.toString(), requestOptions("text/event-stream", signal));
   } catch (error) {
     throw new FindokUpstreamError(error instanceof Error ? error.message : undefined);
   }
@@ -549,6 +551,7 @@ async function fetchProSearchPage(
 async function fetchProDetails(
   hits: FindokSearchHit[],
   fetchImpl: FetchLike,
+  signal?: AbortSignal,
 ): Promise<Array<Omit<BfgProCandidate, "candidateId"> | null>> {
   return survivingDetails(await Promise.allSettled(hits.map(async (hit) => {
     const url = fixedApiUrl("/volltext");
@@ -557,7 +560,7 @@ async function fetchProDetails(
     url.searchParams.set("indexName", hit.indexName);
     let response: Response;
     try {
-      response = await fetchImpl(url.toString(), requestOptions("application/json"));
+      response = await fetchImpl(url.toString(), requestOptions("application/json", signal));
     } catch (error) {
       throw new FindokUpstreamError(error instanceof Error ? error.message : undefined);
     }
@@ -569,10 +572,12 @@ export async function fetchBfgProCandidates({
   query,
   norm,
   fetchImpl = fetch,
+  signal,
 }: {
   query: string;
   norm?: string;
   fetchImpl?: FetchLike;
+  signal?: AbortSignal;
 }): Promise<BfgProCandidate[]> {
   const normalizedQuery = normalizeFindokQuery(query);
   const normalizedNorm = normalizeFindokQuery(norm ?? "");
@@ -580,9 +585,11 @@ export async function fetchBfgProCandidates({
   let totalPages = 1;
 
   for (let page = 1; page <= BFG_PRO_MAX_PAGES && page <= totalPages; page += 1) {
-    const searchPage = await fetchProSearchPage(normalizedQuery, normalizedNorm, page, fetchImpl);
+    const searchPage = await fetchProSearchPage(normalizedQuery, normalizedNorm, page, fetchImpl, signal);
     totalPages = Math.max(1, searchPage.totalPages);
-    const details = await fetchProDetails(searchPage.hits, fetchImpl);
+    const details = await fetchProDetails(searchPage.hits, fetchImpl, signal);
+    // Details that survived an abort must not pass for a complete result.
+    signal?.throwIfAborted();
     candidates.push(...details.filter(
       (candidate): candidate is Omit<BfgProCandidate, "candidateId"> => candidate !== null,
     ));

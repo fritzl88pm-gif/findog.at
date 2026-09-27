@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { UserVisibleError } from "@/lib/errors";
 import { fetchBfgProCandidates, type BfgProCandidate } from "./bfg-decisions";
 import type { BfgProProgress } from "./bfg-pro-stream";
 import {
@@ -229,7 +230,10 @@ describe("BFG PRO query generation and full-text Luna Medium evaluation", () => 
 
     const response = await runBfgProSearch("Arbeitszimmer im Wohnungsverband");
 
-    expect(fetchBfgProCandidates).toHaveBeenCalledWith({ query: "Arbeitszimmer Vorsteuer" });
+    expect(fetchBfgProCandidates).toHaveBeenCalledWith({
+      query: "Arbeitszimmer Vorsteuer",
+      signal: expect.any(AbortSignal),
+    });
     expect(response.results).toHaveLength(1);
     expect(response.results[0]).toMatchObject({ gz: officialCandidate.gz, score: 80 });
   });
@@ -243,8 +247,8 @@ describe("BFG PRO query generation and full-text Luna Medium evaluation", () => 
 
     await expect(runBfgProSearch("Sachverhalt")).resolves.toEqual({ results: [] });
     expect(vi.mocked(fetchBfgProCandidates).mock.calls).toEqual([
-      [{ query: "Arbeitszimmer" }],
-      [{ query: "Vorsteuer" }],
+      [{ query: "Arbeitszimmer", signal: expect.any(AbortSignal) }],
+      [{ query: "Vorsteuer", signal: expect.any(AbortSignal) }],
     ]);
   });
 
@@ -281,6 +285,47 @@ describe("BFG PRO query generation and full-text Luna Medium evaluation", () => 
       { stage: "sorting", count: 6 },
       { stage: "summarizing", count: 6 },
     ]);
+  });
+
+  it("stops every later stage once the caller aborts during query planning", async () => {
+    fetchMock.mockImplementationOnce((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    }));
+    const client = new AbortController();
+
+    const search = runBfgProSearch("Sachverhalt", { signal: client.signal });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    client.abort();
+
+    await expect(search).rejects.toBeInstanceOf(UserVisibleError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchBfgProCandidates).not.toHaveBeenCalled();
+  });
+
+  it("ends the whole run within the 600 s proxy budget even when each stage is shorter", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock
+        .mockImplementationOnce(() => new Promise((resolve) => {
+          setTimeout(() => resolve(mockLunaResponse('{"queries":["Arbeitszimmer"],"norm":null}')), 300_000);
+        }))
+        .mockImplementationOnce((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        }));
+
+      const outcome = runBfgProSearch("Sachverhalt").then(() => "resolved", (error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(290_000);
+
+      const error = await Promise.race([outcome, Promise.resolve("pending")]);
+      expect(error).toBeInstanceOf(UserVisibleError);
+      expect((error as UserVisibleError).message).toBe(
+        "Die BFG Suche PRO hat zu lange gedauert. Bitte den Sachverhalt eingrenzen oder erneut versuchen.",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stops reporting progress once retrieval found no official candidate", async () => {
@@ -326,9 +371,9 @@ describe("BFG PRO query generation and full-text Luna Medium evaluation", () => 
     await runBfgProSearch("Sachverhalt");
 
     expect(vi.mocked(fetchBfgProCandidates).mock.calls).toEqual([
-      [{ query: "Arbeitszimmer" }],
-      [{ query: "Arbeitszimmer", norm: "EStG 1988 § 20" }],
-      [{ query: "betrieblicher Raum" }],
+      [{ query: "Arbeitszimmer", signal: expect.any(AbortSignal) }],
+      [{ query: "Arbeitszimmer", norm: "EStG 1988 § 20", signal: expect.any(AbortSignal) }],
+      [{ query: "betrieblicher Raum", signal: expect.any(AbortSignal) }],
     ]);
   });
 
@@ -377,9 +422,9 @@ describe("BFG PRO query generation and full-text Luna Medium evaluation", () => 
 
     // All planned queries were called despite Q1 having 60 hits
     expect(vi.mocked(fetchBfgProCandidates).mock.calls).toEqual([
-      [{ query: "Arbeitszimmer" }],
-      [{ query: "Arbeitszimmer", norm: "EStG 1988 § 20" }],
-      [{ query: "häusliches Büro" }],
+      [{ query: "Arbeitszimmer", signal: expect.any(AbortSignal) }],
+      [{ query: "Arbeitszimmer", norm: "EStG 1988 § 20", signal: expect.any(AbortSignal) }],
+      [{ query: "häusliches Büro", signal: expect.any(AbortSignal) }],
     ]);
 
     // Check that round-robin candidates were merged into the pool of max 60

@@ -638,6 +638,29 @@ describe("Findok BFG result mapping", () => {
       .rejects.toBeInstanceOf(FindokUpstreamError);
   });
 
+  it("cancels pending PRO detail requests when the caller aborts", async () => {
+    const client = new AbortController();
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      if (new URL(String(input)).pathname.endsWith("/dokumente")) {
+        return sseResponse(searchPageWith(["doc-1", "doc-2"]));
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+    });
+
+    const pending = fetchBfgProCandidates({
+      query: "Arbeitszimmer",
+      fetchImpl: fetchMock,
+      signal: client.signal,
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    client.abort();
+
+    await expect(pending).rejects.toBeDefined();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("keeps the other search results when single Findok details fail", async () => {
     const fetchMock = detailFetch(["doc-1", "doc-2", "doc-3"], failingDetails);
 
