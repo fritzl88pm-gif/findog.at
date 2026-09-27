@@ -296,6 +296,41 @@ describe("executeFredTurn", () => {
     expect(persistence.persistGeneratedArtifacts).not.toHaveBeenCalled();
   });
 
+  it("completes a stored answer as text-only when its generated files cannot be persisted", async () => {
+    const onRequestTransition = vi.fn().mockResolvedValue(undefined);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    upstream = makeUpstreamDeps({
+      openStream: vi.fn().mockResolvedValue(artifactStream(
+        "[Report](sandbox:/workspace/output/report.txt)",
+        { artifacts: [{ file_name: "report.txt", file_size: 12, file_type: ".txt", handle: "resource://report" }] },
+      )),
+    });
+    persistence = makePersistenceDeps({
+      recordEvent: vi.fn()
+        .mockResolvedValueOnce({ conversation: summaryConv(), messageId: 41 })
+        .mockResolvedValueOnce({ conversation: summaryConv(), messageId: 42 }),
+      persistGeneratedArtifacts: vi.fn().mockRejectedValue(new Error("transient db error")),
+    });
+
+    const { events, result } = await collectEvents(executeFredTurn(
+      baseRequest({ onRequestTransition }),
+      upstream,
+      persistence,
+      config,
+    ));
+
+    expect(persistence.persistGeneratedArtifacts).toHaveBeenCalledTimes(1);
+    expect(onRequestTransition).toHaveBeenLastCalledWith({ status: "completed", assistantMessageId: 42 });
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "final", answer: "Report", assistantMessageId: 42 });
+    expect(events.at(-1)).not.toHaveProperty("artifacts");
+    expect(result).toMatchObject({ answer: "Report", assistantMessageId: 42, stopped: false });
+    expect(result.artifacts).toBeUndefined();
+    expect(upstream.stopSession).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith("fred generated artifacts not persisted", expect.any(Object));
+    consoleError.mockRestore();
+  });
+
   it("keeps WeKnora citation tags out of the streamed, persisted and final answer", async () => {
     upstream.openStream = vi.fn().mockResolvedValue(new ReadableStream<Uint8Array>({
       start(ctrl) {

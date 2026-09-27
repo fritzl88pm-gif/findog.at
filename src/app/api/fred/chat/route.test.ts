@@ -939,6 +939,53 @@ describe("POST /api/fred/chat", () => {
     });
   });
 
+  it("completes a stored attachment answer as text-only when its generated files cannot be persisted", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const from = vi.fn((table: string) => table === "fred_messages"
+      ? {
+        update: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                select: vi.fn().mockReturnValue({
+                  maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "statement timeout" } }),
+                }),
+              }),
+            }),
+          }),
+        }),
+      }
+      : {
+        insert: vi.fn().mockReturnValue({ select: vi.fn().mockResolvedValue({ data: [{ id: "run-1" }], error: null }) }),
+        update: vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ data: null, error: null }) }),
+      });
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+    vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+      'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+      `data: ${JSON.stringify({ response_type: "answer", content: "Hier: [tabelle.csv](sandbox:/mnt/data/tabelle.csv)", done: true })}\n\n`,
+      `data: ${JSON.stringify({
+        response_type: "complete",
+        data: { artifacts: [{ file_name: "tabelle.csv", file_type: ".csv", file_size: 12, handle: "resource://tabelle-csv" }] },
+      })}\n\n`,
+    ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+    const response = await POST(multipartRequest({ query: "Tabelle als CSV", attachment: pdfFile() }));
+    const events = (await response.text()).split("\n").filter(Boolean).map(parseFredNativeStreamLine);
+
+    expect(from).toHaveBeenCalledWith("fred_messages");
+    expect(events.some((event) => event?.type === "error")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "final", answer: "Hier: tabelle.csv", assistantMessageId: 2 });
+    expect(events.at(-1)).not.toHaveProperty("artifacts");
+    expect(mockTransitionFredRequestReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: "completed",
+      assistantMessageId: 2,
+    }));
+    expect(stopFredUpstreamSession).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith("fred generated artifacts not persisted", expect.any(Object));
+    consoleError.mockRestore();
+  });
+
   it("cleans deadline timers and the request abort listener after early provider failure", async () => {
     vi.useFakeTimers();
     const rpc = rpcForTurn();

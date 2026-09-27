@@ -1653,10 +1653,19 @@ export async function POST(request: Request) {
             throw new UserVisibleError("Die gespeicherte Antwort hat keine Nachrichten-ID.", 503);
           }
           if (generatedArtifacts.length > 0 && upstreamMsgId) {
-            persistedGeneratedArtifacts = await persistGeneratedArtifacts({
-              supabase, userId: user.id, conversationId: finalConversation.id,
-              messageId: assistantMessageId, upstreamMessageId: upstreamMsgId, artifacts: generatedArtifacts,
-            });
+            try {
+              persistedGeneratedArtifacts = await persistGeneratedArtifacts({
+                supabase, userId: user.id, conversationId: finalConversation.id,
+                messageId: assistantMessageId, upstreamMessageId: upstreamMsgId, artifacts: generatedArtifacts,
+              });
+            } catch (error) {
+              // The answer is already stored. Its files are an enhancement, as in
+              // artifact discovery, so the turn completes as a text-only answer.
+              console.error("fred generated artifacts not persisted", {
+                path: "fred_chat",
+                message: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+              });
+            }
           }
           await transitionFredRequestReceipt({
             supabase,

@@ -775,13 +775,22 @@ export async function* executeFredTurn(
       && assistantMessageId !== undefined
       && persistence.persistGeneratedArtifacts
     ) {
-      persistedArtifacts = await persistence.persistGeneratedArtifacts({
-        clientId: request.clientId,
-        conversationId: finalConversation.id,
-        messageId: assistantMessageId,
-        upstreamMessageId: upstreamMsgId,
-        artifacts: generatedArtifacts,
-      });
+      try {
+        persistedArtifacts = await persistence.persistGeneratedArtifacts({
+          clientId: request.clientId,
+          conversationId: finalConversation.id,
+          messageId: assistantMessageId,
+          upstreamMessageId: upstreamMsgId,
+          artifacts: generatedArtifacts,
+        });
+      } catch (error) {
+        // The answer is already stored. Its files are an enhancement, as in
+        // artifact discovery, so the turn completes as a text-only answer.
+        console.error("fred generated artifacts not persisted", {
+          path: "fred_turn_service",
+          message: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+        });
+      }
     }
 
     if (request.onRequestTransition) {
