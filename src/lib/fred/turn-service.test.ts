@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { parseFredWebhookEvent } from "@/lib/weknora/fred-history";
 import { EOF_WITHOUT_FINAL_CLIENT_MESSAGE } from "./run-diagnostics";
 import type {
   FredTurnEvent,
@@ -548,6 +549,36 @@ describe("executeFredTurn", () => {
     expect(upstream.relayEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
       type: "message_received",
     }));
+  });
+
+  it("persists and relays the trimmed answer that the signed webhook echo stores", async () => {
+    upstream.openStream = vi.fn().mockResolvedValue(new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        ctrl.enqueue(new TextEncoder().encode([
+          'data: {"response_type":"answer","content":"\\nAntwort mit Liste","done":false}\n\n',
+          'data: {"response_type":"answer","content":"\\n","done":true}\n\n',
+          'data: {"response_type":"complete","data":{}}\n\n',
+        ].join("")));
+        ctrl.close();
+      },
+    }));
+
+    await collectEvents(executeFredTurn(baseRequest(), upstream, persistence, config));
+
+    const persisted = vi.mocked(persistence.recordEvent).mock.calls[1][0];
+    const relayed = vi.mocked(upstream.relayEvent).mock.calls
+      .map(([params]) => params)
+      .find((params) => params.type === "message_received");
+    expect(persisted).toMatchObject({ eventType: "message_received", content: "Antwort mit Liste" });
+    expect(relayed?.content).toBe(persisted.content);
+    // The webhook route stores the parsed echo; bridge pairing needs equal content.
+    expect(parseFredWebhookEvent({
+      type: "message_received",
+      channel_id: channelId,
+      session_id: "session-1",
+      timestamp: new Date().toISOString(),
+      content: relayed?.content,
+    }, channelId).content).toBe(persisted.content);
   });
 
   it("uses the caller-provided assistant event id", async () => {

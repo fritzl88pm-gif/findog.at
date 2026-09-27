@@ -771,6 +771,33 @@ describe("POST /api/fred/chat", () => {
     expect(cancel).toHaveBeenCalledWith("browser-request-cancel");
   });
 
+  it("persists and relays the trimmed attachment answer that the webhook echo stores", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "77777777-7777-4777-8777-777777777703",
+    });
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+      'data: {"response_type":"answer","content":"\\nAntwort mit Tabelle","done":false}\n\n',
+      'data: {"response_type":"answer","content":"\\n","done":true}\n\n',
+      'data: {"response_type":"complete","data":{}}\n\n',
+    ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+    const response = await POST(multipartRequest({ query: "Beleg prüfen", attachment: pdfFile() }));
+    await response.text();
+
+    expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
+      payload: expect.objectContaining({
+        event_type: "message_received",
+        content: "Antwort mit Tabelle",
+      }),
+    });
+    expect(relayFredWebhookEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "message_received",
+      content: "Antwort mit Tabelle",
+    }));
+  });
+
   it("cleans deadline timers and the request abort listener after early provider failure", async () => {
     vi.useFakeTimers();
     const rpc = rpcForTurn();

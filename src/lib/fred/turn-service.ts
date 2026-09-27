@@ -732,13 +732,15 @@ export async function* executeFredTurn(
       { target: "fullText" },
     ), generatedArtifacts);
 
+    // Persist and relay the trimmed answer: the signed webhook echo of this
+    // relay is trimmed before storage and pairs with this row only on equal content.
     const { conversation: finalConversation, messageId: assistantMessageId } = await persistence.recordEvent({
       clientId: request.clientId,
       channelId: fredConfig.channelId,
       sessionId: upstreamSession.id,
       eventId: request.assistantEventId ?? randomUUID(),
       eventType: "message_received",
-      content: rawAnswer,
+      content: plainFinalAnswer,
       occurredAt: new Date().toISOString(),
       attachments: [],
       webSearchEnabled: false,
@@ -781,7 +783,7 @@ export async function* executeFredTurn(
     void upstream.relayEvent({
       ...sessionConfigCache,
       type: "message_received",
-      content: rawAnswer,
+      content: plainFinalAnswer,
       signal: request.signal ? request.signal : new AbortController().signal,
     }).catch(() => undefined);
 

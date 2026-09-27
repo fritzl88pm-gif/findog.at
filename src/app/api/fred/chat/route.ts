@@ -1611,6 +1611,8 @@ export async function POST(request: Request) {
           // Normalize after image materialization, which rebuilds the display
           // text, so native image turns also drop generated-file pseudo-links.
           displayAnswer = normalizeGeneratedArtifactLinks(displayAnswer, generatedArtifacts);
+          // Persist and relay the trimmed answer: the signed webhook echo of
+          // this relay is trimmed before storage and pairs only on equal content.
           const { conversation: finalConversation, messageId: assistantMessageId } = await recordEvent({
             supabase,
             userId: user.id,
@@ -1618,7 +1620,7 @@ export async function POST(request: Request) {
             sessionId: upstreamSession.id,
             eventId: requestReceipt.assistantEventId,
             eventType: "message_received",
-            content: rawAnswer,
+            content: plainFinalAnswer,
             occurredAt: new Date().toISOString(),
             displayContent: displayAnswer,
             researchTrace,
@@ -1661,7 +1663,7 @@ export async function POST(request: Request) {
             config,
             upstreamSession,
             type: "message_received",
-            content: rawAnswer,
+            content: plainFinalAnswer,
             signal: deadline.signal,
           });
           const finalEvent: Parameters<typeof encodeFredNativeStreamEvent>[0] = {
