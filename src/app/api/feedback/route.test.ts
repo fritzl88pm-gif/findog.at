@@ -97,6 +97,20 @@ describe("POST /api/feedback", () => {
     expect(supabase.insert).not.toHaveBeenCalled();
   });
 
+  it("reports a conversation deleted between the check and the insert as not found", async () => {
+    const supabase = supabaseClient({
+      insertError: { code: "P0002", message: "Fred conversation not found" },
+    });
+    vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client as never);
+
+    const response = await POST(request());
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: "Die Fred-Unterhaltung wurde nicht gefunden.",
+    });
+  });
+
   it("rejects empty feedback and unknown fields", async () => {
     const supabase = supabaseClient();
     vi.mocked(getSupabaseServerClient).mockReturnValue(supabase.client as never);

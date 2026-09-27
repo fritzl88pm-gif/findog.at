@@ -88,6 +88,25 @@ describe("agent feedback conversation deletion migration", () => {
     }
   });
 
+  it("locks the owning Fred conversation before feedback is inserted", () => {
+    const sql = readDeletionMigration();
+    const fn = sql.match(
+      /create or replace function public\.lock_agent_feedback_conversation\(\)([\s\S]*?)\$\$;/i,
+    )?.[1] ?? "";
+    expect(fn).toMatch(/returns trigger/i);
+    expect(fn).toMatch(/security definer\s+set search_path = ''/i);
+    expect(fn).toMatch(
+      /from public\.fred_conversations as conversation\s+where conversation\.id = new\.conversation_id\s+and conversation\.client_id = new\.user_id\s+for key share;/i,
+    );
+    expect(fn).toMatch(/if not found then\s+raise exception[^;]*using errcode = 'P0002';/i);
+    expect(sql).toMatch(
+      /revoke all on function public\.lock_agent_feedback_conversation\(\)\s+from public, anon, authenticated;/i,
+    );
+    expect(sql).toMatch(
+      /before insert on public\.agent_feedback\s+for each row\s+execute function public\.lock_agent_feedback_conversation\(\);/i,
+    );
+  });
+
   it("indexes conversation_id for the trigger lookup", () => {
     expect(readDeletionMigration()).toMatch(
       /create index if not exists agent_feedback_conversation_id_idx\s+on public\.agent_feedback \(conversation_id\);/i,

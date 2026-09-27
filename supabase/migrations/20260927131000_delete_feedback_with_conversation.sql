@@ -36,6 +36,42 @@ after delete on public.conversations
 for each row
 execute function public.delete_conversation_agent_feedback();
 
+-- The route checks the conversation before inserting, but without a lock a
+-- concurrent deletion can commit between that check and the insert, and the
+-- AFTER DELETE trigger cannot see an uncommitted insert. FOR KEY SHARE makes the
+-- deletion wait for the inserting transaction, whose feedback the trigger's
+-- delete then sees; an insert after the deletion finds no conversation and
+-- fails. Feedback is only accepted for Fred conversations.
+create or replace function public.lock_agent_feedback_conversation()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform 1
+  from public.fred_conversations as conversation
+  where conversation.id = new.conversation_id
+    and conversation.client_id = new.user_id
+  for key share;
+
+  if not found then
+    raise exception 'Fred conversation not found'
+      using errcode = 'P0002';
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke all on function public.lock_agent_feedback_conversation()
+  from public, anon, authenticated;
+
+create trigger agent_feedback_lock_conversation
+before insert on public.agent_feedback
+for each row
+execute function public.lock_agent_feedback_conversation();
+
 -- One-time cleanup: feedback whose conversation was already deleted, i.e. no
 -- conversation of the same owner exists in either table.
 delete from public.agent_feedback as feedback

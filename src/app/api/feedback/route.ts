@@ -136,6 +136,10 @@ export async function POST(request: Request) {
       assistant_response: body.assistantResponse,
       user_feedback: body.feedback,
     });
+    // P0002: the insert trigger found the conversation deleted after the check.
+    if (error?.code === "P0002") {
+      throw new UserVisibleError("Die Fred-Unterhaltung wurde nicht gefunden.", 404);
+    }
     if (error) {
       throw new UserVisibleError("Feedback konnte nicht gespeichert werden.", 503);
     }
