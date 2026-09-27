@@ -754,3 +754,71 @@ describe("Fred ResearchTrace rendering", () => {
     });
   });
 });
+
+describe("Fred answer leave guard", () => {
+  function pageFunction(name: string): string {
+    const start = pageSource.search(new RegExp(`\\n  (?:async )?function ${name}\\(`));
+    expect(start, `${name} fehlt in page.tsx`).toBeGreaterThan(-1);
+    return pageSource.slice(start, pageSource.indexOf("\n  }\n", start));
+  }
+
+  it("keeps the chat view's sending state in a ref and asks before leaving a streaming answer", () => {
+    expect(pageSource).toContain(
+      '"Fred beantwortet gerade eine Frage. Wenn du jetzt wechselst, wird die Antwort abgebrochen. Trotzdem wechseln?"',
+    );
+    expect(pageSource).toContain("onSendingChange={handleFredSendingChange}");
+    expect(pageSource).toMatch(/isFredAnsweringRef\.current = isSending;/);
+    expect(pageFunction("confirmLeaveFredAnswer")).toContain(
+      "!isFredAnsweringRef.current || window.confirm(FRED_LEAVE_ANSWER_CONFIRMATION)",
+    );
+    expect(pageFunction("leaveCurrentView")).toContain("confirmLeaveFredAnswer() && leaveAdministration()");
+  });
+
+  it("guards every view switch, the new-question button and sign-out", () => {
+    // leaveAdministration is only reached through leaveCurrentView.
+    expect(pageSource.match(/(?<!function )leaveAdministration\(\)/g)).toHaveLength(1);
+    const openers = [...pageSource.matchAll(/\n  (?:async )?function (open\w*View)\(/g)].map((match) => match[1]);
+    expect(openers).toEqual(expect.arrayContaining([
+      "openHomeView",
+      "openFredView",
+      "openFormsView",
+      "openDataView",
+      "openScanningView",
+      "openFredRunView",
+      "openAdministrationView",
+    ]));
+    for (const name of [...openers, "handleSignOut"]) {
+      expect(pageFunction(name), name).toMatch(/!leaveCurrentView\(\)\) return;/);
+    }
+    for (const name of openers.filter((opener) => opener !== "openFredView")) {
+      expect(pageFunction(name), name).not.toContain("showNewFredConversation");
+    }
+    expect(pageFunction("openFredView")).toContain("showNewFredConversation();");
+    expect(pageFunction("showNewFredConversation")).toContain("setFredChatInstance((current) => current + 1);");
+    // Dashboard openers delegate to the guarded view openers.
+    expect(pageFunction("openDashboardApp")).not.toContain("setAppView");
+    expect(pageFunction("openDashboardConversation")).toContain("selectFredConversation(conversation)");
+  });
+
+  it("asks before switching to another conversation but not when reopening the open one", () => {
+    const select = pageFunction("selectFredConversation");
+    expect(select).toContain('appView === "chat" && conversation.id === fredConversationId');
+    expect(select).toContain("if (!isOpenConversation && !leaveCurrentView()) return;");
+    expect(select.indexOf("leaveCurrentView()")).toBeLessThan(select.indexOf("setIsHistoryLoading(true)"));
+  });
+
+  it("asks before deleting the open conversation or the account and does not ask twice", () => {
+    const deletion = pageFunction("deleteFredConversations");
+    const guardIndex = deletion.indexOf("ids.includes(fredConversationId) && !confirmLeaveFredAnswer()");
+    expect(guardIndex).toBeGreaterThan(-1);
+    expect(guardIndex).toBeLessThan(deletion.indexOf("window.confirm("));
+    expect(deletion).toContain("showNewFredConversation();");
+    expect(deletion).not.toContain("openFredView()");
+
+    const accountDeletion = pageFunction("deleteOwnAccount");
+    expect(accountDeletion.indexOf("confirmLeaveFredAnswer()")).toBeGreaterThan(-1);
+    expect(accountDeletion.indexOf("confirmLeaveFredAnswer()")).toBeLessThan(
+      accountDeletion.indexOf("window.confirm("),
+    );
+  });
+});

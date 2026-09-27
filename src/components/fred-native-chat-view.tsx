@@ -151,6 +151,7 @@ type FredNativeChatViewProps = {
     conversation: FredNativeConversation,
     messages: FredNativeMessage[],
   ) => void;
+  onSendingChange?: (isSending: boolean) => void;
 };
 
 function formatTime(value: string): string {
@@ -481,6 +482,7 @@ export default function FredNativeChatView({
   renderAssistantContent,
   renderUserContent,
   onConversationUpdated,
+  onSendingChange,
 }: FredNativeChatViewProps) {
   const [messages, setMessages] = useState<FredNativeMessage[]>(initialMessages);
   const [activeAssistant, setActiveAssistant] = useState<FredNativeMessage | null>(null);
@@ -703,6 +705,22 @@ export default function FredNativeChatView({
     }).catch(() => undefined);
     return () => controller.abort();
   }, [accessToken, readOnly]);
+
+  // Leaving the view or closing the tab aborts the stream and the server then
+  // cancels the answer, so the page and the browser ask before that happens.
+  useEffect(() => {
+    if (!isSending) return;
+    onSendingChange?.(true);
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", warnBeforeUnload);
+      onSendingChange?.(false);
+    };
+  }, [isSending, onSendingChange]);
 
   useEffect(() => () => {
     streamingPreviewRef.current?.cancel();

@@ -132,6 +132,8 @@ function leaveAdminOnlyView(current: AppView): AppView {
 }
 
 const TELEGRAM_BOT_USERNAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{4,31}$/u;
+const FRED_LEAVE_ANSWER_CONFIRMATION =
+  "Fred beantwortet gerade eine Frage. Wenn du jetzt wechselst, wird die Antwort abgebrochen. Trotzdem wechseln?";
 
 type AuthForm = {
   email: string;
@@ -1133,6 +1135,21 @@ export default function Home() {
   }, adminGuard);
   useEffect(() => () => adminLoadController.current?.abort(), []);
 
+  const isFredAnsweringRef = useRef(false);
+  const handleFredSendingChange = useCallback((isSending: boolean) => {
+    isFredAnsweringRef.current = isSending;
+  }, []);
+
+  // Unmounting, re-keying or switching the chat view aborts a streaming answer
+  // and the server marks the turn cancelled, so ask before doing that.
+  function confirmLeaveFredAnswer() {
+    return !isFredAnsweringRef.current || window.confirm(FRED_LEAVE_ANSWER_CONFIRMATION);
+  }
+
+  function leaveCurrentView() {
+    return confirmLeaveFredAnswer() && leaveAdministration();
+  }
+
   function leaveAdministration() {
     if (appView !== "administration") return true;
     if (!adminGuard.canLeave()) return false;
@@ -1690,7 +1707,7 @@ export default function Home() {
   }
 
   async function deleteOwnAccount() {
-    if (isAccountDeletionSubmitting) {
+    if (isAccountDeletionSubmitting || !confirmLeaveFredAnswer()) {
       return;
     }
     if (!window.confirm(
@@ -1747,7 +1764,7 @@ export default function Home() {
   }
 
   async function handleSignOut() {
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
     if (!supabase || isAuthSubmitting) {
       return;
     }
@@ -1776,7 +1793,7 @@ export default function Home() {
   }
 
   function openHomeView() {
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
     setAppView("home");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1808,7 +1825,7 @@ export default function Home() {
   }
 
   function openFormsView() {
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
     setAppView("forms");
     setSelectedFormId("");
     setFormImage(null);
@@ -1824,7 +1841,7 @@ export default function Home() {
   }
 
   function openDataView() {
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
     setAppView("data");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1833,7 +1850,7 @@ export default function Home() {
   }
 
   function openDownloadsView() {
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
     setAppView("downloads");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1842,7 +1859,7 @@ export default function Home() {
   }
 
   function openReasoningsView() {
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
     setAppView("reasonings");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1851,7 +1868,7 @@ export default function Home() {
   }
 
   function openBfgDecisionsView() {
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
     setAppView("bfg-decisions");
     setBfgError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1860,7 +1877,7 @@ export default function Home() {
   }
 
   function openBfgProView() {
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
     setAppView("bfg-pro");
     setBfgProError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1869,7 +1886,7 @@ export default function Home() {
   }
 
   function openBfgNewslettersView() {
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
     setAppView("bfg-newsletters");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1878,7 +1895,7 @@ export default function Home() {
   }
 
   function openGermanSvPensionView() {
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
     setAppView("german-sv-pension");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1887,7 +1904,7 @@ export default function Home() {
   }
 
   function openL17bCurrencyView() {
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
     setAppView("l17b-currency");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1896,7 +1913,7 @@ export default function Home() {
   }
 
   function openFredRunView() {
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
     setAppView("fredrun");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -1908,7 +1925,7 @@ export default function Home() {
     if (!isAdmin) {
       return;
     }
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
     setAppView("quiz");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
@@ -1916,7 +1933,7 @@ export default function Home() {
   }
 
   function openFredLiveView() {
-    if (!isAdmin || !leaveAdministration()) return;
+    if (!isAdmin || !leaveCurrentView()) return;
     setAppView("fred-live");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
@@ -1924,7 +1941,11 @@ export default function Home() {
   }
 
   function openFredView() {
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
+    showNewFredConversation();
+  }
+
+  function showNewFredConversation() {
     setAppView("chat");
     setFredConversationId("");
     setActiveConversationOrigin("web");
@@ -2244,7 +2265,7 @@ export default function Home() {
   }
 
   async function openAdministrationView() {
-    if (!isAdmin || !session?.access_token || !leaveAdministration()) return;
+    if (!isAdmin || !session?.access_token || !leaveCurrentView()) return;
     setAppView("administration");
     setAdminTab("overview");
     setAdminError("");
@@ -2561,7 +2582,7 @@ export default function Home() {
   }
 
   function openScanningView() {
-    if (!leaveAdministration()) return;
+    if (!leaveCurrentView()) return;
     setAppView("scanning");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
@@ -2570,10 +2591,13 @@ export default function Home() {
   }
 
   async function selectFredConversation(conversation: ConversationSummary) {
-    if (!leaveAdministration()) return;
     if (isHistoryLoading || isDeleting || !session?.access_token) {
       return;
     }
+    // Reopening the conversation already shown keeps the chat view mounted,
+    // so an answer streaming there is not cancelled.
+    const isOpenConversation = appView === "chat" && conversation.id === fredConversationId;
+    if (!isOpenConversation && !leaveCurrentView()) return;
     setError("");
     setIsHistoryLoading(true);
     try {
@@ -2649,6 +2673,10 @@ export default function Home() {
     ) {
       return;
     }
+    // Deleting the open conversation resets the chat view below.
+    if (ids.includes(fredConversationId) && !confirmLeaveFredAnswer()) {
+      return;
+    }
 
     const confirmed = window.confirm(
       ids.length === 1
@@ -2696,7 +2724,7 @@ export default function Home() {
       setFredConversations(result.conversations);
       setSelectedFredConversationIds(result.selectedIds);
       if (result.activeConversationDeleted) {
-        openFredView();
+        showNewFredConversation();
       }
     } catch (deleteError) {
       setError(
@@ -3638,6 +3666,7 @@ export default function Home() {
           renderAssistantContent={(content) => <RichAnswer content={content} />}
           renderUserContent={renderUserMessageContent}
           onConversationUpdated={handleFredConversationUpdated}
+          onSendingChange={handleFredSendingChange}
         />
       ) : appView === "data" ? (
         <KnowledgeLandscapeView accessToken={session?.access_token ?? ""} />

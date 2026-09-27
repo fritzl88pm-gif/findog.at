@@ -77,7 +77,11 @@ function installFetch() {
   }));
 }
 
-async function renderView(conversationId: string, messages: FredNativeMessage[]) {
+async function renderView(
+  conversationId: string,
+  messages: FredNativeMessage[],
+  onSendingChange?: (isSending: boolean) => void,
+) {
   // Re-rendering the same root with other props mirrors how page.tsx switches
   // conversations: the view is updated in place, not remounted.
   await act(async () => {
@@ -90,6 +94,7 @@ async function renderView(conversationId: string, messages: FredNativeMessage[])
       onConversationUpdated: (updated: FredNativeConversation, updatedMessages?: FredNativeMessage[]) => {
         conversationUpdates.push({ id: updated.id, messages: updatedMessages });
       },
+      onSendingChange,
     }));
   });
   await settle();
@@ -343,5 +348,61 @@ describe("FredNativeChatView rejected questions", () => {
 
     expect(transcriptText()).toContain("Neue Frage");
     expect(composer().value).toBe("");
+  });
+});
+
+describe("FredNativeChatView leave guard", () => {
+  function dispatchBeforeUnload(): boolean {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  }
+
+  it("reports a streaming answer to the page and warns before closing the tab", async () => {
+    const sendingChanges: boolean[] = [];
+    await renderView(conversationA.id, messagesA, (isSending) => sendingChanges.push(isSending));
+    expect(sendingChanges).toEqual([]);
+    expect(dispatchBeforeUnload()).toBe(false);
+
+    await sendQuestion("Folgefrage A");
+    expect(sendingChanges).toEqual([true]);
+    expect(dispatchBeforeUnload()).toBe(true);
+
+    chatRequests[0].push({ type: "conversation", conversation: conversationA });
+    chatRequests[0].push({ type: "delta", content: "Antwort A2" });
+    chatRequests[0].push({ type: "final", answer: "Antwort A2", assistantMessageId: 3, conversation: conversationA });
+    chatRequests[0].close();
+    await settle();
+
+    expect(sendingChanges).toEqual([true, false]);
+    expect(dispatchBeforeUnload()).toBe(false);
+  });
+
+  it("clears the sending state when the user stops the answer", async () => {
+    const sendingChanges: boolean[] = [];
+    await renderView(conversationA.id, messagesA, (isSending) => sendingChanges.push(isSending));
+    await sendQuestion("Folgefrage A");
+
+    await act(async () => {
+      Array.from(container.querySelectorAll("button"))
+        .find((element) => element.textContent?.trim() === "Stoppen")!
+        .click();
+    });
+    await settle();
+
+    expect(sendingChanges).toEqual([true, false]);
+    expect(dispatchBeforeUnload()).toBe(false);
+  });
+
+  it("clears the sending state when the view unmounts mid-answer", async () => {
+    const sendingChanges: boolean[] = [];
+    await renderView(conversationA.id, messagesA, (isSending) => sendingChanges.push(isSending));
+    await sendQuestion("Folgefrage A");
+
+    await act(async () => root.unmount());
+    root = createRoot(container);
+
+    expect(sendingChanges).toEqual([true, false]);
+    expect(dispatchBeforeUnload()).toBe(false);
   });
 });
