@@ -348,8 +348,10 @@ export async function replaceTelegramBot(
   }
 
   // 4. Check webhook info for foreign-webhook conflict
+  let currentWebhookUrl = "";
   try {
     const webhookInfo = await api.getWebhookInfo();
+    currentWebhookUrl = webhookInfo.url ?? "";
     if (webhookInfo.url && webhookInfo.url.length > 0) {
       const expectedPrefix = `${publicOrigin}/api/webhooks/telegram/`;
       if (!webhookInfo.url.startsWith(expectedPrefix) && !options?.replaceExistingWebhook) {
@@ -383,24 +385,28 @@ export async function replaceTelegramBot(
   const newWebhookId = isSameBot
     ? integration.webhook_id as string
     : randomUUID();
-  const newWebhookSecret = isSameBot ? null : generateWebhookSecret();
+  const newWebhookUrl = `${publicOrigin}/api/webhooks/telegram/${newWebhookId}`;
+  // A same-bot replacement keeps the existing webhook only while Telegram still
+  // points at it. After a failed registration or disconnect it is gone (or
+  // foreign), and only the secret's hash is stored, so a fresh secret is needed.
+  const needsWebhook = !isSameBot || currentWebhookUrl !== newWebhookUrl;
+  const newWebhookSecret = needsWebhook ? generateWebhookSecret() : null;
   const newPairingToken = generatePairingToken();
   const newPairingExpiresAt = new Date(Date.now() + PAIRING_EXPIRY_MINUTES * 60 * 1000).toISOString();
 
   const newAad = buildAad(integrationId, clientId, newBotInfo.id);
   const newEncryptedToken = encryptTelegramToken(token, newAad);
-  const newWebhookSecretHash = isSameBot
-    ? integration.webhook_secret_sha256 as string
-    : hashToken(newWebhookSecret as string);
+  const newWebhookSecretHash = newWebhookSecret
+    ? hashToken(newWebhookSecret)
+    : integration.webhook_secret_sha256 as string;
   const newPairingTokenHash = hashToken(newPairingToken);
 
-  const newWebhookUrl = `${publicOrigin}/api/webhooks/telegram/${newWebhookId}`;
   const commands = TELEGRAM_BOT_COMMANDS;
 
   // 7. Configure commands and webhook on the NEW bot FIRST
   try {
     await api.setMyCommands(commands);
-    if (!isSameBot) {
+    if (needsWebhook) {
       await api.setWebhook({
         url: newWebhookUrl,
         secret_token: newWebhookSecret as string,
@@ -442,6 +448,10 @@ export async function replaceTelegramBot(
       const newCleanupApi = botApi ?? createBotApi(token);
       try { await newCleanupApi.deleteWebhook(true); } catch { /* best effort */ }
       try { await newCleanupApi.deleteMyCommands(); } catch { /* best effort */ }
+    } else if (needsWebhook) {
+      // The stored row does not know the fresh secret; the replaced webhook was
+      // not a working Findog webhook, so removing it loses nothing.
+      try { await api.deleteWebhook(true); } catch { /* best effort */ }
     }
     throw new UserVisibleError(
       "Datenbank-Aktualisierung fehlgeschlagen. Der bisherige Bot ist weiterhin aktiv.",

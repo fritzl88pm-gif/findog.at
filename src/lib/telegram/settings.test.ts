@@ -14,6 +14,7 @@ import {
 } from "./settings";
 import type { BotApi } from "./bot-api";
 import { encryptTelegramToken } from "./credentials";
+import { hashToken } from "./pairing";
 
 vi.mock("@/lib/supabase/server", () => ({ getSupabaseServerClient: vi.fn() }));
 
@@ -615,6 +616,71 @@ describe("replaceTelegramBot", () => {
       p_new_webhook_id: integration.webhook_id,
       p_new_webhook_secret_sha256: integration.webhook_secret_sha256,
     }));
+  });
+
+  it("re-registers the webhook with a fresh secret when the same bot has no Findog webhook", async () => {
+    const integration = mockIntegrationRow({ status: "error" });
+    let callCount = 0;
+    const from = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return mockSelectMaybeSingle({ data: integration, error: null });
+      return mockSelectMaybeSingle({ data: null, error: null });
+    });
+    const mockRpc = vi.fn().mockResolvedValue({ data: true, error: null });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from, rpc: mockRpc } as never);
+
+    const setWebhook = vi.fn().mockResolvedValue(true);
+    const botApi = mockBotApi({
+      getMe: vi.fn().mockResolvedValue({ id: integration.bot_user_id, is_bot: true, first_name: "SameBot", username: "same_bot" }),
+      getWebhookInfo: vi.fn().mockResolvedValue({ url: "", has_custom_certificate: false, pending_update_count: 0 }),
+      setWebhook,
+    });
+
+    const { replaceTelegramBot } = await import("./settings");
+    const result = await replaceTelegramBot(CLIENT_ID, TOKEN, botApi);
+
+    expect(result.deepLink).toContain("https://t.me/same_bot?start=");
+    expect(setWebhook).toHaveBeenCalledTimes(1);
+    const webhookParams = setWebhook.mock.calls[0][0] as { url: string; secret_token: string };
+    expect(webhookParams.url).toBe(`https://findog.at/api/webhooks/telegram/${integration.webhook_id}`);
+    const rpcArgs = mockRpc.mock.calls[0][1] as Record<string, unknown>;
+    expect(rpcArgs.p_new_webhook_id).toBe(integration.webhook_id);
+    expect(rpcArgs.p_new_webhook_secret_sha256).toBe(hashToken(webhookParams.secret_token));
+    expect(rpcArgs.p_new_webhook_secret_sha256).not.toBe(integration.webhook_secret_sha256);
+  });
+
+  it("overwrites a foreign webhook of the same bot when replaceExistingWebhook is set", async () => {
+    const integration = mockIntegrationRow({ status: "error" });
+    let callCount = 0;
+    const from = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return mockSelectMaybeSingle({ data: integration, error: null });
+      return mockSelectMaybeSingle({ data: null, error: null });
+    });
+    const mockRpc = vi.fn().mockResolvedValue({ data: false, error: null });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from, rpc: mockRpc } as never);
+
+    const setWebhook = vi.fn().mockResolvedValue(true);
+    const deleteWebhook = vi.fn().mockResolvedValue(true);
+    const deleteMyCommands = vi.fn().mockResolvedValue(true);
+    const botApi = mockBotApi({
+      getMe: vi.fn().mockResolvedValue({ id: integration.bot_user_id, is_bot: true, first_name: "SameBot", username: "same_bot" }),
+      getWebhookInfo: vi.fn().mockResolvedValue({ url: "https://other.example.com/webhook", has_custom_certificate: false, pending_update_count: 0 }),
+      setWebhook,
+      deleteWebhook,
+      deleteMyCommands,
+    });
+
+    const { replaceTelegramBot } = await import("./settings");
+    await expect(replaceTelegramBot(CLIENT_ID, TOKEN, botApi, { replaceExistingWebhook: true }))
+      .rejects.toThrow("Datenbank-Aktualisierung");
+
+    expect(setWebhook).toHaveBeenCalledWith(expect.objectContaining({
+      url: `https://findog.at/api/webhooks/telegram/${integration.webhook_id}`,
+    }));
+    // The stored row never learned the fresh secret, so the webhook is removed again.
+    expect(deleteWebhook).toHaveBeenCalledWith(true);
+    expect(deleteMyCommands).not.toHaveBeenCalled();
   });
 
   it("skips old bot cleanup when new and old bot IDs are the same (same-bot credential rotation)", async () => {
