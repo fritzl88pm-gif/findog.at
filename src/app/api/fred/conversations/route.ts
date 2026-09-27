@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
+import { loadAllRows } from "@/lib/supabase/load-all-rows";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import type { FredAgentKey } from "@/lib/weknora/fred-agent";
 
@@ -65,16 +66,15 @@ async function parseDeleteIds(request: Request): Promise<string[]> {
 export async function GET(request: Request) {
   try {
     const { supabase, user } = await authenticatedContext(request);
-    const { data, error } = await supabase
+    const conversations = await loadAllRows<FredConversationRow>((from, to) => supabase
       .from("fred_conversations")
       .select("id,title,created_at,updated_at,agent_key,origin,telegram_integration_id")
       .eq("client_id", user.id)
-      .order("updated_at", { ascending: false });
-    if (error) {
-      throw new UserVisibleError("Der Fred-Verlauf konnte nicht geladen werden.", 503);
-    }
+      .order("updated_at", { ascending: false })
+      .order("id", { ascending: false })
+      .range(from, to), "Der Fred-Verlauf konnte nicht geladen werden.");
     return json({
-      conversations: ((data ?? []) as FredConversationRow[]).map((conversation) => ({
+      conversations: conversations.map((conversation) => ({
         id: conversation.id,
         title: conversation.title,
         createdAt: conversation.created_at,

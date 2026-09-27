@@ -8,6 +8,7 @@ import {
   verifyBfgCitations,
   type VerifiedBfgCitation,
 } from "@/lib/findok/bfg-citations";
+import { loadAllRows } from "@/lib/supabase/load-all-rows";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import type { FredAgentKey } from "@/lib/weknora/fred-agent";
 import {
@@ -124,17 +125,16 @@ export async function GET(
     if (!conversation) {
       throw new UserVisibleError("Fred-Unterhaltung wurde nicht gefunden.", 404);
     }
-    const { data: messages, error: messagesError } = await supabase
+    // Paged: in ascending order the 1000-row cap would drop the newest messages.
+    const messages = await loadAllRows<FredMessageRow>((from, to) => supabase
       .from("fred_messages")
       .select("id,role,content,display_content,research_trace,execution_trace,source_references,provider_created_at,created_at,attachments,web_search_enabled,pro_mode_enabled,artifacts")
       .eq("conversation_id", conversationId)
       .eq("client_id", user.id)
       .order("provider_created_at", { ascending: true, nullsFirst: false })
-      .order("id", { ascending: true });
-    if (messagesError) {
-      throw new UserVisibleError("Fred-Nachrichten konnten nicht geladen werden.", 503);
-    }
-    const preparedMessages = ((messages ?? []) as FredMessageRow[]).map((message): PreparedFredMessage => {
+      .order("id", { ascending: true })
+      .range(from, to), "Fred-Nachrichten konnten nicht geladen werden.");
+    const preparedMessages = messages.map((message): PreparedFredMessage => {
       const rawTransformation = message.role === "assistant"
         ? transformWeKnoraAnswer(message.content)
         : { text: message.content, sources: [] };

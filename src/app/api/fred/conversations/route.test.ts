@@ -21,7 +21,8 @@ describe("GET /api/fred/conversations — origin and user isolation", () => {
     const queryChain = {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
-      order: vi.fn().mockResolvedValue({
+      order: vi.fn().mockReturnThis(),
+      range: vi.fn().mockResolvedValue({
         data: [
           {
             id: CONVO_ID_A,
@@ -75,7 +76,8 @@ describe("GET /api/fred/conversations — origin and user isolation", () => {
     const queryChain = {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
-      order: vi.fn().mockResolvedValue({
+      order: vi.fn().mockReturnThis(),
+      range: vi.fn().mockResolvedValue({
         data: [{ id: CONVO_ID_A, title: "A-only", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", agent_key: "fred", origin: "web", telegram_integration_id: null }],
         error: null,
       }),
@@ -99,7 +101,8 @@ describe("GET /api/fred/conversations — origin and user isolation", () => {
     const queryChain = {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
-      order: vi.fn().mockResolvedValue({
+      order: vi.fn().mockReturnThis(),
+      range: vi.fn().mockResolvedValue({
         data: [
           {
             id: CONVO_ID_A,
@@ -186,5 +189,62 @@ describe("DELETE /api/fred/conversations — user isolation", () => {
       p_client_id: USER_A,
       p_conversation_ids: [CONVO_ID_B],
     });
+  });
+});
+
+// Hosted Supabase PostgREST returns at most this many rows per response.
+const POSTGREST_MAX_ROWS = 1_000;
+
+function cappedQuery(rows: unknown[]) {
+  let from = 0;
+  let to = Number.POSITIVE_INFINITY;
+  const builder: Record<string, unknown> = {};
+  builder.select = vi.fn(() => builder);
+  builder.eq = vi.fn(() => builder);
+  builder.order = vi.fn(() => builder);
+  builder.range = vi.fn((rangeFrom: number, rangeTo: number) => {
+    from = rangeFrom;
+    to = rangeTo;
+    return builder;
+  });
+  builder.then = (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
+    Promise.resolve({
+      data: rows.slice(from, Math.min(to + 1, from + POSTGREST_MAX_ROWS)),
+      error: null,
+    }).then(resolve, reject);
+  return builder;
+}
+
+describe("GET /api/fred/conversations — paging", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: USER_A });
+  });
+
+  it("returns every conversation past the 1000-row response cap", async () => {
+    const rows = Array.from({ length: 1_500 }, (_, index) => ({
+      id: `11111111-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      title: `Unterhaltung ${index}`,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      agent_key: "fred",
+      origin: "web",
+      telegram_integration_id: null,
+    }));
+    const query = cappedQuery(rows);
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from: vi.fn(() => query) } as never);
+
+    const response = await GET(
+      new Request("http://localhost/api/fred/conversations", {
+        headers: { Authorization: "Bearer token" },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.conversations).toHaveLength(1_500);
+    expect(payload.conversations[1_499].id).toBe(rows[1_499].id);
+    expect(query.eq).toHaveBeenCalledWith("client_id", USER_A);
+    expect(query.order).toHaveBeenLastCalledWith("id", { ascending: false });
   });
 });

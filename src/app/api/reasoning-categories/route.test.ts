@@ -18,7 +18,7 @@ describe("reasoning categories API", () => {
   });
 
   it("returns only categories scoped to the authenticated user with parentId", async () => {
-    const order = vi.fn().mockResolvedValue({
+    const range = vi.fn().mockResolvedValue({
       data: [{
         id: CATEGORY_ID,
         name: "Umsatzsteuer",
@@ -28,6 +28,7 @@ describe("reasoning categories API", () => {
       }],
       error: null,
     });
+    const order: ReturnType<typeof vi.fn> = vi.fn(() => ({ order, range }));
     const eq = vi.fn(() => ({ order }));
     const select = vi.fn(() => ({ eq }));
     const from = vi.fn(() => ({ select }));
@@ -39,6 +40,8 @@ describe("reasoning categories API", () => {
     expect(from).toHaveBeenCalledWith("user_reasoning_categories");
     expect(eq).toHaveBeenCalledWith("client_id", USER_ID);
     expect(order).toHaveBeenCalledWith("name", { ascending: true });
+    expect(order).toHaveBeenCalledWith("id", { ascending: true });
+    expect(range).toHaveBeenCalledWith(0, 999);
     expect(response.headers.get("cache-control")).toBe("private, no-store, max-age=0");
     await expect(response.json()).resolves.toEqual({
       categories: [{
@@ -52,7 +55,7 @@ describe("reasoning categories API", () => {
   });
 
   it("maps missing parent_id to parentId null", async () => {
-    const order = vi.fn().mockResolvedValue({
+    const range = vi.fn().mockResolvedValue({
       data: [{
         id: CATEGORY_ID,
         name: "Betriebsausgaben",
@@ -62,6 +65,7 @@ describe("reasoning categories API", () => {
       }],
       error: null,
     });
+    const order: ReturnType<typeof vi.fn> = vi.fn(() => ({ order, range }));
     const eq = vi.fn(() => ({ order }));
     const select = vi.fn(() => ({ eq }));
     const from = vi.fn(() => ({ select }));
@@ -193,5 +197,55 @@ describe("reasoning categories API", () => {
 
     expect(response.status).toBe(503);
     expect(authenticateSupabaseRequest).not.toHaveBeenCalled();
+  });
+});
+
+// Hosted Supabase PostgREST returns at most this many rows per response.
+const POSTGREST_MAX_ROWS = 1_000;
+
+function cappedQuery(rows: unknown[]) {
+  let from = 0;
+  let to = Number.POSITIVE_INFINITY;
+  const builder: Record<string, unknown> = {};
+  builder.select = vi.fn(() => builder);
+  builder.eq = vi.fn(() => builder);
+  builder.order = vi.fn(() => builder);
+  builder.range = vi.fn((rangeFrom: number, rangeTo: number) => {
+    from = rangeFrom;
+    to = rangeTo;
+    return builder;
+  });
+  builder.then = (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
+    Promise.resolve({
+      data: rows.slice(from, Math.min(to + 1, from + POSTGREST_MAX_ROWS)),
+      error: null,
+    }).then(resolve, reject);
+  return builder;
+}
+
+describe("reasoning categories API paging", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: USER_ID });
+  });
+
+  it("returns every category past the 1000-row response cap", async () => {
+    const rows = Array.from({ length: 1_200 }, (_, index) => ({
+      id: `4411bb00-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      name: `Kategorie ${String(index).padStart(4, "0")}`,
+      parent_id: null,
+      created_at: "2026-07-28T08:00:00.000Z",
+      updated_at: "2026-07-28T08:00:00.000Z",
+    }));
+    const query = cappedQuery(rows);
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ auth: {}, from: vi.fn(() => query) } as never);
+
+    const response = await GET(new Request("https://findog.at/api/reasoning-categories"));
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.categories).toHaveLength(1_200);
+    expect(payload.categories[1_199].id).toBe(rows[1_199].id);
+    expect(query.order).toHaveBeenLastCalledWith("id", { ascending: true });
   });
 });

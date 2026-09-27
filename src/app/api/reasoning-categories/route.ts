@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import { parseCategoryInput } from "@/lib/reasonings";
+import { loadAllRows } from "@/lib/supabase/load-all-rows";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -42,16 +43,15 @@ async function requestBody(request: Request): Promise<unknown> {
 export async function GET(request: Request) {
   try {
     const { supabase, user } = await authenticatedContext(request);
-    const { data, error } = await supabase
+    const categories = await loadAllRows<CategoryRow>((from, to) => supabase
       .from("user_reasoning_categories")
       .select("id,name,parent_id,created_at,updated_at")
       .eq("client_id", user.id)
-      .order("name", { ascending: true });
-    if (error) {
-      throw new UserVisibleError("Kategorien konnten nicht geladen werden.", 503);
-    }
+      .order("name", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, to), "Kategorien konnten nicht geladen werden.");
     return json({
-      categories: ((data ?? []) as CategoryRow[]).map((category) => ({
+      categories: categories.map((category) => ({
         id: category.id,
         name: category.name,
         parentId: category.parent_id,

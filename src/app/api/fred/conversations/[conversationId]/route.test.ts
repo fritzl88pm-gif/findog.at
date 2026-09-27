@@ -124,6 +124,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
+      range: vi.fn().mockReturnThis(),
       then: (resolve: (value: typeof messageResult) => unknown) => resolve(messageResult),
     };
     vi.mocked(getSupabaseServerClient).mockReturnValue({
@@ -214,6 +215,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
+      range: vi.fn().mockReturnThis(),
       then: (resolve: (value: typeof messageResult) => unknown) => resolve(messageResult),
     };
     vi.mocked(getSupabaseServerClient).mockReturnValue({
@@ -301,6 +303,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
+      range: vi.fn().mockReturnThis(),
       then: (resolve: (value: typeof messageResult) => unknown) => resolve(messageResult),
     };
     vi.mocked(getSupabaseServerClient).mockReturnValue({
@@ -384,6 +387,7 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
+      range: vi.fn().mockReturnThis(),
       then: (resolve: (value: typeof messageResult) => unknown) => resolve(messageResult),
     };
     vi.mocked(getSupabaseServerClient).mockReturnValue({
@@ -409,5 +413,88 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
       detail: "3 Aufgaben geplant",
       counts: { total: 3, completed: 3, inProgress: 0, open: 0 },
     }]);
+  });
+});
+
+// Hosted Supabase PostgREST returns at most this many rows per response.
+const POSTGREST_MAX_ROWS = 1_000;
+
+function cappedQuery(rows: unknown[]) {
+  let from = 0;
+  let to = Number.POSITIVE_INFINITY;
+  const builder: Record<string, unknown> = {};
+  builder.select = vi.fn(() => builder);
+  builder.eq = vi.fn(() => builder);
+  builder.order = vi.fn(() => builder);
+  builder.range = vi.fn((rangeFrom: number, rangeTo: number) => {
+    from = rangeFrom;
+    to = rangeTo;
+    return builder;
+  });
+  builder.then = (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
+    Promise.resolve({
+      data: rows.slice(from, Math.min(to + 1, from + POSTGREST_MAX_ROWS)),
+      error: null,
+    }).then(resolve, reject);
+  return builder;
+}
+
+describe("GET /api/fred/conversations/[conversationId] — paging", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "user-1" });
+    vi.mocked(verifyBfgCitations).mockResolvedValue({ verified: [], rejected: [] });
+  });
+
+  it("returns the newest messages of a conversation past the 1000-row response cap", async () => {
+    const conversationId = "33333333-3333-4333-8333-333333333333";
+    const conversationQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          id: conversationId,
+          title: "Lange Unterhaltung",
+          created_at: "2026-07-19T07:00:00.000Z",
+          updated_at: "2026-07-19T07:01:00.000Z",
+          agent_key: "fred",
+          origin: "telegram",
+          telegram_integration_id: null,
+        },
+        error: null,
+      }),
+    };
+    const rows = Array.from({ length: 1_200 }, (_, index) => ({
+      id: index + 1,
+      role: "user",
+      content: `Frage ${index + 1}`,
+      display_content: null,
+      research_trace: [],
+      source_references: [],
+      provider_created_at: new Date(Date.UTC(2026, 6, 19, 7, 0, index)).toISOString(),
+      created_at: new Date(Date.UTC(2026, 6, 19, 7, 0, index)).toISOString(),
+      attachments: [],
+      web_search_enabled: false,
+      pro_mode_enabled: false,
+    }));
+    const messagesQuery = cappedQuery(rows);
+    vi.mocked(getSupabaseServerClient).mockReturnValue({
+      from: vi.fn((table: string) => (
+        table === "fred_conversations" ? conversationQuery : messagesQuery
+      )),
+    } as never);
+
+    const response = await GET(
+      new Request(`https://findog.at/api/fred/conversations/${conversationId}`, {
+        headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
+      }),
+      { params: Promise.resolve({ conversationId }) },
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.messages).toHaveLength(1_200);
+    expect(payload.messages[1_199].content).toBe("Frage 1200");
+    expect(messagesQuery.order).toHaveBeenLastCalledWith("id", { ascending: true });
   });
 });
