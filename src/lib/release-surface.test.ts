@@ -92,8 +92,10 @@ describe("approved release surface", () => {
   it("keeps the Quiz view behind the administrator capability in every client path", () => {
     expect(pageSource).toMatch(/function openQuizView\(\) \{\r?\n\s+if \(!isAdmin\)/);
     expect(pageSource.match(/\{isAdmin \? \(\s*<button[\s\S]{0,500}?appView === "quiz"/g)).toHaveLength(2);
-    expect(pageSource).toContain('current === "administration" || current === "quiz" ? "home" : current');
+    expect(pageSource).toContain('current === "administration" || current === "quiz" || current === "fred-live" ? "home" : current');
+    expect(pageSource.match(/setAppView\(leaveAdminOnlyView\)/g)).toHaveLength(3);
     expect(pageSource).toContain('appView === "quiz" && isAdmin ?');
+    expect(pageSource).toContain('appView === "fred-live" && isAdmin ?');
   });
 
   it("adds the local Deutsche SV-Rente AppView as the first Rechner entry in both navigations", () => {

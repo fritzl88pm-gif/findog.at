@@ -135,6 +135,11 @@ type ConversationSummary = {
 
 type AppView = "home" | "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "bfg-newsletters" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "fred-live" | "administration" | "data" | "reasonings";
 
+// Views rendered only for administrators; losing admin rights on one of them returns to home.
+function leaveAdminOnlyView(current: AppView): AppView {
+  return current === "administration" || current === "quiz" || current === "fred-live" ? "home" : current;
+}
+
 const TELEGRAM_BOT_USERNAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{4,31}$/u;
 
 type AuthForm = {
@@ -1562,7 +1567,7 @@ export default function Home() {
     if (!accessToken || !user?.id) {
       queueMicrotask(() => {
         setIsAdmin(false);
-        setAppView((current) => current === "administration" || current === "quiz" ? "home" : current);
+        setAppView(leaveAdminOnlyView);
       });
       return;
     }
@@ -1575,13 +1580,13 @@ export default function Home() {
         }
         setIsAdmin(adminCapability.isAdmin);
         if (!adminCapability.isAdmin) {
-          setAppView((current) => current === "administration" || current === "quiz" ? "home" : current);
+          setAppView(leaveAdminOnlyView);
         }
       })
       .catch(() => {
         if (isActive) {
           setIsAdmin(false);
-          setAppView((current) => current === "administration" || current === "quiz" ? "home" : current);
+          setAppView(leaveAdminOnlyView);
         }
       });
 
