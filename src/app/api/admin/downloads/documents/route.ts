@@ -45,6 +45,11 @@ function errorResponse(error: unknown): NextResponse {
   return json({ error: "Das Download-Dokument konnte nicht verarbeitet werden." }, 500);
 }
 
+// Storage reports a missing object with statusCode "404" (older servers with HTTP 400).
+function isMissingStorageObject(error: { status?: number; statusCode?: string } | null): boolean {
+  return error?.statusCode === "404" || error?.status === 404;
+}
+
 async function requireActiveCategory(
   supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
   categoryId: string,
@@ -226,15 +231,20 @@ export async function DELETE(request: Request) {
     const { data: backup, error: backupError } = await supabase.storage
       .from(DOWNLOAD_BUCKET)
       .download(document.storage_path);
-    if (backupError || !backup) {
-      throw new UserVisibleError("Die Datei konnte vor dem Löschen nicht geprüft werden.", 503);
-    }
-    const backupBytes = Buffer.from(await backup.arrayBuffer());
-    const { error: removeError } = await supabase.storage
-      .from(DOWNLOAD_BUCKET)
-      .remove([document.storage_path]);
-    if (removeError) {
-      throw new UserVisibleError("Die Datei konnte nicht entfernt werden.", 503);
+    // A row whose binary is already gone is only soft-deleted; otherwise it would stay
+    // listed, fail every download and block deleting its category for good.
+    let backupBytes: Buffer | null = null;
+    if (!isMissingStorageObject(backupError)) {
+      if (backupError || !backup) {
+        throw new UserVisibleError("Die Datei konnte vor dem Löschen nicht geprüft werden.", 503);
+      }
+      backupBytes = Buffer.from(await backup.arrayBuffer());
+      const { error: removeError } = await supabase.storage
+        .from(DOWNLOAD_BUCKET)
+        .remove([document.storage_path]);
+      if (removeError) {
+        throw new UserVisibleError("Die Datei konnte nicht entfernt werden.", 503);
+      }
     }
 
     const { data: deleted, error: deleteError } = await supabase
@@ -249,18 +259,20 @@ export async function DELETE(request: Request) {
       .select("id")
       .maybeSingle();
     if (deleteError) {
-      const { error: restoreError } = await supabase.storage
-        .from(DOWNLOAD_BUCKET)
-        .upload(document.storage_path, backupBytes, {
-          cacheControl: "3600",
-          contentType: document.mime_type,
-          upsert: false,
-        });
-      if (restoreError) {
-        throw new UserVisibleError(
-          "Die Metadaten konnten nicht gelöscht und die Speicherdatei nicht wiederhergestellt werden.",
-          503,
-        );
+      if (backupBytes) {
+        const { error: restoreError } = await supabase.storage
+          .from(DOWNLOAD_BUCKET)
+          .upload(document.storage_path, backupBytes, {
+            cacheControl: "3600",
+            contentType: document.mime_type,
+            upsert: false,
+          });
+        if (restoreError) {
+          throw new UserVisibleError(
+            "Die Metadaten konnten nicht gelöscht und die Speicherdatei nicht wiederhergestellt werden.",
+            503,
+          );
+        }
       }
       throw new UserVisibleError("Das Dokument konnte nicht gelöscht werden.", 503);
     }
