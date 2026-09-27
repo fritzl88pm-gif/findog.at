@@ -775,8 +775,13 @@ describe("Fred answer leave guard", () => {
   });
 
   it("guards every view switch, the new-question button and sign-out", () => {
-    // leaveAdministration is only reached through leaveCurrentView.
-    expect(pageSource.match(/(?<!function )leaveAdministration\(\)/g)).toHaveLength(1);
+    // leaveAdministration is reached through leaveCurrentView, and directly only
+    // where the Fred answer was already confirmed (deleting the open conversation).
+    const adminLeaveCallers = [...pageSource.matchAll(/(?<!function )leaveAdministration\(\)/g)].map((match) => {
+      const start = pageSource.lastIndexOf("\n  ", pageSource.lastIndexOf("function ", match.index));
+      return /function (\w+)\(/.exec(pageSource.slice(start))?.[1];
+    });
+    expect(adminLeaveCallers.sort()).toEqual(["deleteFredConversations", "leaveCurrentView"]);
     const openers = [...pageSource.matchAll(/\n  (?:async )?function (open\w*View)\(/g)].map((match) => match[1]);
     expect(openers).toEqual(expect.arrayContaining([
       "openHomeView",
@@ -812,8 +817,12 @@ describe("Fred answer leave guard", () => {
     const guardIndex = deletion.indexOf("ids.includes(fredConversationId) && !confirmLeaveFredAnswer()");
     expect(guardIndex).toBeGreaterThan(-1);
     expect(guardIndex).toBeLessThan(deletion.indexOf("window.confirm("));
-    expect(deletion).toContain("showNewFredConversation();");
+    // The admin unsaved-changes guard and cleanup still run before the reset,
+    // without asking about the Fred answer a second time.
+    expect(deletion).toContain("if (result.activeConversationDeleted && leaveAdministration()) {");
+    expect(deletion.indexOf("leaveAdministration()")).toBeLessThan(deletion.indexOf("showNewFredConversation();"));
     expect(deletion).not.toContain("openFredView()");
+    expect(deletion).not.toContain("leaveCurrentView()");
 
     const accountDeletion = pageFunction("deleteOwnAccount");
     expect(accountDeletion.indexOf("confirmLeaveFredAnswer()")).toBeGreaterThan(-1);

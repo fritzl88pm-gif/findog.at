@@ -2723,7 +2723,9 @@ export default function Home() {
       });
       setFredConversations(result.conversations);
       setSelectedFredConversationIds(result.selectedIds);
-      if (result.activeConversationDeleted) {
+      // The Fred answer was confirmed above; the admin unsaved-changes guard
+      // and cleanup still apply when this is deleted from Administration.
+      if (result.activeConversationDeleted && leaveAdministration()) {
         showNewFredConversation();
       }
     } catch (deleteError) {
