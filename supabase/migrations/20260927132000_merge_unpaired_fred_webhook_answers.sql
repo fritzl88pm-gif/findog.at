@@ -19,6 +19,11 @@
 --
 -- User questions are not affected: every entry point trims the question
 -- before it is stored and relayed, so both copies were always equal and paired.
+--
+-- This is a one-shot merge. Apply it only after the app release that persists
+-- trimmed answers (2349817) is live; an answer stored twice by the old code
+-- after it ran stays duplicated, so re-run this block as a follow-up if it was
+-- applied earlier.
 do $$
 begin
   -- Hold off concurrent event writes so the candidates cannot change while

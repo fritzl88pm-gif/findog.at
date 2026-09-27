@@ -9,17 +9,30 @@ const migrationName = "20260927132000_merge_unpaired_fred_webhook_answers.sql";
 const migration = readFileSync(join(migrationsDir, migrationName), "utf8");
 const sql = migration.replace(/^\s*--.*$/gm, "");
 
-/** Every `<table>.<column>` that references fred_messages(id) in any migration. */
+/**
+ * Every `<table>.<column>` that references fred_messages in the given SQL, in
+ * any form: inline in `create table [if not exists]`, via `alter table ... add
+ * column`, or as a `foreign key (...)` constraint. An occurrence whose table or
+ * column cannot be read is returned as `unparsed@<offset>` so it fails loudly.
+ */
+function fredMessageReferencesIn(text: string): string[] {
+  const code = text.replace(/--.*$/gm, "");
+  return [...code.matchAll(/\breferences\s+(?:public\.)?fred_messages\b/gi)].map((match) => {
+    const statement = code.slice(code.lastIndexOf(";", match.index) + 1, match.index);
+    const table = statement.match(
+      /\b(?:create\s+table(?:\s+if\s+not\s+exists)?|alter\s+table(?:\s+if\s+exists)?(?:\s+only)?)\s+(?:public\.)?(\w+)/i,
+    )?.[1];
+    const column = statement.match(/(?:foreign\s+key\s*\(\s*(\w+)\s*\)|(\w+)\s+bigint\b)[^,]*$/i);
+    const columnName = column?.[1] ?? column?.[2];
+    return table && columnName ? `${table}.${columnName}` : `unparsed@${match.index}`;
+  });
+}
+
+/** Every `<table>.<column>` that references fred_messages in any migration. */
 function fredMessageReferences(): string[] {
   return readdirSync(migrationsDir)
     .filter((fileName) => fileName.endsWith(".sql"))
-    .flatMap((fileName) => {
-      const text = readFileSync(join(migrationsDir, fileName), "utf8");
-      return [...text.matchAll(/create table public\.(\w+) \(([\s\S]*?)\n\);/gi)].flatMap(
-        ([, table, body]) => [...body.matchAll(/^\s*(\w+) bigint[^,]*?references public\.fred_messages\(id\)/gim)]
-          .map(([, column]) => `${table}.${column}`),
-      );
-    });
+    .flatMap((fileName) => fredMessageReferencesIn(readFileSync(join(migrationsDir, fileName), "utf8")));
 }
 
 describe("merge unpaired Fred webhook answers migration", () => {
@@ -57,6 +70,21 @@ describe("merge unpaired Fred webhook answers migration", () => {
     ]) {
       expect(sql).toContain(condition);
     }
+  });
+
+  it("finds a fred_messages reference in every form a migration may declare it", () => {
+    expect(fredMessageReferencesIn(`
+      create table if not exists public.a (
+        id bigint primary key,
+        message_id bigint not null references public.fred_messages (id) on delete cascade
+      );
+      alter table public.b add column if not exists message_id bigint
+        references public.fred_messages(id) on delete set null;
+      alter table only public.c
+        add constraint c_message_fkey foreign key (message_id) references fred_messages(id);
+      -- alter table public.d add column message_id bigint references public.fred_messages(id);
+      create table public.e (other_id bigint references public.fred_messages_archive(id));
+    `)).toEqual(["a.message_id", "b.message_id", "c.message_id"]);
   });
 
   it("keeps a webhook-only row that any table references", () => {
