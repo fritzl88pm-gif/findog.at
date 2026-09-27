@@ -16,10 +16,10 @@ describe("FredArtifactCards", () => {
       downloadedFileName = this.download;
     });
     vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => {
-      downloadedBlob = blob instanceof Blob ? blob : undefined;
+      downloadedBlob = blob as Blob;
       return "blob:fixture";
     });
-    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
     await act(async () => createRoot(container).render(<FredArtifactCards accessToken="jwt-123" conversationId="conv" messageId={9} artifacts={[
       { id: "a", fileName: "a.txt", fileSize: 3, fileType: ".txt", upstreamIndex: 4 },
@@ -34,8 +34,10 @@ describe("FredArtifactCards", () => {
       headers: { Authorization: "Bearer jwt-123" },
     }));
     expect(downloadedFileName).toBe("b.pdf");
-    expect(downloadedBlob).toBeInstanceOf(Blob);
+    // Response.blob() comes from Node's realm, not jsdom's, so instanceof Blob cannot hold here.
+    expect(Object.prototype.toString.call(downloadedBlob)).toBe("[object Blob]");
     expect(new Uint8Array(await downloadedBlob!.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:fixture");
   });
 
   it("renders PowerPoint and Excel cards for delivered office files", async () => {
