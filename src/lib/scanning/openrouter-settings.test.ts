@@ -18,7 +18,7 @@ describe("Default scanning prompt ordering", () => {
 });
 
 function providerResponse(content: unknown, status = 200): Response {
-  return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+  return new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: "stop" }] }), {
     status,
     headers: { "Content-Type": "application/json" },
   });
