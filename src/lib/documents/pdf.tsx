@@ -183,7 +183,10 @@ function plainText(value: string): string {
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 ($2)")
     .replace(/(?:\*\*|__)(.+?)(?:\*\*|__)/g, "$1")
-    .replace(/(?:\*|_)(.+?)(?:\*|_)/g, "$1")
+    // A single * or _ only marks emphasis when it hugs a phrase that starts
+    // after a space, bracket or quote, so 2*3*4, 1.200 * 12 and
+    // Steuer_Berechnung_2025.xlsx keep their characters.
+    .replace(/(^|[\s([{"'„“‚‘«»])([*_])(?!\s|\2)(.+?)(?<!\s)\2(?![\p{L}\p{N}*_])/gu, "$1$3")
     .replace(/`([^`]+)`/g, "$1")
     .replace(/^>\s?/, ""));
 }

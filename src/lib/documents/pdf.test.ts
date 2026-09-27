@@ -133,6 +133,32 @@ it("writes only WinAnsi characters to the PDF for symbols outside Helvetica", as
   )).toEqual([]);
 });
 
+it("keeps single asterisks and underscores in calculations, file names and URLs", () => {
+  expect(
+    parsePdfContentBlocks([
+      "Berechnung: 1.200 * 12 = 14.400; 14.400 * 0,5 = 7.200 und 2*3*4 = 24",
+      "",
+      "Datei Steuer_Berechnung_2025.xlsx, siehe [Bescheid](https://a.at/a_b_c).",
+      "",
+      "| Formel | Name |",
+      "| --- | --- |",
+      "| 100 * 2 * 3 | mein_datei_name |",
+      "",
+      "Das ist *kursiv* und _auch_ (*hier*), **fett** bleibt fett.",
+    ].join("\n")),
+  ).toEqual([
+    { type: "paragraph", text: "Berechnung: 1.200 * 12 = 14.400; 14.400 * 0,5 = 7.200 und 2*3*4 = 24" },
+    { type: "paragraph", text: "Datei Steuer_Berechnung_2025.xlsx, siehe Bescheid (https://a.at/a_b_c)." },
+    {
+      type: "table",
+      headers: ["Formel", "Name"],
+      alignments: ["left", "left"],
+      rows: [["100 * 2 * 3", "mein_datei_name"]],
+    },
+    { type: "paragraph", text: "Das ist kursiv und auch (hier), fett bleibt fett." },
+  ]);
+});
+
 it("repeats table headers when a table spans multiple pages", async () => {
   const source = await readFile(new URL("./pdf.tsx", import.meta.url), "utf8");
 
