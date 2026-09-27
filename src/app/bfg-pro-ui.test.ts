@@ -164,3 +164,23 @@ describe("BFG date formatting", () => {
     expect(page).not.toContain("function formatBfgPublicationDate");
   });
 });
+
+describe("BFG search pagination", () => {
+  const search = /async function searchBfgDecisions\([\s\S]*?\n {2}\}\n/u.exec(page)?.[0] ?? "";
+
+  it("pages through the submitted query instead of the text typed since", () => {
+    expect(search).toContain(
+      "controls = { query: bfgAppliedQuery, sort: bfgAppliedSort, filters: bfgAppliedFilters }",
+    );
+    expect(search).toContain("const query = controls.query.trim();");
+    expect(search).not.toContain("bfgQuery");
+    expect(page).toContain("void searchBfgDecisions(bfgPage.page - 1)");
+    expect(page).toContain("void searchBfgDecisions(bfgPage.page + 1)");
+  });
+
+  it("applies query, sort and filters only together with a successful result page", () => {
+    expect(search).toMatch(
+      /setBfgPage\(normalized\);\s*setBfgAppliedQuery\(query\);\s*setBfgAppliedSort\(controls\.sort\);\s*setBfgAppliedFilters\(controls\.filters\);/u,
+    );
+  });
+});

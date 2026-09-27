@@ -1149,6 +1149,7 @@ export default function Home() {
   }
 
   const [bfgQuery, setBfgQuery] = useState("");
+  const [bfgAppliedQuery, setBfgAppliedQuery] = useState("");
   const [bfgSort, setBfgSort] = useState<BfgSort>("1");
   const [bfgAppliedSort, setBfgAppliedSort] = useState<BfgSort>("1");
   const [bfgFilters, setBfgFilters] = useState<BfgFilterSelection>(emptyBfgFilterSelection);
@@ -1370,6 +1371,7 @@ export default function Home() {
         setIsHistorySelectionMode(false);
         setAppView("home");
         setBfgQuery("");
+        setBfgAppliedQuery("");
         setBfgPage(null);
         setBfgError("");
         setHasSearchedBfg(false);
@@ -2016,11 +2018,13 @@ export default function Home() {
     setBfgFilters((current) => ({ ...current, [key]: value }));
   }
 
+  // Pagination reuses the query and controls of the shown results, not what
+  // has been typed into the form since.
   async function searchBfgDecisions(
     page: number,
-    controls = { sort: bfgAppliedSort, filters: bfgAppliedFilters },
+    controls = { query: bfgAppliedQuery, sort: bfgAppliedSort, filters: bfgAppliedFilters },
   ) {
-    const query = bfgQuery.trim();
+    const query = controls.query.trim();
     const accessToken = session?.access_token;
     if (!query) {
       setBfgError("Bitte einen Suchbegriff oder eine Geschäftszahl eingeben.");
@@ -2055,8 +2059,6 @@ export default function Home() {
       if (controls.filters.withHeadnote) {
         parameters.set("withHeadnote", "true");
       }
-      setBfgAppliedSort(controls.sort);
-      setBfgAppliedFilters(controls.filters);
       const response = await fetch(`/api/findok/bfg?${parameters.toString()}`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
@@ -2076,6 +2078,9 @@ export default function Home() {
         throw new Error("Findok lieferte eine ungültige Antwort.");
       }
       setBfgPage(normalized);
+      setBfgAppliedQuery(query);
+      setBfgAppliedSort(controls.sort);
+      setBfgAppliedFilters(controls.filters);
       setBfgFilters((current) => availableBfgFilterSelection(current, normalized.facets));
       setHasSearchedBfg(true);
     } catch (searchError) {
@@ -2093,7 +2098,7 @@ export default function Home() {
     const filters = emptyBfgFilterSelection();
     setBfgFilters(filters);
     if (hasSearchedBfg) {
-      void searchBfgDecisions(1, { sort: bfgSort, filters });
+      void searchBfgDecisions(1, { query: bfgQuery, sort: bfgSort, filters });
     }
   }
 
@@ -3736,7 +3741,7 @@ export default function Home() {
               className="bfg-search-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                void searchBfgDecisions(1, { sort: bfgSort, filters: bfgFilters });
+                void searchBfgDecisions(1, { query: bfgQuery, sort: bfgSort, filters: bfgFilters });
               }}
             >
               <label htmlFor="bfg-search">Suchbegriff oder Geschäftszahl</label>
@@ -3861,7 +3866,7 @@ export default function Home() {
                       type="button"
                       onClick={() => {
                         setIsBfgFilterPanelOpen(false);
-                        void searchBfgDecisions(1, { sort: bfgSort, filters: bfgFilters });
+                        void searchBfgDecisions(1, { query: bfgQuery, sort: bfgSort, filters: bfgFilters });
                       }}
                       disabled={isSearchingBfg || !bfgQuery.trim()}
                     >
