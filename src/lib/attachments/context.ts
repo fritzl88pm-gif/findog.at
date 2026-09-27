@@ -22,6 +22,7 @@ export type BuildAttachmentOptions = {
   geminiProvider?: GeminiProvider;
   documentFallbackProvider?: DocumentFallbackProvider;
   documentProvider?: DocumentProvider;
+  signal?: AbortSignal;
 };
 
 const MINERU_KINDS = new Set<MineruFileInput["kind"]>(["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"]);
@@ -97,17 +98,25 @@ async function mapWithConcurrency<T, R>(
   mapper: (item: T, index: number) => Promise<R>,
 ): Promise<R[]> {
   const results = new Array<R>(items.length);
+  const failures: unknown[] = [];
   let nextIndex = 0;
   async function worker(): Promise<void> {
-    for (;;) {
+    // Once one item failed the batch is lost: start no further provider calls, but let calls
+    // already in flight settle before rejecting.
+    while (failures.length === 0) {
       const index = nextIndex++;
       if (index >= items.length) return;
-      results[index] = await mapper(items[index], index);
+      try {
+        results[index] = await mapper(items[index], index);
+      } catch (error) {
+        failures.push(error);
+      }
     }
   }
   await Promise.all(
     Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
   );
+  if (failures.length > 0) throw failures[0];
   return results;
 }
 
@@ -143,43 +152,63 @@ export async function buildAttachmentContext(
     if (LOCAL_KINDS.has(file.kind)) contents[index] = decodeLocalText(file);
   });
 
+  // The first provider failure cancels all sibling provider work, and the call settles only after
+  // every branch has stopped: callers release the heavy-attachment slot as soon as this returns.
+  const providerAbort = new AbortController();
+  const signal = providerAbort.signal;
+  const failures: unknown[] = [];
+  const cancelSiblingsOnFailure = <T>(work: Promise<T>): Promise<T> => work.catch((error: unknown) => {
+    failures.push(error);
+    if (!signal.aborted) providerAbort.abort(error);
+    throw error;
+  });
+  const onCallerAbort = () => {
+    if (!signal.aborted) providerAbort.abort(options.signal?.reason);
+  };
+  if (options.signal?.aborted) onCallerAbort();
+  else options.signal?.addEventListener("abort", onCallerAbort, { once: true });
+
   const mineruFiles = mineruEntries.map(({ file }) => file);
   const sharedDocumentProvider = options.documentProvider;
   const mineruPromise = mineruEntries.length === 0
     ? Promise.resolve<string[]>([])
     : sharedDocumentProvider
-      ? (async () => validateProviderResults(
+      ? cancelSiblingsOnFailure((async () => validateProviderResults(
         "Dokument-OCR",
         mineruFiles,
-        await sharedDocumentProvider(mineruFiles),
-      ))()
-      : (async () => {
+        await sharedDocumentProvider(mineruFiles, { signal }),
+      ))())
+      : cancelSiblingsOnFailure((async () => {
       try {
         return validateProviderResults(
           "MinerU",
           mineruFiles,
-          await options.mineruProvider!(mineruFiles),
+          await options.mineruProvider!(mineruFiles, { signal }),
         );
       } catch (error) {
-        if (!options.documentFallbackProvider) throw error;
+        if (!options.documentFallbackProvider || signal.aborted) throw error;
         return validateProviderResults(
           "Dokument-Fallback",
           mineruFiles,
-          await options.documentFallbackProvider(mineruFiles),
+          await options.documentFallbackProvider(mineruFiles, { signal }),
         );
       }
-    })();
+    })());
   const geminiPromise = geminiEntries.length === 0
     ? Promise.resolve<string[]>([])
-    : mapWithConcurrency(geminiEntries, 2, async ({ file }) =>
-      options.geminiProvider!(bytesToDataUri(file.bytes, file.mimeType)));
+    : cancelSiblingsOnFailure((async () => validateProviderResults(
+      "Gemini",
+      geminiEntries.map(({ file }) => file),
+      await mapWithConcurrency(geminiEntries, 2, async ({ file }) => cancelSiblingsOnFailure(
+        options.geminiProvider!(bytesToDataUri(file.bytes, file.mimeType), { signal }),
+      )),
+    ))());
 
-  const [mineruResults, rawGeminiResults] = await Promise.all([mineruPromise, geminiPromise]);
-  const geminiResults = validateProviderResults(
-    "Gemini",
-    geminiEntries.map(({ file }) => file),
-    rawGeminiResults,
-  );
+  const [mineruOutcome, geminiOutcome] = await Promise.allSettled([mineruPromise, geminiPromise]);
+  options.signal?.removeEventListener("abort", onCallerAbort);
+  if (mineruOutcome.status === "rejected" || geminiOutcome.status === "rejected") throw failures[0];
+  const mineruResults = mineruOutcome.value;
+  const geminiResults = geminiOutcome.value;
 
   mineruEntries.forEach(({ index }, resultIndex) => {
     contents[index] = mineruResults[resultIndex];

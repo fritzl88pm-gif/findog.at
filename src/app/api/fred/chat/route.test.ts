@@ -1483,6 +1483,34 @@ describe("POST /api/fred/chat", () => {
     }));
   });
 
+  it("hands the preprocessing signal to the attachment builder so a failed provider can cancel its siblings", async () => {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
+      id: "abababab-abab-4bab-8bab-abababababab",
+    });
+    const rpc = rpcForTurn();
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+    const builderAbort = new AbortController();
+    let builderSignal: AbortSignal | undefined;
+    vi.mocked(buildAttachmentContext).mockImplementationOnce(async (question, attachments, options) => {
+      builderSignal = options?.signal;
+      if (!options?.documentProvider) throw new Error("shared document provider missing");
+      const documents = await options.documentProvider(attachments as never, { signal: builderAbort.signal });
+      return `${question}\n\n${documents.join("\n")}`;
+    });
+
+    const response = await POST(multipartRequest({
+      query: "Bitte Dokument prüfen",
+      attachment: pdfFile("Beleg.pdf"),
+    }));
+    await response.text();
+
+    expect(builderSignal).toBeInstanceOf(AbortSignal);
+    expect(extractDocumentsWithConfiguredModel).toHaveBeenCalledWith(
+      [expect.objectContaining({ name: "Beleg.pdf", kind: "pdf" })],
+      { signal: builderAbort.signal },
+    );
+  });
+
   it.each([
     ["PDF", new File(["not-pdf"], "Beleg.pdf", { type: "application/pdf" }), "attachment"],
     ["PNG", new File(["not-png"], "Bild.png", { type: "image/png" }), "image"],

@@ -52,7 +52,9 @@ export async function extractDocumentsWithPipeline(
 
   try {
     return await options.mineruProvider(files, providerOptions(options.signal));
-  } catch {
+  } catch (error) {
+    // A cancelled batch must not start the paid fallback for every document.
+    if (options.signal?.aborted) throw error;
     return options.omnirouteProvider(files, providerOptions(options.signal));
   }
 }

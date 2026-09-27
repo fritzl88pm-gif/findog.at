@@ -67,6 +67,24 @@ describe("document provider dispatch", () => {
     expect(omnirouteProvider).toHaveBeenCalledTimes(1);
   });
 
+  it("does not start the OmniRoute fallback when MinerU stopped because the batch was cancelled", async () => {
+    const controller = new AbortController();
+    const mineruProvider = vi.fn(async () => {
+      controller.abort(new Error("sibling failed"));
+      throw new Error("MinerU aborted");
+    });
+    const omnirouteProvider = vi.fn().mockResolvedValue(["Fallback result"]);
+
+    await expect(extractDocumentsWithPipeline([files[0]], {
+      pipeline: "mineru_with_omniroute_luna_fallback",
+      mineruProvider,
+      omnirouteProvider,
+      signal: controller.signal,
+    })).rejects.toThrow("MinerU aborted");
+
+    expect(omnirouteProvider).not.toHaveBeenCalled();
+  });
+
   it("rejects an invalid runtime pipeline before selecting a provider", async () => {
     const mineruProvider = vi.fn();
     const omnirouteProvider = vi.fn();

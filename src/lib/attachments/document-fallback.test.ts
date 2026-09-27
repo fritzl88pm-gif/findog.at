@@ -90,6 +90,25 @@ describe("configured OmniRoute Luna document fallback", () => {
       .toContain("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
   });
 
+  it("does not send the remaining documents after one document failed", async () => {
+    let releaseSecond!: () => void;
+    const fetch = vi.fn()
+      .mockResolvedValue(providerResponse("Later"))
+      .mockResolvedValueOnce(new Response("error", { status: 500 }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => {
+        releaseSecond = () => resolve(providerResponse("Second"));
+      }));
+
+    await expect(extractDocumentsWithConfiguredModel(
+      ["a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf"].map((name) => document(name)),
+      { fetch },
+    )).rejects.toMatchObject({ status: 502 });
+    releaseSecond();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("accepts multipart text responses and strips hidden thinking", async () => {
     const fetch = vi.fn().mockResolvedValue(providerResponse([
       { type: "text", text: "<thinking>work notes</thinking>" },

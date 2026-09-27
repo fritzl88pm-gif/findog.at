@@ -208,11 +208,18 @@ export async function extractDocumentsWithConfiguredModel(
   }
   const results = new Array<string>(files.length);
   let nextIndex = 0;
+  let failed = false;
   async function worker(): Promise<void> {
-    for (;;) {
+    // Once one document failed the batch is lost; do not send the remaining files to the provider.
+    while (!failed) {
       const index = nextIndex++;
       if (index >= files.length) return;
-      results[index] = await extractDocument(files[index], options);
+      try {
+        results[index] = await extractDocument(files[index], options);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
     }
   }
   await Promise.all(

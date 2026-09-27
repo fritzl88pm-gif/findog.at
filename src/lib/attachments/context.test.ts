@@ -60,6 +60,7 @@ describe("Attachment context builder", () => {
     expect(mineruProvider).toHaveBeenCalledTimes(1);
     expect(mineruProvider).toHaveBeenCalledWith(
       [expect.objectContaining({ kind: "pdf", name: "report.pdf" })],
+      { signal: expect.any(AbortSignal) },
     );
     expect(geminiProvider).not.toHaveBeenCalled();
     expect(result).toContain("# Extracted PDF text");
@@ -180,7 +181,7 @@ describe("Attachment context builder", () => {
 
     expect(documentFallbackProvider).toHaveBeenCalledWith([
       expect.objectContaining({ name: "fallback.pdf", kind: "pdf" }),
-    ]);
+    ], { signal: expect.any(AbortSignal) });
     expect(result).toContain("# Gemini document content");
   });
 
@@ -224,7 +225,7 @@ describe("Attachment context builder", () => {
     expect(documentProvider).toHaveBeenCalledWith([
       expect.objectContaining({ name: "one.pdf" }),
       expect.objectContaining({ name: "two.pdf" }),
-    ]);
+    ], { signal: expect.any(AbortSignal) });
     expect(geminiProvider).toHaveBeenCalledTimes(1);
     expect(result).toContain("First document");
     expect(result).toContain("Second document");
@@ -304,6 +305,65 @@ describe("Attachment context builder", () => {
     ["Gemini empty output", [pngInput("a.png")], { geminiProvider: vi.fn().mockResolvedValue("") }],
   ])("fails closed for %s", async (_label, inputs, providers) => {
     await expect(buildAttachmentContext("Q", inputs, providers)).rejects.toThrow();
+  });
+
+  it("cancels sibling provider work after one provider fails and settles only once it stopped", async () => {
+    let documentSignal: AbortSignal | undefined;
+    let documentSettled = false;
+    const documentProvider = vi.fn((_files: unknown, options?: { signal?: AbortSignal }) => (
+      new Promise<string[]>((_resolve, reject) => {
+        documentSignal = options?.signal;
+        documentSignal?.addEventListener("abort", () => {
+          documentSettled = true;
+          reject(new Error("document aborted"));
+        }, { once: true });
+      })
+    ));
+    const geminiProvider = vi.fn().mockRejectedValue(new Error("image failed"));
+
+    await expect(buildAttachmentContext("Q", [pdfInput("scan.pdf"), pngInput("photo.png")], {
+      documentProvider,
+      geminiProvider,
+    })).rejects.toThrow("image failed");
+
+    expect(documentSignal?.aborted).toBe(true);
+    expect(documentSettled).toBe(true);
+  });
+
+  it("starts no further image requests after one image failed and aborts the one in flight", async () => {
+    let inFlightSignal: AbortSignal | undefined;
+    const geminiProvider = vi.fn()
+      .mockResolvedValue("later image")
+      .mockRejectedValueOnce(new Error("first image failed"))
+      .mockImplementationOnce((_uri: string, options?: { signal?: AbortSignal }) => new Promise<string>((_resolve, reject) => {
+        inFlightSignal = options?.signal;
+        inFlightSignal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }));
+
+    await expect(buildAttachmentContext(
+      "Q",
+      [pngInput("a.png"), pngInput("b.png"), pngInput("c.png"), pngInput("d.png")],
+      { geminiProvider },
+    )).rejects.toThrow("first image failed");
+
+    expect(inFlightSignal?.aborted).toBe(true);
+    expect(geminiProvider).toHaveBeenCalledTimes(2);
+  });
+
+  it("links the caller signal to every provider call", async () => {
+    const caller = new AbortController();
+    let providerSignal: AbortSignal | undefined;
+    const geminiProvider = vi.fn((_uri: string, options?: { signal?: AbortSignal }) => new Promise<string>((_resolve, reject) => {
+      providerSignal = options?.signal;
+      providerSignal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    }));
+
+    const pending = buildAttachmentContext("Q", [pngInput()], { geminiProvider, signal: caller.signal });
+    await vi.waitFor(() => expect(geminiProvider).toHaveBeenCalledTimes(1));
+    caller.abort(new Error("client left"));
+
+    await expect(pending).rejects.toThrow("aborted");
+    expect(providerSignal?.aborted).toBe(true);
   });
 
   it("rejects invalid local UTF-8 before any document or image provider is called", async () => {

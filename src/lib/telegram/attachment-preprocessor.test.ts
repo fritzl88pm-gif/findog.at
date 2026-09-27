@@ -95,7 +95,10 @@ describe("createAttachmentPreprocessor", () => {
       "Was ist zu sehen?",
     );
 
-    expect(gemini).toHaveBeenCalledWith(expect.stringMatching(/^data:image\/jpeg;base64,/));
+    expect(gemini).toHaveBeenCalledWith(
+      expect.stringMatching(/^data:image\/jpeg;base64,/),
+      { signal: expect.any(AbortSignal) },
+    );
     expect(document).not.toHaveBeenCalled();
     expect(result.upstreamQuery).toContain("Bildbeschreibung");
   });

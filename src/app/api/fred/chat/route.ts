@@ -1160,11 +1160,13 @@ export async function POST(request: Request) {
               });
               const combined = await runWithTimeout(
                 async (signal) => buildAttachmentContext(body.query, attachmentInputs, {
+                  signal,
+                  // The builder's signal is linked to ours and also cancels siblings after one provider fails.
                   documentProvider: (files, options = {}) => configuredDocumentProvider(files, {
                     ...options,
-                    signal,
+                    signal: options.signal ?? signal,
                   }),
-                  geminiProvider: (uri) => describeImage(uri, { signal }),
+                  geminiProvider: (uri, options = {}) => describeImage(uri, { signal: options.signal ?? signal }),
                 }),
                 {
                   deadline,
