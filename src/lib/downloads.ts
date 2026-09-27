@@ -221,11 +221,12 @@ export async function getDownloadCatalog(supabase: SupabaseClient): Promise<Down
 }
 
 export function downloadDisplayFilename(title: string, extension: string): string {
-  const safeTitle = title
+  const sanitizedTitle = title
     .normalize("NFKC")
     .replace(/[\u0000-\u001f\u007f/\\:*?"<>|]/gu, "_")
-    .trim()
-    .slice(0, 180) || "download";
+    .trim();
+  // Cut by code points: a split surrogate pair would make encodeURIComponent throw.
+  const safeTitle = Array.from(sanitizedTitle).slice(0, 180).join("") || "download";
   const suffix = `.${extension.toLowerCase()}`;
   return safeTitle.toLowerCase().endsWith(suffix) ? safeTitle : `${safeTitle}${suffix}`;
 }

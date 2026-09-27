@@ -70,6 +70,23 @@ describe("download filenames", () => {
     expect(downloadDisplayFilename("Vorlage.xlsx", "xlsx")).toBe("Vorlage.xlsx");
   });
 
+  it("never splits a surrogate pair when shortening long titles", () => {
+    for (const rawTitle of ["a" + "📄".repeat(100), "📄".repeat(100)]) {
+      const { title } = parseDownloadDocumentInput({
+        categoryId: CATEGORY_ID,
+        title: rawTitle,
+        description: "",
+        sortOrder: 0,
+      });
+      const filename = downloadDisplayFilename(title, "pdf");
+
+      expect(filename).toBe(`${rawTitle}.pdf`);
+      // With the u flag this only matches lone surrogates.
+      expect(filename).not.toMatch(/[\uD800-\uDFFF]/u);
+      expect(() => downloadContentDisposition(filename)).not.toThrow();
+    }
+  });
+
   it("creates an attachment header with ASCII fallback and UTF-8 filename", () => {
     const header = downloadContentDisposition("Einkommensteuererklärung.pdf");
     expect(header).toContain('attachment; filename="Einkommensteuererklarung.pdf"');
