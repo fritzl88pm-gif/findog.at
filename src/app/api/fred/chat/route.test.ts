@@ -108,7 +108,10 @@ vi.mock("@/lib/weknora/fred-native", async (importOriginal) => {
   };
 });
 
-const userId = "11111111-1111-4111-8111-111111111111";
+// The route's rate limiter is module-level and keyed by user, so each test
+// authenticates as its own default user instead of draining one shared budget.
+let userSequence = 0;
+let userId = "";
 const auditUserId = "33333333-3333-4333-8333-333333333333";
 const conversationId = "22222222-2222-4222-8222-222222222222";
 const requestId = "44444444-4444-4444-8444-444444444444";
@@ -231,6 +234,8 @@ describe("POST /api/fred/chat", () => {
       receivedAt: "2026-08-29T10:00:00.000Z",
     });
     mockTransitionFredRequestReceipt.mockResolvedValue(undefined);
+    userSequence += 1;
+    userId = `11111111-1111-4111-8111-${String(userSequence).padStart(12, "0")}`;
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: userId });
     vi.mocked(readFredEmbedServerConfig).mockReturnValue({
       channelId: "fred-channel",
@@ -986,6 +991,25 @@ describe("POST /api/fred/chat", () => {
     const admitted = await POST(multipartRequest({ query: "Jetzt verarbeiten" }));
     expect(admitted.status).toBe(200);
     await admitted.text();
+  });
+
+  it("limits a user to 30 requests per ten-minute window", async () => {
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc: vi.fn() } as never);
+
+    // Empty questions are rejected right after the limiter, so no turn runs.
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const response = await POST(request({ query: "" }));
+      expect(response.status).toBe(400);
+    }
+    const limited = await POST(request({ query: "" }));
+    expect(limited.status).toBe(429);
+    await expect(limited.json()).resolves.toEqual({
+      error: "Zu viele Fred-Anfragen. Bitte kurz warten.",
+    });
+
+    vi.setSystemTime(Date.now() + 10 * 60 * 1_000);
+    const nextWindow = await POST(request({ query: "" }));
+    expect(nextWindow.status).toBe(400);
   });
 
   it("rejects a native aggregate attachment overflow with 413 before runs, persistence, providers, and WeKnora", async () => {
