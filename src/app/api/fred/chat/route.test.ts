@@ -2654,6 +2654,93 @@ describe("POST /api/fred/chat", () => {
         answer: "Antworttext: Graph",
       }));
     });
+
+    it.each([
+      ["image discovery succeeds", false, "Bild: ![Beleg](findog-artifact://99999999-9999-4999-8999-999999999998) und tabelle.csv"],
+      ["image discovery fails", true, "Bild: Beleg und tabelle.csv"],
+    ])("normalizes generated-artifact links in a native image turn when %s", async (_case, discoveryFails, expectedDisplay) => {
+      const currentUserId = "ffff6666-ffff-4fff-8fff-ffffffffff01";
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: currentUserId });
+      const artifact = {
+        id: "artifact-csv", fileName: "tabelle.csv", fileSize: 12, fileType: ".csv", upstreamIndex: 0,
+      };
+      const from = vi.fn((table: string) => {
+        if (table === "fred_native_image_artifacts") {
+          return {
+            insert: vi.fn().mockReturnValue({
+              select: vi.fn().mockResolvedValue({
+                data: [{ id: "99999999-9999-4999-8999-999999999998", source_uri: "minio://bucket/img1.png" }],
+                error: null,
+              }),
+            }),
+          };
+        }
+        if (table === "fred_messages") {
+          return {
+            update: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  eq: vi.fn().mockReturnValue({
+                    select: vi.fn().mockReturnValue({
+                      maybeSingle: vi.fn().mockResolvedValue({ data: { artifacts: [artifact] }, error: null }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          };
+        }
+        return {
+          insert: vi.fn().mockReturnValue({ select: vi.fn().mockResolvedValue({ data: [{ id: "run-1" }], error: null }) }),
+          update: vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ data: null, error: null }) }),
+        };
+      });
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
+      vi.mocked(getScanningSettings).mockResolvedValue({
+        documentPipeline: "mineru_with_omniroute_luna_fallback",
+        fredAttachmentMode: "weknora_native",
+        scanningProvider: "omniroute_luna",
+        modelId: "model/x",
+        prompt: "prompt",
+        updatedAt: "2026-07-19T10:00:00.000Z",
+        updatedBy: currentUserId,
+      });
+      if (discoveryFails) {
+        vi.mocked(fetchFredRecentEmbedImages).mockRejectedValue(new Error("Network timeout"));
+      } else {
+        vi.mocked(fetchFredRecentEmbedImages).mockResolvedValue([
+          { url: "minio://bucket/img1.png", caption: "Bild.png" },
+        ]);
+      }
+      const answer = "Bild: ![Beleg](minio://bucket/img1.png) und [tabelle.csv](sandbox:/mnt/data/tabelle.csv)";
+      vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
+        'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+        `data: ${JSON.stringify({ response_type: "answer", content: answer, done: true })}\n\n`,
+        `data: ${JSON.stringify({
+          response_type: "complete",
+          data: { artifacts: [{ file_name: "tabelle.csv", file_type: ".csv", file_size: 12, handle: "resource://tabelle-csv" }] },
+        })}\n\n`,
+      ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+      const response = await POST(multipartRequest({
+        query: "Tabelle aus dem Bild als CSV",
+        image: pngFile(),
+      }));
+      const events = (await response.text()).split("\n").filter(Boolean).map(parseFredNativeStreamLine);
+
+      expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
+        payload: expect.objectContaining({
+          content: answer,
+          display_content: expectedDisplay,
+        }),
+      });
+      expect(events.find((event) => event?.type === "final")).toEqual(expect.objectContaining({
+        type: "final",
+        answer: expectedDisplay,
+        artifacts: [artifact],
+      }));
+    });
   });
 
   describe("direct-result source gating vertical route behavior", () => {

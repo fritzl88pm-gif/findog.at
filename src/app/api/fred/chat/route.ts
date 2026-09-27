@@ -1567,7 +1567,7 @@ export async function POST(request: Request) {
             [...verifiedCitations.values()],
             { target: "fullText" },
           );
-          let displayAnswer = normalizeGeneratedArtifactLinks(finalAnswer, generatedArtifacts);
+          let displayAnswer = finalAnswer;
           const hasImageAttachments = (body.attachments ?? []).some((a) => a.kind === "image");
           if (
             fredAttachmentMode === "weknora_native"
@@ -1608,6 +1608,9 @@ export async function POST(request: Request) {
               displayAnswer = sanitizeProviderImageMarkupToAlt(finalAnswer);
             }
           }
+          // Normalize after image materialization, which rebuilds the display
+          // text, so native image turns also drop generated-file pseudo-links.
+          displayAnswer = normalizeGeneratedArtifactLinks(displayAnswer, generatedArtifacts);
           const { conversation: finalConversation, messageId: assistantMessageId } = await recordEvent({
             supabase,
             userId: user.id,
