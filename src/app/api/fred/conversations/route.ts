@@ -73,8 +73,16 @@ export async function GET(request: Request) {
       .order("updated_at", { ascending: false })
       .order("id", { ascending: false })
       .range(from, to), "Der Fred-Verlauf konnte nicht geladen werden.");
+    // Offset pages over updated_at shift when a conversation gets a new message while the
+    // list loads, so a row can arrive twice; the sidebar keys entries by id.
+    const seenIds = new Set<string>();
+    const uniqueConversations = conversations.filter((conversation) => {
+      if (seenIds.has(conversation.id)) return false;
+      seenIds.add(conversation.id);
+      return true;
+    });
     return json({
-      conversations: conversations.map((conversation) => ({
+      conversations: uniqueConversations.map((conversation) => ({
         id: conversation.id,
         title: conversation.title,
         createdAt: conversation.created_at,

@@ -247,4 +247,40 @@ describe("GET /api/fred/conversations — paging", () => {
     expect(query.eq).toHaveBeenCalledWith("client_id", USER_A);
     expect(query.order).toHaveBeenLastCalledWith("id", { ascending: false });
   });
+
+  it("drops a conversation repeated because the list shifted between pages", async () => {
+    const rows = Array.from({ length: 1_500 }, (_, index) => ({
+      id: `11111111-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      title: `Unterhaltung ${index}`,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      agent_key: "fred",
+      origin: "web",
+      telegram_integration_id: null,
+    }));
+    const query = cappedQuery(rows);
+    // After the first page, conversation 1200 gets a new message and moves to the top,
+    // so the second page starts with row 999 again.
+    const range = query.range as (rangeFrom: number, rangeTo: number) => unknown;
+    const movedId = rows[1_200].id;
+    query.range = vi.fn((rangeFrom: number, rangeTo: number) => {
+      if (rangeFrom > 0 && rows[0].id !== movedId) {
+        const [moved] = rows.splice(1_200, 1);
+        rows.unshift(moved);
+      }
+      return range(rangeFrom, rangeTo);
+    });
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from: vi.fn(() => query) } as never);
+
+    const response = await GET(
+      new Request("http://localhost/api/fred/conversations", {
+        headers: { Authorization: "Bearer token" },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const ids = (await response.json()).conversations.map((conversation: { id: string }) => conversation.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(1_499);
+  });
 });
