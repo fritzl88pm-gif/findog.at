@@ -501,7 +501,15 @@ export class Sim {
     this.stepPlayerPhysics(dtw, input, false);
     this.updateEntities(dtw);
     this.collide(dtw);
-    for (const s of this.systems) s.update(this, dtw);
+    for (let i = this.systems.length - 1; i >= 0; i -= 1) {
+      try {
+        this.systems[i].update(this, dtw);
+      } catch (err) {
+        // Ein defektes Weltsystem darf den Lauf nicht beenden: entfernen und weiterspielen.
+        console.error("[fredrun2] Weltsystem entfernt nach Fehler", err);
+        this.systems.splice(i, 1);
+      }
+    }
     this.checkGates();
     if (!this.noSpawn) this.spawner.fill();
     this.cull();

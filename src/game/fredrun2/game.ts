@@ -27,6 +27,7 @@ import { NO_INPUT, Sim, TOUR_METERS, TOUR_ORDER, dailyWorld, type SimInput } fro
 import type { HudState, HudToast } from "./hud";
 import type { CharacterId, Ent, RunConfig, RunMode, SimEvent, WorldDef, WorldId, WorldRenderer } from "./types";
 import { WORLDS } from "./worlds";
+import { BasicRenderer } from "./worlds/basic";
 
 /** Strukturelle Schnittstelle des Audio-Moduls (siehe ./audio). */
 export interface AudioLike {
@@ -627,8 +628,8 @@ export class FredRunGame {
     const gate = sim.nextGate;
     const nxt = gate ? this.worldRenderers.get(gate.to) ?? null : null;
     if (this.phase !== "paused") {
-      cur?.update(visDt, view);
-      if (nxt && sim.gateBlend > 0.001) nxt.update(visDt, view);
+      this.guard(sim.world.id, () => cur?.update(visDt, view));
+      if (nxt && gate && sim.gateBlend > 0.001) this.guard(gate.to, () => nxt.update(visDt, view));
       r.update(visDt, sim, sim.phase === "running" ? sim.speed : 0);
     }
 
@@ -656,12 +657,32 @@ export class FredRunGame {
       idle: this.phase === "countdown" && !this.resumeCountdown && sim.phase === "ready",
       victory: this.victory,
     };
-    r.draw(frame);
-    if (this.countdownT > 0 && this.phase === "countdown") this.drawCountdown(r);
+    try {
+      r.draw(frame);
+    } catch (err) {
+      this.renderFailed(sim.world.id, err);
+    }
   }
 
-  private drawCountdown(r: Renderer): void {
-    void r;
+  private renderErrors = new Map<WorldId, number>();
+
+  /** Fehler in einem Welt-Renderer dürfen das Spiel nie einfrieren: nach 3 Fehlern fällt die Welt auf den Basis-Renderer zurück. */
+  private renderFailed(id: WorldId, err: unknown): void {
+    const n = (this.renderErrors.get(id) ?? 0) + 1;
+    this.renderErrors.set(id, n);
+    if (n === 1) console.error(`[fredrun2] Renderfehler in Welt "${id}"`, err);
+    if (n === 3) {
+      const fallback = new BasicRenderer(220);
+      this.worldRenderers.set(id, fallback);
+    }
+  }
+
+  private guard(id: WorldId, fn: () => void): void {
+    try {
+      fn();
+    } catch (err) {
+      this.renderFailed(id, err);
+    }
   }
 
   private consumeEvents(sim: Sim, r: Renderer): void {

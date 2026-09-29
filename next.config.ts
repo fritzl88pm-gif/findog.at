@@ -42,6 +42,11 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        // Fredrun 2.0: große, selten geänderte Sprite-/Prop-Dateien dürfen lange gecacht werden.
+        source: "/fredrun2/:path*",
+        headers: [{ key: "Cache-Control", value: "public, max-age=86400, stale-while-revalidate=604800" }],
+      },
+      {
         source: "/:path*",
         headers: [
           {
