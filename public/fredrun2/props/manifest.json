@@ -80,6 +80,26 @@
       "facing": "right",
       "kb": 20
     },
+    "bat-fly": {
+      "file": "bat-fly.webp",
+      "cols": 6,
+      "rows": 2,
+      "frames": 12,
+      "cw": 320,
+      "ch": 224,
+      "ax": 0.5,
+      "ay": 0.5,
+      "fps": 22,
+      "loop": true,
+      "tags": [
+        "finanzamt",
+        "hazard"
+      ],
+      "w": 289,
+      "h": 212,
+      "facing": "right",
+      "kb": 140
+    },
     "bee-swarm": {
       "file": "bee-swarm.webp",
       "cols": 4,
@@ -119,6 +139,26 @@
       "h": 295,
       "facing": "right",
       "kb": 24
+    },
+    "brezel": {
+      "file": "brezel.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 383,
+      "ch": 338,
+      "ax": 0.5,
+      "ay": 0.5,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wien",
+        "pickup"
+      ],
+      "w": 373,
+      "h": 328,
+      "facing": "right",
+      "kb": 26
     },
     "cannon": {
       "file": "cannon.webp",
@@ -299,6 +339,26 @@
       "h": 196,
       "facing": "front",
       "kb": 237
+    },
+    "eagle-fly": {
+      "file": "eagle-fly.webp",
+      "cols": 6,
+      "rows": 4,
+      "frames": 24,
+      "cw": 288,
+      "ch": 256,
+      "ax": 0.5,
+      "ay": 0.5,
+      "fps": 20,
+      "loop": true,
+      "tags": [
+        "alpen",
+        "hazard"
+      ],
+      "w": 247,
+      "h": 244,
+      "facing": "right",
+      "kb": 221
     },
     "edelweiss": {
       "file": "edelweiss.webp",
@@ -619,6 +679,26 @@
       "h": 289,
       "facing": "right",
       "kb": 23
+    },
+    "lebkuchenherz": {
+      "file": "lebkuchenherz.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 336,
+      "ch": 314,
+      "ax": 0.5,
+      "ay": 0.5,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "prater",
+        "pickup"
+      ],
+      "w": 326,
+      "h": 304,
+      "facing": "right",
+      "kb": 22
     },
     "luki-defeated": {
       "file": "luki-defeated.webp",
@@ -981,6 +1061,26 @@
       "facing": "right",
       "kb": 22
     },
+    "regenschirm": {
+      "file": "regenschirm.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 374,
+      "ch": 367,
+      "ax": 0.5,
+      "ay": 0.5,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wien",
+        "pickup"
+      ],
+      "w": 364,
+      "h": 357,
+      "facing": "right",
+      "kb": 16
+    },
     "reihe100": {
       "file": "reihe100.webp",
       "cols": 1,
@@ -1001,6 +1101,26 @@
       "h": 191,
       "facing": "front",
       "kb": 21
+    },
+    "sachertorte": {
+      "file": "sachertorte.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 393,
+      "ch": 395,
+      "ax": 0.5,
+      "ay": 0.5,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wien",
+        "pickup"
+      ],
+      "w": 383,
+      "h": 385,
+      "facing": "right",
+      "kb": 27
     },
     "server-rack": {
       "file": "server-rack.webp",
@@ -1223,6 +1343,291 @@
       "h": 342,
       "facing": "right",
       "kb": 31
+    },
+    "zuckerwatte": {
+      "file": "zuckerwatte.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 234,
+      "ch": 415,
+      "ax": 0.5,
+      "ay": 0.5,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "prater",
+        "pickup"
+      ],
+      "w": 224,
+      "h": 405,
+      "facing": "right",
+      "kb": 11
+    },
+    "landmark-abbey": {
+      "file": "landmark-abbey.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 739,
+      "ch": 760,
+      "ax": 0.5,
+      "ay": 1.0,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "landmark",
+        "wachau",
+        "alpen"
+      ],
+      "w": 739,
+      "h": 760,
+      "facing": "right",
+      "kb": 107
+    },
+    "landmark-castle": {
+      "file": "landmark-castle.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 700,
+      "ch": 686,
+      "ax": 0.5,
+      "ay": 1.0,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "landmark",
+        "wachau",
+        "alpen"
+      ],
+      "w": 700,
+      "h": 686,
+      "facing": "right",
+      "kb": 97
+    },
+    "landmark-riesenrad": {
+      "file": "landmark-riesenrad.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 788,
+      "ch": 800,
+      "ax": 0.5,
+      "ay": 1.0,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "landmark",
+        "prater",
+        "wien"
+      ],
+      "w": 788,
+      "h": 800,
+      "facing": "right",
+      "kb": 256
+    },
+    "landmark-cathedral": {
+      "file": "landmark-cathedral.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 537,
+      "ch": 760,
+      "ax": 0.5,
+      "ay": 1.0,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "landmark",
+        "wien",
+        "cyber"
+      ],
+      "w": 537,
+      "h": 760,
+      "facing": "right",
+      "kb": 98
+    },
+    "landmark-coaster": {
+      "file": "landmark-coaster.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 760,
+      "ch": 687,
+      "ax": 0.5,
+      "ay": 1.0,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "landmark",
+        "prater"
+      ],
+      "w": 760,
+      "h": 687,
+      "facing": "right",
+      "kb": 133
+    },
+    "landmark-chalet": {
+      "file": "landmark-chalet.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 520,
+      "ch": 388,
+      "ax": 0.5,
+      "ay": 1.0,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "landmark",
+        "alpen"
+      ],
+      "w": 520,
+      "h": 388,
+      "facing": "right",
+      "kb": 64
+    },
+    "landmark-church": {
+      "file": "landmark-church.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 436,
+      "ch": 520,
+      "ax": 0.5,
+      "ay": 1.0,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "landmark",
+        "alpen",
+        "wachau"
+      ],
+      "w": 436,
+      "h": 520,
+      "facing": "right",
+      "kb": 30
+    },
+    "landmark-steamship": {
+      "file": "landmark-steamship.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 720,
+      "ch": 361,
+      "ax": 0.5,
+      "ay": 1.0,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "landmark",
+        "wachau"
+      ],
+      "w": 720,
+      "h": 361,
+      "facing": "right",
+      "kb": 52
+    },
+    "landmark-peak": {
+      "file": "landmark-peak.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 760,
+      "ch": 659,
+      "ax": 0.5,
+      "ay": 1.0,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "landmark",
+        "alpen"
+      ],
+      "w": 760,
+      "h": 659,
+      "facing": "right",
+      "kb": 97
+    },
+    "landmark-carousel": {
+      "file": "landmark-carousel.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 640,
+      "ch": 622,
+      "ax": 0.5,
+      "ay": 1.0,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "landmark",
+        "prater"
+      ],
+      "w": 640,
+      "h": 622,
+      "facing": "right",
+      "kb": 138
+    },
+    "landmark-tent": {
+      "file": "landmark-tent.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 660,
+      "ch": 568,
+      "ax": 0.5,
+      "ay": 1.0,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "landmark",
+        "prater"
+      ],
+      "w": 660,
+      "h": 568,
+      "facing": "right",
+      "kb": 69
+    },
+    "landmark-hauntedhouse": {
+      "file": "landmark-hauntedhouse.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 640,
+      "ch": 613,
+      "ax": 0.5,
+      "ay": 1.0,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "landmark",
+        "prater"
+      ],
+      "w": 640,
+      "h": 613,
+      "facing": "right",
+      "kb": 128
+    },
+    "landmark-vineyard": {
+      "file": "landmark-vineyard.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 640,
+      "ch": 624,
+      "ax": 0.5,
+      "ay": 1.0,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "landmark",
+        "wachau"
+      ],
+      "w": 640,
+      "h": 624,
+      "facing": "right",
+      "kb": 126
     }
   }
 }

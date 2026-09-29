@@ -2,7 +2,7 @@
  * Wien – vorgerenderte Kulissen-Kacheln: Dachlandschaft, Gründerzeit-Fassaden (Varianten intakt → Brand → Ruine),
  * Wolken, Kopfsteinpflaster mit Gleisen, Straßenmöbel-Sprites (Laterne, Platane, Litfaßsäule).
  */
-import { hash, pnoise, type Tile, renderTile } from "../shared-a/gfx";
+import { hash, type Tile, renderTile } from "../shared-a/gfx";
 
 // ---------------------------------------------------------------------------------------------------
 // Dachlandschaft (fern)
@@ -121,7 +121,15 @@ export interface FacadeOpts {
   damage: 0 | 1 | 2;
 }
 
-const FACADE_COLORS = ["#7f6c4e", "#8a8575", "#6d7075", "#80685f", "#67715f", "#8a774b", "#76706a", "#5f6a77"];
+const FACADE_COLORS = ["#6b5b44", "#716d62", "#585d66", "#6a5752", "#566052", "#73633f", "#645f5a", "#4f5a68"];
+
+function shadeHex(hex: string, k: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.min(255, Math.round(((n >> 16) & 255) * k));
+  const gg = Math.min(255, Math.round(((n >> 8) & 255) * k));
+  const b = Math.min(255, Math.round((n & 255) * k));
+  return "#" + ((1 << 24) | (r << 16) | (gg << 8) | b).toString(16).slice(1);
+}
 
 function shade(hex: string, k: number): string {
   const n = parseInt(hex.slice(1), 16);
@@ -131,40 +139,48 @@ function shade(hex: string, k: number): string {
   return `rgb(${r},${gg},${b})`;
 }
 
-export function paintFacades(W: number, H: number, o: FacadeOpts, k = 1): Tile {
-  return renderTile(W, H, k, (g) => {
+export interface FacadeTile extends Tile {
+  /** Dächer: [x, Oberkante Dach, Breite] in Kachelkoordinaten */
+  roofs: Array<[number, number, number]>;
+}
+
+export function paintFacades(W: number, H: number, o: FacadeOpts, k = 1): FacadeTile {
+  const roofs: Array<[number, number, number]> = [];
+  const tile = renderTile(W, H, k, (g) => {
     let x = 0;
     let i = 0;
     const holes: Array<[number, number, number, number]> = [];
+    const glows: Array<[number, number, number]> = [];
     while (x < W) {
-      let w = 170 + hash(i * 3.1 + 11) * 130;
-      if (W - (x + w) < 170) w = W - x;
+      let w = 130 + hash(i * 3.1 + 11) * 110;
+      if (W - (x + w) < 130) w = W - x;
       const floors = 3 + Math.floor(hash(i * 1.7 + 5) * 3);
-      const floorH = 40 + Math.floor(hash(i * 2.9) * 6);
-      const groundH = 52;
-      const bodyH = groundH + floors * floorH + 14;
+      const floorH = 30 + Math.floor(hash(i * 2.9) * 5);
+      const groundH = 40;
+      const bodyH = groundH + floors * floorH + 12;
       const top = H - bodyH;
-      const col = FACADE_COLORS[Math.floor(hash(i * 5.3 + 2) * FACADE_COLORS.length)];
+      const col0 = FACADE_COLORS[Math.floor(hash(i * 5.3 + 2) * FACADE_COLORS.length)];
+      const col = o.damage === 2 ? "#3e3a38" : o.fire > 0.15 ? shadeHex(col0, 0.72) : col0;
       const style = hash(i * 8.1 + 4);
       const roofKind = hash(i * 6.7 + 9);
 
       // Dach
-      const roofH = 28 + hash(i * 4.4) * 16;
+      const roofH = 20 + hash(i * 4.4) * 12;
       if (o.damage < 2) {
         g.fillStyle = roofKind < 0.2 ? "#35574f" : "#2a303c";
         g.beginPath();
         g.moveTo(x + 2, top);
-        if (roofKind < 0.2 && w > 200) {
+        if (roofKind < 0.2 && w > 160) {
           // Eckkuppel (Kupfer-Patina)
-          const cx = x + w - 34;
-          g.lineTo(x + 12, top - roofH);
-          g.lineTo(cx - 26, top - roofH);
-          g.lineTo(cx - 26, top - roofH - 14);
-          g.quadraticCurveTo(cx - 26, top - roofH - 58, cx, top - roofH - 64);
-          g.lineTo(cx, top - roofH - 92);
-          g.lineTo(cx + 2, top - roofH - 64);
-          g.quadraticCurveTo(cx + 28, top - roofH - 58, cx + 28, top - roofH - 14);
-          g.lineTo(cx + 28, top);
+          const cx = x + w - 28;
+          g.lineTo(x + 10, top - roofH);
+          g.lineTo(cx - 20, top - roofH);
+          g.lineTo(cx - 20, top - roofH - 10);
+          g.quadraticCurveTo(cx - 20, top - roofH - 42, cx, top - roofH - 46);
+          g.lineTo(cx, top - roofH - 66);
+          g.lineTo(cx + 2, top - roofH - 46);
+          g.quadraticCurveTo(cx + 22, top - roofH - 42, cx + 22, top - roofH - 10);
+          g.lineTo(cx + 22, top);
         } else {
           g.lineTo(x + 12, top - roofH);
           g.lineTo(x + w - 12, top - roofH);
@@ -173,26 +189,26 @@ export function paintFacades(W: number, H: number, o: FacadeOpts, k = 1): Tile {
         g.closePath();
         g.fill();
         // Dachfenster (Gauben)
-        const ng = Math.floor((w - 40) / 46);
+        const ng = Math.floor((w - 40) / 38);
         for (let d = 0; d < ng; d += 1) {
-          const dx = x + 24 + d * 46;
+          const dx = x + 22 + d * 38;
           g.fillStyle = "#3b4252";
-          g.fillRect(dx, top - roofH + 8, 16, roofH - 8);
+          g.fillRect(dx, top - roofH + 6, 12, roofH - 6);
           g.beginPath();
-          g.moveTo(dx - 3, top - roofH + 9);
-          g.lineTo(dx + 8, top - roofH + 1);
-          g.lineTo(dx + 19, top - roofH + 9);
+          g.moveTo(dx - 2, top - roofH + 7);
+          g.lineTo(dx + 6, top - roofH + 1);
+          g.lineTo(dx + 14, top - roofH + 7);
           g.fill();
           const hv = hash(i * 17 + d * 3.1);
           g.fillStyle = hv < o.lit * 0.6 ? "#f2b766" : "#141a26";
-          g.fillRect(dx + 4, top - roofH + 12, 8, roofH - 14);
+          g.fillRect(dx + 3, top - roofH + 9, 6, roofH - 11);
         }
         // Schornsteine
         g.fillStyle = "#2a2f38";
         for (let c = 0; c < 2; c += 1) {
           const cx = x + 20 + hash(i * 3.7 + c) * (w - 50);
-          g.fillRect(cx, top - roofH - 16, 10, 20);
-          g.fillRect(cx - 2, top - roofH - 18, 14, 4);
+          g.fillRect(cx, top - roofH - 12, 8, 16);
+          g.fillRect(cx - 2, top - roofH - 14, 12, 3);
         }
         if (o.damage === 1) {
           // Sturmschäden: Loch im Dach
@@ -208,10 +224,12 @@ export function paintFacades(W: number, H: number, o: FacadeOpts, k = 1): Tile {
         }
       }
 
+      roofs.push([x, top - roofH, w]);
       // Fassade
       const grd = g.createLinearGradient(0, top, 0, H);
-      grd.addColorStop(0, shade(col, 1.08));
-      grd.addColorStop(1, shade(col, 0.72));
+      grd.addColorStop(0, shade(col, 1.12));
+      grd.addColorStop(0.55, shade(col, 0.82));
+      grd.addColorStop(1, shade(col, 0.55));
       g.fillStyle = grd;
       g.fillRect(x, top, w, bodyH);
       // Gebäudefuge
@@ -226,21 +244,21 @@ export function paintFacades(W: number, H: number, o: FacadeOpts, k = 1): Tile {
       g.fillStyle = shade(col, 0.85);
       g.fillRect(x, H - groundH, w, groundH);
       g.fillStyle = "rgba(0,0,0,0.18)";
-      for (let yy = H - groundH + 8; yy < H; yy += 9) g.fillRect(x, yy, w, 1);
+      for (let yy = H - groundH + 7; yy < H; yy += 7) g.fillRect(x, yy, w, 1);
 
       // Fensterachsen
-      const cols = Math.max(2, Math.floor((w - 24) / 40));
-      const pitch = (w - 24) / cols;
+      const cols = Math.max(2, Math.floor((w - 20) / 30));
+      const pitch = (w - 20) / cols;
       for (let f = 0; f < floors; f += 1) {
         const fy = top + 14 + f * floorH;
         // Gurtgesims
         g.fillStyle = shade(col, 1.18);
         g.fillRect(x + 2, fy + floorH - 6, w - 4, 3);
         for (let c = 0; c < cols; c += 1) {
-          const wx = x + 12 + c * pitch + pitch / 2 - 8;
-          const wy = fy + 7;
-          const ww = 16;
-          const wh = floorH - 17;
+          const wx = x + 10 + c * pitch + pitch / 2 - 6;
+          const wy = fy + 6;
+          const ww = 12;
+          const wh = floorH - 14;
           const hv = hash(i * 57.3 + f * 11.1 + c * 3.7);
           const arched = style > 0.66;
           // Fensterrahmen / Verdachung
@@ -260,9 +278,22 @@ export function paintFacades(W: number, H: number, o: FacadeOpts, k = 1): Tile {
           const fire = hv > 1 - o.fire;
           const lit = !fire && hv < o.lit;
           if (o.damage === 2) {
-            holes.push([wx, wy, ww, wh]);
+            // ausgebrannte Fensterhöhle
+            g.fillStyle = "#120d0b";
+            g.fillRect(wx, wy, ww, wh);
+            if (hv < 0.06) {
+              g.fillStyle = "rgba(255,110,40,0.85)";
+              g.fillRect(wx + 2, wy + wh * 0.5, ww - 4, wh * 0.5);
+            }
+            if (hv > 0.82) holes.push([wx, wy, ww, wh]);
+            const sg = g.createLinearGradient(0, wy - 24, 0, wy);
+            sg.addColorStop(0, "rgba(0,0,0,0)");
+            sg.addColorStop(1, "rgba(8,6,5,0.6)");
+            g.fillStyle = sg;
+            g.fillRect(wx - 3, wy - 24, ww + 6, 24);
             continue;
           }
+          if (fire || lit) glows.push([wx + ww / 2, wy + wh / 2, fire ? 1 : 0]);
           if (fire) {
             const fg = g.createLinearGradient(0, wy, 0, wy + wh);
             fg.addColorStop(0, "#ffe08a");
@@ -309,34 +340,44 @@ export function paintFacades(W: number, H: number, o: FacadeOpts, k = 1): Tile {
       const doorX = x + w * (0.3 + hash(i * 2.2) * 0.4);
       g.fillStyle = "#1a1d24";
       g.beginPath();
-      g.moveTo(doorX - 13, H);
-      g.lineTo(doorX - 13, H - 34);
-      g.arc(doorX, H - 34, 13, Math.PI, 0);
-      g.lineTo(doorX + 13, H);
+      g.moveTo(doorX - 10, H);
+      g.lineTo(doorX - 10, H - 26);
+      g.arc(doorX, H - 26, 10, Math.PI, 0);
+      g.lineTo(doorX + 10, H);
       g.fill();
       for (let s = 0; s < 2; s += 1) {
-        const sxx = s === 0 ? x + 10 : x + w - 58;
-        if (Math.abs(sxx + 24 - doorX) < 40) continue;
+        const sxx = s === 0 ? x + 8 : x + w - 46;
+        if (Math.abs(sxx + 19 - doorX) < 32) continue;
         const shopLit = hash(i * 23 + s) < o.lit * 1.1 && o.damage < 2;
-        const sg = g.createLinearGradient(0, H - 40, 0, H - 4);
+        const sg = g.createLinearGradient(0, H - 30, 0, H - 3);
         sg.addColorStop(0, shopLit ? "#f6c983" : "#27303f");
         sg.addColorStop(1, shopLit ? "#b86d34" : "#141922");
         g.fillStyle = sg;
-        g.fillRect(sxx, H - 40, 48, 36);
+        g.fillRect(sxx, H - 30, 38, 27);
+        if (o.damage === 2) continue;
         // Markise
         const aw = ["#7c2a2a", "#2d5a3d", "#6b5a2a", "#2f4a6b"][Math.floor(hash(i * 3 + s) * 4)];
         g.fillStyle = aw;
         g.beginPath();
-        g.moveTo(sxx - 3, H - 46);
-        g.lineTo(sxx + 51, H - 46);
-        g.lineTo(sxx + 55, H - 38);
-        g.lineTo(sxx - 7, H - 38);
+        g.moveTo(sxx - 3, H - 35);
+        g.lineTo(sxx + 41, H - 35);
+        g.lineTo(sxx + 45, H - 28);
+        g.lineTo(sxx - 7, H - 28);
         g.closePath();
         g.fill();
         g.fillStyle = "rgba(255,255,255,0.12)";
-        for (let st = 0; st < 6; st += 2) g.fillRect(sxx - 3 + st * 9.5, H - 46, 9.5, 8);
+        for (let st = 0; st < 6; st += 2) g.fillRect(sxx - 3 + st * 7.5, H - 35, 7.5, 7);
       }
       if (o.damage === 2) {
+        // Schuttkegel am Fuß
+        g.fillStyle = "#2a2624";
+        g.beginPath();
+        g.moveTo(x - 10, H);
+        const m = 5;
+        for (let s2 = 0; s2 <= m; s2 += 1) g.lineTo(x + (w * s2) / m, H - 10 - hash(i * 7.7 + s2) * 26);
+        g.lineTo(x + w + 10, H);
+        g.closePath();
+        g.fill();
         // Ruine: zackige Abbruchkante ausschneiden
         g.save();
         g.globalCompositeOperation = "destination-out";
@@ -345,7 +386,7 @@ export function paintFacades(W: number, H: number, o: FacadeOpts, k = 1): Tile {
         const steps = Math.max(4, Math.round(w / 18));
         for (let s = 0; s <= steps; s += 1) {
           const xx = x + (w * s) / steps;
-          const cut = 20 + hash(i * 19 + s * 2.3) * (bodyH * 0.45) + (s % 3 === 0 ? 30 : 0);
+          const cut = 16 + hash(i * 19 + s * 2.3) * (bodyH * 0.55) + (s % 3 === 0 ? 40 : 0) + (hash(i * 3.3) < 0.3 ? bodyH * 0.25 : 0);
           g.lineTo(xx, top + cut);
         }
         g.lineTo(x + w + 1, -10);
@@ -356,19 +397,32 @@ export function paintFacades(W: number, H: number, o: FacadeOpts, k = 1): Tile {
       x += w;
       i += 1;
     }
+    if (glows.length) {
+      g.save();
+      g.globalCompositeOperation = "lighter";
+      const warm = g.createRadialGradient(0, 0, 0, 0, 0, 22);
+      warm.addColorStop(0, "rgba(255,190,110,0.28)");
+      warm.addColorStop(1, "rgba(255,190,110,0)");
+      const hot = g.createRadialGradient(0, 0, 0, 0, 0, 30);
+      hot.addColorStop(0, "rgba(255,120,40,0.45)");
+      hot.addColorStop(1, "rgba(255,90,30,0)");
+      for (const [gx, gy2, f] of glows) {
+        g.save();
+        g.translate(gx, gy2);
+        g.fillStyle = f ? hot : warm;
+        g.fillRect(-30, -30, 60, 60);
+        g.restore();
+      }
+      g.restore();
+    }
     if (holes.length) {
       g.save();
       g.globalCompositeOperation = "destination-out";
-      for (const [hx, hy, hw, hh] of holes) {
-        if (hash(hx * 0.37 + hy) < 0.8) g.fillRect(hx, hy, hw, hh);
-      }
+      for (const [hx, hy, hw, hh] of holes) g.fillRect(hx, hy, hw, hh);
       g.restore();
-      // verkohlte Ränder
-      g.strokeStyle = "rgba(8,6,6,0.55)";
-      g.lineWidth = 2;
-      for (const [hx, hy, hw, hh] of holes) if (hash(hx * 0.37 + hy) < 0.8) g.strokeRect(hx, hy, hw, hh);
     }
   });
+  return { ...tile, roofs };
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -395,6 +449,14 @@ export function paintClouds(W: number, H: number): Tile {
         g.fill();
       }
     }
+      g.globalCompositeOperation = "destination-in";
+    const m = g.createLinearGradient(0, 0, 0, H);
+    m.addColorStop(0, "rgba(0,0,0,1)");
+    m.addColorStop(0.62, "rgba(0,0,0,1)");
+    m.addColorStop(1, "rgba(0,0,0,0)");
+    g.fillStyle = m;
+    g.fillRect(0, 0, W, H);
+    g.globalCompositeOperation = "source-over";
   });
 }
 
@@ -498,7 +560,6 @@ export function paintStreet(W: number, H: number, k: number): Tile {
     dg.addColorStop(1, "rgba(0,0,0,0.45)");
     g.fillStyle = dg;
     g.fillRect(0, 0, W, H);
-    void pnoise;
   });
 }
 
@@ -600,47 +661,116 @@ export function paintLampOff(k: number): Tile {
 }
 
 export function paintTree(k: number, seed: number): Tile {
-  // 220 × 330, Stamm unten Mitte
-  return renderTile(220, 330, k, (g) => {
-    const cx = 110;
-    // Stamm
-    g.fillStyle = "#15181c";
+  // 200 × 300, Stamm unten Mitte
+  return renderTile(200, 300, k, (g) => {
+    const cx = 100;
+    // Stamm + Äste
+    g.fillStyle = "#14161a";
     g.beginPath();
-    g.moveTo(cx - 9, 330);
-    g.quadraticCurveTo(cx - 4, 220, cx - 6, 150);
-    g.lineTo(cx + 6, 150);
-    g.quadraticCurveTo(cx + 5, 220, cx + 10, 330);
+    g.moveTo(cx - 8, 300);
+    g.quadraticCurveTo(cx - 3, 210, cx - 5, 140);
+    g.lineTo(cx + 5, 140);
+    g.quadraticCurveTo(cx + 4, 210, cx + 9, 300);
     g.fill();
-    g.strokeStyle = "#15181c";
-    g.lineWidth = 5;
-    g.beginPath();
-    g.moveTo(cx - 2, 170);
-    g.quadraticCurveTo(cx - 30, 130, cx - 50, 110);
-    g.moveTo(cx + 2, 160);
-    g.quadraticCurveTo(cx + 34, 120, cx + 56, 104);
-    g.stroke();
-    // Krone aus vielen Blattklumpen
-    for (let i = 0; i < 26; i += 1) {
+    g.strokeStyle = "#14161a";
+    g.lineCap = "round";
+    for (const [dx, dy, w] of [
+      [-44, -58, 5],
+      [50, -66, 5],
+      [-20, -90, 4],
+      [24, -96, 4],
+    ] as Array<[number, number, number]>) {
+      g.lineWidth = w;
+      g.beginPath();
+      g.moveTo(cx, 170);
+      g.quadraticCurveTo(cx + dx * 0.4, 170 + dy * 0.6, cx + dx, 150 + dy);
+      g.stroke();
+    }
+    // Krone: Blattbüschel mit Licht von oben rechts
+    const clumps: Array<[number, number, number]> = [];
+    for (let i = 0; i < 34; i += 1) {
       const a = hash(seed * 7 + i * 1.3) * Math.PI * 2;
-      const rr = hash(seed * 3 + i * 2.1);
-      const x = cx + Math.cos(a) * 70 * rr;
-      const y = 100 + Math.sin(a) * 58 * rr - 10;
-      const r = 26 + hash(seed + i * 5.3) * 24;
-      const shadeV = 18 + hash(seed * 11 + i) * 14;
-      g.fillStyle = `rgb(${shadeV | 0},${(shadeV + 10) | 0},${(shadeV + 6) | 0})`;
+      const rr = Math.sqrt(hash(seed * 3 + i * 2.1));
+      clumps.push([cx + Math.cos(a) * 72 * rr, 92 + Math.sin(a) * 56 * rr, 14 + hash(seed + i * 5.3) * 16]);
+    }
+    clumps.sort((p, q) => p[1] - q[1]);
+    for (const [x, y, r] of clumps) {
+      const lg = g.createRadialGradient(x + r * 0.35, y - r * 0.45, r * 0.1, x, y, r);
+      lg.addColorStop(0, "#3b4a3c");
+      lg.addColorStop(0.55, "#222b24");
+      lg.addColorStop(1, "#151a17");
+      g.fillStyle = lg;
       g.beginPath();
       g.arc(x, y, r, 0, Math.PI * 2);
       g.fill();
     }
-    // Randlicht oben rechts
-    g.globalCompositeOperation = "source-atop";
-    const rg = g.createLinearGradient(40, 30, 190, 170);
-    rg.addColorStop(0, "rgba(120,140,170,0.0)");
-    rg.addColorStop(0.7, "rgba(120,140,170,0.0)");
-    rg.addColorStop(1, "rgba(150,170,210,0.22)");
-    g.fillStyle = rg;
-    g.fillRect(0, 0, 220, 330);
-    g.globalCompositeOperation = "source-over";
+    // Blattspitzen am Rand
+    g.fillStyle = "#1a211c";
+    for (let i = 0; i < 60; i += 1) {
+      const a = hash(seed * 13 + i * 0.7) * Math.PI * 2;
+      const x = cx + Math.cos(a) * (70 + hash(i + seed) * 16);
+      const y = 92 + Math.sin(a) * (54 + hash(i * 2 + seed) * 12);
+      g.beginPath();
+      g.ellipse(x, y, 5, 3, a, 0, Math.PI * 2);
+      g.fill();
+    }
+  });
+}
+
+/** Verkohlter, kahler Baum (späte Stufen). */
+export function paintBareTree(k: number, seed: number): Tile {
+  return renderTile(200, 300, k, (g) => {
+    g.strokeStyle = "#0f0f11";
+    g.lineCap = "round";
+    const branch = (x: number, y: number, a: number, len: number, w: number, depth: number): void => {
+      const x2 = x + Math.cos(a) * len;
+      const y2 = y + Math.sin(a) * len;
+      g.lineWidth = w;
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x2, y2);
+      g.stroke();
+      if (depth <= 0) return;
+      const n = 2;
+      for (let i = 0; i < n; i += 1) {
+        const da = (i === 0 ? -1 : 1) * (0.35 + hash(seed * 9 + depth * 3 + i + x) * 0.45);
+        branch(x2, y2, a + da, len * (0.62 + hash(seed + depth + i * 2 + y) * 0.2), w * 0.62, depth - 1);
+      }
+    };
+    branch(100, 300, -Math.PI / 2, 120, 10, 5);
+    g.strokeStyle = "rgba(255,120,50,0.35)";
+    g.lineWidth = 1.5;
+    g.beginPath();
+    g.moveTo(98, 290);
+    g.lineTo(99, 220);
+    g.stroke();
+  });
+}
+
+/** Regenvorhang (nahtlos kachelbar), halbtransparente Schlieren. */
+export function paintRainSheet(W: number, H: number): Tile {
+  return renderTile(W, H, 1, (g) => {
+    g.lineCap = "round";
+    for (let i = 0; i < 260; i += 1) {
+      const x = hash(i * 1.7) * W;
+      const y = hash(i * 3.1) * H;
+      const len = 40 + hash(i * 5.3) * 120;
+      const a = 0.04 + hash(i * 7.9) * 0.1;
+      g.strokeStyle = `rgba(190,205,235,${a})`;
+      g.lineWidth = 1 + hash(i * 2.2) * 1.5;
+      for (const [ox, oy] of [
+        [0, 0],
+        [-W, 0],
+        [W, 0],
+        [0, -H],
+        [0, H],
+      ]) {
+        g.beginPath();
+        g.moveTo(x + ox, y + oy);
+        g.lineTo(x + ox - len * 0.28, y + oy + len);
+        g.stroke();
+      }
+    }
   });
 }
 
@@ -648,7 +778,7 @@ export function paintLitfass(k: number): Tile {
   // 70 × 190
   return renderTile(70, 190, k, (g) => {
     const cx = 35;
-    g.fillStyle = "#171a20";
+    g.fillStyle = "#12141a";
     g.fillRect(cx - 24, 34, 48, 146);
     g.fillRect(cx - 27, 178, 54, 12);
     g.beginPath();
@@ -659,7 +789,7 @@ export function paintLitfass(k: number): Tile {
     g.quadraticCurveTo(cx, -6, cx + 22, 30);
     g.fill();
     // Plakate (gedeckte Farben)
-    const cols = ["#8c3b30", "#c7a04a", "#3b5f7d", "#6d4a7a", "#d0c7b5", "#3f6a4a"];
+    const cols = ["#4a2a26", "#5e5236", "#2c3a48", "#3d3144", "#5a5650", "#2e3f33"];
     let y = 42;
     let i = 0;
     while (y < 172) {

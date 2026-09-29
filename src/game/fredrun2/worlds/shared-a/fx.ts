@@ -246,10 +246,13 @@ export class Motes {
         case "ember": {
           g.globalCompositeOperation = "lighter";
           g.globalAlpha = alpha * fade * (0.6 + 0.4 * Math.sin(t * 12 + s));
-          g.fillStyle = u > 0.5 ? "#ffd27a" : "#ff7a2a";
-          g.fillRect(x - r, y - r, r * 2, r * 2);
-          g.globalAlpha *= 0.25;
-          g.fillRect(x - r * 2.5, y - r * 2.5, r * 5, r * 5);
+          g.strokeStyle = u > 0.5 ? "#ffd27a" : "#ff7a2a";
+          g.lineWidth = r;
+          g.lineCap = "round";
+          g.beginPath();
+          g.moveTo(x, y);
+          g.lineTo(x - this.vx[i] * 0.03, y - this.vy[i] * 0.03);
+          g.stroke();
           g.globalCompositeOperation = "source-over";
           break;
         }
@@ -266,9 +269,11 @@ export class Motes {
           break;
         }
         case "ash":
-          g.globalAlpha = alpha * fade * 0.8;
-          g.fillStyle = s % 2 > 1 ? "#9a9aa2" : "#5d5d66";
-          g.fillRect(x - r, y - r * 0.6, r * 2, r * 1.2);
+          g.globalAlpha = alpha * fade * 0.75;
+          g.fillStyle = s % 2 > 1 ? "#a2a2aa" : "#6a6a72";
+          g.beginPath();
+          g.ellipse(x, y, r, r * 0.55, Math.sin(t + s) * 1.2, 0, Math.PI * 2);
+          g.fill();
           break;
         case "snow":
           g.globalAlpha = alpha * fade * 0.9;

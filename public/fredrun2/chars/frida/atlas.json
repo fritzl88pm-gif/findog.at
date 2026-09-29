@@ -83,8 +83,8 @@
     "dash": {
       "file": "dash.webp",
       "cols": 8,
-      "rows": 3,
-      "frames": 18,
+      "rows": 2,
+      "frames": 16,
       "cw": 304,
       "ch": 256,
       "cx": 152,

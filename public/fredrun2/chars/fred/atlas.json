@@ -18,27 +18,27 @@
     "jump": {
       "file": "jump.webp",
       "cols": 8,
-      "rows": 3,
-      "frames": 19,
-      "cw": 256,
-      "ch": 256,
-      "cx": 128,
-      "footY": 246,
-      "scale": 1.0,
-      "fps": 24,
-      "loop": false
-    },
-    "fall": {
-      "file": "fall.webp",
-      "cols": 8,
       "rows": 2,
-      "frames": 12,
+      "frames": 9,
       "cw": 256,
       "ch": 256,
       "cx": 128,
       "footY": 246,
       "scale": 1.0,
       "fps": 20,
+      "loop": false
+    },
+    "fall": {
+      "file": "fall.webp",
+      "cols": 8,
+      "rows": 1,
+      "frames": 8,
+      "cw": 256,
+      "ch": 256,
+      "cx": 128,
+      "footY": 246,
+      "scale": 1.0,
+      "fps": 14,
       "loop": true
     },
     "doublejump": {
@@ -110,13 +110,13 @@
       "file": "idle.webp",
       "cols": 8,
       "rows": 4,
-      "frames": 32,
+      "frames": 30,
       "cw": 256,
       "ch": 256,
       "cx": 128,
       "footY": 246,
       "scale": 1.0,
-      "fps": 16,
+      "fps": 14,
       "loop": true
     },
     "victory": {

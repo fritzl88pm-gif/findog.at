@@ -1,34 +1,104 @@
 /**
- * Parallax-Ebene mit Tag-/Nacht-Variante und Leucht-Kacheln. Die Nacht-Variante wird automatisch aus der Tag-Kachel
- * erzeugt (Silhouette), Leuchtkacheln werden additiv gezeichnet.
+ * Parallax-Ebenen mit pro Stimmungsstufe VORGEBACKENER Einfärbung (Nacht-Silhouette + atmosphärischer Dunst +
+ * Bodenschatten). Pro Frame kostet eine Ebene damit nur einen ganzzahligen Blit (zwei während einer Überblendung)
+ * plus optionale additive Leuchtkacheln. Varianten werden lazy erzeugt (max. eine pro Frame in `prepare`).
  */
-import { blitTiled, tintCopy, type Ctx2D } from "./canvas";
+import { blitTiled, paint, type Ctx2D } from "./canvas";
 
-export interface ParallaxLayer {
-  tile: HTMLCanvasElement;
-  night: HTMLCanvasElement | null;
+export interface StageTint {
+  /** Flache Einfärbung (z.B. Nacht-Silhouette) */
+  night?: { color: string; a: number };
+  /** Vertikaler Dunst-Verlauf über die Höhe der Quelle */
+  haze?: { color: string; aTop: number; aBottom: number };
+  /** Abdunkeln zum unteren Rand hin (Kontakt-/Bodenschatten), ab Anteil `from` der Höhe */
+  shade?: { color: string; a: number; from: number };
+}
+
+/** Lazy erzeugte Zeichenflächen pro Stufe (z.B. Himmel), mit Verwerfen alter Stufen. */
+export class StageCache {
+  private cache = new Map<number, HTMLCanvasElement>();
+  constructor(private readonly make: (stage: number) => HTMLCanvasElement) {}
+
+  has(stage: number): boolean {
+    return this.cache.has(stage);
+  }
+
+  get(stage: number): HTMLCanvasElement {
+    let c = this.cache.get(stage);
+    if (!c) {
+      c = this.make(stage);
+      this.cache.set(stage, c);
+    }
+    return c;
+  }
+
+  /** Nur die Stufen a und b im Cache behalten */
+  keep(a: number, b: number): void {
+    for (const k of [...this.cache.keys()]) if (k !== a && k !== b) this.cache.delete(k);
+  }
+}
+
+/** Quelle + lazy erzeugte, pro Stufe eingefärbte Varianten */
+export class Staged extends StageCache {
+  constructor(
+    readonly src: HTMLCanvasElement,
+    tint: (stage: number) => StageTint,
+  ) {
+    super((stage) => tinted(src, tint(stage)));
+  }
+}
+
+export function tinted(src: HTMLCanvasElement, t: StageTint): HTMLCanvasElement {
+  return paint(src.width, src.height, (g, w, h) => {
+    g.drawImage(src, 0, 0);
+    g.globalCompositeOperation = "source-atop";
+    if (t.night && t.night.a > 0.001) {
+      g.globalAlpha = Math.min(1, t.night.a);
+      g.fillStyle = t.night.color;
+      g.fillRect(0, 0, w, h);
+      g.globalAlpha = 1;
+    }
+    if (t.haze && (t.haze.aTop > 0.001 || t.haze.aBottom > 0.001)) {
+      const grd = g.createLinearGradient(0, 0, 0, h);
+      grd.addColorStop(0, rgbaOf(t.haze.color, t.haze.aTop));
+      grd.addColorStop(1, rgbaOf(t.haze.color, t.haze.aBottom));
+      g.fillStyle = grd;
+      g.fillRect(0, 0, w, h);
+    }
+    if (t.shade && t.shade.a > 0.001) {
+      const grd = g.createLinearGradient(0, h * t.shade.from, 0, h);
+      grd.addColorStop(0, rgbaOf(t.shade.color, 0));
+      grd.addColorStop(1, rgbaOf(t.shade.color, t.shade.a));
+      g.fillStyle = grd;
+      g.fillRect(0, h * t.shade.from, w, h * (1 - t.shade.from));
+    }
+  });
+}
+
+export interface StagedLayer {
+  staged: Staged;
   lights: HTMLCanvasElement | null;
-  /** zweite Leuchtkachel (Lauflicht-Effekt: gegenphasig blenden) */
   lights2: HTMLCanvasElement | null;
+  /** vertikaler Versatz der Leuchtkacheln relativ zur Ebene (zugeschnittene Lichtbänder) */
+  lightsDy: number;
   w: number;
   h: number;
-  /** Bildschirm-y der Kacheloberkante */
   y: number;
-  /** Scrollfaktor relativ zu view.dist */
   factor: number;
 }
 
-export function makeLayer(
+export function stagedLayer(
   tile: HTMLCanvasElement,
   y: number,
   factor: number,
-  opts: { nightColor?: string; nightAlpha?: number; lights?: HTMLCanvasElement | null; lights2?: HTMLCanvasElement | null } = {},
-): ParallaxLayer {
+  tint: (stage: number) => StageTint,
+  opts: { lights?: HTMLCanvasElement | null; lights2?: HTMLCanvasElement | null; lightsDy?: number } = {},
+): StagedLayer {
   return {
-    tile,
-    night: opts.nightColor ? tintCopy(tile, opts.nightColor, opts.nightAlpha ?? 0.82) : null,
+    staged: new Staged(tile, tint),
     lights: opts.lights ?? null,
     lights2: opts.lights2 ?? null,
+    lightsDy: opts.lightsDy ?? 0,
     w: tile.width,
     h: tile.height,
     y,
@@ -36,56 +106,66 @@ export function makeLayer(
   };
 }
 
-/**
- * Zeichnet die Ebene: Tag → (Nacht darüber mit Alpha `night`) → Lichter additiv.
- * `lightA`/`lights2A` = Deckkraft der Leuchtkacheln. `dy` verschiebt vertikal (z.B. Wippen).
- */
-export function drawLayer(g: Ctx2D, L: ParallaxLayer, dist: number, night: number, lightA: number, lights2A = lightA, dy = 0): void {
+/** Zeichnet Stufe `stage` (und blendet `blend` in stage+1). */
+export function drawStaged(g: Ctx2D, L: StagedLayer, dist: number, stage: number, blend: number, maxStage: number, lightA = 0, lights2A = lightA, dy = 0): void {
   const scroll = dist * L.factor;
   const y = L.y + dy;
-  if (!L.night || night < 0.985) blitTiled(g, L.tile, L.w, L.h, scroll, y);
-  if (L.night && night > 0.015) {
+  const a = L.staged.get(stage);
+  blitTiled(g, a, L.w, L.h, scroll, y);
+  if (blend > 0.004 && stage + 1 <= maxStage) {
     const pa = g.globalAlpha;
-    g.globalAlpha = pa * Math.min(1, night);
-    blitTiled(g, L.night, L.w, L.h, scroll, y);
+    g.globalAlpha = pa * blend;
+    blitTiled(g, L.staged.get(stage + 1), L.w, L.h, scroll, y);
     g.globalAlpha = pa;
   }
-  if ((L.lights && lightA > 0.01) || (L.lights2 && lights2A > 0.01)) {
-    const pa = g.globalAlpha;
-    const op = g.globalCompositeOperation;
-    g.globalCompositeOperation = "lighter";
-    if (L.lights && lightA > 0.01) {
-      g.globalAlpha = pa * Math.min(1, lightA);
-      blitTiled(g, L.lights, L.lights.width, L.lights.height, scroll, y);
+  drawLights(g, L, scroll, y, lightA, lights2A);
+}
+
+export function drawLights(g: Ctx2D, L: StagedLayer, scroll: number, y: number, lightA: number, lights2A: number): void {
+  if (!((L.lights && lightA > 0.03) || (L.lights2 && lights2A > 0.03))) return;
+  const pa = g.globalAlpha;
+  const op = g.globalCompositeOperation;
+  g.globalCompositeOperation = "lighter";
+  if (L.lights && lightA > 0.03) {
+    g.globalAlpha = pa * Math.min(1, lightA);
+    blitTiled(g, L.lights, L.lights.width, L.lights.height, scroll, y + L.lightsDy);
+  }
+  if (L.lights2 && lights2A > 0.03) {
+    g.globalAlpha = pa * Math.min(1, lights2A);
+    blitTiled(g, L.lights2, L.lights2.width, L.lights2.height, scroll, y + L.lightsDy);
+  }
+  g.globalAlpha = pa;
+  g.globalCompositeOperation = op;
+}
+
+/**
+ * Hält für alle Staged-Objekte die Varianten `stage` und `stage+1` bereit; erzeugt pro Aufruf höchstens `budget`
+ * fehlende Varianten (Verteilung der Kosten über mehrere Frames) und verwirft alte.
+ */
+export function prepareStaged(list: StageCache[], stage: number, maxStage: number, budget = 1): void {
+  let made = 0;
+  const next = Math.min(maxStage, stage + 1);
+  for (const s of list) {
+    s.keep(stage, next);
+    if (made < budget && !s.has(stage)) {
+      s.get(stage);
+      made += 1;
     }
-    if (L.lights2 && lights2A > 0.01) {
-      g.globalAlpha = pa * Math.min(1, lights2A);
-      blitTiled(g, L.lights2, L.lights2.width, L.lights2.height, scroll, y);
+    if (made < budget && !s.has(next)) {
+      s.get(next);
+      made += 1;
     }
-    g.globalAlpha = pa;
-    g.globalCompositeOperation = op;
   }
 }
 
-/** Dunst über einer Ebene: vertikaler Verlauf von transparent (oben) zu `color` mit Alpha `a` (unten). */
-export function haze(g: Ctx2D, y0: number, y1: number, color: string, aTop: number, aBottom: number, cache: { grd?: CanvasGradient; key?: string }): void {
-  const key = `${color}|${aTop.toFixed(3)}|${aBottom.toFixed(3)}|${y0}|${y1}`;
-  if (cache.key !== key || !cache.grd) {
-    const grd = g.createLinearGradient(0, y0, 0, y1);
-    grd.addColorStop(0, withA(color, aTop));
-    grd.addColorStop(1, withA(color, aBottom));
-    cache.grd = grd;
-    cache.key = key;
-  }
-  g.fillStyle = cache.grd;
-  g.fillRect(0, y0, 1280, y1 - y0);
-}
-
-function withA(color: string, a: number): string {
-  if (color.startsWith("rgb(")) return color.replace("rgb(", "rgba(").replace(")", `,${a.toFixed(3)})`);
+export function rgbaOf(color: string, a: number): string {
+  const al = Math.max(0, Math.min(1, a)).toFixed(3);
   if (color.startsWith("#")) {
-    const n = parseInt(color.slice(1), 16);
-    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a.toFixed(3)})`;
+    let h = color.slice(1);
+    if (h.length === 3) h = h.split("").map((x) => x + x).join("");
+    const n = parseInt(h, 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${al})`;
   }
+  if (color.startsWith("rgb(")) return color.replace("rgb(", "rgba(").replace(")", `,${al})`);
   return color;
 }

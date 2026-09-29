@@ -41,6 +41,19 @@
       "fps": 20,
       "loop": true
     },
+    "glide": {
+      "file": "glide.webp",
+      "cols": 8,
+      "rows": 2,
+      "frames": 15,
+      "cw": 272,
+      "ch": 256,
+      "cx": 136,
+      "footY": 246,
+      "scale": 1.0,
+      "fps": 20,
+      "loop": true
+    },
     "doublejump": {
       "file": "doublejump.webp",
       "cols": 8,

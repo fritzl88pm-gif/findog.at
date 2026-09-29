@@ -15,6 +15,7 @@ export interface PraterSkinAssets {
   glowWhite: HTMLCanvasElement;
   softGhost: HTMLCanvasElement;
   candy: HTMLCanvasElement;
+  valance: HTMLCanvasElement;
 }
 
 export function makeSkinAssets(): PraterSkinAssets {
@@ -104,6 +105,7 @@ export function makeSkinAssets(): PraterSkinAssets {
     glowWhite: glowSprite("#fff6e0"),
     softGhost: softSprite("rgba(170,255,240,0.9)"),
     candy,
+    valance: valanceTexture(),
   };
 }
 
@@ -190,13 +192,18 @@ export function drawSwingChair(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number
   // Warn-Rimlight (Gefahr lesbar auch nachts)
   g.globalCompositeOperation = "lighter";
   g.globalAlpha = 0.45 + 0.25 * k.night;
-  glowAt(g, A.glowPink, 0, 4, r * 1.55);
+  glowAt(g, A.glowPink, 0, 4, r * 1.9);
   g.globalAlpha = 1;
   g.globalCompositeOperation = "source-over";
+  g.scale(1.3, 1.3);
   // Rückenlehne
   g.fillStyle = "#b3124f";
   g.beginPath();
   rr(g, -r * 0.62, -r * 0.62, r * 0.28, r * 1.05, 6);
+  g.fill();
+  g.fillStyle = "#ffd24a";
+  g.beginPath();
+  g.arc(-r * 0.48, -r * 0.62, r * 0.14, 0, TAU);
   g.fill();
   // Sitzfläche (Schale)
   const grd = g.createLinearGradient(0, -r * 0.3, 0, r * 0.6);
@@ -651,52 +658,91 @@ export function drawBooth(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, sy:
   }
 }
 
-/** Reifenstapel (Autodrom-Bande) */
-export function drawTires(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, sy: number): void {
+/** Reifenstapel (Autodrom-Bande): gestapelte Reifen, weiß-rot bemalt */
+export function drawTires(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, sy: number, v: ViewState, k: SkinCtx): void {
   const w = e.w;
   const h = e.h;
-  const rows = Math.max(2, Math.round(h / 24));
+  const rows = Math.max(2, Math.round(h / 26));
   const rh = h / rows;
+  // Rimlight hinter dem Stapel (lesbar vor dunklen Buden)
+  g.globalCompositeOperation = "lighter";
+  g.globalAlpha = 0.35 + 0.3 * k.night;
+  glowAt(g, A.glowPink, sx + w / 2, sy + h * 0.55, w * 0.85, h * 0.75);
+  g.globalAlpha = 1;
+  g.globalCompositeOperation = "source-over";
   for (let r = 0; r < rows; r += 1) {
     const y = sy + h - (r + 1) * rh;
-    const n = Math.max(1, Math.round(w / 44) - (r % 2));
-    const tw = w / Math.max(1, Math.round(w / 44));
-    const off = (w - n * tw) / 2;
-    for (let i = 0; i < n; i += 1) {
-      const x = sx + off + i * tw;
-      g.fillStyle = "#1f1d29";
-      g.beginPath();
-      rr(g, x + 1, y + 1, tw - 2, rh - 2, rh / 2.2);
-      g.fill();
-      g.fillStyle = r % 2 ? "#ffd24a" : "#ff4fa3";
-      g.fillRect(x + 4, y + rh / 2 - 2, tw - 8, 4);
-      g.fillStyle = "rgba(255,255,255,0.18)";
-      g.fillRect(x + 5, y + 3, tw - 10, 2);
-    }
+    const inset = (r % 2) * 3;
+    // Reifen-Körper
+    const grd = g.createLinearGradient(0, y, 0, y + rh);
+    grd.addColorStop(0, "#4a4658");
+    grd.addColorStop(0.45, "#26232f");
+    grd.addColorStop(1, "#121019");
+    g.fillStyle = grd;
+    g.beginPath();
+    rr(g, sx + inset, y + 1, w - inset * 2, rh - 1, rh * 0.45);
+    g.fill();
+    // Farbband (Bemalung)
+    g.fillStyle = r % 2 ? "#f4f0f6" : "#e2366f";
+    g.fillRect(sx + inset + 6, y + rh * 0.42, w - inset * 2 - 12, rh * 0.22);
+    // Profilrillen
+    g.fillStyle = "rgba(0,0,0,0.35)";
+    for (let x = sx + inset + 10; x < sx + w - inset - 8; x += 9) g.fillRect(x, y + 3, 2, rh * 0.3);
+    // Glanz
+    g.fillStyle = "rgba(255,255,255,0.22)";
+    g.fillRect(sx + inset + 8, y + 2, w - inset * 2 - 16, 2);
   }
-  void A;
+  void v;
+}
+
+/** Stoffbahn-Textur (2 Streifen breit, mit Faltenschattierung) für den Budenvorhang */
+export function valanceTexture(): HTMLCanvasElement {
+  return paint(48, 256, (g) => {
+    for (let i = 0; i < 2; i += 1) {
+      g.fillStyle = i === 0 ? "#b8233f" : "#f1e2d2";
+      g.fillRect(i * 24, 0, 24, 256);
+      const grd = g.createLinearGradient(i * 24, 0, i * 24 + 24, 0);
+      grd.addColorStop(0, "rgba(40,0,20,0.28)");
+      grd.addColorStop(0.35, "rgba(255,255,255,0.10)");
+      grd.addColorStop(0.7, "rgba(0,0,0,0)");
+      grd.addColorStop(1, "rgba(40,0,20,0.32)");
+      g.fillStyle = grd;
+      g.fillRect(i * 24, 0, 24, 256);
+    }
+  });
 }
 
 /** Hängender Budenvorhang mit Entenparade (overhead → rutschen) */
 export function drawValance(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, sy: number, v: ViewState, k: SkinCtx): void {
   const w = e.w;
   const bottom = sy + e.h;
-  const top = Math.max(-10, sy);
-  // Stoffbahnen
-  const sw = 24;
-  for (let i = 0; i < w; i += sw) {
-    g.fillStyle = (i / sw) % 2 < 1 ? "#d9304f" : "#fff1ec";
-    g.fillRect(sx + i, top, Math.min(sw, w - i) + 0.5, bottom - top - 26);
+  const top = Math.max(-4, sy);
+  const clothBottom = bottom - 30;
+  // Stoff (gekachelte Textur)
+  g.save();
+  g.beginPath();
+  g.rect(sx, top, w, clothBottom - top);
+  g.clip();
+  for (let x = sx; x < sx + w; x += 48) {
+    for (let y = clothBottom - 256; y > top - 256; y -= 256) g.drawImage(A.valance, Math.round(x), Math.round(y));
   }
-  // Faltenschatten
-  g.fillStyle = "rgba(60,0,20,0.18)";
-  for (let i = sw - 4; i < w; i += sw) g.fillRect(sx + i, top, 4, bottom - top - 26);
+  // Tiefenverlauf + Nacht
+  const shade = g.createLinearGradient(0, top, 0, clothBottom);
+  shade.addColorStop(0, `rgba(20,8,30,${(0.45 + 0.25 * k.night).toFixed(3)})`);
+  shade.addColorStop(1, `rgba(20,8,30,${(0.12 + 0.3 * k.night).toFixed(3)})`);
+  g.fillStyle = shade;
+  g.fillRect(sx, top, w, clothBottom - top);
+  g.restore();
+  // Seitenkanten
+  g.fillStyle = "#5a1428";
+  g.fillRect(sx - 3, top, 4, clothBottom - top);
+  g.fillRect(sx + w - 1, top, 4, clothBottom - top);
   // Volant
   const vy = bottom - 34;
-  g.fillStyle = "#ffd24a";
+  g.fillStyle = "#e0a93a";
   g.fillRect(sx - 4, vy - 4, w + 8, 8);
   for (let i = 0; i < w; i += 20) {
-    g.fillStyle = (i / 20) % 2 < 1 ? "#e2366f" : "#ffd24a";
+    g.fillStyle = (i / 20) % 2 < 1 ? "#c42c5a" : "#e0a93a";
     g.beginPath();
     g.arc(sx + i + 10, vy + 4, 10, 0, Math.PI);
     g.fill();
@@ -730,7 +776,7 @@ export function drawValance(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, s
   g.fillStyle = "#fff4c2";
   g.fillRect(sx - 6, bottom - 4, w + 12, 4);
   g.globalCompositeOperation = "lighter";
-  g.globalAlpha = 0.4 + 0.3 * k.night;
+  g.globalAlpha = 0.35 + 0.3 * k.night;
   glowAt(g, A.glowGold, sx + w / 2, bottom - 2, w * 0.6, 14);
   g.globalAlpha = 1;
   g.globalCompositeOperation = "source-over";

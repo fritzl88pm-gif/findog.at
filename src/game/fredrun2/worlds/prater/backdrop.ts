@@ -82,7 +82,6 @@ export function farSkyline(W: number, H: number): { day: HTMLCanvasElement; ligh
     // DC Tower
     wrapDraw(W, 1340, 60, (x) => {
       if (lights) {
-        for (let k = 0; k < 18; k += 1) g.fillStyle = "rgba(0,0,0,0)";
         bulb(g, x + 18, H - 252, 2, "#ff5a5a", 3);
         return;
       }
@@ -601,7 +600,7 @@ export function heartPath(g: Ctx2D, x: number, y: number, r: number): void {
 // ------------------------------------------------------------------------------------------------
 // Nahe Ebene: Kandelaber-Laternen + Lichterketten-Girlanden
 
-export function lampTiles(W: number, H: number, spacing: number): { day: HTMLCanvasElement; lights: HTMLCanvasElement; lights2: HTMLCanvasElement } {
+export function lampTiles(W: number, H: number, spacing: number, lightsH = H): { day: HTMLCanvasElement; lights: HTMLCanvasElement; lights2: HTMLCanvasElement } {
   const postTop = 120;
   const sag = 70;
   const garlandY = postTop + 40;
@@ -667,7 +666,7 @@ export function lampTiles(W: number, H: number, spacing: number): { day: HTMLCan
     }
   };
   const mkLights = (odd: number): HTMLCanvasElement =>
-    paint(W, H, (g) => {
+    paint(W, lightsH, (g) => {
       let n = 0;
       for (let x = spacing / 2; x < W + spacing / 2; x += spacing) {
         for (let i = 1; i < 16; i += 1) {

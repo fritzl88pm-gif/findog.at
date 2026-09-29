@@ -45,36 +45,58 @@ export function tintCopy(src: HTMLCanvasElement, color: string, a: number): HTML
 }
 
 /**
- * Zeichnet eine horizontal gekachelte Ebene. `scroll` = Ebenen-Scroll in px. Unterstützt Alpha/Composite
- * über den aktuellen Kontextzustand. `scale` skaliert die Kachel (Breite und Höhe).
+ * Zeichnet eine horizontal gekachelte Ebene 1:1 an GANZZAHLIGEN Positionen (schneller Blit-Pfad; Subpixel-/skalierte
+ * drawImage-Aufrufe sind in Software-Rendering ~10× teurer). `scroll` = Ebenen-Scroll in px.
  */
-export function blitTiled(g: Ctx2D, tile: CanvasImageSource, tileW: number, tileH: number, scroll: number, y: number, viewW = 1280, scale = 1): void {
-  const w = tileW * scale;
-  const h = tileH * scale;
-  let x = -(((scroll % w) + w) % w);
+export function blitTiled(g: Ctx2D, tile: CanvasImageSource, tileW: number, tileH: number, scroll: number, y: number, viewW = 1280): void {
+  void tileH;
+  const off = Math.round(((scroll % tileW) + tileW) % tileW);
+  const yy = Math.round(y);
+  let x = -off;
+  if (x + tileW <= 0) x += tileW;
   while (x < viewW) {
-    g.drawImage(tile, x, y, w + 0.6, h);
-    x += w;
+    g.drawImage(tile, x, yy);
+    x += tileW;
   }
 }
 
 /**
  * Kachel nur im Bildschirmbereich [x0, x1) zeichnen (Bodensegmente zwischen Lücken). `scroll` wie oben.
- * Quelle wird zugeschnitten → keine Überzeichnung in die Lücke.
+ * Quelle wird zugeschnitten → keine Überzeichnung in die Lücke. Ganzzahlige Koordinaten.
  */
 export function blitTiledRange(g: Ctx2D, tile: CanvasImageSource, tileW: number, tileH: number, scroll: number, x0: number, x1: number, y: number): void {
-  if (x1 <= x0) return;
-  const off = ((scroll % tileW) + tileW) % tileW;
-  // Bildschirm-x → Kachel-x: u = (x + off) mod tileW
-  let x = x0;
+  const a = Math.round(x0);
+  const b = Math.round(x1);
+  if (b <= a) return;
+  const off = Math.round(((scroll % tileW) + tileW) % tileW);
+  const yy = Math.round(y);
+  let x = a;
   let guard = 0;
-  while (x < x1 && guard < 16) {
+  while (x < b && guard < 16) {
     const u = (((x + off) % tileW) + tileW) % tileW;
-    const w = Math.min(tileW - u, x1 - x);
-    if (w > 0.01) g.drawImage(tile, u, 0, w, tileH, x, y, w, tileH);
+    const w = Math.min(tileW - u, b - x);
+    if (w > 0) g.drawImage(tile, u, 0, w, tileH, x, yy, w, tileH);
     x += w;
     guard += 1;
   }
+}
+
+/** Großen vorgerenderten Sprite 1:1 an ganzzahliger Position zentriert zeichnen (schnell). */
+export function blitCentered(g: Ctx2D, spr: HTMLCanvasElement, cx: number, cy: number): void {
+  g.drawImage(spr, Math.round(cx - spr.width / 2), Math.round(cy - spr.height / 2));
+}
+
+/** Weicher, großer Leuchtfleck als fertige Fläche (w×h, elliptisch), zum 1:1-Blitten. */
+export function bigGlow(w: number, h: number, stops: Array<[number, string]>): HTMLCanvasElement {
+  return paint(w, h, (g) => {
+    const r = Math.max(w, h) / 2;
+    g.translate(w / 2, h / 2);
+    g.scale(w / (2 * r), h / (2 * r));
+    const grd = g.createRadialGradient(0, 0, 0, 0, 0, r);
+    for (const [o, c] of stops) grd.addColorStop(o, c);
+    g.fillStyle = grd;
+    g.fillRect(-r, -r, 2 * r, 2 * r);
+  });
 }
 
 export interface Seg {

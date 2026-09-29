@@ -44,12 +44,12 @@
     "doublejump": {
       "file": "doublejump.webp",
       "cols": 8,
-      "rows": 3,
-      "frames": 19,
-      "cw": 288,
-      "ch": 304,
-      "cx": 144,
-      "footY": 294,
+      "rows": 2,
+      "frames": 13,
+      "cw": 272,
+      "ch": 288,
+      "cx": 136,
+      "footY": 265,
       "scale": 1.0,
       "fps": 28,
       "loop": false

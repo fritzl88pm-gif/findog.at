@@ -9,25 +9,34 @@ Aufruf (aus dem Repo-Root):
 
     python3 tools/fredrun2/pack_sprites.py --src <ROHSHEET-ORDNER> [--chars fred,frida] [--anims run,jump]
                                            [--out public/fredrun2/chars] [--config tools/fredrun2/sprite_sources.json]
-                                           [--preview <ORDNER>] [--report]
+                                           [--preview <ORDNER> [--every 3] [--cell 128]] [--report] [--preview-only]
 
-* `--src`     Ordner mit den Rohsheets. Dateinamen stehen in `sprite_sources.json` (`src`, z.B. `fred_run.png`);
-              Rohsheets sind die 512px-Sheets von AutoSprite (`sheetUrl` aus list_spritesheets) bzw. die
-              Originalsheets aus public/fredrun/ (Fallback / victory), siehe `origin` in der Config.
-* `--config`  JSON mit Quelle + Frame-Auswahl je Charakter/Animation (siehe Kopf der Datei sprite_sources.json).
-* `--preview` schreibt je Charakter einen Kontaktbogen (aus den fertigen WebPs) als JPG.
-* `--report`  gibt nur die Analyse aus (Skalierung, Figurhoehen, Loop-Naht), schreibt nichts.
+* `--src`     Ordner mit den Rohsheets (PNG/WebP). Die Dateinamen (`src`) sowie Raster (`cols`, `total`), Frame-Auswahl
+              und Herkunft (`origin` = AutoSprite-Sheet-ID bzw. Originaldatei) stehen in `sprite_sources.json`.
+              Rohsheets holt man per AutoSprite-MCP: `list_spritesheets`/`get_spritesheet` -> `sheetUrl` -> curl.
+              (Run-Sheets: `regenerate_single_spritesheet` mit frameSize 384, maxFrames 0 = alle ~97 Videoframes;
+              der Rohordner liegt nicht im Repo, weil > 100 MB.)
+* `--config`  JSON: je Charakter/Animation `src, cols, total, sel | loop_detect, loop, fps, sizeMode, scaleMul, drop,
+              vanchor, native, standRef` (siehe `_doc` in der JSON-Datei).
+* `--preview` schreibt je Charakter einen Kontaktbogen (aus den fertigen WebPs, mit Fusslinie/Ankermarke) als JPG.
+* `--preview-only`  nur Kontaktboegen aus den vorhandenen Dateien rendern; `--report` nur Analyse, nichts schreiben.
 
 Pipeline je Frame:
   1. Alpha bereinigen (Schwelle, Fragmente < 2 % der Hauptfigur entfernen), Farbsaeume entfernen ("defringe":
-     halbtransparente Randpixel bekommen die Farbe des naechsten deckenden Pixels).
+     halbtransparente Randpixel bekommen die Farbe des naechsten deckenden Pixels; RGB unter Transparenz wird mit
+     der Figurfarbe befuellt, damit beim bilinearen Filtern kein dunkler Saum entsteht).
   2. Hauptfigur = groesste zusammenhaengende Komponente (+ nahe Teile) -> Bounding-Box, Schwerpunkt.
-  3. Gemeinsamer Skalierfaktor S = runHeight / Median(Figurhoehe im run-Zyklus) (Lanczos, premultiplied alpha).
-     Einzelne Animationen werden ueber `sizeMode` (geo|area|family|stand) bzw. `scaleMul` (manuell) angeglichen, falls
-     das Rohmaterial anders gezoomt ist (AI-Videos haben je Clip leicht andere Bildausschnitte).
+     Staub/Speedlines sind Teil des Frames, zaehlen aber nicht fuer Anker/Groesse.
+  3. Gemeinsamer Skalierfaktor S = runHeight (214 px) / Median(Figurhoehe im run-Zyklus), Lanczos mit premultiplied
+     alpha. Rohsheets duerfen verschieden gross sein (S ist auf die Framebreite normiert). AI-Videos haben je Clip
+     leicht anderen Zoom -> `sizeMode` (geo|area|family|stand) bzw. manuelles `scaleMul` gleicht Clips an run an.
   4. Fussanker: unterste Zeile der Hauptfigur -> footY; x: geglaetteter Schwerpunkt (gleitender Mittelwert,
      7 Frames, bei Loops zirkulaer) -> cx. `vanchor: "center"` (Salto): Schwerpunkt-y bleibt fix statt der Fuesse.
-  5. Zellgroesse 256x256 (waechst automatisch, wenn eine Pose nicht passt), Raster 8 Spalten, WebP q~82.
+  5. Zellgroesse 256x256 (waechst automatisch auf ein Vielfaches von 16, wenn eine Pose nicht passt; cx/footY im
+     atlas.json gelten dann fuer die jeweilige Zelle), Raster 8 Spalten, WebP q82 (method 6, alpha_quality 90),
+     Qualitaet sinkt schrittweise, falls > 450 KB.
+  6. `loop_detect` sucht in der Rohsequenz den nahtlosesten Zyklus (Start + Periode); `drop` blendet einzelne
+     Quellframes (Geister-/Blur-Frames, im --report als "unscharfe Frames" gemeldet) aus.
 """
 from __future__ import annotations
 
@@ -272,6 +281,8 @@ def process_anim(name: str, spec: dict, frames_raw: list[np.ndarray], S: float, 
         ends = [fr[k]["bbox_main"][3] - fr[k]["bbox_main"][1] for k in (0, 1, -2, -1) if -len(fr) <= k < len(fr)]
         stand_h = float(np.median(ends)) * s
         cyc_target = FOOT_Y - 0.5 * stand_h * float(spec.get("centerRise", 1.0))
+        if "centerHeight" in spec:  # feste Hoehe des Schwerpunkts ueber footY (z.B. glide: Mitte der Hitbox)
+            cyc_target = FOOT_Y - float(spec["centerHeight"])
 
     placed = []  # (image, left, top) im Zellkoordinatensystem (cx=CX, footY=FOOT_Y, vor Zellwachstum)
     for k, f in enumerate(fr):
@@ -558,7 +569,7 @@ def main(argv=None) -> int:
         for m in clean_atlas["anims"].values():
             m.pop("kb", None)
         # Reihenfolge stabil
-        order = ["run", "jump", "fall", "doublejump", "slide", "hurt", "dash", "stomp", "idle", "victory"]
+        order = ["run", "jump", "fall", "glide", "doublejump", "slide", "hurt", "dash", "stomp", "idle", "victory"]
         clean_atlas["anims"] = {k: clean_atlas["anims"][k] for k in order if k in clean_atlas["anims"]}
         ap_path.write_text(json.dumps(clean_atlas, indent=2) + "\n")
         print(f"[{cid}] atlas.json geschrieben ({len(clean_atlas['anims'])} Animationen)")

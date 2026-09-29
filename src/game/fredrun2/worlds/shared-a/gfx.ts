@@ -113,7 +113,7 @@ export interface BackdropSpec {
  */
 export class PaintedBackdrop {
   private imgs: Array<HTMLImageElement | null> = [];
-  private cache = new Map<number, { tile: Canvas2D; w: number }>();
+  private cache = new Map<number, { tile: Canvas2D; w: number; mirror: boolean }>();
   private order: number[] = [];
   private k = 1;
 
@@ -145,7 +145,7 @@ export class PaintedBackdrop {
     }
   }
 
-  private build(i: number): { tile: Canvas2D; w: number } | null {
+  private build(i: number): { tile: Canvas2D; w: number; mirror: boolean } | null {
     const hit = this.cache.get(i);
     if (hit) return hit;
     const img = this.imgs[i] ?? this.imgs.find((x) => !!x) ?? null;
@@ -158,18 +158,14 @@ export class PaintedBackdrop {
     const k = this.k;
     let tile: Canvas2D;
     if ((s.seam ?? "mirror") === "mirror") {
-      tile = createCanvas(w * 2 * k, this.drawH * k);
+      // Einfach breit vorskalieren; die gespiegelte Kopie entsteht beim Zeichnen (spart Speicher)
+      tile = createCanvas(w * k, this.drawH * k);
       const g = tile.getContext("2d");
       if (g) {
         g.imageSmoothingQuality = "high";
         g.drawImage(img, 0, sy, img.width, sh, 0, 0, w * k, this.drawH * k);
-        g.save();
-        g.translate(w * 2 * k, 0);
-        g.scale(-1, 1);
-        g.drawImage(img, 0, sy, img.width, sh, 0, 0, w * k, this.drawH * k);
-        g.restore();
       }
-      const entry = { tile, w: w * 2 };
+      const entry = { tile, w, mirror: true };
       this.remember(i, entry);
       return entry;
     }
@@ -194,12 +190,12 @@ export class PaintedBackdrop {
         g.drawImage(strip, 0, 0);
       }
     }
-    const entry = { tile, w: w - ov };
+    const entry = { tile, w: w - ov, mirror: false };
     this.remember(i, entry);
     return entry;
   }
 
-  private remember(i: number, e: { tile: Canvas2D; w: number }): void {
+  private remember(i: number, e: { tile: Canvas2D; w: number; mirror: boolean }): void {
     this.cache.set(i, e);
     this.order.push(i);
     while (this.order.length > this.keep) {
@@ -219,10 +215,32 @@ export class PaintedBackdrop {
     const prev = g.globalAlpha;
     g.globalAlpha = prev * alpha;
     const w = e.w;
-    let x = -(((scroll % w) + w) % w);
-    while (x < viewW) {
-      g.drawImage(e.tile, x, y, w + 0.6, this.drawH);
-      x += w;
+    const h = this.drawH;
+    if (e.mirror) {
+      const period = w * 2;
+      const off = ((scroll % period) + period) % period;
+      let x = -off;
+      let n = 0;
+      while (x < viewW) {
+        if (x + w > 0) {
+          if (n % 2 === 0) g.drawImage(e.tile, x, y, w + 0.6, h);
+          else {
+            g.save();
+            g.translate(x + w, y);
+            g.scale(-1, 1);
+            g.drawImage(e.tile, -0.6, 0, w + 0.6, h);
+            g.restore();
+          }
+        }
+        x += w;
+        n += 1;
+      }
+    } else {
+      let x = -(((scroll % w) + w) % w);
+      while (x < viewW) {
+        g.drawImage(e.tile, x, y, w + 0.6, h);
+        x += w;
+      }
     }
     g.globalAlpha = prev;
     return true;

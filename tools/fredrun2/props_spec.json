@@ -1226,7 +1226,8 @@
       "tags": [
         "wien",
         "pickup"
-      ]
+      ],
+      "holes_min": 300
     },
     "regenschirm": {
       "kind": "static",
