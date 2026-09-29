@@ -1,0 +1,1128 @@
+{
+  "props": {
+    "apricot": {
+      "file": "apricot.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 247,
+      "ch": 289,
+      "ax": 0.5,
+      "ay": 0.9827,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wachau",
+        "pickup"
+      ],
+      "w": 237,
+      "h": 279,
+      "facing": "right",
+      "kb": 15
+    },
+    "autoscooter": {
+      "file": "autoscooter.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 399,
+      "ch": 307,
+      "ax": 0.5,
+      "ay": 0.9837,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "prater",
+        "obstacle"
+      ],
+      "w": 389,
+      "h": 297,
+      "facing": "right",
+      "kb": 28
+    },
+    "balloon-bunch": {
+      "file": "balloon-bunch.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 268,
+      "ch": 396,
+      "ax": 0.5,
+      "ay": 0.9874,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "prater",
+        "deco"
+      ],
+      "w": 258,
+      "h": 386,
+      "facing": "right",
+      "kb": 22
+    },
+    "barrier-neon": {
+      "file": "barrier-neon.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 224,
+      "ch": 225,
+      "ax": 0.5,
+      "ay": 0.9778,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "cyber",
+        "obstacle"
+      ],
+      "w": 214,
+      "h": 215,
+      "facing": "right",
+      "kb": 20
+    },
+    "boulder": {
+      "file": "boulder.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 393,
+      "ch": 306,
+      "ax": 0.5,
+      "ay": 0.9837,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "alpen",
+        "obstacle"
+      ],
+      "w": 383,
+      "h": 296,
+      "facing": "right",
+      "kb": 25
+    },
+    "cannon": {
+      "file": "cannon.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 325,
+      "ch": 325,
+      "ax": 0.5,
+      "ay": 0.9846,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "prater",
+        "obstacle"
+      ],
+      "w": 315,
+      "h": 315,
+      "facing": "right",
+      "kb": 27
+    },
+    "carousel-chair": {
+      "file": "carousel-chair.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 303,
+      "ch": 386,
+      "ax": 0.5,
+      "ay": 0.987,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "prater",
+        "obstacle"
+      ],
+      "w": 293,
+      "h": 376,
+      "facing": "right",
+      "kb": 31
+    },
+    "coffee-cup": {
+      "file": "coffee-cup.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 244,
+      "ch": 274,
+      "ax": 0.5,
+      "ay": 0.9818,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "finanzamt",
+        "pickup"
+      ],
+      "w": 234,
+      "h": 264,
+      "facing": "right",
+      "kb": 15
+    },
+    "coin": {
+      "file": "coin.webp",
+      "cols": 6,
+      "rows": 2,
+      "frames": 12,
+      "cw": 192,
+      "ch": 192,
+      "ax": 0.5,
+      "ay": 0.5,
+      "fps": 14,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "pickup"
+      ],
+      "w": 176,
+      "h": 176,
+      "facing": "front",
+      "kb": 90
+    },
+    "cow": {
+      "file": "cow.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 443,
+      "ch": 308,
+      "ax": 0.5,
+      "ay": 0.9838,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "alpen",
+        "obstacle"
+      ],
+      "w": 433,
+      "h": 298,
+      "facing": "right",
+      "kb": 29
+    },
+    "crate-wine": {
+      "file": "crate-wine.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 364,
+      "ch": 348,
+      "ax": 0.5,
+      "ay": 0.9856,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wachau",
+        "obstacle"
+      ],
+      "w": 354,
+      "h": 338,
+      "facing": "right",
+      "kb": 31
+    },
+    "data-coin": {
+      "file": "data-coin.webp",
+      "cols": 6,
+      "rows": 2,
+      "frames": 12,
+      "cw": 192,
+      "ch": 192,
+      "ax": 0.5,
+      "ay": 0.5,
+      "fps": 14,
+      "loop": true,
+      "tags": [
+        "cyber",
+        "pickup"
+      ],
+      "w": 162,
+      "h": 176,
+      "facing": "front",
+      "kb": 82
+    },
+    "drone": {
+      "file": "drone.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 481,
+      "ch": 312,
+      "ax": 0.5,
+      "ay": 0.984,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "cyber",
+        "enemy"
+      ],
+      "w": 471,
+      "h": 302,
+      "facing": "right",
+      "kb": 25
+    },
+    "edelweiss": {
+      "file": "edelweiss.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 322,
+      "ch": 282,
+      "ax": 0.5,
+      "ay": 0.9823,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "alpen",
+        "pickup"
+      ],
+      "w": 312,
+      "h": 272,
+      "facing": "right",
+      "kb": 20
+    },
+    "fiaker": {
+      "file": "fiaker.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 512,
+      "ch": 358,
+      "ax": 0.5,
+      "ay": 0.986,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wien",
+        "obstacle"
+      ],
+      "w": 502,
+      "h": 348,
+      "facing": "right",
+      "kb": 48
+    },
+    "file-cart": {
+      "file": "file-cart.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 277,
+      "ch": 406,
+      "ax": 0.5,
+      "ay": 0.9877,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "finanzamt",
+        "obstacle"
+      ],
+      "w": 267,
+      "h": 396,
+      "facing": "right",
+      "kb": 26
+    },
+    "gem": {
+      "file": "gem.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 259,
+      "ch": 293,
+      "ax": 0.5,
+      "ay": 0.9829,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "pickup"
+      ],
+      "w": 249,
+      "h": 283,
+      "facing": "right",
+      "kb": 11
+    },
+    "ghost": {
+      "file": "ghost.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 280,
+      "ch": 331,
+      "ax": 0.5,
+      "ay": 0.9849,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "prater",
+        "enemy"
+      ],
+      "w": 270,
+      "h": 321,
+      "facing": "right",
+      "kb": 15
+    },
+    "glitch-cube": {
+      "file": "glitch-cube.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 277,
+      "ch": 274,
+      "ax": 0.5,
+      "ay": 0.9818,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "cyber",
+        "obstacle"
+      ],
+      "w": 267,
+      "h": 264,
+      "facing": "right",
+      "kb": 30
+    },
+    "gondola": {
+      "file": "gondola.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 225,
+      "ch": 337,
+      "ax": 0.5,
+      "ay": 0.0,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "alpen",
+        "hazard"
+      ],
+      "w": 215,
+      "h": 327,
+      "facing": "right",
+      "kb": 15
+    },
+    "grape-bunch": {
+      "file": "grape-bunch.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 284,
+      "ch": 382,
+      "ax": 0.5,
+      "ay": 0.9869,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wachau",
+        "pickup"
+      ],
+      "w": 274,
+      "h": 372,
+      "facing": "right",
+      "kb": 25
+    },
+    "heart": {
+      "file": "heart.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 346,
+      "ch": 330,
+      "ax": 0.5,
+      "ay": 0.9848,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "pickup"
+      ],
+      "w": 336,
+      "h": 320,
+      "facing": "right",
+      "kb": 16
+    },
+    "jqa-defeated": {
+      "file": "jqa-defeated.webp",
+      "cols": 6,
+      "rows": 3,
+      "frames": 16,
+      "cw": 320,
+      "ch": 256,
+      "ax": 0.5,
+      "ay": 0.9766,
+      "fps": 16,
+      "loop": false,
+      "tags": [
+        "allgemein",
+        "enemy"
+      ],
+      "w": 254,
+      "h": 230,
+      "facing": "right",
+      "kb": 115
+    },
+    "jqa-jump": {
+      "file": "jqa-jump.webp",
+      "cols": 8,
+      "rows": 3,
+      "frames": 24,
+      "cw": 256,
+      "ch": 320,
+      "ax": 0.5,
+      "ay": 0.9812,
+      "fps": 24,
+      "loop": false,
+      "tags": [
+        "allgemein",
+        "enemy"
+      ],
+      "w": 148,
+      "h": 226,
+      "facing": "right",
+      "kb": 155
+    },
+    "jqa-run": {
+      "file": "jqa-run.webp",
+      "cols": 8,
+      "rows": 3,
+      "frames": 23,
+      "cw": 256,
+      "ch": 256,
+      "ax": 0.5,
+      "ay": 0.9766,
+      "fps": 26,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "enemy"
+      ],
+      "w": 159,
+      "h": 220,
+      "facing": "right",
+      "kb": 174
+    },
+    "key": {
+      "file": "key.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 355,
+      "ch": 388,
+      "ax": 0.5,
+      "ay": 0.9871,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "pickup"
+      ],
+      "w": 345,
+      "h": 378,
+      "facing": "right",
+      "kb": 18
+    },
+    "laser-turret": {
+      "file": "laser-turret.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 307,
+      "ch": 300,
+      "ax": 0.5,
+      "ay": 0.9833,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "cyber",
+        "hazard"
+      ],
+      "w": 297,
+      "h": 290,
+      "facing": "right",
+      "kb": 23
+    },
+    "luki-defeated": {
+      "file": "luki-defeated.webp",
+      "cols": 6,
+      "rows": 3,
+      "frames": 16,
+      "cw": 320,
+      "ch": 256,
+      "ax": 0.5,
+      "ay": 0.9766,
+      "fps": 16,
+      "loop": false,
+      "tags": [
+        "allgemein",
+        "enemy"
+      ],
+      "w": 257,
+      "h": 234,
+      "facing": "right",
+      "kb": 102
+    },
+    "luki-run": {
+      "file": "luki-run.webp",
+      "cols": 8,
+      "rows": 3,
+      "frames": 24,
+      "cw": 256,
+      "ch": 256,
+      "ax": 0.5,
+      "ay": 0.9766,
+      "fps": 28,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "enemy"
+      ],
+      "w": 203,
+      "h": 227,
+      "facing": "right",
+      "kb": 224
+    },
+    "madinger-defeated": {
+      "file": "madinger-defeated.webp",
+      "cols": 6,
+      "rows": 3,
+      "frames": 14,
+      "cw": 320,
+      "ch": 256,
+      "ax": 0.5,
+      "ay": 0.9766,
+      "fps": 16,
+      "loop": false,
+      "tags": [
+        "allgemein",
+        "enemy"
+      ],
+      "w": 233,
+      "h": 219,
+      "facing": "right",
+      "kb": 79
+    },
+    "madinger-jump": {
+      "file": "madinger-jump.webp",
+      "cols": 8,
+      "rows": 4,
+      "frames": 28,
+      "cw": 256,
+      "ch": 320,
+      "ax": 0.5,
+      "ay": 0.9812,
+      "fps": 24,
+      "loop": false,
+      "tags": [
+        "allgemein",
+        "enemy"
+      ],
+      "w": 160,
+      "h": 223,
+      "facing": "right",
+      "kb": 152
+    },
+    "madinger-run": {
+      "file": "madinger-run.webp",
+      "cols": 8,
+      "rows": 3,
+      "frames": 24,
+      "cw": 256,
+      "ch": 256,
+      "ax": 0.5,
+      "ay": 0.9766,
+      "fps": 24,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "enemy"
+      ],
+      "w": 128,
+      "h": 220,
+      "facing": "right",
+      "kb": 125
+    },
+    "odo-defeated": {
+      "file": "odo-defeated.webp",
+      "cols": 6,
+      "rows": 3,
+      "frames": 16,
+      "cw": 320,
+      "ch": 256,
+      "ax": 0.5,
+      "ay": 0.9766,
+      "fps": 16,
+      "loop": false,
+      "tags": [
+        "allgemein",
+        "enemy"
+      ],
+      "w": 256,
+      "h": 196,
+      "facing": "right",
+      "kb": 101
+    },
+    "odo-run": {
+      "file": "odo-run.webp",
+      "cols": 8,
+      "rows": 3,
+      "frames": 23,
+      "cw": 256,
+      "ch": 256,
+      "ax": 0.5,
+      "ay": 0.9766,
+      "fps": 26,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "enemy"
+      ],
+      "w": 197,
+      "h": 219,
+      "facing": "right",
+      "kb": 191
+    },
+    "office-chair": {
+      "file": "office-chair.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 266,
+      "ch": 401,
+      "ax": 0.5,
+      "ay": 0.9875,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "finanzamt",
+        "obstacle"
+      ],
+      "w": 256,
+      "h": 391,
+      "facing": "right",
+      "kb": 15
+    },
+    "paper-stack": {
+      "file": "paper-stack.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 307,
+      "ch": 327,
+      "ax": 0.5,
+      "ay": 0.9847,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "finanzamt",
+        "obstacle"
+      ],
+      "w": 297,
+      "h": 317,
+      "facing": "right",
+      "kb": 29
+    },
+    "paragraph": {
+      "file": "paragraph.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 149,
+      "ch": 202,
+      "ax": 0.5,
+      "ay": 0.9752,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "finanzamt",
+        "obstacle"
+      ],
+      "w": 139,
+      "h": 192,
+      "facing": "front",
+      "kb": 20
+    },
+    "park-bench": {
+      "file": "park-bench.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 365,
+      "ch": 288,
+      "ax": 0.5,
+      "ay": 0.9826,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wien",
+        "obstacle"
+      ],
+      "w": 355,
+      "h": 278,
+      "facing": "right",
+      "kb": 22
+    },
+    "powerup-magnet": {
+      "file": "powerup-magnet.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 196,
+      "ch": 195,
+      "ax": 0.5,
+      "ay": 0.9744,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "pickup"
+      ],
+      "w": 186,
+      "h": 185,
+      "facing": "front",
+      "kb": 10
+    },
+    "powerup-shield": {
+      "file": "powerup-shield.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 283,
+      "ch": 329,
+      "ax": 0.5,
+      "ay": 0.9848,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "pickup"
+      ],
+      "w": 273,
+      "h": 319,
+      "facing": "right",
+      "kb": 18
+    },
+    "powerup-slowmo": {
+      "file": "powerup-slowmo.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 218,
+      "ch": 354,
+      "ax": 0.5,
+      "ay": 0.9859,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "pickup"
+      ],
+      "w": 208,
+      "h": 344,
+      "facing": "right",
+      "kb": 25
+    },
+    "powerup-turbo": {
+      "file": "powerup-turbo.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 282,
+      "ch": 458,
+      "ax": 0.5,
+      "ay": 0.9891,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "pickup"
+      ],
+      "w": 272,
+      "h": 448,
+      "facing": "right",
+      "kb": 24
+    },
+    "puddle": {
+      "file": "puddle.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 337,
+      "ch": 147,
+      "ax": 0.5,
+      "ay": 0.966,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wien",
+        "hazard"
+      ],
+      "w": 327,
+      "h": 137,
+      "facing": "right",
+      "kb": 7
+    },
+    "raft": {
+      "file": "raft.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 349,
+      "ch": 266,
+      "ax": 0.5,
+      "ay": 0.9812,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wachau",
+        "obstacle"
+      ],
+      "w": 339,
+      "h": 256,
+      "facing": "right",
+      "kb": 23
+    },
+    "reihe100": {
+      "file": "reihe100.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 202,
+      "ch": 201,
+      "ax": 0.5,
+      "ay": 0.9751,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "finanzamt",
+        "obstacle"
+      ],
+      "w": 192,
+      "h": 191,
+      "facing": "front",
+      "kb": 21
+    },
+    "server-rack": {
+      "file": "server-rack.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 239,
+      "ch": 262,
+      "ax": 0.5,
+      "ay": 0.9809,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "cyber",
+        "obstacle"
+      ],
+      "w": 229,
+      "h": 252,
+      "facing": "right",
+      "kb": 13
+    },
+    "shredder": {
+      "file": "shredder.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 247,
+      "ch": 423,
+      "ax": 0.5,
+      "ay": 0.9882,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "finanzamt",
+        "obstacle"
+      ],
+      "w": 237,
+      "h": 413,
+      "facing": "right",
+      "kb": 18
+    },
+    "stamp-big": {
+      "file": "stamp-big.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 305,
+      "ch": 416,
+      "ax": 0.5,
+      "ay": 0.988,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "finanzamt",
+        "obstacle"
+      ],
+      "w": 295,
+      "h": 406,
+      "facing": "right",
+      "kb": 22
+    },
+    "steuerkodex": {
+      "file": "steuerkodex.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 152,
+      "ch": 202,
+      "ax": 0.5,
+      "ay": 0.9752,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "allgemein",
+        "finanzamt",
+        "obstacle"
+      ],
+      "w": 142,
+      "h": 192,
+      "facing": "front",
+      "kb": 21
+    },
+    "street-lamp": {
+      "file": "street-lamp.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 110,
+      "ch": 461,
+      "ax": 0.5,
+      "ay": 0.9892,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wien",
+        "deco"
+      ],
+      "w": 100,
+      "h": 451,
+      "facing": "right",
+      "kb": 8
+    },
+    "traffic-cone": {
+      "file": "traffic-cone.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 176,
+      "ch": 217,
+      "ax": 0.5,
+      "ay": 0.977,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wien",
+        "allgemein",
+        "obstacle"
+      ],
+      "w": 166,
+      "h": 207,
+      "facing": "right",
+      "kb": 7
+    },
+    "tram": {
+      "file": "tram.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 512,
+      "ch": 308,
+      "ax": 0.5,
+      "ay": 0.9838,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wien",
+        "obstacle"
+      ],
+      "w": 502,
+      "h": 298,
+      "facing": "right",
+      "kb": 42
+    },
+    "trampoline": {
+      "file": "trampoline.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 343,
+      "ch": 215,
+      "ax": 0.5,
+      "ay": 0.9767,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "prater",
+        "obstacle"
+      ],
+      "w": 333,
+      "h": 205,
+      "facing": "right",
+      "kb": 17
+    },
+    "wine-barrel": {
+      "file": "wine-barrel.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 276,
+      "ch": 379,
+      "ax": 0.5,
+      "ay": 0.9868,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wachau",
+        "obstacle"
+      ],
+      "w": 266,
+      "h": 369,
+      "facing": "right",
+      "kb": 26
+    },
+    "wood-fence": {
+      "file": "wood-fence.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 281,
+      "ch": 143,
+      "ax": 0.5,
+      "ay": 0.965,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "alpen",
+        "obstacle"
+      ],
+      "w": 271,
+      "h": 133,
+      "facing": "right",
+      "kb": 8
+    },
+    "wuerstelstand": {
+      "file": "wuerstelstand.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 353,
+      "ch": 352,
+      "ax": 0.5,
+      "ay": 0.9858,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wien",
+        "obstacle"
+      ],
+      "w": 343,
+      "h": 342,
+      "facing": "right",
+      "kb": 31
+    }
+  }
+}
