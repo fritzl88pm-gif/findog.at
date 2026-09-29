@@ -22,8 +22,8 @@ import {
   type Settings,
 } from "./profile";
 import { Renderer, type FrameData } from "./render";
-import { dailySeed } from "./rng";
-import { NO_INPUT, Sim, TOUR_METERS, TOUR_ORDER, type SimInput } from "./sim";
+import { dailySeed, dateKey } from "./rng";
+import { NO_INPUT, Sim, TOUR_METERS, TOUR_ORDER, dailyWorld, type SimInput } from "./sim";
 import type { HudState, HudToast } from "./hud";
 import type { CharacterId, Ent, RunConfig, RunMode, SimEvent, WorldDef, WorldId, WorldRenderer } from "./types";
 import { WORLDS } from "./worlds";
@@ -88,9 +88,9 @@ export interface GameSnapshot {
 }
 
 const HINTS: Array<{ at: number; text: string }> = [
-  { at: 0.2, text: "Springen: Leertaste / Tippen · lang halten = höher · zweimal = Doppelsprung" },
+  { at: 0.2, text: "Springen: Leertaste / Tippen · halten = höher · nochmal = Doppelsprung" },
   { at: 6.5, text: "Rutschen: ↓ / nach unten wischen · in der Luft: Stampfen" },
-  { at: 13, text: "Dash: Shift / Dash-Taste – unverwundbar, sobald der Energiering voll genug ist" },
+  { at: 13, text: "Dash: Shift / ⚡-Taste – unverwundbar, wenn der Energiering voll genug ist" },
 ];
 
 const ZONE_SFX: Array<[RegExp, { warn?: string; active?: string }]> = [
@@ -166,6 +166,7 @@ export class FredRunGame {
   private runStartMs = 0;
   private stageToastShown = false;
   reducedMotion = false;
+  private touchMode = false;
   /** Harness/Tests: Frames werden nur manuell (debugAdvance) berechnet. */
   manual = false;
 
@@ -183,6 +184,7 @@ export class FredRunGame {
     try {
       this.profile = loadProfile();
       if (typeof window !== "undefined") {
+        this.touchMode = window.matchMedia?.("(pointer: coarse)").matches === true;
         const q = new URLSearchParams(window.location.search);
         if (q.has("unlockall")) this.profile = { ...this.profile, unlocked: [...Object.keys(CHARACTERS)] as CharacterId[] };
         const w = q.get("world");
@@ -220,6 +222,7 @@ export class FredRunGame {
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.tick);
     document.addEventListener("visibilitychange", this.onVisibility);
+    window.addEventListener("blur", this.onBlur);
     this.emitChange();
   }
 
@@ -229,6 +232,7 @@ export class FredRunGame {
     this.input.detach();
     this.ro?.disconnect();
     document.removeEventListener("visibilitychange", this.onVisibility);
+    window.removeEventListener("blur", this.onBlur);
     this.audio.music.stop(0.2);
     for (const l of this.activeLoops) this.audio.loop(l, false);
     this.audio.dispose();
@@ -238,6 +242,10 @@ export class FredRunGame {
     this.loadProgress = v;
     this.emitChange();
   }
+
+  private onBlur = (): void => {
+    if (this.phase === "running") this.pause();
+  };
 
   private onVisibility = (): void => {
     if (document.hidden) {
@@ -277,7 +285,7 @@ export class FredRunGame {
       p = (async () => {
         const def = WORLDS[id];
         const r = def.createRenderer();
-        this.renderer && r.resize?.(this.renderer.pixelScale);
+        if (this.renderer) r.resize?.(this.renderer.pixelScale);
         await Promise.all([r.load(this.assets).catch(() => undefined), this.assets.props.preload(def.propIds ?? [])]);
         this.worldRenderers.set(id, r);
       })();
@@ -437,8 +445,8 @@ export class FredRunGame {
     this.unlockAudio();
     const p = this.profile;
     const mode = over.mode ?? p.mode;
-    const world = over.world ?? p.world;
-    const dailyKey = mode === "daily" ? new Date().toISOString().slice(0, 10) : "";
+    const world = mode === "daily" ? dailyWorld() : over.world ?? p.world;
+    const dailyKey = mode === "daily" ? dateKey() : "";
     this.dailyKey = dailyKey;
     const seed = over.seed ?? (mode === "daily" ? dailySeed() : (Math.random() * 0xffffffff) >>> 0);
     const cfg: RunConfig = { mode, world, character: over.character ?? p.character, seed, startMeters: over.startMeters };
@@ -463,6 +471,8 @@ export class FredRunGame {
     this.hintShow = 0;
     this.toast = null;
     this.stageToastShown = false;
+    this.flashV = 1;
+    this.flashColor = "#000000";
     this.phase = "countdown";
     this.countdownT = 3.2;
     this.countdownSfx = 4;
@@ -893,6 +903,7 @@ export class FredRunGame {
       tourFrac: sim.cfg.mode === "tour" ? Math.min(1, sim.worldMeters / TOUR_METERS) : null,
       time: this.time,
       chaseWarn: sim.vars.chaseWarn ?? 0,
+      touch: this.touchMode,
     };
   }
 
@@ -972,7 +983,13 @@ export class FredRunGame {
   // Debug / QA (Screenshot-Werkzeug, Tests)
 
   /** Startet sofort einen Lauf ohne Countdown; Bot-gesteuert. Für QA-Screenshots. */
-  async debugRun(cfg: Partial<RunConfig> & { bot?: boolean; hearts?: number }): Promise<void> {
+  setManual(v: boolean): void {
+    this.manual = v;
+    this.last = performance.now();
+    this.acc = 0;
+  }
+
+  async debugRun(cfg: Partial<RunConfig> & { bot?: boolean; hearts?: number; live?: boolean }): Promise<void> {
     const world = cfg.world ?? "wien";
     await this.ensureCharacter(cfg.character ?? this.profile.character);
     if (cfg.mode === "tour") await Promise.all(TOUR_ORDER.map((w) => this.ensureWorld(w)));
@@ -985,7 +1002,7 @@ export class FredRunGame {
     this.sim = sim;
     this.cfg = sim.cfg;
     this.bot = cfg.bot === false ? null : new Bot();
-    this.demo = false;
+    this.demo = cfg.live === true;
     this.phase = "running";
     this.prev = { dist: sim.dist, hgt: 0 };
     this.renderer?.particles.clear();

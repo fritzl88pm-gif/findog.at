@@ -73,9 +73,9 @@
       "rows": 2,
       "frames": 16,
       "cw": 256,
-      "ch": 272,
+      "ch": 256,
       "cx": 128,
-      "footY": 262,
+      "footY": 246,
       "scale": 1.0,
       "fps": 22,
       "loop": false

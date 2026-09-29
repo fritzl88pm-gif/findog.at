@@ -1,5 +1,5 @@
 {
- "_doc": "Quelle + Frame-Auswahl je Charakter/Animation fuer tools/fredrun2/pack_sprites.py. Felder: src (Datei im --src-Ordner), cols, total (Frames im Sheet), sel (Liste | {start,end,step|n,pingpong,endpoint}), loop_detect {from,to,pmin,pmax[,n]} = bester nahtloser Zyklus, loop, fps, vanchor (foot|center), scaleMul (manuell), autoScale (Flaechen-Angleichung an run), standMatch (Standpose/median := Standhoehe aus standRef-Clips), standRef (Frame 0 = Standpose), native (Pixel 1:1, Korrektur ueber atlas.scale). origin: AutoSprite-Sheet-ID bzw. Original-Datei.",
+ "_doc": "Quelle + Frame-Auswahl je Charakter/Animation fuer tools/fredrun2/pack_sprites.py. Felder: src (Datei im --src-Ordner), cols, total (Frames im Sheet), sel (Liste | {start,end,step|n,pingpong,endpoint}), loop_detect {from,to,pmin,pmax[,n]} = bester nahtloser Zyklus, loop, fps, vanchor (foot|center), sizeMode (geo|area|family|stand, siehe pack_sprites.py), scaleMul (manuelle Feinkorrektur), standRef (Frame 0 = Standpose fuer sizeMode stand), native (Pixel 1:1, Korrektur ueber atlas.scale), origin (Herkunft: AutoSprite-Sheet-ID / Original-Datei).",
  "chars": {
   "fred": {
    "anims": {
@@ -27,7 +27,8 @@
       "start": 4,
       "end": 22
      },
-     "origin": "AutoSprite cmrmj6bjn0042w00jf14tpfl3"
+     "origin": "AutoSprite cmrmj6bjn0042w00jf14tpfl3",
+     "sizeMode": "geo"
     },
     "fall": {
      "src": "fred_jump.png",
@@ -40,7 +41,9 @@
       "end": 32,
       "pingpong": true
      },
-     "origin": "AutoSprite cmrmj6bjn0042w00jf14tpfl3 (Abstieg, Ping-Pong)"
+     "origin": "AutoSprite cmrmj6bjn0042w00jf14tpfl3 (Abstieg, Ping-Pong)",
+     "sizeMode": "geo",
+     "scaleMul": 0.95
     },
     "doublejump": {
      "src": "fred_dj1024.png",
@@ -49,12 +52,12 @@
      "loop": false,
      "fps": 28,
      "vanchor": "center",
-     "autoScale": true,
      "sel": {
       "start": 6,
       "end": 22
      },
-     "origin": "AutoSprite neu (video cmun9ec33000u972dfmzhmf0r, 1024px)"
+     "origin": "AutoSprite neu (video cmun9ec33000u972dfmzhmf0r, 1024px)",
+     "sizeMode": "area"
     },
     "slide": {
      "src": "fred_slide.png",
@@ -62,14 +65,15 @@
      "total": 32,
      "loop": true,
      "fps": 20,
-     "standRef": true,
      "loop_detect": {
       "from": 12,
       "to": 31,
       "pmin": 8,
       "pmax": 18
      },
-     "origin": "AutoSprite neu cmun9bzv9000fwgtnwv43yq2d"
+     "origin": "AutoSprite neu cmun9bzv9000fwgtnwv43yq2d",
+     "sizeMode": "family",
+     "scaleMul": 0.92
     },
     "hurt": {
      "src": "fred_hurt2.png",
@@ -77,13 +81,14 @@
      "total": 32,
      "loop": false,
      "fps": 22,
-     "scaleMul": 0.95,
      "sel": {
       "start": 0,
       "end": 31,
       "step": 2
      },
-     "origin": "AutoSprite neu (turbo reference) cmun9gwg40008reay0nl1wlwx"
+     "origin": "AutoSprite neu (turbo reference) cmun9gwg40008reay0nl1wlwx",
+     "sizeMode": "area",
+     "scaleMul": 0.84
     },
     "dash": {
      "src": "fred_dash.png",
@@ -91,14 +96,15 @@
      "total": 32,
      "loop": true,
      "fps": 24,
-     "standRef": true,
      "loop_detect": {
       "from": 6,
       "to": 31,
       "pmin": 10,
       "pmax": 20
      },
-     "origin": "AutoSprite neu cmun9bylk000bwgtn7cv1qhct"
+     "origin": "AutoSprite neu cmun9bylk000bwgtn7cv1qhct",
+     "sizeMode": "family",
+     "scaleMul": 0.92
     },
     "stomp": {
      "src": "fred_stomp2.png",
@@ -112,7 +118,9 @@
       "step": 3,
       "pingpong": true
      },
-     "origin": "AutoSprite neu (turbo reference) cmun9ghp6000hu1c5ag627qkl"
+     "origin": "AutoSprite neu (turbo reference) cmun9ghp6000hu1c5ag627qkl",
+     "sizeMode": "area",
+     "scaleMul": 0.95
     },
     "idle": {
      "src": "fred_idle.png",
@@ -126,7 +134,9 @@
       "n": 32,
       "endpoint": false
      },
-     "origin": "AutoSprite bestehend cmrkwbo0v00b1htb77sk1kd2x (frontal)"
+     "origin": "AutoSprite bestehend cmrkwbo0v00b1htb77sk1kd2x (frontal)",
+     "sizeMode": "geo",
+     "scaleMul": 0.92
     },
     "victory": {
      "src": "fred_victory.png",
@@ -134,7 +144,6 @@
      "total": 64,
      "loop": true,
      "fps": 16,
-     "standMatch": "median",
      "loop_detect": {
       "from": 0,
       "to": 63,
@@ -142,7 +151,9 @@
       "pmax": 48,
       "n": 32
      },
-     "origin": "AutoSprite bestehend cmrkwpffs002uouahom0tflcn"
+     "origin": "AutoSprite bestehend cmrkwpffs002uouahom0tflcn",
+     "sizeMode": "geo",
+     "scaleMul": 0.9
     }
    }
   },
@@ -172,7 +183,8 @@
       "start": 18,
       "end": 33
      },
-     "origin": "AutoSprite cmstybteb00je10fzvlivl9d0"
+     "origin": "AutoSprite cmstybteb00je10fzvlivl9d0",
+     "sizeMode": "geo"
     },
     "fall": {
      "src": "frida_jump.png",
@@ -185,7 +197,8 @@
       "end": 39,
       "pingpong": true
      },
-     "origin": "AutoSprite cmstybteb00je10fzvlivl9d0 (Abstieg, Ping-Pong)"
+     "origin": "AutoSprite cmstybteb00je10fzvlivl9d0 (Abstieg, Ping-Pong)",
+     "sizeMode": "geo"
     },
     "doublejump": {
      "src": "frida_dj1024.png",
@@ -194,12 +207,12 @@
      "loop": false,
      "fps": 28,
      "vanchor": "center",
-     "autoScale": true,
      "sel": {
       "start": 6,
       "end": 21
      },
-     "origin": "AutoSprite neu (video cmun9n8ky0017wnf8dfu8lnjv, 1024px)"
+     "origin": "AutoSprite neu (video cmun9n8ky0017wnf8dfu8lnjv, 1024px)",
+     "sizeMode": "area"
     },
     "slide": {
      "src": "frida_slide.png",
@@ -213,7 +226,9 @@
       "pmin": 8,
       "pmax": 18
      },
-     "origin": "AutoSprite neu cmun9oeeu000np3cj1gnauyqz"
+     "origin": "AutoSprite neu cmun9oeeu000np3cj1gnauyqz",
+     "sizeMode": "family",
+     "scaleMul": 1.1
     },
     "hurt": {
      "src": "frida_hurt.png",
@@ -221,13 +236,14 @@
      "total": 32,
      "loop": false,
      "fps": 22,
-     "autoScale": true,
      "sel": {
       "start": 0,
       "end": 31,
       "step": 2
      },
-     "origin": "AutoSprite neu (turbo reference) cmun9ok13001vwnf8qiw9e3v4"
+     "origin": "AutoSprite neu (turbo reference) cmun9ok13001vwnf8qiw9e3v4",
+     "sizeMode": "area",
+     "scaleMul": 0.94
     },
     "dash": {
      "src": "frida_dash.png",
@@ -241,7 +257,13 @@
       "pmin": 10,
       "pmax": 20
      },
-     "origin": "AutoSprite neu cmun9oo3v00018ioq5sv4r529"
+     "origin": "AutoSprite neu cmun9oo3v00018ioq5sv4r529",
+     "sizeMode": "family",
+     "scaleMul": 1.1,
+     "drop": [
+      13,
+      14
+     ]
     },
     "stomp": {
      "src": "frida_stomp.png",
@@ -249,14 +271,14 @@
      "total": 32,
      "loop": true,
      "fps": 20,
-     "autoScale": true,
      "sel": {
       "start": 2,
       "end": 29,
       "step": 3,
       "pingpong": true
      },
-     "origin": "AutoSprite neu (turbo reference) cmun9qe3p000txnooil6xw3la"
+     "origin": "AutoSprite neu (turbo reference) cmun9qe3p000txnooil6xw3la",
+     "sizeMode": "area"
     },
     "idle": {
      "src": "frida_idle.png",
@@ -264,14 +286,16 @@
      "total": 32,
      "loop": true,
      "fps": 14,
-     "standRef": true,
      "sel": {
       "start": 0,
       "end": 31,
       "step": 2,
       "pingpong": true
      },
-     "origin": "AutoSprite neu cmun9ozxs000g10fbq17edyfc"
+     "origin": "AutoSprite neu cmun9ozxs000g10fbq17edyfc",
+     "sizeMode": "geo",
+     "standRef": true,
+     "scaleMul": 1.05
     },
     "victory": {
      "src": "frida_victory_ship.webp",
@@ -280,8 +304,8 @@
      "loop": true,
      "fps": 16,
      "native": true,
-     "standMatch": "median",
-     "origin": "Original public/fredrun/frida/victory.webp (AutoSprite cmstdeedl004oexqfy0xjuaem, 192px)"
+     "origin": "Original public/fredrun/frida/victory.webp (AutoSprite cmstdeedl004oexqfy0xjuaem, 192px)",
+     "sizeMode": "stand"
     }
    }
   },
@@ -311,7 +335,9 @@
       "start": 18,
       "end": 30
      },
-     "origin": "AutoSprite cmsunpvbx009ung92xnm9e9ob"
+     "origin": "AutoSprite cmsunpvbx009ung92xnm9e9ob",
+     "sizeMode": "geo",
+     "scaleMul": 0.88
     },
     "fall": {
      "src": "superfred_jump.png",
@@ -324,7 +350,8 @@
       "end": 40,
       "pingpong": true
      },
-     "origin": "AutoSprite cmsunpvbx009ung92xnm9e9ob (Abstieg, Ping-Pong)"
+     "origin": "AutoSprite cmsunpvbx009ung92xnm9e9ob (Abstieg, Ping-Pong)",
+     "sizeMode": "geo"
     },
     "doublejump": {
      "src": "superfred_dj1024.png",
@@ -333,13 +360,13 @@
      "loop": false,
      "fps": 28,
      "vanchor": "center",
-     "autoScale": true,
      "sel": {
       "start": 2,
       "end": 30,
       "step": 2
      },
-     "origin": "AutoSprite neu (video cmun9ngwi000h8nojbm5hlf1y, 1024px)"
+     "origin": "AutoSprite neu (video cmun9ngwi000h8nojbm5hlf1y, 1024px)",
+     "sizeMode": "area"
     },
     "slide": {
      "src": "superfred_slide.png",
@@ -353,7 +380,9 @@
       "pmin": 8,
       "pmax": 18
      },
-     "origin": "AutoSprite neu cmun9po9i0046u8j3wkf8ml0a"
+     "origin": "AutoSprite neu cmun9po9i0046u8j3wkf8ml0a",
+     "sizeMode": "family",
+     "scaleMul": 1.1
     },
     "hurt": {
      "src": "superfred_hurt.png",
@@ -361,13 +390,14 @@
      "total": 32,
      "loop": false,
      "fps": 22,
-     "autoScale": true,
      "sel": {
       "start": 0,
       "end": 31,
       "step": 2
      },
-     "origin": "AutoSprite neu (turbo reference) cmun9pbko000h8ioqcsgx5dnn"
+     "origin": "AutoSprite neu (turbo reference) cmun9pbko000h8ioqcsgx5dnn",
+     "sizeMode": "area",
+     "scaleMul": 0.85
     },
     "dash": {
      "src": "superfred_dash.png",
@@ -381,7 +411,9 @@
       "pmin": 10,
       "pmax": 20
      },
-     "origin": "AutoSprite neu cmun9pnzf0042u8j3cyv2ah22"
+     "origin": "AutoSprite neu cmun9pnzf0042u8j3cyv2ah22",
+     "sizeMode": "family",
+     "scaleMul": 1.1
     },
     "stomp": {
      "src": "superfred_stomp.png",
@@ -389,14 +421,14 @@
      "total": 32,
      "loop": true,
      "fps": 20,
-     "autoScale": true,
      "sel": {
       "start": 2,
       "end": 29,
       "step": 3,
       "pingpong": true
      },
-     "origin": "AutoSprite neu (turbo reference) cmun9rejt000ma2jufg5nqskj"
+     "origin": "AutoSprite neu (turbo reference) cmun9rejt000ma2jufg5nqskj",
+     "sizeMode": "area"
     },
     "idle": {
      "src": "superfred_idle.png",
@@ -404,14 +436,15 @@
      "total": 32,
      "loop": true,
      "fps": 14,
-     "standRef": true,
      "sel": {
       "start": 0,
       "end": 31,
       "step": 2,
       "pingpong": true
      },
-     "origin": "AutoSprite neu cmun9pz8n0005xnooaq70ek2h"
+     "origin": "AutoSprite neu cmun9pz8n0005xnooaq70ek2h",
+     "sizeMode": "geo",
+     "scaleMul": 0.88
     },
     "victory": {
      "src": "superfred_custom2.png",
@@ -419,7 +452,6 @@
      "total": 64,
      "loop": true,
      "fps": 16,
-     "standMatch": "median",
      "loop_detect": {
       "from": 0,
       "to": 63,
@@ -427,7 +459,9 @@
       "pmax": 48,
       "n": 32
      },
-     "origin": "AutoSprite bestehend cmsu4q87100akg90c3tx2be7w"
+     "origin": "AutoSprite bestehend cmsu4q87100akg90c3tx2be7w",
+     "sizeMode": "geo",
+     "scaleMul": 0.8
     }
    }
   },
@@ -457,7 +491,8 @@
       "start": 20,
       "end": 32
      },
-     "origin": "AutoSprite cmsxmdedl001qg3eg0dk5fcrm"
+     "origin": "AutoSprite cmsxmdedl001qg3eg0dk5fcrm",
+     "sizeMode": "geo"
     },
     "fall": {
      "src": "cyberfred_jump.png",
@@ -470,7 +505,8 @@
       "end": 44,
       "pingpong": true
      },
-     "origin": "AutoSprite cmsxmdedl001qg3eg0dk5fcrm (Abstieg, Ping-Pong)"
+     "origin": "AutoSprite cmsxmdedl001qg3eg0dk5fcrm (Abstieg, Ping-Pong)",
+     "sizeMode": "geo"
     },
     "doublejump": {
      "src": "cyberfred_dj1024.png",
@@ -479,12 +515,12 @@
      "loop": false,
      "fps": 28,
      "vanchor": "center",
-     "autoScale": true,
      "sel": {
       "start": 6,
       "end": 24
      },
-     "origin": "AutoSprite neu (video cmun9nvgk0012gwyr9ypj4347, 1024px)"
+     "origin": "AutoSprite neu (video cmun9nvgk0012gwyr9ypj4347, 1024px)",
+     "sizeMode": "area"
     },
     "slide": {
      "src": "cyberfred_slide.png",
@@ -498,7 +534,8 @@
       "pmin": 8,
       "pmax": 18
      },
-     "origin": "AutoSprite neu cmun9pjwd003yu8j3tcjnsilj"
+     "origin": "AutoSprite neu cmun9pjwd003yu8j3tcjnsilj",
+     "sizeMode": "family"
     },
     "hurt": {
      "src": "cyberfred_hurt.png",
@@ -506,13 +543,14 @@
      "total": 32,
      "loop": false,
      "fps": 22,
-     "autoScale": true,
      "sel": {
       "start": 0,
       "end": 31,
       "step": 2
      },
-     "origin": "AutoSprite neu (turbo reference) cmun9rplf000y118xsipox7o2"
+     "origin": "AutoSprite neu (turbo reference) cmun9rplf000y118xsipox7o2",
+     "sizeMode": "area",
+     "scaleMul": 0.92
     },
     "dash": {
      "src": "cyberfred_dash.png",
@@ -526,7 +564,8 @@
       "pmin": 10,
       "pmax": 20
      },
-     "origin": "AutoSprite neu cmun9pz630001xnoox39nhl6x"
+     "origin": "AutoSprite neu cmun9pz630001xnoox39nhl6x",
+     "sizeMode": "family"
     },
     "stomp": {
      "src": "cyberfred_stomp.png",
@@ -534,14 +573,14 @@
      "total": 32,
      "loop": true,
      "fps": 20,
-     "autoScale": true,
      "sel": {
       "start": 2,
       "end": 29,
       "step": 3,
       "pingpong": true
      },
-     "origin": "AutoSprite neu (turbo reference) cmun9qalx0001nwdtbrvscwb8"
+     "origin": "AutoSprite neu (turbo reference) cmun9qalx0001nwdtbrvscwb8",
+     "sizeMode": "area"
     },
     "idle": {
      "src": "cyberfred_idle.png",
@@ -549,14 +588,14 @@
      "total": 32,
      "loop": true,
      "fps": 14,
-     "standRef": true,
      "sel": {
       "start": 0,
       "end": 31,
       "step": 2,
       "pingpong": true
      },
-     "origin": "AutoSprite neu cmun9q679000dxnoor26u64ap"
+     "origin": "AutoSprite neu cmun9q679000dxnoor26u64ap",
+     "sizeMode": "geo"
     },
     "victory": {
      "src": "cyberfred_custom.png",
@@ -564,7 +603,6 @@
      "total": 64,
      "loop": true,
      "fps": 16,
-     "standMatch": "median",
      "loop_detect": {
       "from": 0,
       "to": 63,
@@ -572,7 +610,8 @@
       "pmax": 48,
       "n": 32
      },
-     "origin": "AutoSprite bestehend cmsxfw00400013794zpps1oqa (Robot Dance)"
+     "origin": "AutoSprite bestehend cmsxfw00400013794zpps1oqa (Robot Dance)",
+     "sizeMode": "geo"
     }
    }
   },
@@ -602,7 +641,8 @@
       "start": 1,
       "end": 12
      },
-     "origin": "AutoSprite cmsyi0sod001szxweqehf5722"
+     "origin": "AutoSprite cmsyi0sod001szxweqehf5722",
+     "sizeMode": "geo"
     },
     "fall": {
      "src": "superfrida_jump.png",
@@ -615,7 +655,8 @@
       "end": 23,
       "pingpong": true
      },
-     "origin": "AutoSprite cmsyi0sod001szxweqehf5722 (Abstieg, Ping-Pong)"
+     "origin": "AutoSprite cmsyi0sod001szxweqehf5722 (Abstieg, Ping-Pong)",
+     "sizeMode": "geo"
     },
     "doublejump": {
      "src": "superfrida_dj1024.png",
@@ -624,13 +665,13 @@
      "loop": false,
      "fps": 28,
      "vanchor": "center",
-     "autoScale": true,
      "sel": {
       "start": 4,
       "end": 30,
       "step": 2
      },
-     "origin": "AutoSprite neu (video cmun9nxks00128wjrot4aj6lq, 1024px)"
+     "origin": "AutoSprite neu (video cmun9nxks00128wjrot4aj6lq, 1024px)",
+     "sizeMode": "area"
     },
     "slide": {
      "src": "superfrida_slide.png",
@@ -644,7 +685,9 @@
       "pmin": 8,
       "pmax": 18
      },
-     "origin": "AutoSprite neu cmun9qbuj0005rpfpjgjwqhns"
+     "origin": "AutoSprite neu cmun9qbuj0005rpfpjgjwqhns",
+     "sizeMode": "family",
+     "scaleMul": 1.1
     },
     "hurt": {
      "src": "superfrida_hurt.png",
@@ -652,13 +695,14 @@
      "total": 32,
      "loop": false,
      "fps": 22,
-     "autoScale": true,
      "sel": {
       "start": 0,
       "end": 31,
       "step": 2
      },
-     "origin": "AutoSprite neu (turbo reference) cmun9qchl000inwdts4nsi59v"
+     "origin": "AutoSprite neu (turbo reference) cmun9qchl000inwdts4nsi59v",
+     "sizeMode": "area",
+     "scaleMul": 0.92
     },
     "dash": {
      "src": "superfrida_dash.png",
@@ -672,7 +716,9 @@
       "pmin": 10,
       "pmax": 20
      },
-     "origin": "AutoSprite neu cmun9qr7h000hrpfp19t3csw1"
+     "origin": "AutoSprite neu cmun9qr7h000hrpfp19t3csw1",
+     "sizeMode": "family",
+     "scaleMul": 1.1
     },
     "stomp": {
      "src": "superfrida_stomp.png",
@@ -680,14 +726,14 @@
      "total": 32,
      "loop": true,
      "fps": 20,
-     "autoScale": true,
      "sel": {
       "start": 2,
       "end": 29,
       "step": 3,
       "pingpong": true
      },
-     "origin": "AutoSprite neu (turbo reference) cmun9qbyw0009nwdtkzhrcqb4"
+     "origin": "AutoSprite neu (turbo reference) cmun9qbyw0009nwdtkzhrcqb4",
+     "sizeMode": "area"
     },
     "idle": {
      "src": "superfrida_idle.png",
@@ -695,14 +741,15 @@
      "total": 32,
      "loop": true,
      "fps": 14,
-     "standRef": true,
      "sel": {
       "start": 0,
       "end": 31,
       "step": 2,
       "pingpong": true
      },
-     "origin": "AutoSprite neu cmun9qcbl000enwdt4lv84ssn"
+     "origin": "AutoSprite neu cmun9qcbl000enwdt4lv84ssn",
+     "sizeMode": "geo",
+     "scaleMul": 1.05
     },
     "victory": {
      "src": "superfrida_custom2.png",
@@ -710,7 +757,6 @@
      "total": 64,
      "loop": true,
      "fps": 16,
-     "standMatch": "median",
      "loop_detect": {
       "from": 0,
       "to": 63,
@@ -718,7 +764,9 @@
       "pmax": 48,
       "n": 32
      },
-     "origin": "AutoSprite bestehend cmsxmv47i00atvlisbe4djzg7"
+     "origin": "AutoSprite bestehend cmsxmv47i00atvlisbe4djzg7",
+     "sizeMode": "geo",
+     "scaleMul": 0.95
     }
    }
   }

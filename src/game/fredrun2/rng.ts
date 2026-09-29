@@ -41,9 +41,14 @@ export function seedFromString(text: string): number {
   return h >>> 0;
 }
 
-export function dailySeed(date = new Date()): number {
+/** Lokales Datum als YYYY-MM-DD (Schlüssel für Tageslauf und Tages-Bestenliste). */
+export function dateKey(date = new Date()): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
-  return seedFromString(`fredrun2-daily-${y}-${m}-${d}`);
+  return `${y}-${m}-${d}`;
+}
+
+export function dailySeed(date = new Date()): number {
+  return seedFromString(`fredrun2-daily-${dateKey(date)}`);
 }

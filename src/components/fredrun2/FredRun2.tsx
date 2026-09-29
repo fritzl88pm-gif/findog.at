@@ -5,9 +5,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { loadCharacter, type CharacterSprites } from "@/game/fredrun2/assets";
 import { createAudio } from "@/game/fredrun2/audio";
 import { CHARACTERS } from "@/game/fredrun2/characters";
+import { deathLabel } from "@/game/fredrun2/death-names";
 import { FredRunGame, type GameSnapshot } from "@/game/fredrun2/game";
 import { boardKey, defaultProfile, type ScoreEntry } from "@/game/fredrun2/profile";
-import { TOUR_ORDER } from "@/game/fredrun2/sim";
+import { dateKey } from "@/game/fredrun2/rng";
+import { TOUR_ORDER, dailyWorld } from "@/game/fredrun2/sim";
 import { CHARACTER_IDS, WORLD_IDS, type CharacterId, type RunMode, type WorldId } from "@/game/fredrun2/types";
 import { WORLDS } from "@/game/fredrun2/worlds";
 
@@ -125,16 +127,17 @@ function CharacterPreview({ id, animate = true }: { id: CharacterId; animate?: b
       g.clearRect(0, 0, w, h);
       if (sprites && w > 0) {
         const t = (now - t0) / 1000;
-        const k = w / 200; // Figur ≈ 150 px logisch in 200-px-Fläche
+        const k = h / 176; // Figur ≈ 150 px logisch in 176-px-Fläche
         g.save();
+        g.translate(w / 2, 0);
         g.scale(k, k);
         g.imageSmoothingQuality = "high";
         // Bodenschatten
         g.fillStyle = "rgba(0,0,0,0.3)";
         g.beginPath();
-        g.ellipse(100, 186, 44, 8, 0, 0, Math.PI * 2);
+        g.ellipse(0, 164, 44, 8, 0, 0, Math.PI * 2);
         g.fill();
-        sprites.draw(g, animate ? "run" : "idle", t * 0.9, 100, 184);
+        sprites.draw(g, animate ? "run" : "idle", t * 0.9, 0, 162);
         g.restore();
       }
       raf = requestAnimationFrame(draw);
@@ -174,7 +177,7 @@ export default function FredRun2(): React.ReactElement {
   const { game, snap, canvasRef, stageRef } = useGame();
   const [tab, setTab] = useState<Tab>("play");
   const [boardKeyState, setBoardKeyState] = useState<string | null>(null);
-  const [tipIdx] = useState(() => Math.floor(Math.random() * TIPS.length));
+  const [tipIdx, setTipIdx] = useState(0);
   const [ignoreRotate, setIgnoreRotate] = useState(false);
   const [namePrompt, setNamePrompt] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -183,7 +186,11 @@ export default function FredRun2(): React.ReactElement {
   const phase = snap.phase;
 
   useEffect(() => {
-    setIsTouch(window.matchMedia?.("(pointer: coarse)").matches === true || "ontouchstart" in window);
+    const id = requestAnimationFrame(() => {
+      setTipIdx(Math.floor(Math.random() * TIPS.length));
+      setIsTouch(window.matchMedia?.("(pointer: coarse)").matches === true || "ontouchstart" in window);
+    });
+    return () => cancelAnimationFrame(id);
   }, []);
 
   const startRun = useCallback(() => {
@@ -240,18 +247,24 @@ export default function FredRun2(): React.ReactElement {
     }
   }, [stageRef]);
 
-  const activeBoard = boardKeyState ?? boardKey(profile.mode, profile.world, new Date().toISOString().slice(0, 10));
+  const onFullscreen = useCallback(() => {
+    game?.unlockAudio();
+    game?.audio.sfx("ui-click");
+    toggleFullscreen();
+  }, [game, toggleFullscreen]);
+
+  const activeBoard = boardKeyState ?? boardKey(profile.mode, profile.world, dateKey());
 
   const world = WORLDS[profile.world];
   const character = CHARACTERS[profile.character];
-  const bestKey = boardKey(profile.mode, profile.world, new Date().toISOString().slice(0, 10));
+  const bestKey = boardKey(profile.mode, profile.world, dateKey());
   const best = profile.best[bestKey] ?? 0;
 
   const boards = useMemo(() => {
     const list: Array<{ key: string; label: string }> = [];
     for (const id of WORLD_IDS) list.push({ key: `world:${id}`, label: WORLDS[id].name });
     list.push({ key: "tour", label: "Weltreise" });
-    list.push({ key: boardKey("daily", "wien", new Date().toISOString().slice(0, 10)), label: "Tageslauf" });
+    list.push({ key: boardKey("daily", "wien", dateKey()), label: "Tageslauf" });
     return list;
   }, []);
 
@@ -302,7 +315,7 @@ export default function FredRun2(): React.ReactElement {
                 <button className={styles.iconBtn} aria-label={profile.settings.muted ? "Ton einschalten" : "Ton ausschalten"} onClick={click(() => game?.setSettings({ muted: !profile.settings.muted }))}>
                   {profile.settings.muted ? "🔇" : "🔊"}
                 </button>
-                <button className={styles.iconBtn} aria-label="Vollbild" onClick={click(toggleFullscreen)}>
+                <button className={styles.iconBtn} aria-label="Vollbild" onClick={onFullscreen}>
                   ⛶
                 </button>
               </div>
@@ -311,6 +324,7 @@ export default function FredRun2(): React.ReactElement {
             <div className={styles.body}>
               {tab === "play" ? (
                 <>
+                  <div className={styles.panel} style={{ background: "transparent", border: "none", backdropFilter: "none", pointerEvents: "none" }} />
                   <div className={styles.hero}>
                     <div className={styles.logo}>
                       <span className={styles.logoMain}>Fredrun</span>
@@ -333,28 +347,26 @@ export default function FredRun2(): React.ReactElement {
                       <button className={styles.summaryCard} onClick={click(() => setTab("worlds"))} style={{ flex: 1 }}>
                         <i className={styles.swatch} style={{ background: profile.mode === "tour" ? "#c4b5fd" : world.accent }} />
                         <div>
-                          <strong>{profile.mode === "tour" ? "Weltreise" : world.name}</strong>
-                          <span>{profile.mode === "daily" ? "Tageslauf" : `Rekord ${fmt(best)}`}</span>
+                          <strong>{profile.mode === "tour" ? "Weltreise" : profile.mode === "daily" ? `Tageslauf: ${WORLDS[dailyWorld()].name}` : world.name}</strong>
+                          <span>{`Rekord ${fmt(best)}`}</span>
                         </div>
                       </button>
                     </div>
                     {snap.error ? <div className={styles.errorBox}>Fehler beim Laden: {snap.error}</div> : null}
                   </div>
-                  <div className={styles.panel} style={{ background: "transparent", border: "none", backdropFilter: "none" }} />
                 </>
               ) : null}
 
               {tab === "worlds" ? (
                 <div className={styles.panel}>
-                  <h2 className={styles.panelTitle}>Modus & Welt</h2>
-                  <div className={styles.tabs} style={{ marginBottom: 14 }}>
+                  <div className={styles.tabs} style={{ marginBottom: 8 }}>
                     {(["world", "tour", "daily"] as RunMode[]).map((m) => (
                       <button key={m} className={`${styles.tab} ${profile.mode === m ? styles.tabActive : ""}`} onClick={click(() => game?.setMode(m))}>
                         {MODE_LABEL[m]}
                       </button>
                     ))}
                   </div>
-                  <p className={styles.muted} style={{ margin: "0 0 14px" }}>
+                  <p className={styles.muted} style={{ margin: "0 0 12px" }}>
                     {MODE_DESC[profile.mode]}
                   </p>
                   <div className={styles.grid}>
@@ -542,7 +554,7 @@ export default function FredRun2(): React.ReactElement {
               <div className={styles.muted} style={{ textAlign: "center", marginTop: -8 }}>
                 {snap.result.mode === "tour" ? "Weltreise" : snap.result.mode === "daily" ? "Tageslauf" : WORLDS[snap.result.world].name}
                 {snap.result.rank ? ` · Platz ${snap.result.rank} der Bestenliste` : ""}
-                {snap.result.deathCause ? ` · gestoppt von „${snap.result.deathCause}“` : ""}
+                {deathLabel(snap.result.deathCause) ? ` · gestoppt von: ${deathLabel(snap.result.deathCause)}` : ""}
               </div>
               <div className={styles.stats}>
                 <div className={styles.stat}>

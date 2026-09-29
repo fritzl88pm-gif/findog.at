@@ -48,7 +48,7 @@
 }
 
 .veil {
-  background: linear-gradient(90deg, rgba(6, 9, 26, 0.86) 0%, rgba(6, 9, 26, 0.55) 42%, rgba(6, 9, 26, 0.12) 100%);
+  background: linear-gradient(270deg, rgba(6, 9, 26, 0.86) 0%, rgba(6, 9, 26, 0.55) 42%, rgba(6, 9, 26, 0.1) 100%);
 }
 
 .veilFull {
@@ -147,7 +147,7 @@
 }
 
 .logoMain {
-  font-size: calc(var(--px) * 104);
+  font-size: calc(var(--px) * 88);
   background: linear-gradient(180deg, #ffffff 10%, #bdeaff 45%, #5cc8ff 100%);
   -webkit-background-clip: text;
   background-clip: text;
@@ -237,20 +237,21 @@
 
 .tabs {
   display: flex;
-  gap: calc(var(--px) * 8);
-  flex-wrap: wrap;
+  gap: calc(var(--px) * 7);
+  flex-wrap: nowrap;
 }
 
 .tab {
-  padding: calc(var(--px) * 10) calc(var(--px) * 22);
+  padding: calc(var(--px) * 9) calc(var(--px) * 18);
   border-radius: calc(var(--px) * 14);
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(14, 18, 34, 0.55);
   color: rgba(255, 255, 255, 0.85);
   font: inherit;
   font-weight: 800;
-  font-size: calc(var(--px) * 24);
+  font-size: calc(var(--px) * 21);
   cursor: pointer;
+  white-space: nowrap;
   transition: transform 0.12s ease, background 0.12s ease;
 }
 
@@ -279,7 +280,8 @@
 
 .hero {
   flex: 0 0 auto;
-  width: calc(var(--px) * 470);
+  margin-left: auto;
+  width: calc(var(--px) * 480);
   display: flex;
   flex-direction: column;
   gap: calc(var(--px) * 18);
@@ -293,10 +295,10 @@
   overflow: auto;
   padding: calc(var(--px) * 22);
   border-radius: calc(var(--px) * 22);
-  background: rgba(10, 14, 32, 0.66);
+  background: rgba(10, 14, 32, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(calc(var(--px) * 10));
-  -webkit-backdrop-filter: blur(calc(var(--px) * 10));
+  backdrop-filter: blur(calc(var(--px) * 14));
+  -webkit-backdrop-filter: blur(calc(var(--px) * 14));
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
 }
@@ -442,7 +444,7 @@
 .grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: calc(var(--px) * 16);
+  gap: calc(var(--px) * 12);
 }
 
 .grid5 {
@@ -455,8 +457,8 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: calc(var(--px) * 8);
-  padding: calc(var(--px) * 16);
+  gap: calc(var(--px) * 6);
+  padding: calc(var(--px) * 14);
   border-radius: calc(var(--px) * 20);
   border: 2px solid rgba(255, 255, 255, 0.14);
   background: linear-gradient(160deg, var(--c1, #26306b), var(--c2, #0b1030));
@@ -484,13 +486,13 @@
 }
 
 .cardTitle {
-  font-size: calc(var(--px) * 27);
+  font-size: calc(var(--px) * 26);
   font-weight: 1000;
   line-height: 1.05;
 }
 
 .cardTag {
-  font-size: calc(var(--px) * 18);
+  font-size: calc(var(--px) * 17);
   opacity: 0.85;
   line-height: 1.25;
 }
@@ -524,12 +526,12 @@
 
 .preview {
   width: 100%;
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 5 / 4;
   display: block;
 }
 
 .worldArt {
-  height: calc(var(--px) * 96);
+  height: calc(var(--px) * 84);
   border-radius: calc(var(--px) * 12);
   margin: calc(var(--px) * -4) calc(var(--px) * -4) calc(var(--px) * 4);
   position: relative;

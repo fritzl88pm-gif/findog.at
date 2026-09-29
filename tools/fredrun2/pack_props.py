@@ -96,17 +96,20 @@ def bleed_colors(im: Image.Image, radius: int = 6) -> Image.Image:
 
 
 def save_webp(im: Image.Image, path: Path, max_kb: int, q_start: int = 88, q_min: int = 66, verbose=True) -> int:
+    """Verlustbehaftetes WebP mit Alpha; senkt Qualitaet (und zuletzt Alpha-Qualitaet) bis ``max_kb`` erreicht ist."""
     path.parent.mkdir(parents=True, exist_ok=True)
     im = bleed_colors(im)
-    q = q_start
-    while True:
-        im.save(path, "WEBP", quality=q, method=6, alpha_quality=92 if q < 84 else 100)
-        kb = path.stat().st_size / 1024
-        if kb <= max_kb or q <= q_min:
+    ladder = [(q_start, 100), (q_start - 4, 100), (q_start - 8, 92), (q_start - 12, 85), (q_start - 16, 78),
+              (q_start - 20, 72)]
+    for q, aq in ladder:
+        if q < q_min - 4:
             break
-        q -= 4
+        im.save(path, "WEBP", quality=q, method=6, alpha_quality=aq)
+        kb = path.stat().st_size / 1024
+        if kb <= max_kb:
+            break
     if verbose:
-        print(f"  -> {path.name}: {im.width}x{im.height}, q{q}, {kb:.0f} KB")
+        print(f"  -> {path.name}: {im.width}x{im.height}, q{q}/a{aq}, {kb:.0f} KB")
     return int(round(kb))
 
 
@@ -384,7 +387,7 @@ def pack_anim(pid: str, spec: dict, src_dir: Path) -> dict:
         outs.append(cell)
     cols = spec.get("out_cols", 6)
     sheet_img, cols, rows = write_sheet(outs, out, out_h, cols)
-    kb = save_webp(sheet_img, OUT_DIR / f"{pid}.webp", spec.get("max_kb", 300))
+    kb = save_webp(sheet_img, OUT_DIR / f"{pid}.webp", spec.get("max_kb", 250))
     print(f"  {pid}: {len(outs)} Frames, scale {scale:.3f}")
     return entry(f"{pid}.webp", cols, rows, len(outs), out, out_h, spec.get("ax", 0.5), spec.get("ay", 0.5),
                  spec.get("fps", 16), spec.get("loop", True), spec["tags"],
@@ -440,7 +443,8 @@ def pack_static(pid: str, spec: dict, src_dir: Path) -> dict:
     cell.alpha_composite(im, (pad, pad))
     kb = save_webp(cell, OUT_DIR / f"{pid}.webp", spec.get("max_kb", 250), q_start=90)
     ax = spec.get("ax", 0.5)
-    ay = spec.get("ay", (ch - pad) / ch)
+    # Pickups haengen frei in der Luft -> Mittelpunkt-Anker; bodenstaendige Objekte -> unten mittig
+    ay = spec.get("ay", 0.5 if "pickup" in spec["tags"] else (ch - pad) / ch)
     return entry(f"{pid}.webp", 1, 1, 1, cw, ch, ax, ay, 0, True, spec["tags"],
                  w=im.width, h=im.height, facing=spec.get("facing", "right"), kb=kb)
 

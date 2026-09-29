@@ -55,7 +55,7 @@ import {
   VIEW_W,
 } from "./constants";
 import { defaultHitbox } from "./patterns";
-import { Rng } from "./rng";
+import { Rng, dailySeed } from "./rng";
 import { Spawner, type GateInfo } from "./spawner";
 import type {
   Ent,
@@ -131,6 +131,11 @@ export interface RunStats {
 
 export const TOUR_ORDER: WorldId[] = ["wien", "alpen", "finanzamt", "prater", "wachau", "cyber"];
 export const TOUR_METERS = 1300;
+
+/** Welt des heutigen Tageslaufs (für alle Spieler gleich). */
+export function dailyWorld(date = new Date()): WorldId {
+  return TOUR_ORDER[dailySeed(date) % TOUR_ORDER.length];
+}
 
 interface Box {
   x0: number;
@@ -659,11 +664,12 @@ export class Sim {
       }
 
       if (!p.onPlatform) {
-        if (p.hgt <= 0 && !overPit && p.vy <= 0 && (p.gravDir !== 1 || true)) {
+        if (p.hgt <= 0 && !overPit && p.vy <= 0) {
           p.hgt = 0;
           this.land(null);
         } else if (p.hgt <= 0 && overPit) {
-          // in der Lücke: fällt weiter
+          // in der Lücke: kein Halt mehr – fällt weiter (Coyote-Time erlaubt noch kurz einen Sprung)
+          p.grounded = false;
           if (p.hgt < -170 && !dying) this.pitFall();
         }
       }
@@ -1211,6 +1217,7 @@ export class Sim {
     this.deathCause = source;
     this.phase = "dying";
     this.deathT = 0;
+    this.player.jumpBuf = 0;
     this.player.vy = 620;
     this.player.grounded = false;
     this.player.onPlatform = null;

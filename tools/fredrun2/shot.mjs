@@ -17,7 +17,8 @@
  *   --size WxH          Viewport (Standard 1280x720)
  *   --dpr n             Pixeldichte (Standard 1)
  *   --out <prefix>      Ausgabepräfix (Datei = <prefix>-<meters>m-<sekunden>s.png)
- *   --fps               Framezeit-Messung ausgeben
+ *   --fps               Framezeit-Messung ausgeben (Sim+Render pro Frame, synchron)
+ *   --live <sek>        Echtzeit-Messung: Bot spielt <sek> Sekunden über requestAnimationFrame; gibt fps/p95/p99 aus
  */
 import { build } from "esbuild";
 import http from "node:http";
@@ -105,6 +106,35 @@ for (const m of meters) {
     await page.locator("#c").screenshot({ path: file });
     console.log(`${file}  score=${r.score} m=${Math.round(r.meters)} hearts=${r.hearts} phase=${r.phase} world=${r.worldId} (${Date.now() - t0}ms)`);
   }
+}
+if (args.live) {
+  const secs = Number(args.live);
+  await page.evaluate(async ([w, md, ch, sd]) => {
+    await window.__fr2.game.debugRun({ world: w, mode: md, character: ch, seed: sd, startMeters: 600, live: true });
+    window.__fr2.game.setManual(false);
+  }, [world, mode, character, seed]);
+  const stats = await page.evaluate(
+    (ms) =>
+      new Promise((resolve) => {
+        const times = [];
+        let last = performance.now();
+        const start = last;
+        const tick = (now) => {
+          times.push(now - last);
+          last = now;
+          if (now - start < ms) requestAnimationFrame(tick);
+          else {
+            const sorted = [...times].sort((a, b) => a - b);
+            const pct = (p) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+            resolve({ frames: times.length, avg: times.reduce((a, b) => a + b, 0) / times.length, p95: pct(0.95), p99: pct(0.99), max: sorted[sorted.length - 1], quality: window.__fr2.game.getSnapshot().quality });
+          }
+        };
+        requestAnimationFrame(tick);
+      }),
+    secs * 1000,
+  );
+  console.log(`LIVE ${world}: ${stats.frames} Frames, Ø ${stats.avg.toFixed(1)} ms (${(1000 / stats.avg).toFixed(0)} fps), p95 ${stats.p95.toFixed(1)}, p99 ${stats.p99.toFixed(1)}, max ${stats.max.toFixed(1)} ms, Qualität ${stats.quality}`);
+  await page.locator("#c").screenshot({ path: `${outPrefix}-${world}-live.png` });
 }
 if (args.fps) {
   const ms = await page.evaluate(() => {

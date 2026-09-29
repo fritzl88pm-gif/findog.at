@@ -36,6 +36,8 @@ export interface HudState {
   tourFrac: number | null;
   time: number;
   chaseWarn: number;
+  /** Touch-Modus: Energiering/Power-ups weiter rechts (Platz für Bildschirmtasten) */
+  touch: boolean;
 }
 
 const POWER_COLOR: Record<string, string> = { magnet: "#ff6b6b", shield: "#67e8f9", slowmo: "#c4b5fd", turbo: "#fde047" };
@@ -98,7 +100,7 @@ export function drawHud(g: CanvasRenderingContext2D, h: HudState): void {
 
   // --- Energie / Dash (unten links) ---
   {
-    const cx = 74;
+    const cx = h.touch ? 226 : 74;
     const cy = 652;
     const r = 36;
     const ready = h.energy >= h.dashCost;
@@ -150,7 +152,7 @@ export function drawHud(g: CanvasRenderingContext2D, h: HudState): void {
   }
 
   // --- Aktive Power-ups ---
-  let px = 148;
+  let px = h.touch ? 300 : 148;
   for (const p of h.powerups) {
     const col = POWER_COLOR[p.kind] ?? "#fff";
     const cx = px + 26;
@@ -188,9 +190,10 @@ export function drawHud(g: CanvasRenderingContext2D, h: HudState): void {
 
   // --- Hinweis (nur Anfangsphase) ---
   if (h.hint) {
-    const w = Math.min(760, 40 + h.hint.length * 13);
-    panel(g, VIEW_W / 2 - w / 2, 610, w, 56, 28);
-    text(g, h.hint, VIEW_W / 2, 647, 26, "#fff", "center", 700);
+    g.font = `700 23px ${FONT}`;
+    const w = Math.min(880, g.measureText(h.hint).width + 52);
+    panel(g, VIEW_W / 2 - w / 2, 632, w, 50, 25);
+    text(g, h.hint, VIEW_W / 2, 666, 23, "#fff", "center", 700);
   }
 
   // --- Toast (Welt / Stufe) ---

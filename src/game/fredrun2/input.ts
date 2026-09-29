@@ -34,6 +34,8 @@ export class InputManager {
   private bound = false;
 
   private onKeyDown = (e: KeyboardEvent): void => {
+    const tag = (e.target as HTMLElement | null)?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     if (e.repeat) {
       if (this.enabled && (JUMP_KEYS.has(e.code) || SLIDE_KEYS.has(e.code) || DASH_KEYS.has(e.code))) e.preventDefault();
       return;

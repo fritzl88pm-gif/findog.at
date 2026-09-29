@@ -1,3 +1,5 @@
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 import { describe, expect, it } from "vitest";
 import { Bot } from "./bot";
 import { FIXED_DT } from "./constants";
@@ -80,4 +82,30 @@ describe("Bot: Weltreise (Tour)", () => {
     expect(visited.size).toBeGreaterThanOrEqual(3);
     expect(sim.stats.worldsVisited.length).toBeGreaterThanOrEqual(3);
   });
+});
+
+/** Kein Pass/Fail-Kriterium, sondern Fairness-Audit: schafft ein „menschlicher“ Bot (0.2 s Reaktion, begrenzte Sicht) die Welten? */
+describe.skipIf(!process.env.BOT_AUDIT)("Bot: menschlicher Fairness-Audit", () => {
+  for (const world of WORLDS_TO_TEST) {
+    it(`${world}`, { timeout: 300_000 }, () => {
+      const rows: string[] = [];
+      for (const [meters, secs] of [[0, 60], [1500, 45], [3500, 45], [6000, 40]] as const) {
+        const sim = new Sim({ mode: "world", world, character: "fred", seed: 99, startMeters: meters }, WORLDS);
+        sim.begin();
+        sim.player.hearts = 3;
+        const bot = new Bot({ reaction: 0.2, vision: 900 });
+        const start = sim.meters;
+        let lost = 0;
+        for (let i = 0; i < secs / FIXED_DT && sim.phase === "running"; i += 1) {
+          sim.step(FIXED_DT, bot.input(sim, FIXED_DT));
+          for (const ev of sim.events) if (ev.type === "hurt" || ev.type === "pit-fall") lost += 1;
+          sim.events.length = 0;
+          if (sim.player.hearts < 3 && sim.player.hearts > 0 && sim.time % 20 < 0.01) sim.player.hearts = 3;
+        }
+        rows.push(`${meters}m: ${(sim.meters - start).toFixed(0)}m in ${sim.time.toFixed(0)}s, Treffer ${lost}, Phase ${sim.phase}`);
+      }
+      console.log(`[audit ${world}]\n  ${rows.join("\n  ")}`);
+      require("node:fs").appendFileSync("/tmp/fr2-audit.txt", `[${world}] ${rows.join(" | ")}\n`);
+    });
+  }
 });

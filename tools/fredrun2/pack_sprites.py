@@ -23,8 +23,8 @@ Pipeline je Frame:
      halbtransparente Randpixel bekommen die Farbe des naechsten deckenden Pixels).
   2. Hauptfigur = groesste zusammenhaengende Komponente (+ nahe Teile) -> Bounding-Box, Schwerpunkt.
   3. Gemeinsamer Skalierfaktor S = runHeight / Median(Figurhoehe im run-Zyklus) (Lanczos, premultiplied alpha).
-     Einzelne Animationen koennen `scaleMul` (manuell) bzw. `autoScale` (Flaechen-Angleichung an run) haben, falls
-     das Rohmaterial anders gezoomt ist.
+     Einzelne Animationen werden ueber `sizeMode` (geo|area|family|stand) bzw. `scaleMul` (manuell) angeglichen, falls
+     das Rohmaterial anders gezoomt ist (AI-Videos haben je Clip leicht andere Bildausschnitte).
   4. Fussanker: unterste Zeile der Hauptfigur -> footY; x: geglaetteter Schwerpunkt (gleitender Mittelwert,
      7 Frames, bei Loops zirkulaer) -> cx. `vanchor: "center"` (Salto): Schwerpunkt-y bleibt fix statt der Fuesse.
   5. Zellgroesse 256x256 (waechst automatisch, wenn eine Pose nicht passt), Raster 8 Spalten, WebP q~82.
@@ -159,6 +159,16 @@ def smooth(values: np.ndarray, win: int, circular: bool) -> np.ndarray:
     return out
 
 
+def sharpness(frame: dict) -> float:
+    """Kantenschaerfe (mittlerer Gradientbetrag der Luminanz innerhalb der Figur) - erkennt Geister-/Blur-Frames."""
+    rgba = frame["rgba"].astype(np.float32)
+    lum = rgba[..., :3] @ np.array([0.299, 0.587, 0.114], np.float32)
+    m = frame["main"]
+    gy, gx = np.gradient(lum)
+    g = np.hypot(gx, gy)
+    return float(g[m].mean()) if m.any() else 0.0
+
+
 def thumb(frame: dict, size: int = 48) -> np.ndarray:
     """Kleine, am Fuss/Schwerpunkt ausgerichtete Alpha-Vorschau (fuer Distanzen)."""
     a = frame["rgba"][..., 3].astype(np.float32) / 255.0
@@ -231,6 +241,8 @@ def bleed_colors(arr: np.ndarray) -> np.ndarray:
 def process_anim(name: str, spec: dict, frames_raw: list[np.ndarray], S: float, cfg: dict, cleaned=None) -> dict:
     """Erzeugt fertiges Sheet fuer eine Animation. Gibt dict(image, meta, stats) zurueck."""
     idx = select_indices(spec.get("sel"), len(frames_raw))
+    if spec.get("drop"):
+        idx = [i for i in idx if i not in set(spec["drop"])]
     loop = bool(spec.get("loop", False))
     if cleaned is None:
         cleaned = {}
@@ -344,7 +356,7 @@ def preview(char_dir: Path, atlas: dict, out: Path, every: int = 3, cell: int = 
         for i in idx:
             r, c = divmod(i, m["cols"])
             fr = im.crop((c * m["cw"], r * m["ch"], (c + 1) * m["cw"], (r + 1) * m["ch"]))
-            k = cell / 256.0
+            k = cell / float(max(m["cw"], m["ch"], 256))
             fr = fr.resize((int(m["cw"] * k), int(m["ch"] * k)), Image.LANCZOS)
             tile = Image.new("RGBA", (cell, cell), (108, 148, 108, 255))
             d = ImageDraw.Draw(tile)
@@ -384,7 +396,7 @@ def stand_ref(cid: str, anims: dict, frames_for, S: float) -> float:
             f = cache[i]
             hs.append((f["bbox_main"][3] - f["bbox_main"][1]) / raw[0].shape[0] * S)
     if not hs:
-        raise SystemExit(f"{cid}: standMatch ohne standRef-Animationen")
+        raise SystemExit(f"{cid}: sizeMode stand ohne standRef-Animation")
     return float(np.median(hs))
 
 
@@ -416,6 +428,7 @@ def main(argv=None) -> int:
     ap.add_argument("--preview", default="")
     ap.add_argument("--every", type=int, default=3, help="Vorschau: jeden n-ten Frame zeigen")
     ap.add_argument("--cell", type=int, default=128, help="Vorschau: Kachelgroesse in px")
+    ap.add_argument("--preview-only", action="store_true", help="nur Kontaktbogen aus vorhandenen WebPs/atlas.json rendern")
     ap.add_argument("--report", action="store_true")
     args = ap.parse_args(argv)
 
@@ -424,6 +437,13 @@ def main(argv=None) -> int:
     out_root = Path(args.out)
     chars = [c for c in args.chars.split(",") if c] or list(cfg["chars"].keys())
     only = [a for a in args.anims.split(",") if a]
+
+    if args.preview_only:
+        for cid in chars:
+            char_dir = out_root / cid
+            atlas = json.loads((char_dir / "atlas.json").read_text())
+            preview(char_dir, atlas, Path(args.preview or ".") / f"{cid}.jpg", args.every, args.cell, only or None)
+        return 0
 
     for cid in chars:
         ccfg = cfg["chars"][cid]
@@ -448,7 +468,7 @@ def main(argv=None) -> int:
             run_frames.append(cache[i])
         hs = [f["bbox_main"][3] - f["bbox_main"][1] for f in run_frames]
         run_h_src = float(np.median(hs))
-        run_area_src = float(np.median([f["area"] for f in run_frames])) / raw[0].shape[0] ** 2
+        run_area_frac = float(np.median([f["area"] for f in run_frames])) / raw[0].shape[0] ** 2
         fw_run = raw[0].shape[0]
         S = RUN_H / run_h_src * fw_run  # Pixel je Bruchteil der Quell-Framebreite (Rohsheets duerfen verschieden gross sein)
         print(f"[{cid}] run: frames={len(run_idx)} median_h_src={run_h_src:.1f} (fw={fw_run}) scale={S / fw_run:.4f} "
@@ -465,29 +485,45 @@ def main(argv=None) -> int:
             raw, cache = frames_for(spec)
             if name != "run":
                 resolve_loop(cid, name, spec, raw, cache)
-            # Groessen-Angleichung fuer Rohmaterial mit anderem Zoom:
-            #   standMatch: Standpose der ersten Frames := Standhoehe des Charakters (aus Frame 0 der first_frame-Clips,
-            #               siehe `standRef` in der Config); autoScale: Flaechen-Angleichung an run (grob).
-            if spec.get("standMatch"):
+            # Groessen-Angleichung fuer Rohmaterial mit anderem Zoom (siehe `sizeMode` in der Config):
+            #   geo    : Mittel aus Hoehen- und Flaechenverhaeltnis zu run (Totzone 0.92..1.08)
+            #   area   : nur Flaechenverhaeltnis (75. Perzentil) - fuer Salto/Sturz/Hitzuckung
+            #   family : gleicher Faktor wie idle (slide/dash/idle stammen vom selben Seed-Bild)
+            #   stand  : Standhoehe (Frame 0 der standRef-Clips) - nur fuer native Sheets (Original-victory 192px)
+            mode = spec.get("sizeMode")
+            if mode == "family":
+                fam = anims["idle"]
+                fraw, fcache = frames_for(fam)
+                resolve_loop(cid, "idle", fam, fraw, fcache)
+                mode, spec_f = "geo", dict(fam)
+            else:
+                spec_f = spec
+            if mode in ("geo", "area"):
+                fr_raw, fr_cache = (fraw, fcache) if spec_f is not spec else (raw, cache)
+                idx = select_indices(spec_f.get("sel"), len(fr_raw))
+                fw_ = fr_raw[0].shape[0]
+                ars, hs_ = [], []
+                for i in idx:
+                    fr_cache.setdefault(i, clean_frame(fr_raw[i]))
+                    ars.append(fr_cache[i]["area"] / fw_ ** 2)
+                    hs_.append((fr_cache[i]["bbox_main"][3] - fr_cache[i]["bbox_main"][1]) / fw_ * S)
+                if mode == "area":
+                    mult = math.sqrt(run_area_frac / np.percentile(ars, 75))
+                    mult = float(np.clip(mult, 0.5, 2.5))
+                else:
+                    ma = math.sqrt(run_area_frac / np.median(ars))
+                    mh = RUN_H / np.median(hs_)
+                    mult = math.sqrt(ma * mh)
+                    mult = 1.0 if 0.92 < mult < 1.08 else float(np.clip(mult, 0.75, 1.35))
+                spec["_autoMul"] = mult
+            elif mode == "stand":
                 ref = stand_ref(cid, anims, frames_for, S)
-                sel0 = select_indices(spec.get("sel"), len(raw))
-                if spec["standMatch"] != "median":
-                    sel0 = sel0[:3]  # erste Frames = Standpose
-                hs0 = []
-                for i in sel0:
-                    cache.setdefault(i, clean_frame(raw[i]))
-                    h_src = cache[i]["bbox_main"][3] - cache[i]["bbox_main"][1]
-                    hs0.append(h_src if spec.get("native") else h_src / raw[0].shape[0] * S)
-                spec["_autoMul"] = float(ref / np.median(hs0))
-                if spec.get("native"):  # Pixel nicht anfassen, Korrektur ueber atlas.scale
-                    spec["_nativeScale"] = spec.pop("_autoMul")
-            elif spec.get("autoScale"):
                 idx = select_indices(spec.get("sel"), len(raw))
-                ar = []
+                hs0 = []
                 for i in idx:
                     cache.setdefault(i, clean_frame(raw[i]))
-                    ar.append(cache[i]["area"])
-                spec["_autoMul"] = float(np.clip(math.sqrt(run_area_src / (np.percentile(ar, spec.get("autoPct", 75)) / raw[0].shape[0] ** 2)), 0.5, 2.5))
+                    hs0.append(cache[i]["bbox_main"][3] - cache[i]["bbox_main"][1])
+                spec["_nativeScale"] = float(ref / np.median(hs0))
             res = process_anim(name, spec, raw, S, cfg, cache)
             m = res["meta"]
             n = m["frames"]
@@ -497,10 +533,12 @@ def main(argv=None) -> int:
                 D = dist_matrix(res["frames"])
                 adj = float(np.mean([D[i, i + 1] for i in range(n - 1)]))
                 seam = f" seam={D[n - 1, 0] / max(adj, 1e-6):.2f}"
-            ar_f = float(np.median([f["area"] for f in res["frames"]])) / raw[0].shape[0] ** 2
-            area_eq = math.sqrt(run_area_src / ar_f) / (S / raw[0].shape[0]) * (S / raw[0].shape[0]) if ar_f else 0
+            sh = np.array([sharpness(f) for f in res["frames"]])
+            blur = [res["idx"][k] for k in range(n) if sh[k] < 0.8 * np.median(sh)]
+            if blur:
+                print(f"    ! unscharfe/Geister-Frames (Quellindex): {blur}  (per `drop` ausschliessbar)")
             print(f"  {name:10s} n={n:2d} cell={m['cw']}x{m['ch']} mult={res['mult']:.3f} "
-                  f"scale={m['scale']} areaEq={area_eq:.2f} h(med/max)={np.median(hh):.0f}/{max(hh):.0f}{seam}  idx={res['idx'][:3]}..{res['idx'][-2:]}")
+                  f"scale={m['scale']} h(med/max)={np.median(hh):.0f}/{max(hh):.0f}{seam}  idx={res['idx'][:3]}..{res['idx'][-2:]}")
             if args.report:
                 continue
             char_dir.mkdir(parents=True, exist_ok=True)

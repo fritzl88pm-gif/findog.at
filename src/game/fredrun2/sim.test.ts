@@ -115,6 +115,20 @@ describe("Sim: Grundphysik", () => {
     expect(s.player.hearts).toBeGreaterThanOrEqual(hearts - 1);
   });
 
+  it("in einer Lücke kann man nicht endlos springen (kein Luft-Springen nach Coyote-Time)", () => {
+    const s = makeSim();
+    s.ents = [];
+    (s.spawner as unknown as { cursor: number }).cursor = 1e9;
+    s.spawn({ kind: "pit", skin: "pit", x: s.playerWorldX - 100, y: s.groundY, w: 900, h: 200 }, 0);
+    run(s, 0.2); // fällt in die Lücke, Coyote abgelaufen
+    expect(s.player.grounded).toBe(false);
+    expect(s.player.hgt).toBeLessThan(0);
+    const hearts = s.player.hearts;
+    // wildes Springen darf nicht dauerhaft tragen
+    run(s, 1.2, (t) => ({ jump: true, jumpPressed: Math.floor(t * 8) !== Math.floor((t - FIXED_DT) * 8), slide: false, slidePressed: false, dashPressed: false }));
+    expect(s.player.hearts).toBe(hearts - 1);
+  });
+
   it("Meter-Umrechnung", () => {
     const s = makeSim({ startMeters: 100 });
     expect(s.meters).toBeCloseTo(100, 0);

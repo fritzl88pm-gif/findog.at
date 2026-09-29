@@ -92,6 +92,10 @@ function planInput(plan: Plan, tau: number, dt: number): SimInput {
 }
 
 export interface BotOptions {
+  /** Menschliche Reaktionszeit (Sek.): Aktionen setzen erst so viel später ein */
+  reaction?: number;
+  /** Sichtweite in Pixeln ab Spielerposition (Standard: unbegrenzt) – simuliert "nur sichtbare Gefahren" */
+  vision?: number;
   /** Vorausschau in Sekunden */
   horizon?: number;
   /** Entscheidungen pro Sekunde */
@@ -107,9 +111,13 @@ export class Bot {
   readonly horizon: number;
   readonly interval: number;
   readonly allowDash: boolean;
+  readonly reaction: number;
+  readonly vision: number;
   lastPlanName = "none";
 
   constructor(opts: BotOptions = {}) {
+    this.reaction = opts.reaction ?? 0;
+    this.vision = opts.vision ?? Infinity;
     this.horizon = opts.horizon ?? 1.4;
     this.interval = 1 / (opts.decisionHz ?? 9);
     this.allowDash = opts.allowDash ?? true;
@@ -118,12 +126,16 @@ export class Bot {
   /** Simuliert einen Plan; liefert die Überlebenszeit bis zum ersten Schaden (oder Horizont). */
   private rollout(sim: Sim, plan: Plan): { survived: number; ok: boolean; hearts: number } {
     const c = sim.clone();
+    if (Number.isFinite(this.vision)) {
+      const limit = c.playerWorldX + this.vision;
+      c.ents = c.ents.filter((e) => e.x <= limit);
+    }
     const startHearts = c.player.hearts;
     const startShield = c.player.shield > 0;
     let tau = 0;
     const steps = Math.round(this.horizon / FIXED_DT);
     for (let i = 0; i < steps; i += 1) {
-      const input = planInput(plan, tau, FIXED_DT);
+      const input = planInput(plan, tau - this.reaction, FIXED_DT);
       c.step(FIXED_DT, input);
       tau += FIXED_DT;
       if (c.phase !== "running" || c.player.hearts < startHearts || (startShield && c.player.shield <= 0 && c.player.invuln > 0.5)) {
@@ -156,13 +168,13 @@ export class Bot {
   input(sim: Sim, dt: number): SimInput {
     if (sim.phase !== "running") return NO_INPUT;
     this.sinceDecision += dt;
-    const planDone = !this.plan || this.planT > this.plan.end + 0.02;
+    const planDone = !this.plan || this.planT > this.plan.end + this.reaction + 0.02;
     if (this.sinceDecision >= this.interval && (planDone || this.plan?.name === "none" || this.plan?.name.endsWith("!"))) {
       this.decide(sim);
       this.sinceDecision = 0;
     }
     const plan = this.plan ?? PLANS[0];
-    const inp = planInput(plan, this.planT, dt);
+    const inp = planInput(plan, this.planT - this.reaction, dt);
     this.planT += dt;
     return inp;
   }

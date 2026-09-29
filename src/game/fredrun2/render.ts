@@ -307,7 +307,11 @@ export class Renderer {
     g.globalCompositeOperation = "source-over";
 
     g.save();
-    if (f.shakeX || f.shakeY) g.translate(f.shakeX, f.shakeY);
+    if (f.shakeX || f.shakeY) {
+      g.fillStyle = "#05060f";
+      g.fillRect(0, 0, VIEW_W, VIEW_H);
+      g.translate(f.shakeX, f.shakeY);
+    }
 
     // --- Hintergrund + Boden ---
     const blend = sim.nextGate ? sim.gateBlend : 0;

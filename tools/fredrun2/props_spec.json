@@ -673,7 +673,8 @@
         "prater",
         "enemy"
       ],
-      "shadow": 150
+      "shadow": 150,
+      "ay": 0.5
     },
     "balloon-bunch": {
       "kind": "static",
@@ -688,7 +689,8 @@
       "tags": [
         "prater",
         "deco"
-      ]
+      ],
+      "ay": 0.5
     },
     "autoscooter": {
       "kind": "static",
@@ -794,7 +796,8 @@
       "tags": [
         "cyber",
         "enemy"
-      ]
+      ],
+      "ay": 0.5
     },
     "glitch-cube": {
       "kind": "static",
@@ -951,7 +954,7 @@
       "src": "coll/tram_c_3.png",
       "crop": [
         67,
-        231,
+        250,
         955,
         758
       ],
@@ -979,7 +982,7 @@
         "hazard"
       ],
       "ax": 0.5,
-      "ay": 0.0
+      "ay": 0.06
     },
     "data-coin": {
       "kind": "spin",
@@ -1043,6 +1046,201 @@
       "tags": [
         "prater",
         "enemy"
+      ]
+    },
+    "pigeon-fly": {
+      "kind": "anim",
+      "src": "pigeon512.png",
+      "src_cw": 512,
+      "cols": 5,
+      "n": 24,
+      "start": 0,
+      "length": 24,
+      "out": 256,
+      "out_cols": 6,
+      "pad": 6,
+      "fps": 20,
+      "ax": 0.5,
+      "ay": 0.5,
+      "facing": "right",
+      "tags": [
+        "wien",
+        "hazard"
+      ]
+    },
+    "ibex-run": {
+      "kind": "cycle",
+      "src": "ibex512.png",
+      "src_cw": 512,
+      "cols": 6,
+      "n": 32,
+      "start": 1,
+      "length": 16,
+      "out": 320,
+      "out_h": 256,
+      "target_h": 206,
+      "out_cols": 6,
+      "fps": 28,
+      "smooth": 5,
+      "foot_pad": 6,
+      "facing": "right",
+      "tags": [
+        "alpen",
+        "enemy"
+      ]
+    },
+    "bee-swarm": {
+      "kind": "anim",
+      "src": "bee512.png",
+      "src_cw": 512,
+      "cols": 5,
+      "n": 24,
+      "frames": [
+        0,
+        1,
+        2,
+        3,
+        5,
+        6,
+        8,
+        10,
+        12,
+        14,
+        15,
+        16,
+        17,
+        18,
+        20,
+        22
+      ],
+      "out": 320,
+      "out_h": 192,
+      "out_cols": 4,
+      "pad": 6,
+      "fps": 14,
+      "ax": 0.5,
+      "ay": 0.5,
+      "facing": "front",
+      "tags": [
+        "wachau",
+        "hazard"
+      ]
+    },
+    "eagle-fly": {
+      "kind": "anim",
+      "src": "eagle512.png",
+      "src_cw": 512,
+      "cols": 5,
+      "n": 24,
+      "start": 0,
+      "length": 24,
+      "out": 288,
+      "out_h": 256,
+      "out_cols": 6,
+      "pad": 6,
+      "fps": 20,
+      "ax": 0.5,
+      "ay": 0.5,
+      "facing": "right",
+      "tags": [
+        "alpen",
+        "hazard"
+      ]
+    },
+    "bat-fly": {
+      "kind": "anim",
+      "src": "bat512.png",
+      "src_cw": 512,
+      "cols": 5,
+      "n": 24,
+      "start": 6,
+      "length": 12,
+      "out": 320,
+      "out_h": 224,
+      "out_cols": 6,
+      "pad": 6,
+      "fps": 22,
+      "ax": 0.5,
+      "ay": 0.5,
+      "facing": "right",
+      "tags": [
+        "finanzamt",
+        "hazard"
+      ]
+    },
+    "sachertorte": {
+      "kind": "static",
+      "src": "coll/bon_0.png",
+      "crop": [
+        88,
+        43,
+        472,
+        430
+      ],
+      "matte": "hard",
+      "tags": [
+        "wien",
+        "pickup"
+      ]
+    },
+    "lebkuchenherz": {
+      "kind": "static",
+      "src": "coll/bon_0.png",
+      "crop": [
+        619,
+        97,
+        946,
+        402
+      ],
+      "matte": "hard",
+      "tags": [
+        "prater",
+        "pickup"
+      ]
+    },
+    "zuckerwatte": {
+      "kind": "static",
+      "src": "coll/bon_0.png",
+      "crop": [
+        403,
+        311,
+        629,
+        716
+      ],
+      "matte": "hard",
+      "tags": [
+        "prater",
+        "pickup"
+      ]
+    },
+    "brezel": {
+      "kind": "static",
+      "src": "coll/bon_1.png",
+      "crop": [
+        85,
+        598,
+        459,
+        927
+      ],
+      "matte": "hard",
+      "tags": [
+        "wien",
+        "pickup"
+      ]
+    },
+    "regenschirm": {
+      "kind": "static",
+      "src": "coll/bon_0.png",
+      "crop": [
+        627,
+        577,
+        992,
+        935
+      ],
+      "matte": "hard",
+      "tags": [
+        "wien",
+        "pickup"
       ]
     }
   }

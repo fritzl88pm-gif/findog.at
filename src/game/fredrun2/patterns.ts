@@ -42,10 +42,6 @@ const KIND_DEFAULT_HARMFUL: Partial<Record<EntKind, boolean>> = {
   swinger: true,
 };
 
-export interface BuiltSpec extends EntSpec {
-  /** Position relativ zum Musterstart (px) – vom Generator in Weltkoordinaten umgerechnet */
-}
-
 export interface PatternCtxInit {
   speed: number;
   diff: number;
