@@ -1070,27 +1070,33 @@ const CARGO = { wheelX: 181, wheelY: 54, cut: 196, ropeX: 183, ropeW: 20, slope:
 
 let ropeTile: HTMLCanvasElement | null = null;
 
-/** Gedrehtes Hanfseil als wiederholbare Kachel (Breite 10, Höhe 12) */
+/** Gedrehtes Hanfseil als wiederholbare Kachel (Breite 10, Höhe 7) */
 function getRopeTile(): HTMLCanvasElement {
   if (ropeTile) return ropeTile;
-  ropeTile = paint(10, 12, (g) => {
+  ropeTile = paint(10, 7, (g) => {
     const grd = g.createLinearGradient(0, 0, 10, 0);
     grd.addColorStop(0, "#8e5f22");
     grd.addColorStop(0.4, "#e2b45a");
     grd.addColorStop(1, "#a06d28");
     g.fillStyle = grd;
-    g.fillRect(0, 0, 10, 12);
-    g.strokeStyle = "rgba(58,32,8,0.6)";
-    g.lineWidth = 1.5;
-    g.beginPath();
-    g.moveTo(1, 12);
-    g.lineTo(9, 3);
-    g.moveTo(1, 0);
-    g.lineTo(9, -9);
-    g.stroke();
+    g.fillRect(0, 0, 10, 7);
+    // Litzen: schräge Kerben (setzen sich über die Kachelgrenze fort)
+    g.lineWidth = 1.7;
+    for (const oy of [0, 7]) {
+      g.strokeStyle = "rgba(58,32,8,0.75)";
+      g.beginPath();
+      g.moveTo(0.5, 6.5 + oy - 7);
+      g.lineTo(9.5, 1.5 + oy - 7);
+      g.stroke();
+      g.strokeStyle = "rgba(255,226,150,0.55)";
+      g.beginPath();
+      g.moveTo(0.5, 4.5 + oy - 7);
+      g.lineTo(9.5, -0.5 + oy - 7);
+      g.stroke();
+    }
     g.fillStyle = "#24140a";
-    g.fillRect(0, 0, 1.6, 12);
-    g.fillRect(8.4, 0, 1.6, 12);
+    g.fillRect(0, 0, 1.6, 7);
+    g.fillRect(8.4, 0, 1.6, 7);
   });
   return ropeTile;
 }

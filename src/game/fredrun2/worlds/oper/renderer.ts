@@ -91,6 +91,14 @@ export class OperRenderer implements WorldRenderer {
     this.skins.setProps(assets.props);
     this.skins.bank.setScale(this.k);
     const [, mids, near, gb] = await Promise.all([assets.props.preload(OPER_PROPS).catch(() => undefined), loadMids(), loadNear(), loadGroundBase()]);
+    // Fehlen Props (Netzfehler, Blocker, veralteter Cache): Ersatzbilder jetzt backen statt beim ersten Auftritt im Lauf
+    if (OPER_PROPS.some((id) => !assets.props.has(id))) {
+      try {
+        this.skins.warm();
+      } catch {
+        // wird beim ersten Zeichnen erneut versucht bzw. übersprungen
+      }
+    }
     this.cols = mids.cols;
     this.tabs = mids.tabs;
     this.near = near;

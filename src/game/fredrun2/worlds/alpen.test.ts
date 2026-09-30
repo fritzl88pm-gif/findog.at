@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { FIXED_DT } from "../constants";
 import { Sim } from "../sim";
@@ -21,6 +22,14 @@ describe("Welt Alpenpanorama", () => {
     for (const p of specials) expect(p.minDiff).toBeGreaterThanOrEqual(3);
     expect(WORLD_ALPEN.patterns.filter((p) => p.minDiff <= 1.5).length).toBeGreaterThanOrEqual(3);
     expect(WORLD_ALPEN.patterns.filter((p) => p.minDiff >= 5).length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("Hindernis-Props (Steinmandl, Holzstoß, Stamm, Murmeltier, Seilbahn-Kiste, Rollfels, Schneeball) sind in propIds und im Manifest", () => {
+    const manifest = JSON.parse(readFileSync("public/fredrun2/props/manifest.json", "utf8")) as { props: Record<string, unknown> };
+    for (const id of ["alpen-cairn", "alpen-logs", "alpen-trunk", "alpen-marmot", "alpen-cargo", "alpen-rollstone", "alpen-snowball"]) {
+      expect(WORLD_ALPEN.propIds).toContain(id);
+      expect(manifest.props[id], id).toBeDefined();
+    }
   });
 
   it("alle Muster bauen regelkonform", () => {

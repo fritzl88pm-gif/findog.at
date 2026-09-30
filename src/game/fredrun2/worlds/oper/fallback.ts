@@ -37,7 +37,6 @@ const rad = (g: Ctx2D, x0: number, y0: number, r0: number, x1: number, y1: numbe
 
 const GOLD: Stop[] = ["#fff4b8", "#f4c94e", "#c48a14", "#7a4a08"];
 const GOLD_H: Stop[] = [[0, "#8a5208"], [0.25, "#ffe27a"], [0.5, "#f4c94e"], [0.8, "#b9770f"], [1, "#6a3c04"]];
-const RED: Stop[] = ["#e23a52", "#b0102e", "#6a0618"];
 
 function ell(g: Ctx2D, cx: number, cy: number, rx: number, ry: number, rot = 0): void {
   g.beginPath();

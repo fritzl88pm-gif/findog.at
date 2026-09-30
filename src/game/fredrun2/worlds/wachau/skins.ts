@@ -93,7 +93,7 @@ export class WachauSkins {
       }
     }
     const st = k.stage;
-    const a = v[st] ?? (v[st] = entTint(base, st));
+    const a = v[st] ?? this.tinted(v, base, st);
     const pa = g.globalAlpha;
     g.globalAlpha = pa * alpha;
     const px = Math.round(x * sc) / sc;
@@ -102,12 +102,20 @@ export class WachauSkins {
     const dh = a.height / sc;
     g.drawImage(a, px, py, dw, dh);
     if (k.blend > 0.02 && st < MAX_STAGE) {
-      const b = v[st + 1] ?? (v[st + 1] = entTint(base, st + 1));
+      const b = v[st + 1] ?? this.tinted(v, base, st + 1);
       g.globalAlpha = pa * alpha * k.blend;
       g.drawImage(b, px, py, dw, dh);
     }
     g.globalAlpha = pa;
     return base;
+  }
+
+  /** Neue Stufen-Variante; Varianten weit entfernter Stufen werden verworfen (Speicher – die Läufe gehen Stufe für Stufe voran) */
+  private tinted(v: Variants, base: HTMLCanvasElement, st: number): HTMLCanvasElement {
+    const t = entTint(base, st);
+    v[st] = t;
+    for (let i = 0; i < v.length; i += 1) if (i < st - 1 || i > st + 1) v[i] = undefined;
+    return t;
   }
 
   private rimOf(key: string, base: HTMLCanvasElement, color: string, sc = 1): HTMLCanvasElement {
@@ -1182,9 +1190,11 @@ export class WachauSkins {
         this.drawStaged(g, `${id}|ext:${w}:${extH}`, () => bakeStretch(props, id, 214, 362, 8, 22, kx, extH, 1.35), ex, -14, k);
       }
     }
+    // große Sprites: Pixelfaktor gedeckelt (Speicher; das Blattwerk verträgt eine leichte Vergrößerung)
+    const hk = Math.min(this.pk, 1.5);
     const key = `${id}:${w}`;
-    const base = this.drawStaged(g, key, () => bakeProp(props, id, w, h, this.pk), x, top, k, 1, this.pk);
-    this.rim(g, key, base, x, top, k, "#ffd27a", 0.55, this.pk);
+    const base = this.drawStaged(g, key, () => bakeProp(props, id, w, h, hk), x, top, k, 1, hk);
+    this.rim(g, key, base, x, top, k, "#ffd27a", 0.55, hk);
     // Leuchtkante der Gefahrenlinie
     g.globalCompositeOperation = "lighter";
     g.globalAlpha = 0.25 + 0.35 * k.night;

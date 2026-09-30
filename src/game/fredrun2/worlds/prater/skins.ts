@@ -935,7 +935,6 @@ export function drawValance(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, s
     glowAt(g, A.glowGold, sx + w / 2, bottom - 4, w * 0.55, 13);
     g.globalAlpha = 1;
     g.globalCompositeOperation = "source-over";
-    void v;
     return;
   }
   const top = Math.max(-4, sy);

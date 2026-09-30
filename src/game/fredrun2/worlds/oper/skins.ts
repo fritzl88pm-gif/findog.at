@@ -8,7 +8,7 @@ import { clamp } from "../../draw-utils";
 import type { Ent, PropLibrary, ViewState } from "../../types";
 import { glowSprite, paint, rr, softSprite, type Ctx2D } from "../shared-b/canvas";
 import { h1 } from "../shared-b/color";
-import { SKIN } from "./dims";
+import { DIM, SKIN } from "./dims";
 import { Pops, starSprite } from "./fx";
 import { SpriteBank, drawBaked, type Baked } from "./sprites";
 import { BEAT } from "./stages";
@@ -150,33 +150,116 @@ export class OperSkins {
     return this.dispatch(g, e, sx, sy, v) || this.fallback(g, e, sx, sy);
   }
 
-  /** Ohne geladene Props: schlichte goldene Kästen mit hellem Rand (Gefahren bleiben lesbar) */
+  /**
+   * Letzter Notbehelf (nur wenn weder Prop noch Ersatzbild aus `fallback.ts` verfügbar sind, z. B. unbekannte Skins oder ein
+   * Fehler beim Backen): Tafel mit Farbverlauf, Goldrahmen, Rautenmuster und Glanzkante – Gefahren bleiben klar lesbar.
+   */
   private fallback(g: Ctx2D, e: Ent, sx: number, sy: number): boolean {
     if (!SKIN_NAMES.has(e.skin) || !["block", "overhead", "walker", "projectile", "swinger", "spring"].includes(e.kind)) return false;
     if (e.skin === SKIN.cork && e.age <= (e.p.delay ?? 0)) return true;
+    const warm = e.kind === "walker";
+    const dark = e.kind === "spring";
     g.save();
-    g.lineWidth = 3;
-    g.strokeStyle = "#fff1c9";
-    g.fillStyle = e.kind === "walker" ? "#c81e3c" : e.kind === "spring" ? "#1d1418" : "#c9931f";
     if (e.kind === "swinger") {
+      const cx = sx + e.w / 2;
+      const cy = sy + e.h / 2;
       g.strokeStyle = "#e0a52a";
+      g.lineWidth = 3;
       g.beginPath();
       g.moveTo(e.p.ax - this.f.dist, e.p.ay);
-      g.lineTo(sx + e.w / 2, sy + e.h / 2);
+      g.lineTo(cx, cy);
       g.stroke();
+      const r = e.w / 2;
+      const grd = g.createRadialGradient(cx - r * 0.35, cy - r * 0.4, r * 0.1, cx, cy, r);
+      grd.addColorStop(0, "#fff6c8");
+      grd.addColorStop(0.55, "#f0c04a");
+      grd.addColorStop(1, "#a86a10");
+      g.fillStyle = grd;
       g.strokeStyle = "#fff1c9";
+      g.lineWidth = 3;
       g.beginPath();
-      g.arc(sx + e.w / 2, sy + e.h / 2, e.w / 2, 0, TAU);
+      g.arc(cx, cy, r, 0, TAU);
       g.fill();
       g.stroke();
+      // Kristallglitzer
+      for (let i = 0; i < 6; i += 1) {
+        const a = (i / 6) * TAU + 0.4;
+        g.fillStyle = "rgba(255,255,255,0.85)";
+        g.beginPath();
+        g.arc(cx + Math.cos(a) * r * 0.6, cy + Math.sin(a) * r * 0.6, 2.6, 0, TAU);
+        g.fill();
+      }
     } else {
+      const x = sx + 2;
+      const y = sy + 2;
+      const w = e.w - 4;
+      const h = e.h - 4;
+      const grd = g.createLinearGradient(x, y, x + w * 0.4, y + h);
+      if (warm) {
+        grd.addColorStop(0, "#f0405a");
+        grd.addColorStop(1, "#8a0e26");
+      } else if (dark) {
+        grd.addColorStop(0, "#3a2a34");
+        grd.addColorStop(1, "#0e080c");
+      } else {
+        grd.addColorStop(0, "#ffe08a");
+        grd.addColorStop(0.5, "#d9a32a");
+        grd.addColorStop(1, "#8a5a0c");
+      }
+      g.fillStyle = grd;
+      g.strokeStyle = "#fff1c9";
+      g.lineWidth = 3;
       g.beginPath();
-      rr(g, sx + 2, sy + 2, e.w - 4, e.h - 4, 12);
+      rr(g, x, y, w, h, 12);
       g.fill();
       g.stroke();
+      // Rautenmuster + Glanzkante
+      g.save();
+      g.beginPath();
+      rr(g, x, y, w, h, 12);
+      g.clip();
+      g.strokeStyle = "rgba(255,241,201,0.28)";
+      g.lineWidth = 2;
+      for (let d = -h; d < w; d += 22) {
+        g.beginPath();
+        g.moveTo(x + d, y);
+        g.lineTo(x + d + h, y + h);
+        g.moveTo(x + d + h, y);
+        g.lineTo(x + d, y + h);
+        g.stroke();
+      }
+      g.fillStyle = "rgba(255,255,255,0.22)";
+      g.fillRect(x + 4, y + 4, 5, Math.max(0, h - 8));
+      g.restore();
     }
     g.restore();
     return true;
+  }
+
+  /**
+   * Ersatzbilder vorab backen (Ladezeit statt erstem Auftritt mitten im Lauf). Der Renderer ruft das nur auf, wenn Props
+   * fehlen. Maße/Ränder entsprechen den Zeichenfunktionen unten (Abweichungen kosten nur einen späteren Bake).
+   */
+  warm(): void {
+    const b = this.bank;
+    const D = DIM;
+    const jobs: Array<() => unknown> = [
+      () => b.get("oper-cakecart", D.cake.h * 1.08, { rim: RIM }),
+      () => b.get("oper-harp", D.harp.h * 1.03, { rim: RIM }),
+      () => b.get("oper-bouquet", D.bouquet.h * 1.06, { rim: RIM }),
+      () => b.get("oper-champagne", D.tower.h * 1.05, { rim: RIM }),
+      () => b.get("oper-rope", D.rope.h, { rim: RIM }),
+      () => b.get("oper-rope", Math.round(D.rope.h * 1.25), { rim: RIM }),
+      () => b.get("oper-chandelier", 138, { rim: RIM, ax: 0.5, ay: 0 }),
+      () => b.get("oper-chandelier", 150, { rim: RIM, ax: 0.5, ay: 0 }),
+      () => b.get("oper-waiter", D.waiter.h * 1.1, { rim: RIM_ENEMY }),
+      () => b.get("oper-dancers", D.dancers.h * 1.08, { rim: RIM_ENEMY }),
+      () => b.get("oper-cork", 84, { rim: RIM_ENEMY, ax: 0.62, ay: 0.5 }),
+      () => b.get("oper-bottle", D.bottle.h * 1.06, { rim: RIM }),
+      () => b.get("oper-spotlight", 190, { rim: 2.2 }),
+      () => b.get("oper-piano", 150, { rim: 2.4, rimColor: "#ffe08a" }),
+    ];
+    for (const job of jobs) job();
   }
 
   private dispatch(g: Ctx2D, e: Ent, sx: number, sy: number, v: ViewState): boolean {

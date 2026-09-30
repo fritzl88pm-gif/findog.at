@@ -76,8 +76,8 @@ export class SpriteBank {
     const hit = this.cache.get(key);
     if (hit !== undefined) return hit;
     const b = this.bake(id, h, o, fb);
-    // fehlende Props nicht dauerhaft als „nicht vorhanden“ merken (könnten später noch eintreffen)
-    if (b || real) this.cache.set(key, b);
+    // fehlende Props ohne Ersatz nicht dauerhaft als „nicht vorhanden“ merken (könnten später noch eintreffen)
+    if (b || real || fb) this.cache.set(key, b);
     return b;
   }
 

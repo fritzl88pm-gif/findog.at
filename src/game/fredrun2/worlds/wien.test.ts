@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { FIXED_DT } from "../constants";
 import { createPatternCtx } from "../patterns";
@@ -29,6 +30,15 @@ describe("Welt Wien im Sturm", () => {
     const ids = new Set(WORLD_WIEN.patterns.map((p) => p.id));
     expect(ids.size).toBe(WORLD_WIEN.patterns.length);
     expect(WORLD_WIEN.propIds).toContain("pigeon-fly");
+  });
+
+  it("Hindernis-Props (Poller, Bauzaun, Schutt, Kranträger, Brezel-Schild, Bim) sind in propIds und im Manifest", () => {
+    const manifest = JSON.parse(readFileSync("public/fredrun2/props/manifest.json", "utf8")) as { props: Record<string, unknown> };
+    const ids = ["wien-poller", "wien-bauzaun", "wien-rubble", "wien-crane-beam", "wien-sign", ...Array.from({ length: 7 }, (_, i) => `wien-tram-n${i}`)];
+    for (const id of ids) {
+      expect(WORLD_WIEN.propIds).toContain(id);
+      expect(manifest.props[id], id).toBeDefined();
+    }
   });
 
   it("Muster-Vielfalt: Einsteiger, schwere Muster und zwei Setpieces", () => {
