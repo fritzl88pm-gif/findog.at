@@ -2,10 +2,9 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Ent, PropLibrary, ViewState } from "../../types";
 import { DIM, SKIN } from "./dims";
-import { paintIcicleBar, WINTER_FALLBACK } from "./fallback";
-import { makeGlows, SpriteCache } from "./gfx";
-import { WINTER_PROPS } from "./renderer";
-import { drawWinterSkin, warmFallbacks, type SkinEnv } from "./skins";
+import { OPER_FALLBACK } from "./fallback";
+import { OPER_PROPS, OperSkins } from "./skins";
+import { SpriteBank } from "./sprites";
 
 // --- Zeichenkontext-Attrappe: zählt Aufrufe und prüft, was ein echter Canvas mit einer Ausnahme quittieren würde ---------
 
@@ -70,10 +69,7 @@ function stubCtx(): { g: CanvasRenderingContext2D; stats: Stats } {
 beforeEach(() => {
   // makeCanvas() braucht ein document; jede Fläche bekommt eine eigene Attrappe
   vi.stubGlobal("document", {
-    createElement: () => {
-      const c = { width: 0, height: 0, getContext: () => stubCtx().g };
-      return c;
-    },
+    createElement: () => ({ width: 0, height: 0, getContext: () => stubCtx().g }),
   });
 });
 
@@ -83,18 +79,14 @@ afterEach(() => {
 
 const NO_PROPS: PropLibrary = { has: () => false, preload: async () => undefined, draw: () => false, cell: () => null };
 
-describe("Christkindlmarkt – prozedurale Ersatz-Props", () => {
-  it("deckt alle Props der Welt ab (außer dem Eiszapfen-Balken, der eigens gebacken wird)", () => {
-    for (const id of WINTER_PROPS) {
-      if (id === "winter-icicles") continue;
-      expect(WINTER_FALLBACK[id], id).toBeDefined();
-    }
-    expect(Object.keys(WINTER_FALLBACK).sort()).toEqual([...WINTER_PROPS].filter((id) => id !== "winter-icicles").sort());
+describe("Opernball – prozedurale Ersatz-Props", () => {
+  it("deckt alle Props der Welt ab", () => {
+    expect(Object.keys(OPER_FALLBACK).sort()).toEqual([...OPER_PROPS].sort());
   });
 
   it("Zellenmaße entsprechen dem Prop-Manifest (gleiches Seitenverhältnis wie die gemalten Props)", () => {
     const manifest = JSON.parse(readFileSync(new URL("../../../../../public/fredrun2/props/manifest.json", import.meta.url), "utf8")) as { props: Record<string, { cw: number; ch: number }> };
-    for (const [id, fb] of Object.entries(WINTER_FALLBACK)) {
+    for (const [id, fb] of Object.entries(OPER_FALLBACK)) {
       const cell = manifest.props[id];
       expect(cell, `${id} im Manifest`).toBeDefined();
       expect(fb.w / fb.h, id).toBeCloseTo(cell.cw / cell.ch, 1);
@@ -102,81 +94,45 @@ describe("Christkindlmarkt – prozedurale Ersatz-Props", () => {
   });
 
   it("jeder Painter zeichnet ohne Fehler: gültige Zahlen/Farben, ausgeglichenes save/restore, sichtbarer Inhalt", () => {
-    for (const [id, fb] of Object.entries(WINTER_FALLBACK)) {
+    for (const [id, fb] of Object.entries(OPER_FALLBACK)) {
       const { g, stats } = stubCtx();
       fb.paint(g, fb.w, fb.h);
       expect(stats.bad, id).toEqual([]);
       expect(stats.saves, id).toBe(stats.restores);
       expect(stats.fills + stats.strokes, id).toBeGreaterThanOrEqual(6);
-      // Lichtpunkte: Tripel im Bild
-      if (fb.lights) {
-        expect(fb.lights.length % 3, id).toBe(0);
-        for (let i = 0; i < fb.lights.length; i += 3) {
-          expect(fb.lights[i], id).toBeGreaterThanOrEqual(0);
-          expect(fb.lights[i], id).toBeLessThanOrEqual(1000);
-          expect(fb.lights[i + 1], id).toBeGreaterThanOrEqual(0);
-          expect(fb.lights[i + 1], id).toBeLessThanOrEqual(1000);
-        }
-      }
-    }
-    for (const w of [120, 260, 331, 600]) {
-      const { g, stats } = stubCtx();
-      paintIcicleBar(g, w, 214);
-      expect(stats.bad, `Balken ${w}`).toEqual([]);
-      expect(stats.fills + stats.strokes).toBeGreaterThan(8);
     }
   });
 
-  it("SpriteCache: ohne Prop entsteht der Ersatz (mit Maßen/Anker des Props), mit geladenem Prop bleibt alles wie zuvor", () => {
-    const cache = new SpriteCache(NO_PROPS);
-    cache.reset(1);
-    const spr = cache.get("winter-snowman", 136, "rgba(255,236,196,0.95)");
-    expect(spr?.fb).toBe(true);
-    expect(spr?.h).toBe(136);
-    expect(spr?.w).toBeCloseTo((136 * 335) / 512, 5);
-    expect(spr?.an).toBe(1);
-    // gleiche Anfrage → derselbe gebackene Sprite
-    expect(cache.get("winter-snowman", 136, "rgba(255,236,196,0.95)")).toBe(spr);
-    // Lichtpunkte des Ersatzes
-    expect(cache.get("winter-tree", 180, null)?.lights?.length).toBeGreaterThan(0);
-    // unbekannte Id ohne Prop und ohne Ersatz: null
-    expect(cache.get("winter-icicles", 200, null, "top")).toBeNull();
-    // Balken beliebiger Breite
-    const bar = cache.proc("icicle-bar", 288, 214, "rgba(150,232,255,0.95)", "top", paintIcicleBar);
-    expect(bar?.fb).toBe(true);
-    expect(bar?.w).toBeCloseTo(288, 5);
-    expect(cache.proc("icicle-bar", 288, 214, "rgba(150,232,255,0.95)", "top", paintIcicleBar)).toBe(bar);
+  it("SpriteBank: ohne Prop entsteht der Ersatz mit den Maßen des Props, mit geladenem Prop bleibt alles wie zuvor", () => {
+    const bank = new SpriteBank(NO_PROPS);
+    const b = bank.get("oper-harp", 253, { rim: 2.6 });
+    expect(b).not.toBeNull();
+    // Körpermaße wie beim Prop: Höhe vorgegeben, Breite nach Seitenverhältnis 303:512
+    expect(b?.bodyH).toBeCloseTo(253, 5);
+    expect(b?.bodyW).toBeCloseTo((253 * 303) / 512, 5);
+    expect(bank.get("oper-harp", 253, { rim: 2.6 })).toBe(b);
+    // Vorhang: Breite vorgegeben, Höhe nach Seitenverhältnis 512:222
+    const d = bank.get("oper-drape", 90, { rim: 2.6, ax: 0.5, ay: 0, w: 210 });
+    expect(d?.bodyW).toBeCloseTo(210, 5);
+    expect(d?.bodyH).toBeCloseTo((210 * 222) / 512, 5);
+    // unbekannte Id → weiterhin null
+    expect(bank.get("oper-gibtsnicht", 100)).toBeNull();
 
-    // geladenes Prop: kein Ersatz, Zeichnen über props.draw wie bisher
+    // geladenes Prop: Zeichnen über props.draw, kein Ersatz
     const draw = vi.fn(() => true);
-    const real: PropLibrary = { has: (id) => id === "winter-snowman", preload: async () => undefined, draw, cell: () => ({ w: 335, h: 512, frames: 1 }) };
-    const c2 = new SpriteCache(real);
-    c2.reset(1);
-    const s2 = c2.get("winter-snowman", 136, null);
-    expect(s2?.fb).toBeUndefined();
+    const real: PropLibrary = { has: (id) => id === "oper-harp", preload: async () => undefined, draw, cell: () => ({ w: 303, h: 512, frames: 1 }) };
+    const rb = new SpriteBank(real);
+    expect(rb.get("oper-harp", 253, { rim: 2.6 })).not.toBeNull();
     expect(draw).toHaveBeenCalled();
     // ein anderes, fehlendes Prop bekommt trotzdem den Ersatz
-    expect(c2.get("winter-presents", 260, null)?.fb).toBe(true);
-  });
-
-  it("SpriteCache: Nachbearbeitung (Variante) und dpr-Wechsel", () => {
-    const cache = new SpriteCache(NO_PROPS);
-    cache.reset(2);
-    const post = vi.fn();
-    const a = cache.get("winter-elf", 127, null, "foot", "thrown", post);
-    expect(a?.fb).toBe(true);
-    expect(post).toHaveBeenCalledTimes(1);
-    expect(a?.k).toBe(2);
-    cache.reset(1);
-    expect(cache.get("winter-elf", 127, null, "foot", "thrown", post)).not.toBe(a);
+    expect(rb.get("oper-piano", 150, { rim: 2.4 })).not.toBeNull();
   });
 
   it("Skins zeichnen ohne Props die Ersatzbilder (Hindernisse, Gegner, Sammelobjekte)", () => {
     const { g, stats } = stubCtx();
-    const spr = new SpriteCache(NO_PROPS);
-    spr.reset(1);
-    const env: SkinEnv = { props: NO_PROPS, spr, glows: makeGlows(), s: 0, night: 0.5 };
-    const view: ViewState = {
+    const skins = new OperSkins();
+    skins.setProps(NO_PROPS);
+    const view = {
       w: 1280,
       h: 720,
       dist: 0,
@@ -200,7 +156,7 @@ describe("Christkindlmarkt – prozedurale Ersatz-Props", () => {
       quality: 2,
       vars: {},
       flash: 0,
-    };
+    } as ViewState;
     let id = 1;
     const ent = (kind: Ent["kind"], skin: string, w: number, h: number, extra: Partial<Ent> = {}): Ent => ({
       id: id++,
@@ -230,32 +186,30 @@ describe("Christkindlmarkt – prozedurale Ersatz-Props", () => {
       ...extra,
     });
     const cases: Array<[string, Ent]> = [
-      ["snowman", ent("block", SKIN.snowman, DIM.snowman.w, DIM.snowman.h)],
-      ["presents", ent("block", SKIN.presents, DIM.presents.w, DIM.presents.h)],
-      ["tree", ent("block", SKIN.tree, DIM.tree.w, DIM.tree.h)],
-      ["cane", ent("block", SKIN.cane, DIM.cane.w, DIM.cane.h)],
-      ["iceblock", ent("block", SKIN.iceblock, DIM.iceblock.w, DIM.iceblock.h)],
-      ["stall", ent("block", SKIN.stall, DIM.stall.w, DIM.stall.h)],
-      ["kessel", ent("block", SKIN.kessel, DIM.kessel.w, DIM.kessel.h)],
-      ["icicles", ent("overhead", SKIN.icicles, 330, 210, { y: 590 - 72 - 210 })],
-      ["gingerbread", ent("walker", SKIN.gingerbread, DIM.gingerbread.w, DIM.gingerbread.h)],
-      ["krampus", ent("walker", SKIN.krampus, DIM.krampus.w, DIM.krampus.h)],
-      ["sled", ent("walker", SKIN.sled, DIM.sled.w, DIM.sled.h)],
-      ["elf", ent("walker", SKIN.elf, DIM.elf.w, DIM.elf.h, { p: { tRel: 0.5 } })],
-      ["snowball", ent("projectile", SKIN.ball, DIM.ball.w, DIM.ball.h, { p: { tRel: 0 } })],
-      ["sled-ride", ent("platform", SKIN.sledRide, DIM.sledRide.w, 16, { y: 590 - 160 })],
-      ["coin", ent("pickup", "coin", 30, 30, { pickup: "coin" })],
-      ["gem", ent("pickup", "gem", 30, 30, { pickup: "gem" })],
+      ["cake", ent("block", SKIN.cake, DIM.cake.w, DIM.cake.h)],
+      ["harp", ent("block", SKIN.harp, DIM.harp.w, DIM.harp.h)],
+      ["bouquet", ent("block", SKIN.bouquet, DIM.bouquet.w, DIM.bouquet.h)],
+      ["champagne", ent("block", SKIN.tower, DIM.tower.w, DIM.tower.h)],
+      ["rope", ent("block", SKIN.rope, DIM.rope.w, DIM.rope.h)],
+      ["drape", ent("overhead", SKIN.drape, 210, 640 + DIM.drapeBottom, { y: 590 - DIM.drapeBottom - 640 })],
+      ["lowlamp", ent("overhead", SKIN.lowlamp, 136, 520 + DIM.lowLampBottom, { y: 590 - DIM.lowLampBottom - 520 })],
+      ["chandelier", ent("swinger", SKIN.swing, DIM.chandelierR * 2, DIM.chandelierR * 2, { p: { ax: 500, ay: -20, len: 510 }, fx: { angle: 0.3 } })],
+      ["waiter", ent("walker", SKIN.waiter, DIM.waiter.w, DIM.waiter.h)],
+      ["dancers", ent("walker", SKIN.dancers, DIM.dancers.w, DIM.dancers.h)],
+      ["cork", ent("projectile", SKIN.cork, DIM.cork.w, DIM.cork.h, { p: { delay: 0, neck: DIM.bottleNeck } })],
+      ["bottle", ent("decor", SKIN.bottle, DIM.bottle.w, DIM.bottle.h, { p: { popT: 1e9 } })],
+      ["piano", ent("spring", SKIN.piano, DIM.piano.w, DIM.piano.h)],
+      ["note", ent("pickup", "coin", 30, 30, { pickup: "coin" })],
+      ["mask", ent("pickup", "gem", 30, 30, { pickup: "gem" })],
     ];
     for (const [name, e] of cases) {
       const before = stats.images;
-      expect(drawWinterSkin(g, env, e, 300, e.y, view), name).toBe(true);
-      // Schatten + Sprite (Ersatzbild) → mindestens zwei drawImage-Aufrufe je Skin
-      expect(stats.images - before, name).toBeGreaterThanOrEqual(2);
+      expect(skins.draw(g, e, 300, e.y, view), name).toBe(true);
+      // Sprite aus dem Ersatzbild (die alte Notlösung zeichnete nur Pfade) → mindestens ein drawImage je Skin
+      expect(stats.images - before, name).toBeGreaterThanOrEqual(1);
     }
     expect(stats.bad).toEqual([]);
     expect(stats.saves).toBe(stats.restores);
-    // Vorab-Backen kostet nichts Unerwartetes
-    expect(() => warmFallbacks(env)).not.toThrow();
+    expect(() => skins.warm()).not.toThrow();
   });
 });
