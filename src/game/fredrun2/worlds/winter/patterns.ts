@@ -347,8 +347,8 @@ export const WINTER_PATTERNS: PatternDef[] = [
   },
   {
     id: "win-eisspalte",
-    minDiff: 0.5,
-    weight: 1.6,
+    minDiff: 0,
+    weight: 2.4,
     tags: ["gap"],
     build(c) {
       const w = Math.round(gapW(c, c.rng.int(170, 230)));

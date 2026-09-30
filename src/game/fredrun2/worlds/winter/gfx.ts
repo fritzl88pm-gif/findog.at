@@ -50,6 +50,8 @@ export interface GlowSet {
   cross: HTMLCanvasElement;
   shadow: HTMLCanvasElement;
   flake: HTMLCanvasElement;
+  /** bläulich-graue Flocke: hebt sich im Whiteout vom hellen Grund ab */
+  flakeCool: HTMLCanvasElement;
 }
 
 let glowCache: GlowSet | null = null;
@@ -113,6 +115,15 @@ export function makeGlows(): GlowSet {
       c.fillStyle = grd;
       c.fillRect(0, -32, 64, 64);
       c.restore();
+    }),
+    flakeCool: paint(16, 16, (c) => {
+      const grd = c.createRadialGradient(8, 8, 0, 8, 8, 8);
+      grd.addColorStop(0, "rgba(255,255,255,1)");
+      grd.addColorStop(0.32, "rgba(240,246,255,0.95)");
+      grd.addColorStop(0.64, "rgba(140,164,208,0.6)");
+      grd.addColorStop(1, "rgba(140,164,208,0)");
+      c.fillStyle = grd;
+      c.fillRect(0, 0, 16, 16);
     }),
     flake: paint(16, 16, (c) => {
       const grd = c.createRadialGradient(8, 8, 0, 8, 8, 8);

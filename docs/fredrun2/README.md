@@ -55,8 +55,8 @@ tools/fredrun2/               Python-Pack-Skripte (Sprites/Props), QA-Werkzeuge 
 | Prater | Kettenkarussell-Pendel, Trampoline, Riesenrad-Gondeln, Kanonen | 5 | 18+ |
 | Wachau | Floß-Sprünge über die Donau, rollende Weinfässer, Bienen, Marillen | 5 | 23 |
 | Cyber-Wien 2099 | Schwerkraft-Umkehr (Decken-Lauf), Phasen-Tore, Drohnen, Glitch | 5 | 24 |
-| Christkindlmarkt | Eisflächen (Tempo-Rutsche), Schneeball-Elfen, Eiszapfen, Glühwein-Aufwind, Rodel-Plattformen, Krampus-Verfolgung (gemalte Kulissen, GPT Image 2) | 5 | 24+ |
-| Opernball | Dreiertakt-Folgen, Kronleuchter-Pendel, Champagner-Korken, Kellner/Tanzpaare zum Stampfen, Klavier-Sprungbrett, Spotlights (gemalte Kulissen, GPT Image 2) | 5 | 24+ |
+| Christkindlmarkt | Eisflächen (Tempo-Rutsche), Schneeball-Elfen, Eiszapfen, Glühwein-Aufwind, Rodel-Plattformen, Krampus-Verfolgung (gemalte Kulissen, GPT Image 2) | 5 | 31 |
+| Opernball | Dreiertakt-Folgen, Kronleuchter-Pendel, Champagner-Korken, Kellner/Tanzpaare zum Stampfen, Klavier-Sprungbrett, Spotlights (gemalte Kulissen, GPT Image 2) | 5 | 29 |
 
 Weitere Dokumente: `ASSETS.md` (Sprite-/Prop-Konventionen), `WORLDS.md` + `WORLD_BRIEFS.md` (Welt-Vertrag und Briefings), `ENGINE_REQUESTS.md` (Wünsche der Welt-Autoren + Status), `AUDIO.md` (Klangeffekte: Sample-Bank aus Kenney-CC0-Samples, Rezepte, Neubau, Pegel).
 

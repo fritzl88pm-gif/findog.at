@@ -29,3 +29,7 @@ python3 tools/fredrun2/pack_props.py --src /tmp/art --only winter-snowman,…   
 * **Kosten** (fal-Schätzung, skaliert mit der Pixelzahl): low ≈ 0,02 $, medium ≈ 0,07 $, high ≈ 0,19 $ je 1024². Der Client bucht jede Erzeugung im
   `ledger.json` des Ausgabeordners und startet nichts mehr über `--budget` (USD). Parallelität ≤ 10 (fal-Limit) – Standard 6.
 * Rohbilder (je 1–2 MB) liegen nicht im Repo; die Prompts sind versioniert, Ergebnisse sind aber nicht deterministisch.
+
+## Verbrauch (Schätzung)
+
+Kulissen und Props beider Welten ≈ 6,1 $ (Tests, `winter` ≈ 2,7 $, `oper` ≈ 2,8 $ inkl. Neuwürfeln), zusätzliche Props der Welt-Agenten ≈ 0,14 $ (`oper-bottle`, `oper-drape`).

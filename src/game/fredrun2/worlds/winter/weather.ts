@@ -24,6 +24,8 @@ export class SnowField {
   private aMid = 0;
   private aNear = 0;
   private t = 0;
+  /** 0..1: Whiteout-Färbung der Flocken (vom Renderer gesetzt) */
+  cool = 0;
 
   constructor() {
     const r = mulberry(77);
@@ -71,33 +73,32 @@ export class SnowField {
     }
   }
 
-  /** Ebene 0 = fern, 1 = mittel: als Sammelpfad (billig) */
-  drawFine(g: Ctx2D, layer: 0 | 1, alpha: number): void {
+  /** Ebene 0 = fern, 1 = mittel: kleine weiche Flocken-Sprites (viel billiger als Kreispfade) */
+  drawFine(g: Ctx2D, glows: GlowSet, layer: 0 | 1, alpha: number): void {
     const start = layer === 0 ? 0 : SnowField.FAR;
     const cnt = layer === 0 ? this.aFar : this.aMid;
-    if (cnt <= 0 || alpha <= 0.01) return;
-    g.globalAlpha = alpha * (layer === 0 ? 0.6 : 0.82);
-    g.fillStyle = "#f4f8ff";
-    g.beginPath();
-    for (let k = 0; k < cnt; k += 1) {
-      const i = start + k;
-      const r = this.sz[i];
-      g.moveTo(this.x[i] + r, this.y[i]);
-      g.arc(this.x[i], this.y[i], r, 0, TAU);
-    }
-    g.fill();
-    g.globalAlpha = 1;
+    this.flakes(g, glows, start, cnt, layer === 0 ? 1.6 : 2.0, alpha * (layer === 0 ? 0.7 : 0.9));
   }
 
   /** nahe, weiche Flocken (Sprites) */
   drawNear(g: Ctx2D, glows: GlowSet, alpha: number): void {
-    if (this.aNear <= 0 || alpha <= 0.01) return;
-    const start = SnowField.FAR + SnowField.MID;
-    g.globalAlpha = alpha * 0.78;
-    for (let k = 0; k < this.aNear; k += 1) {
-      const i = start + k;
-      const r = this.sz[i] * 1.9;
-      g.drawImage(glows.flake, this.x[i] - r, this.y[i] - r, r * 2, r * 2);
+    this.flakes(g, glows, SnowField.FAR + SnowField.MID, this.aNear, 1.9, alpha * 0.78);
+  }
+
+  /** Im Whiteout (`cool` → 1) werden die Flocken bläulich-grau, damit sie sich vom hellen Grund abheben (Überblendung mit Weiß). */
+  private flakes(g: Ctx2D, glows: GlowSet, start: number, cnt: number, k: number, alpha: number): void {
+    if (cnt <= 0 || alpha <= 0.01) return;
+    const cool = this.cool;
+    for (let pass = 0; pass < 2; pass += 1) {
+      const a = pass === 0 ? 1 - cool : cool;
+      if (a < 0.03) continue;
+      g.globalAlpha = alpha * a * (pass === 0 ? 1 : 1.05);
+      const spr = pass === 0 ? glows.flake : glows.flakeCool;
+      for (let n = 0; n < cnt; n += 1) {
+        const i = start + n;
+        const r = this.sz[i] * k;
+        g.drawImage(spr, this.x[i] - r, this.y[i] - r, r * 2, r * 2);
+      }
     }
     g.globalAlpha = 1;
   }

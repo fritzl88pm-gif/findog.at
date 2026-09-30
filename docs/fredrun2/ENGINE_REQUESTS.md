@@ -178,3 +178,14 @@ Format: `## <welt>: <Titel>` + Begründung + gewünschte API. Welt-Agenten ände
   (`Sim.clone`, `systems = []`) sieht nur die aktuelle Geschwindigkeit; bei ±40 % Abweichung entsteht auf 1.4 s Horizont ein Positionsfehler von ≤ 80 px.
 * Wunsch: optionales `Ent.p.vxWave` (Amplitude) + `p.vxPer` (Sek.) direkt in `updateEntities` für `walker` – dann sähe auch die Vorausschau den Rhythmus.
 * Umgehung: kleine Amplitude (Faktoren 1.2 / 1.2 / 0.6) und Dancers sind stompbar; alle Muster sind isoliert 100 % lösbar (auch mit dem „menschlichen“ Bot).
+
+## winter: Schneeball „aus der Hand“ (Startverzögerung) und Muster-Einschub durch Systeme
+* Der Elf wirft erst auf dem Bildschirm: Der Schneeball muss als `projectile` mit `p.gravity` von Anfang an existieren (der Bot-Klon hat keine Systeme
+  und sieht nur, was schon in `sim.ents` steht). Umgehung: rückwärts extrapolierte Parabel (`throwBall` in `winter/patterns.ts`), der Ball ist bis
+  `e.age ≥ p.tRel` unsichtbar und trifft/passiert die Figur exakt zum vorhergesagten Zeitpunkt; Skin und Elf-Animation lesen `p.tRel`.
+* Wunsch: dasselbe wie bei „oper“ – `EntSpec.p.delay` (Sek.: existiert, bewegt sich/kollidiert erst danach) – dann entfällt die Rückrechnung.
+* „Eisrausch“ (Stufe Eistraum): `WinterSystem` schiebt zusätzliche Muster an der Spawn-Kante ein (`createPatternCtx` + `sim.spawner.cursor`).
+  Das geht, weil `cursor` öffentlich ist; sauberer wäre `sim.spawner.insert(pattern)` (setzt `curPattern`, Ruhezeit, Tor-Sperre selbst) oder
+  stufenabhängige Mustergewichte in `WorldDef` (`weightByStage`).
+* Krampus-Verfolgung: läuft als `WorldSystem` (Gummiband auf dem Vorsprung, `sim.hurt("krampus")` bei Aufholen); der Bot-Klon kennt sie nicht,
+  die echte Sim mit Bot ist unauffällig (≤ 1 Treffer / 70 s), weil die Jagd nur den Vorsprung verkürzt und sich nach einem Treffer weit zurücksetzt.

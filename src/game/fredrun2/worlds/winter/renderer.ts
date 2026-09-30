@@ -103,6 +103,7 @@ export class WinterRenderer implements WorldRenderer {
     this.back.prepare(sv.stage, progress);
     const gust = v.vars.gust ?? 0;
     const storm = stageVal(VEIL, s);
+    this.snow.cool = sat(storm * 1.1);
     this.snow.update(dt, v, stageVal(SNOW, s), stageVal(WIND, s), gust);
     this.streaks.update(dt, v, storm * 0.8 + gust * 0.9);
     this.glitter.update(dt, v, stageVal(SPARKLE, s));
@@ -179,9 +180,9 @@ export class WinterRenderer implements WorldRenderer {
     }
     this.lanterns.draw(g, this.glows, v.time, v.reducedMotion, stageVal(SKYLANTERN, s) > 0.02 ? 1 : 0, stageVal(REDGLOW, s));
     this.back.drawFar(g, v.dist, sv, v.time, v.reducedMotion, v.quality);
-    this.snow.drawFine(g, 0, 1);
+    this.snow.drawFine(g, this.glows, 0, 1);
     this.back.drawMid(g, v.dist, sv, v.time, v.reducedMotion, v.quality);
-    this.snow.drawFine(g, 1, 1);
+    this.snow.drawFine(g, this.glows, 1, 1);
     this.back.drawNear(g, v.dist, sv, v.time, v.reducedMotion, v.quality);
     this.back.drawVeil(g, sv);
     g.imageSmoothingQuality = q;
