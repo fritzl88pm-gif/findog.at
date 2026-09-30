@@ -103,3 +103,10 @@ Sichtbereich neben Mustergefahren spawnen (Abstand ≥ 1.2 s Vorlauf). `onHurt` 
 ≥ 16 Muster, davon: 3–4 Einsteiger (diff 0–1.5), 4–5 mittlere, 4–5 schwere (diff ≥ 5), 2 „Setpieces“ (lange, choreografierte
 Abschnitte, diff ≥ 3, mit Belohnung), plus Muster, die die Signatur-Mechanik der Welt in Varianten zeigen. Tags sinnvoll setzen
 (`hop, slide, gap, enemy, timing, combo, special`), damit der Generator Abwechslung erzwingt.
+
+## Props und Fallbacks
+
+Hindernis-Skins bevorzugen gemalte Props (`assets.props`), halten aber immer einen Ersatz bereit, falls ein Prop fehlt (Manifest-/Netzfehler):
+`winter/fallback.ts` und `oper/fallback.ts` liefern Vektor-Ersatzbilder mit denselben Zellenmaßen und Ankerpunkten wie die Props (Animationen/Effekte greifen unverändert),
+die älteren Welten behalten ihre prozeduralen Painter. Skins backen Props einmal pro Zielgröße in Offscreen-Sprites (kein `getImageData`/`shadowBlur` pro Frame).
+Tests: `worlds/<welt>.test.ts` prüfen, dass Props in `propIds` und im Manifest stehen und die Zellenmaße passen.

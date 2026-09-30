@@ -496,7 +496,7 @@ function tree(g: Ctx2D): void {
 // --- Zuckerstangen-Zaun ---------------------------------------------------------------------------------------
 
 function candycane(g: Ctx2D, w: number, h: number): void {
-  const xs = [104, 256, 408];
+  const xs = [92, 240, 388];
   const path = (cx: number): void => {
     g.beginPath();
     g.moveTo(cx, 350);
@@ -665,7 +665,7 @@ function iceblock(g: Ctx2D): void {
 function stallGoods(g: Ctx2D): void {
   const r = mulberry(77);
   // Regale
-  for (const y of [258, 338]) {
+  for (const y of [274, 338]) {
     g.beginPath();
     rr(g, 76, y, 360, 12, 3);
     sticker(g, lin(g, 0, y, 0, y + 12, ["#c48a50", "#7a4a22"]), 3);
@@ -675,20 +675,20 @@ function stallGoods(g: Ctx2D): void {
   for (let i = 0; i < 8; i += 1) {
     const x = 100 + i * 45;
     const k = i % 3;
-    if (k === 0) sphere(g, x, 234, 15, ["#ffffff", cols[Math.floor(r() * 5)], "#3a1a30"], 2.4);
+    if (k === 0) sphere(g, x, 250, 15, ["#ffffff", cols[Math.floor(r() * 5)], "#3a1a30"], 2.4);
     else if (k === 1) {
       g.beginPath();
-      g.moveTo(x, 252);
-      g.bezierCurveTo(x - 24, 234, x - 14, 214, x, 226);
-      g.bezierCurveTo(x + 14, 214, x + 24, 234, x, 252);
+      g.moveTo(x, 270);
+      g.bezierCurveTo(x - 24, 252, x - 14, 232, x, 244);
+      g.bezierCurveTo(x + 14, 232, x + 24, 252, x, 270);
       sticker(g, "#b8692d", 2.6);
       g.beginPath();
-      g.moveTo(x, 246);
-      g.bezierCurveTo(x - 16, 232, x - 9, 220, x, 228);
+      g.moveTo(x, 264);
+      g.bezierCurveTo(x - 16, 250, x - 9, 238, x, 246);
       stroke(g, "rgba(255,255,255,0.8)", 2);
     } else {
-      star(g, x, 234, 17, 0.5);
-      sticker(g, lin(g, x - 14, 220, x + 14, 250, ["#fff2a0", "#e8a80c"]), 2.4, "#5a3a08");
+      star(g, x, 252, 17, 0.5);
+      sticker(g, lin(g, x - 14, 238, x + 14, 268, ["#fff2a0", "#e8a80c"]), 2.4, "#5a3a08");
     }
   }
   // untere Reihe: Tassen, Kerzen, Plätzchen

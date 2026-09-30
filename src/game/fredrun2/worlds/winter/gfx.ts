@@ -212,7 +212,12 @@ export class SpriteCache {
   proc(key: string, w: number, h: number, halo: string | null, anchor: Anchor, paintFn: (g: Ctx2D, w: number, h: number) => void): Spr | null {
     const k = `${key}|${Math.round(w)}|${Math.round(h)}|${halo ?? ""}|${anchor}`;
     const hit = this.custom.get(k);
-    if (hit !== undefined) return hit;
+    if (hit !== undefined) {
+      // zuletzt benutzt → ans Ende (LRU)
+      this.custom.delete(k);
+      this.custom.set(k, hit);
+      return hit;
+    }
     const fb = { w, h, paint: paintFn };
     const spr = this.bake(h, halo, anchor, fb, () => undefined, fb, undefined);
     this.custom.set(k, spr);
@@ -284,7 +289,7 @@ export class SpriteCache {
   }
 }
 
-const CUSTOM_MAX = 24;
+const CUSTOM_MAX = 10;
 
 /**
  * Sprite an (cx, y) zeichnen; (cx, y) = Ankerpunkt. Optional Drehung um den Anker, Stauchung/Streckung, Spiegelung.

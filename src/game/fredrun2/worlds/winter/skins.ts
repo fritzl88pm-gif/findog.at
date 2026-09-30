@@ -47,15 +47,54 @@ function twinkle(g: Ctx2D, env: SkinEnv, spr: Spr, cx: number, foot: number, key
   g.globalCompositeOperation = "source-over";
 }
 
-/** Fallback: abgerundeter, umrandeter Kasten */
+/** Farbe (#rrggbb) aufhellen (k > 0) bzw. abdunkeln (k < 0) */
+function shade(hex: string, k: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const mix = (c: number): number => Math.round(k >= 0 ? c + (255 - c) * k : c * (1 + k));
+  return `rgb(${mix((n >> 16) & 255)},${mix((n >> 8) & 255)},${mix(n & 255)})`;
+}
+
+/**
+ * Letzter Notbehelf (nur wenn weder Prop noch Ersatzbild aus `fallback.ts` verfügbar sind): abgerundeter, umrandeter Kasten
+ * mit Farbverlauf, Glanzkante, Schrägschraffur und Schneehäubchen.
+ */
 function fallbackBox(g: Ctx2D, sx: number, sy: number, w: number, h: number, fill: string, label = ""): void {
   g.save();
-  g.fillStyle = fill;
+  const x = sx + 2;
+  const y = sy + 2;
+  const bw = w - 4;
+  const bh = h - 4;
+  const grd = g.createLinearGradient(x, y, x + bw * 0.5, y + bh);
+  grd.addColorStop(0, shade(fill, 0.28));
+  grd.addColorStop(1, shade(fill, -0.3));
+  g.fillStyle = grd;
   g.strokeStyle = "#1a1020";
   g.lineWidth = 4;
-  roundRect(g, sx + 2, sy + 2, w - 4, h - 4, 10);
+  roundRect(g, x, y, bw, bh, 10);
   g.fill();
   g.stroke();
+  g.save();
+  roundRect(g, x, y, bw, bh, 10);
+  g.clip();
+  g.strokeStyle = "rgba(255,255,255,0.16)";
+  g.lineWidth = 2;
+  for (let d = -bh; d < bw; d += 18) {
+    g.beginPath();
+    g.moveTo(x + d, y + bh);
+    g.lineTo(x + d + bh, y);
+    g.stroke();
+  }
+  g.fillStyle = "rgba(255,255,255,0.28)";
+  g.fillRect(x + 4, y + 5, 5, Math.max(0, bh - 10));
+  g.restore();
+  // Schneehäubchen
+  g.fillStyle = "#f4f8ff";
+  g.beginPath();
+  g.moveTo(x + 2, y + 6);
+  const n = Math.max(2, Math.round(bw / 22));
+  for (let i = 0; i < n; i += 1) g.quadraticCurveTo(x + ((i + 0.5) * bw) / n, y - 10, x + ((i + 1) * bw) / n - 2, y + 6);
+  g.closePath();
+  g.fill();
   if (label) {
     g.fillStyle = "rgba(255,255,255,0.85)";
     g.font = "700 14px system-ui, sans-serif";
@@ -397,8 +436,8 @@ function drawIcicles(g: Ctx2D, env: SkinEnv, e: Ent, sx: number, sy: number, v: 
       }
     }
   } else {
-    // Ersatz ohne Prop: Balken mit Zapfenreihen, in Breitenstufen (16 px) einmal gebacken und auf die Breite gestreckt
-    const bar = env.spr.proc("icicle-bar", Math.ceil(e.w / 16) * 16, e.h * 1.02, HALO_ICE, "top", paintIcicleBar);
+    // Ersatz ohne Prop: Balken mit Zapfenreihen, in Breitenstufen (24 px) einmal gebacken und auf die Breite gestreckt
+    const bar = env.spr.proc("icicle-bar", Math.ceil(e.w / 24) * 24, e.h * 1.02, HALO_ICE, "top", paintIcicleBar);
     if (bar) blitSpr(g, bar, sx + e.w / 2, sy - 2, { sx: e.w / bar.w });
     else {
       g.fillStyle = "#bfeaff";

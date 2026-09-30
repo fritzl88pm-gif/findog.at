@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Ent, PropLibrary, ViewState } from "../../types";
+import type { AssetLoader, Ent, PropLibrary, ViewState } from "../../types";
 import { DIM, SKIN } from "./dims";
 import { paintIcicleBar, WINTER_FALLBACK } from "./fallback";
 import { makeGlows, SpriteCache } from "./gfx";
-import { WINTER_PROPS } from "./renderer";
+import { WINTER_PROPS, WinterRenderer } from "./renderer";
 import { drawWinterSkin, warmFallbacks, type SkinEnv } from "./skins";
 
 // --- Zeichenkontext-Attrappe: zählt Aufrufe und prüft, was ein echter Canvas mit einer Ausnahme quittieren würde ---------
@@ -159,6 +159,18 @@ describe("Christkindlmarkt – prozedurale Ersatz-Props", () => {
     expect(c2.get("winter-presents", 260, null)?.fb).toBe(true);
   });
 
+  it("SpriteCache: Balken-Sprites bleiben begrenzt (kein unbegrenztes Wachstum bei vielen Breiten)", () => {
+    const cache = new SpriteCache(NO_PROPS);
+    cache.reset(1);
+    const first = cache.proc("icicle-bar", 240, 214, null, "top", paintIcicleBar);
+    for (let w = 264; w < 264 + 24 * 14; w += 24) cache.proc("icicle-bar", w, 214, null, "top", paintIcicleBar);
+    // die älteste Breite wurde verdrängt → neu gebacken
+    expect(cache.proc("icicle-bar", 240, 214, null, "top", paintIcicleBar)).not.toBe(first);
+    // eine kürzlich benutzte Breite bleibt erhalten
+    const recent = cache.proc("icicle-bar", 264 + 24 * 13, 214, null, "top", paintIcicleBar);
+    expect(cache.proc("icicle-bar", 264 + 24 * 13, 214, null, "top", paintIcicleBar)).toBe(recent);
+  });
+
   it("SpriteCache: Nachbearbeitung (Variante) und dpr-Wechsel", () => {
     const cache = new SpriteCache(NO_PROPS);
     cache.reset(2);
@@ -169,6 +181,31 @@ describe("Christkindlmarkt – prozedurale Ersatz-Props", () => {
     expect(a?.k).toBe(2);
     cache.reset(1);
     expect(cache.get("winter-elf", 127, null, "foot", "thrown", post)).not.toBe(a);
+  });
+
+  it("letzter Notbehelf: ohne Prop UND ohne Ersatzbild zeichnen die Skins weiterhin (Kasten mit Verlauf, Schneemann aus Kugeln)", () => {
+    const saved = { ...WINTER_FALLBACK };
+    for (const k of Object.keys(WINTER_FALLBACK)) delete WINTER_FALLBACK[k];
+    try {
+      const { g, stats } = stubCtx();
+      const spr = new SpriteCache(NO_PROPS);
+      spr.reset(1);
+      const env: SkinEnv = { props: NO_PROPS, spr, glows: makeGlows(), s: 0, night: 0.5 };
+      const view = { w: 1280, h: 720, dist: 0, speed: 500, time: 3, dt: 0.016, groundY: 590, ceilY: 150, worldMeters: 0, stage: 0, stageBlend: 0, intensity: 0, gravDir: 1, playerX: 300, playerFeetY: 590, hurtGlow: 0, dashing: false, turbo: false, slowmo: 0, reducedMotion: false, quality: 2, vars: {}, flash: 0 } as ViewState;
+      const mk = (skin: string, w: number, h: number): Ent => ({
+        id: 1, kind: "block", skin, x: 500, y: 590 - h, w, h, vx: 0, vy: 0, hb: [0, 0, w, h], harmful: true, stompable: false, breakable: false, ceil: false, warn: false, dead: false,
+        age: 1, state: "idle", stateT: 0, p: {}, minClear: 9999, passed: false, fx: {}, pat: "",
+      });
+      for (const [skin, d] of [[SKIN.snowman, DIM.snowman], [SKIN.presents, DIM.presents], [SKIN.tree, DIM.tree], [SKIN.cane, DIM.cane], [SKIN.iceblock, DIM.iceblock], [SKIN.stall, DIM.stall], [SKIN.kessel, DIM.kessel]] as const) {
+        const before = stats.fills;
+        expect(drawWinterSkin(g, env, mk(skin, d.w, d.h), 300, 590 - d.h, view), skin).toBe(true);
+        expect(stats.fills, skin).toBeGreaterThan(before);
+      }
+      expect(stats.bad).toEqual([]);
+      expect(stats.saves).toBe(stats.restores);
+    } finally {
+      Object.assign(WINTER_FALLBACK, saved);
+    }
   });
 
   it("Skins zeichnen ohne Props die Ersatzbilder (Hindernisse, Gegner, Sammelobjekte)", () => {
@@ -257,5 +294,32 @@ describe("Christkindlmarkt – prozedurale Ersatz-Props", () => {
     expect(stats.saves).toBe(stats.restores);
     // Vorab-Backen kostet nichts Unerwartetes
     expect(() => warmFallbacks(env)).not.toThrow();
+  });
+});
+
+describe("Christkindlmarkt – Laden", () => {
+  it("load() wartet auf assets.props.preload (kein Lauf mit halb geladenen Props)", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const preload = vi.fn(() => gate);
+    const assets: AssetLoader = { image: async () => null, props: { ...NO_PROPS, preload } };
+    const r = new WinterRenderer();
+    let done = false;
+    const p = r.load(assets).then(() => {
+      done = true;
+    });
+    await new Promise((res) => setTimeout(res, 20));
+    expect(preload).toHaveBeenCalledWith(WINTER_PROPS);
+    expect(done).toBe(false);
+    release();
+    await p;
+    expect(done).toBe(true);
+  });
+
+  it("load() bleibt fehlertolerant, wenn preload scheitert (Ersatzbilder statt Abbruch)", async () => {
+    const assets: AssetLoader = { image: async () => null, props: { ...NO_PROPS, preload: async () => Promise.reject(new Error("Netz")) } };
+    await expect(new WinterRenderer().load(assets)).resolves.toBeUndefined();
   });
 });

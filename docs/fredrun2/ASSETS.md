@@ -63,6 +63,16 @@ Eine `manifest.json`:
 * Transparenter Hintergrund, saubere Kanten. Ziel: ≤ 250 KB je Datei, 256–512 px Zellen.
 * IDs sind `kebab-case`, sprechend (`pigeon-fly`, `odo-run`, `odo-defeated`, `coin`, `heart`, `powerup-magnet`, …).
 
+### Hindernis-Props der Welten (fal.ai) und Straßenbahn
+
+* `wien-*`, `alpen-*`, `finanzamt-*`, `prater-*`, `wachau-*`, `cyber-*`: 30 gemalte Hindernis-Sprites (siehe `ART.md`, `art_prompts/legacy.json`), von den Welt-Skins
+  auf die Hitbox eingepasst (Fußpunkt, Skalierung, gebackene Caches); ohne Prop zeichnet jeder Skin weiter seinen prozeduralen Painter.
+* `wien-tram-n0 … n6`: Wiener E2-Triebwagen in **exakter 2D-Seitenansicht** (orthografisch, Front rechts, Fußanker unten), sieben Längen (logische Breiten 548 / 619 / 650 /
+  714 / 753 / 816 / 855 bei `scale 0.6545`, Kastenhöhe 156 = `TRAM_H`). Die Längen entstehen aus wiederholten Fenster-/Türabschnitten desselben Wagens (Schnitte in Fenstersprossen);
+  gezeichnet wird die Variante mit der kleinsten Abweichung, per `SpriteOpts.sx` auf die Hitbox-Breite gestreckt (≤ ±6 %).
+* `SpriteOpts.sx`: zusätzlicher Breitenfaktor nur für die Breite (Straßenbahn-Längenanpassung).
+* Cache-Busting: alle Asset-URLs tragen `?v=<Hash>` (`asset-rev.ts`) – nach Änderungen an `public/fredrun2` `node tools/fredrun2/asset-rev.mjs` ausführen (Test `asset-rev.test.ts`).
+
 ## Weltenkulissen (optional, gemalte Fernkulissen) – `public/fredrun2/worlds/<worldId>/`
 
 Beliebige WebP-Bilder + Nutzung im Weltmodul. Die Originale aus `public/fredrun/` dürfen wiederverwendet werden.

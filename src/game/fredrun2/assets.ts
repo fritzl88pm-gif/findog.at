@@ -240,7 +240,7 @@ class PropLib implements PropLibrary {
     if (json?.props) for (const [id, d] of Object.entries(json.props)) this.defs.set(id, d);
   }
 
-  private reloaded = false;
+  private reloadP: Promise<void> | null = null;
 
   ids(): string[] {
     return [...this.defs.keys()];
@@ -253,10 +253,8 @@ class PropLib implements PropLibrary {
   async preload(ids: string[]): Promise<void> {
     await this.ensureManifest();
     // Gürtel und Hosenträger: fehlen angeforderte Props im Manifest (veralteter Cache), einmalig am Cache vorbei neu laden.
-    if (!this.reloaded && ids.some((id) => !this.defs.has(id))) {
-      this.reloaded = true;
-      await this.fetchManifest("reload");
-    }
+    if (!this.reloadP && ids.some((id) => !this.defs.has(id))) this.reloadP = this.fetchManifest("reload");
+    if (this.reloadP) await this.reloadP; // auch gleichzeitige preload()-Aufrufe warten auf denselben Reload
     await Promise.all(
       ids.map((id) => {
         const def = this.defs.get(id);

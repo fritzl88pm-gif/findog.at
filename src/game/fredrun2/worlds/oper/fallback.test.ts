@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Ent, PropLibrary, ViewState } from "../../types";
+import type { AssetLoader, Ent, PropLibrary, ViewState } from "../../types";
 import { DIM, SKIN } from "./dims";
 import { OPER_FALLBACK } from "./fallback";
+import { OperRenderer } from "./renderer";
 import { OPER_PROPS, OperSkins } from "./skins";
 import { SpriteBank } from "./sprites";
 
@@ -128,6 +129,36 @@ describe("Opernball – prozedurale Ersatz-Props", () => {
     expect(rb.get("oper-piano", 150, { rim: 2.4 })).not.toBeNull();
   });
 
+  it("letzter Notbehelf: ohne Prop UND ohne Ersatzbild zeichnen die Skins weiterhin (Tafel mit Verlauf, Kugel am Kettenpendel)", () => {
+    const saved = { ...OPER_FALLBACK };
+    for (const k of Object.keys(OPER_FALLBACK)) delete OPER_FALLBACK[k];
+    try {
+      const { g, stats } = stubCtx();
+      const skins = new OperSkins();
+      skins.setProps(NO_PROPS);
+      const view = { w: 1280, h: 720, dist: 0, speed: 500, time: 3, dt: 0.016, groundY: 590, ceilY: 150, worldMeters: 0, stage: 0, stageBlend: 0, intensity: 0, gravDir: 1, playerX: 300, playerFeetY: 590, hurtGlow: 0, dashing: false, turbo: false, slowmo: 0, reducedMotion: false, quality: 2, vars: {}, flash: 0 } as ViewState;
+      const mk = (kind: Ent["kind"], skin: string, w: number, h: number, extra: Partial<Ent> = {}): Ent => ({
+        id: 1, kind, skin, x: 500, y: 590 - h, w, h, vx: -100, vy: 0, hb: [0, 0, w, h], harmful: true, stompable: false, breakable: false, ceil: false, warn: false, dead: false,
+        age: 1, state: "idle", stateT: 0, p: {}, minClear: 9999, passed: false, fx: {}, pat: "", ...extra,
+      });
+      const cases: Ent[] = [
+        mk("block", SKIN.cake, DIM.cake.w, DIM.cake.h),
+        mk("walker", SKIN.waiter, DIM.waiter.w, DIM.waiter.h),
+        mk("spring", SKIN.piano, DIM.piano.w, DIM.piano.h),
+        mk("swinger", SKIN.swing, DIM.chandelierR * 2, DIM.chandelierR * 2, { p: { ax: 500, ay: -20, len: 510 }, fx: { angle: 0.3 } }),
+      ];
+      for (const e of cases) {
+        const before = stats.fills;
+        expect(skins.draw(g, e, 300, e.y, view), e.skin).toBe(true);
+        expect(stats.fills, e.skin).toBeGreaterThan(before);
+      }
+      expect(stats.bad).toEqual([]);
+      expect(stats.saves).toBe(stats.restores);
+    } finally {
+      Object.assign(OPER_FALLBACK, saved);
+    }
+  });
+
   it("Skins zeichnen ohne Props die Ersatzbilder (Hindernisse, Gegner, Sammelobjekte)", () => {
     const { g, stats } = stubCtx();
     const skins = new OperSkins();
@@ -211,5 +242,32 @@ describe("Opernball – prozedurale Ersatz-Props", () => {
     expect(stats.bad).toEqual([]);
     expect(stats.saves).toBe(stats.restores);
     expect(() => skins.warm()).not.toThrow();
+  });
+});
+
+describe("Opernball – Laden", () => {
+  it("load() wartet auf assets.props.preload (kein Lauf mit halb geladenen Props)", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const preload = vi.fn(() => gate);
+    const assets: AssetLoader = { image: async () => null, props: { ...NO_PROPS, preload } };
+    const r = new OperRenderer();
+    let done = false;
+    const p = r.load(assets).then(() => {
+      done = true;
+    });
+    await new Promise((res) => setTimeout(res, 20));
+    expect(preload).toHaveBeenCalledWith(OPER_PROPS);
+    expect(done).toBe(false);
+    release();
+    await p;
+    expect(done).toBe(true);
+  });
+
+  it("load() bleibt fehlertolerant, wenn preload scheitert (Ersatzbilder statt Abbruch)", async () => {
+    const assets: AssetLoader = { image: async () => null, props: { ...NO_PROPS, preload: async () => Promise.reject(new Error("Netz")) } };
+    await expect(new OperRenderer().load(assets)).resolves.toBeUndefined();
   });
 });
