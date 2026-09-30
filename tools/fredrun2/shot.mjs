@@ -12,6 +12,7 @@
  *   --mode <m>          world|tour                                  (Standard world)
  *   --char <id>         Figur (Standard fred)
  *   --meters a,b,c      Startdistanzen in Metern (je ein neuer Lauf, danach --seconds Sek. Bot-Spiel)
+ *   --world-meters n    Meter in der Welt (wählt die Stimmungsstufe, z.B. 780 = Stufe 3 bei stageMeters 260)
  *   --seconds a,b,c     nacheinander: Screenshots nach jeweils zusätzlich a,b,c Sekunden
  *   --seed n            Zufallssamen (Standard 1)
  *   --size WxH          Viewport (Standard 1280x720)
@@ -42,6 +43,7 @@ const character = args.char ?? "fred";
 const meters = (args.meters ?? "0").split(",").map(Number);
 const seconds = (args.seconds ?? "4").split(",").map(Number);
 const seed = Number(args.seed ?? 1);
+const worldMeters = args["world-meters"] !== undefined ? Number(args["world-meters"]) : undefined;
 const [vw, vh] = (args.size ?? "1280x720").split("x").map(Number);
 const dpr = Number(args.dpr ?? 1);
 const outPrefix = args.out ?? "/tmp/fr2-shot";
@@ -93,9 +95,9 @@ await page.goto(`http://127.0.0.1:${port}/`);
 await page.waitForFunction(() => document.title === "ready", null, { timeout: 60000 });
 await mkdir(path.dirname(outPrefix), { recursive: true });
 for (const m of meters) {
-  await page.evaluate(async ([w, md, ch, m, sd]) => {
-    await window.__fr2.game.debugRun({ world: w, mode: md, character: ch, startMeters: m, seed: sd });
-  }, [world, mode, character, m, seed]);
+  await page.evaluate(async ([w, md, ch, m, sd, wm]) => {
+    await window.__fr2.game.debugRun({ world: w, mode: md, character: ch, startMeters: m, seed: sd, startWorldMeters: wm });
+  }, [world, mode, character, m, seed, worldMeters]);
   let elapsed = 0;
   for (const s of seconds) {
     const step = Math.max(0.01, s - elapsed);
@@ -109,10 +111,10 @@ for (const m of meters) {
 }
 if (args.live) {
   const secs = Number(args.live);
-  await page.evaluate(async ([w, md, ch, sd]) => {
-    await window.__fr2.game.debugRun({ world: w, mode: md, character: ch, seed: sd, startMeters: 600, live: true });
+  await page.evaluate(async ([w, md, ch, sd, wm]) => {
+    await window.__fr2.game.debugRun({ world: w, mode: md, character: ch, seed: sd, startMeters: 600, startWorldMeters: wm, live: true });
     window.__fr2.game.setManual(false);
-  }, [world, mode, character, seed]);
+  }, [world, mode, character, seed, worldMeters]);
   const stats = await page.evaluate(
     (ms) =>
       new Promise((resolve) => {
@@ -139,11 +141,16 @@ if (args.live) {
 if (args.fps) {
   const ms = await page.evaluate(() => {
     const g = window.__fr2.game;
+    const cv = document.getElementById("c");
+    const cx = cv.getContext("2d");
     const t0 = performance.now();
-    for (let i = 0; i < 60; i += 1) g.debugAdvance(1 / 60);
-    return (performance.now() - t0) / 60;
+    for (let i = 0; i < 40; i += 1) {
+      g.debugAdvance(1 / 60);
+      cx.getImageData(0, 0, 1, 1); // erzwingt Rasterisierung (GPU/Software-Flush) für reproduzierbare Zeiten
+    }
+    return (performance.now() - t0) / 40;
   });
-  console.log(`Ø Frame (Sim+Render, swiftshader/software): ${ms.toFixed(2)} ms`);
+  console.log(`Ø Frame (Sim+Render inkl. Flush, swiftshader/software): ${ms.toFixed(2)} ms`);
 }
 if (logs.length) console.log(logs.slice(0, 30).join("\n"));
 await browser.close();

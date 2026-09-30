@@ -14,6 +14,8 @@ export interface FrameData {
   /** Renderer der aktuellen Welt und (beim Tor-Übergang) der nächsten */
   current: WorldRenderer | null;
   next: WorldRenderer | null;
+  /** Sicht für den Renderer der Zielwelt (Stufe 0, Weltmeter 0) beim Tor-Übergang */
+  nextView: ViewState;
   /** Renderer-Lookup für Entitäten anhand der Welt-ID */
   rendererFor: (e: Ent) => WorldRenderer | null;
   hud: HudState | null;
@@ -320,13 +322,13 @@ export class Renderer {
       f.current.drawBackground(g, view);
       if (blend > 0.001 && f.next) {
         g.globalAlpha = blend;
-        f.next.drawBackground(g, view);
+        f.next.drawBackground(g, f.nextView);
         g.globalAlpha = 1;
       }
       f.current.drawGround(g, view, pits);
       if (blend > 0.001 && f.next) {
         g.globalAlpha = blend;
-        f.next.drawGround(g, view, pits);
+        f.next.drawGround(g, f.nextView, pits);
         g.globalAlpha = 1;
       }
     } else {
@@ -353,7 +355,7 @@ export class Renderer {
       f.current.drawForeground(g, view);
       if (blend > 0.001 && f.next) {
         g.globalAlpha = blend;
-        f.next.drawForeground(g, view);
+        f.next.drawForeground(g, f.nextView);
         g.globalAlpha = 1;
       }
     }
@@ -369,7 +371,7 @@ export class Renderer {
 
   private drawEnt(g: CanvasRenderingContext2D, f: FrameData, e: Ent, sx: number, sy: number): void {
     const r = f.rendererFor(e);
-    if (r?.drawEntity(g, e, sx, sy, f.view)) return;
+    if (r?.drawEntity(g, e, sx, sy, r === f.next ? f.nextView : f.view)) return;
     if ((e.kind === "walker" || e.kind === "flyer") && this.drawGuest(g, e, sx, sy, f.time)) return;
     if (e.kind === "pickup" && e.pickup) {
       drawPickup(g, this.assets.props, e.pickup, e.skin, sx + e.w / 2, sy + e.h / 2, e.w, f.time, e.id * 0.37);
@@ -633,22 +635,28 @@ export class Renderer {
       }
       g.restore();
     }
-    // Vignette
-    if (!this.vignette) {
+    // Vignette (einmal in Zielgröße vorgerendert und 1:1 geblittet – spart Skalierung pro Frame)
+    if (!this.vignette || this.vignette.width !== this.canvas.width || this.vignette.height !== this.canvas.height) {
       const c = document.createElement("canvas");
-      c.width = 256;
-      c.height = 144;
+      c.width = this.canvas.width;
+      c.height = this.canvas.height;
       const cg = c.getContext("2d");
       if (cg) {
-        const grd = cg.createRadialGradient(128, 72, 40, 128, 72, 150);
+        const cx = c.width / 2;
+        const cy = c.height / 2;
+        const rad = Math.hypot(cx, cy) * 1.02;
+        const grd = cg.createRadialGradient(cx, cy, rad * 0.32, cx, cy, rad);
         grd.addColorStop(0, "rgba(0,0,0,0)");
         grd.addColorStop(1, "rgba(0,0,0,0.42)");
         cg.fillStyle = grd;
-        cg.fillRect(0, 0, 256, 144);
+        cg.fillRect(0, 0, c.width, c.height);
       }
       this.vignette = c;
     }
-    g.drawImage(this.vignette, 0, 0, VIEW_W, VIEW_H);
+    g.save();
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.drawImage(this.vignette, 0, 0);
+    g.restore();
     // Slow-Mo-Tönung
     if (view.slowmo) {
       g.fillStyle = "rgba(120,110,255,0.10)";

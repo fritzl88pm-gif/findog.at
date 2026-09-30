@@ -385,4 +385,6 @@ export interface RunConfig {
   seed: number;
   /** Bot/Tests: Startdistanz in Metern (überspringt Einstieg) */
   startMeters?: number;
+  /** QA: Meter in der Startwelt (setzt die Stimmungsstufe), unabhängig von startMeters */
+  startWorldMeters?: number;
 }

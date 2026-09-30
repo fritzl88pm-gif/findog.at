@@ -25,7 +25,7 @@ import { Renderer, type FrameData } from "./render";
 import { dailySeed, dateKey } from "./rng";
 import { NO_INPUT, Sim, TOUR_METERS, TOUR_ORDER, dailyWorld, type SimInput } from "./sim";
 import type { HudState, HudToast } from "./hud";
-import type { CharacterId, Ent, RunConfig, RunMode, SimEvent, WorldDef, WorldId, WorldRenderer } from "./types";
+import type { CharacterId, Ent, RunConfig, RunMode, SimEvent, ViewState, WorldDef, WorldId, WorldRenderer } from "./types";
 import { WORLDS } from "./worlds";
 import { BasicRenderer } from "./worlds/basic";
 
@@ -623,13 +623,16 @@ export class FredRunGame {
 
     // Visuelle Zeit
     const visDt = this.phase === "paused" ? 0 : dt;
-    const view = sim.view(this.hitstop > 0 || !simRunning ? 1 : Math.min(1, this.acc / FIXED_DT), this.prev, this.reducedMotion, this.quality, visDt);
+    const rawView = sim.view(this.hitstop > 0 || !simRunning ? 1 : Math.min(1, this.acc / FIXED_DT), this.prev, this.reducedMotion, this.quality, visDt);
+    // Jede Welt bekommt nur Stufen im eigenen Bereich; die Zielwelt eines Tores beginnt bei Stufe 0.
+    const view: ViewState = { ...rawView, stage: Math.min(rawView.stage, sim.world.stageCount - 1) };
     const cur = this.worldRenderers.get(sim.world.id) ?? null;
     const gate = sim.nextGate;
     const nxt = gate ? this.worldRenderers.get(gate.to) ?? null : null;
+    const nextView: ViewState = { ...rawView, stage: 0, stageBlend: 0, worldMeters: 0 };
     if (this.phase !== "paused") {
       this.guard(sim.world.id, () => cur?.update(visDt, view));
-      if (nxt && gate && sim.gateBlend > 0.001) this.guard(gate.to, () => nxt.update(visDt, view));
+      if (nxt && gate && sim.gateBlend > 0.001) this.guard(gate.to, () => nxt.update(visDt, nextView));
       r.update(visDt, sim, sim.phase === "running" ? sim.speed : 0);
     }
 
@@ -645,6 +648,7 @@ export class FredRunGame {
       view,
       current: cur,
       next: nxt && sim.gateBlend > 0.001 ? nxt : null,
+      nextView,
       rendererFor: (e: Ent) => this.worldRenderers.get(sim.worldAtX(e.x).id) ?? cur,
       hud: this.phase === "menu" || (this.demo && this.phase !== "running") ? null : this.buildHud(sim),
       shakeX: sh ? Math.sin(this.shakeSeed * 1.7) * sh : 0,
@@ -1017,7 +1021,7 @@ export class FredRunGame {
     else await this.ensureWorld(world);
     const character = cfg.character ?? this.profile.character;
     this.renderer?.setCharacter(await loadCharacter(character));
-    const sim = new Sim({ mode: cfg.mode ?? "world", world, character, seed: cfg.seed ?? 1, startMeters: cfg.startMeters }, WORLDS);
+    const sim = new Sim({ mode: cfg.mode ?? "world", world, character, seed: cfg.seed ?? 1, startMeters: cfg.startMeters, startWorldMeters: cfg.startWorldMeters }, WORLDS);
     sim.player.hearts = cfg.hearts ?? 99;
     sim.begin();
     this.sim = sim;
@@ -1042,10 +1046,11 @@ export class FredRunGame {
       sim.step(FIXED_DT, input);
       if (sim.events.length) this.consumeEvents(sim, r);
       if (sim.phase === "running" && i % 6 === 0) {
-        const view = sim.view(1, this.prev, this.reducedMotion, this.quality, FIXED_DT * 6);
-        this.worldRenderers.get(sim.world.id)?.update(FIXED_DT * 6, view);
+        const raw = sim.view(1, this.prev, this.reducedMotion, this.quality, FIXED_DT * 6);
+        const view: ViewState = { ...raw, stage: Math.min(raw.stage, sim.world.stageCount - 1) };
+        this.guard(sim.world.id, () => this.worldRenderers.get(sim.world.id)?.update(FIXED_DT * 6, view));
         const gate = sim.nextGate;
-        if (gate) this.worldRenderers.get(gate.to)?.update(FIXED_DT * 6, view);
+        if (gate) this.guard(gate.to, () => this.worldRenderers.get(gate.to)?.update(FIXED_DT * 6, { ...raw, stage: 0, stageBlend: 0, worldMeters: 0 }));
         r.update(FIXED_DT * 6, sim, sim.speed);
       }
       this.time += FIXED_DT;

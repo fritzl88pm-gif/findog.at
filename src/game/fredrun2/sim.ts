@@ -213,8 +213,8 @@ export class Sim {
     this.world = registry[cfg.mode === "tour" ? TOUR_ORDER[this.tourIndex] : cfg.world];
     this.startDist = (cfg.startMeters ?? 0) * PX_PER_METER;
     this.dist = this.startDist;
-    this.worldStartDist = this.startDist;
-    this.spawnWorldStartX = this.startDist;
+    this.worldStartDist = this.startDist - (cfg.startWorldMeters ?? 0) * PX_PER_METER;
+    this.spawnWorldStartX = this.startDist - (cfg.startWorldMeters ?? 0) * PX_PER_METER;
     this.player = this.freshPlayer();
     this.stats = { coins: 0, gems: 0, stomps: 0, nearMisses: 0, dashes: 0, kills: 0, maxCombo: 1, hurts: 0, worldsVisited: [this.world.id] };
     this.spawner = new Spawner(this, this.world, this.dist + PLAYER_SX + 1250);
