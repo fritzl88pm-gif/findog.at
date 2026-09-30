@@ -122,13 +122,13 @@
     "victory": {
       "file": "victory.webp",
       "cols": 8,
-      "rows": 4,
-      "frames": 32,
-      "cw": 192,
-      "ch": 208,
-      "cx": 96,
-      "footY": 198,
-      "scale": 1.3511,
+      "rows": 3,
+      "frames": 24,
+      "cw": 256,
+      "ch": 256,
+      "cx": 128,
+      "footY": 246,
+      "scale": 0.6875,
       "fps": 16,
       "loop": true
     }

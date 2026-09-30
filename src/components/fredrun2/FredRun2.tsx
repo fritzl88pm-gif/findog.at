@@ -193,6 +193,11 @@ export default function FredRun2(): React.ReactElement {
     return () => cancelAnimationFrame(id);
   }, []);
 
+  // Fokus von verschwundenen Menü-/Pause-Tasten lösen, damit Leertaste im Spiel nie eine Schaltfläche auslöst
+  useEffect(() => {
+    if (phase === "running" || phase === "countdown") (document.activeElement as HTMLElement | null)?.blur?.();
+  }, [phase]);
+
   const startRun = useCallback(() => {
     if (!game) return;
     if (!profile.name && !profile.seenIntro) {

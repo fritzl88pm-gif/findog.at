@@ -298,13 +298,19 @@
      "scaleMul": 1.05
     },
     "victory": {
-     "src": "frida_victory_ship.webp",
-     "cols": 8,
-     "total": 32,
+     "src": "frida_victory_384.png",
+     "cols": 7,
+     "total": 49,
      "loop": true,
      "fps": 16,
-     "native": true,
-     "origin": "Original public/fredrun/frida/victory.webp (AutoSprite cmstdeedl004oexqfy0xjuaem, 192px)",
+     "loop_detect": {
+      "from": 0,
+      "to": 48,
+      "pmin": 14,
+      "pmax": 28,
+      "n": 24
+     },
+     "origin": "AutoSprite cmstdeedl004oexqfy0xjuaem, neu exportiert (Video cmstdcnno0083u6l4qbip1ud8) auf 384 px",
      "sizeMode": "stand"
     }
    }
