@@ -67,10 +67,10 @@ async function open(browser, { token }) {
       { rank: 2, name: "Berta", score: 5000, meters: 400, character: "fred", me: false },
     ];
     const posted = posts.at(-1);
-    if (req.method() === "POST" && posted) entries.push({ rank: 3, name: posted.name || "Fredi", score: posted.score, meters: posted.meters, character: posted.character, me: true });
+    if (posted) entries.push({ rank: 3, name: posted.name || "Fredi", score: posted.score, meters: posted.meters, character: posted.character, me: true });
     await route.fulfill({
       status: 200, contentType: "application/json",
-      body: JSON.stringify({ board, entries, me: req.method() === "POST" && posted ? { rank: 3, score: posted.score } : null, playerName: "Fredi", ...(req.method() === "POST" ? { submitted: true } : {}) }),
+      body: JSON.stringify({ board, entries, me: posted ? { rank: 3, score: posted.score } : null, playerName: "Fredi", ...(req.method() === "POST" ? { submitted: true } : {}) }),
     });
   });
   // Nameneffekt der App (Original-Fredrun) neutral beantworten
@@ -108,10 +108,13 @@ const browser = await chromium.launch({ headless: true, args: ["--autoplay-polic
   check("Mit Anmeldung: weltweite Tabelle geladen", /Weltweit/.test(text) && /Anna/.test(text) && /Berta/.test(text), gets.join(","));
   if (shots) await page.screenshot({ path: path.join(shots, "board-global.png") });
   await page.getByRole("tab", { name: "Spielen" }).first().click();
-  await page.evaluate(async () => {
-    await window.__fr2.game.debugRun({ world: "wien", seed: 3, startMeters: 0, bot: true, live: true });
-  });
-  await page.waitForTimeout(4000);
+  await page.getByRole("button", { name: /Los geht/ }).click();
+  await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "running", null, { timeout: 30000 });
+  // ein paar Sekunden laufen (Score > 0): Sprung-Eingaben, damit der Lauf nicht sofort endet
+  for (let i = 0; i < 6; i += 1) {
+    await page.keyboard.press("Space");
+    await page.waitForTimeout(700);
+  }
   await page.evaluate(() => {
     const s = window.__fr2.game.debugSim;
     s.player.hearts = 1;

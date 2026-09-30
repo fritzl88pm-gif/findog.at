@@ -14,6 +14,7 @@ supabase/migrations/20260930120000_fredrun2_global_scores.sql   Tabelle fredrun2
 src/app/api/fredrun2/highscores/route.ts                        GET ?board=…  (Liste + eigener Platz) · POST (Lauf einreichen)
 src/lib/fredrun2-highscores.ts                                  Board-/Namens-/Antwort-Validierung (Server und Client)
 src/components/fredrun2/globalBoard.ts                          Client: useGlobalBoard, useRunSubmission, useAccessToken
+tools/fredrun2/board-e2e.mjs                                    Browser-Test (Anmeldung/API simuliert, Build mit Dummy-Supabase-Variablen)
 ```
 
 * **Anmeldung**: Die API verlangt eine Findog-Sitzung (Bearer-Token). In der App bekommt `FredRun2` das Token als Prop; auf der eigenständigen Seite
