@@ -8,7 +8,9 @@ tools/fredrun2/art_prompts/<welt>.json   Stilzeilen + Aufträge (Name, Größe, 
 tools/fredrun2/fal-art.mjs               Client: gen | batch | ledger, Parallelitätslimit, Kosten-Ledger mit Budgetgrenze
 tools/fredrun2/pack_world_art.py         Roh-PNG → nahtlos kachelbare WebP-Ebenen in public/fredrun2/worlds/<welt>/ (+ manifest.json)
 tools/fredrun2/pack_props.py             Props (kind: static, RGBA-PNG) → public/fredrun2/props/ (+ manifest.json)
-tools/fredrun2/props_spec.json           Prop-Spezifikation (Einträge `winter-*`, `oper-*`)
+tools/fredrun2/props_spec.json           Prop-Spezifikation (Einträge `winter-*`, `oper-*`, `wien-*`, `alpen-*`, `finanzamt-*`, `prater-*`, `wachau-*`, `cyber-*`)
+tools/fredrun2/art_prompts/legacy.json   Hindernis-Props für die älteren Welten (30 Stück, 1024er-Formate, medium)
+tools/fredrun2/asset-rev.mjs             Revisions-Hashes für Cache-Busting (siehe unten)
 ```
 
 ```bash
@@ -32,4 +34,19 @@ python3 tools/fredrun2/pack_props.py --src /tmp/art --only winter-snowman,…   
 
 ## Verbrauch (Schätzung)
 
-Kulissen und Props beider Welten ≈ 6,1 $ (Tests, `winter` ≈ 2,7 $, `oper` ≈ 2,8 $ inkl. Neuwürfeln), zusätzliche Props der Welt-Agenten ≈ 0,14 $ (`oper-bottle`, `oper-drape`).
+Kulissen und Props beider Welten ≈ 6,1 $ (Tests, `winter` ≈ 2,7 $, `oper` ≈ 2,8 $ inkl. Neuwürfeln), zusätzliche Props der Welt-Agenten ≈ 0,14 $ (`oper-bottle`, `oper-drape`),
+30 Hindernis-Props der älteren Welten (`legacy.json`, medium, kein Neuwürfeln nötig) ≈ 1,65 $ → gesamt ≈ 7,9 $.
+
+## Cache-Busting (Asset-Revisionen)
+
+`/fredrun2/*` wird laut `next.config.ts` bis zu einen Tag ungeprüft aus dem Browser-Cache bedient. Ein wiederkehrender Spieler behielt so ein altes
+`props/manifest.json` – die neuen Props fehlten, die Hindernisse der neuen Welten erschienen „ohne Textur“ (Fallback-Zeichnung).
+Darum hängt der Client jeder Asset-URL `?v=<Hash>` an (`src/game/fredrun2/asset-rev.ts`, `withRev`). Der Hash ist ein Inhalts-Hash je Gruppe
+(`chars`, `props`, `worlds`, `audio`, `previews`, `root`) und steht in der generierten Datei `asset-rev.generated.ts`.
+
+```bash
+node tools/fredrun2/asset-rev.mjs           # nach JEDER Änderung an public/fredrun2 ausführen (schreibt asset-rev.generated.ts)
+node tools/fredrun2/asset-rev.mjs --check   # Prüfung (läuft auch als Test: asset-rev.test.ts)
+```
+
+Zusätzlich lädt `PropLib.preload` das Manifest einmalig am Cache vorbei neu, falls angeforderte Props darin fehlen.
