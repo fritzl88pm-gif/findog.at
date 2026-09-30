@@ -641,7 +641,7 @@ export class FredRunGame {
     this.flashV = Math.max(0, this.flashV - dt * 3.2);
     this.shakeSeed += dt * 60;
     const sh = this.reducedMotion ? 0 : this.shake * this.shake * 14;
-    const flashTotal = Math.max(this.flashV, sim.flash * (this.reducedMotion ? 0.3 : 1));
+    const flashTotal = Math.max(this.flashV, sim.flash) * (this.reducedMotion ? 0.3 : 1);
 
     const frame: FrameData = {
       sim,
@@ -718,6 +718,9 @@ export class FredRunGame {
           this.flashColor = "#ff4d4d";
           break;
         case "portal":
+          this.flashV = Math.max(this.flashV, 0.22);
+          this.flashColor = "#c4b5fd";
+          break;
         case "world-transition":
           this.flashV = 0.7;
           this.flashColor = "#c4b5fd";

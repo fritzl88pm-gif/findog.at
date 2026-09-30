@@ -7,7 +7,7 @@
  * Gekachelt wird gespiegelt (Motive ohne Schrift) – pro Frame ein bis zwei 1:1-Blits.
  */
 import type { AssetLoader, PropLibrary } from "../../types";
-import { ctxOf, paint } from "../shared-b/canvas";
+import { paint } from "../shared-b/canvas";
 import { StageCache } from "../shared-b/layers";
 import { BACKDROP_OF_STAGE, BACKDROP_URLS, MAX_STAGE, STAGE_PAL } from "./stages";
 
@@ -201,6 +201,5 @@ export function propSprite(props: PropLibrary, id: string, h: number, opts: { fl
     g.imageSmoothingQuality = "high";
     props.draw(g, id, w / 2, h - top, { h, flipX: opts.flip, ay: 1 });
   });
-  void ctxOf;
   return c;
 }

@@ -133,16 +133,23 @@ export class Bot {
     const startHearts = c.player.hearts;
     const startShield = c.player.shield > 0;
     let tau = 0;
-    const steps = Math.round(this.horizon / FIXED_DT);
+    // Lange Pläne (z.B. Rutschen) müssen bis kurz nach ihrem Ende simuliert werden, sonst bleibt das Aufstehen unter Gefahren unbemerkt.
+    const horizon = Math.max(this.horizon, plan.end + this.reaction + 0.35);
+    const steps = Math.round(horizon / FIXED_DT);
     for (let i = 0; i < steps; i += 1) {
       const input = planInput(plan, tau - this.reaction, FIXED_DT);
       c.step(FIXED_DT, input);
       tau += FIXED_DT;
-      if (c.phase !== "running" || c.player.hearts < startHearts || (startShield && c.player.shield <= 0 && c.player.invuln > 0.5)) {
+      if (
+        c.phase !== "running" ||
+        c.player.hearts < startHearts ||
+        (startShield && c.player.shield <= 0 && c.player.invuln > 0.5) ||
+        (c.player.hgt < -60 && !c.player.onPlatform)
+      ) {
         return { survived: tau, ok: false, hearts: c.player.hearts };
       }
     }
-    return { survived: this.horizon, ok: true, hearts: c.player.hearts };
+    return { survived: horizon, ok: true, hearts: c.player.hearts };
   }
 
   private decide(sim: Sim): void {

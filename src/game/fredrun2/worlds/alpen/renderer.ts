@@ -11,10 +11,10 @@
 import { PLAYER_SX } from "../../constants";
 import type { AssetLoader, Ent, PropLibrary, ViewState, WorldRenderer } from "../../types";
 import { Motes } from "../shared-a/fx";
-import { bigGlow, blitCentered, blitTiled, blitTiledRange, glowAt, paint, softSprite, solidSegments, type Ctx2D } from "../shared-b/canvas";
+import { bigGlow, blitCentered, blitTiled, blitTiledRange, ctxOf, glowAt, paint, softSprite, solidSegments, type Ctx2D } from "../shared-b/canvas";
 import { h1, mod, mulberry, stageVal } from "../shared-b/color";
 import { StageCache, prepareStaged } from "../shared-b/layers";
-import { AlpBackdrop, bakeLandmark, propSprite, type LandmarkSet } from "./backdrop";
+import { AlpBackdrop, BACKDROP_H, bakeLandmark, propSprite, type LandmarkSet } from "./backdrop";
 import {
   FAR_RIDGE,
   GROUND_TILE_H,
@@ -34,7 +34,9 @@ import {
   paintPuff,
   paintRays,
   paintSky,
+  mixHex,
   ridgeY,
+  type RidgeSpec,
 } from "./scenery";
 import {
   drawBoulder,
@@ -68,6 +70,7 @@ import {
   BUTTERFLIES,
   CABLEWAY,
   CLOUD_DRIFT,
+  CLOUD_SHADOWS,
   CLOUDS,
   GLOW,
   LAKE,
@@ -138,6 +141,7 @@ export class AlpenRenderer implements WorldRenderer {
   private cloudsWarm: HTMLCanvasElement[] = [];
   private mist!: HTMLCanvasElement;
   private mistBand!: StageCache;
+  private lowHaze!: StageCache;
   private lake!: HTMLCanvasElement;
   private rays!: HTMLCanvasElement;
   private sunGlow!: HTMLCanvasElement;
@@ -147,6 +151,8 @@ export class AlpenRenderer implements WorldRenderer {
   private glowWhite!: HTMLCanvasElement;
   private smoke!: HTMLCanvasElement;
   private shade!: HTMLCanvasElement;
+  private buf: HTMLCanvasElement | null = null;
+  private bufG: Ctx2D | null = null;
   private puffs: HTMLCanvasElement[] = [];
   private foreGrass: HTMLCanvasElement[] = [];
   private foreSnow: HTMLCanvasElement[] = [];
@@ -223,7 +229,16 @@ export class AlpenRenderer implements WorldRenderer {
       }),
     );
     this.lake = paintLake();
-    this.staged.push(this.mistBand);
+    this.lowHaze = new StageCache((st) =>
+      paint(1280, 72, (lg) => {
+        const low = lg.createLinearGradient(0, 0, 0, 72);
+        low.addColorStop(0, hexA(STAGE_PAL[st].haze, 0));
+        low.addColorStop(1, hexA(STAGE_PAL[st].haze, 0.28));
+        lg.fillStyle = low;
+        lg.fillRect(0, 0, 1280, 72);
+      }),
+    );
+    this.staged.push(this.mistBand, this.lowHaze);
     this.rays = paintRays(1100, 600, 1060, 40, 3);
     this.sunGlow = bigGlow(520, 520, [
       [0, "rgba(255,250,230,1)"],
@@ -327,6 +342,34 @@ export class AlpenRenderer implements WorldRenderer {
   // ------------------------------------------------------------------------------------------------------
 
   drawBackground(g: Ctx2D, v: ViewState): void {
+    this.withAlpha(g, (c) => this.renderBackground(c, v));
+  }
+
+  /**
+   * Beim Tor-Übergang (Tour) zeichnet die Engine die Zielwelt mit globalAlpha < 1 über die alte. Unsere Ebenen setzen
+   * globalAlpha intern selbst – deshalb in diesem Fall in einen Zwischenpuffer zeichnen und diesen mit Alpha blitten.
+   */
+  private withAlpha(g: Ctx2D, fn: (c: Ctx2D) => void): void {
+    const a = g.globalAlpha;
+    if (a >= 0.999) {
+      fn(g);
+      return;
+    }
+    if (a <= 0.001) return;
+    if (!this.buf) {
+      this.buf = paint(1280, 720, () => undefined);
+      this.bufG = ctxOf(this.buf);
+    }
+    const bg = this.bufG as Ctx2D;
+    bg.setTransform(1, 0, 0, 1, 0, 0);
+    bg.globalAlpha = 1;
+    bg.globalCompositeOperation = "source-over";
+    bg.clearRect(0, 0, 1280, 720);
+    fn(bg);
+    g.drawImage(this.buf, 0, 0);
+  }
+
+  private renderBackground(g: Ctx2D, v: ViewState): void {
     this.build();
     const st = v.stage;
     const bl = v.stageBlend;
@@ -350,11 +393,6 @@ export class AlpenRenderer implements WorldRenderer {
     const sunY = stageVal(SUN_Y, s);
     const sunR = stageVal(SUN_R, s);
     const glow = stageVal(GLOW, s);
-    g.globalCompositeOperation = "lighter";
-    g.globalAlpha = 0.85;
-    blitCentered(g, this.sunGlow, sunX, sunY);
-    g.globalAlpha = 1;
-    g.globalCompositeOperation = "source-over";
     g.fillStyle = glow > 0.5 ? "#ffd9a0" : "#fffbe8";
     g.beginPath();
     g.arc(sunX, sunY, sunR, 0, TAU);
@@ -374,10 +412,20 @@ export class AlpenRenderer implements WorldRenderer {
     } else {
       this.drawStagedTile(g, this.farRange, v, 2048, 420, v.dist * BACK_PAR, BACK_Y + 20);
     }
+    // Sockel unter der Kulisse (in Senken zwischen den Hügelkämmen sonst unbemalt)
+    g.fillStyle = this.baseFill(st);
+    g.fillRect(0, BACK_Y + BACKDROP_H - 2, W, 600 - (BACK_Y + BACKDROP_H - 2));
+    if (bl > 0.004 && st < MAX_STAGE) {
+      g.globalAlpha = bl;
+      g.fillStyle = this.baseFill(st + 1);
+      g.fillRect(0, BACK_Y + BACKDROP_H - 2, W, 600 - (BACK_Y + BACKDROP_H - 2));
+      g.globalAlpha = 1;
+    }
+
     // Sonnen-Glanz über den (ausgeblendeten) Gipfeln
     g.globalCompositeOperation = "lighter";
-    g.globalAlpha = 0.5 * (1 - glow * 0.5);
-    glowAt(g, this.sunGlow, sunX, sunY, sunR * 3.2);
+    g.globalAlpha = 0.75 * (1 - glow * 0.5);
+    glowAt(g, this.sunGlow, sunX, sunY, sunR * 4.2);
     g.globalAlpha = 1;
     g.globalCompositeOperation = "source-over";
 
@@ -420,13 +468,25 @@ export class AlpenRenderer implements WorldRenderer {
     g.restore();
     // 11) Nahe Tannen
     this.drawStagedTile(g, this.near, v, 2048, 360, v.dist * NEAR_PAR, NEAR_Y);
-    // bodennaher Dunst vor dem Waldrand
-    const low = g.createLinearGradient(0, 520, 0, 592);
-    low.addColorStop(0, hexA(hz, 0));
-    low.addColorStop(1, hexA(hz, 0.28));
-    g.fillStyle = low;
-    g.fillRect(0, 520, W, 72);
+    // bodennaher Dunst vor dem Waldrand (vorgebacken je Stufe)
+    g.drawImage(this.lowHaze.get(st), 0, 520);
+    if (bl > 0.004 && st < MAX_STAGE) {
+      g.globalAlpha = bl;
+      g.drawImage(this.lowHaze.get(st + 1), 0, 520);
+      g.globalAlpha = 1;
+    }
     g.imageSmoothingQuality = q;
+  }
+
+  private baseFills: string[] = [];
+  private baseFill(st: number): string {
+    let c = this.baseFills[st];
+    if (!c) {
+      const P = STAGE_PAL[st];
+      c = mixHex(P.haze, mixHex(P.grassDark, "#b9c9da", SNOWCOVER[st] * 0.8), 0.45);
+      this.baseFills[st] = c;
+    }
+    return c;
   }
 
   private blitRows(g: Ctx2D, c: HTMLCanvasElement, rows: number, a: number): void {
@@ -544,7 +604,7 @@ export class AlpenRenderer implements WorldRenderer {
     }
   }
 
-  private drawLandmarkOnRidge(g: Ctx2D, v: ViewState, L: LandmarkSet | null, visTab: number[], par: number, layerY: number, R: typeof MID_RIDGE, period: number, offset: number, sink: number, smoke = false): void {
+  private drawLandmarkOnRidge(g: Ctx2D, v: ViewState, L: LandmarkSet | null, visTab: number[], par: number, layerY: number, R: RidgeSpec, period: number, offset: number, sink: number, smoke = false): void {
     if (!L) return;
     const vis = stageVal(visTab, v.stage + v.stageBlend);
     if (vis < 0.02) return;
@@ -667,7 +727,7 @@ export class AlpenRenderer implements WorldRenderer {
 
   /** Wolkenschatten ziehen über die Almhänge */
   private drawCloudShadows(g: Ctx2D, v: ViewState, s: number): void {
-    const cs = stageVal([0.55, 0.45, 0.4, 0.7, 0], s);
+    const cs = stageVal(CLOUD_SHADOWS, s);
     if (cs < 0.05 || v.quality === 0) return;
     const drift = stageVal(CLOUD_DRIFT, s);
     for (let i = 0; i < 3; i += 1) {
@@ -683,6 +743,10 @@ export class AlpenRenderer implements WorldRenderer {
   // ------------------------------------------------------------------------------------------------------
 
   drawGround(g: Ctx2D, v: ViewState, pits: ReadonlyArray<{ x0: number; x1: number; skin: string }>): void {
+    this.withAlpha(g, (c) => this.renderGround(c, v, pits));
+  }
+
+  private renderGround(g: Ctx2D, v: ViewState, pits: ReadonlyArray<{ x0: number; x1: number; skin: string }>): void {
     this.build();
     const st = v.stage;
     const bl = v.stageBlend;
@@ -709,16 +773,6 @@ export class AlpenRenderer implements WorldRenderer {
       // Abbruchkanten zur Schlucht
       if (sg.x0 > -30) this.drawCliffEdge(g, v, sg.x0, 1, snow);
       if (sg.x1 < v.w + 30) this.drawCliffEdge(g, v, sg.x1, -1, snow);
-    }
-    // Bodenabdunklung nach unten (Tiefe)
-    const dg = g.createLinearGradient(0, gy + 40, 0, v.h);
-    dg.addColorStop(0, "rgba(10,14,20,0)");
-    dg.addColorStop(1, `rgba(10,14,20,${(0.35 + 0.1 * snow).toFixed(3)})`);
-    g.fillStyle = dg;
-    for (const sg of segs) {
-      const a = Math.max(0, sg.x0);
-      const b = Math.min(v.w, sg.x1);
-      if (b > a) g.fillRect(a, gy + 40, b - a, v.h - gy - 40);
     }
     g.imageSmoothingQuality = q;
   }
@@ -934,6 +988,10 @@ export class AlpenRenderer implements WorldRenderer {
   // ------------------------------------------------------------------------------------------------------
 
   drawForeground(g: Ctx2D, v: ViewState): void {
+    this.withAlpha(g, (c) => this.renderForeground(c, v));
+  }
+
+  private renderForeground(g: Ctx2D, v: ViewState): void {
     this.build();
     const s = v.stage + v.stageBlend;
     // Pollen, Blütenblätter, Schnee
@@ -1148,7 +1206,7 @@ export class AlpenRenderer implements WorldRenderer {
     const s = v.stage + v.stageBlend;
     const glow = stageVal(GLOW, s);
     // Sonnen-Bloom (warmes Gegenlicht)
-    if (v.quality === 2 && (glow > 0.3 || s < 1.5)) {
+    if (v.quality === 2 && glow > 0.3) {
       const sunX = stageVal(SUN_X, s);
       const sunY = stageVal(SUN_Y, s);
       g.globalCompositeOperation = "lighter";

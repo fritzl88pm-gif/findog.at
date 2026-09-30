@@ -324,7 +324,6 @@ export function paintFarHills(stage: number): HTMLCanvasElement {
   const H = 230;
   const snow = SNOWCOVER[stage];
   return paint(W, H, (g) => {
-    const P = STAGE_PAL[stage];
     const green = mixHex("#5f8f70", "#dfe8ee", snow * 0.85);
     const deep = mixHex("#3f6b58", "#9fb2c4", snow * 0.7);
     g.beginPath();
@@ -371,7 +370,6 @@ export function paintFarHills(stage: number): HTMLCanvasElement {
       else g.lineTo(x, y);
     }
     g.stroke();
-    void P;
     gradeLayer(g, W, H, stage, 0.45, 0.2);
   });
 }
@@ -773,6 +771,7 @@ export function paintGround(stage: number): HTMLCanvasElement {
           g.stroke();
         }
       }
+      darkenBottom(g, W, H, T, snow);
       return;
     }
     // Grashalme über der Kante
@@ -821,7 +820,17 @@ export function paintGround(stage: number): HTMLCanvasElement {
     // Sonnenlicht auf der Kante
     g.fillStyle = "rgba(255,248,210,0.25)";
     g.fillRect(0, T - 1, W, 2);
+    darkenBottom(g, W, H, T, snow);
   });
+}
+
+/** Tiefe: Bodenquerschnitt nach unten abdunkeln (vorgebacken statt pro Frame). */
+function darkenBottom(g: Ctx2D, W: number, H: number, T: number, snow: number): void {
+  const dg = g.createLinearGradient(0, T + 40, 0, H);
+  dg.addColorStop(0, "rgba(10,14,20,0)");
+  dg.addColorStop(1, `rgba(10,14,20,${(0.35 + 0.1 * snow).toFixed(3)})`);
+  g.fillStyle = dg;
+  g.fillRect(0, T + 40, W, H - T - 40);
 }
 
 /** Gegenüberliegende Schluchtwand (im Schatten, nach unten dunkler), Kachel 512 × 170; `ice` = Gletscherspalte. */

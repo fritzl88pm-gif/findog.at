@@ -1093,7 +1093,6 @@ function bakeCrag(e: Ent, top: number, snowKey: number): HTMLCanvasElement {
       const taper = Math.min(0.22, (y / 700) * 0.22) * w;
       pts.push([x0 + w - taper - r() * 14 + (r() < 0.25 ? 10 : 0), y]);
     }
-    const right = pts.length;
     const left: Array<[number, number]> = [];
     for (let y = 26; y < H + 20; y += 28 + r() * 22) {
       const taper = Math.min(0.18, (y / 700) * 0.18) * w;
@@ -1102,7 +1101,6 @@ function bakeCrag(e: Ent, top: number, snowKey: number): HTMLCanvasElement {
     pts.push([x0 + w * 0.6, H + 20]);
     pts.push([x0 + w * 0.3, H + 20]);
     for (let i = left.length - 1; i >= 0; i -= 1) pts.push(left[i]);
-    void right;
     const path = (): void => {
       g.beginPath();
       pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));

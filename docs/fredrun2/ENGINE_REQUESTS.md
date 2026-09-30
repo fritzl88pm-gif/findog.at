@@ -125,3 +125,20 @@ Format: `## <welt>: <Titel>` + Begründung + gewünschte API. Welt-Agenten ände
 * `spawn()` setzt `p.hopT = hopEvery·(0.5 + rng.next())` und überschreibt vorgegebene Werte. System-gespawnte Walker (Terrassen-Fässer)
   verschieben dadurch die Zufallsfolge des Level-Generators (weiterhin deterministisch je Seed, aber Muster ändern sich mit System-Tuning).
 * Wunsch: `p.hopT` respektieren, falls gesetzt, oder eigenen RNG für Walker-Timer.
+
+## alpen: Todesursachen-Namen für Alpen-Skins
+* `death-names.ts` kennt `ibex`, `lawine`, `rock|boulder|stein`, `pit` – es fehlen die übrigen Alpen-Skins, der Game-Over-Text bleibt leer.
+* Wunsch: `[/eagle|adler/, "Adler"]`, `[/cow|kuh/, "Kuh"]`, `[/marmot/, "Murmeltier"]`, `[/snowball|schneeball/, "Schneeball"]`,
+  `[/rollstone/, "Felsbrocken"]`, `[/ledge/, "Felsdach"]`, `[/cargo/, "Lastenseilbahn"]`, `[/fence|zaun/, "Weidezaun"]`,
+  `[/trunk|logs/, "Baumstamm"]`, `[/cairn/, "Steinmandl"]` (Reihenfolge vor `/rock|…|stein/`, weil `rockfall`/`rollstone` sonst dort landen).
+
+## alpen: Harness `debugAdvance` lässt den Tor-Blitz stehen
+* `debugAdvance()` ruft am Ende `frame(0.0001)` → `flashV` (Welt-Übergang, Portal-Lila 0.7) klingt in Screenshots praktisch nie ab; nach
+  einem Tour-Tor ist jedes weitere Bild lila überzogen (im echten Spiel korrekt).
+* Wunsch: in `debugAdvance` `flashV`/`shake` um die simulierte Zeit abklingen lassen (z.B. `this.flashV = max(0, flashV − seconds·3.2)`).
+
+## alpen: Bot-Horizont bei langen Schlucht-Ketten (bestätigt, siehe wachau)
+* Gleiches Muster wie in der Wachau: der früheste „überlebende“ Sprungplan landet zu kurz vor der ersten Plattform. Umgehung in Alpen:
+  kurzer Anlauf vor Schlucht-Mustern (`withRunUp`), breite Einstiegs-Felskanzel direkt an der Kante, Plattform-Treppen per
+  `landDist()` (voller Sprung aus der Mitte trifft die nächste Mitte) und eine tiefe Rettungs-Thermik in langen Setpieces → 0 Treffer in
+  allen Bot-Läufen (4 Figuren, 14 Seeds/Startweiten, 0–8000 m).

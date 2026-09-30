@@ -47,7 +47,7 @@ export const SUN_X = [1010, 980, 860, 760, 640];
 export const SUN_Y = [120, 92, 70, 120, 408];
 export const SUN_R = [44, 42, 40, 44, 60];
 /** Lichtstrahlen-Stärke */
-export const RAYS = [0.85, 0.7, 0.4, 0, 0.6];
+export const RAYS = [0.85, 0.7, 0, 0, 0];
 /** Wolkenmenge 0..1 und Drift (px/s) */
 export const CLOUDS = [0.55, 0.45, 0.4, 0.95, 0.6];
 export const CLOUD_DRIFT = [8, 10, 16, 34, 12];
@@ -70,4 +70,4 @@ export const MIST = [0.5, 0.35, 0.3, 0.5, 0.4];
 /** Wolkenschatten, die über das Land ziehen */
 export const CLOUD_SHADOWS = [0.6, 0.5, 0.45, 0.8, 0];
 /** Bergsee im Mittelgrund */
-export const LAKE = [0, 1, 0.25, 0, 0];
+export const LAKE = [0, 1, 0, 0, 0];

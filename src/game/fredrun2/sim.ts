@@ -656,6 +656,14 @@ export class Sim {
       if (p.stomping && p.vy < -STOMP_V) p.vy = -STOMP_V;
       const prevHgt = p.hgt;
       p.hgt += p.vy * dt;
+      if (this.world.gravityFlip) {
+        // Spielfeld-Anschlag: Kopf stößt an der Gegenfläche an (Doppelsprung/Flip darf nie aus dem Spielfeld führen)
+        const maxH = this.groundY - this.ceilY - PLAYER_H;
+        if (p.hgt > maxH) {
+          p.hgt = maxH;
+          if (p.vy > 0) p.vy = 0;
+        }
+      }
 
       // Plattform-Landung
       if (p.gravDir === 1 && p.vy <= 0 && !dying) {
@@ -783,9 +791,17 @@ export class Sim {
       switch (e.kind) {
         case "walker": {
           e.x += e.vx * dt;
-          if (e.state === "defeated") {
+          if (e.state === "defeated" || e.state === "sunk") {
             e.y += e.vy * dt;
             e.vy += 1800 * dt;
+            if (e.y > 900) e.dead = true;
+            break;
+          }
+          if (e.p.sinkInPits && this.pitAt(e.x + e.w / 2)) {
+            // Läufer fallen in Lücken (Wasser, Schlucht) und werden harmlos
+            e.state = "sunk";
+            e.harmful = false;
+            e.vy = 60;
             break;
           }
           if (e.p.hopEvery) {
@@ -826,7 +842,7 @@ export class Sim {
           const per = e.p.per || 1.8;
           if (e.p.track) {
             const feet = this.feetY();
-            const target = feet - PLAYER_H * 0.5 - e.h / 2;
+            const target = feet - p.gravDir * PLAYER_H * 0.5 - e.h / 2;
             if (e.x - px < 620 && e.x - px > 60) e.p.baseY += (target - e.p.baseY) * Math.min(1, e.p.track * dt);
           }
           e.y = e.p.baseY + (e.p.amp || 0) * Math.sin((e.age * Math.PI * 2) / per + (e.p.ph || 0));
@@ -1169,13 +1185,14 @@ export class Sim {
     const feet = this.feetY();
     const groundY = this.groundY;
     const ceilY = this.ceilY;
+    // Die Figur kippt um ihre Körpermitte: der Körper bleibt an Ort und Stelle, Fuß und Kopf tauschen die Rollen.
     if (p.gravDir === 1) {
       p.gravDir = -1;
-      p.hgt = Math.max(0, feet - ceilY);
+      p.hgt = Math.max(0, feet - PLAYER_H - ceilY);
       p.vy = -p.vy;
     } else {
       p.gravDir = 1;
-      p.hgt = Math.max(0, groundY - feet);
+      p.hgt = Math.max(0, groundY - (feet + PLAYER_H));
       p.vy = -p.vy;
     }
     p.grounded = false;
