@@ -1,0 +1,146 @@
+{
+  "menu": {
+    "file": "menu.mp3",
+    "bpm": 131.19,
+    "period": 73.188,
+    "xfade": 0.9147,
+    "length": 74.103,
+    "bytes": 890013,
+    "source": "menu-b.mp3"
+  },
+  "select": {
+    "file": "select.mp3",
+    "bpm": 107.24,
+    "period": 71.6032,
+    "xfade": 1.119,
+    "length": 72.722,
+    "bytes": 873399,
+    "source": "select-b.mp3"
+  },
+  "wien": {
+    "file": "wien.mp3",
+    "bpm": 153.06,
+    "period": 68.9712,
+    "xfade": 0.784,
+    "length": 69.755,
+    "bytes": 837980,
+    "source": "wien-a.mp3"
+  },
+  "alpen": {
+    "file": "alpen.mp3",
+    "bpm": 139.95,
+    "period": 75.4283,
+    "xfade": 0.8574,
+    "length": 76.286,
+    "bytes": 916348,
+    "source": "alpen-b.mp3"
+  },
+  "finanzamt": {
+    "file": "finanzamt.mp3",
+    "bpm": 133.44,
+    "period": 71.9127,
+    "xfade": 0.8993,
+    "length": 72.812,
+    "bytes": 874662,
+    "source": "finanzamt-b.mp3"
+  },
+  "prater": {
+    "file": "prater.mp3",
+    "bpm": 159.11,
+    "period": 66.3488,
+    "xfade": 0.7542,
+    "length": 67.103,
+    "bytes": 805999,
+    "source": "prater-a.mp3"
+  },
+  "wachau": {
+    "file": "wachau.mp3",
+    "bpm": 136.0,
+    "period": 77.6375,
+    "xfade": 0.8824,
+    "length": 78.52,
+    "bytes": 942985,
+    "source": "wachau-b.mp3"
+  },
+  "cyber": {
+    "file": "cyber.mp3",
+    "bpm": 140.09,
+    "period": 75.428,
+    "xfade": 0.8566,
+    "length": 76.285,
+    "bytes": 916350,
+    "source": "cyber-a.mp3"
+  },
+  "menu-2": {
+    "file": "menu-2.mp3",
+    "bpm": 128.55,
+    "period": 52.2691,
+    "xfade": 0.9335,
+    "length": 53.203,
+    "bytes": 639238,
+    "source": "menu-a.mp3"
+  },
+  "select-2": {
+    "file": "select-2.mp3",
+    "bpm": 107.77,
+    "period": 62.3229,
+    "xfade": 1.1134,
+    "length": 63.436,
+    "bytes": 762118,
+    "source": "select-a.mp3"
+  },
+  "wien-2": {
+    "file": "wien-2.mp3",
+    "bpm": 150.02,
+    "period": 70.3962,
+    "xfade": 0.7999,
+    "length": 71.196,
+    "bytes": 855221,
+    "source": "wien-b.mp3"
+  },
+  "alpen-2": {
+    "file": "alpen-2.mp3",
+    "bpm": 141.98,
+    "period": 74.439,
+    "xfade": 0.8452,
+    "length": 75.284,
+    "bytes": 904122,
+    "source": "alpen-a.mp3"
+  },
+  "finanzamt-2": {
+    "file": "finanzamt-2.mp3",
+    "bpm": 133.04,
+    "period": 64.9319,
+    "xfade": 0.902,
+    "length": 65.834,
+    "bytes": 790966,
+    "source": "finanzamt-a.mp3"
+  },
+  "prater-2": {
+    "file": "prater-2.mp3",
+    "bpm": 160.05,
+    "period": 59.9929,
+    "xfade": 0.7498,
+    "length": 60.743,
+    "bytes": 729826,
+    "source": "prater-b.mp3"
+  },
+  "wachau-2": {
+    "file": "wachau-2.mp3",
+    "bpm": 136.0,
+    "period": 77.6375,
+    "xfade": 0.8824,
+    "length": 78.52,
+    "bytes": 942985,
+    "source": "wachau-a.mp3"
+  },
+  "cyber-2": {
+    "file": "cyber-2.mp3",
+    "bpm": 139.95,
+    "period": 75.4233,
+    "xfade": 0.8574,
+    "length": 76.281,
+    "bytes": 916350,
+    "source": "cyber-b.mp3"
+  }
+}

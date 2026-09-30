@@ -21,7 +21,8 @@ import {
 import { LoopBank } from "./loops";
 import { MusicDirector, TIMER_MS, type NoteLogEntry } from "./music";
 import { SFX_META, SfxPlayer } from "./sfx";
-import type { FredAudio, LoopName, SfxName, SfxOptions, WorldMusicId } from "./types";
+import { isJingle, JINGLES, JinglePlayer, TrackMusic } from "./tracks";
+import type { FredAudio, LoopName, MusicTrackId, SfxName, SfxOptions, WorldMusicId } from "./types";
 
 type AudioCtor = new (options?: AudioContextOptions) => AudioContext;
 
@@ -33,7 +34,7 @@ export function resolveContextCtor(): AudioCtor | null {
 /** Stummes Ersatzobjekt (SSR, Tests ohne AudioContext, Browser ohne Web Audio). Merkt sich nur trivialen Zustand. */
 export function createNoopAudio(): FredAudio {
   let muted = false;
-  let current: WorldMusicId | null = null;
+  let current: MusicTrackId | null = null;
   return {
     unlock: () => Promise.resolve(),
     get unlocked() {
@@ -91,6 +92,11 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
   let graph: AudioGraph | null = null;
   let sfxPlayer: SfxPlayer | null = null;
   let director: MusicDirector | null = null;
+  /** aufgenommene Musik (Suno-Schleifen); die prozedurale `director`-Musik dient als Fallback */
+  let tracks: TrackMusic | null = null;
+  let jingles: JinglePlayer | null = null;
+  let tracksFailed = false;
+  let lastPlay: { id: MusicTrackId; opts?: { crossfadeSec?: number; intensity?: number } } | null = null;
   let loops: LoopBank | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -100,7 +106,7 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
   let lastResumeTry = -Infinity;
   let tempo = 1;
   let volumes: Volumes = { ...DEFAULT_VOLUMES };
-  let pendingPlay: { id: WorldMusicId; opts?: { crossfadeSec?: number; intensity?: number } } | null = null;
+  let pendingPlay: { id: MusicTrackId; opts?: { crossfadeSec?: number; intensity?: number } } | null = null;
   const pendingLoops = new Map<LoopName, number | null>();
 
   const debugState = { recordNotes: false, noteLog: [] as NoteLogEntry[] };
@@ -141,6 +147,16 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
         if (debugState.recordNotes) debugState.noteLog.push(e);
       };
       director.setTempoScale(tempo);
+      tracks = new TrackMusic(graph);
+      tracks.onFail = (id) => {
+        // Datei nicht ladbar (offline/fehlt): dauerhaft auf die prozedurale Musik zurückfallen
+        tracksFailed = true;
+        if (lastPlay && lastPlay.id === id && director && ready()) {
+          director.play(proceduralId(id), lastPlay.opts);
+          startTimer();
+        }
+      };
+      jingles = new JinglePlayer(graph);
       loops = new LoopBank(graph);
       ctx.onstatechange = () => {
         // Browser hat den Kontext (z.B. nach iOS-Unterbrechung) wieder gestartet
@@ -155,9 +171,25 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
       graph = null;
       sfxPlayer = null;
       director = null;
+      tracks = null;
+      jingles = null;
       loops = null;
       return false;
     }
+  }
+
+  const proceduralId = (id: MusicTrackId): WorldMusicId => (id === "select" ? "menu" : id);
+
+  /** Startet ein Musikstück: aufgenommene Schleife, bei Ladefehler die prozedurale Komposition. */
+  function startMusic(id: MusicTrackId, opts?: { crossfadeSec?: number; intensity?: number }): void {
+    lastPlay = { id, opts };
+    if (tracks && !tracksFailed) {
+      director?.stop(opts?.crossfadeSec ?? 1);
+      tracks.play(id, opts);
+      return;
+    }
+    director?.play(proceduralId(id), opts);
+    startTimer();
   }
 
   function onRunning(): void {
@@ -168,9 +200,15 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
     if (pendingPlay && director) {
       const p = pendingPlay;
       pendingPlay = null;
-      director.play(p.id, p.opts);
+      startMusic(p.id, p.opts);
     }
     startTimer();
+    // Stinger (Game Over/Highscore/Weltwechsel) erst nach dem ersten Stück laden, damit sich die Downloads nicht bremsen
+    if (jingles) {
+      const j = jingles;
+      const t = setTimeout(() => j.prefetch(), 2500);
+      (t as unknown as { unref?: () => void }).unref?.();
+    }
   }
 
   function unlock(): Promise<void> {
@@ -234,6 +272,12 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
       return;
     }
     if (!sfxAudible(graph)) return;
+    if (jingles && isJingle(name) && jingles.play(name, graph.sfxDry, opts?.volume ?? 1)) {
+      const [amount, sec] = JINGLES[name].duck;
+      duckMusic(graph, amount, sec);
+      // Game-Over/Highscore sind reine Musik-Stinger; der Weltwechsel bekommt zusätzlich den Effekt
+      if (name !== "world-transition") return;
+    }
     const voice = sfxPlayer.play(name, opts);
     if (voice) {
       const d = SFX_META[name].duck;
@@ -258,21 +302,23 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
         return;
       }
       pendingPlay = null;
-      director.play(id, opts);
-      startTimer();
+      startMusic(id, opts);
     },
     setIntensity(v, rampSec) {
       if (disposed) return;
       director?.setIntensity(v, rampSec);
+      tracks?.setIntensity(v, rampSec);
     },
     stop(fadeSec) {
       pendingPlay = null;
+      lastPlay = null;
       if (disposed) return;
       director?.stop(fadeSec);
+      tracks?.stop(fadeSec);
     },
     get current() {
       if (pendingPlay) return pendingPlay.id;
-      return director?.current ?? null;
+      return tracks?.current ?? director?.current ?? null;
     },
   };
 
@@ -346,6 +392,8 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
       pendingLoops.clear();
       try {
         loops?.dispose();
+        tracks?.dispose();
+        jingles?.dispose();
         director?.dispose();
         sfxPlayer?.dispose();
       } catch {
@@ -356,6 +404,8 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
       graph = null;
       sfxPlayer = null;
       director = null;
+      tracks = null;
+      jingles = null;
       loops = null;
       try {
         c?.close().catch(noop);

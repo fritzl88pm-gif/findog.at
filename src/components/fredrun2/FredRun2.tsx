@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
-import { loadCharacter, type CharacterSprites } from "@/game/fredrun2/assets";
 import { createAudio } from "@/game/fredrun2/audio";
 import { CHARACTERS } from "@/game/fredrun2/characters";
 import { deathLabel } from "@/game/fredrun2/death-names";
@@ -10,9 +9,10 @@ import { FredRunGame, type GameSnapshot } from "@/game/fredrun2/game";
 import { boardKey, defaultProfile, type ScoreEntry } from "@/game/fredrun2/profile";
 import { dateKey } from "@/game/fredrun2/rng";
 import { TOUR_ORDER, dailyWorld } from "@/game/fredrun2/sim";
-import { CHARACTER_IDS, WORLD_IDS, type CharacterId, type RunMode, type WorldId } from "@/game/fredrun2/types";
+import { WORLD_IDS, type RunMode, type WorldId } from "@/game/fredrun2/types";
 import { WORLDS } from "@/game/fredrun2/worlds";
 
+import CharacterSelect from "./CharacterSelect";
 import styles from "./fredrun2.module.css";
 
 type Tab = "play" | "worlds" | "characters" | "board" | "settings" | "help";
@@ -101,54 +101,31 @@ function useGame(): { game: FredRunGame | null; snap: GameSnapshot; canvasRef: R
   return { game, snap, canvasRef, stageRef };
 }
 
-function CharacterPreview({ id, animate = true }: { id: CharacterId; animate?: boolean }): React.ReactElement {
-  const ref = useRef<HTMLCanvasElement | null>(null);
-  useEffect(() => {
-    let raf = 0;
-    let dead = false;
-    let sprites: CharacterSprites | null = null;
-    const canvas = ref.current;
-    if (!canvas) return;
-    const g = canvas.getContext("2d");
-    if (!g) return;
-    void loadCharacter(id, ["run", "idle"]).then((s) => {
-      sprites = s;
-    });
-    const t0 = performance.now();
-    const draw = (now: number): void => {
-      if (dead) return;
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const w = Math.round(canvas.clientWidth * dpr);
-      const h = Math.round(canvas.clientHeight * dpr);
-      if (canvas.width !== w || canvas.height !== h) {
-        canvas.width = w;
-        canvas.height = h;
-      }
-      g.clearRect(0, 0, w, h);
-      if (sprites && w > 0) {
-        const t = (now - t0) / 1000;
-        const k = h / 176; // Figur ≈ 150 px logisch in 176-px-Fläche
-        g.save();
-        g.translate(w / 2, 0);
-        g.scale(k, k);
-        g.imageSmoothingQuality = "high";
-        // Bodenschatten
-        g.fillStyle = "rgba(0,0,0,0.3)";
-        g.beginPath();
-        g.ellipse(0, 164, 44, 8, 0, 0, Math.PI * 2);
-        g.fill();
-        sprites.draw(g, animate ? "run" : "idle", t * 0.9, 0, 162);
-        g.restore();
-      }
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-    return () => {
-      dead = true;
-      cancelAnimationFrame(raf);
-    };
-  }, [id, animate]);
-  return <canvas ref={ref} className={styles.preview} aria-hidden="true" />;
+/** Titel-Logo (Bild mit Transparenz); fällt bei Ladefehler auf den Schriftzug zurück. */
+function LogoImage({ className }: { className?: string }): React.ReactElement {
+  const [ok, setOk] = useState(true);
+  if (!ok) {
+    return (
+      <div className={styles.logo}>
+        <span className={styles.logoMain}>Fredrun</span>
+        <span className={styles.logoSub}>2.0</span>
+      </div>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      className={`${styles.logoImg} ${className ?? ""}`}
+      src="/fredrun2/logo.webp"
+      alt="Fredrun 2.0"
+      width={1457}
+      height={975}
+      decoding="async"
+      fetchPriority="high"
+      draggable={false}
+      onError={() => setOk(false)}
+    />
+  );
 }
 
 function WorldArt({ id }: { id: WorldId }): React.ReactElement {
@@ -275,6 +252,21 @@ export default function FredRun2(): React.ReactElement {
 
   const showMenu = phase === "menu";
 
+  // Die Heldenauswahl hat ein eigenes Musikstück; alle anderen Menü-Tabs spielen das Menü-Thema.
+  const wasSelecting = useRef(false);
+  useEffect(() => {
+    if (!game) return;
+    if (phase !== "menu") {
+      wasSelecting.current = false;
+      return;
+    }
+    const selecting = tab === "characters";
+    if (selecting !== wasSelecting.current) {
+      wasSelecting.current = selecting;
+      game.audio.music.play(selecting ? "select" : "menu", { crossfadeSec: 0.9 });
+    }
+  }, [game, phase, tab]);
+
   return (
     <div className={styles.root}>
       <div className={styles.stage} ref={stageRef}>
@@ -285,10 +277,7 @@ export default function FredRun2(): React.ReactElement {
         {/* Laden */}
         {phase === "loading" ? (
           <div className={`${styles.overlay} ${styles.loading}`} role="status" aria-live="polite">
-            <div className={styles.logo}>
-              <span className={styles.logoMain}>Fredrun</span>
-              <span className={styles.logoSub}>2.0</span>
-            </div>
+            <LogoImage className={styles.logoLoading} />
             <div className={styles.bar} aria-hidden="true">
               <div className={styles.barFill} style={{ width: `${Math.round(snap.loadProgress * 100)}%` }} />
             </div>
@@ -298,7 +287,7 @@ export default function FredRun2(): React.ReactElement {
 
         {/* Menü */}
         {showMenu ? (
-          <div className={`${styles.overlay} ${styles.veil} ${styles.menu}`}>
+          <div className={`${styles.overlay} ${tab === "play" ? styles.veilCenter : styles.veil} ${styles.menu}`}>
             <div className={styles.menuTop}>
               <div className={styles.tabs} role="tablist" aria-label="Menü">
                 {TABS.map((t) => (
@@ -329,15 +318,9 @@ export default function FredRun2(): React.ReactElement {
             <div className={styles.body}>
               {tab === "play" ? (
                 <>
-                  <div className={styles.panel} style={{ background: "transparent", border: "none", backdropFilter: "none", pointerEvents: "none" }} />
-                  <div className={styles.hero}>
-                    <div className={styles.logo}>
-                      <span className={styles.logoMain}>Fredrun</span>
-                      <span className={styles.logoSub}>2.0</span>
-                    </div>
-                    <p className={styles.muted} style={{ margin: 0 }}>
-                      Der Endlos-Runner mit sechs Welten, fünf Helden und jeder Menge Chaos.
-                      <br />
+                  <div className={`${styles.hero} ${styles.heroCenter}`}>
+                    <LogoImage className={styles.logoHero} />
+                    <p className={`${styles.muted} ${styles.heroTagline}`}>
                       <strong style={{ color: profile.mode === "tour" ? "#ddd6fe" : "#e8edff" }}>
                         {profile.mode === "tour" ? "Weltreise: alle Welten in einem Lauf." : world.tagline}
                       </strong>
@@ -408,45 +391,7 @@ export default function FredRun2(): React.ReactElement {
                 </div>
               ) : null}
 
-              {tab === "characters" ? (
-                <div className={styles.panel}>
-                  <h2 className={styles.panelTitle}>Charakter wählen</h2>
-                  <div className={styles.grid5}>
-                    {CHARACTER_IDS.map((id) => {
-                      const c = CHARACTERS[id];
-                      const owned = profile.unlocked.includes(id);
-                      const selected = profile.character === id;
-                      return (
-                        <div
-                          key={id}
-                          className={`${styles.card} ${selected ? styles.cardSelected : ""} ${owned ? "" : styles.cardLocked}`}
-                          style={{ ["--c1" as string]: c.color, ["--c2" as string]: c.colorDark, cursor: "default" }}
-                        >
-                          <CharacterPreview id={id} animate={owned} />
-                          <span className={styles.cardTitle}>{c.name}</span>
-                          <span className={styles.cardTag}>{c.tagline}</span>
-                          <span className={styles.tagRow}>
-                            <span className={styles.tag}>{c.abilityName}</span>
-                          </span>
-                          <span className={styles.cardTag} style={{ minHeight: "3.6em" }}>{c.abilityText}</span>
-                          {owned ? (
-                            <button className={`${styles.btn} ${selected ? styles.btnPrimary : ""}`} onClick={click(() => void game?.selectCharacter(id))} disabled={selected}>
-                              {selected ? "Ausgewählt" : "Wählen"}
-                            </button>
-                          ) : (
-                            <button className={`${styles.btn} ${styles.btnGold}`} onClick={() => game?.buyCharacter(id)} disabled={profile.coins < c.price && false}>
-                              {fmt(c.price)} ● kaufen
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <p className={styles.muted} style={{ marginTop: 14 }}>
-                    Alle Helden laufen gleich schnell – jede Fähigkeit ist ein kleiner Vorteil, keine Abkürzung. Münzen sammelst du in jedem Lauf.
-                  </p>
-                </div>
-              ) : null}
+              {tab === "characters" ? <CharacterSelect profile={profile} game={game} reducedMotion={profile.settings.reducedMotion} /> : null}
 
               {tab === "board" ? (
                 <div className={styles.panel}>

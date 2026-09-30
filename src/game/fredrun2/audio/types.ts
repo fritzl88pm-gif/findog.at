@@ -7,6 +7,8 @@
 
 export const WORLD_MUSIC_IDS = ["menu", "wien", "alpen", "finanzamt", "prater", "wachau", "cyber"] as const;
 export type WorldMusicId = (typeof WORLD_MUSIC_IDS)[number];
+/** Stücke der aufgenommenen Musik: die Welt-Themen plus die Heldenauswahl (ohne prozedurales Gegenstück – Fallback ist „menu“). */
+export type MusicTrackId = WorldMusicId | "select";
 
 export const SFX_NAMES = [
   // UI
@@ -48,11 +50,11 @@ export interface FredAudio {
   /** Dauerklänge (Regen, Wind…) an/aus mit sanften Fades; level 0..1 */
   loop(name: LoopName, on: boolean, level?: number): void;
   music: {
-    play(id: WorldMusicId, opts?: { crossfadeSec?: number; intensity?: number }): void;
+    play(id: MusicTrackId, opts?: { crossfadeSec?: number; intensity?: number }): void;
     /** 0..1: mehr Layer (Drums, Bass, Arpeggio) je höher; weich geblendet */
     setIntensity(v: number, rampSec?: number): void;
     stop(fadeSec?: number): void;
-    readonly current: WorldMusicId | null;
+    readonly current: MusicTrackId | null;
   };
   setMasterVolume(v: number): void;
   setMusicVolume(v: number): void;

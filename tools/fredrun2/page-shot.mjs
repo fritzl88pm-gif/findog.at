@@ -2,6 +2,10 @@
 /**
  * Screenshot der echten Next-Seite (/fredrun2) inkl. Menü/UI. Voraussetzung: `npx next dev -p 3111` läuft.
  *   node tools/fredrun2/page-shot.mjs --url http://localhost:3111/fredrun2 --out /tmp/x/menu --steps menu,worlds,characters,board,settings,help,play,pause,gameover
+ *
+ * Weitere Optionen: --size 844x390 --touch true --dpr 2 --coins 500 --reduced true --profile '{"unlocked":["fred","frida"]}'
+ * Weitere Schritte: char:Superfred (Roster-Kachel wählen), chip:Dash (Bewegungs-Chip), key:ArrowRight, click:Kaufen (Button per Name),
+ *                   shot:<name> (Screenshot mit Namen), wait800 (Wartezeit in ms), tab:Charaktere
  */
 import path from "node:path";
 import { mkdir } from "node:fs/promises";
@@ -19,8 +23,14 @@ const steps = (args.steps ?? "menu").split(",");
 const [vw, vh] = (args.size ?? "1280x720").split("x").map(Number);
 const { chromium } = require(path.join(process.env.PLAYWRIGHT_NODE_PATH ?? "/opt/node22/lib/node_modules", "playwright"));
 const browser = await chromium.launch({ headless: true, args: ["--autoplay-policy=no-user-gesture-required"] });
-const ctx = await browser.newContext({ viewport: { width: vw, height: vh }, hasTouch: args.touch === "true", isMobile: args.touch === "true" });
+const ctx = await browser.newContext({ viewport: { width: vw, height: vh }, hasTouch: args.touch === "true", isMobile: args.touch === "true", deviceScaleFactor: Number(args.dpr ?? 1) });
 const page = await ctx.newPage();
+if (args.coins || args.reduced || args.profile) {
+  const prof = { ...(args.profile ? JSON.parse(args.profile) : {}) };
+  if (args.coins) prof.coins = Number(args.coins);
+  if (args.reduced) prof.settings = { ...(prof.settings ?? {}), reducedMotion: args.reduced === "true" };
+  await page.addInitScript((p) => { try { if (!localStorage.getItem("findog.fredrun2.profile.v1")) localStorage.setItem("findog.fredrun2.profile.v1", JSON.stringify(p)); } catch {} }, prof);
+}
 const logs = [];
 page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") logs.push(`[${m.type()}] ${m.text()}`); });
 page.on("pageerror", (e) => logs.push(`[pageerror] ${e.message}`));
@@ -50,6 +60,12 @@ for (const s of steps) {
     await page.evaluate(() => { const g = window.__fr2.game.debugSim; if (g) { g.player.hearts = 1; g.hurt("test"); } });
     await page.waitForTimeout(4500); await shot("gameover");
   } else if (s.startsWith("wait")) await page.waitForTimeout(Number(s.slice(4)) || 1000);
+  else if (s.startsWith("char:")) { await page.getByRole("radio", { name: new RegExp("^" + s.slice(5)) }).click(); await page.waitForTimeout(150); }
+  else if (s.startsWith("chip:")) { await page.getByRole("button", { name: s.slice(5), exact: true }).click(); await page.waitForTimeout(150); }
+  else if (s.startsWith("click:")) { await page.getByRole("button", { name: new RegExp(s.slice(6)) }).first().click(); await page.waitForTimeout(150); }
+  else if (s.startsWith("key:")) { await page.keyboard.press(s.slice(4)); await page.waitForTimeout(150); }
+  else if (s.startsWith("tab:")) { await page.getByRole("tab", { name: s.slice(4) }).first().click(); await page.waitForTimeout(400); }
+  else if (s.startsWith("shot:")) await shot(s.slice(5));
 }
 if (logs.length) console.log(logs.slice(0, 20).join("\n"));
 await browser.close();

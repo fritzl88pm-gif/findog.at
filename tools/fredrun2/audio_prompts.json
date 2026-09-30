@@ -1,0 +1,51 @@
+{
+  "_doc": "Prompts für die Audio-Erzeugung über kie.ai (Suno = Musik/Jingles, ElevenLabs Sound-Effect = SFX). Der API-Schlüssel kommt nur aus der Umgebungsvariable KIE_API_KEY.",
+  "model": "V5",
+  "music": {
+    "menu": {
+      "title": "Fredrun Hauptmenue",
+      "style": "Epic yet playful heroic main menu theme for a colorful 3D dog superhero endless runner video game. Bright orchestral brass, staccato strings, glockenspiel, punchy electronic drums, driving 124 bpm, major key, triumphant catchy melody, polished AAA game soundtrack, instrumental, seamless loop, no fade out, no vocals"
+    },
+    "select": {
+      "title": "Fredrun Heldenwahl",
+      "style": "Cool confident hero selection lounge for a video game character select screen: groovy slap bass, shiny analog synth, crisp finger snaps, warm brass stabs, playful and stylish, 108 bpm, major key, instrumental, seamless loop, no vocals"
+    },
+    "wien": {
+      "title": "Fredrun Wien im Sturm",
+      "style": "Dramatic thunderstorm chase through Vienna: energetic hybrid orchestral action with a Viennese waltz feel, pizzicato strings, harpsichord, timpani, tense brass stabs, fast 148 bpm, minor key, catchy motif, endless runner video game level soundtrack, instrumental, seamless loop, no vocals"
+    },
+    "alpen": {
+      "title": "Fredrun Alpenpanorama",
+      "style": "Heroic alpine mountain adventure: alphorn, zither, brass band, uplifting folk orchestral, driving snare, stomping rhythm, sweeping strings, 140 bpm, major key, triumphant and breezy, endless runner video game level soundtrack, instrumental, seamless loop, no vocals"
+    },
+    "finanzamt": {
+      "title": "Fredrun Finanzamt bei Nacht",
+      "style": "Quirky stealth heist in an office building at night: funky walking bass, muted electric guitar, rubber stamp and typewriter percussion, staccato brass, comedic tension, jazzy spy groove, 132 bpm, minor key, endless runner video game level soundtrack, instrumental, seamless loop, no vocals"
+    },
+    "prater": {
+      "title": "Fredrun Prater",
+      "style": "Frantic funfair carnival: calliope organ, accordion, circus polka, glockenspiel, bouncy tuba bass, rollercoaster excitement, cheerful and chaotic, 158 bpm, major key, endless runner video game level soundtrack, instrumental, seamless loop, no vocals"
+    },
+    "wachau": {
+      "title": "Fredrun Wachau",
+      "style": "Sunny vineyard river valley by the Danube: warm acoustic guitar, accordion, clarinet, light percussion, cheerful Austrian folk pop, relaxed but energetic groove, 136 bpm, major key, endless runner video game level soundtrack, instrumental, seamless loop, no vocals"
+    },
+    "cyber": {
+      "title": "Fredrun Cyber-Wien 2099",
+      "style": "Neon cyberpunk Vienna 2099: dark synthwave, pulsing arpeggiated synths, heavy sidechained bass, hard electronic drums, glitchy effects, futuristic and driving, 140 bpm, minor key, AAA endless runner video game level soundtrack, instrumental, seamless loop, no vocals"
+    },
+    "jingle-gameover": {
+      "title": "Fredrun Game Over",
+      "style": "Very short comic-sad game over jingle, descending muted trombone and low strings, gentle and funny not depressing, about 6 seconds, ends on a final note, instrumental, no vocals"
+    },
+    "jingle-highscore": {
+      "title": "Fredrun Highscore",
+      "style": "Very short triumphant new highscore fanfare, bright brass, timpani roll and cymbal crash, sparkling glockenspiel, about 8 seconds, ends on a big final chord, instrumental, no vocals"
+    },
+    "jingle-victory": {
+      "title": "Fredrun Sieg",
+      "style": "Short joyful level complete victory jingle, celebratory brass and strings, upbeat, about 8 seconds, ends on a big final chord, instrumental, no vocals"
+    }
+  },
+  "sfx": {}
+}
