@@ -156,3 +156,25 @@ Format: `## <welt>: <Titel>` + Begründung + gewünschte API. Welt-Agenten ände
   kurzer Anlauf vor Schlucht-Mustern (`withRunUp`), breite Einstiegs-Felskanzel direkt an der Kante, Plattform-Treppen per
   `landDist()` (voller Sprung aus der Mitte trifft die nächste Mitte) und eine tiefe Rettungs-Thermik in langen Setpieces → 0 Treffer in
   allen Bot-Läufen (4 Figuren, 14 Seeds/Startweiten, 0–8000 m).
+
+## oper: Spring-Bounce wird ohne gehaltene Sprungtaste auf ≈ 256 px gekappt
+* `handleInput` wendet die variable Sprunghöhe (`!input.jump && p.vy > 0 && p.jumpsUsed > 0 && p.vy < JUMP_V·0.98`) auch auf den Bounce eines
+  `spring` an (`SPRING_V` 1500 → Scheitel ≈ 416 px nur bei gehaltener Taste, sonst ≈ 256 px, Flugzeit 0.4 s statt 0.9 s bis zur Balkonhöhe).
+  Ein Spieler, der beim Überlaufen des Sprungbretts nicht gerade die Taste hält, erreicht Plattformen über ≈ 250 px nicht.
+* Wunsch: `p.springLock` (Sek.) bzw. `p.jumpsUsed = 1` + `p.noCut = true` nach einem Spring, solange `vy > 0` – der Bounce ist eine Fremdbeschleunigung
+  und sollte immer die volle Höhe haben (Prater-Trampolin-Ring ist aus demselben Grund nur mit gehaltener Taste erreichbar).
+* Umgehung (Opernball): Balkonbahnen liegen niedrig (190 px) und sind lang (0.95 s): sie treffen sowohl den gekappten (Landung ≈ 0.4 s nach dem Abflug)
+  als auch den vollen Bounce (≈ 0.9 s). Test „Flügel trägt auf die Balkonbahn – mit und ohne gehaltene Sprungtaste“ in `worlds/oper.test.ts`.
+
+## oper: Entitäten mit Startverzögerung (Korken erscheint erst im Flaschenhals)
+* Ein Projektil, das „vor den Augen“ aus einem Objekt abgefeuert wird (Champagnerkorken aus der Flasche, Kanonenkugel aus dem Rohr), lässt sich mit Mustern
+  nur simulieren: Spawn außerhalb des Bildschirms, Bewegung ab dem Spawn. Der Opernball rechnet über `leadX`/`arriveT` zurück, lässt den Korken bis zum
+  Flaschenhals unsichtbar (`p.launchD`, Skin zeichnet nichts) und sichert die Fairness über den Warnpfeil (`warn: true`) und die schüttelnde Flasche.
+* Wunsch: `EntSpec.p.delay` (Sek.): die Entität existiert (Skin darf zeichnen), bewegt sich und kollidiert aber erst nach `delay`; alternativ ein
+  Muster-Hook `PatternCtx.at(dt, () => EntSpec)` für zeitversetzt erzeugte Entitäten, die auch der Bot-Klon kennt (Systeme fehlen dort).
+
+## oper: Bot-Klon führt keine Weltsysteme aus – Walzer-Tempo der Tanzpaare
+* Die Tanzpaare des Opernballs ändern `vx` im 1-2-3-Rhythmus (schnell – schnell – langsam, Mittel unverändert) per `WorldSystem`. Der Bot-Klon
+  (`Sim.clone`, `systems = []`) sieht nur die aktuelle Geschwindigkeit; bei ±40 % Abweichung entsteht auf 1.4 s Horizont ein Positionsfehler von ≤ 80 px.
+* Wunsch: optionales `Ent.p.vxWave` (Amplitude) + `p.vxPer` (Sek.) direkt in `updateEntities` für `walker` – dann sähe auch die Vorausschau den Rhythmus.
+* Umgehung: kleine Amplitude (Faktoren 1.2 / 1.2 / 0.6) und Dancers sind stompbar; alle Muster sind isoliert 100 % lösbar (auch mit dem „menschlichen“ Bot).

@@ -1497,6 +1497,25 @@
     "pickup"
    ],
    "max_side": 256
+  },
+  "oper-bottle": {
+   "kind": "static",
+   "src": "oper/oper-bottle.png",
+   "tags": [
+    "oper",
+    "hazard"
+   ],
+   "max_side": 512
+  },
+  "oper-drape": {
+   "kind": "static",
+   "src": "oper/oper-drape.png",
+   "tags": [
+    "oper",
+    "hazard"
+   ],
+   "max_side": 512,
+   "ay": 0.0
   }
  }
 }
