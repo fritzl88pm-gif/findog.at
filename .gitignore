@@ -11,3 +11,4 @@ yarn-error.log*
 .vercel
 .hermes/
 dist/
+__pycache__/
