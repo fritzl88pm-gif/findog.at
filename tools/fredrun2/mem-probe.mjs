@@ -26,7 +26,7 @@ await p.goto(`http://127.0.0.1:${server.address().port}/`);
 await p.waitForFunction(() => document.title === "ready");
 const stats = () => p.evaluate(() => { let px = 0, n = 0; for (const w of window.__cv) { const c = w.deref(); if (c) { px += c.width * c.height; n++; } } return { canvases: n, MPix: +(px / 1e6).toFixed(1), approxMB: Math.round((px * 4) / 1048576), heapMB: Math.round(performance.memory.usedJSHeapSize / 1048576) }; });
 console.log("start", JSON.stringify(await stats()));
-for (const w of ["wien", "alpen", "finanzamt", "prater", "wachau", "cyber"]) {
+for (const w of ["wien", "alpen", "finanzamt", "prater", "wachau", "cyber", "winter", "oper"]) {
   await p.evaluate(async (w) => { await window.__fr2.game.debugRun({ world: w, seed: 2, startMeters: 0 }); }, w);
   for (const wm of [0, 300, 700, 1200]) { await p.evaluate((wm) => { const s = window.__fr2.game.debugSim; s.worldStartDist = s.dist - wm * 60; window.__fr2.game.debugAdvance(0.3); }, wm); }
   console.log(w, JSON.stringify(await stats()));

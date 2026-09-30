@@ -7,8 +7,11 @@
 
 export const WORLD_MUSIC_IDS = ["menu", "wien", "alpen", "finanzamt", "prater", "wachau", "cyber"] as const;
 export type WorldMusicId = (typeof WORLD_MUSIC_IDS)[number];
-/** Stücke der aufgenommenen Musik: die Welt-Themen plus die Heldenauswahl (ohne prozedurales Gegenstück – Fallback ist „menu“). */
-export type MusicTrackId = WorldMusicId | "select";
+/**
+ * Stücke der aufgenommenen Musik: die Welt-Themen plus Heldenauswahl und die Welten „winter“/„oper“, die kein eigenes
+ * prozedurales Thema haben (Fallback siehe engine.ts `proceduralId`).
+ */
+export type MusicTrackId = WorldMusicId | "select" | "winter" | "oper";
 
 export const SFX_NAMES = [
   // UI

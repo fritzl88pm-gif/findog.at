@@ -1,1248 +1,1502 @@
 {
-  "_doc": "Spec fuer pack_props.py. kind: cycle|clip|anim|static|spin. src relativ zu --src (oder @orig/... = public/fredrun/...).",
-  "props": {
-    "odo-run": {
-      "kind": "cycle",
-      "src": "odo-run.png",
-      "src_cw": 512,
-      "cols": 8,
-      "n": 64,
-      "start": 31,
-      "length": 23,
-      "flip": false,
-      "out": 256,
-      "target_h": 216,
-      "fps": 26,
-      "tags": [
-        "allgemein",
-        "enemy"
-      ]
-    },
-    "jqa-run": {
-      "kind": "cycle",
-      "src": "jqa-run.png",
-      "src_cw": 512,
-      "cols": 8,
-      "n": 64,
-      "start": 8,
-      "length": 23,
-      "flip": false,
-      "out": 256,
-      "target_h": 216,
-      "fps": 26,
-      "tags": [
-        "allgemein",
-        "enemy"
-      ]
-    },
-    "madinger-run": {
-      "kind": "cycle",
-      "src": "madinger-walk512.png",
-      "src_cw": 512,
-      "cols": 7,
-      "n": 49,
-      "start": 8,
-      "length": 24,
-      "flip": false,
-      "out": 256,
-      "target_h": 216,
-      "fps": 24,
-      "tags": [
-        "allgemein",
-        "enemy"
-      ]
-    },
-    "luki-run": {
-      "kind": "cycle",
-      "src": "luki-49.png",
-      "src_cw": 512,
-      "cols": 7,
-      "n": 49,
-      "start": 19,
-      "length": 24,
-      "flip": true,
-      "out": 256,
-      "target_h": 216,
-      "fps": 28,
-      "tags": [
-        "allgemein",
-        "enemy"
-      ]
-    },
-    "madinger-jump": {
-      "kind": "clip",
-      "src": "madinger-jump512.png",
-      "src_cw": 512,
-      "cols": 7,
-      "n": 49,
-      "frames": [
-        40,
-        41,
-        42,
-        43,
-        44,
-        45,
-        46,
-        47,
-        48,
-        0,
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        8,
-        9,
-        10,
-        11,
-        12,
-        13,
-        14,
-        15,
-        16,
-        17,
-        18
-      ],
-      "flip": false,
-      "out": 256,
-      "out_h": 320,
-      "target_h": 216,
-      "ref": "median",
-      "fps": 24,
-      "tags": [
-        "allgemein",
-        "enemy"
-      ],
-      "scale": 0.713
-    },
-    "jqa-jump": {
-      "kind": "clip",
-      "src": "jqa-jump.png",
-      "src_cw": 512,
-      "cols": 8,
-      "n": 64,
-      "frames": [
-        12,
-        13,
-        14,
-        15,
-        16,
-        17,
-        18,
-        19,
-        20,
-        21,
-        22,
-        23,
-        24,
-        25,
-        26,
-        27,
-        28,
-        29,
-        30,
-        31,
-        32,
-        33,
-        34,
-        35
-      ],
-      "flip": false,
-      "out": 256,
-      "out_h": 320,
-      "target_h": 216,
-      "ref": "median",
-      "fps": 24,
-      "tags": [
-        "allgemein",
-        "enemy"
-      ],
-      "scale": 0.554
-    },
-    "coin": {
-      "kind": "spin",
-      "src": "@orig/coin-f.webp",
-      "out": 192,
-      "n": 12,
-      "fps": 14,
-      "rim": 0.09,
-      "rim_color": [
-        201,
-        146,
-        20
-      ],
-      "tags": [
-        "allgemein",
-        "pickup"
-      ]
-    },
-    "powerup-magnet": {
-      "kind": "static",
-      "src": "@orig/powerup-magnet.png",
-      "pad": 5,
-      "facing": "front",
-      "tags": [
-        "allgemein",
-        "pickup"
-      ]
-    },
-    "paragraph": {
-      "kind": "static",
-      "src": "@orig/obstacles/paragraph.webp",
-      "pad": 5,
-      "facing": "front",
-      "tags": [
-        "allgemein",
-        "finanzamt",
-        "obstacle"
-      ]
-    },
-    "reihe100": {
-      "kind": "static",
-      "src": "@orig/obstacles/reihe100.webp",
-      "pad": 5,
-      "facing": "front",
-      "tags": [
-        "allgemein",
-        "finanzamt",
-        "obstacle"
-      ]
-    },
-    "steuerkodex": {
-      "kind": "static",
-      "src": "@orig/obstacles/steuerkodex.webp",
-      "pad": 5,
-      "facing": "front",
-      "tags": [
-        "allgemein",
-        "finanzamt",
-        "obstacle"
-      ]
-    },
-    "odo-defeated": {
-      "kind": "clip",
-      "src": "odo-def.png",
-      "src_cw": 512,
-      "cols": 6,
-      "n": 32,
-      "frames": [
-        16,
-        17,
-        18,
-        19,
-        20,
-        21,
-        22,
-        23,
-        24,
-        25,
-        26,
-        27,
-        28,
-        29,
-        30,
-        31
-      ],
-      "flip": false,
-      "out": 320,
-      "out_h": 256,
-      "target_h": 238,
-      "ref_frame": 1,
-      "smooth": 5,
-      "fps": 16,
-      "tags": [
-        "allgemein",
-        "enemy"
-      ],
-      "center": "bbox",
-      "out_cols": 6
-    },
-    "madinger-defeated": {
-      "kind": "clip",
-      "src": "mad-def.png",
-      "src_cw": 512,
-      "cols": 6,
-      "n": 32,
-      "frames": [
-        18,
-        19,
-        20,
-        21,
-        22,
-        23,
-        24,
-        25,
-        26,
-        27,
-        28,
-        29,
-        30,
-        31
-      ],
-      "flip": false,
-      "out": 320,
-      "out_h": 256,
-      "target_h": 222,
-      "ref_frame": 1,
-      "smooth": 5,
-      "fps": 16,
-      "tags": [
-        "allgemein",
-        "enemy"
-      ],
-      "loop": false,
-      "center": "bbox",
-      "out_cols": 6
-    },
-    "jqa-defeated": {
-      "kind": "clip",
-      "src": "jqa-def.png",
-      "src_cw": 512,
-      "cols": 6,
-      "n": 32,
-      "frames": [
-        16,
-        17,
-        18,
-        19,
-        20,
-        21,
-        22,
-        23,
-        24,
-        25,
-        26,
-        27,
-        28,
-        29,
-        30,
-        31
-      ],
-      "flip": false,
-      "out": 320,
-      "out_h": 256,
-      "target_h": 238,
-      "ref_frame": 1,
-      "smooth": 5,
-      "fps": 16,
-      "tags": [
-        "allgemein",
-        "enemy"
-      ],
-      "center": "bbox",
-      "out_cols": 6
-    },
-    "luki-defeated": {
-      "kind": "clip",
-      "src": "luki-def.png",
-      "src_cw": 512,
-      "cols": 6,
-      "n": 32,
-      "frames": [
-        16,
-        17,
-        18,
-        19,
-        20,
-        21,
-        22,
-        23,
-        24,
-        25,
-        26,
-        27,
-        28,
-        29,
-        30,
-        31
-      ],
-      "flip": false,
-      "out": 320,
-      "out_h": 256,
-      "target_h": 236,
-      "ref_frame": 1,
-      "smooth": 5,
-      "fps": 16,
-      "tags": [
-        "allgemein",
-        "enemy"
-      ],
-      "center": "bbox",
-      "out_cols": 6
-    },
-    "fiaker": {
-      "kind": "static",
-      "src": "coll/wien2_1.png",
-      "crop": [
-        61,
-        102,
-        563,
-        451
-      ],
-      "matte": "hard",
-      "tags": [
-        "wien",
-        "obstacle"
-      ]
-    },
-    "wuerstelstand": {
-      "kind": "static",
-      "src": "coll/wien2_1.png",
-      "crop": [
-        626,
-        100,
-        969,
-        443
-      ],
-      "matte": "hard",
-      "tags": [
-        "wien",
-        "obstacle"
-      ]
-    },
-    "traffic-cone": {
-      "kind": "static",
-      "src": "coll/wien2_1.png",
-      "crop": [
-        430,
-        449,
-        605,
-        661
-      ],
-      "matte": "hard",
-      "tags": [
-        "wien",
-        "allgemein",
-        "obstacle"
-      ]
-    },
-    "puddle": {
-      "kind": "static",
-      "src": "coll/wien2_1.png",
-      "crop": [
-        448,
-        800,
-        776,
-        939
-      ],
-      "matte": "hard",
-      "tags": [
-        "wien",
-        "hazard"
-      ]
-    },
-    "park-bench": {
-      "kind": "static",
-      "src": "coll/wien2_1.png",
-      "crop": [
-        72,
-        634,
-        427,
-        914
-      ],
-      "matte": "hard",
-      "tags": [
-        "wien",
-        "obstacle"
-      ]
-    },
-    "street-lamp": {
-      "kind": "static",
-      "src": "coll/wien2_0.png",
-      "crop": [
-        752,
-        475,
-        883,
-        926
-      ],
-      "matte": "hard",
-      "tags": [
-        "wien",
-        "deco"
-      ]
-    },
-    "cow": {
-      "kind": "static",
-      "src": "coll/alp_1.png",
-      "crop": [
-        76,
-        80,
-        516,
-        382
-      ],
-      "matte": "hard",
-      "tags": [
-        "alpen",
-        "obstacle"
-      ]
-    },
-    "wood-fence": {
-      "kind": "static",
-      "src": "coll/alp_1.png",
-      "crop": [
-        82,
-        458,
-        354,
-        592
-      ],
-      "matte": "hard",
-      "tags": [
-        "alpen",
-        "obstacle"
-      ],
-      "holes_min": 400
-    },
-    "boulder": {
-      "kind": "static",
-      "src": "coll/alp_1.png",
-      "crop": [
-        576,
-        85,
-        962,
-        382
-      ],
-      "matte": "hard",
-      "tags": [
-        "alpen",
-        "obstacle"
-      ]
-    },
-    "edelweiss": {
-      "kind": "static",
-      "src": "coll/alp_0.png",
-      "crop": [
-        63,
-        666,
-        375,
-        939
-      ],
-      "matte": "hard",
-      "tags": [
-        "alpen",
-        "pickup"
-      ]
-    },
-    "paper-stack": {
-      "kind": "static",
-      "src": "coll/fa1_3.png",
-      "crop": [
-        58,
-        81,
-        355,
-        399
-      ],
-      "matte": "hard",
-      "tags": [
-        "finanzamt",
-        "obstacle"
-      ]
-    },
-    "stamp-big": {
-      "kind": "static",
-      "src": "coll/fa1_2.png",
-      "crop": [
-        360,
-        43,
-        655,
-        468
-      ],
-      "matte": "hard",
-      "tags": [
-        "finanzamt",
-        "obstacle"
-      ]
-    },
-    "office-chair": {
-      "kind": "static",
-      "src": "coll/fa1_0.png",
-      "crop": [
-        711,
-        74,
-        968,
-        465
-      ],
-      "matte": "hard",
-      "tags": [
-        "finanzamt",
-        "obstacle"
-      ]
-    },
-    "shredder": {
-      "kind": "static",
-      "src": "coll/fa1_3.png",
-      "crop": [
-        77,
-        542,
-        314,
-        955
-      ],
-      "matte": "hard",
-      "tags": [
-        "finanzamt",
-        "obstacle"
-      ]
-    },
-    "file-cart": {
-      "kind": "static",
-      "src": "coll/fa1_2.png",
-      "crop": [
-        387,
-        561,
-        655,
-        958
-      ],
-      "matte": "hard",
-      "tags": [
-        "finanzamt",
-        "obstacle"
-      ]
-    },
-    "coffee-cup": {
-      "kind": "static",
-      "src": "coll/fa1_2.png",
-      "crop": [
-        741,
-        674,
-        976,
-        939
-      ],
-      "matte": "hard",
-      "tags": [
-        "finanzamt",
-        "pickup"
-      ]
-    },
-    "carousel-chair": {
-      "kind": "static",
-      "src": "coll/pra_2.png",
-      "crop": [
-        50,
-        33,
-        344,
-        409
-      ],
-      "matte": "hard",
-      "tags": [
-        "prater",
-        "obstacle"
-      ]
-    },
-    "cannon": {
-      "kind": "static",
-      "src": "coll/pra_1.png",
-      "crop": [
-        651,
-        95,
-        967,
-        413
-      ],
-      "matte": "hard",
-      "tags": [
-        "prater",
-        "obstacle"
-      ]
-    },
-    "trampoline": {
-      "kind": "static",
-      "src": "coll/pra_0.png",
-      "crop": [
-        343,
-        441,
-        679,
-        664
-      ],
-      "matte": "hard",
-      "tags": [
-        "prater",
-        "obstacle"
-      ]
-    },
-    "ghost": {
-      "kind": "static",
-      "src": "coll/pra_2.png",
-      "crop": [
-        389,
-        585,
-        660,
-        944
-      ],
-      "matte": "hard",
-      "tags": [
-        "prater",
-        "enemy"
-      ],
-      "shadow": 150,
-      "ay": 0.5
-    },
-    "balloon-bunch": {
-      "kind": "static",
-      "src": "coll/pra_1.png",
-      "crop": [
-        379,
-        529,
-        637,
-        915
-      ],
-      "matte": "hard",
-      "tags": [
-        "prater",
-        "deco"
-      ],
-      "ay": 0.5
-    },
-    "autoscooter": {
-      "kind": "static",
-      "src": "coll/pra_3.png",
-      "crop": [
-        545,
-        659,
-        937,
-        971
-      ],
-      "matte": "hard",
-      "tags": [
-        "prater",
-        "obstacle"
-      ],
-      "shadow": 150
-    },
-    "wine-barrel": {
-      "kind": "static",
-      "src": "coll/wac_0.png",
-      "crop": [
-        65,
-        49,
-        332,
-        419
-      ],
-      "matte": "hard",
-      "tags": [
-        "wachau",
-        "obstacle"
-      ]
-    },
-    "apricot": {
-      "kind": "static",
-      "src": "coll/wac_2.png",
-      "crop": [
-        723,
-        47,
-        960,
-        326
-      ],
-      "matte": "hard",
-      "tags": [
-        "wachau",
-        "pickup"
-      ]
-    },
-    "raft": {
-      "kind": "static",
-      "src": "coll/wac_2.png",
-      "crop": [
-        342,
-        370,
-        681,
-        628
-      ],
-      "matte": "hard",
-      "tags": [
-        "wachau",
-        "obstacle"
-      ]
-    },
-    "crate-wine": {
-      "kind": "static",
-      "src": "coll/wac_1.png",
-      "crop": [
-        336,
-        639,
-        690,
-        977
-      ],
-      "matte": "hard",
-      "tags": [
-        "wachau",
-        "obstacle"
-      ]
-    },
-    "grape-bunch": {
-      "kind": "static",
-      "src": "coll/wac_0.png",
-      "crop": [
-        709,
-        610,
-        984,
-        983
-      ],
-      "matte": "hard",
-      "tags": [
-        "wachau",
-        "pickup"
-      ]
-    },
-    "drone": {
-      "kind": "static",
-      "src": "coll/cyb_0.png",
-      "crop": [
-        36,
-        78,
-        509,
-        384
-      ],
-      "matte": "hard",
-      "tags": [
-        "cyber",
-        "enemy"
-      ],
-      "ay": 0.5
-    },
-    "glitch-cube": {
-      "kind": "static",
-      "src": "coll/cyb_1.png",
-      "crop": [
-        685,
-        53,
-        952,
-        317
-      ],
-      "matte": "glow",
-      "tags": [
-        "cyber",
-        "obstacle"
-      ]
-    },
-    "barrier-neon": {
-      "kind": "static",
-      "src": "coll/cyb_2.png",
-      "crop": [
-        691,
-        386,
-        904,
-        600
-      ],
-      "matte": "glow",
-      "tags": [
-        "cyber",
-        "obstacle"
-      ]
-    },
-    "server-rack": {
-      "kind": "static",
-      "src": "coll/cyb_1.png",
-      "crop": [
-        82,
-        702,
-        312,
-        954
-      ],
-      "matte": "hard",
-      "tags": [
-        "cyber",
-        "obstacle"
-      ]
-    },
-    "laser-turret": {
-      "kind": "static",
-      "src": "coll/cyb_1.png",
-      "crop": [
-        680,
-        668,
-        977,
-        960
-      ],
-      "matte": "hard",
-      "tags": [
-        "cyber",
-        "hazard"
-      ]
-    },
-    "heart": {
-      "kind": "static",
-      "src": "coll/pik_0.png",
-      "crop": [
-        73,
-        79,
-        409,
-        399
-      ],
-      "matte": "hard",
-      "tags": [
-        "allgemein",
-        "pickup"
-      ]
-    },
-    "powerup-shield": {
-      "kind": "static",
-      "src": "coll/pik_2.png",
-      "crop": [
-        399,
-        71,
-        672,
-        391
-      ],
-      "matte": "hard",
-      "tags": [
-        "allgemein",
-        "pickup"
-      ]
-    },
-    "powerup-slowmo": {
-      "kind": "static",
-      "src": "coll/pik_2.png",
-      "crop": [
-        727,
-        83,
-        935,
-        428
-      ],
-      "matte": "hard",
-      "tags": [
-        "allgemein",
-        "pickup"
-      ]
-    },
-    "powerup-turbo": {
-      "kind": "static",
-      "src": "coll/pik_2.png",
-      "crop": [
-        55,
-        523,
-        327,
-        972
-      ],
-      "matte": "hard",
-      "tags": [
-        "allgemein",
-        "pickup"
-      ]
-    },
-    "gem": {
-      "kind": "static",
-      "src": "coll/pik_0.png",
-      "crop": [
-        103,
-        647,
-        353,
-        932
-      ],
-      "matte": "hard",
-      "tags": [
-        "allgemein",
-        "pickup"
-      ]
-    },
-    "key": {
-      "kind": "static",
-      "src": "coll/pik_0.png",
-      "crop": [
-        622,
-        579,
-        967,
-        958
-      ],
-      "matte": "hard",
-      "tags": [
-        "allgemein",
-        "pickup"
-      ]
-    },
-    "tram": {
-      "kind": "static",
-      "src": "coll/tram_c_3.png",
-      "crop": [
-        67,
-        250,
-        955,
-        758
-      ],
-      "matte": "hard",
-      "flip": true,
-      "max_side": 512,
-      "tags": [
-        "wien",
-        "obstacle"
-      ],
-      "shadow": 150
-    },
-    "gondola": {
-      "kind": "static",
-      "src": "coll/alp_0.png",
-      "crop": [
-        415,
-        590,
-        630,
-        920
-      ],
-      "matte": "hard",
-      "tags": [
-        "alpen",
-        "hazard"
-      ],
-      "ax": 0.5,
-      "ay": 0.06
-    },
-    "data-coin": {
-      "kind": "spin",
-      "src": "coll/cyb_3.png",
-      "crop": [
-        406,
-        395,
-        628,
-        634
-      ],
-      "matte": "hard",
-      "out": 192,
-      "n": 12,
-      "fps": 14,
-      "rim": 0.1,
-      "rim_color": [
-        40,
-        150,
-        150
-      ],
-      "tags": [
-        "cyber",
-        "pickup"
-      ]
-    },
-    "drone-hover": {
-      "kind": "anim",
-      "src": "drone512.png",
-      "src_cw": 512,
-      "cols": 5,
-      "n": 24,
-      "start": 0,
-      "length": 24,
-      "out": 256,
-      "out_cols": 6,
-      "pad": 6,
-      "fps": 12,
-      "ax": 0.5,
-      "ay": 0.5,
-      "facing": "front",
-      "tags": [
-        "cyber",
-        "hazard"
-      ]
-    },
-    "ghost-float": {
-      "kind": "anim",
-      "src": "ghost512.png",
-      "src_cw": 512,
-      "cols": 5,
-      "n": 24,
-      "start": 0,
-      "length": 24,
-      "out": 256,
-      "out_cols": 6,
-      "pad": 6,
-      "fps": 12,
-      "ax": 0.5,
-      "ay": 0.5,
-      "facing": "front",
-      "tags": [
-        "prater",
-        "enemy"
-      ]
-    },
-    "pigeon-fly": {
-      "kind": "anim",
-      "src": "pigeon512.png",
-      "src_cw": 512,
-      "cols": 5,
-      "n": 24,
-      "start": 0,
-      "length": 24,
-      "out": 256,
-      "out_cols": 6,
-      "pad": 6,
-      "fps": 20,
-      "ax": 0.5,
-      "ay": 0.5,
-      "facing": "right",
-      "tags": [
-        "wien",
-        "hazard"
-      ]
-    },
-    "ibex-run": {
-      "kind": "cycle",
-      "src": "ibex512.png",
-      "src_cw": 512,
-      "cols": 6,
-      "n": 32,
-      "start": 1,
-      "length": 16,
-      "out": 320,
-      "out_h": 256,
-      "target_h": 206,
-      "out_cols": 6,
-      "fps": 28,
-      "smooth": 5,
-      "foot_pad": 6,
-      "facing": "right",
-      "tags": [
-        "alpen",
-        "enemy"
-      ]
-    },
-    "bee-swarm": {
-      "kind": "anim",
-      "src": "bee512.png",
-      "src_cw": 512,
-      "cols": 5,
-      "n": 24,
-      "frames": [
-        0,
-        1,
-        2,
-        3,
-        5,
-        6,
-        8,
-        10,
-        12,
-        14,
-        15,
-        16,
-        17,
-        18,
-        20,
-        22
-      ],
-      "out": 320,
-      "out_h": 192,
-      "out_cols": 4,
-      "pad": 6,
-      "fps": 14,
-      "ax": 0.5,
-      "ay": 0.5,
-      "facing": "front",
-      "tags": [
-        "wachau",
-        "hazard"
-      ]
-    },
-    "eagle-fly": {
-      "kind": "anim",
-      "src": "eagle512.png",
-      "src_cw": 512,
-      "cols": 5,
-      "n": 24,
-      "start": 0,
-      "length": 24,
-      "out": 288,
-      "out_h": 256,
-      "out_cols": 6,
-      "pad": 6,
-      "fps": 20,
-      "ax": 0.5,
-      "ay": 0.5,
-      "facing": "right",
-      "tags": [
-        "alpen",
-        "hazard"
-      ]
-    },
-    "bat-fly": {
-      "kind": "anim",
-      "src": "bat512.png",
-      "src_cw": 512,
-      "cols": 5,
-      "n": 24,
-      "start": 6,
-      "length": 12,
-      "out": 320,
-      "out_h": 224,
-      "out_cols": 6,
-      "pad": 6,
-      "fps": 22,
-      "ax": 0.5,
-      "ay": 0.5,
-      "facing": "right",
-      "tags": [
-        "finanzamt",
-        "hazard"
-      ]
-    },
-    "sachertorte": {
-      "kind": "static",
-      "src": "coll/bon_0.png",
-      "crop": [
-        88,
-        43,
-        472,
-        430
-      ],
-      "matte": "hard",
-      "tags": [
-        "wien",
-        "pickup"
-      ]
-    },
-    "lebkuchenherz": {
-      "kind": "static",
-      "src": "coll/bon_0.png",
-      "crop": [
-        619,
-        97,
-        946,
-        402
-      ],
-      "matte": "hard",
-      "tags": [
-        "prater",
-        "pickup"
-      ]
-    },
-    "zuckerwatte": {
-      "kind": "static",
-      "src": "coll/bon_0.png",
-      "crop": [
-        403,
-        311,
-        629,
-        716
-      ],
-      "matte": "hard",
-      "tags": [
-        "prater",
-        "pickup"
-      ]
-    },
-    "brezel": {
-      "kind": "static",
-      "src": "coll/bon_1.png",
-      "crop": [
-        85,
-        598,
-        459,
-        927
-      ],
-      "matte": "hard",
-      "tags": [
-        "wien",
-        "pickup"
-      ],
-      "holes_min": 300
-    },
-    "regenschirm": {
-      "kind": "static",
-      "src": "coll/bon_0.png",
-      "crop": [
-        627,
-        577,
-        992,
-        935
-      ],
-      "matte": "hard",
-      "tags": [
-        "wien",
-        "pickup"
-      ]
-    }
+ "_doc": "Spec fuer pack_props.py. kind: cycle|clip|anim|static|spin. src relativ zu --src (oder @orig/... = public/fredrun/...).",
+ "props": {
+  "odo-run": {
+   "kind": "cycle",
+   "src": "odo-run.png",
+   "src_cw": 512,
+   "cols": 8,
+   "n": 64,
+   "start": 31,
+   "length": 23,
+   "flip": false,
+   "out": 256,
+   "target_h": 216,
+   "fps": 26,
+   "tags": [
+    "allgemein",
+    "enemy"
+   ]
+  },
+  "jqa-run": {
+   "kind": "cycle",
+   "src": "jqa-run.png",
+   "src_cw": 512,
+   "cols": 8,
+   "n": 64,
+   "start": 8,
+   "length": 23,
+   "flip": false,
+   "out": 256,
+   "target_h": 216,
+   "fps": 26,
+   "tags": [
+    "allgemein",
+    "enemy"
+   ]
+  },
+  "madinger-run": {
+   "kind": "cycle",
+   "src": "madinger-walk512.png",
+   "src_cw": 512,
+   "cols": 7,
+   "n": 49,
+   "start": 8,
+   "length": 24,
+   "flip": false,
+   "out": 256,
+   "target_h": 216,
+   "fps": 24,
+   "tags": [
+    "allgemein",
+    "enemy"
+   ]
+  },
+  "luki-run": {
+   "kind": "cycle",
+   "src": "luki-49.png",
+   "src_cw": 512,
+   "cols": 7,
+   "n": 49,
+   "start": 19,
+   "length": 24,
+   "flip": true,
+   "out": 256,
+   "target_h": 216,
+   "fps": 28,
+   "tags": [
+    "allgemein",
+    "enemy"
+   ]
+  },
+  "madinger-jump": {
+   "kind": "clip",
+   "src": "madinger-jump512.png",
+   "src_cw": 512,
+   "cols": 7,
+   "n": 49,
+   "frames": [
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18
+   ],
+   "flip": false,
+   "out": 256,
+   "out_h": 320,
+   "target_h": 216,
+   "ref": "median",
+   "fps": 24,
+   "tags": [
+    "allgemein",
+    "enemy"
+   ],
+   "scale": 0.713
+  },
+  "jqa-jump": {
+   "kind": "clip",
+   "src": "jqa-jump.png",
+   "src_cw": 512,
+   "cols": 8,
+   "n": 64,
+   "frames": [
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35
+   ],
+   "flip": false,
+   "out": 256,
+   "out_h": 320,
+   "target_h": 216,
+   "ref": "median",
+   "fps": 24,
+   "tags": [
+    "allgemein",
+    "enemy"
+   ],
+   "scale": 0.554
+  },
+  "coin": {
+   "kind": "spin",
+   "src": "@orig/coin-f.webp",
+   "out": 192,
+   "n": 12,
+   "fps": 14,
+   "rim": 0.09,
+   "rim_color": [
+    201,
+    146,
+    20
+   ],
+   "tags": [
+    "allgemein",
+    "pickup"
+   ]
+  },
+  "powerup-magnet": {
+   "kind": "static",
+   "src": "@orig/powerup-magnet.png",
+   "pad": 5,
+   "facing": "front",
+   "tags": [
+    "allgemein",
+    "pickup"
+   ]
+  },
+  "paragraph": {
+   "kind": "static",
+   "src": "@orig/obstacles/paragraph.webp",
+   "pad": 5,
+   "facing": "front",
+   "tags": [
+    "allgemein",
+    "finanzamt",
+    "obstacle"
+   ]
+  },
+  "reihe100": {
+   "kind": "static",
+   "src": "@orig/obstacles/reihe100.webp",
+   "pad": 5,
+   "facing": "front",
+   "tags": [
+    "allgemein",
+    "finanzamt",
+    "obstacle"
+   ]
+  },
+  "steuerkodex": {
+   "kind": "static",
+   "src": "@orig/obstacles/steuerkodex.webp",
+   "pad": 5,
+   "facing": "front",
+   "tags": [
+    "allgemein",
+    "finanzamt",
+    "obstacle"
+   ]
+  },
+  "odo-defeated": {
+   "kind": "clip",
+   "src": "odo-def.png",
+   "src_cw": 512,
+   "cols": 6,
+   "n": 32,
+   "frames": [
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+   ],
+   "flip": false,
+   "out": 320,
+   "out_h": 256,
+   "target_h": 238,
+   "ref_frame": 1,
+   "smooth": 5,
+   "fps": 16,
+   "tags": [
+    "allgemein",
+    "enemy"
+   ],
+   "center": "bbox",
+   "out_cols": 6
+  },
+  "madinger-defeated": {
+   "kind": "clip",
+   "src": "mad-def.png",
+   "src_cw": 512,
+   "cols": 6,
+   "n": 32,
+   "frames": [
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+   ],
+   "flip": false,
+   "out": 320,
+   "out_h": 256,
+   "target_h": 222,
+   "ref_frame": 1,
+   "smooth": 5,
+   "fps": 16,
+   "tags": [
+    "allgemein",
+    "enemy"
+   ],
+   "loop": false,
+   "center": "bbox",
+   "out_cols": 6
+  },
+  "jqa-defeated": {
+   "kind": "clip",
+   "src": "jqa-def.png",
+   "src_cw": 512,
+   "cols": 6,
+   "n": 32,
+   "frames": [
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+   ],
+   "flip": false,
+   "out": 320,
+   "out_h": 256,
+   "target_h": 238,
+   "ref_frame": 1,
+   "smooth": 5,
+   "fps": 16,
+   "tags": [
+    "allgemein",
+    "enemy"
+   ],
+   "center": "bbox",
+   "out_cols": 6
+  },
+  "luki-defeated": {
+   "kind": "clip",
+   "src": "luki-def.png",
+   "src_cw": 512,
+   "cols": 6,
+   "n": 32,
+   "frames": [
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+   ],
+   "flip": false,
+   "out": 320,
+   "out_h": 256,
+   "target_h": 236,
+   "ref_frame": 1,
+   "smooth": 5,
+   "fps": 16,
+   "tags": [
+    "allgemein",
+    "enemy"
+   ],
+   "center": "bbox",
+   "out_cols": 6
+  },
+  "fiaker": {
+   "kind": "static",
+   "src": "coll/wien2_1.png",
+   "crop": [
+    61,
+    102,
+    563,
+    451
+   ],
+   "matte": "hard",
+   "tags": [
+    "wien",
+    "obstacle"
+   ]
+  },
+  "wuerstelstand": {
+   "kind": "static",
+   "src": "coll/wien2_1.png",
+   "crop": [
+    626,
+    100,
+    969,
+    443
+   ],
+   "matte": "hard",
+   "tags": [
+    "wien",
+    "obstacle"
+   ]
+  },
+  "traffic-cone": {
+   "kind": "static",
+   "src": "coll/wien2_1.png",
+   "crop": [
+    430,
+    449,
+    605,
+    661
+   ],
+   "matte": "hard",
+   "tags": [
+    "wien",
+    "allgemein",
+    "obstacle"
+   ]
+  },
+  "puddle": {
+   "kind": "static",
+   "src": "coll/wien2_1.png",
+   "crop": [
+    448,
+    800,
+    776,
+    939
+   ],
+   "matte": "hard",
+   "tags": [
+    "wien",
+    "hazard"
+   ]
+  },
+  "park-bench": {
+   "kind": "static",
+   "src": "coll/wien2_1.png",
+   "crop": [
+    72,
+    634,
+    427,
+    914
+   ],
+   "matte": "hard",
+   "tags": [
+    "wien",
+    "obstacle"
+   ]
+  },
+  "street-lamp": {
+   "kind": "static",
+   "src": "coll/wien2_0.png",
+   "crop": [
+    752,
+    475,
+    883,
+    926
+   ],
+   "matte": "hard",
+   "tags": [
+    "wien",
+    "deco"
+   ]
+  },
+  "cow": {
+   "kind": "static",
+   "src": "coll/alp_1.png",
+   "crop": [
+    76,
+    80,
+    516,
+    382
+   ],
+   "matte": "hard",
+   "tags": [
+    "alpen",
+    "obstacle"
+   ]
+  },
+  "wood-fence": {
+   "kind": "static",
+   "src": "coll/alp_1.png",
+   "crop": [
+    82,
+    458,
+    354,
+    592
+   ],
+   "matte": "hard",
+   "tags": [
+    "alpen",
+    "obstacle"
+   ],
+   "holes_min": 400
+  },
+  "boulder": {
+   "kind": "static",
+   "src": "coll/alp_1.png",
+   "crop": [
+    576,
+    85,
+    962,
+    382
+   ],
+   "matte": "hard",
+   "tags": [
+    "alpen",
+    "obstacle"
+   ]
+  },
+  "edelweiss": {
+   "kind": "static",
+   "src": "coll/alp_0.png",
+   "crop": [
+    63,
+    666,
+    375,
+    939
+   ],
+   "matte": "hard",
+   "tags": [
+    "alpen",
+    "pickup"
+   ]
+  },
+  "paper-stack": {
+   "kind": "static",
+   "src": "coll/fa1_3.png",
+   "crop": [
+    58,
+    81,
+    355,
+    399
+   ],
+   "matte": "hard",
+   "tags": [
+    "finanzamt",
+    "obstacle"
+   ]
+  },
+  "stamp-big": {
+   "kind": "static",
+   "src": "coll/fa1_2.png",
+   "crop": [
+    360,
+    43,
+    655,
+    468
+   ],
+   "matte": "hard",
+   "tags": [
+    "finanzamt",
+    "obstacle"
+   ]
+  },
+  "office-chair": {
+   "kind": "static",
+   "src": "coll/fa1_0.png",
+   "crop": [
+    711,
+    74,
+    968,
+    465
+   ],
+   "matte": "hard",
+   "tags": [
+    "finanzamt",
+    "obstacle"
+   ]
+  },
+  "shredder": {
+   "kind": "static",
+   "src": "coll/fa1_3.png",
+   "crop": [
+    77,
+    542,
+    314,
+    955
+   ],
+   "matte": "hard",
+   "tags": [
+    "finanzamt",
+    "obstacle"
+   ]
+  },
+  "file-cart": {
+   "kind": "static",
+   "src": "coll/fa1_2.png",
+   "crop": [
+    387,
+    561,
+    655,
+    958
+   ],
+   "matte": "hard",
+   "tags": [
+    "finanzamt",
+    "obstacle"
+   ]
+  },
+  "coffee-cup": {
+   "kind": "static",
+   "src": "coll/fa1_2.png",
+   "crop": [
+    741,
+    674,
+    976,
+    939
+   ],
+   "matte": "hard",
+   "tags": [
+    "finanzamt",
+    "pickup"
+   ]
+  },
+  "carousel-chair": {
+   "kind": "static",
+   "src": "coll/pra_2.png",
+   "crop": [
+    50,
+    33,
+    344,
+    409
+   ],
+   "matte": "hard",
+   "tags": [
+    "prater",
+    "obstacle"
+   ]
+  },
+  "cannon": {
+   "kind": "static",
+   "src": "coll/pra_1.png",
+   "crop": [
+    651,
+    95,
+    967,
+    413
+   ],
+   "matte": "hard",
+   "tags": [
+    "prater",
+    "obstacle"
+   ]
+  },
+  "trampoline": {
+   "kind": "static",
+   "src": "coll/pra_0.png",
+   "crop": [
+    343,
+    441,
+    679,
+    664
+   ],
+   "matte": "hard",
+   "tags": [
+    "prater",
+    "obstacle"
+   ]
+  },
+  "ghost": {
+   "kind": "static",
+   "src": "coll/pra_2.png",
+   "crop": [
+    389,
+    585,
+    660,
+    944
+   ],
+   "matte": "hard",
+   "tags": [
+    "prater",
+    "enemy"
+   ],
+   "shadow": 150,
+   "ay": 0.5
+  },
+  "balloon-bunch": {
+   "kind": "static",
+   "src": "coll/pra_1.png",
+   "crop": [
+    379,
+    529,
+    637,
+    915
+   ],
+   "matte": "hard",
+   "tags": [
+    "prater",
+    "deco"
+   ],
+   "ay": 0.5
+  },
+  "autoscooter": {
+   "kind": "static",
+   "src": "coll/pra_3.png",
+   "crop": [
+    545,
+    659,
+    937,
+    971
+   ],
+   "matte": "hard",
+   "tags": [
+    "prater",
+    "obstacle"
+   ],
+   "shadow": 150
+  },
+  "wine-barrel": {
+   "kind": "static",
+   "src": "coll/wac_0.png",
+   "crop": [
+    65,
+    49,
+    332,
+    419
+   ],
+   "matte": "hard",
+   "tags": [
+    "wachau",
+    "obstacle"
+   ]
+  },
+  "apricot": {
+   "kind": "static",
+   "src": "coll/wac_2.png",
+   "crop": [
+    723,
+    47,
+    960,
+    326
+   ],
+   "matte": "hard",
+   "tags": [
+    "wachau",
+    "pickup"
+   ]
+  },
+  "raft": {
+   "kind": "static",
+   "src": "coll/wac_2.png",
+   "crop": [
+    342,
+    370,
+    681,
+    628
+   ],
+   "matte": "hard",
+   "tags": [
+    "wachau",
+    "obstacle"
+   ]
+  },
+  "crate-wine": {
+   "kind": "static",
+   "src": "coll/wac_1.png",
+   "crop": [
+    336,
+    639,
+    690,
+    977
+   ],
+   "matte": "hard",
+   "tags": [
+    "wachau",
+    "obstacle"
+   ]
+  },
+  "grape-bunch": {
+   "kind": "static",
+   "src": "coll/wac_0.png",
+   "crop": [
+    709,
+    610,
+    984,
+    983
+   ],
+   "matte": "hard",
+   "tags": [
+    "wachau",
+    "pickup"
+   ]
+  },
+  "drone": {
+   "kind": "static",
+   "src": "coll/cyb_0.png",
+   "crop": [
+    36,
+    78,
+    509,
+    384
+   ],
+   "matte": "hard",
+   "tags": [
+    "cyber",
+    "enemy"
+   ],
+   "ay": 0.5
+  },
+  "glitch-cube": {
+   "kind": "static",
+   "src": "coll/cyb_1.png",
+   "crop": [
+    685,
+    53,
+    952,
+    317
+   ],
+   "matte": "glow",
+   "tags": [
+    "cyber",
+    "obstacle"
+   ]
+  },
+  "barrier-neon": {
+   "kind": "static",
+   "src": "coll/cyb_2.png",
+   "crop": [
+    691,
+    386,
+    904,
+    600
+   ],
+   "matte": "glow",
+   "tags": [
+    "cyber",
+    "obstacle"
+   ]
+  },
+  "server-rack": {
+   "kind": "static",
+   "src": "coll/cyb_1.png",
+   "crop": [
+    82,
+    702,
+    312,
+    954
+   ],
+   "matte": "hard",
+   "tags": [
+    "cyber",
+    "obstacle"
+   ]
+  },
+  "laser-turret": {
+   "kind": "static",
+   "src": "coll/cyb_1.png",
+   "crop": [
+    680,
+    668,
+    977,
+    960
+   ],
+   "matte": "hard",
+   "tags": [
+    "cyber",
+    "hazard"
+   ]
+  },
+  "heart": {
+   "kind": "static",
+   "src": "coll/pik_0.png",
+   "crop": [
+    73,
+    79,
+    409,
+    399
+   ],
+   "matte": "hard",
+   "tags": [
+    "allgemein",
+    "pickup"
+   ]
+  },
+  "powerup-shield": {
+   "kind": "static",
+   "src": "coll/pik_2.png",
+   "crop": [
+    399,
+    71,
+    672,
+    391
+   ],
+   "matte": "hard",
+   "tags": [
+    "allgemein",
+    "pickup"
+   ]
+  },
+  "powerup-slowmo": {
+   "kind": "static",
+   "src": "coll/pik_2.png",
+   "crop": [
+    727,
+    83,
+    935,
+    428
+   ],
+   "matte": "hard",
+   "tags": [
+    "allgemein",
+    "pickup"
+   ]
+  },
+  "powerup-turbo": {
+   "kind": "static",
+   "src": "coll/pik_2.png",
+   "crop": [
+    55,
+    523,
+    327,
+    972
+   ],
+   "matte": "hard",
+   "tags": [
+    "allgemein",
+    "pickup"
+   ]
+  },
+  "gem": {
+   "kind": "static",
+   "src": "coll/pik_0.png",
+   "crop": [
+    103,
+    647,
+    353,
+    932
+   ],
+   "matte": "hard",
+   "tags": [
+    "allgemein",
+    "pickup"
+   ]
+  },
+  "key": {
+   "kind": "static",
+   "src": "coll/pik_0.png",
+   "crop": [
+    622,
+    579,
+    967,
+    958
+   ],
+   "matte": "hard",
+   "tags": [
+    "allgemein",
+    "pickup"
+   ]
+  },
+  "tram": {
+   "kind": "static",
+   "src": "coll/tram_c_3.png",
+   "crop": [
+    67,
+    250,
+    955,
+    758
+   ],
+   "matte": "hard",
+   "flip": true,
+   "max_side": 512,
+   "tags": [
+    "wien",
+    "obstacle"
+   ],
+   "shadow": 150
+  },
+  "gondola": {
+   "kind": "static",
+   "src": "coll/alp_0.png",
+   "crop": [
+    415,
+    590,
+    630,
+    920
+   ],
+   "matte": "hard",
+   "tags": [
+    "alpen",
+    "hazard"
+   ],
+   "ax": 0.5,
+   "ay": 0.06
+  },
+  "data-coin": {
+   "kind": "spin",
+   "src": "coll/cyb_3.png",
+   "crop": [
+    406,
+    395,
+    628,
+    634
+   ],
+   "matte": "hard",
+   "out": 192,
+   "n": 12,
+   "fps": 14,
+   "rim": 0.1,
+   "rim_color": [
+    40,
+    150,
+    150
+   ],
+   "tags": [
+    "cyber",
+    "pickup"
+   ]
+  },
+  "drone-hover": {
+   "kind": "anim",
+   "src": "drone512.png",
+   "src_cw": 512,
+   "cols": 5,
+   "n": 24,
+   "start": 0,
+   "length": 24,
+   "out": 256,
+   "out_cols": 6,
+   "pad": 6,
+   "fps": 12,
+   "ax": 0.5,
+   "ay": 0.5,
+   "facing": "front",
+   "tags": [
+    "cyber",
+    "hazard"
+   ]
+  },
+  "ghost-float": {
+   "kind": "anim",
+   "src": "ghost512.png",
+   "src_cw": 512,
+   "cols": 5,
+   "n": 24,
+   "start": 0,
+   "length": 24,
+   "out": 256,
+   "out_cols": 6,
+   "pad": 6,
+   "fps": 12,
+   "ax": 0.5,
+   "ay": 0.5,
+   "facing": "front",
+   "tags": [
+    "prater",
+    "enemy"
+   ]
+  },
+  "pigeon-fly": {
+   "kind": "anim",
+   "src": "pigeon512.png",
+   "src_cw": 512,
+   "cols": 5,
+   "n": 24,
+   "start": 0,
+   "length": 24,
+   "out": 256,
+   "out_cols": 6,
+   "pad": 6,
+   "fps": 20,
+   "ax": 0.5,
+   "ay": 0.5,
+   "facing": "right",
+   "tags": [
+    "wien",
+    "hazard"
+   ]
+  },
+  "ibex-run": {
+   "kind": "cycle",
+   "src": "ibex512.png",
+   "src_cw": 512,
+   "cols": 6,
+   "n": 32,
+   "start": 1,
+   "length": 16,
+   "out": 320,
+   "out_h": 256,
+   "target_h": 206,
+   "out_cols": 6,
+   "fps": 28,
+   "smooth": 5,
+   "foot_pad": 6,
+   "facing": "right",
+   "tags": [
+    "alpen",
+    "enemy"
+   ]
+  },
+  "bee-swarm": {
+   "kind": "anim",
+   "src": "bee512.png",
+   "src_cw": 512,
+   "cols": 5,
+   "n": 24,
+   "frames": [
+    0,
+    1,
+    2,
+    3,
+    5,
+    6,
+    8,
+    10,
+    12,
+    14,
+    15,
+    16,
+    17,
+    18,
+    20,
+    22
+   ],
+   "out": 320,
+   "out_h": 192,
+   "out_cols": 4,
+   "pad": 6,
+   "fps": 14,
+   "ax": 0.5,
+   "ay": 0.5,
+   "facing": "front",
+   "tags": [
+    "wachau",
+    "hazard"
+   ]
+  },
+  "eagle-fly": {
+   "kind": "anim",
+   "src": "eagle512.png",
+   "src_cw": 512,
+   "cols": 5,
+   "n": 24,
+   "start": 0,
+   "length": 24,
+   "out": 288,
+   "out_h": 256,
+   "out_cols": 6,
+   "pad": 6,
+   "fps": 20,
+   "ax": 0.5,
+   "ay": 0.5,
+   "facing": "right",
+   "tags": [
+    "alpen",
+    "hazard"
+   ]
+  },
+  "bat-fly": {
+   "kind": "anim",
+   "src": "bat512.png",
+   "src_cw": 512,
+   "cols": 5,
+   "n": 24,
+   "start": 6,
+   "length": 12,
+   "out": 320,
+   "out_h": 224,
+   "out_cols": 6,
+   "pad": 6,
+   "fps": 22,
+   "ax": 0.5,
+   "ay": 0.5,
+   "facing": "right",
+   "tags": [
+    "finanzamt",
+    "hazard"
+   ]
+  },
+  "sachertorte": {
+   "kind": "static",
+   "src": "coll/bon_0.png",
+   "crop": [
+    88,
+    43,
+    472,
+    430
+   ],
+   "matte": "hard",
+   "tags": [
+    "wien",
+    "pickup"
+   ]
+  },
+  "lebkuchenherz": {
+   "kind": "static",
+   "src": "coll/bon_0.png",
+   "crop": [
+    619,
+    97,
+    946,
+    402
+   ],
+   "matte": "hard",
+   "tags": [
+    "prater",
+    "pickup"
+   ]
+  },
+  "zuckerwatte": {
+   "kind": "static",
+   "src": "coll/bon_0.png",
+   "crop": [
+    403,
+    311,
+    629,
+    716
+   ],
+   "matte": "hard",
+   "tags": [
+    "prater",
+    "pickup"
+   ]
+  },
+  "brezel": {
+   "kind": "static",
+   "src": "coll/bon_1.png",
+   "crop": [
+    85,
+    598,
+    459,
+    927
+   ],
+   "matte": "hard",
+   "tags": [
+    "wien",
+    "pickup"
+   ],
+   "holes_min": 300
+  },
+  "regenschirm": {
+   "kind": "static",
+   "src": "coll/bon_0.png",
+   "crop": [
+    627,
+    577,
+    992,
+    935
+   ],
+   "matte": "hard",
+   "tags": [
+    "wien",
+    "pickup"
+   ]
+  },
+  "winter-stall": {
+   "kind": "static",
+   "src": "winter/winter-stall.png",
+   "tags": [
+    "winter",
+    "obstacle"
+   ],
+   "max_side": 512
+  },
+  "winter-snowman": {
+   "kind": "static",
+   "src": "winter/winter-snowman.png",
+   "tags": [
+    "winter",
+    "obstacle"
+   ],
+   "max_side": 512
+  },
+  "winter-presents": {
+   "kind": "static",
+   "src": "winter/winter-presents.png",
+   "tags": [
+    "winter",
+    "obstacle"
+   ],
+   "max_side": 512
+  },
+  "winter-tree": {
+   "kind": "static",
+   "src": "winter/winter-tree.png",
+   "tags": [
+    "winter",
+    "obstacle"
+   ],
+   "max_side": 512
+  },
+  "winter-sled": {
+   "kind": "static",
+   "src": "winter/winter-sled.png",
+   "tags": [
+    "winter",
+    "obstacle"
+   ],
+   "max_side": 512
+  },
+  "winter-icicles": {
+   "kind": "static",
+   "src": "winter/winter-icicles.png",
+   "tags": [
+    "winter",
+    "hazard"
+   ],
+   "max_side": 512,
+   "ay": 0.0
+  },
+  "winter-snowball": {
+   "kind": "static",
+   "src": "winter/winter-snowball.png",
+   "tags": [
+    "winter",
+    "hazard"
+   ],
+   "max_side": 256
+  },
+  "winter-krampus": {
+   "kind": "static",
+   "src": "winter/winter-krampus.png",
+   "tags": [
+    "winter",
+    "enemy"
+   ],
+   "max_side": 512
+  },
+  "winter-elf": {
+   "kind": "static",
+   "src": "winter/winter-elf.png",
+   "tags": [
+    "winter",
+    "enemy"
+   ],
+   "max_side": 512
+  },
+  "winter-gingerbread": {
+   "kind": "static",
+   "src": "winter/winter-gingerbread.png",
+   "tags": [
+    "winter",
+    "enemy"
+   ],
+   "max_side": 512
+  },
+  "winter-kessel": {
+   "kind": "static",
+   "src": "winter/winter-kessel.png",
+   "tags": [
+    "winter",
+    "hazard"
+   ],
+   "max_side": 512
+  },
+  "winter-iceblock": {
+   "kind": "static",
+   "src": "winter/winter-iceblock.png",
+   "tags": [
+    "winter",
+    "obstacle"
+   ],
+   "max_side": 512
+  },
+  "winter-candycane": {
+   "kind": "static",
+   "src": "winter/winter-candycane.png",
+   "tags": [
+    "winter",
+    "obstacle"
+   ],
+   "max_side": 512
+  },
+  "winter-star": {
+   "kind": "static",
+   "src": "winter/winter-star.png",
+   "tags": [
+    "winter",
+    "pickup"
+   ],
+   "max_side": 256
+  },
+  "winter-lantern": {
+   "kind": "static",
+   "src": "winter/winter-lantern.png",
+   "tags": [
+    "winter",
+    "deco"
+   ],
+   "max_side": 512
+  },
+  "oper-piano": {
+   "kind": "static",
+   "src": "oper/oper-piano.png",
+   "tags": [
+    "oper",
+    "obstacle"
+   ],
+   "max_side": 512
+  },
+  "oper-champagne": {
+   "kind": "static",
+   "src": "oper/oper-champagne.png",
+   "tags": [
+    "oper",
+    "obstacle"
+   ],
+   "max_side": 512
+  },
+  "oper-chandelier": {
+   "kind": "static",
+   "src": "oper/oper-chandelier.png",
+   "tags": [
+    "oper",
+    "hazard"
+   ],
+   "max_side": 512,
+   "ay": 0.0
+  },
+  "oper-waiter": {
+   "kind": "static",
+   "src": "oper/oper-waiter.png",
+   "tags": [
+    "oper",
+    "enemy"
+   ],
+   "max_side": 512
+  },
+  "oper-dancers": {
+   "kind": "static",
+   "src": "oper/oper-dancers.png",
+   "tags": [
+    "oper",
+    "enemy"
+   ],
+   "max_side": 512
+  },
+  "oper-cakecart": {
+   "kind": "static",
+   "src": "oper/oper-cakecart.png",
+   "tags": [
+    "oper",
+    "obstacle"
+   ],
+   "max_side": 512
+  },
+  "oper-harp": {
+   "kind": "static",
+   "src": "oper/oper-harp.png",
+   "tags": [
+    "oper",
+    "obstacle"
+   ],
+   "max_side": 512
+  },
+  "oper-bouquet": {
+   "kind": "static",
+   "src": "oper/oper-bouquet.png",
+   "tags": [
+    "oper",
+    "obstacle"
+   ],
+   "max_side": 512
+  },
+  "oper-rope": {
+   "kind": "static",
+   "src": "oper/oper-rope.png",
+   "tags": [
+    "oper",
+    "obstacle"
+   ],
+   "max_side": 512
+  },
+  "oper-spotlight": {
+   "kind": "static",
+   "src": "oper/oper-spotlight.png",
+   "tags": [
+    "oper",
+    "hazard"
+   ],
+   "max_side": 512
+  },
+  "oper-cork": {
+   "kind": "static",
+   "src": "oper/oper-cork.png",
+   "tags": [
+    "oper",
+    "hazard"
+   ],
+   "max_side": 256
+  },
+  "oper-note": {
+   "kind": "static",
+   "src": "oper/oper-note.png",
+   "tags": [
+    "oper",
+    "pickup"
+   ],
+   "max_side": 256
+  },
+  "oper-mask": {
+   "kind": "static",
+   "src": "oper/oper-mask.png",
+   "tags": [
+    "oper",
+    "pickup"
+   ],
+   "max_side": 256
   }
+ }
 }

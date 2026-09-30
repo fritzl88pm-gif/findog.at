@@ -33,7 +33,7 @@ const TIPS = [
   "Tipp: Ein voller Energiering erlaubt einen unverwundbaren Dash.",
   "Tipp: Sprungtaste länger halten = höher springen.",
   "Tipp: Herzen sind selten – aber Schutzschilde fangen einen Treffer ab.",
-  "Tipp: Die Weltreise führt dich durch alle sechs Welten.",
+  "Tipp: Die Weltreise führt dich durch alle acht Welten.",
 ];
 
 const LOADING: GameSnapshot = {
@@ -57,7 +57,7 @@ function fmt(n: number): string {
 const MODE_LABEL: Record<RunMode, string> = { world: "Welt-Lauf", tour: "Weltreise", daily: "Tageslauf" };
 const MODE_DESC: Record<RunMode, string> = {
   world: "Endlos in einer Welt – eigene Bestenliste je Welt.",
-  tour: "Alle sechs Welten hintereinander, mit steigendem Tempo.",
+  tour: "Alle acht Welten hintereinander, mit steigendem Tempo.",
   daily: "Jeden Tag derselbe Kurs für alle – kämpfe um den Tagesrekord.",
 };
 
@@ -772,7 +772,7 @@ function HelpBody(): React.ReactElement {
         </ul>
       </div>
       <div className={styles.helpCard} style={{ gridColumn: "1 / -1" }}>
-        <h3>Sechs Welten, sechs Ideen</h3>
+        <h3>Acht Welten, acht Ideen</h3>
         <p>
           {TOUR_ORDER.map((id) => `${WORLDS[id].name}: ${WORLDS[id].mechanics.slice(0, 2).join(", ") || WORLDS[id].tagline}`).join(" · ")}
         </p>

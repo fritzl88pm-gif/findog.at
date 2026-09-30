@@ -1,0 +1,74 @@
+{
+  "sky-dusk": {
+    "file": "sky-dusk.webp",
+    "w": 1680,
+    "h": 576,
+    "alpha": false,
+    "tile": true,
+    "kb": 42
+  },
+  "sky-night": {
+    "file": "sky-night.webp",
+    "w": 1680,
+    "h": 576,
+    "alpha": false,
+    "tile": true,
+    "kb": 68
+  },
+  "far-city": {
+    "file": "far-city.webp",
+    "w": 2016,
+    "h": 691,
+    "alpha": true,
+    "tile": true,
+    "kb": 273
+  },
+  "mid-market": {
+    "file": "mid-market.webp",
+    "w": 2240,
+    "h": 768,
+    "alpha": true,
+    "tile": true,
+    "kb": 338
+  },
+  "mid-rink": {
+    "file": "mid-rink.webp",
+    "w": 2240,
+    "h": 768,
+    "alpha": true,
+    "tile": true,
+    "kb": 398
+  },
+  "mid-krampus": {
+    "file": "mid-krampus.webp",
+    "w": 2240,
+    "h": 768,
+    "alpha": true,
+    "tile": true,
+    "kb": 450
+  },
+  "near-fir": {
+    "file": "near-fir.webp",
+    "w": 2240,
+    "h": 768,
+    "alpha": true,
+    "tile": true,
+    "kb": 235
+  },
+  "ground": {
+    "file": "ground.webp",
+    "w": 1472,
+    "h": 512,
+    "alpha": false,
+    "tile": true,
+    "kb": 115
+  },
+  "ice": {
+    "file": "ice.webp",
+    "w": 1472,
+    "h": 512,
+    "alpha": false,
+    "tile": true,
+    "kb": 161
+  }
+}

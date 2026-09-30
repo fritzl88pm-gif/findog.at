@@ -1,3 +1,6 @@
+import { OPER_DEATH_NAMES } from "./worlds/oper/death-names";
+import { WINTER_DEATH_NAMES } from "./worlds/winter/death-names";
+
 /** Lesbare Bezeichnung für die Todesursache (Skin-Name → deutscher Text). Unbekanntes wird ausgeblendet. */
 const NAMES: Array<[RegExp, string]> = [
   // Wien
@@ -76,6 +79,9 @@ const NAMES: Array<[RegExp, string]> = [
   [/jqa/, "JQA"],
   [/luki/, "Luki"],
   [/pit|water|abgrund|gap/, "Abgrund"],
+  // neue Welten (eigene Dateien der Weltmodule)
+  ...WINTER_DEATH_NAMES,
+  ...OPER_DEATH_NAMES,
 ];
 
 export function deathLabel(cause: string | undefined | null): string {

@@ -67,12 +67,28 @@ function text(g: CanvasRenderingContext2D, s: string, x: number, y: number, size
 export function drawHud(g: CanvasRenderingContext2D, h: HudState): void {
   g.save();
   // --- Herzen + Punktestand (oben links) ---
-  panel(g, 22, 18, 292, 108);
-  for (let i = 0; i < MAX_HEARTS; i += 1) {
-    drawHeartVector(g, 50 + i * 50, 48, 17, h.time + i * 0.3, i < h.hearts);
+  panel(g, 22, 18, 292, 118);
+  {
+    // rot hinterlegte, leuchtende Herz-Leiste
+    const hx = 30;
+    const hy = 25;
+    const hw = 276;
+    const hh = 52;
+    const bar = g.createLinearGradient(0, hy, 0, hy + hh);
+    bar.addColorStop(0, "rgba(150,14,28,0.75)");
+    bar.addColorStop(1, "rgba(70,4,14,0.8)");
+    roundRect(g, hx, hy, hw, hh, hh / 2);
+    g.fillStyle = bar;
+    g.fill();
+    g.lineWidth = 2.5;
+    g.strokeStyle = h.hearts <= 1 ? `rgba(255,80,80,${0.65 + Math.sin(h.time * 11) * 0.3})` : "rgba(255,110,110,0.7)";
+    g.stroke();
+    for (let i = 0; i < MAX_HEARTS; i += 1) {
+      drawHeartVector(g, 62 + i * 50, 51, 19, h.time + i * 0.3, i < h.hearts, h.hearts === 1 && i === 0);
+    }
   }
-  text(g, String(h.score).replace(/\B(?=(\d{3})+(?!\d))/g, "."), 40, 106, 46, "#fff");
-  text(g, `${Math.floor(h.meters)} m`, 300, 106, 22, "rgba(255,255,255,0.75)", "right", 700);
+  text(g, String(h.score).replace(/\B(?=(\d{3})+(?!\d))/g, "."), 40, 120, 46, "#fff");
+  text(g, `${Math.floor(h.meters)} m`, 300, 120, 22, "rgba(255,255,255,0.75)", "right", 700);
 
   // --- Münzen (oben rechts) ---
   panel(g, VIEW_W - 178, 18, 156, 52);

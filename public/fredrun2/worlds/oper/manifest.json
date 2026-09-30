@@ -1,0 +1,82 @@
+{
+  "far-ballroom": {
+    "file": "far-ballroom.webp",
+    "w": 2240,
+    "h": 768,
+    "alpha": false,
+    "tile": true,
+    "kb": 333
+  },
+  "far-foyer": {
+    "file": "far-foyer.webp",
+    "w": 2240,
+    "h": 768,
+    "alpha": false,
+    "tile": true,
+    "kb": 276
+  },
+  "far-boxes": {
+    "file": "far-boxes.webp",
+    "w": 2240,
+    "h": 768,
+    "alpha": false,
+    "tile": true,
+    "kb": 331
+  },
+  "far-mirror": {
+    "file": "far-mirror.webp",
+    "w": 2240,
+    "h": 768,
+    "alpha": false,
+    "tile": true,
+    "kb": 394
+  },
+  "far-midnight": {
+    "file": "far-midnight.webp",
+    "w": 2240,
+    "h": 768,
+    "alpha": false,
+    "tile": true,
+    "kb": 340
+  },
+  "mid-columns": {
+    "file": "mid-columns.webp",
+    "w": 2240,
+    "h": 768,
+    "alpha": true,
+    "tile": true,
+    "kb": 389
+  },
+  "mid-tables": {
+    "file": "mid-tables.webp",
+    "w": 2240,
+    "h": 768,
+    "alpha": true,
+    "tile": true,
+    "kb": 426
+  },
+  "near-curtain": {
+    "file": "near-curtain.webp",
+    "w": 2240,
+    "h": 768,
+    "alpha": true,
+    "tile": true,
+    "kb": 274
+  },
+  "ground-parquet": {
+    "file": "ground-parquet.webp",
+    "w": 1472,
+    "h": 512,
+    "alpha": false,
+    "tile": true,
+    "kb": 161
+  },
+  "ground-carpet": {
+    "file": "ground-carpet.webp",
+    "w": 1472,
+    "h": 512,
+    "alpha": false,
+    "tile": true,
+    "kb": 182
+  }
+}

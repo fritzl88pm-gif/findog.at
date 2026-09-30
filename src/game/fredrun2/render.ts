@@ -702,7 +702,7 @@ export class Renderer {
   }
 }
 
-const GATE_COLORS = ["#5b7cfa", "#39b26b", "#3aa0ff", "#ff4fa3", "#f2a33a", "#22e0ff"];
+const GATE_COLORS = ["#5b7cfa", "#39b26b", "#3aa0ff", "#ff4fa3", "#f2a33a", "#22e0ff", "#8fd3ff", "#f2c14e"];
 const BACK = new Set(["decor", "wind", "speedzone", "zone", "portal"]);
 const MID = new Set(["platform", "block", "overhead", "spring", "walker", "flyer", "projectile", "swinger"]);
 const PICK = new Set(["pickup"]);

@@ -45,6 +45,14 @@
     "jingle-victory": {
       "title": "Fredrun Sieg",
       "style": "Short joyful level complete victory jingle, celebratory brass and strings, upbeat, about 8 seconds, ends on a big final chord, instrumental, no vocals"
+    },
+    "winter": {
+      "title": "Fredrun Christkindlmarkt",
+      "style": "Festive winter market adventure for a video game level: sleigh bells, celesta, glockenspiel, warm strings, soft choir oohs and playful low brass with a mischievous Krampus undertone, driving beat, cozy yet exciting, snowy Vienna, 128 bpm, minor key with major lifts, endless runner soundtrack, instrumental, seamless loop, no vocals"
+    },
+    "oper": {
+      "title": "Fredrun Opernball",
+      "style": "Fast elegant Viennese waltz in 3/4 time for a video game ball level: sweeping strings, brass fanfares, harp glissandi, glittering celesta and timpani, playful and thrilling, glamorous opera ball atmosphere, about 174 bpm, clear strong first beat, energetic endless runner soundtrack, instrumental, seamless loop, no vocals"
     }
   },
   "sfx": {}

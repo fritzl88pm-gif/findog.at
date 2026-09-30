@@ -14,7 +14,7 @@ export default function FredRun2View({ accessToken }: { accessToken: string }): 
           <div>
             <p className="eyebrow">Findog Spielpause</p>
             <h1 id="fredrun2-view-title">Fredrun 2.0</h1>
-            <p>Sechs Welten, fünf Helden, Weltreise und Tageslauf: sammle Münzen, stampfe auf Gegner und jage den Highscore.</p>
+            <p>Acht Welten, fünf Helden, Weltreise und Tageslauf: sammle Münzen, stampfe auf Gegner und jage den Highscore.</p>
           </div>
           <div className="fredrun-controls-copy" aria-label="Steuerung">
             <span>

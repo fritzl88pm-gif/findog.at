@@ -87,30 +87,41 @@ function heartPath(g: CanvasRenderingContext2D, r: number): void {
   g.closePath();
 }
 
-export function drawHeartVector(g: CanvasRenderingContext2D, cx: number, cy: number, r: number, t = 0, filled = true): void {
+export function drawHeartVector(g: CanvasRenderingContext2D, cx: number, cy: number, r: number, t = 0, filled = true, urgent = false): void {
   g.save();
   g.translate(cx, cy);
-  const beat = 1 + Math.sin(t * 6) * 0.05;
+  // Herzschlag: bei der letzten Leben schneller und stärker
+  const beat = 1 + Math.sin(t * (urgent ? 11 : 6)) * (urgent ? 0.11 : 0.05);
   g.scale(beat, beat);
   heartPath(g, r);
   if (filled) {
+    // leuchtendes, gesättigtes Rot mit hellem Rand: hebt sich von jedem Hintergrund ab
+    g.shadowColor = urgent ? "rgba(255,40,40,0.95)" : "rgba(255,50,50,0.75)";
+    g.shadowBlur = r * (urgent ? 1.1 : 0.8);
+    g.lineWidth = Math.max(4, r * 0.34);
+    g.strokeStyle = "rgba(255,255,255,0.95)";
+    g.lineJoin = "round";
+    g.stroke();
+    g.shadowBlur = 0;
     const grd = g.createLinearGradient(0, -r, 0, r);
-    grd.addColorStop(0, "#ff7a8f");
-    grd.addColorStop(1, "#e11d48");
+    grd.addColorStop(0, "#ff5252");
+    grd.addColorStop(0.45, "#f0141e");
+    grd.addColorStop(1, "#b00012");
     g.fillStyle = grd;
     g.fill();
     g.lineWidth = Math.max(2, r * 0.16);
-    g.strokeStyle = "#7f1230";
+    g.strokeStyle = "#5c0010";
     g.stroke();
-    g.fillStyle = "rgba(255,255,255,0.55)";
+    g.fillStyle = "rgba(255,255,255,0.7)";
     g.beginPath();
-    g.ellipse(-r * 0.5, -r * 0.42, r * 0.22, r * 0.13, -0.6, 0, Math.PI * 2);
+    g.ellipse(-r * 0.5, -r * 0.42, r * 0.24, r * 0.14, -0.6, 0, Math.PI * 2);
     g.fill();
   } else {
-    g.fillStyle = "rgba(30,34,52,0.55)";
+    // verlorenes Herz: dunkler Rahmen mit roter Kontur – der Platz bleibt lesbar
+    g.fillStyle = "rgba(48,6,14,0.7)";
     g.fill();
-    g.lineWidth = Math.max(2, r * 0.14);
-    g.strokeStyle = "rgba(255,255,255,0.35)";
+    g.lineWidth = Math.max(2, r * 0.16);
+    g.strokeStyle = "rgba(255,70,70,0.6)";
     g.stroke();
   }
   g.restore();

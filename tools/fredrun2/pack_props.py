@@ -42,7 +42,7 @@ REPO = Path(__file__).resolve().parents[2]
 OUT_DIR = REPO / "public" / "fredrun2" / "props"
 ORIG_DIR = REPO / "public" / "fredrun"
 MANIFEST = OUT_DIR / "manifest.json"
-WORLD_TAGS = {"wien", "alpen", "finanzamt", "prater", "wachau", "cyber", "allgemein"}
+WORLD_TAGS = {"wien", "alpen", "finanzamt", "prater", "wachau", "cyber", "winter", "oper", "allgemein"}
 TYPE_TAGS = {"obstacle", "enemy", "pickup", "deco", "hazard"}
 ALPHA_T = 40  # Schwelle fuer "sichtbar"
 

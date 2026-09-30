@@ -129,7 +129,7 @@ export interface RunStats {
   worldsVisited: WorldId[];
 }
 
-export const TOUR_ORDER: WorldId[] = ["wien", "alpen", "finanzamt", "prater", "wachau", "cyber"];
+export const TOUR_ORDER: WorldId[] = ["wien", "alpen", "finanzamt", "prater", "wachau", "cyber", "winter", "oper"];
 export const TOUR_METERS = 1300;
 
 /** Welt des heutigen Tageslaufs (für alle Spieler gleich). */

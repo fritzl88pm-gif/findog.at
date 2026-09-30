@@ -1,0 +1,185 @@
+{
+  "_doc": "Welt „winter“ (Christkindlmarkt am Rathausplatz): Kulissen (2304×768, kachelbar) und Props (1024², transparent). Erzeugung: FAL_KEY=… node tools/fredrun2/fal-art.mjs batch tools/fredrun2/art_prompts/winter.json --out <dir>",
+  "styles": {
+    "scene": "2D side-scrolling game parallax layer, stylized painterly illustration with soft gradients, rich lighting and glowing lights, polished cheerful high-end mobile endless-runner art style. Seen straight from the front in a flat orthographic side view without perspective tilt. The image must tile seamlessly horizontally: the far left edge and the far right edge continue each other. No characters, no people, no letters or writing anywhere (all signs and boards are completely blank), no logos, no watermark.",
+    "prop": "Game asset illustration in bold comic style with thick black outlines and halftone shading, vibrant saturated colors, cheerful Austrian mobile endless-runner look. Single isolated object, centered, seen from the side, fully transparent background, no ground shadow, no text, no watermark."
+  },
+  "jobs": [
+    {
+      "name": "winter-sky-dusk",
+      "style": "scene",
+      "size": "2304x768",
+      "quality": "medium",
+      "transparent": false,
+      "prompt": "Sky only, no buildings, no ground: blue-hour winter dusk over Vienna, gradient from deep indigo at the top to warm apricot and rose glow at the horizon, soft snow clouds, a few early stars, gentle warm city glow along the bottom edge."
+    },
+    {
+      "name": "winter-sky-night",
+      "style": "scene",
+      "size": "2304x768",
+      "quality": "medium",
+      "transparent": false,
+      "prompt": "Sky only, no buildings, no ground: deep midnight winter sky, dark navy to teal gradient, thousands of twinkling stars, a big soft glowing moon, subtle green-teal aurora ribbons, wispy clouds, a faint warm glow along the bottom edge."
+    },
+    {
+      "name": "winter-far-city",
+      "style": "scene",
+      "size": "2304x768",
+      "quality": "high",
+      "transparent": true,
+      "prompt": "Far background skyline of snowy Vienna at dusk: a Gothic town hall with a clock tower, a tall Gothic cathedral spire, baroque domes, Ringstrasse buildings with snow-covered roofs and warmly lit windows, hazy blue atmospheric perspective, low contrast, soft and slightly desaturated. All buildings rest on the bottom edge of the image, everything above is transparent (no sky)."
+    },
+    {
+      "name": "winter-mid-rink",
+      "style": "scene",
+      "size": "2304x768",
+      "quality": "high",
+      "transparent": true,
+      "prompt": "Middle-ground of an outdoor winter ice-skating park: a low wooden fence with fairy lights, a giant illuminated Christmas tree, a small skate hut with snow roof and blank signboards, a tent with striped awning and blank chalkboards, old-fashioned lamp posts, snow banks, warm glowing lights. All objects rest on the bottom edge of the image, everything above is transparent (no sky)."
+    },
+    {
+      "name": "winter-near-fir",
+      "style": "scene",
+      "size": "2304x768",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "Foreground silhouettes with rim lighting: large dark blue-black snow-laden fir trees and fir branches, a lamp post, snow banks and a wooden fence, big soft shapes, sparse composition with wide gaps between the objects. All objects rest on the bottom edge, everything above is transparent."
+    },
+    {
+      "name": "winter-ground",
+      "style": "scene",
+      "size": "1536x512",
+      "quality": "medium",
+      "transparent": false,
+      "prompt": "Side-on strip of a snowy cobblestone street surface: packed snow on wet dark cobblestones with small icy patches and footprints, the top edge is a thin snow-covered curb line, the strip fills the whole image from top to bottom."
+    },
+    {
+      "name": "winter-ice",
+      "style": "scene",
+      "size": "1536x512",
+      "quality": "medium",
+      "transparent": false,
+      "prompt": "Side-on strip of a sheet of glossy blue ice with white scratches, frozen bubbles and bright reflections, the top edge has a thin frosty highlight line, the strip fills the whole image from top to bottom."
+    },
+    {
+      "name": "winter-snowman",
+      "style": "prop",
+      "size": "1024x1024",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "A grumpy-cute snowman with carrot nose, coal eyes, red-white scarf, small top hat and twig arms, standing on a small snow mound."
+    },
+    {
+      "name": "winter-presents",
+      "style": "prop",
+      "size": "1024x1024",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "A tall stack of colorful wrapped Christmas gift boxes with big ribbons and bows, a little snow on top."
+    },
+    {
+      "name": "winter-tree",
+      "style": "prop",
+      "size": "1024x1024",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "A small decorated Christmas fir tree with red baubles, golden star on top and warm fairy lights, planted in a wooden crate."
+    },
+    {
+      "name": "winter-sled",
+      "style": "prop",
+      "size": "1024x1024",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "A wooden Austrian toboggan sled (Rodelschlitten) with curved metal runners, red cushion and a rope, seen from the side, flat top surface."
+    },
+    {
+      "name": "winter-icicles",
+      "style": "prop",
+      "size": "1024x1024",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "A cluster of sharp glittering icicles hanging down from a short snowy wooden roof gutter at the top of the image, the icicles point downward, translucent blue-white."
+    },
+    {
+      "name": "winter-snowball",
+      "style": "prop",
+      "size": "1024x1024",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "A single packed white snowball with a few flying snow crumbs and small speed streaks on its left side, blue shading."
+    },
+    {
+      "name": "winter-krampus",
+      "style": "prop",
+      "size": "1024x1024",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "A comic Krampus monster (Austrian Christmas folklore), furry dark brown, big curved horns, long red tongue, rusty chains, carrying a bundle of birch twigs, running in a menacing but funny pose facing right."
+    },
+    {
+      "name": "winter-elf",
+      "style": "prop",
+      "size": "1024x1024",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "A mischievous little Christmas elf with a pointy red-green hat holding a big snowball in the raised right hand, ready to throw, facing right."
+    },
+    {
+      "name": "winter-gingerbread",
+      "style": "prop",
+      "size": "1024x1024",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "A running gingerbread man cookie with white icing details, cheeky grin and gumdrop buttons, mid-run pose facing right."
+    },
+    {
+      "name": "winter-kessel",
+      "style": "prop",
+      "size": "1024x1024",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "A big copper cauldron of steaming mulled wine (Glühwein) on a small iron stand with glowing embers below, thick steam swirling upward."
+    },
+    {
+      "name": "winter-iceblock",
+      "style": "prop",
+      "size": "1024x1024",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "A large translucent blue ice block (cube) with sparkles, cracks and a frosty rim."
+    },
+    {
+      "name": "winter-candycane",
+      "style": "prop",
+      "size": "1024x1024",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "A low fence made of three giant red-white candy canes standing upright with green ribbons, a little snow at the base."
+    },
+    {
+      "name": "winter-star",
+      "style": "prop",
+      "size": "1024x1024",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "A shiny golden five-pointed Christmas star coin with bevelled edges, glossy highlights and a small sparkle, front view."
+    },
+    {
+      "name": "winter-lantern",
+      "style": "prop",
+      "size": "1024x1024",
+      "quality": "medium",
+      "transparent": true,
+      "prompt": "A tall old-fashioned iron street lantern on a pole with a glowing warm light, snow on top, decorated with a small green garland and red bow."
+    },
+    {
+      "name": "winter-mid-krampus",
+      "style": "scene",
+      "size": "2304x768",
+      "quality": "high",
+      "transparent": true,
+      "prompt": "Middle-ground of a dark midnight winter market during the Krampus run (Krampuslauf): wooden stalls with dim red lantern light, tall iron torches and bonfire baskets with orange flames, carved wooden Perchten demon masks hanging as decoration, chains and birch bundles, thin fog at the ground, dark blue and deep red palette with orange fire glow, spooky but funny. Widely spaced objects. All objects rest on the bottom edge of the image, everything above is transparent (no sky)."
+    }
+  ]
+}

@@ -9,7 +9,9 @@
 import type { Rng } from "./rng";
 import type { Sim } from "./sim";
 
-export const WORLD_IDS = ["wien", "alpen", "finanzamt", "prater", "wachau", "cyber"] as const;
+import type { MusicTrackId } from "./audio/types";
+
+export const WORLD_IDS = ["wien", "alpen", "finanzamt", "prater", "wachau", "cyber", "winter", "oper"] as const;
 export type WorldId = (typeof WORLD_IDS)[number];
 
 export const CHARACTER_IDS = ["fred", "frida", "superfred", "cyberfred", "superfrida"] as const;
@@ -312,7 +314,7 @@ export interface WorldDef {
   accent: string;
   /** dunkle UI-Farbe für Karten (CSS) */
   accentDark: string;
-  music: "wien" | "alpen" | "finanzamt" | "prater" | "wachau" | "cyber";
+  music: MusicTrackId;
   /** Bodenlinie; Standard DEFAULT_GROUND_Y */
   groundY?: number;
   /** Schwerkraft-Umkehr möglich (Decke ceilY) */

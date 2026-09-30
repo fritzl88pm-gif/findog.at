@@ -362,4 +362,4 @@ export class Spawner {
   }
 }
 
-const WORLD_ORDER_INDEX: Record<WorldId, number> = { wien: 0, alpen: 1, finanzamt: 2, prater: 3, wachau: 4, cyber: 5 };
+const WORLD_ORDER_INDEX: Record<WorldId, number> = { wien: 0, alpen: 1, finanzamt: 2, prater: 3, wachau: 4, cyber: 5, winter: 6, oper: 7 };

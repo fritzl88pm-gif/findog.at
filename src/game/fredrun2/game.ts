@@ -101,7 +101,7 @@ const ZONE_SFX: Array<[RegExp, { warn?: string; active?: string }]> = [
   [/rock|stein/, { warn: "rockfall", active: "rockfall" }],
 ];
 
-const TITLE_CASE: Record<WorldId, string> = { wien: "Wien", alpen: "Alpen", finanzamt: "Finanzamt", prater: "Prater", wachau: "Wachau", cyber: "Cyber-Wien" };
+const TITLE_CASE: Record<WorldId, string> = { wien: "Wien", alpen: "Alpen", finanzamt: "Finanzamt", prater: "Prater", wachau: "Wachau", cyber: "Cyber-Wien", winter: "Christkindlmarkt", oper: "Opernball" };
 
 export interface GameOptions {
   canvas: HTMLCanvasElement;

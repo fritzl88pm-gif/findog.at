@@ -179,7 +179,8 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
     }
   }
 
-  const proceduralId = (id: MusicTrackId): WorldMusicId => (id === "select" ? "menu" : id);
+  const PROCEDURAL_FALLBACK: Partial<Record<MusicTrackId, WorldMusicId>> = { select: "menu", winter: "alpen", oper: "wien" };
+  const proceduralId = (id: MusicTrackId): WorldMusicId => PROCEDURAL_FALLBACK[id] ?? (id as WorldMusicId);
 
   /** Startet ein Musikstück: aufgenommene Schleife, bei Ladefehler die prozedurale Komposition. */
   function startMusic(id: MusicTrackId, opts?: { crossfadeSec?: number; intensity?: number }): void {
