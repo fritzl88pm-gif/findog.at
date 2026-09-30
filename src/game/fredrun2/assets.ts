@@ -285,7 +285,7 @@ class PropLib implements PropLibrary {
     let k = o.scale ?? 1;
     if (o.h !== undefined) k = o.h / d.ch;
     else if (o.w !== undefined) k = o.w / d.cw;
-    const dw = d.cw * k;
+    const dw = d.cw * k * (o.sx ?? 1);
     const dh = d.ch * k;
     let f = o.frame ?? 0;
     if (o.frame === undefined && d.frames > 1) {

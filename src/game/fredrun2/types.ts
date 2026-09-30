@@ -250,6 +250,8 @@ export interface SpriteOpts {
   w?: number;
   /** Skalierungsfaktor auf Originalgröße der Zelle */
   scale?: number;
+  /** zusätzlicher Faktor nur auf die Breite (leichtes Strecken, z. B. Straßenbahnlänge an die Hitbox anpassen) */
+  sx?: number;
   flipX?: boolean;
   flipY?: boolean;
   /** Animationszeit in Sekunden (Frameauswahl) */
