@@ -1789,7 +1789,7 @@
     },
     "wien-tram-n0": {
       "kind": "static",
-      "src": "tram/wien-tram-n0.png",
+      "src": "tram2/wien-tram-n0.png",
       "tags": [
         "wien",
         "obstacle"
@@ -1799,7 +1799,7 @@
     },
     "wien-tram-n1": {
       "kind": "static",
-      "src": "tram/wien-tram-n1.png",
+      "src": "tram2/wien-tram-n1.png",
       "tags": [
         "wien",
         "obstacle"
@@ -1809,7 +1809,7 @@
     },
     "wien-tram-n2": {
       "kind": "static",
-      "src": "tram/wien-tram-n2.png",
+      "src": "tram2/wien-tram-n2.png",
       "tags": [
         "wien",
         "obstacle"
@@ -1819,7 +1819,7 @@
     },
     "wien-tram-n3": {
       "kind": "static",
-      "src": "tram/wien-tram-n3.png",
+      "src": "tram2/wien-tram-n3.png",
       "tags": [
         "wien",
         "obstacle"
@@ -1829,7 +1829,27 @@
     },
     "wien-tram-n4": {
       "kind": "static",
-      "src": "tram/wien-tram-n4.png",
+      "src": "tram2/wien-tram-n4.png",
+      "tags": [
+        "wien",
+        "obstacle"
+      ],
+      "max_side": 1400,
+      "max_kb": 320
+    },
+    "wien-tram-n5": {
+      "kind": "static",
+      "src": "tram2/wien-tram-n5.png",
+      "tags": [
+        "wien",
+        "obstacle"
+      ],
+      "max_side": 1400,
+      "max_kb": 320
+    },
+    "wien-tram-n6": {
+      "kind": "static",
+      "src": "tram2/wien-tram-n6.png",
       "tags": [
         "wien",
         "obstacle"

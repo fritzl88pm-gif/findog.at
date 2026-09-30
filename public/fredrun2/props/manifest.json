@@ -2454,100 +2454,140 @@
       "cols": 1,
       "rows": 1,
       "frames": 1,
-      "cw": 643,
-      "ch": 229,
+      "cw": 847,
+      "ch": 266,
       "ax": 0.5,
-      "ay": 0.9782,
+      "ay": 0.9812,
       "fps": 0,
       "loop": true,
       "tags": [
         "wien",
         "obstacle"
       ],
-      "w": 633,
-      "h": 219,
+      "w": 837,
+      "h": 256,
       "facing": "right",
-      "kb": 57
+      "kb": 65
     },
     "wien-tram-n1": {
       "file": "wien-tram-n1.webp",
       "cols": 1,
       "rows": 1,
       "frames": 1,
-      "cw": 751,
-      "ch": 229,
+      "cw": 955,
+      "ch": 266,
       "ax": 0.5,
-      "ay": 0.9782,
+      "ay": 0.9812,
       "fps": 0,
       "loop": true,
       "tags": [
         "wien",
         "obstacle"
       ],
-      "w": 741,
-      "h": 219,
+      "w": 945,
+      "h": 256,
       "facing": "right",
-      "kb": 66
+      "kb": 70
     },
     "wien-tram-n2": {
       "file": "wien-tram-n2.webp",
       "cols": 1,
       "rows": 1,
       "frames": 1,
-      "cw": 859,
-      "ch": 229,
+      "cw": 1003,
+      "ch": 266,
       "ax": 0.5,
-      "ay": 0.9782,
+      "ay": 0.9812,
       "fps": 0,
       "loop": true,
       "tags": [
         "wien",
         "obstacle"
       ],
-      "w": 849,
-      "h": 219,
+      "w": 993,
+      "h": 256,
       "facing": "right",
-      "kb": 74
+      "kb": 73
     },
     "wien-tram-n3": {
       "file": "wien-tram-n3.webp",
       "cols": 1,
       "rows": 1,
       "frames": 1,
-      "cw": 967,
-      "ch": 229,
+      "cw": 1100,
+      "ch": 266,
       "ax": 0.5,
-      "ay": 0.9782,
+      "ay": 0.9812,
       "fps": 0,
       "loop": true,
       "tags": [
         "wien",
         "obstacle"
       ],
-      "w": 957,
-      "h": 219,
+      "w": 1090,
+      "h": 256,
       "facing": "right",
-      "kb": 83
+      "kb": 78
     },
     "wien-tram-n4": {
       "file": "wien-tram-n4.webp",
       "cols": 1,
       "rows": 1,
       "frames": 1,
-      "cw": 1076,
-      "ch": 229,
+      "cw": 1160,
+      "ch": 266,
       "ax": 0.5,
-      "ay": 0.9782,
+      "ay": 0.9812,
       "fps": 0,
       "loop": true,
       "tags": [
         "wien",
         "obstacle"
       ],
-      "w": 1066,
-      "h": 219,
+      "w": 1150,
+      "h": 256,
       "facing": "right",
-      "kb": 92
+      "kb": 81
+    },
+    "wien-tram-n5": {
+      "file": "wien-tram-n5.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 1256,
+      "ch": 266,
+      "ax": 0.5,
+      "ay": 0.9812,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wien",
+        "obstacle"
+      ],
+      "w": 1246,
+      "h": 256,
+      "facing": "right",
+      "kb": 86
+    },
+    "wien-tram-n6": {
+      "file": "wien-tram-n6.webp",
+      "cols": 1,
+      "rows": 1,
+      "frames": 1,
+      "cw": 1316,
+      "ch": 266,
+      "ax": 0.5,
+      "ay": 0.9812,
+      "fps": 0,
+      "loop": true,
+      "tags": [
+        "wien",
+        "obstacle"
+      ],
+      "w": 1306,
+      "h": 256,
+      "facing": "right",
+      "kb": 89
     },
     "wine-barrel": {
       "file": "wine-barrel.webp",
