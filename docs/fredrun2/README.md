@@ -15,7 +15,7 @@ src/game/fredrun2/            (Framework-unabhängig, TypeScript strict)
   spawner.ts, patterns.ts     Level-Generator (zeitbasierte Muster, Schwierigkeitsrampe, Gast-Gegner, Belohnungen)
   bot.ts                      vorausschauender Bot (Tests, Attract-Modus im Menü, QA-Screenshots)
   characters.ts               Helden + Fähigkeiten + Preise
-  profile.ts                  Persistenz: Münzen, Freischaltungen, Bestenlisten, Einstellungen
+  profile.ts                  Persistenz: Münzen, Freischaltungen, lokale Bestenlisten (Fallback), Einstellungen
   assets.ts                   Bilder, Charakter-Atlanten (public/fredrun2/chars), Props-Bibliothek
   render.ts, hud.ts,          Zeichnen: Figur, Effekte, Partikel, HUD, Post-Processing
   particles.ts, pickups.ts
@@ -41,7 +41,7 @@ tools/fredrun2/               Python-Pack-Skripte (Sprites/Props), QA-Werkzeuge 
   Finanzamt (Stempel, Laser, Förderbänder, Dunkelheit), Prater (Pendel, Trampoline, Riesenrad-Plattformen), Wachau (Flöße, Weinfässer),
   Cyber-Wien (Schwerkraft-Umkehr, Phasen-Tore), Christkindlmarkt (Eisflächen, Schneeball-Elfen, Krampus-Verfolgung),
   Opernball (Dreiertakt-Muster, Kronleuchter-Pendel, Klavier-Sprungbrett, Spotlights).
-* Modi: **Welt-Lauf** (je Welt eigene Bestenliste), **Weltreise** (alle Welten hintereinander, Tore, steigende Schwierigkeit),
+* Modi: **Welt-Lauf** (je Welt eigene, weltweite Bestenliste – siehe HIGHSCORES.md), **Weltreise** (alle Welten hintereinander, Tore, steigende Schwierigkeit),
   **Tageslauf** (gleicher Seed für alle am selben Tag).
 * Schwierigkeit: Meter → Schwierigkeitsstufe → Tempo (470 → 1180 px/s) und Musterauswahl; Abstände in Zeit definiert ⇒ jedes Muster bleibt lösbar.
 

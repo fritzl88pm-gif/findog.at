@@ -5,6 +5,11 @@ import { CHARACTER_IDS, WORLD_IDS, type CharacterId, type RunMode, type WorldId 
 export const PROFILE_KEY = "findog.fredrun2.profile.v1";
 export const TOP_LIMIT = 10;
 export const NAME_MAX = 16;
+/**
+ * Bestenlisten-Generation: Highscores sind ab Generation 2 global (Server, jeder gegen jeden). Profile ohne diese Generation
+ * (alte, nur lokale Bestenlisten) werden beim Laden zurückgesetzt – Münzen, Helden, Einstellungen bleiben erhalten.
+ */
+export const SCORE_EPOCH = 2;
 
 export interface ScoreEntry {
   name: string;
@@ -51,6 +56,7 @@ export interface Profile {
   lifetime: Lifetime;
   seenIntro: boolean;
   dailyKey: string;
+  scoreEpoch: number;
 }
 
 export function boardKey(mode: RunMode, world: WorldId, dateKey = ""): string {
@@ -74,6 +80,7 @@ export function defaultProfile(): Profile {
     lifetime: { runs: 0, meters: 0, coins: 0, stomps: 0, nearMisses: 0, playSeconds: 0 },
     seenIntro: false,
     dailyKey: "",
+    scoreEpoch: SCORE_EPOCH,
   };
 }
 
@@ -98,13 +105,15 @@ export function normalizeProfile(raw: unknown): Profile {
   if (Array.isArray(r.unlocked)) for (const id of r.unlocked) if (isCharacterId(id)) unlocked.add(id);
   const character = isCharacterId(r.character) && unlocked.has(r.character) ? r.character : d.character;
   const best: Record<string, number> = {};
-  if (r.best && typeof r.best === "object") {
+  // Alte (lokale) Bestenlisten verfallen: ohne aktuelle Generation nichts übernehmen
+  const keepScores = r.scoreEpoch === SCORE_EPOCH;
+  if (keepScores && r.best && typeof r.best === "object") {
     for (const [k, v] of Object.entries(r.best as Record<string, unknown>)) {
       if (typeof v === "number" && Number.isFinite(v) && v >= 0 && k.length < 40) best[k] = Math.floor(v);
     }
   }
   const top: Record<string, ScoreEntry[]> = {};
-  if (r.top && typeof r.top === "object") {
+  if (keepScores && r.top && typeof r.top === "object") {
     for (const [k, list] of Object.entries(r.top as Record<string, unknown>)) {
       if (!Array.isArray(list) || k.length > 40) continue;
       const entries: ScoreEntry[] = [];
@@ -158,6 +167,7 @@ export function normalizeProfile(raw: unknown): Profile {
     },
     seenIntro: r.seenIntro === true,
     dailyKey: typeof r.dailyKey === "string" ? r.dailyKey.slice(0, 16) : "",
+    scoreEpoch: SCORE_EPOCH,
   };
 }
 

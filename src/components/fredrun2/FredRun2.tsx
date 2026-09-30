@@ -8,7 +8,7 @@ import { createAudio } from "@/game/fredrun2/audio";
 import { CHARACTERS } from "@/game/fredrun2/characters";
 import { deathLabel } from "@/game/fredrun2/death-names";
 import { FredRunGame, type GameSnapshot } from "@/game/fredrun2/game";
-import { boardKey, defaultProfile, type ScoreEntry } from "@/game/fredrun2/profile";
+import { boardKey, defaultProfile } from "@/game/fredrun2/profile";
 import { dateKey } from "@/game/fredrun2/rng";
 import { TOUR_ORDER, dailyWorld } from "@/game/fredrun2/sim";
 import { WORLD_IDS, type RunMode, type WorldId } from "@/game/fredrun2/types";
@@ -16,6 +16,7 @@ import { WORLDS } from "@/game/fredrun2/worlds";
 
 import CharacterSelect from "./CharacterSelect";
 import styles from "./fredrun2.module.css";
+import { useAccessToken, useGlobalBoard, useRunSubmission } from "./globalBoard";
 
 type Tab = "play" | "worlds" | "characters" | "board" | "settings" | "help";
 
@@ -155,12 +156,13 @@ function WorldArt({ id }: { id: WorldId }): React.ReactElement {
 export interface FredRun2Props {
   /** In die App eingebettet (wie das Original-Fredrun): Größe folgt dem Inhaltsbereich, Vollbild über die Schaltfläche. */
   embedded?: boolean;
-  /** Supabase-Sitzung der App: liefert den Spielernamen aus dem Original-Fredrun-Profil. */
+  /** Supabase-Sitzung der App: Spielername aus dem Original-Fredrun-Profil und globale Bestenliste (ohne Angabe: Sitzung des Browsers). */
   accessToken?: string;
 }
 
-export default function FredRun2({ embedded = false, accessToken = "" }: FredRun2Props = {}): React.ReactElement {
+export default function FredRun2({ embedded = false, accessToken: accessTokenProp = "" }: FredRun2Props = {}): React.ReactElement {
   const { game, snap, canvasRef, stageRef } = useGame();
+  const accessToken = useAccessToken(accessTokenProp);
   const [tab, setTab] = useState<Tab>("play");
   const [boardKeyState, setBoardKeyState] = useState<string | null>(null);
   const [tipIdx, setTipIdx] = useState(0);
@@ -278,6 +280,18 @@ export default function FredRun2({ embedded = false, accessToken = "" }: FredRun
   const character = CHARACTERS[profile.character];
   const bestKey = boardKey(profile.mode, profile.world, dateKey());
   const best = profile.best[bestKey] ?? 0;
+
+  // Globale Bestenliste (jeder gegen jeden): Anzeige im Menü, Einreichung nach jedem Lauf
+  const board = useGlobalBoard(accessToken, activeBoard, phase === "menu" && tab === "board");
+  const result = snap.result;
+  const submission = useMemo(
+    () =>
+      accessToken && result && result.score > 0
+        ? { board: result.board, runId: result.runId, name: profile.name, score: Math.floor(result.score), meters: Math.floor(result.meters), character: result.character }
+        : null,
+    [accessToken, result, profile.name],
+  );
+  const submitState = useRunSubmission(accessToken, submission);
 
   const boards = useMemo(() => {
     const list: Array<{ key: string; label: string }> = [];
@@ -433,6 +447,9 @@ export default function FredRun2({ embedded = false, accessToken = "" }: FredRun
               {tab === "board" ? (
                 <div className={styles.panel}>
                   <h2 className={styles.panelTitle}>Bestenliste</h2>
+                  <p className={styles.muted} style={{ margin: "-4px 0 10px" }}>
+                    {accessToken ? "Weltweit – jeder gegen jeden, je Spieler zählt der beste Lauf." : "Nur dieses Gerät – melde dich in Findog an, um weltweit gegen alle anzutreten."}
+                  </p>
                   <div className={styles.boardTabs}>
                     {boards.map((b) => (
                       <button key={b.key} className={`${styles.tab} ${activeBoard === b.key ? styles.tabActive : ""}`} onClick={click(() => setBoardKeyState(b.key))}>
@@ -440,7 +457,13 @@ export default function FredRun2({ embedded = false, accessToken = "" }: FredRun
                       </button>
                     ))}
                   </div>
-                  <BoardTable entries={profile.top[activeBoard] ?? []} />
+                  {accessToken ? (
+                    <GlobalBoard state={board.state} onRetry={board.retry} />
+                  ) : (
+                    <BoardTable
+                      rows={(profile.top[activeBoard] ?? []).map((e, i) => ({ rank: i + 1, name: e.name, character: e.character, meters: e.meters, score: e.score, me: false }))}
+                    />
+                  )}
                   <p className={styles.muted} style={{ marginTop: 12 }}>
                     Lebenslang: {fmt(profile.lifetime.runs)} Läufe · {fmt(profile.lifetime.meters)} m · {fmt(profile.lifetime.coins)} Münzen · {fmt(profile.lifetime.stomps)} Stampfer · {fmt(profile.lifetime.nearMisses)} knappe Rettungen
                   </p>
@@ -548,9 +571,17 @@ export default function FredRun2({ embedded = false, accessToken = "" }: FredRun
               <div className={styles.bigScore}>{fmt(snap.result.score)}</div>
               <div className={styles.muted} style={{ textAlign: "center", marginTop: -8 }}>
                 {snap.result.mode === "tour" ? "Weltreise" : snap.result.mode === "daily" ? "Tageslauf" : WORLDS[snap.result.world].name}
-                {snap.result.rank ? ` · Platz ${snap.result.rank} der Bestenliste` : ""}
                 {deathLabel(snap.result.deathCause) ? ` · gestoppt von: ${deathLabel(snap.result.deathCause)}` : ""}
               </div>
+              {accessToken && snap.result.score > 0 ? (
+                <div className={styles.muted} style={{ textAlign: "center", marginTop: 4 }} aria-live="polite">
+                  {submitState?.status === "done" && submitState.rank
+                    ? `Weltweit Platz ${submitState.rank}${submitState.score !== null ? ` · dein Bestwert ${fmt(submitState.score)}` : ""}`
+                    : submitState?.status === "failed"
+                      ? "Weltweite Bestenliste gerade nicht erreichbar."
+                      : "Weltweite Bestenliste wird aktualisiert …"}
+                </div>
+              ) : null}
               <div className={styles.stats}>
                 <div className={styles.stat}>
                   <b>{fmt(snap.result.meters)} m</b>
@@ -604,7 +635,7 @@ export default function FredRun2({ embedded = false, accessToken = "" }: FredRun
             >
               <h2 className={styles.modalTitle}>Wie heißt du?</h2>
               <p className={styles.muted} style={{ margin: 0, textAlign: "center" }}>
-                Dein Name erscheint in der Bestenliste dieses Geräts.
+                Dein Name erscheint in der weltweiten Bestenliste.
               </p>
               <input className={styles.nameInput} value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} placeholder="Fred" maxLength={16} autoFocus aria-label="Name" />
               <div className={styles.row} style={{ justifyContent: "center" }}>
@@ -646,8 +677,17 @@ export default function FredRun2({ embedded = false, accessToken = "" }: FredRun
   );
 }
 
-function BoardTable({ entries }: { entries: ScoreEntry[] }): React.ReactElement {
-  if (!entries.length) return <p className={styles.muted}>Noch keine Einträge – lauf los!</p>;
+interface BoardRow {
+  rank: number;
+  name: string;
+  character: string;
+  meters: number;
+  score: number;
+  me: boolean;
+}
+
+function BoardTable({ rows }: { rows: BoardRow[] }): React.ReactElement {
+  if (!rows.length) return <p className={styles.muted}>Noch keine Einträge – lauf los!</p>;
   return (
     <table className={styles.table}>
       <thead>
@@ -660,17 +700,46 @@ function BoardTable({ entries }: { entries: ScoreEntry[] }): React.ReactElement 
         </tr>
       </thead>
       <tbody>
-        {entries.map((e, i) => (
-          <tr key={`${e.date}-${i}`}>
-            <td className={i === 0 ? styles.rankGold : i === 1 ? styles.rankSilver : i === 2 ? styles.rankBronze : undefined}>{i + 1}</td>
-            <td>{e.name}</td>
-            <td>{CHARACTERS[e.character]?.name ?? e.character}</td>
+        {rows.map((e) => (
+          <tr key={`${e.rank}-${e.name}`} className={e.me ? styles.rowMe : undefined} aria-current={e.me ? "true" : undefined}>
+            <td className={e.rank === 1 ? styles.rankGold : e.rank === 2 ? styles.rankSilver : e.rank === 3 ? styles.rankBronze : undefined}>{e.rank}</td>
+            <td>
+              {e.name}
+              {e.me ? " (du)" : ""}
+            </td>
+            <td>{CHARACTERS[e.character as keyof typeof CHARACTERS]?.name ?? e.character}</td>
             <td style={{ textAlign: "right" }}>{fmt(e.meters)}</td>
             <td style={{ textAlign: "right" }}>{fmt(e.score)}</td>
           </tr>
         ))}
       </tbody>
     </table>
+  );
+}
+
+function GlobalBoard({ state, onRetry }: { state: ReturnType<typeof useGlobalBoard>["state"]; onRetry: () => void }): React.ReactElement {
+  if (state.status === "error") {
+    return (
+      <div>
+        <p className={styles.muted}>Die weltweite Bestenliste ist gerade nicht erreichbar.</p>
+        <button className={styles.btn} onClick={onRetry}>
+          Erneut laden
+        </button>
+      </div>
+    );
+  }
+  if (state.status !== "ready") return <p className={styles.muted}>Bestenliste wird geladen …</p>;
+  const { entries, me } = state.data;
+  const inTop = entries.some((e) => e.me);
+  return (
+    <div>
+      <BoardTable rows={entries} />
+      {me && !inTop ? (
+        <p className={styles.muted} style={{ marginTop: 10 }}>
+          Dein Platz: <b>{fmt(me.rank)}</b> · {fmt(me.score)} Punkte
+        </p>
+      ) : null}
+    </div>
   );
 }
 

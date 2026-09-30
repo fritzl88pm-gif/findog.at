@@ -1062,3 +1062,8 @@
     animation: none !important;
   }
 }
+
+.rowMe td {
+  background: rgba(255, 210, 63, 0.16);
+  font-weight: 800;
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardKey, defaultProfile, normalizeProfile, purchaseCharacter, recordRun, TOP_LIMIT } from "./profile";
+import { boardKey, defaultProfile, normalizeProfile, purchaseCharacter, recordRun, SCORE_EPOCH, TOP_LIMIT } from "./profile";
 
 const run = (score: number, coins = 10) => ({ mode: "world" as const, world: "wien" as const, character: "fred" as const, score, meters: score / 2, coins, stomps: 1, nearMisses: 2, seconds: 30 });
 
@@ -11,12 +11,25 @@ describe("Profil", () => {
   });
 
   it("normalisiert kaputte Daten", () => {
-    const p = normalizeProfile({ coins: -5, character: "hacker", unlocked: ["cyberfred", "x"], best: { a: "b", "world:wien": 12.9 }, top: { "world:wien": [{ score: 5 }, { score: "x" }] } });
+    const p = normalizeProfile({ coins: -5, character: "hacker", unlocked: ["cyberfred", "x"], scoreEpoch: SCORE_EPOCH, best: { a: "b", "world:wien": 12.9 }, top: { "world:wien": [{ score: 5 }, { score: "x" }] } });
     expect(p.coins).toBe(0);
     expect(p.character).toBe("fred");
     expect(p.unlocked).toContain("cyberfred");
     expect(p.best["world:wien"]).toBe(12);
     expect(p.top["world:wien"]).toHaveLength(1);
+  });
+
+  it("setzt alte lokale Bestenlisten zurück, behält aber Münzen und Helden", () => {
+    const old = { coins: 500, unlocked: ["cyberfred"], best: { "world:wien": 9000 }, top: { "world:wien": [{ name: "Alt", score: 9000, meters: 400, character: "fred", date: "" }] } };
+    const p = normalizeProfile(old);
+    expect(p.best).toEqual({});
+    expect(p.top).toEqual({});
+    expect(p.coins).toBe(500);
+    expect(p.unlocked).toContain("cyberfred");
+    expect(p.scoreEpoch).toBe(SCORE_EPOCH);
+    // nach dem Zurücksetzen bleiben neue Bestwerte erhalten
+    const again = normalizeProfile(JSON.parse(JSON.stringify(recordRun(p, run(300)).profile)));
+    expect(again.best["world:wien"]).toBe(300);
   });
 
   it("trägt Läufe ein, bucht Münzen und führt Bestenliste", () => {

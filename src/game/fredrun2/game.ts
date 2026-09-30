@@ -71,6 +71,9 @@ export interface RunResult {
   previousBest: number;
   worldsVisited: WorldId[];
   top: ScoreEntry[];
+  /** Board-Schlüssel (`world:<id>` | `tour` | `daily:<Datum>`) und eindeutige Lauf-ID für die globale Bestenliste */
+  board: string;
+  runId: string;
 }
 
 export interface GameSnapshot {
@@ -1006,6 +1009,8 @@ export class FredRunGame {
       previousBest: rec.previousBest,
       worldsVisited: sim.stats.worldsVisited,
       top: rec.profile.top[rec.key] ?? [],
+      board: rec.key,
+      runId: newRunId(),
     };
     this.victory = this.result.isNewBest;
     this.phase = "gameover";
@@ -1136,4 +1141,17 @@ export class FredRunGame {
   get logicalSize(): { w: number; h: number; playerX: number } {
     return { w: VIEW_W, h: VIEW_H, playerX: PLAYER_SX };
   }
+}
+
+/** Eindeutige Lauf-ID (UUID v4) – macht Einreichungen an die globale Bestenliste idempotent. */
+function newRunId(): string {
+  const c = typeof globalThis.crypto !== "undefined" ? globalThis.crypto : null;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  const b = new Uint8Array(16);
+  if (c && typeof c.getRandomValues === "function") c.getRandomValues(b);
+  else for (let i = 0; i < 16; i += 1) b[i] = Math.floor(Math.random() * 256);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
