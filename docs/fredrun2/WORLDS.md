@@ -73,7 +73,7 @@ Sichtbereich neben Mustergefahren spawnen (Abstand ≥ 1.2 s Vorlauf). `onHurt` 
   `e.age`, `e.stateT`) für Animation nutzen (z.B. Warn-Schatten, Aufprall). Münzen (`e.kind==="pickup" && e.pickup==="coin"`)
   dürfen **weltspezifisch** gezeichnet werden (Marille, Jeton, Datenchip, Euro …); gib `false` für alles zurück, was die
   Engine-Standardgrafik erledigen soll. Skin `"gateway"` (Tour-Tor) darf gezeichnet werden (`e.p.to` = Index der Zielwelt in
-  [wien, alpen, finanzamt, prater, wachau, cyber]); sonst zeichnet die Engine ein Standard-Tor.
+  [wien, alpen, finanzamt, prater, wachau, cyber, winter, oper]); sonst zeichnet die Engine ein Standard-Tor.
 * Props laden in `load(assets)`: `await assets.props.preload([...ids])`; `assets.props.has(id)` prüfen; **jede Welt muss ohne
   Props ebenfalls gut aussehen** (Fallback prozedural). Bilder aus `public/fredrun/…` (Originalspiel) dürfen per
   `assets.image(url)` als Fernkulisse genutzt werden (Kachelung durch Spiegeln nahtlos machen).

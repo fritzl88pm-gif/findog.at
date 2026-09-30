@@ -1,6 +1,6 @@
 # Fredrun 2.0
 
-Endlos-Runner im Browser – als Ansicht der App (Seitenleiste/Icon-Leiste/Dashboard „Fredrun 2.0“, aufgebaut wie das Original-Fredrun: `FredRun2View`, Kopfzeile „Findog Spielpause“, Vollbild-Schaltfläche) und eigenständig unter `/fredrun2`: sechs Welten, fünf Helden (Fred, Frida, Superfred, Cyberfred, Superfrida –
+Endlos-Runner im Browser – als Ansicht der App (Seitenleiste/Icon-Leiste/Dashboard „Fredrun 2.0“, aufgebaut wie das Original-Fredrun: `FredRun2View`, Kopfzeile „Findog Spielpause“, Vollbild-Schaltfläche) und eigenständig unter `/fredrun2`: acht Welten, fünf Helden (Fred, Frida, Superfred, Cyberfred, Superfrida –
 alle aus dem Originalspiel), Highscore/Bestenliste, Weltreise-Modus und Tageslauf. Läuft ohne Server-Anbindung
 (Speicherstand in `localStorage`), Canvas 2D, fester Zeitschritt (120 Hz) mit Interpolation, adaptive Bildqualität.
 
@@ -37,9 +37,10 @@ tools/fredrun2/               Python-Pack-Skripte (Sprites/Props), QA-Werkzeuge 
 * 3 Herzen (max. 5), Treffer = Tempo-Verlust + Unverwundbarkeit; Power-ups: Magnet, Schutzschild, Zeitlupe, Turbo-Rakete, Herz.
 * Heldenfähigkeiten: Fred „Spürnase“ (Münz-Sog), Frida „Blitzstart“ (Energie), Superfred „Cape-Gleiter“, Cyberfred „Düsen-Dash“, Superfrida „Super-Stampfer“.
 * Gast-Gegner aus dem Original (Odo, Madinger, JQA, Luki) laufen in jeder Welt entgegen (stampfen!).
-* Sechs Welten mit eigener Signatur-Mechanik: Wien (Blitz + Straßenbahn-Surfen), Alpen (Lawine, Aufwind, bröckelnde Plattformen),
+* Acht Welten mit eigener Signatur-Mechanik: Wien (Blitz + Straßenbahn-Surfen), Alpen (Lawine, Aufwind, bröckelnde Plattformen),
   Finanzamt (Stempel, Laser, Förderbänder, Dunkelheit), Prater (Pendel, Trampoline, Riesenrad-Plattformen), Wachau (Flöße, Weinfässer),
-  Cyber-Wien (Schwerkraft-Umkehr, Phasen-Tore).
+  Cyber-Wien (Schwerkraft-Umkehr, Phasen-Tore), Christkindlmarkt (Eisflächen, Schneeball-Elfen, Krampus-Verfolgung),
+  Opernball (Dreiertakt-Muster, Kronleuchter-Pendel, Klavier-Sprungbrett, Spotlights).
 * Modi: **Welt-Lauf** (je Welt eigene Bestenliste), **Weltreise** (alle Welten hintereinander, Tore, steigende Schwierigkeit),
   **Tageslauf** (gleicher Seed für alle am selben Tag).
 * Schwierigkeit: Meter → Schwierigkeitsstufe → Tempo (470 → 1180 px/s) und Musterauswahl; Abstände in Zeit definiert ⇒ jedes Muster bleibt lösbar.
@@ -54,6 +55,8 @@ tools/fredrun2/               Python-Pack-Skripte (Sprites/Props), QA-Werkzeuge 
 | Prater | Kettenkarussell-Pendel, Trampoline, Riesenrad-Gondeln, Kanonen | 5 | 18+ |
 | Wachau | Floß-Sprünge über die Donau, rollende Weinfässer, Bienen, Marillen | 5 | 23 |
 | Cyber-Wien 2099 | Schwerkraft-Umkehr (Decken-Lauf), Phasen-Tore, Drohnen, Glitch | 5 | 24 |
+| Christkindlmarkt | Eisflächen (Tempo-Rutsche), Schneeball-Elfen, Eiszapfen, Glühwein-Aufwind, Rodel-Plattformen, Krampus-Verfolgung (gemalte Kulissen, GPT Image 2) | 5 | 24+ |
+| Opernball | Dreiertakt-Folgen, Kronleuchter-Pendel, Champagner-Korken, Kellner/Tanzpaare zum Stampfen, Klavier-Sprungbrett, Spotlights (gemalte Kulissen, GPT Image 2) | 5 | 24+ |
 
 Weitere Dokumente: `ASSETS.md` (Sprite-/Prop-Konventionen), `WORLDS.md` + `WORLD_BRIEFS.md` (Welt-Vertrag und Briefings), `ENGINE_REQUESTS.md` (Wünsche der Welt-Autoren + Status), `AUDIO.md` (Klangeffekte: Sample-Bank aus Kenney-CC0-Samples, Rezepte, Neubau, Pegel).
 
