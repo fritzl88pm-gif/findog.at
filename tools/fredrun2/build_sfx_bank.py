@@ -158,7 +158,13 @@ def src(ref: str, t0: float | None = None, t1: float | None = None, thr: float =
 
 
 def cut(x: np.ndarray, t0: float, t1: float | None = None) -> np.ndarray:
-    return x[int(t0 * SR): int(t1 * SR) if t1 is not None else None]
+    """Ausschnitt [t0, t1] in Sekunden; die neuen Schnittkanten werden kurz ausgeblendet (2 ms / 5 ms), damit nichts klickt."""
+    a = int(t0 * SR)
+    b = int(t1 * SR) if t1 is not None else len(x)
+    y = x[a:b].copy()
+    if len(y) == 0:
+        return y
+    return fade(y, 0.002 if a > 0 else 0.0, 0.005 if b < len(x) else 0.0)
 
 
 def fade(x: np.ndarray, fin: float = 0.0, fout: float = 0.0, curve: str = "cos") -> np.ndarray:
@@ -470,38 +476,50 @@ def bump(dur: float, f: float, decay: float, rng: np.random.Generator | None = N
 class Spec:
     """Ein Effekt: Rezept-Funktion + Standardwerte fuer das Manifest."""
 
-    def __init__(self, name: str, fn: Callable[[], list[np.ndarray]], cat: str, peak: float, jitter: float,
-                 reverb: float | None, pan: float | None, sweep: tuple[float, float] | None, gain: float) -> None:
-        self.name, self.fn, self.cat, self.peak, self.jitter = name, fn, cat, peak, jitter
-        self.reverb, self.pan, self.sweep, self.gain = reverb, pan, sweep, gain
+    def __init__(self, name: str, fn: Callable[[], list[np.ndarray]], cat: str, lufs: float, ceil: float, jitter: float,
+                 reverb: float | None, pan: float | None, sweep: tuple[float, float] | None, sweep_flip: bool,
+                 gain: float, tail: float) -> None:
+        self.name, self.fn, self.cat, self.lufs, self.ceil, self.jitter = name, fn, cat, lufs, ceil, jitter
+        self.reverb, self.pan, self.sweep, self.sweep_flip, self.gain, self.tail = reverb, pan, sweep, sweep_flip, gain, tail
 
 
 SPECS: dict[str, Spec] = {}
+LIMITED: dict[str, float] = {}      # Effekt -> groesste Spitzenreduktion des Limiters (dB), fuer den Bericht
 
 
-def fx(name: str, cat: str, peak: float = -9.0, jitter: float = 0.03, reverb: float | None = None,
-       pan: float | None = None, sweep: tuple[float, float] | None = None, gain: float = 1.0):
+def fx(name: str, cat: str, lufs: float = -24.0, ceil: float = CEIL_DB, jitter: float = 0.03, reverb: float | None = None,
+       pan: float | None = None, sweep: tuple[float, float] | None = None, sweep_flip: bool = False,
+       gain: float = 1.0, tail: float = -46.0):
     """Rezept registrieren.
 
-    ``peak``    Ziel-Spitzenpegel der lautesten Variante in dBFS (Kategorien: UI -12..-9, haeufige Bewegung -10..-7,
-                Pickups -9..-6, Treffer/Explosionen -3..-2). Alles wird zusaetzlich auf -2 dBFS begrenzt.
+    ``lufs``    Ziel-Lautheit (lautester 200-ms-Abschnitt, K-bewertet, siehe ``loudness()``). Kategorien: UI -37..-24 (Klicks
+                leise), haeufige Bewegung/Muenzen -28..-23 (bewusst dezent), Pickups -23..-20, Treffer -17..-15, Explosionen
+                und Donner -17..-15. Kurze Effekte erreichen ihr Ziel nur bis zur Spitzenpegel-Grenze ``ceil``.
+    ``ceil``    Spitzenpegel-Grenze in dBFS (Lookahead-Limiter; nie ueber -2 dBFS). Haeufige Effekte bekommen -6..-5,
+                damit sie nie "spitz" werden, Treffer/Explosionen -3..-2.
     ``jitter``  zufaellige Tonhoehe der Laufzeit (+-Anteil, 0.03 = +-3 %) – bei melodischen Effekten klein/0.
     ``reverb``  Reverb-Send der Laufzeit (0..1) statt des Standardwertes aus SFX_META (Effekte mit eingebautem Hall: klein).
-    ``pan``     Standard-Panorama, ``sweep`` (von, bis) fuer Vorbeiflug-Effekte (Laufzeit-Pan-Automation).
+    ``pan``     Standard-Panorama, ``sweep`` (von, bis) fuer Vorbeiflug-Effekte (Laufzeit-Pan-Automation), ``sweep_flip``
+                spiegelt die Richtung zufaellig.
     ``gain``    Standard-Verstaerkung im Manifest (Feinabgleich ohne Neubau).
+    ``tail``    Ausklang-Schwelle: alles leiser als so viele dB unter der Spitze wird am Ende abgeschnitten (kurze, haeufige
+                Effekte behalten so keine unhoerbaren Hallfahnen, die den Sprite aufblaehen).
     """
 
     def deco(fn: Callable[[], list[np.ndarray]]):
-        SPECS[name] = Spec(name, fn, cat, peak, jitter, reverb, pan, sweep, gain)
+        SPECS[name] = Spec(name, fn, cat, lufs, min(ceil, CEIL_DB), jitter, reverb, pan, sweep, sweep_flip, gain, tail)
         return fn
 
     return deco
 
 
 def air(rng: np.random.Generator, dur: float, f0: float, f1: float, q: float = 1.1, attack: float = 0.02,
-        decay: float = 3.0, ref: str = "sci/thrusterFire_003", at: float = 1.0) -> np.ndarray:
-    """Luftrauschen (aus einem Triebwerks-Sample, Ausschnitt ohne Zuendphase) mit gleitendem Bandpass und Huellkurve."""
-    x = cut(load_raw(ref), at + float(rng.uniform(0, 0.5)), at + 0.5 + dur)[: int(dur * SR)]
+        decay: float = 3.0, lowcut: float = 140.0) -> np.ndarray:
+    """Luftrauschen (rosa Rauschen, dessen Tiefen abgeschnitten sind) mit gleitendem Bandpass f0 -> f1 und Huellkurve.
+
+    Ein Whoosh ist gefiltertes Rauschen; die aufgenommenen Trieb-/Kraftfeld-Samples von Kenney bestehen fast nur aus
+    Bass-Grollen und taugen nicht als Luft. Foley-Textur (Stoff, Aufpralle) kommt weiterhin aus den Samples."""
+    x = hp(noise(dur + 0.05, rng, "pink"), lowcut)[: int(dur * SR)]
     x = sweep(x, "bandpass", f0, f1, q=q)
     t = np.arange(len(x)) / SR
     e = np.minimum(1.0, t / max(attack, 1e-3)) * np.exp(-decay * t / dur)
@@ -509,7 +527,7 @@ def air(rng: np.random.Generator, dur: float, f0: float, f1: float, q: float = 1
 
 
 # ---- UI -------------------------------------------------------------------------------------------------------------
-@fx("ui-click", "ui", peak=-9, jitter=0.03, reverb=0.03)
+@fx("ui-click", "ui", lufs=-30, ceil=-6, jitter=0.03, reverb=0.03)
 def ui_click():
     # Kurzer, trockener "Tock": Zupf-Koerper (Ton) + Klick-Transiente, weich hochgefiltert
     a = mix((src("ui/select_001"), 0, 0), (src("ui/click_003"), 0, -7))
@@ -518,12 +536,12 @@ def ui_click():
     return [lp(v, 9000) for v in (a, b, c)]
 
 
-@fx("ui-hover", "ui", peak=-17, jitter=0.04, reverb=0.02)
+@fx("ui-hover", "ui", lufs=-37, ceil=-12, jitter=0.04, reverb=0.02)
 def ui_hover():
     return [lp(src("ui/tick_002"), 5500), lp(src("ui/tick_001"), 6000)]
 
 
-@fx("ui-back", "ui", peak=-11, jitter=0.03, reverb=0.03)
+@fx("ui-back", "ui", lufs=-30, ceil=-6, jitter=0.03, reverb=0.03)
 def ui_back():
     # abfallendes Zupfen: zwei Varianten, leise Klick-Ebene darunter
     a = mix((src("ui/back_002"), 0, 0), (src("ui/click_003"), 0, -12))
@@ -531,21 +549,21 @@ def ui_back():
     return [lp(a, 7000), lp(b, 7000)]
 
 
-@fx("ui-buy", "ui", peak=-7, jitter=0.0, reverb=0.10)
+@fx("ui-buy", "ui", lufs=-24, ceil=-4, jitter=0.0, reverb=0.10, tail=-40)
 def ui_buy():
     # "Ka-Ching": Muenzen klimpern + aufsteigender Bestaetigungston + Glas-Glitzern, kurzer Hall
     out = []
-    for coins, conf, glass_at in (("rpg/handleCoins", "ui/confirmation_003", 0.10), ("rpg/handleCoins2", "ui/confirmation_002", 0.12)):
-        c = hp(cut(src(coins), 0, 0.45), 500)
+    for coins, conf, glass_at in (("rpg/handleCoins", "ui/confirmation_003", 0.10),):
+        c = lp(hp(cut(src(coins), 0, 0.40), 300), 9000)
         c = fade(c, 0, 0.12)
-        k = semis(src(conf), 12)
-        g = fade(cut(src("ui/glass_004"), 0, 0.55), 0, 0.2)
-        v = mix((c, 0, -4), (k, 0.02, -3), (g, glass_at, -13))
-        out.append(reverb(v, rt60=0.55, wet=0.22, seed=f"buy{coins}"))
+        k = semis(src(conf), 7)
+        g = fade(cut(src("ui/glass_004"), 0, 0.5), 0, 0.2)
+        v = mix((c, 0, -3), (k, 0.02, -1), (g, glass_at, -16))
+        out.append(reverb(v, rt60=0.45, wet=0.2, seed=f"buy{coins}"))
     return out
 
 
-@fx("ui-denied", "ui", peak=-9, jitter=0.03, reverb=0.03)
+@fx("ui-denied", "ui", lufs=-27, ceil=-5, jitter=0.03, reverb=0.03)
 def ui_denied():
     # Zwei dumpfe Zupfer abwaerts ("nope"), tief gestimmt und weich
     a = semis(mix((src("ui/error_001"), 0, 0), (src("imp/impactSoft_medium_000"), 0, -8)), -5)
@@ -592,31 +610,33 @@ def scatter(rng: np.random.Generator, pool: list[np.ndarray], n: int, t0: float,
 
 
 # ---- Bewegung -------------------------------------------------------------------------------------------------------
-@fx("jump", "move", peak=-9, jitter=0.04, reverb=0.05)
+@fx("jump", "move", lufs=-27, ceil=-6, jitter=0.04, reverb=0.05, tail=-40)
 def jump():
-    # "hup": Stoff-Flick + aufsteigendes Luftrauschen + ganz leiser Retro-Aufwaertsschub (gibt dem Sprung Charakter)
+    # "hup": Abstoss vom Boden (Schuh-Transiente, damit der Effekt sofort einsetzt) + Stoff-Flick + aufsteigendes Luftrauschen
+    # + leiser Retro-Aufwaertsschub, der dem Sprung Charakter gibt
     rng = rng_for("jump")
     out = []
-    for cloth, pj, (f0, f1), pj_db, st in (
-        ("rpg/cloth2", "dig/phaseJump2", (500, 2600), -13, 0),
-        ("rpg/cloth3", "dig/phaseJump3", (600, 3000), -14, 1),
-        ("rpg/cloth1", "dig/phaseJump1", (450, 2400), -13, -1),
-        ("rpg/cloth4", "dig/phaseJump4", (700, 3200), -15, 2),
+    for cloth, pj, push, (f0, f1), pj_db, st in (
+        ("rpg/cloth2", "dig/phaseJump2", "imp/footstep_concrete_002", (900, 4200), -8, 0),
+        ("rpg/cloth3", "dig/phaseJump3", "imp/footstep_carpet_003", (1000, 4800), -9, 1),
+        ("rpg/cloth1", "dig/phaseJump1", "imp/footstep_concrete_004", (800, 4000), -8, -1),
+        ("rpg/cloth4", "dig/phaseJump4", "imp/footstep_carpet_001", (1100, 5200), -9, 2),
     ):
         a = air(rng, 0.20, f0, f1, decay=3.2)
         c = hp(fade(src(cloth, 0, 0.13), 0, 0.05), 600)
-        b = lp(semis(fade(src(pj, 0, 0.2), 0, 0.08), st), 3200)
-        out.append(mix((a, 0.0, -4), (c, 0.0, -3), (b, 0.0, pj_db)))
+        b = lp(semis(fade(src(pj, 0, 0.2), 0, 0.08), st), 3500)
+        k = hp(lp(src(push, 0, 0.08), 3200), 300)
+        out.append(mix((k, 0.0, -2), (a, 0.0, -3), (c, 0.0, -4), (b, 0.0, pj_db)))
     return out
 
 
-@fx("doublejump", "move", peak=-9, jitter=0.03, reverb=0.10)
+@fx("doublejump", "move", lufs=-26, ceil=-6, jitter=0.03, reverb=0.10, tail=-40)
 def doublejump():
     # heller, "luftiger": Sprung-Basis + Glitzer-Zupfer (zweiter Impuls in der Luft)
     rng = rng_for("doublejump")
     out = []
     for i, (cloth, pj, spark, note) in enumerate((("rpg/cloth3", "dig/phaseJump5", "ui/glass_002", "E6"), ("rpg/cloth1", "dig/phaseJump4", "ui/glass_003", "G6"))):
-        a = air(rng, 0.22, 1200, 5200, q=1.0, decay=2.8)
+        a = air(rng, 0.22, 1600, 6500, q=1.0, decay=2.4)
         c = hp(fade(src(cloth, 0, 0.11), 0, 0.05), 900)
         b = lp(fade(src(pj, 0, 0.2), 0, 0.08), 4200)
         s = pluck(note, 2, 0.14)
@@ -625,7 +645,7 @@ def doublejump():
     return out
 
 
-@fx("land", "move", peak=-8, jitter=0.05, reverb=0.05)
+@fx("land", "move", lufs=-26, ceil=-5, jitter=0.05, reverb=0.05, tail=-40)
 def land():
     # Landung: dumpfer Koerper (weicher Aufprall) + Schuh-Transiente + kleines Scharren
     out = []
@@ -635,40 +655,40 @@ def land():
         ("imp/impactSoft_medium_003", "imp/footstep_concrete_003", "imp/footstep_grass_002"),
         ("imp/impactSoft_medium_004", "imp/footstep_wood_001", "imp/footstep_grass_004"),
     )):
-        b = lp(src(body), 320)
-        s = hp(src(step), 350)
-        g = hp(lp(cut(src(scuff), 0, 0.14), 5000), 700)
-        out.append(mix((b, 0, 0), (s, 0, -6), (g, 0.012, -14)))
+        b = lp(src(body), 420)
+        s = hp(src(step), 280)
+        g = hp(lp(cut(src(scuff), 0, 0.14), 6000), 1100)
+        out.append(mix((b, 0, -6), (s, 0, 0), (g, 0.012, -9)))
     return out
 
 
-@fx("slide", "move", peak=-11, jitter=0.05, reverb=0.04)
+@fx("slide", "move", lufs=-28, ceil=-8, jitter=0.05, reverb=0.04, tail=-40)
 def slide():
     # Rutschen: Stoff-Reibung + weiches, fallendes Reibungsrauschen (Boden), dumpfer Bodenkontakt am Anfang
     rng = rng_for("slide")
     out = []
-    for cloth, f0, f1, body in (("rpg/cloth3", 1500, 600, "imp/impactSoft_medium_002"), ("rpg/cloth1", 1900, 800, "imp/impactSoft_medium_004"), ("rpg/cloth4", 1300, 500, "imp/impactSoft_medium_001")):
-        c = hp(cut(src(cloth), 0, 0.34), 350)
-        n = air(rng, 0.34, f0, f1, q=0.7, attack=0.05, decay=1.6, ref="sci/thrusterFire_001", at=0.8)
+    for cloth, f0, f1, body in (("rpg/cloth3", 2600, 1000, "imp/impactSoft_medium_002"), ("rpg/cloth1", 3000, 1200, "imp/impactSoft_medium_004"), ("rpg/cloth4", 2400, 900, "imp/impactSoft_medium_001")):
+        c = hp(cut(src(cloth), 0, 0.34), 400)
+        n = air(rng, 0.34, f0, f1, q=0.7, attack=0.05, decay=1.6)
         fr = fade(mix((c, 0, -2), (n, 0, 0)), 0.02, 0.14)
-        out.append(mix((fr, 0, 0), (lp(src(body), 300), 0, -3)))
+        out.append(mix((fr, 0, 0), (lp(src(body), 380), 0, -9)))
     return out
 
 
-@fx("dash", "move", peak=-8, jitter=0.03, reverb=0.08)
+@fx("dash", "move", lufs=-23, ceil=-5, jitter=0.03, reverb=0.08)
 def dash():
     # Schub: Luft-Whoosh mit steigendem Bandpass + "Wumm" des Kraftfelds + Sub-Stoss
     rng = rng_for("dash")
     out = []
-    for i, (ff, f0, f1) in enumerate((("sci/forceField_001", 350, 4200), ("sci/forceField_003", 500, 5200), ("sci/forceField_000", 300, 3600))):
-        a = air(rng, 0.30, f0, f1, q=1.3, attack=0.03, decay=2.2)
-        w = hp(fade(src(ff, 0, 0.30), 0.01, 0.12), 180)
-        s = sub("sci/lowFrequency_explosion_001", 0, 170, 0.22, g_db=-10)
-        out.append(mix((a, 0, -1), (w, 0, -9), (s, 0, 0)))
+    for i, (ff, f0, f1) in enumerate((("sci/forceField_001", 800, 6500), ("sci/forceField_003", 1000, 7000), ("sci/forceField_000", 700, 6000))):
+        a = air(rng, 0.30, f0, f1, q=1.3, attack=0.03, decay=1.6)
+        w = hp(fade(src(ff, 0, 0.30), 0.01, 0.12), 300)
+        s = sub("sci/lowFrequency_explosion_001", 0, 200, 0.22)
+        out.append(mix((a, 0, 0), (w, 0, -10), (s, 0, -8)))
     return out
 
 
-@fx("stomp", "move", peak=-3, jitter=0.03, reverb=0.08)
+@fx("stomp", "move", lufs=-19, ceil=-2, jitter=0.03, reverb=0.08, tail=-42)
 def stomp():
     # Stampfer: schwere Platte + tiefer Aufprall + Crunch-Anteil, kurzer Raum
     out = []
@@ -681,12 +701,12 @@ def stomp():
         s = lp(src(soft), 200)
         c = fade(lp(src(crunch, 0, 0.26), 1800), 0, 0.15)
         m = lp(src(metal, 0, 0.35), 900)
-        v = mix((p, 0, -2), (s, 0, -1), (c, 0, -9), (m, 0, -5))
+        v = mix((p, 0, 0), (s, 0, -6), (c, 0, -7), (m, 0, -7))
         out.append(reverb(v, rt60=0.35, wet=0.16, seed=f"stomp{i}"))
     return out
 
 
-@fx("stomp-chain", "move", peak=-6, jitter=0.0, reverb=0.16)
+@fx("stomp-chain", "move", lufs=-23, ceil=-4, jitter=0.0, reverb=0.16, tail=-40)
 def stomp_chain():
     # Kombo-Stampfer: leichterer Aufprall + aufsteigende Zupf-Terz-Kette (wird mit der Kettenlaenge hoeher gestimmt)
     out = []
@@ -699,53 +719,46 @@ def stomp_chain():
     return out
 
 
-@fx("spring", "move", peak=-8, jitter=0.03, reverb=0.12)
+@fx("spring", "move", lufs=-22, ceil=-5, jitter=0.03, reverb=0.12)
 def spring():
     # Sprungfeder: aufsteigendes "Boing" (Retro-Phasensprung) + Metall-Twang + Luft
     rng = rng_for("spring")
     out = []
-    for pj, metal in (("dig/phaseJump1", "imp/impactMetal_light_001"), ("dig/phaseJump2", "imp/impactMetal_light_004")):
+    for pj, metal in (("dig/phaseJump1", "imp/impactMetal_light_001"),):
         b = lp(fade(src(pj), 0, 0.12), 5200)
         t = semis(hp(src(metal, 0, 0.25), 900), 3)
-        a = air(rng, 0.25, 800, 4200, decay=2.5)
+        a = air(rng, 0.25, 1500, 6000, decay=2.2)
         out.append(mix((b, 0, -2), (t, 0, -7), (a, 0, -12)))
     return out
 
 
-@fx("portal", "move", peak=-6, jitter=0.02, reverb=0.10, sweep=(-0.7, 0.7))
+@fx("portal", "move", lufs=-20, ceil=-3, jitter=0.02, reverb=0.10, sweep=(-0.7, 0.7), tail=-36)
 def portal():
     # Portal: Kraftfeld-Schwellen + rueckwaerts laufendes Glas-Glitzern + Luft-Riser, halliger Ausklang
     rng = rng_for("portal")
-    out = []
-    for ff, door, note in (("sci/forceField_000", "sci/doorOpen_001", "E6"), ("sci/forceField_002", "sci/doorOpen_002", "B5")):
-        w = hp(fade(src(ff), 0.05, 0.25), 140)
-        g = reverse(ring(note, 0.7, "ui/glass_004", fout=0.05))
-        g = fade(g, 0.3, 0.02)
-        a = air(rng, 0.85, 300, 6000, q=1.0, attack=0.45, decay=1.0)
-        d = lp(fade(src(door), 0.05, 0.3), 7000)
-        v = mix((w, 0, -2), (g, 0.15, -10), (a, 0, -6), (d, 0.2, -13))
-        out.append(reverb(v, rt60=0.9, wet=0.3, seed=f"portal{ff}"))
-    return out
+    w = hp(fade(src("sci/forceField_000", 0, 0.75), 0.05, 0.2), 220)
+    g = fade(reverse(ring("E6", 0.55, "ui/glass_004", fout=0.05)), 0.25, 0.01)
+    a = air(rng, 0.7, 500, 7000, q=1.0, attack=0.4, decay=0.8)
+    d = lp(fade(src("sci/doorOpen_001"), 0.05, 0.3), 7000)
+    v = mix((w, 0, -7), (g, 0.12, -8), (a, 0, 0), (d, 0.15, -9))
+    return [reverb(v, rt60=0.6, wet=0.25, seed="portal")]
 
 
-@fx("wallbreak", "move", peak=-2, jitter=0.03, reverb=0.12)
+@fx("wallbreak", "move", lufs=-16, ceil=-2, jitter=0.03, reverb=0.12, tail=-36)
 def wallbreak():
     # Wand bricht: Holz-/Stein-Knall + Crunch-Wolke + Sub + verstreute Bruchstuecke
     rng = rng_for("wallbreak")
-    out = []
-    for i, (crunch, crack, sub_ref) in enumerate((("sci/explosionCrunch_000", "imp/impactPlank_medium_001", "sci/lowFrequency_explosion_001"), ("sci/explosionCrunch_001", "imp/impactPlank_medium_002", "sci/lowFrequency_explosion_000"))):
-        c = sweep(src(crunch, 0, 0.7), "lowpass", 9000, 1400, q=0.8)
-        c = fade(c, 0, 0.25)
-        k = src(crack)
-        s = sub(sub_ref, 0, 220, 0.6, g_db=-1)
-        debris = scatter(rng, [src(f"imp/impactMining_00{j}", 0, 0.3) for j in range(5)], 6, 0.05, 0.45, -8, -14, st=3, length=0.7)
-        v = mix((c, 0, -4), (k, 0, -1), (s, 0, -3), (debris, 0, 0))
-        out.append(reverb(v, rt60=0.55, wet=0.2, seed=f"wall{i}"))
-    return out
+    c = sweep(src("sci/explosionCrunch_000", 0, 0.6), "lowpass", 9000, 1400, q=0.8)
+    c = fade(c, 0, 0.25)
+    k = src("imp/impactPlank_medium_001")
+    s_ = sub("sci/lowFrequency_explosion_001", 0, 220, 0.55, g_db=-1)
+    debris = scatter(rng, [src(f"imp/impactMining_00{j}", 0, 0.3) for j in range(5)], 6, 0.05, 0.4, -8, -14, st=3, length=0.6)
+    v = mix((c, 0, -3), (k, 0, -1), (s_, 0, -9), (debris, 0, 0))
+    return [reverb(v, rt60=0.4, wet=0.18, seed="wall")]
 
 
 # ---- Pickups / Power-ups ---------------------------------------------------------------------------------------------
-@fx("coin", "pick", peak=-8, jitter=0.015, reverb=0.10)
+@fx("coin", "pick", lufs=-26, ceil=-5, jitter=0.015, reverb=0.10, tail=-38)
 def coin():
     # "Bling-Ling": zwei aufsteigende Zupftoene (Quarte, wie ein Muenz-Ding) mit Glas-Nachklang + Metall-Klick eines Chips.
     # Die Varianten unterscheiden sich in Klangfarbe (Zupfer/Glas/Klick), nicht in der Tonhoehe -> Kombos klingen einheitlich.
@@ -754,72 +767,69 @@ def coin():
            (1, 1, "ui/glass_001", "cas/chips-stack-5"), (2, 2, "ui/glass_003", "cas/chips-collide-2"))
     for i, (p1, p2, rr, clk) in enumerate(cfg):
         v = mix(
-            (pluck("B5", p1, 0.10), 0, 0), (ring("B5", 0.22, rr, -4), 0, -6),
-            (pluck("E6", p2, 0.12), 0.055, 0), (ring("E6", 0.40, rr, -4), 0.055, -5),
+            (pluck("B5", p1, 0.10), 0, 0), (ring("B5", 0.20, rr, -4), 0, -6),
+            (pluck("E6", p2, 0.12), 0.055, 0), (ring("E6", 0.34, rr, -4), 0.055, -5),
             (hp(cut(src(clk), 0, 0.06), 2500), 0, -9),
         )
         out.append(reverb(v, rt60=0.30, wet=0.14, seed=f"coin{i}"))
     return out
 
 
-@fx("gem", "pick", peak=-6, jitter=0.01, reverb=0.16)
+@fx("gem", "pick", lufs=-22, ceil=-4, jitter=0.01, reverb=0.16, tail=-38)
 def gem():
     # Edelstein: schnelle Glitzer-Kaskade (Pentatonik) mit langem, glasigem Nachklang und Hall
     out = []
     for i, (notes, rr) in enumerate((("E6 G#6 B6 E7 G#7", "ui/glass_002"), ("D6 F#6 A6 D7 F#7", "ui/glass_003"))):
         ns = notes.split()
         pings = arp(pluck("E6", 2, 0.12), hz("E6"), ns, 0.048, ramp_db=0.8)
-        rings = arp(ring("E6", 0.5, rr, fout=0.3), hz("E6"), ns, 0.048, ramp_db=0.5)
-        top = ring(ns[-1], 0.9, "ui/glass_004", -2, fout=0.5)
+        rings = arp(ring("E6", 0.4, rr, fout=0.25), hz("E6"), ns, 0.048, ramp_db=0.5)
+        top = ring(ns[-1], 0.55, "ui/glass_004", -2, fout=0.35)
         v = mix((pings, 0, 0), (rings, 0, -4), (top, 0.19, -8), (hp(cut(src("cas/chips-handle-1"), 0, 0.4), 4000), 0.02, -14))
-        out.append(reverb(v, rt60=0.9, wet=0.28, seed=f"gem{i}"))
+        out.append(reverb(v, rt60=0.6, wet=0.24, seed=f"gem{i}"))
     return out
 
 
-@fx("heart", "pick", peak=-7, jitter=0.0, reverb=0.16)
+@fx("heart", "pick", lufs=-22, ceil=-4, jitter=0.0, reverb=0.16, tail=-38)
 def heart():
     # Herz: zwei weiche Herzschlag-Bumms + warmer aufsteigender Akkord
-    thump = lp(semis(src("imp/impactSoft_medium_001"), -4), 260)
-    thump2 = lp(semis(src("imp/impactSoft_medium_003"), -5), 240)
+    thump = lp(semis(src("imp/impactSoft_medium_001"), -2), 420)
+    thump2 = lp(semis(src("imp/impactSoft_medium_003"), -3), 380)
     notes = ["C5", "E5", "G5", "C6"]
     warm = arp(lp(pluck("C5", 1, 0.5), 5000), hz("C5"), notes, 0.075, ramp_db=0.5)
     rings = arp(ring("C6", 0.55, "ui/glass_002", fout=0.3), hz("C6"), notes[1:] + ["E6"], 0.075, ramp_db=0.0)
-    v = mix((thump, 0, 0), (thump2, 0.14, -2), (warm, 0.06, -2), (rings, 0.06, -9))
+    v = mix((thump, 0, -5), (thump2, 0.14, -7), (warm, 0.06, 0), (rings, 0.06, -7))
     return [reverb(v, rt60=0.8, wet=0.25, seed="heart")]
 
 
-@fx("powerup", "pick", peak=-6, jitter=0.0, reverb=0.16)
+@fx("powerup", "pick", lufs=-21, ceil=-3, jitter=0.0, reverb=0.16, tail=-38)
 def powerup():
     # Power-up: aufsteigendes Zupf-Arpeggio (C-Dur) ueber Retro-Aufwaertstreppe, Luft-Riser und Glitzer-Abschluss
     rng = rng_for("powerup")
     out = []
-    for i, (pu, plk) in enumerate((("dig/powerUp7", 2), ("dig/powerUp12", 1))):
+    for i, (pu, plk) in enumerate((("dig/powerUp7", 2),)):
         notes = ["C5", "E5", "G5", "C6", "E6"]
         ap = arp(pluck("C5", plk, 0.3), hz("C5"), notes, 0.05, ramp_db=0.8)
         steps = lp(cut(src(pu), 0, 0.6), 5200)
-        riser = air(rng, 0.42, 600, 6500, q=1.0, attack=0.3, decay=1.2)
+        riser = air(rng, 0.42, 1200, 7500, q=1.0, attack=0.3, decay=1.0)
         top = ring("E7", 0.6, "ui/glass_002", fout=0.35)
         v = mix((ap, 0, 0), (steps, 0, -9), (riser, 0, -9), (top, 0.25, -6))
         out.append(reverb(v, rt60=0.7, wet=0.24, seed=f"pow{i}"))
     return out
 
 
-@fx("shield-on", "pick", peak=-7, jitter=0.02, reverb=0.16)
+@fx("shield-on", "pick", lufs=-21, ceil=-4, jitter=0.02, reverb=0.16, tail=-38)
 def shield_on():
     # Schild: Kraftfeld baut sich auf (Schwellen) + Glas-Riser + Metall-Ping am Ende
     rng = rng_for("shield-on")
-    out = []
-    for ff, ping, note in (("sci/forceField_003", "imp/impactMetal_light_001", "G6"), ("sci/forceField_004", "imp/impactMetal_light_003", "D6")):
-        w = hp(fade(cut(src(ff), 0, 0.62), 0.03, 0.2), 250)
-        g = fade(reverse(ring(note, 0.5, "ui/glass_004", fout=0.02)), 0.25, 0.01)
-        a = air(rng, 0.5, 500, 5000, q=1.2, attack=0.32, decay=1.0)
-        p = hp(cut(src(ping), 0, 0.3), 1200)
-        v = mix((w, 0, 0), (g, 0.12, -7), (a, 0, -9), (p, 0.6, -6), (ring(note, 0.6, "ui/glass_002", fout=0.4), 0.62, -8))
-        out.append(reverb(v, rt60=0.7, wet=0.22, seed=f"sh{ff}"))
-    return out
+    w = hp(fade(src("sci/forceField_003", 0, 0.5), 0.03, 0.16), 300)
+    g = fade(reverse(ring("G6", 0.4, "ui/glass_004", fout=0.02)), 0.2, 0.01)
+    a = air(rng, 0.42, 800, 6500, q=1.2, attack=0.26, decay=0.9)
+    p = hp(src("imp/impactMetal_light_001", 0, 0.3), 1200)
+    v = mix((w, 0, -6), (g, 0.1, -6), (a, 0, -3), (p, 0.46, -3), (ring("G6", 0.5, "ui/glass_002", fout=0.35), 0.47, -7))
+    return [reverb(v, rt60=0.6, wet=0.2, seed="sh")]
 
 
-@fx("shield-hit", "pick", peak=-5, jitter=0.03, reverb=0.14)
+@fx("shield-hit", "pick", lufs=-21, ceil=-3, jitter=0.03, reverb=0.14, tail=-40)
 def shield_hit():
     # Schildtreffer: heller Metall-Klang + kurzer Kraftfeld-Ruck + Glas-Splitter
     out = []
@@ -832,31 +842,31 @@ def shield_hit():
     return out
 
 
-@fx("slowmo-on", "pick", peak=-6, jitter=0.0, reverb=0.16)
+@fx("slowmo-on", "pick", lufs=-21, ceil=-4, jitter=0.0, reverb=0.16, tail=-36)
 def slowmo_on():
-    # Zeitlupe an: Tape-Stop (Kraftfeld gleitet nach unten) + tiefer Wumm + Retro-Abwaertsschub, Filter schliesst sich
-    w = glide(src(("sci/forceField_000")), 1.0, 0.32)
-    w = sweep(w, "lowpass", 7000, 320, q=1.1)
-    thump = sub("imp/impactSoft_heavy_001", 0, 200, 0.4)
+    # Zeitlupe an: Tape-Stop (harmonisches Summen gleitet nach unten, Filter schliesst sich) + Bumms + Retro-Abwaertsschub
+    w = glide(fade(src("dig/zap2", 0, 0.7), 0, 0.05), 1.0, 0.45)
+    w = sweep(w, "lowpass", 6500, 500, q=1.1)
+    thump = sub("imp/impactSoft_heavy_001", 0, 320, 0.4)
     d = glide(lp(src("dig/lowDown"), 2600), 1.0, 0.55)
-    v = mix((w, 0.02, 0), (thump, 0, -3), (d, 0.05, -9))
+    v = mix((w, 0.02, 0), (thump, 0, -7), (d, 0.05, -8))
     v = fade(v, 0, 0.35)
     return [reverb(v, rt60=0.8, wet=0.25, seed="slowon")]
 
 
-@fx("slowmo-off", "pick", peak=-8, jitter=0.0, reverb=0.14)
+@fx("slowmo-off", "pick", lufs=-23, ceil=-5, jitter=0.0, reverb=0.14, tail=-38)
 def slowmo_off():
     # Zeitlupe aus: Tonhoehe schnellt zurueck (Tape-Start), Luft-Riser, "Snap" + Glas-Ping am Ende
     rng = rng_for("slowmo-off")
-    w = glide(fade(src("sci/forceField_002", 0, 0.55), 0.06, 0.05), 0.45, 1.25)
-    w = sweep(w, "lowpass", 400, 7000, q=1.1)
-    a = air(rng, 0.34, 400, 7500, q=1.1, attack=0.25, decay=0.8)
+    w = glide(fade(src("dig/zap2", 0, 0.5), 0.05, 0.05), 0.5, 1.3)
+    w = sweep(w, "lowpass", 600, 7000, q=1.1)
+    a = air(rng, 0.34, 800, 7500, q=1.1, attack=0.25, decay=0.6)
     snap = mix((src("ui/click_003"), 0, 0), (hp(src("imp/impactGeneric_light_001"), 500), 0, -3))
-    v = mix((w, 0, 0), (a, 0, -5), (snap, 0.30, -1), (ring("B6", 0.4, "ui/glass_002", fout=0.25), 0.30, -6))
+    v = mix((w, 0, 0), (a, 0, -4), (snap, 0.30, -1), (ring("B6", 0.4, "ui/glass_002", fout=0.25), 0.30, -6))
     return [reverb(v, rt60=0.5, wet=0.2, seed="slowoff")]
 
 
-@fx("magnet-on", "pick", peak=-7, jitter=0.02, reverb=0.12)
+@fx("magnet-on", "pick", lufs=-22, ceil=-4, jitter=0.02, reverb=0.12, tail=-38)
 def magnet_on():
     # Magnet: summendes Kraftfeld mit Tremolo, steigend + metallisches "Einrasten"
     w = semis(src("sci/forceField_004", 0, 0.55), 5)
@@ -868,7 +878,7 @@ def magnet_on():
 
 
 # ---- Treffer / Combo -----------------------------------------------------------------------------------------------------
-@fx("hurt", "hit", peak=-2.5, jitter=0.03, reverb=0.10)
+@fx("hurt", "hit", lufs=-17, ceil=-2, jitter=0.03, reverb=0.10, tail=-38)
 def hurt():
     # Autsch: Faustschlag-Koerper + Sub + kurzer elektrischer "Zap" (Schmerz) + Crunch
     out = []
@@ -881,43 +891,37 @@ def hurt():
         s = lp(src(soft), 190, 2)
         z = semis(fade(src(laser, 0, 0.3), 0, 0.15), -5)
         c = fade(lp(src(crunch, 0, 0.14), 3500), 0, 0.09)
-        out.append(reverb(mix((p, 0, 0), (s, 0, -3), (z, 0, -9), (c, 0, -8)), rt60=0.3, wet=0.12, seed=f"hurt{i}"))
+        out.append(reverb(mix((p, 0, 0), (s, 0, -8), (z, 0, -8), (c, 0, -6)), rt60=0.3, wet=0.12, seed=f"hurt{i}"))
     return out
 
 
-@fx("death", "hit", peak=-2, jitter=0.02, reverb=0.16)
+@fx("death", "hit", lufs=-15.5, ceil=-2, jitter=0.02, reverb=0.16, tail=-34)
 def death():
     # Tod: grosser Einschlag, Crunch-Wolke die sich tiefpassend verabschiedet, langer Sub-Ausklang, absackender Retro-Ton
-    out = []
-    for i, (crunch, boom, fall, clang) in enumerate((
-        ("sci/explosionCrunch_002", "sci/lowFrequency_explosion_000", "dig/lowDown", "imp/impactMetal_heavy_001"),
-        ("sci/explosionCrunch_004", "sci/lowFrequency_explosion_001", "dig/zapThreeToneDown", "imp/impactMetal_heavy_003"),
-    )):
-        c = sweep(src(crunch, 0, 1.3), "lowpass", 9000, 260, q=0.9)
-        c = fade(c, 0, 0.5)
-        b = fade(sub(boom, 0, 300, 1.5), 0, 0.6)
-        f = glide(lp(src(fall), 3000), 1.0, 0.45)
-        f = fade(f, 0, 0.3)
-        k = lp(src(clang), 5000)
-        v = mix((c, 0, -1), (b, 0, -2), (f, 0.04, -9), (k, 0, -6))
-        out.append(reverb(v, rt60=1.0, wet=0.28, seed=f"death{i}"))
-    return out
+    c = sweep(src("sci/explosionCrunch_002", 0, 1.0), "lowpass", 9000, 260, q=0.9)
+    c = fade(c, 0, 0.4)
+    b = fade(sub("sci/lowFrequency_explosion_000", 0, 300, 1.3), 0, 0.5)
+    f = glide(lp(src("dig/lowDown"), 3000), 1.0, 0.5)
+    f = fade(f, 0, 0.3)
+    k = lp(src("imp/impactMetal_heavy_001"), 5000)
+    v = mix((c, 0, -1), (b, 0, -5), (f, 0.04, -8), (k, 0, -5))
+    return [reverb(v, rt60=0.8, wet=0.26, seed="death")]
 
 
-@fx("near-miss", "hit", peak=-9, jitter=0.03, reverb=0.08, sweep=(-0.8, 0.8))
+@fx("near-miss", "hit", lufs=-24, ceil=-6, jitter=0.03, reverb=0.08, sweep=(-0.8, 0.8), sweep_flip=True, tail=-38)
 def near_miss():
     # Knapp vorbei: Luft-Whoosh mit fallendem Bandpass + Doppler-Tonhoehen-Abfall (Pan-Vorbeiflug macht die Laufzeit)
     rng = rng_for("near-miss")
     out = []
     for i, (f0, f1, sw) in enumerate(((3800, 900, "rpg/knifeSlice2"), (3200, 800, "rpg/knifeSlice"))):
-        a = air(rng, 0.34, f0, f1, q=1.3, attack=0.07, decay=1.6)
+        a = air(rng, 0.34, f0, f1, q=1.3, attack=0.07, decay=1.4, lowcut=300)
         s = lp(cut(src(sw), 0.1, 0.45), 6500)
-        v = glide(mix((a, 0, 0), (fade(s, 0.03, 0.15), 0.02, -5)), 1.2, 0.78)
+        v = glide(mix((a, 0, 0), (fade(s, 0.03, 0.15), 0.02, -5)), 1.2, 0.8)
         out.append(fade(v, 0.01, 0.1))
     return out
 
 
-@fx("combo-up", "hit", peak=-8, jitter=0.0, reverb=0.16)
+@fx("combo-up", "hit", lufs=-25, ceil=-5, jitter=0.0, reverb=0.16, tail=-38)
 def combo_up():
     # Kombo steigt: drei aufsteigende Zupfer + Glas (wird mit der Kombohoehe hoeher gestimmt)
     out = []
@@ -929,27 +933,27 @@ def combo_up():
     return out
 
 
-@fx("combo-break", "hit", peak=-8, jitter=0.03, reverb=0.10)
+@fx("combo-break", "hit", lufs=-25, ceil=-5, jitter=0.03, reverb=0.10, tail=-38)
 def combo_break():
     # Kombo reisst: fallender Retro-Ton, Glas-Knacks, dumpfer Bumms
     out = []
-    for i, (fall, glass, body) in enumerate((("dig/highDown", "imp/impactGlass_light_001", "imp/impactSoft_medium_001"), ("dig/phaserDown1", "imp/impactGlass_light_003", "imp/impactSoft_medium_002"))):
+    for i, (fall, glass, body) in enumerate((("dig/highDown", "imp/impactGlass_light_001", "imp/impactSoft_medium_001"),)):
         d = lp(fade(src(fall), 0, 0.15), 3200)
         g = hp(src(glass), 1200)
         b = lp(src(body), 240)
-        out.append(mix((d, 0, 0), (g, 0.0, -5), (b, 0.02, -4)))
+        out.append(mix((d, 0, 0), (g, 0.0, -5), (b, 0.02, -9)))
     return out
 
 
 # ---- Ablauf / Stinger -----------------------------------------------------------------------------------------------
-@fx("countdown", "flow", peak=-8, jitter=0.0, reverb=0.10)
+@fx("countdown", "flow", lufs=-27, ceil=-6, jitter=0.0, reverb=0.10, tail=-40)
 def countdown():
     # Countdown-Tick: sauberer Ton A5 (Zupfer + Glas) mit winzigem Klick
     v = mix((pluck("A5", 1, 0.22), 0, 0), (ring("A5", 0.30, "ui/glass_002", fout=0.2), 0, -5), (src("ui/click_003"), 0, -10))
     return [v]
 
 
-@fx("go", "flow", peak=-5, jitter=0.0, reverb=0.16)
+@fx("go", "flow", lufs=-22, ceil=-3, jitter=0.0, reverb=0.16, tail=-38)
 def go():
     # "GO!": C-Dur-Akkord (Zupfer + Glas) mit Anschlag, aufsteigender Luft und Crunch
     rng = rng_for("go")
@@ -957,13 +961,13 @@ def go():
     chord = mix(*[(pluck(n, 2 if i % 2 else 1, 0.45), 0, 0) for i, n in enumerate(notes)])
     rings = mix(*[(ring(n, 0.9, "ui/glass_002", fout=0.5), 0, -3) for n in ["C6", "E6", "G6", "C7"]])
     hit = lp(src("imp/impactPlate_medium_002"), 5200)
-    w = air(rng, 0.4, 600, 7500, q=1.0, attack=0.22, decay=1.1)
+    w = air(rng, 0.4, 1200, 8000, q=1.0, attack=0.22, decay=1.0)
     cr = fade(lp(src("sci/explosionCrunch_000", 0, 0.25), 2500), 0, 0.15)
     v = mix((chord, 0, 0), (rings, 0, -5), (hit, 0, -4), (w, 0, -8), (cr, 0, -12))
     return [reverb(v, rt60=0.9, wet=0.28, seed="go")]
 
 
-@fx("checkpoint", "flow", peak=-6, jitter=0.0, reverb=0.16)
+@fx("checkpoint", "flow", lufs=-22, ceil=-3, jitter=0.0, reverb=0.16, tail=-38)
 def checkpoint():
     # Checkpoint: vier aufsteigende Glockenzupfer (G-C-E-G), letzter klingt lange nach, luftiger Glanz
     notes = ["G5", "C6", "E6", "G6"]
@@ -974,20 +978,20 @@ def checkpoint():
     return [reverb(v, rt60=1.0, wet=0.3, seed="cp")]
 
 
-@fx("world-transition", "flow", peak=-2, jitter=0.0, reverb=0.20)
+@fx("world-transition", "flow", lufs=-17, ceil=-2, jitter=0.0, reverb=0.20, tail=-38)
 def world_transition():
-    # Weltwechsel: rueckwaerts laufende Crunch-Wolke + Luft-Riser (1.1 s) -> Einschlag mit Sub -> Glockenglanz und langer Hall
+    # Weltwechsel: rueckwaerts laufende Crunch-Wolke + Luft-Riser (1.1 s) -> Einschlag mit Sub -> Glitzerrauschen, Hall.
+    # Bewusst atonal: die Engine spielt zeitgleich den Weltwechsel-Jingle (Musik) darueber, Toene wuerden sich reiben.
     rng = rng_for("world")
     rise = reverse(sweep(src("sci/explosionCrunch_001", 0, 1.2), "lowpass", 6500, 500, q=0.8))
     rise = fade(rise, 0.1, 0.01)
-    air_ = air(rng, 1.15, 200, 9000, q=1.0, attack=0.9, decay=0.5)
+    air_ = air(rng, 1.15, 400, 9500, q=1.0, attack=0.9, decay=0.5)
     T = 1.12
-    hit = mix((lp(src("imp/impactPlate_heavy_002"), 5500), 0, 0), (sub("sci/lowFrequency_explosion_001", 0, 260, 0.9), 0, -1),
-              (fade(lp(src("sci/explosionCrunch_000", 0, 0.5), 1800), 0, 0.3), 0, -6))
-    bells = arp(pluck("C6", 2, 0.4), hz("C6"), ["C6", "E6", "G6", "C7"], 0.08, ramp_db=0.5)
-    rings = arp(ring("C6", 0.9, "ui/glass_002", fout=0.5), hz("C6"), ["C6", "E6", "G6", "C7"], 0.08, ramp_db=0.0)
-    v = mix((rise, 0, -1), (air_, 0, -7), (hit, T, 0), (bells, T + 0.05, -6), (rings, T + 0.05, -10))
-    return [reverb(v, rt60=1.4, wet=0.32, seed="world")]
+    hit = mix((lp(src("imp/impactPlate_heavy_002"), 5500), 0, 0), (sub("sci/lowFrequency_explosion_001", 0, 260, 0.9), 0, -7),
+              (fade(lp(src("sci/explosionCrunch_000", 0, 0.5), 1800), 0, 0.3), 0, -4))
+    sparkle = hp(fade(cut(src("cas/chips-handle-1"), 0, 0.5), 0.02, 0.3), 5000)
+    v = mix((rise, 0, -1), (air_, 0, -7), (hit, T, 0), (sparkle, T + 0.03, -12))
+    return [reverb(v, rt60=1.1, wet=0.3, seed="world")]
 
 
 # ---- Weltspezifisch ---------------------------------------------------------------------------------------------------
@@ -1002,7 +1006,7 @@ def flicker(x: np.ndarray, rng: np.random.Generator, gap: tuple[float, float] = 
     return x * uniform_filter1d(g, size=int(0.003 * SR) | 1)
 
 
-@fx("lightning-warn", "world", peak=-8, jitter=0.03, reverb=0.10)
+@fx("lightning-warn", "world", lufs=-23, ceil=-5, jitter=0.03, reverb=0.10)
 def lightning_warn():
     # Blitz-Warnung: elektrisches Summen (Zap-Sample) + anschwellendes, flackerndes Knistern + leiser Tief-Brumm
     rng = rng_for("lightning-warn")
@@ -1014,101 +1018,101 @@ def lightning_warn():
     return [reverb(mix((buzz, 0, -3), (st, 0, 0), (hum, 0, -6)), rt60=0.4, wet=0.14, seed="lw")]
 
 
-@fx("thunder", "world", peak=-2, jitter=0.03, reverb=0.10)
+@fx("thunder", "world", lufs=-17, ceil=-2, jitter=0.03, reverb=0.10, tail=-36)
 def thunder():
     # Donner: scharfer Knall (Blitzeinschlag), darauf rollendes, tief werdendes Grollen mit langem Hall
     out = []
-    for i, (crunch, boom, slow) in enumerate((("sci/explosionCrunch_004", "sci/lowFrequency_explosion_000", 0.62), ("sci/explosionCrunch_003", "sci/lowFrequency_explosion_001", 0.55))):
+    for i, (crunch, boom, slow) in enumerate((("sci/explosionCrunch_004", "sci/lowFrequency_explosion_000", 0.62),)):
         crack = hp(fade(src("sci/explosionCrunch_000", 0, 0.22), 0, 0.12), 1400)
         roll = resample_rate(src(crunch), slow)
-        roll = sweep(roll, "lowpass", 1000, 110, q=0.7)
+        roll = sweep(roll, "lowpass", 2000, 200, q=0.7)
         roll = fade(roll, 0.06, 1.0)
         b = fade(sub(boom, -2, 260, None), 0, 0.8)
-        v = mix((crack, 0, -2), (roll, 0.09, 0), (b, 0.09, -3))
-        v = reverb(v, rt60=1.6, wet=0.35, lowcut=60, seed=f"thunder{i}")
-        out.append(fade(v, 0, 0.9))
+        v = mix((crack, 0, -2), (roll, 0.09, 0), (b, 0.09, -7))
+        v = reverb(v, rt60=1.3, wet=0.33, lowcut=60, seed=f"thunder{i}")
+        out.append(fade(v[: int(2.7 * SR)], 0, 0.8))
     return out
 
 
-@fx("tram-bell", "world", peak=-5, jitter=0.02, reverb=0.08)
+@fx("tram-bell", "world", lufs=-22, ceil=-4, jitter=0.02, reverb=0.08, tail=-38)
 def tram_bell():
     # Strassenbahn "Ding-Ding-Ding": dreimal die schwere Glocke, um eine Oktave nach oben gestimmt, leicht ueberlappend
     out = []
     for i, (bell, st) in enumerate((("imp/impactBell_heavy_003", 10), ("imp/impactBell_heavy_002", 11))):
         b = fade(hp(semis(src(bell), st), 250), 0, 0.2)
-        b = cut(b, 0, 0.42)
+        b = cut(b, 0, 0.36)
         click = hp(src("rpg/metalClick", 0, 0.1), 2000)
         v = mix((b, 0.0, -1), (b, 0.125, 0), (b, 0.25, 1), (click, 0.0, -14), length=0.75)
         out.append(reverb(v, rt60=0.5, wet=0.15, seed=f"tram{i}"))
     return out
 
 
-@fx("stamp-thud", "world", peak=-4, jitter=0.04, reverb=0.10)
+@fx("stamp-thud", "world", lufs=-20, ceil=-3, jitter=0.04, reverb=0.10, tail=-40)
 def stamp_thud():
     # Behoerden-Stempel: Buch-Klatschen (Papier) + schwerer Holz-Aufprall + dumpfer Bumms
     out = []
     for i, (book, wood, soft) in enumerate((("rpg/bookPlace1", "imp/impactWood_heavy_000", "imp/impactSoft_heavy_000"), ("rpg/bookPlace2", "imp/impactWood_heavy_002", "imp/impactSoft_heavy_002"), ("rpg/bookPlace3", "imp/impactWood_heavy_004", "imp/impactSoft_heavy_004"))):
-        v = mix((hp(src(book), 250), 0, -2), (src(wood), 0, 0), (lp(src(soft), 200), 0, -3))
+        v = mix((hp(src(book), 250), 0, -1), (src(wood), 0, 0), (lp(src(soft), 260), 0, -8))
         out.append(reverb(v, rt60=0.3, wet=0.12, seed=f"stamp{i}"))
     return out
 
 
-@fx("laser-zap", "world", peak=-7, jitter=0.04, reverb=0.10)
+@fx("laser-zap", "world", lufs=-23, ceil=-4, jitter=0.04, reverb=0.10, tail=-40)
 def laser_zap():
     # Laser: kurzer "Pew" aus zwei Laser-Samples mit leisem Sub-Klick
     out = []
     for i, (a, b, sb) in enumerate((("sci/laserRetro_002", "sci/laserSmall_001", "imp/impactSoft_medium_000"), ("sci/laserSmall_002", "sci/laserRetro_000", "imp/impactSoft_medium_002"), ("sci/laserRetro_004", "sci/laserSmall_004", "imp/impactSoft_medium_004"))):
         x = fade(src(a, 0, 0.26), 0, 0.05)
         y = semis(fade(src(b, 0, 0.26), 0, 0.05), 2)
-        out.append(mix((x, 0, 0), (y, 0, -5), (lp(src(sb), 260), 0, -8)))
+        out.append(mix((x, 0, 0), (y, 0, -5), (lp(src(sb), 300), 0, -13)))
     return out
 
 
-@fx("paper-flutter", "world", peak=-12, jitter=0.05, reverb=0.08)
+@fx("paper-flutter", "world", lufs=-33, ceil=-10, jitter=0.05, reverb=0.08)
 def paper_flutter():
     # Papierflattern: Karten-Fächer und Buchblätter, hochpassgefiltert (leicht, luftig)
     out = []
-    for ref, n0, n1 in (("cas/card-fan-1", 0.0, 0.6), ("rpg/bookFlip2", 0.0, 0.42), ("cas/card-fan-2", 0.0, 0.7)):
+    for ref, n0, n1 in (("cas/card-fan-1", 0.0, 0.5), ("rpg/bookFlip2", 0.0, 0.42), ("cas/card-fan-2", 0.0, 0.6)):
         x = hp(cut(src(ref), n0, n1), 500)
         out.append(fade(x, 0.004, 0.08))
     return out
 
 
-@fx("cannon", "world", peak=-2, jitter=0.03, reverb=0.14)
+@fx("cannon", "world", lufs=-15, ceil=-2, jitter=0.03, reverb=0.14, tail=-36)
 def cannon():
     # Kanone: Mündungsknall (Crunch) + tiefer Druck + Metall-Klang, langer Hall-Ausklang
     out = []
-    for i, (crunch, boom, clang, plate) in enumerate((("sci/explosionCrunch_001", "sci/lowFrequency_explosion_000", "sci/impactMetal_001", "imp/impactPlate_heavy_001"), ("sci/explosionCrunch_003", "sci/lowFrequency_explosion_001", "sci/impactMetal_003", "imp/impactPlate_heavy_004"))):
+    for i, (crunch, boom, clang, plate) in enumerate((("sci/explosionCrunch_001", "sci/lowFrequency_explosion_000", "sci/impactMetal_001", "imp/impactPlate_heavy_001"),)):
         c = sweep(src(crunch, 0, 0.9), "lowpass", 8000, 1500, q=0.8)
         c = fade(c, 0, 0.3)
         b = fade(sub(boom, 0, 300, 1.2), 0, 0.5)
         k = lp(src(clang, 0, 0.5), 2500)
         p = semis(lp(src(plate), 3000), -6)
-        v = mix((c, 0, -2), (b, 0, -2), (k, 0, -8), (p, 0, -5))
-        out.append(reverb(v, rt60=0.9, wet=0.3, seed=f"cannon{i}"))
+        v = mix((c, 0, -2), (b, 0, -7), (k, 0, -6), (p, 0, -4))
+        out.append(reverb(v, rt60=0.7, wet=0.28, seed=f"cannon{i}"))
     return out
 
 
-@fx("splash", "world", peak=-6, jitter=0.05, reverb=0.16)
+@fx("splash", "world", lufs=-22, ceil=-4, jitter=0.05, reverb=0.16, tail=-36)
 def splash():
     # Platsch: Wasser-Rauschen (Bandpass faellt), "Bloop" des Eintauchens (Drop-Samples) + verstreute Tropfen
     rng = rng_for("splash")
     out = []
     for i, (bloop, drops) in enumerate((("ui/drop_004", ("ui/drop_001", "ui/drop_002", "ui/drop_003")), ("ui/drop_003", ("ui/drop_004", "ui/drop_002", "ui/drop_001")))):
-        w = air(rng, 0.42, 5500, 1400, q=0.8, attack=0.012, decay=3.0)
+        w = air(rng, 0.36, 5500, 1400, q=0.8, attack=0.012, decay=3.0)
         b = lp(semis(src(bloop), 4), 4000)
-        dr = scatter(rng, [semis(src(d), 7) for d in drops], 5, 0.10, 0.42, -5, -12, st=5, length=0.5)
+        dr = scatter(rng, [semis(src(d), 7) for d in drops], 4, 0.08, 0.34, -5, -12, st=5, length=0.4)
         out.append(reverb(mix((w, 0, 0), (b, 0, -1), (dr, 0, -6)), rt60=0.5, wet=0.2, seed=f"splash{i}"))
     return out
 
 
-@fx("barrel-roll", "world", peak=-8, jitter=0.04, reverb=0.08, sweep=(-0.5, 0.5))
+@fx("barrel-roll", "world", lufs=-26, ceil=-6, jitter=0.04, reverb=0.08, sweep=(-0.5, 0.5))
 def barrel_roll():
     # Fass rollt: dumpfe Holz-Schlaege in beschleunigender Folge ueber grollendem Boden-Rumpeln
     out = []
-    for i in range(2):
+    for i in range(1):
         rng = rng_for("barrel-roll", i)
-        pool = [lp(src(f"imp/impactWood_heavy_00{j}", 0, 0.24), 1100) for j in range(5)] + [src(f"imp/footstep_wood_00{j}") for j in range(4)]
+        pool = [lp(src(f"imp/impactPlank_medium_00{j}", 0, 0.24), 2200) for j in range(5)] + [lp(src(f"imp/impactWood_medium_00{j}", 0, 0.24), 1500) for j in range(4)]
         n = 8
         layers = []
         t = 0.0
@@ -1118,13 +1122,13 @@ def barrel_roll():
             layers.append((x, t, -8 + 8 * e + float(rng.uniform(-1.5, 1.5))))
             t += 0.125 - k * 0.006 + float(rng.uniform(-0.01, 0.01))
         hits = mix(*layers, length=0.95)
-        rumble = lp(noise(0.95, rng, "brown"), 300)
+        rumble = lp(noise(0.95, rng, "brown"), 500)
         rumble = am(rumble, 9 + 3 * i, 0.7) * np.sin(np.linspace(0, math.pi, len(rumble))) ** 0.7
-        out.append(mix((hits, 0, 0), (rumble, 0, -4)))
+        out.append(mix((hits, 0, 0), (rumble, 0, -7)))
     return out
 
 
-@fx("glitch", "world", peak=-7, jitter=0.03, reverb=0.08)
+@fx("glitch", "world", lufs=-23, ceil=-5, jitter=0.03, reverb=0.08)
 def glitch():
     # Glitch: Stotter-Folge aus Mini-Glitches (zufaellige Tonhoehe) ueber zerhacktem, bit-reduziertem "Weltraum-Muell"
     out = []
@@ -1140,37 +1144,36 @@ def glitch():
         ticks = mix(*layers, length=0.4)
         tr = bitcrush(hp(cut(src(trash), 0.0, 0.4), 500), 5, 3)
         tr = tr * (rng.random(int(0.4 * SR) // 900 + 1).repeat(900)[: len(tr)] > 0.35)
-        out.append(fade(mix((ticks, 0, 0), (tr, 0, -6)), 0.002, 0.05))
+        out.append(fade(hp(mix((ticks, 0, 0), (tr, 0, -6)), 250), 0.002, 0.05))
     return out
 
 
-@fx("avalanche-warn", "world", peak=-5, jitter=0.02, reverb=0.16)
+@fx("avalanche-warn", "world", lufs=-21, ceil=-4, jitter=0.02, reverb=0.16, tail=-36)
 def avalanche_warn():
-    # Lawinen-Warnung: anschwellendes Grollen (rueckwaerts gelaufener Sub-Boom + tiefes Crunch-Rollen) mit Eis-Knacken
+    # Lawinen-Warnung: anschwellendes Grollen (tiefes Crunch-Rollen + langer Sub) mit Eis-Knacken
     rng = rng_for("avalanche")
-    swell = reverse(sub("sci/lowFrequency_explosion_000", 0, 280, 1.3))
-    swell = fade(swell, 0.4, 0.15)
-    roll = sweep(resample_rate(src("sci/explosionCrunch_004", 0, 1.9), 0.8), "lowpass", 260, 600, q=0.8)
-    roll = fade(roll[: int(1.3 * SR)], 0.8, 0.25)
-    ice = scatter(rng, [hp(src(f"imp/impactGlass_light_00{j}"), 2500) for j in range(5)], 5, 0.2, 1.0, -14, -8, st=4, length=1.3)
-    return [reverb(mix((swell, 0, 0), (roll, 0, -3), (ice, 0, -8)), rt60=1.0, wet=0.25, seed="aval")]
+    swell = fade(sub("sci/lowFrequency_explosion_000", -3, 280, 1.2), 0.25, 0.3)
+    roll = sweep(resample_rate(src("sci/explosionCrunch_004", 0, 1.9), 0.8), "lowpass", 500, 1500, q=0.8)
+    roll = fade(roll[: int(1.2 * SR)], 0.35, 0.3)
+    ice = scatter(rng, [hp(src(f"imp/impactGlass_light_00{j}"), 2500) for j in range(5)], 5, 0.15, 0.9, -14, -8, st=4, length=1.2)
+    return [reverb(mix((swell, 0, -7), (roll, 0, 0), (ice, 0, -8)), rt60=0.8, wet=0.22, seed="aval")]
 
 
-@fx("rockfall", "world", peak=-4, jitter=0.04, reverb=0.12)
+@fx("rockfall", "world", lufs=-21, ceil=-3, jitter=0.04, reverb=0.12, tail=-36)
 def rockfall():
     # Steinschlag: Brocken poltern (Mining-Aufpralle, zufaellig verteilt) + grosser Aufprall am Ende
     out = []
-    for i in range(2):
+    for i in range(1):
         rng = rng_for("rockfall", i)
         pool = [lp(src(f"imp/impactMining_00{j}", 0, 0.35), 5000) for j in range(5)] + [src(f"imp/impactGeneric_light_00{j}") for j in range(3)]
         hits = scatter(rng, pool, 10, 0.0, 0.62, -9, -3, st=4, length=1.0)
-        big = mix((lp(src("imp/impactSoft_heavy_001"), 260), 0, 0), (src("imp/impactMining_004", 0, 0.5), 0, -3))
+        big = mix((lp(src("imp/impactSoft_heavy_001"), 300), 0, -8), (src("imp/impactMining_004", 0, 0.5), 0, 0))
         rumble = fade(lp(noise(0.8, rng, "brown"), 350), 0.1, 0.4)
-        out.append(reverb(mix((hits, 0, 0), (big, 0.64, 0), (rumble, 0, -8)), rt60=0.5, wet=0.2, seed=f"rock{i}"))
+        out.append(reverb(mix((hits, 0, 0), (big, 0.64, 2), (rumble, 0, -12)), rt60=0.5, wet=0.2, seed=f"rock{i}"))
     return out
 
 
-@fx("crumble", "world", peak=-8, jitter=0.05, reverb=0.10)
+@fx("crumble", "world", lufs=-25, ceil=-6, jitter=0.05, reverb=0.10, tail=-36)
 def crumble():
     # Broeckelnder Boden: Kiesel-Kruemel (Schritt-/Mining-Schnipsel) in abnehmender Dichte ueber dumpfem Rumpeln
     out = []
@@ -1179,11 +1182,11 @@ def crumble():
         pool = [hp(cut(src(f"imp/footstep_grass_00{j}"), 0, 0.12), 900) for j in range(5)] + [lp(src(f"imp/impactMining_00{j}", 0, 0.2), 4000) for j in range(3)]
         bits = scatter(rng, pool, 9, 0.0, 0.42, -3, -12, st=5, length=0.55)
         low = fade(lp(src("sci/explosionCrunch_00%d" % (i + 1), 0, 0.5), 700), 0.03, 0.3)
-        out.append(mix((bits, 0, 0), (low, 0, -8)))
+        out.append(mix((bits, 0, 0), (low, 0, -12)))
     return out
 
 
-@fx("enemy-defeat", "world", peak=-5, jitter=0.03, reverb=0.12)
+@fx("enemy-defeat", "world", lufs=-21, ceil=-3, jitter=0.03, reverb=0.12, tail=-38)
 def enemy_defeat():
     # Gegner besiegt: satter "Bonk" (Faust + Blech) + kurzes, aufsteigendes Glitzer-Duo
     out = []
@@ -1194,3 +1197,311 @@ def enemy_defeat():
         r = arp(ring("G6", 0.3, glass, fout=0.2), hz("G6"), ["G6", "D7"], 0.07)
         out.append(reverb(mix((p, 0, 0), (t, 0, -5), (ch, 0.05, -6), (r, 0.05, -10)), rt60=0.4, wet=0.15, seed=f"defeat{i}"))
     return out
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Feinschliff, Sprite, Kodierung, Manifest
+# ---------------------------------------------------------------------------------------------------------------------
+def finish(spec: Spec, variants: list[np.ndarray]) -> list[np.ndarray]:
+    """Rohvarianten -> auslieferbare Varianten: Gleichanteil weg, sauber getrimmt/ausgeblendet, gleich laut, auf Zielpegel."""
+    outs = []
+    for x in variants:
+        x = signal.sosfilt(_sos("highpass", 18.0, 1), np.asarray(x, dtype=np.float64))   # Gleichanteil / Infraschall
+        a = max(0, onset(x, -60.0) - int(0.0004 * SR))
+        b = end_of(x, spec.tail)
+        x = x[a:b]
+        x = fade(x, 0.0004, min(0.06, 0.3 * sec(x)))
+        outs.append(x)
+    # Varianten eines Effekts gleich laut machen (max. +-4 dB Korrektur), danach die Gruppe auf die Ziel-Lautheit des Effekts;
+    # der Lookahead-Limiter haelt die Spitzen unter der Grenze (kurze/spitze Effekte bleiben dadurch leiser als das Ziel)
+    ld = [loudness(x) for x in outs]
+    ref = float(np.mean(ld))
+    outs = [x * db(float(np.clip(ref - l, -4.0, 4.0))) for x, l in zip(outs, ld)]
+    g = spec.lufs - float(np.mean([loudness(x) for x in outs]))
+    res = []
+    for x in outs:
+        y = x * db(g)
+        z = limit(y, spec.ceil)
+        LIMITED[spec.name] = max(LIMITED.get(spec.name, 0.0), peak_db(y) - peak_db(z))
+        res.append(z)
+    return res
+
+
+def sync_pulse(rng: np.random.Generator) -> np.ndarray:
+    """Kurzer Rauschimpuls (1.5 ms, Hann) – Referenz zum Ausmessen des MP3-Encoder-Delays in der Laufzeit."""
+    n = int(0.0015 * SR)
+    return rng.standard_normal(n) * np.hanning(n) * 0.9
+
+
+def detect_sync(x: np.ndarray, sr: int, at: float, half: float = 0.05) -> float:
+    """Zeitpunkt (s), an dem der Sync-Puls einsetzt: erster Wert >= 40 % des Fenstermaximums. MUSS zu bank.ts passen."""
+    a = max(0, int((at - half) * sr))
+    seg = np.abs(x[a: int((at + half) * sr)])
+    i = int(np.argmax(seg >= 0.4 * seg.max()))
+    return (a + i) / sr
+
+
+def build_sprite(items: list[tuple[str, int, np.ndarray]]) -> tuple[np.ndarray, list[tuple[str, int, int, int]]]:
+    """Alle Varianten hintereinander legen. Rueckgabe: (Sprite, [(name, idx, start_sample, laenge)])."""
+    pos = int(round(LEAD * SR))
+    layout = []
+    for name, idx, x in items:
+        layout.append((name, idx, pos, len(x)))
+        pos += len(x) + int(round(GAP * SR))
+    total = pos - int(round(GAP * SR)) + int(round(TAIL * SR))
+    sprite = np.zeros(total)
+    for (name, idx, st, n), (_, _, x) in zip(layout, items):
+        sprite[st: st + n] = x
+    p = sync_pulse(rng_for("sync"))
+    a = int(round(SYNC_AT * SR)) - len(p) // 2
+    sprite[a: a + len(p)] = p
+    return sprite, layout
+
+
+def encode_mp3(pcm: np.ndarray, path: Path, kbps: int) -> None:
+    """mono f32 -> MP3 (libmp3lame, CBR). bitexact: gleiche Eingabe = gleiche Datei; Xing/LAME-Kopf bleibt (Gapless-Info)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [_ffmpeg, "-v", "error", "-y", "-f", "f32le", "-ar", str(SR), "-ac", "1", "-i", "-",
+           "-c:a", "libmp3lame", "-b:a", f"{kbps}k", "-compression_level", "0", "-ar", str(SR), "-ac", "1",
+           "-fflags", "+bitexact", "-flags:a", "+bitexact", "-write_xing", "1", "-id3v2_version", "0", str(path)]
+    subprocess.run(cmd, input=pcm.astype(np.float32).tobytes(), check=True)
+
+
+def decode_mp3(path: Path) -> np.ndarray:
+    p = subprocess.run([_ffmpeg, "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "1", "-ar", str(SR), "-"], capture_output=True, check=True)
+    return np.frombuffer(p.stdout, dtype=np.float32).astype(np.float64)
+
+
+def self_test(sprite: np.ndarray, layout: list[tuple[str, int, int, int]], mp3: Path) -> tuple[float, float, list[str]]:
+    """Kodierten Sprite zurueckdekodieren: (Sync-Position, max. Versatz in Samples, Probleme). Nutzt den Sync-Puls und die
+    Kreuzkorrelation jeder Variante gegen das Original, um Encoder-Delay/Versatz sicher auszuschliessen."""
+    dec = decode_mp3(mp3)
+    problems: list[str] = []
+    t_sync = detect_sync(dec, SR, SYNC_AT)
+    worst = 0
+    pad = int(0.006 * SR)
+    for name, idx, st, n in layout:
+        ref = sprite[st: st + n]
+        # Anker = lautester 4096-Samples-Block der Variante (Anfaenge sind oft leise und daher mehrdeutig)
+        m = min(len(ref), 4096)
+        e = uniform_filter1d(ref ** 2, size=m, mode="constant")
+        c0 = int(np.clip(int(np.argmax(e)) - m // 2, 0, len(ref) - m))
+        seg = dec[st + c0 - pad: st + c0 + m + pad]
+        c = signal.correlate(seg, ref[c0: c0 + m], mode="valid", method="fft")
+        lag = int(np.argmax(c)) - pad
+        worst = max(worst, abs(lag))
+        if abs(lag) > 2:
+            problems.append(f"{name}#{idx}: Versatz {lag} Samples")
+        # Ausklang muss bei ~0 enden (sonst knackt der Schnitt); Vorecho des Kodierers vor dem Einsatz wird nur gemeldet
+        tailv = dec[st + n - 8: st + n]
+        if len(tailv) and np.max(np.abs(tailv)) > 0.01:
+            problems.append(f"{name}#{idx}: Ende nicht stumm ({np.max(np.abs(tailv)):.3f})")
+    return t_sync, float(worst), problems
+
+
+def manifest_json(m: dict) -> str:
+    """Manifest lesbar, aber kompakt: Kopfzeilen + eine Zeile je Effekt."""
+    c = lambda o: json.dumps(o, separators=(",", ":"), ensure_ascii=False)  # noqa: E731
+    head = ",\n".join(f' "{k}": {c(v)}' for k, v in m.items() if k != "effects")
+    rows = ",\n".join(f'  "{n}": {c(e)}' for n, e in m["effects"].items())
+    return "{\n" + head + ',\n "effects": {\n' + rows + "\n }\n}\n"
+
+
+def sfx_names() -> list[str]:
+    """SFX_NAMES aus types.ts lesen (einzige Quelle der Wahrheit)."""
+    import re
+
+    txt = (REPO / "src/game/fredrun2/audio/types.ts").read_text(encoding="utf-8")
+    block = txt[txt.index("SFX_NAMES"): txt.index("] as const", txt.index("SFX_NAMES"))]
+    return re.findall(r'"([a-z0-9-]+)"', block)
+
+
+# ---- Bericht ---------------------------------------------------------------------------------------------------------
+# Effekte, die sofort einsetzen muessen (Attack < 15 ms), sonst wirken sie verzoegert; Whooshes/Riser sind ausgenommen
+SNAPPY = {"ui-click", "ui-hover", "ui-back", "ui-denied", "jump", "doublejump", "land", "coin", "stomp", "stomp-chain", "hurt",
+          "death", "enemy-defeat", "shield-hit", "wallbreak", "cannon", "stamp-thud", "laser-zap", "combo-break", "countdown"}
+
+
+def attack_ms(x: np.ndarray) -> float:
+    """Zeit bis zum ersten Sample >= 25 % (-12 dB) der Spitze."""
+    a = np.abs(x)
+    return float(np.argmax(a >= 0.25 * a.max())) / SR * 1000.0
+
+
+def _cmap(v: np.ndarray) -> np.ndarray:
+    stops = np.array([[0, 0, 4], [40, 11, 84], [101, 21, 110], [159, 42, 99], [212, 72, 66], [245, 125, 21], [250, 193, 39], [252, 255, 164]], float)
+    xx = np.clip(v, 0, 1) * (len(stops) - 1)
+    i = np.clip(xx.astype(int), 0, len(stops) - 2)
+    f = (xx - i)[..., None]
+    return (stops[i] * (1 - f) + stops[i + 1] * f).astype(np.uint8)
+
+
+def write_sheet(items: list[tuple[str, np.ndarray]], path: Path, cols: int = 4, w: int = 360, h: int = 150) -> None:
+    """Kontaktbogen: je Variante Hüllkurve + Spektrogramm (0-16 kHz, 80 dB), gemeinsame Zeitachse je Bogen (max. 2 s)."""
+    from PIL import Image, ImageDraw
+
+    maxdur = min(2.0, max(0.1, max(len(x) for _, x in items) / SR))
+    rows = (len(items) + cols - 1) // cols
+    sheet = Image.new("RGB", (cols * w, rows * h), (0, 0, 0))
+    for k, (label, x) in enumerate(items):
+        xx = np.zeros(int(maxdur * SR))
+        m = min(len(xx), len(x))
+        xx[:m] = x[:m]
+        nper = 1024 if maxdur > 0.3 else 512
+        f, t, sx = signal.spectrogram(xx, SR, nperseg=nper, noverlap=int(nper * 0.85), mode="magnitude")
+        d = (20 * np.log10(sx / (sx.max() + 1e-9) + 1e-7) + 80) / 80
+        d = d[f <= 16000][::-1]
+        img = Image.fromarray(_cmap(d)).resize((w, h - 50), Image.BILINEAR)
+        wf = Image.new("RGB", (w, 40), (20, 20, 24))
+        dr = ImageDraw.Draw(wf)
+        for i, c in enumerate(np.array_split(xx, w)):
+            hh = int(min(1.0, float(np.abs(c).max())) * 19)
+            dr.line([(i, 20 - hh), (i, 20 + hh)], fill=(120, 200, 255))
+        cell = Image.new("RGB", (w, h))
+        cell.paste(wf, (0, 10))
+        cell.paste(img, (0, 50))
+        ImageDraw.Draw(cell).text((2, 0), f"{label}  {len(x) / SR:.2f}s", fill=(255, 255, 255))
+        sheet.paste(cell, ((k % cols) * w, (k // cols) * h))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(path)
+
+
+def write_wav(x: np.ndarray, path: Path) -> None:
+    import wave
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        w.writeframes((np.clip(x, -1, 1) * 32767).astype("<i2").tobytes())
+
+
+def main() -> None:
+    global _src_root, _ffmpeg
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--src", help="Ordner mit den entpackten Kenney-Paketen")
+    ap.add_argument("--out", default=None, help="Ausgabeordner (Standard: public/fredrun2/audio)")
+    ap.add_argument("--only", default=None, help="nur diese Effekte (Komma-Liste); schreibt die Bank nur mit ausdruecklichem --out")
+    ap.add_argument("--report", default=None, help="Ordner fuer report.txt und Spektrogramm-Kontaktboegen")
+    ap.add_argument("--wav", default=None, help="Ordner fuer WAV-Dateien jeder Variante (zum Anhoeren)")
+    ap.add_argument("--ffmpeg", default=None)
+    ap.add_argument("--kbps", type=int, default=MP3_KBPS)
+    ap.add_argument("--list", action="store_true", help="Effekte auflisten und beenden")
+    args = ap.parse_args()
+
+    names = sfx_names()
+    bad = [n for n in SPECS if n not in names]
+    if bad:
+        sys.exit(f"Rezepte fuer unbekannte SFX-Namen (Tippfehler?): {bad}")
+    if args.list:
+        for n, s in SPECS.items():
+            print(f"{n:18s} {s.cat:6s} Ziel {s.lufs:6.1f} LUFS, Spitze <= {s.ceil:4.1f} dBFS")
+        print("ohne Sample (prozedural bzw. Jingle):", ", ".join(n for n in names if n not in SPECS))
+        return
+    if not args.src:
+        ap.error("--src ist noetig")
+    _src_root = Path(args.src)
+    _ffmpeg = find_ffmpeg(args.ffmpeg)
+    out_dir = Path(args.out) if args.out else REPO / "public" / "fredrun2" / "audio"
+    write_out = not (args.only and not args.out)
+
+    only = set(args.only.split(",")) if args.only else None
+    if only and not only <= set(SPECS):
+        sys.exit(f"unbekannte Effekte in --only: {sorted(only - set(SPECS))}")
+
+    finished: dict[str, list[np.ndarray]] = {}
+    for n, s in SPECS.items():
+        if only and n not in only:
+            continue
+        finished[n] = finish(s, s.fn())
+        print(f"  {n:18s} {len(finished[n])} Var.  {sum(sec(v) for v in finished[n]):5.2f} s", flush=True)
+
+    # ---- Bericht ----------------------------------------------------------------------------------------------------
+    lines = [f"{'effekt':16s} {'var':>3s} {'dauer(s)':>16s} {'peak':>7s} {'LUFS200':>8s} {'ziel':>6s} {'rms':>7s} {'limiter':>7s} {'att25%(ms)':>10s} {'dc':>7s}  hinweise"]
+    for n, vs in finished.items():
+        s = SPECS[n]
+        pk = max(peak_db(v) for v in vs)
+        ld = np.mean([loudness(v) for v in vs])
+        rms = np.mean([20 * math.log10(float(np.sqrt(np.mean(v ** 2))) + 1e-9) for v in vs])
+        att = max(attack_ms(v) for v in vs)
+        dc = max(abs(float(np.mean(v))) for v in vs)
+        notes = []
+        if pk > CEIL_DB + 0.05:
+            notes.append("CLIP>-2dBFS")
+        if LIMITED.get(n, 0.0) > 3.0:
+            notes.append("Limiter>3dB")
+        if ld < s.lufs - 3.0:
+            notes.append("Ziel-Lautheit nicht erreicht")
+        if n in SNAPPY and att > 15:
+            notes.append("Attack>15ms")
+        if dc > 0.002:
+            notes.append("DC")
+        lines.append(f"{n:16s} {len(vs):3d} {'/'.join(f'{sec(v):.2f}' for v in vs):>16s} {pk:7.1f} {ld:8.1f} {s.lufs:6.1f} {rms:7.1f} {LIMITED.get(n, 0.0):7.1f} {att:10.1f} {dc:7.4f}  {' '.join(notes)}")
+    total = sum(sec(v) + GAP for vs in finished.values() for v in vs)
+    lines.append(f"\nSumme Nutzsignal + Luecken: {total + LEAD + TAIL - GAP:.1f} s, Varianten: {sum(len(v) for v in finished.values())}")
+    print("\n".join(lines))
+    if args.report:
+        rd = Path(args.report)
+        rd.mkdir(parents=True, exist_ok=True)
+        (rd / "report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        for cat in sorted({SPECS[n].cat for n in finished}):
+            its = [(f"{n}#{i}", v) for n, vs in finished.items() if SPECS[n].cat == cat for i, v in enumerate(vs)]
+            for part, k in enumerate(range(0, len(its), 16)):
+                write_sheet(its[k: k + 16], rd / f"sheet-{cat}{part + 1 if len(its) > 16 else ''}.png")
+    if args.wav:
+        for n, vs in finished.items():
+            for i, v in enumerate(vs):
+                write_wav(v, Path(args.wav) / f"{n}-{i}.wav")
+
+    # ---- Sprite + MP3 + Manifest --------------------------------------------------------------------------------------
+    items = [(n, i, v) for n, vs in finished.items() for i, v in enumerate(vs)]
+    sprite, layout = build_sprite(items)
+    mp3_name = "sfx-bank.mp3"
+    tmp_mp3 = (out_dir if write_out else Path(args.report or ".")) / mp3_name
+    encode_mp3(sprite, tmp_mp3, args.kbps)
+    t_sync, worst, problems = self_test(sprite, layout, tmp_mp3)
+    size = tmp_mp3.stat().st_size
+    print(f"\nSprite {len(sprite) / SR:.1f} s, MP3 {size / 1024:.0f} KB ({args.kbps} kbps), Sync {t_sync * 1000:.2f} ms (Soll {SYNC_AT * 1000:.0f}), max. Versatz {worst:.0f} Samples")
+    for p in problems:
+        print("  PROBLEM:", p)
+    if problems:
+        sys.exit("Selbsttest fehlgeschlagen")
+
+    effects: dict[str, dict] = {}
+    for n, i, st, ln in layout:
+        s = SPECS[n]
+        e = effects.setdefault(n, {"variants": []})
+        e["variants"].append({"start": round(st / SR, 6), "dur": round(ln / SR, 6)})
+    for n, e in effects.items():
+        s = SPECS[n]
+        if s.jitter:
+            e["pitchJitter"] = s.jitter
+        if s.gain != 1.0:
+            e["gain"] = s.gain
+        if s.pan is not None:
+            e["pan"] = s.pan
+        if s.sweep is not None:
+            e["sweep"] = {"from": s.sweep[0], "to": s.sweep[1], **({"flip": True} if s.sweep_flip else {})}
+        if s.reverb is not None:
+            e["reverb"] = s.reverb
+    manifest = {
+        "version": BANK_VERSION,
+        "file": mp3_name,
+        "rev": hashlib.sha1(tmp_mp3.read_bytes()).hexdigest()[:10],
+        "sampleRate": SR,
+        "duration": round(len(sprite) / SR, 6),
+        "sync": {"at": round(t_sync, 6)},
+        "effects": effects,
+    }
+    if write_out:
+        (out_dir / "sfx-bank.json").write_text(manifest_json(manifest), encoding="utf-8")
+        print(f"geschrieben: {out_dir / mp3_name} ({size / 1024:.0f} KB), {out_dir / 'sfx-bank.json'}")
+    else:
+        print("(--only ohne --out: Bank nicht in den Projektordner geschrieben)")
+    missing = [n for n in names if n not in SPECS]
+    print("ohne Sample (prozedural bzw. Jingle):", ", ".join(missing))
+
+
+if __name__ == "__main__":
+    main()

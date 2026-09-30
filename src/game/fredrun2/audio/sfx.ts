@@ -4,7 +4,11 @@
  * (Pan, Reverb-Send, Aufräumen). Frequenzen sind Basiswerte, `p` skaliert die Tonhöhe.
  *
  * Alle Amplituden sind "Peak-Nennwerte" vor der Bus-Lautstärke; die feine Balance steckt in `SFX_META.gain`.
+ *
+ * Sample-Bank: Ist `bank.ts` geladen und kennt einen Effekt, spielt `SfxPlayer` statt dieser Rezepte das Sample
+ * (gleiche Priorität/Drosselung/Ducking); die Rezepte sind Fallback (Bank nicht geladen, Effekt ohne Sample).
  */
+import { SfxBank } from "./bank";
 import { clamp } from "./dsp";
 import type { AudioGraph } from "./graph";
 import type { SfxName, SfxOptions } from "./types";
@@ -546,8 +550,17 @@ export class SfxPlayer {
   played = 0;
   dropped = 0;
   stolen = 0;
+  /** Sample-Bank (nach `enableBank()`); `has(name)` ist erst nach dem Laden wahr. */
+  bank: SfxBank | null = null;
 
   constructor(private readonly g: AudioGraph) {}
+
+  /** Erzeugt die Sample-Bank und stößt das Laden an (still: Fehler lassen die prozeduralen Stimmen aktiv). */
+  enableBank(bank: SfxBank = new SfxBank(this.g.ctx)): SfxBank {
+    this.bank = bank;
+    void bank.load();
+    return bank;
+  }
 
   get activeVoices(): number {
     return this.voices.length;
@@ -634,16 +647,31 @@ export class SfxPlayer {
     this.last.set(name, now);
 
     const t0 = now + START_LEAD;
+    const bank = this.bank?.has(name) ? this.bank : null;
+    const info = bank?.info(name);
     const voice = new SfxVoice(this.g, {
       volume,
-      pan: clamp(opts.pan ?? 0, -1, 1),
-      reverb: meta.reverb,
+      pan: clamp(opts.pan ?? info?.pan ?? 0, -1, 1),
+      reverb: info?.reverb ?? meta.reverb,
       t0,
       priority: meta.pri,
       name,
     });
     voice.onDispose = () => this.remove(voice);
     this.voices.push(voice);
+    if (bank) {
+      // Sample statt Synthese: Lautstärke/Pan/Reverb-Send steckt in der Voice, die Bank liefert Variante + Tonhöhe
+      const bv = bank.play(name, voice.out, { pitch, when: t0, autoPan: false, onEnded: () => voice.dispose() });
+      if (bv) {
+        voice.attach(bv);
+        if (info?.sweep && opts.pan === undefined) {
+          const dir = info.sweep.flip && Math.random() < 0.5 ? -1 : 1;
+          voice.panSweep(info.sweep.from * dir, info.sweep.to * dir, t0, bv.endTime - t0);
+        }
+        this.played++;
+        return voice;
+      }
+    }
     try {
       recipe(voice, pitch, t0);
     } catch {
@@ -658,5 +686,7 @@ export class SfxPlayer {
   dispose(): void {
     for (const v of this.voices.slice()) v.dispose();
     this.voices.length = 0;
+    this.bank?.dispose();
+    this.bank = null;
   }
 }

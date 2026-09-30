@@ -142,6 +142,7 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
       graph = buildGraph(ctx, volumes);
       volumes = graph.volumes;
       sfxPlayer = new SfxPlayer(graph);
+      sfxPlayer.enableBank(); // Sample-Bank (bank.ts) lädt ab jetzt; bis dahin spielen die prozeduralen Stimmen
       director = new MusicDirector(graph);
       director.onNote = (e) => {
         if (debugState.recordNotes) debugState.noteLog.push(e);

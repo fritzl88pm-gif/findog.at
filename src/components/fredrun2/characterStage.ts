@@ -157,11 +157,11 @@ interface Ring {
 }
 
 /** Sprung-Physik der Vorschau (Figur-Einheiten). */
-const JUMP_G = 2300;
-const JUMP_V1 = 400;
-const JUMP_V2 = 470;
-const JUMP_TDJ = 0.3;
-const STOMP_H = 52;
+const JUMP_G = 1700;
+const JUMP_V1 = 250;
+const JUMP_V2 = 300;
+const JUMP_TDJ = 0.24;
+const STOMP_H = 36;
 const STOMP_IMPACT = 0.62;
 
 export class CharacterStage {
@@ -204,6 +204,10 @@ export class CharacterStage {
   private acc = { streak: 0, dust: 0, spark: 0 };
   private layer: HTMLCanvasElement | null = null;
   private layerG: CanvasRenderingContext2D | null = null;
+  private rim: HTMLCanvasElement | null = null;
+  private rimG: CanvasRenderingContext2D | null = null;
+  private bg: HTMLCanvasElement | null = null;
+  private bgKey = "";
   private readonly store = new Map<CharacterId, { s: CharacterSprites; full: boolean }>();
   private readonly pose: Pose = { anim: "idle", at: 0, once: false, x: 0, y: 0, sx: 1, sy: 1, alpha: 1, trail: 0 };
 
@@ -254,6 +258,9 @@ export class CharacterStage {
     this.prev = null;
     this.layer = null;
     this.layerG = null;
+    this.rim = null;
+    this.rimG = null;
+    this.bg = null;
     this.store.clear();
     this.onAction = null;
     this.onAvailable = null;
@@ -373,13 +380,15 @@ export class CharacterStage {
       this.canvas.width = pw;
       this.canvas.height = ph;
     }
-    if (this.layer && (this.layer.width !== pw || this.layer.height !== ph)) {
-      this.layer.width = pw;
-      this.layer.height = ph;
+    for (const cv of [this.layer, this.rim]) {
+      if (cv && (cv.width !== pw || cv.height !== ph)) {
+        cv.width = pw;
+        cv.height = ph;
+      }
     }
     this.cx = this.w * 0.5;
-    this.feetY = this.h * 0.665;
-    this.figH = Math.min(this.h * 0.55, this.w * 0.68);
+    this.feetY = this.h * 0.7;
+    this.figH = Math.min(this.h * 0.53, this.w * 0.66);
     this.u = this.figH / PLAYER_VISUAL_H;
     this.podRx = Math.min(this.w * 0.37, this.figH * 0.9);
     this.podRy = this.podRx * 0.17;
@@ -868,7 +877,7 @@ export class CharacterStage {
   private draw(): void {
     const g = this.g;
     if (!g || this.w < 4 || this.h < 4) return;
-    const { w, h, dpr } = this;
+    const dpr = this.dpr;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.globalAlpha = 1;
     g.globalCompositeOperation = "source-over";
@@ -889,49 +898,74 @@ export class CharacterStage {
     else this.drawLoading(g);
     this.drawParticles(g);
     g.restore();
-
-    // Vignette
-    const vg = g.createRadialGradient(w / 2, h * 0.46, Math.min(w, h) * 0.32, w / 2, h * 0.46, Math.max(w, h) * 0.78);
-    vg.addColorStop(0, "rgba(0,0,0,0)");
-    vg.addColorStop(1, "rgba(0,0,0,0.6)");
-    g.fillStyle = vg;
-    g.fillRect(0, 0, w, h);
   }
 
+  /** Hintergrund (Verlauf, Farb-Aura, Bokeh, Vignette) wird nur neu gemalt, wenn sich Größe oder Farbe ändern. */
   private drawBackground(g: CanvasRenderingContext2D): void {
+    const { w, h } = this;
+    const c = this.colC;
+    const d = this.colD;
+    const pw = this.canvas.width;
+    const ph = this.canvas.height;
+    const key = `${pw}x${ph}|${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])}|${Math.round(d[0])},${Math.round(d[1])},${Math.round(d[2])}`;
+    if (!this.bg) {
+      this.bg = document.createElement("canvas");
+      this.bgKey = "";
+    }
+    const cv = this.bg;
+    if (key !== this.bgKey) {
+      this.bgKey = key;
+      cv.width = pw;
+      cv.height = ph;
+      const b = cv.getContext("2d");
+      if (b) this.paintBackground(b);
+    }
+    g.fillStyle = rgba(mix(d, NIGHT, 0.5), 1);
+    g.fillRect(-12, -12, w + 24, h + 24);
+    g.drawImage(cv, 0, 0, w, h);
+  }
+
+  private paintBackground(b: CanvasRenderingContext2D): void {
     const { w, h, cx, feetY, figH } = this;
     const c = this.colC;
     const d = this.colD;
-    const bg = g.createLinearGradient(0, 0, 0, h);
+    b.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    const bg = b.createLinearGradient(0, 0, 0, h);
     bg.addColorStop(0, rgba(mix(d, NIGHT, 0.5), 1));
     bg.addColorStop(0.62, rgba(mix(d, NIGHT, 0.3), 1));
     bg.addColorStop(1, rgba(mix(d, NIGHT, 0.72), 1));
-    g.fillStyle = bg;
-    g.fillRect(-12, -12, w + 24, h + 24);
+    b.fillStyle = bg;
+    b.fillRect(0, 0, w, h);
 
     // Farb-Aura hinter der Figur
     const ay = feetY - figH * 0.5;
-    const aura = g.createRadialGradient(cx, ay, 0, cx, ay, w * 0.78);
+    const aura = b.createRadialGradient(cx, ay, 0, cx, ay, w * 0.78);
     aura.addColorStop(0, rgba(c, 0.5));
     aura.addColorStop(0.45, rgba(c, 0.16));
     aura.addColorStop(1, rgba(c, 0));
-    g.fillStyle = aura;
-    g.fillRect(-12, -12, w + 24, h + 24);
+    b.fillStyle = aura;
+    b.fillRect(0, 0, w, h);
 
     // sanftes Bokeh
     if (this.glowTint) {
-      g.globalCompositeOperation = "lighter";
-      const t = this.reduced ? 0 : this.t;
+      b.globalCompositeOperation = "lighter";
       for (let i = 0; i < 7; i++) {
         const fx = ((i * 0.377 + 0.11) % 1) * w;
         const fy = ((i * 0.529 + 0.07) % 0.62) * h;
         const r = (0.05 + ((i * 0.37) % 0.08)) * w * 2;
-        g.globalAlpha = 0.09 + 0.05 * Math.sin(t * 0.3 + i * 1.7);
-        g.drawImage(this.glowTint, fx + Math.sin(t * 0.11 + i) * 14 - r, fy + Math.cos(t * 0.09 + i * 2) * 10 - r, r * 2, r * 2);
+        b.globalAlpha = 0.1;
+        b.drawImage(this.glowTint, fx - r, fy - r, r * 2, r * 2);
       }
-      g.globalAlpha = 1;
-      g.globalCompositeOperation = "source-over";
+      b.globalAlpha = 1;
+      b.globalCompositeOperation = "source-over";
     }
+
+    // Vignette
+    const vg = b.createRadialGradient(w / 2, h * 0.46, Math.min(w, h) * 0.32, w / 2, h * 0.46, Math.max(w, h) * 0.78);
+    vg.addColorStop(0, "rgba(0,0,0,0)");
+    vg.addColorStop(1, "rgba(0,0,0,0.6)");
+    b.fillStyle = vg;
+    b.fillRect(0, 0, w, h);
   }
 
   private drawBeam(g: CanvasRenderingContext2D): void {
@@ -1105,7 +1139,7 @@ export class CharacterStage {
       g.translate(x, y);
       g.scale(u * p.sx, u * p.sy);
       g.imageSmoothingQuality = "high";
-      s.draw(g, p.anim, Math.max(0, at), 0, 0, { once: p.once, alpha });
+      s.draw(g, p.anim, Math.max(0, at), 0, 0, { once: p.once, alpha, heightScale: this.animNorm(s, p.anim) });
       g.restore();
       return;
     }
@@ -1122,22 +1156,63 @@ export class CharacterStage {
     lg.translate(x, y);
     lg.scale(u * p.sx, u * p.sy);
     lg.imageSmoothingQuality = "high";
-    s.draw(lg, p.anim, Math.max(0, at), 0, 0, { once: p.once });
+    s.draw(lg, p.anim, Math.max(0, at), 0, 0, { once: p.once, heightScale: this.animNorm(s, p.anim) });
     lg.restore();
     lg.setTransform(1, 0, 0, 1, 0, 0);
     lg.globalCompositeOperation = "source-atop";
     const gr = lg.createLinearGradient(0, 0, 0, layer.height);
-    gr.addColorStop(0, "rgba(58,72,128,0.93)");
-    gr.addColorStop(0.7, "rgba(14,18,42,0.95)");
-    gr.addColorStop(1, "rgba(6,8,22,0.97)");
+    gr.addColorStop(0, rgba(mix(this.colC, NIGHT, 0.68), 0.94));
+    gr.addColorStop(1, rgba(mix(this.colC, NIGHT, 0.9), 0.97));
     lg.fillStyle = gr;
     lg.fillRect(0, 0, layer.width, layer.height);
     lg.globalCompositeOperation = "source-over";
+
+    // Kontur-Licht in der Figurenfarbe (Silhouette bleibt lesbar)
+    const rim = this.ensureRim();
+    const rg = this.rimG;
     g.save();
     g.setTransform(1, 0, 0, 1, 0, 0);
+    if (rim && rg) {
+      rg.setTransform(1, 0, 0, 1, 0, 0);
+      rg.globalCompositeOperation = "source-over";
+      rg.clearRect(0, 0, rim.width, rim.height);
+      rg.drawImage(layer, 0, 0);
+      rg.globalCompositeOperation = "source-in";
+      rg.fillStyle = rgba(mix(this.colC, WHITE, 0.45), 1);
+      rg.fillRect(0, 0, rim.width, rim.height);
+      rg.globalCompositeOperation = "source-over";
+      const d = Math.max(1.5, 2.2 * this.dpr);
+      g.globalCompositeOperation = "lighter";
+      g.globalAlpha = alpha * 0.5;
+      for (const [ox, oy] of [
+        [-d, 0],
+        [d, 0],
+        [0, -d],
+        [0, d],
+      ]) {
+        g.drawImage(rim, ox, oy);
+      }
+      g.globalCompositeOperation = "source-over";
+    }
     g.globalAlpha = alpha;
     g.drawImage(layer, 0, 0);
     g.restore();
+  }
+
+  /** Gleicht abweichende Atlas-Skalierungen aus (z. B. Fridas Siegestanz), damit die Figur in der Vorschau gleich groß bleibt. */
+  private animNorm(s: CharacterSprites, anim: AnimName): number {
+    const a = s.resolve(anim);
+    return a && a.scale > 0 && a.scale < 1 ? 1 / a.scale : 1;
+  }
+
+  private ensureRim(): HTMLCanvasElement | null {
+    if (!this.rim) {
+      this.rim = document.createElement("canvas");
+      this.rim.width = this.canvas.width;
+      this.rim.height = this.canvas.height;
+      this.rimG = this.rim.getContext("2d");
+    }
+    return this.rim;
   }
 
   private ensureLayer(): HTMLCanvasElement | null {
@@ -1213,7 +1288,7 @@ export class CharacterStage {
 // --- Portrait (Roster-Kacheln) -----------------------------------------------------------------------
 
 /** Zeichnet den ersten Idle-Frame als Brustbild (Kopf im Fokus). Gesperrte Helden als dunkle Silhouette. */
-export function drawPortrait(canvas: HTMLCanvasElement, sprites: CharacterSprites | null, locked: boolean, cssW: number, cssH: number): void {
+export function drawPortrait(canvas: HTMLCanvasElement, sprites: CharacterSprites | null, locked: boolean, color: string, cssW: number, cssH: number): void {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const pw = Math.max(1, Math.round(cssW * dpr));
   const ph = Math.max(1, Math.round(cssH * dpr));
@@ -1239,9 +1314,10 @@ export function drawPortrait(canvas: HTMLCanvasElement, sprites: CharacterSprite
   if (locked) {
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.globalCompositeOperation = "source-atop";
+    const c = hexRgb(color);
     const gr = g.createLinearGradient(0, 0, 0, ph);
-    gr.addColorStop(0, "rgba(58,72,128,0.93)");
-    gr.addColorStop(1, "rgba(8,10,26,0.97)");
+    gr.addColorStop(0, rgba(mix(c, NIGHT, 0.6), 0.94));
+    gr.addColorStop(1, rgba(mix(c, NIGHT, 0.88), 0.97));
     g.fillStyle = gr;
     g.fillRect(0, 0, pw, ph);
     g.globalCompositeOperation = "source-over";

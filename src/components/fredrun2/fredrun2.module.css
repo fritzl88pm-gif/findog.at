@@ -193,7 +193,8 @@
 
 .chips {
   display: flex;
-  gap: calc(var(--px) * 10);
+  flex: 0 0 auto;
+  gap: calc(var(--px) * 8);
   align-items: center;
 }
 
@@ -242,19 +243,20 @@
 
 .tabs {
   display: flex;
-  gap: calc(var(--px) * 7);
+  gap: calc(var(--px) * 6);
   flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .tab {
-  padding: calc(var(--px) * 9) calc(var(--px) * 18);
+  padding: calc(var(--px) * 9) calc(var(--px) * 14);
   border-radius: calc(var(--px) * 14);
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(14, 18, 34, 0.55);
   color: rgba(255, 255, 255, 0.85);
   font: inherit;
   font-weight: 800;
-  font-size: calc(var(--px) * 21);
+  font-size: calc(var(--px) * 20);
   cursor: pointer;
   white-space: nowrap;
   transition: transform 0.12s ease, background 0.12s ease;
@@ -463,12 +465,6 @@
   border-color: rgba(255, 255, 255, 0.4);
 }
 
-.btnGold {
-  background: linear-gradient(180deg, #ffd23f, #f59e0b);
-  color: #2b1300;
-  border-color: rgba(255, 255, 255, 0.5);
-}
-
 .row {
   display: flex;
   gap: calc(var(--px) * 12);
@@ -522,12 +518,6 @@
   gap: calc(var(--px) * 12);
 }
 
-.grid5 {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: calc(var(--px) * 14);
-}
-
 .card {
   position: relative;
   display: flex;
@@ -556,20 +546,10 @@
   box-shadow: 0 0 0 calc(var(--px) * 3) var(--c1, #7ee8ff), 0 calc(var(--px) * 14) calc(var(--px) * 40) rgba(0, 0, 0, 0.45);
 }
 
-.cardLocked {
-  filter: saturate(0.55) brightness(0.85);
-}
-
 .cardTitle {
   font-size: calc(var(--px) * 26);
   font-weight: 1000;
   line-height: 1.05;
-}
-
-.cardTag {
-  font-size: calc(var(--px) * 17);
-  opacity: 0.85;
-  line-height: 1.25;
 }
 
 .tagRow {
@@ -597,12 +577,6 @@
   font-size: calc(var(--px) * 16);
   background: rgba(0, 0, 0, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
-}
-
-.preview {
-  width: 100%;
-  aspect-ratio: 5 / 4;
-  display: block;
 }
 
 .worldArt {

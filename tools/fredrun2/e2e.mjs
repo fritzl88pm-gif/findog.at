@@ -50,11 +50,21 @@ await page.waitForTimeout(800);
 await page.getByRole("tab", { name: "Charaktere" }).click();
 await shot("characters");
 const owned0 = (await snap()).profile.unlocked.length;
-await page.getByRole("button", { name: /kaufen/ }).first().click();
+check("5 Helden-Kacheln (radiogroup)", (await page.getByRole("radio").count()) === 5);
+await page.getByRole("radio", { name: /^Superfred/ }).click();
+await page.waitForTimeout(300);
+await page.getByRole("button", { name: /Kaufen/ }).click();
 check("Kauf ohne Münzen abgelehnt", (await snap()).profile.unlocked.length === owned0);
-await page.getByRole("button", { name: "Wählen" }).first().click();
+await page.getByRole("radio", { name: /^Frida/ }).click();
+await page.keyboard.press("ArrowRight");
+await page.waitForTimeout(200);
+check("Pfeiltaste wechselt die Ansicht", (await page.getByRole("radio", { name: /^Superfred/ }).getAttribute("aria-checked")) === "true");
+await page.keyboard.press("ArrowLeft");
+await page.waitForTimeout(300);
+await page.getByRole("button", { name: "Auswählen" }).click();
 await page.waitForTimeout(600);
 check("Frida wählbar", (await snap()).profile.character === "frida");
+await shot("characters-frida");
 
 // Start
 await page.getByRole("tab", { name: "Spielen" }).click();

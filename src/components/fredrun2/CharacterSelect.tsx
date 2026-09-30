@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { loadCharacter, type CharacterSprites } from "@/game/fredrun2/assets";
 import { CHARACTERS, type CharacterPerks } from "@/game/fredrun2/characters";
@@ -151,21 +151,21 @@ function AbilityIcon({ id }: { id: CharacterId }): React.ReactElement {
     case "superfred": // Cape-Gleiter
       return (
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <path d="M2.5 7.5c3.2 1.6 6.2 2.3 9.5 2.3s6.3-.7 9.5-2.3c-.6 5.6-3.6 10.4-9.5 13.5C6.100 17.900 3.100 13.100 2.500 7.500Z" fill="currentColor" />
-          <path d="M12 9.800V21" stroke="#fff" strokeWidth="1.400" opacity=".5" />
+          <path d="M2.5 7.5c3.2 1.6 6.2 2.3 9.5 2.3s6.3-.7 9.5-2.3c-.6 5.6-3.6 10.4-9.5 13.5C6.1 17.9 3.1 13.1 2.5 7.5Z" fill="currentColor" />
+          <path d="M12 9.8V21" stroke="#fff" strokeWidth="1.4" opacity=".5" />
         </svg>
       );
     case "cyberfred": // Düsen-Dash
       return (
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <path d="m4 5 7.500 7L4 19M12.500 5l7.500 7-7.500 7" fill="none" stroke="currentColor" strokeWidth="3.400" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="m4 5 7.5 7L4 19M12.5 5l7.5 7-7.5 7" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
     case "superfrida": // Super-Stampfer
       return (
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <path d="M12 2.500v11m-5-4.500 5 5 5-5" fill="none" stroke="currentColor" strokeWidth="3.200" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M2.500 18.500c3-1.800 6-1.800 9.500 0s6.500 1.800 9.500 0M5.500 22h13" fill="none" stroke="currentColor" strokeWidth="2.200" strokeLinecap="round" opacity=".8" />
+          <path d="M12 2.5v11m-5-4.5 5 5 5-5" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M2.5 18.5c3-1.8 6-1.8 9.5 0s6.5 1.8 9.5 0M5.5 22h13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" opacity=".8" />
         </svg>
       );
   }
@@ -175,6 +175,7 @@ function AbilityIcon({ id }: { id: CharacterId }): React.ReactElement {
 
 function Portrait({ id, locked }: { id: CharacterId; locked: boolean }): React.ReactElement {
   const ref = useRef<HTMLCanvasElement | null>(null);
+  const color = CHARACTERS[id].color;
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
@@ -183,7 +184,7 @@ function Portrait({ id, locked }: { id: CharacterId; locked: boolean }): React.R
     let cw = 0;
     let ch = 0;
     const paint = (): void => {
-      if (!dead && cw > 0) drawPortrait(canvas, sprites, locked, cw, ch);
+      if (!dead && cw > 0) drawPortrait(canvas, sprites, locked, color, cw, ch);
     };
     const ro = new ResizeObserver((entries) => {
       const r = entries[entries.length - 1]?.contentRect;
@@ -201,7 +202,7 @@ function Portrait({ id, locked }: { id: CharacterId; locked: boolean }): React.R
       dead = true;
       ro.disconnect();
     };
-  }, [id, locked]);
+  }, [id, locked, color]);
   return <canvas ref={ref} className={styles.portrait} aria-hidden="true" />;
 }
 
@@ -286,6 +287,7 @@ export default function CharacterSelect({ profile, game, reducedMotion = false }
   const radios = useRef<Array<HTMLButtonElement | null>>([]);
   const shakeTimer = useRef<number>(0);
   const swipe = useRef<{ x: number; y: number } | null>(null);
+  const subId = useId();
 
   const def = CHARACTERS[view];
   const owned = profile.unlocked.includes(view);
@@ -512,7 +514,7 @@ export default function CharacterSelect({ profile, game, reducedMotion = false }
 
           <ul className={styles.stats} aria-label="Werte im Vergleich zum Standard">
             {stats.map((s, i) => (
-              <li key={s.key} className={`${styles.stat} ${s.boosted ? styles.statBoost : ""}`} style={{ ["--i" as string]: i }}>
+              <li key={s.key} className={`${styles.stat} ${s.boosted ? styles.statBoost : !s.tick ? styles.statOff : ""}`} style={{ ["--i" as string]: i }}>
                 <span className={styles.statLabel}>{s.label}</span>
                 <span className={styles.statBar} aria-hidden="true">
                   <span className={styles.statFill} style={{ width: `${Math.round(s.fill * 100)}%` }} />
@@ -544,14 +546,14 @@ export default function CharacterSelect({ profile, game, reducedMotion = false }
             <button
               type="button"
               className={`${styles.cta} ${styles.ctaBuy} ${canAfford ? "" : styles.ctaPoor} ${shaking ? styles.shake : ""}`}
-              aria-disabled={!canAfford}
+              aria-describedby={subId}
               onClick={() => primary(view)}
             >
               Kaufen – {fmt(def.price)} <i className={styles.coin} aria-hidden="true" />
               <span className={styles.srOnly}>Münzen</span>
             </button>
           )}
-          <p className={`${styles.ctaSub} ${!owned && !canAfford ? styles.ctaSubPoor : ""} ${shaking ? styles.shake : ""}`}>
+          <p id={subId} className={`${styles.ctaSub} ${!owned && !canAfford ? styles.ctaSubPoor : ""} ${shaking ? styles.shake : ""}`}>
             {!owned
               ? canAfford
                 ? `Du hast ${fmt(profile.coins)} Münzen.`

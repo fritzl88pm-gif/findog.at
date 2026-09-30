@@ -267,10 +267,27 @@ export class SfxVoice extends Synth {
     this.panner.pan.linearRampToValueAtTime(clamp(to, -1, 1), t + Math.max(0.01, dur));
   }
 
+  /** Von der Sample-Bank (bank.ts) gespielte Quelle dieser Stimme, falls es ein Sample-Effekt ist. */
+  private external: { stop(when?: number): void } | null = null;
+
+  /** Koppelt eine Sample-Stimme an: Endzeit folgt ihrer Dauer, `kill`/`dispose` blenden sie mit aus. */
+  attach(ext: { endTime: number; stop(when?: number): void }): void {
+    this.external = ext;
+    this.mark(ext.endTime + 0.05);
+  }
+
   /** Schnelles, klickfreies Ausblenden (Voice-Stealing). */
   kill(now: number): void {
     this.out.gain.cancelScheduledValues(now);
     this.out.gain.setTargetAtTime(0, now, 0.008);
+    this.external?.stop(now);
     this.stopAll(now + 0.06);
+  }
+
+  override dispose(): void {
+    const ext = this.external;
+    this.external = null;
+    ext?.stop();
+    super.dispose();
   }
 }
