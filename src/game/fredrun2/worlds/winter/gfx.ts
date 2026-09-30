@@ -1,0 +1,240 @@
+/**
+ * Christkindlmarkt – Zeichen-Helfer: vorgerenderte Props mit Lichtsaum (Halo), Glüh-Sprites, Schatten, Sterne.
+ * Alles Teure entsteht einmal (lazy) auf Offscreen-Canvases; pro Frame bleiben ganzzahlige/leichte drawImage-Aufrufe.
+ */
+import { makeCanvas } from "../../draw-utils";
+import type { PropLibrary } from "../../types";
+import { glowSprite, paint, softSprite, type Ctx2D } from "../shared-b/canvas";
+
+export const TAU = Math.PI * 2;
+
+export function sat(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+export function fract(v: number): number {
+  return v - Math.floor(v);
+}
+
+export function easeOut(u: number): number {
+  const c = sat(u);
+  return 1 - (1 - c) * (1 - c);
+}
+
+export function easeIn(u: number): number {
+  const c = sat(u);
+  return c * c;
+}
+
+export function smooth01(u: number): number {
+  const c = sat(u);
+  return c * c * (3 - 2 * c);
+}
+
+/** Vorgerenderte Leucht-Sprites (Farbe → weicher Fleck) */
+export interface GlowSet {
+  warm: HTMLCanvasElement;
+  gold: HTMLCanvasElement;
+  red: HTMLCanvasElement;
+  orange: HTMLCanvasElement;
+  cyan: HTMLCanvasElement;
+  white: HTMLCanvasElement;
+  green: HTMLCanvasElement;
+  blue: HTMLCanvasElement;
+  softWarm: HTMLCanvasElement;
+  softCyan: HTMLCanvasElement;
+  softWhite: HTMLCanvasElement;
+  softRed: HTMLCanvasElement;
+  puff: HTMLCanvasElement;
+  puffPink: HTMLCanvasElement;
+  cross: HTMLCanvasElement;
+  shadow: HTMLCanvasElement;
+  flake: HTMLCanvasElement;
+}
+
+let glowCache: GlowSet | null = null;
+
+export function makeGlows(): GlowSet {
+  if (glowCache) return glowCache;
+  const puff = (r: number, g: number, b: number): HTMLCanvasElement =>
+    paint(64, 64, (c) => {
+      const grd = c.createRadialGradient(32, 32, 2, 32, 32, 32);
+      grd.addColorStop(0, `rgba(${r},${g},${b},0.85)`);
+      grd.addColorStop(0.5, `rgba(${r},${g},${b},0.42)`);
+      grd.addColorStop(1, `rgba(${r},${g},${b},0)`);
+      c.fillStyle = grd;
+      c.fillRect(0, 0, 64, 64);
+    });
+  glowCache = {
+    warm: glowSprite("#ffc266", 0.16),
+    gold: glowSprite("#ffd86a", 0.16),
+    red: glowSprite("#ff3a2a", 0.16),
+    orange: glowSprite("#ff8a2a", 0.16),
+    cyan: glowSprite("#7fe0ff", 0.16),
+    white: glowSprite("#ffffff", 0.2),
+    green: glowSprite("#7dff9a", 0.16),
+    blue: glowSprite("#7aa8ff", 0.16),
+    softWarm: softSprite("rgba(255,196,110,1)"),
+    softCyan: softSprite("rgba(120,220,255,1)"),
+    softWhite: softSprite("rgba(255,255,255,1)"),
+    softRed: softSprite("rgba(255,60,40,1)"),
+    puff: puff(255, 255, 255),
+    puffPink: puff(255, 226, 218),
+    // vierzackiger Glitzerstern (Kern + Strahlen)
+    cross: paint(64, 64, (c) => {
+      c.translate(32, 32);
+      const grd = c.createRadialGradient(0, 0, 0, 0, 0, 30);
+      grd.addColorStop(0, "rgba(255,255,255,1)");
+      grd.addColorStop(0.25, "rgba(255,255,255,0.55)");
+      grd.addColorStop(1, "rgba(255,255,255,0)");
+      c.fillStyle = grd;
+      c.beginPath();
+      c.moveTo(0, -30);
+      c.quadraticCurveTo(2.5, -2.5, 30, 0);
+      c.quadraticCurveTo(2.5, 2.5, 0, 30);
+      c.quadraticCurveTo(-2.5, 2.5, -30, 0);
+      c.quadraticCurveTo(-2.5, -2.5, 0, -30);
+      c.closePath();
+      c.fill();
+      const core = c.createRadialGradient(0, 0, 0, 0, 0, 9);
+      core.addColorStop(0, "rgba(255,255,255,1)");
+      core.addColorStop(1, "rgba(255,255,255,0)");
+      c.fillStyle = core;
+      c.fillRect(-9, -9, 18, 18);
+    }),
+    shadow: paint(64, 16, (c) => {
+      const grd = c.createRadialGradient(32, 8, 0, 32, 8, 32);
+      grd.addColorStop(0, "rgba(6,10,30,0.55)");
+      grd.addColorStop(0.6, "rgba(6,10,30,0.22)");
+      grd.addColorStop(1, "rgba(6,10,30,0)");
+      c.save();
+      c.scale(1, 0.25);
+      c.translate(0, 24);
+      c.fillStyle = grd;
+      c.fillRect(0, -32, 64, 64);
+      c.restore();
+    }),
+    flake: paint(16, 16, (c) => {
+      const grd = c.createRadialGradient(8, 8, 0, 8, 8, 8);
+      grd.addColorStop(0, "rgba(255,255,255,0.95)");
+      grd.addColorStop(0.45, "rgba(255,255,255,0.55)");
+      grd.addColorStop(1, "rgba(255,255,255,0)");
+      c.fillStyle = grd;
+      c.fillRect(0, 0, 16, 16);
+    }),
+  };
+  return glowCache;
+}
+
+/** Additiven Glühpunkt zeichnen (Aufrufer setzt `lighter`). */
+export function glowAt(g: Ctx2D, spr: HTMLCanvasElement, x: number, y: number, r: number, ry = r): void {
+  g.drawImage(spr, x - r, y - ry, r * 2, ry * 2);
+}
+
+/** Weicher Bodenschatten */
+export function groundShadow(g: Ctx2D, glows: GlowSet, cx: number, groundY: number, rx: number, alpha = 1): void {
+  const pa = g.globalAlpha;
+  g.globalAlpha = pa * alpha;
+  g.drawImage(glows.shadow, cx - rx, groundY - rx * 0.12, rx * 2, rx * 0.5);
+  g.globalAlpha = pa;
+}
+
+// --- Props mit Halo ------------------------------------------------------------------------------
+
+export interface Spr {
+  c: HTMLCanvasElement;
+  /** Pixelfaktor (Canvas-Pixel je logischem Pixel) */
+  k: number;
+  /** logische Maße des Bildes ohne Rand */
+  w: number;
+  h: number;
+  /** Ankerpunkt in Canvas-Pixeln */
+  ax: number;
+  ay: number;
+  /** Anker als Anteil der Bildhöhe von oben (Fuß = 1, Mitte = 0.5, oben = 0) */
+  an: number;
+}
+
+export type Anchor = "foot" | "center" | "top";
+
+/**
+ * Vorgerenderte Props: Bild + weicher Lichtsaum (damit Gefahren sich auch in dunklen/hellen Stufen klar abheben).
+ * Schlüssel = Prop, Höhe, Halo-Farbe, Variante.
+ */
+export class SpriteCache {
+  dpr = 1;
+  private cache = new Map<string, Spr | null>();
+  constructor(public props: PropLibrary) {}
+
+  reset(dpr: number): void {
+    this.dpr = dpr;
+    this.cache.clear();
+  }
+
+  /** Höhe `h` (logisch); `halo` = CSS-Farbe oder null; `variant` unterscheidet nachbearbeitete Kopien (z.B. Elf ohne Ball) */
+  get(id: string, h: number, halo: string | null, anchor: Anchor = "foot", variant = "", post?: (g: Ctx2D, s: Spr) => void): Spr | null {
+    const key = `${id}|${Math.round(h)}|${halo ?? ""}|${anchor}|${variant}`;
+    if (this.cache.has(key)) return this.cache.get(key) ?? null;
+    const cell = this.props.cell(id);
+    if (!cell || !this.props.has(id)) {
+      // (noch) nicht geladen: nicht dauerhaft merken
+      return null;
+    }
+    const k = Math.max(1, Math.min(2, this.dpr));
+    const w = (h * cell.w) / cell.h;
+    const m = Math.ceil((halo ? 14 : 2) * k);
+    const cw = Math.ceil(w * k + m * 2);
+    const ch = Math.ceil(h * k + m * 2);
+    const c = makeCanvas(cw, ch);
+    const g = c.getContext("2d");
+    if (!g) return null;
+    const ax = cw / 2;
+    const ay = anchor === "foot" ? m + h * k : anchor === "center" ? ch / 2 : m;
+    const ayN = anchor === "foot" ? 1 : anchor === "center" ? 0.5 : 0;
+    g.imageSmoothingQuality = "high";
+    if (halo) {
+      const far = cw * 2;
+      g.save();
+      g.shadowColor = halo;
+      g.shadowOffsetX = far;
+      g.shadowOffsetY = 0;
+      for (const blur of [5 * k, 12 * k]) {
+        g.shadowBlur = blur;
+        this.props.draw(g, id, ax - far, ay, { h: h * k, ax: 0.5, ay: ayN });
+      }
+      g.restore();
+    }
+    this.props.draw(g, id, ax, ay, { h: h * k, ax: 0.5, ay: ayN });
+    const spr: Spr = { c, k, w, h, ax, ay, an: ayN };
+    post?.(g, spr);
+    this.cache.set(key, spr);
+    return spr;
+  }
+}
+
+/**
+ * Sprite an (cx, y) zeichnen; (cx, y) = Ankerpunkt. Optional Drehung um den Anker, Stauchung/Streckung, Spiegelung.
+ */
+export function blitSpr(g: Ctx2D, s: Spr, cx: number, y: number, o: { rot?: number; sx?: number; sy?: number; flip?: boolean; alpha?: number } = {}): void {
+  const inv = 1 / s.k;
+  const pa = g.globalAlpha;
+  if (o.alpha !== undefined) g.globalAlpha = pa * o.alpha;
+  if (o.rot || o.sx !== undefined || o.sy !== undefined || o.flip) {
+    g.save();
+    g.translate(cx, y);
+    if (o.rot) g.rotate(o.rot);
+    g.scale((o.sx ?? 1) * (o.flip ? -1 : 1), o.sy ?? 1);
+    g.drawImage(s.c, -s.ax * inv, -s.ay * inv, s.c.width * inv, s.c.height * inv);
+    g.restore();
+  } else {
+    g.drawImage(s.c, cx - s.ax * inv, y - s.ay * inv, s.c.width * inv, s.c.height * inv);
+  }
+  g.globalAlpha = pa;
+}
+
+/** Position eines Lichtpunkts (Promille des Bildes) innerhalb eines mit `blitSpr` gezeichneten, ggf. gespiegelten Sprites */
+export function sprPoint(s: Spr, cx: number, y: number, px: number, py: number, flip: boolean): { x: number; y: number } {
+  const dx = (px / 1000 - 0.5) * s.w * (flip ? -1 : 1);
+  const top = y - s.an * s.h;
+  return { x: cx + dx, y: top + (py / 1000) * s.h };
+}

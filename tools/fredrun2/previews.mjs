@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Erzeugt die Vorschaubilder der Welt-Karten (public/fredrun2/previews/<welt>.webp, 640×256) aus dem echten Spiel (headless Chromium).
- *   node tools/fredrun2/previews.mjs
+ *   node tools/fredrun2/previews.mjs [welt …]     (ohne Angabe: alle Welten)
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
@@ -13,8 +13,10 @@ rmSync(tmp, { recursive: true, force: true });
 mkdirSync(tmp, { recursive: true });
 mkdirSync(path.join(root, "public/fredrun2/previews"), { recursive: true });
 // Welt → [Weltmeter (Stufe), Sekunden Bot-Spiel]
-const PLAN = { wien: [300, 7], alpen: [80, 7], finanzamt: [140, 7], prater: [330, 7], wachau: [430, 7], cyber: [40, 9] };
+const PLAN = { wien: [300, 7], alpen: [80, 7], finanzamt: [140, 7], prater: [330, 7], wachau: [430, 7], cyber: [40, 9], winter: [40, 8], oper: [330, 7] };
+const only = process.argv.slice(2);
 for (const [world, [wm, secs]] of Object.entries(PLAN)) {
+  if (only.length && !only.includes(world)) continue;
   execFileSync("node", [path.join(root, "tools/fredrun2/shot.mjs"), "--world", world, "--world-meters", String(wm), "--seconds", String(secs), "--seed", "4", "--clean", "--out", path.join(tmp, "p")], { stdio: "inherit" });
 }
 execFileSync("python3", [
