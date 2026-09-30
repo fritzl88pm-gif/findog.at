@@ -40,6 +40,7 @@ import {
   drawTrampoline,
   drawValance,
   makeSkinAssets,
+  OBSTACLE_PROPS,
   type PraterSkinAssets,
   type SkinCtx,
 } from "./skins";
@@ -47,7 +48,7 @@ import {
 const TAU = Math.PI * 2;
 const MAX_STAGE = 4;
 
-export const PRATER_PROPS = ["ghost", "ghost-float", "autoscooter", ...LANDMARK_PROP_IDS];
+export const PRATER_PROPS = ["ghost", "ghost-float", "autoscooter", ...Object.values(OBSTACLE_PROPS), ...LANDMARK_PROP_IDS];
 
 const STAGES = [
   { top: "#3b3f92", mid: "#e0808a", low: "#ffc56a", haze: "#f3a07e", sun: "#ffd27a", glow: "#ff9a4a", ground: "#ffcf9a" },
@@ -139,9 +140,18 @@ export class PraterRenderer implements WorldRenderer {
   private shoot = { x: 0, y: 0, t: -1 };
   private rng = mulberry(1234);
 
+  /** Pixelfaktor der Zeichenfläche (Hindernis-Sprites werden dafür vorgerendert) */
+  private pixelK = 1;
+
+  resize(dpr: number): void {
+    this.pixelK = dpr;
+    if (this.ready) this.A.bank.setScale(dpr);
+  }
+
   async load(assets: AssetLoader): Promise<void> {
     this.build();
     this.A.props = assets.props;
+    this.A.bank.setProps(assets.props);
     await assets.props.preload(PRATER_PROPS);
     // Gemalte Fahrgeschäfte (Ringelspiel, Zirkuszelt) als eigene Tiefenebene zwischen Hochschaubahn und Buden
     const P = assets.props;
@@ -155,6 +165,7 @@ export class PraterRenderer implements WorldRenderer {
   private build(): void {
     if (this.ready) return;
     this.A = makeSkinAssets();
+    this.A.bank.setScale(this.pixelK);
     const stars = paint(1280, 460, (g) => {
       const r = mulberry(5);
       for (let i = 0; i < 300; i += 1) {

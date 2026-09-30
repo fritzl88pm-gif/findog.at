@@ -2,11 +2,14 @@
 import type { Ent, PropLibrary, ViewState } from "../../types";
 import { colorWithAlpha, glowAt, glowSprite, paint, rr, softSprite, spriteStrip, drawStripFrame, type Ctx2D } from "../shared-b/canvas";
 import { heartPath } from "./backdrop";
+import { PropBank, fitBox, type Baked, type PropCrop } from "./propfit";
 
 const TAU = Math.PI * 2;
 
 export interface PraterSkinAssets {
   props: PropLibrary | null;
+  /** vorgerenderte Hindernis-Sprites (Buden, Kisten, Reifen, Behang, Geistertor, Kettenkarussell-Sitz) */
+  bank: PropBank;
   jeton: HTMLCanvasElement;
   jetonSize: number;
   glowPink: HTMLCanvasElement;
@@ -97,6 +100,7 @@ export function makeSkinAssets(): PraterSkinAssets {
   });
   return {
     props: null,
+    bank: new PropBank(),
     jeton,
     jetonSize: size,
     glowPink: glowSprite("#ff4fa3"),
@@ -131,6 +135,99 @@ export function drawJeton(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, sy:
     g.globalCompositeOperation = "source-over";
   }
   drawStripFrame(g, A.jeton, A.jetonSize, f, cx, cy, s);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Hindernis-Props (prater-*.webp): eng zugeschnittene Silhouetten, in Zielgröße vorgerendert (PropBank)
+
+export const OBSTACLE_PROPS = {
+  booth: "prater-booth",
+  candy: "prater-candy-crate",
+  tires: "prater-tires",
+  valance: "prater-valance",
+  gate: "prater-ghostgate",
+  seat: "prater-swing-chair",
+} as const;
+
+/** Erlaubtes Verhältnis Ziel/Natur (Höhe zu Breite), siehe fitBox: [min, max] */
+const FIT = {
+  booth: [0.72, 1.4],
+  candy: [0.72, 1.3],
+  tires: [0.72, 1.4],
+} as const;
+
+/** Silhouette mit Fußmitte (cx, foot) zeichnen; auf das Pixelraster gerundet */
+function blit(g: Ctx2D, A: PraterSkinAssets, b: Baked, cx: number, foot: number): void {
+  g.drawImage(b.c, A.bank.snap(cx - b.w / 2), A.bank.snap(foot - b.h), b.w, b.h);
+}
+
+/** Bodenblock: Prop in die Hitbox einpassen (Unterkante 2 px in den Boden). false = Prop fehlt → prozeduraler Fallback. */
+function blockSprite(g: Ctx2D, A: PraterSkinAssets, id: string, e: Ent, sx: number, sy: number, lim: readonly [number, number]): boolean {
+  const asp = A.bank.aspect(id);
+  if (asp === null) return false;
+  const f = fitBox(asp, e.w, e.h, lim[0], lim[1]);
+  const b = A.bank.get(id, f.w, f.h);
+  if (!b) return false;
+  blit(g, A, b, sx + e.w / 2, sy + e.h + 2);
+  return true;
+}
+
+/** Hängende Aufhängung (Seil/Kette) von der Sprite-Oberkante (x0, y0) aus dem Bild: nimmt die Neigung des Sprites auf und läuft oben senkrecht aus */
+function hanger(g: Ctx2D, x0: number, y0: number, slope: number, width: number, kind: "rope" | "chain"): void {
+  const top = -14;
+  const dy = y0 - top;
+  if (dy <= 2) return;
+  const h1 = dy * 0.4;
+  const c1x = x0 + slope * h1;
+  g.beginPath();
+  g.moveTo(x0 - slope * 4, y0 + 4);
+  g.lineTo(x0, y0);
+  g.quadraticCurveTo(c1x, y0 - h1, c1x, top);
+  g.lineCap = "butt";
+  g.lineJoin = "round";
+  if (kind === "rope") {
+    g.strokeStyle = "#1a0d05";
+    g.lineWidth = width + 2.6;
+    g.stroke();
+    g.strokeStyle = "#e3a826";
+    g.lineWidth = width;
+    g.stroke();
+    // Drehung des Seils: feine Querstriche
+    g.setLineDash([1.6, 2.6]);
+    g.strokeStyle = "#a8701a";
+    g.lineWidth = width * 0.8;
+    g.stroke();
+    g.setLineDash([]);
+    return;
+  }
+  // Kette: Umriss, große Glieder (Blick auf die Fläche, mit Loch) im Wechsel mit schmalen Gliedern (Kante)
+  const p = width * 1.25;
+  g.strokeStyle = "#100c14";
+  g.lineWidth = width + 2.6;
+  g.stroke();
+  g.setLineDash([p * 0.66, p * 0.34]);
+  g.strokeStyle = "#7c7f98";
+  g.lineWidth = width;
+  g.stroke();
+  g.setLineDash([p * 0.34, p * 0.66]);
+  g.lineDashOffset = -p * 0.16;
+  g.strokeStyle = "#1c1822";
+  g.lineWidth = width * 0.42;
+  g.stroke();
+  g.setLineDash([p * 0.26, p * 0.74]);
+  g.lineDashOffset = -p * 0.67;
+  g.strokeStyle = "#a9adc6";
+  g.lineWidth = width * 0.5;
+  g.stroke();
+  g.setLineDash([]);
+  g.lineDashOffset = 0;
+}
+
+/** Hängender Überhang: Sprite bündig auf der Hitbox-Unterkante, Breite = Hitbox-Breite */
+function overheadSprite(A: PraterSkinAssets, id: string, e: Ent): Baked | null {
+  const asp = A.bank.aspect(id);
+  if (asp === null) return null;
+  return A.bank.get(id, e.w, e.w * asp);
 }
 
 /** Kettenkarussell-Sitz inkl. Ketten und Baldachin am Ankerpunkt */
@@ -170,9 +267,48 @@ export function drawSwingChair(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number
     g.globalAlpha = 1;
     g.globalCompositeOperation = "source-over";
   }
-  // Ketten (zwei, zu den Sitz-Ecken)
   const ca = Math.cos(ang);
   const sa = Math.sin(ang);
+  // Prop-Sitz (vier Ketten, Sitz aus prater-swing-chair); Ketten laufen prozedural zum Aufhängepunkt
+  const seat = seatSprite(A, r);
+  if (seat) {
+    const { b, w, h } = seat;
+    // Ketten: (Anteil an der Sprite-Breite, golden?) – gespiegelt, der Sitz schaut in Laufrichtung
+    g.lineCap = "butt";
+    g.lineJoin = "round";
+    for (const [u, gold] of SEAT_CHAINS) {
+      const lx = (u - 0.5) * w;
+      const ly = -SEAT_CY * h + 3;
+      const tx = cx + lx * ca + ly * sa;
+      const ty = cy - lx * sa + ly * ca;
+      const topX = ax + (u - 0.5) * 22;
+      g.beginPath();
+      g.moveTo(topX, ay);
+      g.lineTo(tx, ty);
+      g.strokeStyle = "#1a1218";
+      g.lineWidth = 3.6;
+      g.stroke();
+      g.setLineDash([3.4, 1.6]);
+      g.strokeStyle = gold ? "#f4c53a" : "#c3cad8";
+      g.lineWidth = 2;
+      g.stroke();
+      g.setLineDash([]);
+    }
+    g.save();
+    g.translate(cx, cy);
+    g.rotate(-ang);
+    // Warn-Rimlight (Gefahr lesbar auch nachts)
+    g.globalCompositeOperation = "lighter";
+    g.globalAlpha = 0.4 + 0.25 * k.night;
+    glowAt(g, A.glowPink, 0, 4, r * 1.9);
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = "source-over";
+    g.scale(-1, 1);
+    g.drawImage(b.c, -w / 2, -SEAT_CY * h, w, h);
+    g.restore();
+    return;
+  }
+  // Ketten (zwei, zu den Sitz-Ecken)
   const seatTopX = cx - sa * r * 0.55;
   const seatTopY = cy - ca * r * 0.55;
   g.strokeStyle = "#cfc6d8";
@@ -572,7 +708,40 @@ export function drawScooter(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, s
 }
 
 /** Zuckerwatte-Kiste (zerbrechlich) */
+/** Süßigkeiten-Kiste aus dem Prop; sehr hohe Hitboxen (Kistenturm) werden aus mehreren überlappenden Kisten gestapelt */
+function candyCrateSprite(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, sy: number): boolean {
+  const id = OBSTACLE_PROPS.candy;
+  const asp = A.bank.aspect(id);
+  if (asp === null) return false;
+  const rmax = FIT.candy[1];
+  const r = e.h / (e.w * asp);
+  if (r <= rmax) return blockSprite(g, A, id, e, sx, sy, FIT.candy);
+  // Turm: obere Kisten überdecken die Füllung der unteren
+  const ov = 0.62;
+  const n = Math.max(2, Math.round(1 + (r - 1) / ov));
+  const each = e.h / (1 + ov * (n - 1));
+  const f = fitBox(asp, e.w, each, 0.8, 1.25);
+  const b = A.bank.get(id, f.w, f.h);
+  if (!b) return false;
+  const cx = sx + e.w / 2;
+  const foot = sy + e.h + 2;
+  for (let i = 0; i < n; i += 1) blit(g, A, b, cx + (i % 2 ? -1 : 1) * e.w * 0.03, foot - i * each * ov);
+  return true;
+}
+
 export function drawCandyCrate(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, sy: number, v: ViewState, k: SkinCtx): void {
+  const w = e.w;
+  if (!candyCrateSprite(g, A, e, sx, sy)) drawCandyCrateFallback(g, A, e, sx, sy);
+  // Zerbrechlich-Hinweis: Glitzern
+  const tw = k.reduced ? 0.6 : 0.5 + 0.5 * Math.sin(v.time * 5 + e.id);
+  g.globalCompositeOperation = "lighter";
+  g.globalAlpha = 0.35 + 0.4 * tw;
+  glowAt(g, A.glowWhite, sx + w * 0.78, sy + 8, 12);
+  g.globalAlpha = 1;
+  g.globalCompositeOperation = "source-over";
+}
+
+function drawCandyCrateFallback(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, sy: number): void {
   const w = e.w;
   const h = e.h;
   const boxH = Math.max(30, h * 0.68);
@@ -601,19 +770,23 @@ export function drawCandyCrate(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number
   g.lineWidth = 1.5;
   heartPath(g, sx + w / 2, by + boxH / 2, Math.min(9, boxH * 0.16));
   g.stroke();
-  // Zerbrechlich-Hinweis: Glitzern
-  const tw = k.reduced ? 0.6 : 0.5 + 0.5 * Math.sin(v.time * 5 + e.id);
-  g.globalCompositeOperation = "lighter";
-  g.globalAlpha = 0.35 + 0.4 * tw;
-  glowAt(g, A.glowWhite, sx + w * 0.78, sy + 8, 12);
-  g.globalAlpha = 1;
-  g.globalCompositeOperation = "source-over";
 }
 
 /** Schießbuden-Theke mit Dosenpyramide */
 export function drawBooth(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, sy: number, v: ViewState, k: SkinCtx): void {
   const w = e.w;
   const h = e.h;
+  if (blockSprite(g, A, OBSTACLE_PROPS.booth, e, sx, sy, FIT.booth)) {
+    // Lichterketten der Bude glimmen nachts
+    if (k.night > 0.2) {
+      g.globalCompositeOperation = "lighter";
+      g.globalAlpha = 0.32 * k.night;
+      glowAt(g, A.glowGold, sx + w / 2, sy + h * 0.4, w * 0.62, h * 0.55);
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = "source-over";
+    }
+    return;
+  }
   const counterY = sy + h * 0.42;
   // Theke
   const grd = g.createLinearGradient(0, counterY, 0, sy + h);
@@ -671,6 +844,7 @@ export function drawTires(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, sy:
   glowAt(g, A.glowPink, sx + w / 2, sy + h * 0.55, w * 0.85, h * 0.75);
   g.globalAlpha = 1;
   g.globalCompositeOperation = "source-over";
+  if (blockSprite(g, A, OBSTACLE_PROPS.tires, e, sx, sy, FIT.tires)) return;
   for (let r = 0; r < rows; r += 1) {
     const y = sy + h - (r + 1) * rh;
     const inset = (r % 2) * 3;
@@ -717,6 +891,28 @@ export function valanceTexture(): HTMLCanvasElement {
 export function drawValance(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, sy: number, v: ViewState, k: SkinCtx): void {
   const w = e.w;
   const bottom = sy + e.h;
+  const b = overheadSprite(A, OBSTACLE_PROPS.valance, e);
+  if (b) {
+    // Bild bündig auf der Hitbox-Unterkante; die Seile laufen vom Bildrand zum Sprite (Neigung wie im Bild)
+    const x = A.bank.snap(sx + (w - b.w) / 2);
+    const y = A.bank.snap(bottom + 1 - b.h);
+    const kx = b.w / 630;
+    for (const [u, dir] of [
+      [0.148, 1],
+      [0.848, -1],
+    ] as const) {
+      hanger(g, x + u * b.w, y + 2, 0.27 * dir, Math.max(2.6, 14 * kx), "rope");
+    }
+    g.drawImage(b.c, x, y, b.w, b.h);
+    // Schein unter dem Saum → Rutschen-Höhe klar erkennbar
+    g.globalCompositeOperation = "lighter";
+    g.globalAlpha = 0.28 + 0.3 * k.night;
+    glowAt(g, A.glowGold, sx + w / 2, bottom - 4, w * 0.55, 13);
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = "source-over";
+    void v;
+    return;
+  }
   const top = Math.max(-4, sy);
   const clothBottom = bottom - 30;
   // Stoff (gekachelte Textur)
@@ -787,6 +983,30 @@ export function drawValance(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, s
 export function drawGhostGate(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, sy: number, v: ViewState, k: SkinCtx): void {
   const w = e.w;
   const bottom = sy + e.h;
+  const b = overheadSprite(A, OBSTACLE_PROPS.gate, e);
+  if (b) {
+    // Tor hängt an zwei Ketten von oben; der Bogen unten deckt die Hitbox
+    const x = A.bank.snap(sx + (w - b.w) / 2);
+    const y = A.bank.snap(bottom + 1 - b.h);
+    const kx = b.w / 622;
+    for (const [u, dir] of [
+      [0.231, 1],
+      [0.766, -1],
+    ] as const) {
+      hanger(g, x + u * b.w, y + 2, 0.15 * dir, Math.max(3, 24 * kx), "chain");
+    }
+    g.drawImage(b.c, x, y, b.w, b.h);
+    // Totenkopf-Augen glimmen (nachts stärker), Schein unter dem Bogen
+    g.globalCompositeOperation = "lighter";
+    const pulse = k.reduced ? 0.7 : 0.6 + 0.4 * Math.sin(v.time * 3.2 + e.id * 1.7);
+    g.globalAlpha = (0.3 + 0.4 * k.night) * pulse;
+    glowAt(g, A.glowPink, x + b.w * 0.5, y + b.h * 0.27, b.w * 0.16, b.w * 0.1);
+    g.globalAlpha = 0.28 + 0.3 * k.night;
+    glowAt(g, A.glowPink, sx + w / 2, bottom - 4, w * 0.55, 13);
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = "source-over";
+    return;
+  }
   const top = Math.max(-10, sy);
   const grd = g.createLinearGradient(0, top, 0, bottom);
   grd.addColorStop(0, "#1d1430");

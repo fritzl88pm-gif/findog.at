@@ -5,6 +5,7 @@
 import type { WorldDef } from "../types";
 import { WIEN_PATTERNS } from "./wien/patterns";
 import { WienRenderer } from "./wien/renderer";
+import { WIEN_PROPS } from "./wien/skins";
 import { WIEN_STAGE_NAMES } from "./wien/stages";
 import { WienSystem } from "./wien/system";
 import { GUEST_PROP_IDS } from "./shared-a/guests";
@@ -25,5 +26,5 @@ export const WORLD_WIEN: WorldDef = {
   patterns: WIEN_PATTERNS,
   createSystems: () => [new WienSystem()],
   createRenderer: () => new WienRenderer(),
-  propIds: ["fiaker", "traffic-cone", "park-bench", "wuerstelstand", "pigeon-fly", ...GUEST_PROP_IDS],
+  propIds: ["fiaker", "traffic-cone", "park-bench", "wuerstelstand", "pigeon-fly", ...WIEN_PROPS, ...GUEST_PROP_IDS],
 };

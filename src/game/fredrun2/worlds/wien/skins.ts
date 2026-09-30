@@ -1,13 +1,164 @@
 /**
  * Wien – Entitäts-Skins: Straßenbahn, Fiaker, Tauben, Pfütze, Blitzeinschlag, Poller, Bauzaun, Gerüst, Trümmer,
  * Wirtshausschild, Dachziegel, Ziegel. Props werden genutzt, wenn vorhanden; sonst prozedurale Varianten.
+ *
+ * Hindernis-Props (Poller, Bauzaun, Schutt, Kranträger, Brezel-Schild) werden einmal in Zielgröße vorgerendert
+ * (`PropSprites`, zweistufig verkleinert = flimmerfrei) und pro Frame nur noch geblittet.
  */
 import { clamp, roundRect } from "../../draw-utils";
 import type { Ent, PropLibrary, ViewState } from "../../types";
 import { hash } from "../shared-a/gfx";
 
+/** Props, die die Wien-Skins nutzen (werden vor dem Lauf geladen). */
+export const WIEN_TRAM_PROPS = ["wien-tram-n0", "wien-tram-n1", "wien-tram-n2", "wien-tram-n3", "wien-tram-n4"];
+export const WIEN_PROPS = ["wien-poller", "wien-bauzaun", "wien-rubble", "wien-crane-beam", "wien-sign", ...WIEN_TRAM_PROPS];
+
+/** Alpha-Rand der zugeschnittenen Prop-Zellen (tools/fredrun2/pack_props.py) */
+const PROP_PAD = 5;
+
+/**
+ * Vorgerendertes Prop (ggf. ausschnittweise). Koordinaten „Zelle“ = Pixel des Original-Bildes; `s` = logische px je
+ * Zellpixel; (x0, y0) = Ursprung des gespeicherten Ausschnitts in Zellkoordinaten.
+ */
+export interface PropSprite {
+  c: HTMLCanvasElement;
+  s: number;
+  x0: number;
+  y0: number;
+  /** logische Größe des Ausschnitts */
+  w: number;
+  h: number;
+  /** Zellmaße */
+  cw: number;
+  ch: number;
+}
+
+export interface BakeOpts {
+  /** Ausschnitt in Zellpixeln [x0, y0, x1, y1] (Standard: ganze Zelle) */
+  crop?: [number, number, number, number];
+  /** nur diese Rechtecke [x, y, w, h] (Zellpixel) sichtbar */
+  clip?: Array<[number, number, number, number]>;
+}
+
+export class PropSprites {
+  private readonly cache = new Map<string, PropSprite>();
+  private k = 1;
+
+  constructor(private props: PropLibrary | null = null) {}
+
+  setProps(p: PropLibrary | null): void {
+    this.props = p;
+    this.cache.clear();
+  }
+
+  /** Pixelfaktor der Zeichenfläche (1 … 2); bei Änderung werden die Sprites neu gebacken. */
+  setScale(k: number): void {
+    const nk = clamp(k, 1, 2);
+    if (Math.abs(nk - this.k) > 0.2) {
+      this.k = nk;
+      this.cache.clear();
+    }
+  }
+
+  /** aktueller Pixelfaktor der Zeichenfläche */
+  get scale(): number {
+    return this.k;
+  }
+
+  has(id: string): boolean {
+    return !!this.props?.has(id);
+  }
+
+  /** Logische px je Zellpixel, damit die sichtbare Silhouette `sw` breit ist. */
+  scaleForWidth(id: string, sw: number): number {
+    const cell = this.props?.cell(id);
+    return cell ? sw / Math.max(1, cell.w - PROP_PAD * 2) : 1;
+  }
+
+  /** … damit die sichtbare Silhouette `sh` hoch ist. */
+  scaleForHeight(id: string, sh: number): number {
+    const cell = this.props?.cell(id);
+    return cell ? sh / Math.max(1, cell.h - PROP_PAD * 2) : 1;
+  }
+
+  /** Prop `id` mit `s` logischen px je Zellpixel backen; null, wenn das Prop nicht geladen ist. */
+  get(id: string, s: number, o: BakeOpts = {}): PropSprite | null {
+    const props = this.props;
+    if (!props?.has(id)) return null;
+    const sq = Math.round(s * 1000) / 1000;
+    const key = `${id}|${sq}|${o.crop ? o.crop.join(",") : ""}|${o.clip ? o.clip.map((r) => r.join(",")).join(";") : ""}`;
+    const hit = this.cache.get(key);
+    if (hit) return hit;
+    const cell = props.cell(id);
+    if (!cell) return null;
+    const spr = this.bake(props, id, cell.w, cell.h, sq, o);
+    this.cache.set(key, spr);
+    if (this.cache.size > 64) {
+      const first = this.cache.keys().next().value;
+      if (first !== undefined) this.cache.delete(first);
+    }
+    return spr;
+  }
+
+  private bake(props: PropLibrary, id: string, cw: number, ch: number, s: number, o: BakeOpts): PropSprite {
+    const [x0, y0, x1, y1] = o.crop ?? [0, 0, cw, ch];
+    const k = this.k;
+    const w = (x1 - x0) * s;
+    const h = (y1 - y0) * s;
+    const W = Math.max(2, Math.round(w * k));
+    const H = Math.max(2, Math.round(h * k));
+    // Zielskala in Canvas-Pixeln je Zellpixel
+    const t = (W / (x1 - x0));
+    const paintTo = (g: CanvasRenderingContext2D, scale: number): void => {
+      g.save();
+      if (o.clip) {
+        g.beginPath();
+        for (const [rx, ry, rw, rh] of o.clip) g.rect((rx - x0) * scale, (ry - y0) * scale, rw * scale, rh * scale);
+        g.clip();
+      }
+      props.draw(g, id, -x0 * scale, -y0 * scale, { scale, ax: 0, ay: 0 });
+      g.restore();
+    };
+    const c = document.createElement("canvas");
+    c.width = W;
+    c.height = H;
+    const g = c.getContext("2d");
+    if (g) {
+      g.imageSmoothingQuality = "high";
+      if (t < 0.55) {
+        // starke Verkleinerung: erst auf die doppelte Zielgröße, dann herunter (kein Flimmern)
+        const big = document.createElement("canvas");
+        big.width = W * 2;
+        big.height = H * 2;
+        const bg = big.getContext("2d");
+        if (bg) {
+          bg.imageSmoothingQuality = "high";
+          paintTo(bg, t * 2);
+          g.drawImage(big, 0, 0, W, H);
+        }
+      } else {
+        paintTo(g, t);
+      }
+    }
+    return { c, s, x0, y0, w: W / k, h: H / k, cw, ch };
+  }
+}
+
+/** Zeichnet den Sprite so, dass der Zellpunkt (cx, cy) auf (wx, wy) landet (ganzzahlig, wenn `snap`). */
+export function blitSprite(g: CanvasRenderingContext2D, spr: PropSprite, cx: number, cy: number, wx: number, wy: number, snap = true): void {
+  let dx = wx - (cx - spr.x0) * spr.s;
+  let dy = wy - (cy - spr.y0) * spr.s;
+  if (snap) {
+    dx = Math.round(dx);
+    dy = Math.round(dy);
+  }
+  g.drawImage(spr.c, dx, dy, spr.w, spr.h);
+}
+
 export interface SkinCtx {
   props: PropLibrary | null;
+  /** vorgerenderte Hindernis-Props */
+  sprites: PropSprites;
   /** Blitzhelligkeit 0..1 */
   flash: number;
   /** Stufe 0..7 (Brand/Asche beeinflusst Trümmer-Glut) */
@@ -42,6 +193,31 @@ function makeCanvas2(w: number, h: number, paint: (g: CanvasRenderingContext2D) 
   c.height = Math.max(1, Math.ceil(h));
   const g = c.getContext("2d");
   if (g) paint(g);
+  return c;
+}
+
+let glowLamp: HTMLCanvasElement | null = null;
+let glowEmber: HTMLCanvasElement | null = null;
+
+/** Weicher Lichthof (vorgerendert): Warnleuchte bzw. Glut. */
+function getGlow(kind: "lamp" | "ember"): HTMLCanvasElement {
+  if (kind === "lamp" && glowLamp) return glowLamp;
+  if (kind === "ember" && glowEmber) return glowEmber;
+  const c = makeCanvas2(48, 48, (g) => {
+    const grd = g.createRadialGradient(24, 24, 0, 24, 24, 24);
+    if (kind === "lamp") {
+      grd.addColorStop(0, "rgba(255,214,96,1)");
+      grd.addColorStop(0.3, "rgba(255,176,44,0.55)");
+      grd.addColorStop(1, "rgba(255,150,30,0)");
+    } else {
+      grd.addColorStop(0, "rgba(255,150,60,0.7)");
+      grd.addColorStop(1, "rgba(255,90,30,0)");
+    }
+    g.fillStyle = grd;
+    g.fillRect(0, 0, 48, 48);
+  });
+  if (kind === "lamp") glowLamp = c;
+  else glowEmber = c;
   return c;
 }
 
@@ -213,9 +389,25 @@ function paintTramBody(w: number, h: number, id: number): HTMLCanvasElement {
   });
 }
 
+/** logische px je Zellpixel der Straßenbahn-Sprites: Dachkante bis Radunterkante = TRAM_H (156) */
+const TRAM_SPRITE_SCALE = 0.806;
+
+/** Vorgerenderter Wagen aus einem Straßenbahn-Sprite (Front links), auf die Hitbox-Breite gestreckt. */
+export interface TramSprite {
+  c: HTMLCanvasElement;
+  /** logische Größe */
+  w: number;
+  h: number;
+  /** Ort der Radunterkante (Fußlinie) ab Oberkante, in logischen px */
+  foot: number;
+  /** Streckung gegenüber der natürlichen Länge (≈ 0.93 … 1.07) */
+  sx: number;
+}
+
 /** Vorgerenderte Wagenkästen je Zug (kleiner LRU-Puffer). */
 export class TramBodies {
   private readonly map = new Map<number, { c: HTMLCanvasElement; w: number; h: number }>();
+  private readonly sprites = new Map<number, { key: string; s: TramSprite }>();
 
   get(e: Ent): HTMLCanvasElement {
     let hit = this.map.get(e.id);
@@ -229,9 +421,87 @@ export class TramBodies {
     }
     return hit.c;
   }
+
+  /** Sprite der passendsten Wagenlänge (kleinste Abweichung zur Hitbox-Breite); null ohne geladene Props. */
+  sprite(e: Ent, props: PropLibrary | null, k: number): TramSprite | null {
+    if (!props) return null;
+    let id = "";
+    let nat = 0;
+    let best = Infinity;
+    for (const pid of WIEN_TRAM_PROPS) {
+      if (!props.has(pid)) continue;
+      const cell = props.cell(pid);
+      if (!cell) continue;
+      const n = (cell.w - PROP_PAD * 2) * TRAM_SPRITE_SCALE;
+      const d = Math.abs(n - e.w);
+      if (d < best) {
+        best = d;
+        id = pid;
+        nat = n;
+      }
+    }
+    if (!id) return null;
+    const key = `${id}|${e.w}|${k}`;
+    const hit = this.sprites.get(e.id);
+    if (hit && hit.key === key) return hit.s;
+    const cell = props.cell(id);
+    if (!cell) return null;
+    const sx = e.w / nat;
+    const W = Math.max(2, Math.round(cell.w * TRAM_SPRITE_SCALE * sx * k));
+    const H = Math.max(2, Math.round(cell.h * TRAM_SPRITE_SCALE * k));
+    const c = document.createElement("canvas");
+    c.width = W;
+    c.height = H;
+    const g = c.getContext("2d");
+    if (g) {
+      g.imageSmoothingQuality = "high";
+      props.draw(g, id, W / 2, H / 2, { scale: TRAM_SPRITE_SCALE * k, sx, flipX: true, ax: 0.5, ay: 0.5 });
+    }
+    const s: TramSprite = { c, w: W / k, h: H / k, foot: (cell.h - PROP_PAD) * TRAM_SPRITE_SCALE, sx };
+    this.sprites.set(e.id, { key, s });
+    if (this.sprites.size > 6) {
+      const first = this.sprites.keys().next().value;
+      if (first !== undefined) this.sprites.delete(first);
+    }
+    return s;
+  }
+}
+
+/** Scheinwerfer der Bim-Sprites (Front links): Abstand von der Vorderkante und Höhe über der Schiene, logische px */
+const TRAM_LAMP = { front: 13, up: 55 };
+
+function drawTramSprite(g: CanvasRenderingContext2D, e: Ent, sx: number, v: ViewState, c: SkinCtx, spr: TramSprite): void {
+  const x = Math.round(sx);
+  const gy = v.groundY;
+  const fx = getTramFx();
+  const lx = x + TRAM_LAMP.front;
+  const ly = gy - TRAM_LAMP.up;
+  g.save();
+  shadow(g, x + e.w / 2, gy, e.w * 0.52, 0.45);
+  // Scheinwerferkegel + Reflex auf nasser Straße
+  g.globalCompositeOperation = "lighter";
+  g.drawImage(fx.beam, lx - 372, ly - 8);
+  g.drawImage(fx.refl, lx - 228, gy - 6);
+  g.globalCompositeOperation = "source-over";
+  const dx = Math.round(x + e.w / 2 - spr.w / 2);
+  const dy = Math.round(gy - spr.foot);
+  g.drawImage(spr.c, dx, dy, spr.w, spr.h);
+  // Scheinwerfer + Blitz (nur bei Einschlag hellt der Wagen kurz auf)
+  g.globalCompositeOperation = "lighter";
+  g.drawImage(fx.head, lx - 34, ly - 34);
+  if (c.flash > 0.04) {
+    g.globalAlpha = Math.min(0.4, c.flash * 0.4);
+    g.drawImage(spr.c, dx, dy, spr.w, spr.h);
+  }
+  g.restore();
 }
 
 export function drawTram(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: number, v: ViewState, c: SkinCtx, bodies: TramBodies): void {
+  const spr = bodies.sprite(e, c.props, c.sprites.scale);
+  if (spr) {
+    drawTramSprite(g, e, sx, v, c, spr);
+    return;
+  }
   const w = e.w;
   const h = e.h;
   const t = v.time;
@@ -645,7 +915,15 @@ export function drawBolt(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: nu
 // ---------------------------------------------------------------------------------------------------
 // Blöcke
 
-export function drawPoller(g: CanvasRenderingContext2D, sx: number, sy: number, w: number, h: number, gy: number): void {
+export function drawPoller(g: CanvasRenderingContext2D, sx: number, sy: number, w: number, h: number, gy: number, c: SkinCtx): void {
+  const spr = c.sprites.get("wien-poller", c.sprites.scaleForHeight("wien-poller", Math.round(h * 1.08)));
+  if (spr) {
+    // Stahlpoller: Fuß auf der Bodenlinie (3 px eingesunken), Trefferfläche liegt mittig hinter der Säule
+    const cx = sx + w / 2;
+    shadow(g, cx, gy, Math.max(11, (spr.cw - 10) * spr.s * 0.95));
+    blitSprite(g, spr, spr.cw / 2, spr.ch - PROP_PAD, cx, gy + 3);
+    return;
+  }
   shadow(g, sx + w / 2, gy, w * 0.7);
   g.save();
   const grd = g.createLinearGradient(sx, 0, sx + w, 0);
@@ -671,7 +949,33 @@ export function drawPoller(g: CanvasRenderingContext2D, sx: number, sy: number, 
   g.restore();
 }
 
-export function drawBauzaun(g: CanvasRenderingContext2D, sx: number, sy: number, w: number, h: number, gy: number, t: number, reduced: boolean): void {
+/** Warnleuchten des Bauzauns (Zellkoordinaten des Sprites, x von links, y von oben) */
+const BAUZAUN_LAMPS: Array<[number, number]> = [
+  [55, 43],
+  [457, 43],
+];
+
+export function drawBauzaun(g: CanvasRenderingContext2D, sx: number, sy: number, w: number, h: number, gy: number, t: number, reduced: boolean, c: SkinCtx): void {
+  const spr = c.sprites.get("wien-bauzaun", c.sprites.scaleForWidth("wien-bauzaun", Math.round(w * 1.08)));
+  if (spr) {
+    const cx = sx + w / 2;
+    shadow(g, cx, gy, (spr.cw - 10) * spr.s * 0.56);
+    blitSprite(g, spr, spr.cw / 2, spr.ch - PROP_PAD, cx, gy + 3);
+    // Wechselblinker: die beiden Leuchten blinken abwechselnd (bei reduzierter Bewegung ruhig)
+    const glow = getGlow("lamp");
+    const phase = Math.sin(t * 7) > 0;
+    const r = 21;
+    g.save();
+    g.globalCompositeOperation = "lighter";
+    for (let i = 0; i < BAUZAUN_LAMPS.length; i += 1) {
+      const lx = cx + (BAUZAUN_LAMPS[i][0] - spr.cw / 2) * spr.s;
+      const ly = gy + 3 - (spr.ch - PROP_PAD - BAUZAUN_LAMPS[i][1]) * spr.s;
+      g.globalAlpha = reduced ? 0.5 : (i === 0) === phase ? 0.95 : 0.15;
+      g.drawImage(glow, lx - r, ly - r, r * 2, r * 2);
+    }
+    g.restore();
+    return;
+  }
   shadow(g, sx + w / 2, gy, w * 0.6);
   g.save();
   // Füße
@@ -723,6 +1027,27 @@ export function drawBauzaun(g: CanvasRenderingContext2D, sx: number, sy: number,
 export function drawRubble(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: number, gy: number, t: number, c: SkinCtx): void {
   const w = e.w;
   const h = e.h;
+  const spr = c.sprites.get("wien-rubble", c.sprites.scaleForWidth("wien-rubble", Math.round(w * 1.06)));
+  if (spr) {
+    // Schutthaufen mit Bauhelm; späte Stufen: glimmende Glutnester dazwischen
+    const cx = sx + w / 2;
+    shadow(g, cx, gy, w * 0.6, 0.4);
+    blitSprite(g, spr, spr.cw / 2, spr.ch - PROP_PAD, cx, gy + 3);
+    if (c.stage >= 3) {
+      const glow = getGlow("ember");
+      const pulse = c.reduced ? 0.7 : 0.6 + 0.4 * Math.sin(t * 4 + e.id);
+      g.save();
+      g.globalCompositeOperation = "lighter";
+      g.globalAlpha = pulse;
+      for (let i = 0; i < 4; i += 1) {
+        const ex = sx + (0.2 + hash(e.id + i * 3) * 0.6) * w;
+        const ey = gy - (0.2 + hash(e.id * 2 + i) * 0.4) * h;
+        g.drawImage(glow, ex - 16, ey - 16, 32, 32);
+      }
+      g.restore();
+    }
+    return;
+  }
   shadow(g, sx + w / 2, gy, w * 0.6, 0.4);
   g.save();
   // Balken
@@ -855,10 +1180,45 @@ export function drawScaffold(g: CanvasRenderingContext2D, e: Ent, sx: number, sy
   g.restore();
 }
 
-export function drawBurningBeam(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: number, v: ViewState): void {
+/** Kranseil-Enden am oberen Bildrand des Trägers (Zellkoordinaten: Mitte x, Breite) */
+const BEAM_CABLES: Array<[number, number]> = [
+  [294, 13],
+  [337.5, 13],
+];
+
+/** Stahlseil (Kontur, Stahlkern, Litzen) von (x, y0) nach oben bis y1. */
+function steelCable(g: CanvasRenderingContext2D, x: number, y0: number, y1: number, wd: number): void {
+  g.lineCap = "butt";
+  g.strokeStyle = "#0a0a0c";
+  g.lineWidth = wd;
+  g.beginPath();
+  g.moveTo(x, y0);
+  g.lineTo(x, y1);
+  g.stroke();
+  g.strokeStyle = "#7d8288";
+  g.lineWidth = wd * 0.42;
+  g.stroke();
+  g.strokeStyle = "rgba(0,0,0,0.55)";
+  g.setLineDash([2, 4]);
+  g.stroke();
+  g.setLineDash([]);
+}
+
+export function drawBurningBeam(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: number, v: ViewState, c: SkinCtx): void {
   const w = e.w;
   const bottom = sy + e.h;
   const t = v.time;
+  // Kranträger: Balken deckt die Trefferfläche, Ketten + Haken darüber, die Seile laufen aus dem Bild
+  const beamW = Math.max(8, Math.round((w * 1.06) / 8) * 8);
+  const spr = c.sprites.get("wien-crane-beam", c.sprites.scaleForWidth("wien-crane-beam", beamW));
+  if (spr) {
+    const cx = sx + w / 2;
+    const by = bottom - 2;
+    blitSprite(g, spr, spr.cw / 2, spr.ch - PROP_PAD, cx, by, false);
+    const top = by - (spr.ch - PROP_PAD * 2) * spr.s;
+    for (const [ccx, cw] of BEAM_CABLES) steelCable(g, cx + (ccx - spr.cw / 2) * spr.s, top + 2, -12, Math.max(3, cw * spr.s));
+    return;
+  }
   g.save();
   // Ketten nach oben
   g.strokeStyle = "#2a2522";
@@ -925,12 +1285,73 @@ export function drawBurningBeam(g: CanvasRenderingContext2D, e: Ent, sx: number,
 // ---------------------------------------------------------------------------------------------------
 // Wirtshausschild (Pendel)
 
-export function drawSign(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: number, v: ViewState): void {
+/** Brezel-Schild (Zellkoordinaten): Schwerpunkt, Schnitt Ausleger/Schild, Aufhängeketten, Breite der Brezel */
+const SIGN = { px: 218, py: 343, cut: 110, chainL: 137, chainR: 307, barY: 106, pretzelW: 308 };
+
+/** Kettenstrang von (x0, y0) nach (x1, y1): dunkle Kontur, Stahlkern, Gliedernähte. */
+function chainStroke(g: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number, wd: number): void {
+  g.lineCap = "round";
+  g.strokeStyle = "#0b0b0d";
+  g.lineWidth = wd + 2.4;
+  g.beginPath();
+  g.moveTo(x0, y0);
+  g.lineTo(x1, y1);
+  g.stroke();
+  g.strokeStyle = "#8b919b";
+  g.lineWidth = wd;
+  g.stroke();
+  g.strokeStyle = "rgba(11,11,13,0.75)";
+  g.setLineDash([1.6, 6]);
+  g.stroke();
+  g.setLineDash([]);
+}
+
+export function drawSign(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: number, v: ViewState, c: SkinCtx): void {
   const ax = e.p.ax - v.dist;
   const ay = e.p.ay;
   const cx = sx + e.w / 2;
   const cy = sy + e.h / 2;
   const r = e.w / 2;
+  // Brezel-Schild: Eisenausleger (fest) + Kette + Schild (pendelt mit dem Winkel der Physik)
+  const sb = (e.w * 0.97) / SIGN.pretzelW;
+  const body = c.sprites.get("wien-sign", sb, {
+    crop: [0, SIGN.cut, 404, 512],
+    clip: [
+      [100, SIGN.cut, 304, 402],
+      [70, 174, 30, 338],
+    ],
+  });
+  const bracket = c.sprites.get("wien-sign", sb * 1.3, {
+    crop: [0, 0, 404, 254],
+    clip: [
+      [0, 0, 404, SIGN.cut],
+      [0, SIGN.cut, 100, 64],
+      [0, 174, 70, 80],
+    ],
+  });
+  if (body && bracket) {
+    blitSprite(g, bracket, (SIGN.chainL + SIGN.chainR) / 2, SIGN.barY, ax, ay, false);
+    // Koordinaten mit Ursprung in der Schildmitte; die –y-Achse zeigt exakt zum Aufhängepunkt
+    const len = Math.hypot(cx - ax, cy - ay);
+    const yCut = (SIGN.cut - SIGN.py) * sb;
+    const xl = (SIGN.chainL - SIGN.px) * sb;
+    const xr = (SIGN.chainR - SIGN.px) * sb;
+    const my = yCut - 12;
+    g.save();
+    g.translate(cx, cy);
+    g.rotate(e.fx.angle ? -e.fx.angle : 0);
+    chainStroke(g, 0, my, 0, -len + 1, 2.2);
+    chainStroke(g, xl, yCut + 2, 0, my, 1.8);
+    chainStroke(g, xr, yCut + 2, 0, my, 1.8);
+    g.strokeStyle = "#0b0b0d";
+    g.lineWidth = 2;
+    g.beginPath();
+    g.arc(0, my, 3, 0, Math.PI * 2);
+    g.stroke();
+    g.drawImage(body.c, -(SIGN.px - body.x0) * body.s, -(SIGN.py - body.y0) * body.s, body.w, body.h);
+    g.restore();
+    return;
+  }
   g.save();
   // Ausleger oben
   g.fillStyle = "#1c1b1d";

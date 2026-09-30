@@ -38,7 +38,9 @@ import {
   type FacadeTile,
 } from "./scenery";
 import {
+  PropSprites,
   TramBodies,
+  WIEN_PROPS,
   drawBauzaun,
   drawBolt,
   drawBrick,
@@ -171,7 +173,7 @@ export class WienRenderer implements WorldRenderer {
   private motes = new Motes(220);
   private k = 1;
   private nearK = 0;
-  private skinCtx: SkinCtx = { props: null, flash: 0, stage: 0, reduced: false };
+  private skinCtx: SkinCtx = { props: null, sprites: new PropSprites(), flash: 0, stage: 0, reduced: false };
   private emberT = 0;
   private ashT = 0;
   private debrisT = 0;
@@ -181,7 +183,8 @@ export class WienRenderer implements WorldRenderer {
   async load(assets: AssetLoader): Promise<void> {
     this.props = assets.props;
     this.skinCtx.props = assets.props;
-    await Promise.all([this.backdrop.load(assets.image), assets.props.preload(["pigeon-fly"])]);
+    await Promise.all([this.backdrop.load(assets.image), assets.props.preload(["pigeon-fly", ...WIEN_PROPS]).catch(() => undefined)]);
+    this.skinCtx.sprites.setProps(assets.props);
     this.buildStatic();
     await Promise.resolve();
     this.buildNear();
@@ -196,6 +199,7 @@ export class WienRenderer implements WorldRenderer {
 
   resize(dpr: number): void {
     this.k = clamp(dpr, 1, 2);
+    this.skinCtx.sprites.setScale(this.k);
   }
 
   // --- Vorrendern ----------------------------------------------------------------------------------
@@ -965,10 +969,10 @@ export class WienRenderer implements WorldRenderer {
         drawBolt(g, e, sx, sy, v, c);
         return true;
       case "poller":
-        drawPoller(g, sx, sy, e.w, e.h, gy);
+        drawPoller(g, sx, sy, e.w, e.h, gy, c);
         return true;
       case "bauzaun":
-        drawBauzaun(g, sx, sy, e.w, e.h, gy, v.time, v.reducedMotion);
+        drawBauzaun(g, sx, sy, e.w, e.h, gy, v.time, v.reducedMotion, c);
         return true;
       case "rubble":
         drawRubble(g, e, sx, sy, gy, v.time, c);
@@ -977,10 +981,10 @@ export class WienRenderer implements WorldRenderer {
         drawScaffold(g, e, sx, sy, v);
         return true;
       case "beam":
-        drawBurningBeam(g, e, sx, sy, v);
+        drawBurningBeam(g, e, sx, sy, v, c);
         return true;
       case "sign":
-        drawSign(g, e, sx, sy, v);
+        drawSign(g, e, sx, sy, v, c);
         return true;
       case "rooftile":
         drawRoofTile(g, e, sx, sy, v);
