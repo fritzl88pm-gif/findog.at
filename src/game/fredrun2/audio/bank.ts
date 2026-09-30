@@ -9,6 +9,7 @@
  * Der Datei-Teil ist absichtlich in reine Funktionen getrennt (`parseManifest`, `VariantPicker`, `syncShift`,
  * `sliceFrames`, `jitterRate`), damit die Logik in Vitest ohne echten AudioContext testbar ist (`bank.test.ts`).
  */
+import { withRev } from "../asset-rev";
 import { clamp, makePanner } from "./dsp";
 import { SFX_NAMES } from "./types";
 import type { SfxOptions } from "./types";
@@ -352,12 +353,12 @@ export class SfxBank {
     const doFetch = this.opts.fetch ?? (typeof fetch === "function" ? (u: string) => fetch(u, { credentials: "same-origin" }) : null);
     if (!doFetch) throw new Error("kein fetch verfügbar");
     const base = this.opts.baseUrl ?? BANK_BASE_URL;
-    const res = await doFetch(base + BANK_MANIFEST_FILE);
+    const res = await doFetch(withRev(base + BANK_MANIFEST_FILE));
     if (!res.ok) throw new Error("Manifest nicht ladbar");
     const parsed = parseManifest(await res.json(), this.opts.names);
     if (!parsed.ok) throw new Error("Manifest ungültig: " + parsed.errors.slice(0, 3).join("; "));
     const m = parsed.manifest;
-    const mp3 = await doFetch(base + m.file + (m.rev ? `?v=${m.rev}` : ""));
+    const mp3 = await doFetch(m.rev ? `${base}${m.file}?v=${m.rev}` : withRev(base + m.file));
     if (!mp3.ok) throw new Error("MP3 nicht ladbar");
     const data = await mp3.arrayBuffer();
     if (this.disposed) return false;

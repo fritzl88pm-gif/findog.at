@@ -1,0 +1,248 @@
+{
+ "_doc": "Neue Hindernis-Props für die älteren Welten (Aufwertung). Erzeugung: FAL_KEY=… node tools/fredrun2/fal-art.mjs batch tools/fredrun2/art_prompts/legacy.json --out <dir> --budget <USD>",
+ "styles": {
+  "prop": "Game asset illustration in bold comic style with thick black outlines and halftone shading, vibrant saturated colors, cheerful Austrian mobile endless-runner look. Single isolated object, centered, seen from the side, fully transparent background, no ground shadow, no text, no watermark."
+ },
+ "jobs": [
+  {
+   "name": "wien-bauzaun",
+   "style": "prop",
+   "size": "1024x896",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A Viennese construction-site barrier fence: two orange and white striped plastic barrier panels on small feet, a yellow blinking warning lamp on top, reflective stripes, a little rain-wet shine. Wide and low object filling the frame."
+  },
+  {
+   "name": "wien-poller",
+   "style": "prop",
+   "size": "576x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A tall slim steel street bollard with a red and white reflective band and a domed top, stainless steel with a subtle shine, cast base. Tall narrow object filling the frame."
+  },
+  {
+   "name": "wien-rubble",
+   "style": "prop",
+   "size": "1024x640",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A heap of construction rubble: broken bricks, concrete chunks and grey dust, a bent rebar sticking out, a yellow hard hat resting on top, low wide pile filling the frame."
+  },
+  {
+   "name": "wien-crane-beam",
+   "style": "prop",
+   "size": "1024x768",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A heavy steel I-beam hanging horizontally from two thick chains that lead up and out of the top edge of the frame, joined at a crane hook, yellow safety paint with black hazard stripes on the ends, rivets and scratches."
+  },
+  {
+   "name": "alpen-cairn",
+   "style": "prop",
+   "size": "576x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A tall stacked stone cairn tower of flat grey mountain rocks with a little moss and snow on top, a tiny red-white trail marker painted on one stone. Tall object filling the frame."
+  },
+  {
+   "name": "alpen-logs",
+   "style": "prop",
+   "size": "1024x672",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A neat pile of split firewood logs stacked in a pyramid, warm brown bark, pale cut faces with tree rings, a few green pine needles, wide low pile filling the frame."
+  },
+  {
+   "name": "alpen-trunk",
+   "style": "prop",
+   "size": "1024x352",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A fallen mossy pine tree trunk lying on the ground, seen from the side, rough bark, one broken branch stub, a round cut end with tree rings on the right, long and low object filling the frame."
+  },
+  {
+   "name": "alpen-marmot",
+   "style": "prop",
+   "size": "1024x896",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A cute fat alpine marmot standing upright on its hind legs, brown-grey fur, small ears, cheeks puffed, cheeky whistle expression, facing right, holding a tiny edelweiss flower."
+  },
+  {
+   "name": "alpen-cargo",
+   "style": "prop",
+   "size": "576x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A wooden cargo crate with rope netting hanging from a cable gondola: a thick steel cable and a rope lead up and out of the top edge of the frame, the crate swings below with metal corner brackets and a tiny red flag. Tall object filling the frame."
+  },
+  {
+   "name": "finanzamt-binders",
+   "style": "prop",
+   "size": "1024x576",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A row of colorful office file binders standing upright, six thick ring binders in red, green, blue, yellow, orange and grey with white spine labels left blank, slightly uneven, wide and low object filling the frame."
+  },
+  {
+   "name": "finanzamt-boxes",
+   "style": "prop",
+   "size": "832x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A tall messy stack of brown cardboard archive boxes with lids, packing tape, hand-hold cut-outs, rubber stamps marks without any letters, a paper sheet sticking out, tall object filling the frame."
+  },
+  {
+   "name": "finanzamt-copier",
+   "style": "prop",
+   "size": "1024x832",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A big grey office photocopier machine with an open lid, a paper tray full of paper sheets, a control panel with small colored buttons, a bright green light beam glowing from under the lid, a stack of paper on top."
+  },
+  {
+   "name": "finanzamt-hanging-files",
+   "style": "prop",
+   "size": "1024x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A hanging file folder rack swinging from two chains that lead up and out of the top edge of the frame, a metal frame holding many colorful hanging file folders and papers sticking out, bureaucratic chaos."
+  },
+  {
+   "name": "prater-booth",
+   "style": "prop",
+   "size": "1024x576",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A small funfair game booth counter with a red and white striped awning, wooden counter with shelves of plush toys and prizes, string lights, a blank painted sign board, seen from the front. Wide low object filling the frame."
+  },
+  {
+   "name": "prater-candy-crate",
+   "style": "prop",
+   "size": "1024x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A wooden crate overflowing with colorful candy: swirly lollipops, striped candy canes, pink cotton candy, gummy bears and wrapped sweets, glossy and sparkly, filling the frame."
+  },
+  {
+   "name": "prater-tires",
+   "style": "prop",
+   "size": "1024x832",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A stack of black rubber tires used as bumpers at an autodrom funfair, three tires stacked with white and red painted stripes on them, glossy rubber highlights, filling the frame."
+  },
+  {
+   "name": "prater-valance",
+   "style": "prop",
+   "size": "1024x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A festive funfair banner hanging from ropes that lead up and out of the top edge of the frame: a scalloped red and white striped canvas valance with golden tassels and a string of colorful bunting flags underneath, no text."
+  },
+  {
+   "name": "prater-ghostgate",
+   "style": "prop",
+   "size": "1024x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A spooky ghost train gate hanging from chains that lead up and out of the top edge of the frame: a black wooden arch with a grinning white skull in the middle, purple glowing eyes, cobwebs, dripping green slime, no text."
+  },
+  {
+   "name": "prater-swing-chair",
+   "style": "prop",
+   "size": "1024x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A single funfair chain swing seat (Kettenkarussell) hanging from long thin chains that lead up and out of the top edge of the frame: a padded red seat with gold trim and a safety bar, chains slightly swaying."
+  },
+  {
+   "name": "wachau-cask",
+   "style": "prop",
+   "size": "832x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A large old oak wine cask standing upright on its end, wooden staves with dark iron hoops, a small wooden tap, a few grape leaves and grapes draped on top, warm brown color."
+  },
+  {
+   "name": "wachau-crates",
+   "style": "prop",
+   "size": "576x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A tall stack of wooden grape harvest crates filled with purple and green grapes and vine leaves, three crates stacked with slightly uneven alignment. Tall object filling the frame."
+  },
+  {
+   "name": "wachau-wall",
+   "style": "prop",
+   "size": "1024x480",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A short dry-stone vineyard terrace wall made of warm beige and grey natural stones with moss and small green plants on top, some grapevine leaves spilling over, low wide wall filling the frame."
+  },
+  {
+   "name": "wachau-branch",
+   "style": "prop",
+   "size": "1024x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A thick apricot tree branch entering from the top edge of the frame and hanging downward with lush green leaves and ripe orange apricots, autumn-tinted leaves, a couple of yellow leaves."
+  },
+  {
+   "name": "wachau-vines",
+   "style": "prop",
+   "size": "1024x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "Thick grapevine tendrils entering from the top edge of the frame and hanging downward with big clusters of purple and green grapes, curling tendrils and autumn-colored vine leaves in gold and red."
+  },
+  {
+   "name": "cyber-hover",
+   "style": "prop",
+   "size": "1024x384",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A futuristic hover platform seen from the side: a slim dark metal slab with glowing cyan neon edge lights, small thruster glows underneath with magenta light, circuit line details, floating."
+  },
+  {
+   "name": "wien-sign",
+   "style": "prop",
+   "size": "1024x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A hanging Viennese bakery shop sign swinging from a wrought-iron bracket: a golden pretzel shape with a small wooden board underneath, ornate black iron scrollwork, the bracket and short chains lead up and out of the top edge of the frame, no text."
+  },
+  {
+   "name": "alpen-rollstone",
+   "style": "prop",
+   "size": "1024x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A big round grey mountain boulder rolling, rough cracked rock surface with moss patches and dust puffs trailing off it, slightly tilted, filling the frame."
+  },
+  {
+   "name": "alpen-snowball",
+   "style": "prop",
+   "size": "1024x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A giant rolling snowball packed with pebbles, small twigs and a few pine needles, white and pale blue shading with sparkling snow crystals, slightly flattened at the bottom, filling the frame."
+  },
+  {
+   "name": "finanzamt-duct",
+   "style": "prop",
+   "size": "1024x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A big rectangular grey metal ventilation duct segment with a slatted vent grille and rivets hanging from two steel rods that lead up and out of the top edge of the frame, dust bunnies and torn paper sheets swirling out of the vent, dark bluish steel."
+  },
+  {
+   "name": "finanzamt-lamp",
+   "style": "prop",
+   "size": "1024x1024",
+   "quality": "medium",
+   "transparent": true,
+   "prompt": "A green bankers desk lamp with a brass base swinging on a long black cable that leads up and out of the top edge of the frame, the lamp head glowing warm yellow, tilted while swinging."
+  }
+ ]
+}

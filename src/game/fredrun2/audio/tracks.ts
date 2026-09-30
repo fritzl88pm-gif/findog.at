@@ -9,6 +9,7 @@
  * Es wird immer nur ein Stück (plus das ausblendende Vorgängerstück) dekodiert im Speicher gehalten (≈ 25–35 MB je Stück).
  * Schlägt das Laden fehl (offline, Datei fehlt), meldet `onFail` das an die Engine, die dann auf die prozedurale Musik zurückfällt.
  */
+import { withRev } from "../asset-rev";
 import { clamp } from "./dsp";
 import { smooth, type AudioGraph } from "./graph";
 import type { MusicTrackId } from "./types";
@@ -70,7 +71,7 @@ export function decodeBuffer(ctx: BaseAudioContext, data: ArrayBuffer): Promise<
 }
 
 async function fetchBuffer(ctx: BaseAudioContext, url: string): Promise<AudioBuffer> {
-  const res = await fetch(url);
+  const res = await fetch(withRev(url));
   if (!res.ok) throw new Error(`${url}: ${res.status}`);
   return decodeBuffer(ctx, await res.arrayBuffer());
 }
@@ -254,7 +255,7 @@ export class TrackMusic {
   private loadManifest(): Promise<TrackManifest> {
     if (this.manifest) return Promise.resolve(this.manifest);
     if (!this.manifestPromise) {
-      this.manifestPromise = fetch(`${this.base}/music.json`)
+      this.manifestPromise = fetch(withRev(`${this.base}/music.json`))
         .then((r) => {
           if (!r.ok) throw new Error(`music.json: ${r.status}`);
           return r.json() as Promise<TrackManifest>;

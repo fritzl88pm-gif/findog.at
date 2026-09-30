@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { withRev } from "@/game/fredrun2/asset-rev";
 import { createAudio } from "@/game/fredrun2/audio";
 import { CHARACTERS } from "@/game/fredrun2/characters";
 import { deathLabel } from "@/game/fredrun2/death-names";
@@ -117,7 +118,7 @@ function LogoImage({ className }: { className?: string }): React.ReactElement {
     // eslint-disable-next-line @next/next/no-img-element
     <img
       className={`${styles.logoImg} ${className ?? ""}`}
-      src="/fredrun2/logo.webp"
+      src={withRev("/fredrun2/logo.webp")}
       alt="Fredrun 2.0"
       width={1457}
       height={975}
@@ -137,7 +138,7 @@ function WorldArt({ id }: { id: WorldId }): React.ReactElement {
       {ok ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={`/fredrun2/previews/${id}.webp`}
+          src={withRev(`/fredrun2/previews/${id}.webp`)}
           alt=""
           width={480}
           height={192}

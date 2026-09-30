@@ -6,6 +6,7 @@
  *  · Nahgrund (`near-curtain`): nur der obere Vorhangsaum.
  *  · Boden (`ground-carpet` / `ground-parquet`): pro Stufe eingefärbt (lazy, aktuelle + nächste Stufe).
  */
+import { withRev } from "../../asset-rev";
 import { makeCanvas } from "../../draw-utils";
 import { paint, type Ctx2D } from "../shared-b/canvas";
 import { CHANDELIERS, FAR_H, FAR_W } from "./glints";
@@ -30,7 +31,7 @@ export function loadPlain(url: string): Promise<HTMLImageElement | null> {
       else done();
     };
     img.onerror = () => resolve(null);
-    img.src = url;
+    img.src = withRev(url);
   });
 }
 

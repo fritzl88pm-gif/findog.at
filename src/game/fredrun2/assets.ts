@@ -1,4 +1,5 @@
 /** Asset-Laden: Bilder, Charakter-Atlanten, Props-Bibliothek. Alles fehlertolerant (Fallbacks statt Abbruch). */
+import { withRev } from "./asset-rev";
 import { PLAYER_VISUAL_H } from "./constants";
 import type { AssetLoader, CharacterId, PropLibrary, SpriteOpts } from "./types";
 
@@ -15,7 +16,7 @@ export function loadImage(url: string): Promise<HTMLImageElement | null> {
     img.decoding = "async";
     img.onload = () => resolve(img);
     img.onerror = () => resolve(null);
-    img.src = url;
+    img.src = withRev(url); // versionierte URL: nach Updates keine veralteten Cache-Treffer
   });
   imageCache.set(url, p);
   return p;
@@ -149,9 +150,9 @@ const LEGACY: Record<CharacterId, Record<string, Partial<AnimDef> & { file: stri
 
 const charCache = new Map<CharacterId, Promise<CharacterSprites>>();
 
-async function fetchJson<T>(url: string): Promise<T | null> {
+async function fetchJson<T>(url: string, cache: RequestCache = "force-cache"): Promise<T | null> {
   try {
-    const res = await fetch(url, { cache: "force-cache" });
+    const res = await fetch(withRev(url), { cache });
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -230,14 +231,16 @@ class PropLib implements PropLibrary {
   private manifestP: Promise<void> | null = null;
 
   ensureManifest(): Promise<void> {
-    if (!this.manifestP) {
-      this.manifestP = (async () => {
-        const json = await fetchJson<{ props: Record<string, PropDef> }>(`${ASSET_BASE}/props/manifest.json`);
-        if (json?.props) for (const [id, d] of Object.entries(json.props)) this.defs.set(id, d);
-      })();
-    }
+    if (!this.manifestP) this.manifestP = this.fetchManifest("force-cache");
     return this.manifestP;
   }
+
+  private async fetchManifest(cache: RequestCache): Promise<void> {
+    const json = await fetchJson<{ props: Record<string, PropDef> }>(`${ASSET_BASE}/props/manifest.json`, cache);
+    if (json?.props) for (const [id, d] of Object.entries(json.props)) this.defs.set(id, d);
+  }
+
+  private reloaded = false;
 
   ids(): string[] {
     return [...this.defs.keys()];
@@ -249,6 +252,11 @@ class PropLib implements PropLibrary {
 
   async preload(ids: string[]): Promise<void> {
     await this.ensureManifest();
+    // Gürtel und Hosenträger: fehlen angeforderte Props im Manifest (veralteter Cache), einmalig am Cache vorbei neu laden.
+    if (!this.reloaded && ids.some((id) => !this.defs.has(id))) {
+      this.reloaded = true;
+      await this.fetchManifest("reload");
+    }
     await Promise.all(
       ids.map((id) => {
         const def = this.defs.get(id);
