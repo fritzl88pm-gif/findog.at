@@ -21,7 +21,7 @@ src/game/fredrun2/            (Framework-unabhängig, TypeScript strict)
   particles.ts, pickups.ts
   input.ts                    Tastatur, Touch/Zeiger (Tippen, Wischen), Gamepad, Bildschirmtasten
   game.ts                     Controller: Schleife, Countdown, Pause, Game-Over, Demo, Audio-Verknüpfung, Qualität
-  audio/                      prozedurale Web-Audio-Engine (SFX + dynamische Musik je Welt), siehe audio/README.md
+  audio/                      Web-Audio: aufgenommene Musik-Schleifen (tracks.ts), CC0-Sample-Bank für Effekte (bank.ts), prozeduraler Fallback – siehe audio/README.md, MUSIC.md, AUDIO.md
   worlds/<id>.ts              Welt-Module (Muster, Renderer, Systeme) – siehe WORLDS.md
 src/components/fredrun2/      React-Oberfläche (Menüs, Overlays, Touch-Tasten) + CSS-Modul
 src/app/fredrun2/page.tsx     Route
@@ -54,7 +54,7 @@ tools/fredrun2/               Python-Pack-Skripte (Sprites/Props), QA-Werkzeuge 
 | Wachau | Floß-Sprünge über die Donau, rollende Weinfässer, Bienen, Marillen | 5 | 23 |
 | Cyber-Wien 2099 | Schwerkraft-Umkehr (Decken-Lauf), Phasen-Tore, Drohnen, Glitch | 5 | 24 |
 
-Weitere Dokumente: `ASSETS.md` (Sprite-/Prop-Konventionen), `WORLDS.md` + `WORLD_BRIEFS.md` (Welt-Vertrag und Briefings), `ENGINE_REQUESTS.md` (Wünsche der Welt-Autoren + Status).
+Weitere Dokumente: `ASSETS.md` (Sprite-/Prop-Konventionen), `WORLDS.md` + `WORLD_BRIEFS.md` (Welt-Vertrag und Briefings), `ENGINE_REQUESTS.md` (Wünsche der Welt-Autoren + Status), `AUDIO.md` (Klangeffekte: Sample-Bank aus Kenney-CC0-Samples, Rezepte, Neubau, Pegel).
 
 ## Qualitätssicherung
 
@@ -64,7 +64,8 @@ Weitere Dokumente: `ASSETS.md` (Sprite-/Prop-Konventionen), `WORLDS.md` + `WORLD
 * `npx next dev -p 3111` + `node tools/fredrun2/page-shot.mjs --steps menu,worlds,play,pause,gameover --out /tmp/x/ui` – echte Seite.
 * `node tools/fredrun2/e2e.mjs --base http://localhost:3112` – End-to-End-Test der echten Seite (Menü, Kauf, Lauf, Pause, Game-Over, Persistenz, Weltreise, Konsolenfehler); Server: `npx next build && npx next start -p 3112`.
 * `node tools/fredrun2/previews.mjs` – erzeugt die Vorschaubilder der Welt-Karten (`public/fredrun2/previews/*.webp`); `node tools/fredrun2/anim-gallery.mjs` – Figuren-Animationen im Spielcode.
-* `node tools/fredrun2/audio-smoke.mjs` – Rauchtest der prozeduralen Audio-Engine im Browser.
+* `node tools/fredrun2/music-smoke.mjs [--block]` – Rauchtest der Musik im Browser (Menü-/Weltmusik hörbar, Jingle, Rückfall bei blockierten Dateien).
+* `FFMPEG=<pfad> node tools/fredrun2/audio-smoke.mjs` – Rauchtest der Audio-Engine im Browser (Sample-Bank, prozeduraler Fallback, Encoder-Delay-Ausgleich).
 * Menschlicher Fairness-Audit: `BOT_AUDIT=1 npx vitest run src/game/fredrun2/bot.test.ts -t menschlicher` (0.2 s Reaktionszeit, begrenzte Sicht).
 * Debug-URL-Parameter: `?debug` (Hook `window.__fr2`), `?unlockall` (alle Helden), `?world=<id>`.
 

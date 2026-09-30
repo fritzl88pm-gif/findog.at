@@ -2,14 +2,15 @@
 /**
  * Rauchtest der Audio-Engine im headless Chromium (echter AudioContext, gebündelt per esbuild).
  *
- *   node tools/fredrun2/audio-smoke.mjs
+ *   node tools/fredrun2/audio-smoke.mjs [--only bank,fallback,48k,gapless] [--ffmpeg <Pfad>]
  *
  * Szenario 1 (Bank da): alle SFX, Loops und Musikthemen laufen ohne Fehler; die Sample-Bank (public/fredrun2/audio/sfx-bank.*)
  * lädt, jede Variante beginnt/endet sauber (kein Knacken), bleibt unter -1.7 dBFS, "knackige" Effekte setzen in < 15 ms ein,
  * der Encoder-Delay-Ausgleich (Sync-Puls) liegt unter 3 ms, jeder gemappte Name spielt aus der Bank, alle anderen synthetisch,
  * und nach Ende der Effekte sind alle Stimmen wieder frei (kein Leck).
  * Szenario 2 (Bank blockiert): alle SFX spielen weiter prozedural (Fallback), ohne Fehler.
- * Szenario 3 (nur mit ffmpeg: --ffmpeg <Pfad> oder $FFMPEG): dieselbe MP3 OHNE Xing/LAME-Kopf, sodass der Browser den Encoder-Delay
+ * Szenario 3 (AudioContext mit 48 kHz): decodeAudioData resampelt den Sprite (44,1 -> 48 kHz), Schnitte und Sync müssen trotzdem sitzen.
+ * Szenario 4 (nur mit ffmpeg: --ffmpeg <Pfad> oder $FFMPEG): dieselbe MP3 OHNE Xing/LAME-Kopf, sodass der Browser den Encoder-Delay
  * nicht herausrechnen kann (wie manche Safari-/Firefox-Versionen) – der Sync-Puls muss ~25 ms Versatz messen und ausgleichen,
  * danach müssen alle Slices wieder sauber beginnen/enden.
  */
@@ -53,7 +54,7 @@ const { chromium } = require(path.join(process.env.PLAYWRIGHT_NODE_PATH ?? "/opt
 const browser = await chromium.launch({ headless: true, args: ["--autoplay-policy=no-user-gesture-required"] });
 
 /** Ein Durchlauf; `mode`: "normal", "blocked" (Bank-Dateien abweisen = Fallback-Test) oder "nogapless" (MP3 ohne LAME-Kopf). */
-async function scenario(mode, altMp3) {
+async function scenario(mode, altMp3, contextRate = 0) {
   const blockBank = mode === "blocked";
   const page = await browser.newPage();
   const errs = [];
@@ -69,12 +70,15 @@ async function scenario(mode, altMp3) {
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
   await page.waitForFunction(() => document.title === "ready");
   await page.click("#b");
-  const res = await page.evaluate(async ([blocked, expectShift]) => {
+  const res = await page.evaluate(async ([blocked, expectShift, rate]) => {
     const { createEngine, resolveContextCtor, SFX_NAMES, LOOP_NAMES, WORLD_MUSIC_IDS } = window.__t;
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    const { audio: a, debug } = createEngine(resolveContextCtor());
+    const Base = resolveContextCtor();
+    const Ctor = rate ? class extends Base { constructor(o) { super({ ...(o ?? {}), sampleRate: rate }); } } : Base;
+    const { audio: a, debug } = createEngine(Ctor);
     await a.unlock();
-    const out = { unlocked: a.unlocked, sfx: 0, loops: 0, themes: [], problems: [] };
+    const out = { unlocked: a.unlocked, sfx: 0, loops: 0, themes: [], problems: [], contextRate: debug.ctx.sampleRate };
+    if (rate && debug.ctx.sampleRate !== rate) out.problems.push(`AudioContext läuft mit ${debug.ctx.sampleRate} Hz statt ${rate}`);
     const bank = debug.sfxPlayer.bank;
     for (let i = 0; i < 100 && !bank.ready && !bank.error; i++) await sleep(50);
     out.bank = { ready: bank.ready, error: bank.error, shiftMs: Math.round(bank.appliedShift * 10000) / 10, effects: bank.names().length, variants: 0 };
@@ -113,6 +117,8 @@ async function scenario(mode, altMp3) {
     const inBank = new Set(bank.names());
     const source = {};
     for (const n of SFX_NAMES) {
+      // Polyphonie-Cap (24 Stimmen) nicht künstlich reißen: erst weiterspielen, wenn genug Stimmen frei sind
+      for (let w = 0; w < 80 && debug.sfxPlayer.activeVoices > 10; w++) await sleep(50);
       const p0 = debug.sfxPlayer.played, b0 = bank.played;
       a.sfx(n);
       out.sfx++;
@@ -145,19 +151,23 @@ async function scenario(mode, altMp3) {
     if (out.activeVoices !== 0) out.problems.push(`${out.activeVoices} SFX-Stimmen hängen nach dem Ausklang`);
     a.dispose();
     return out;
-  }, [blockBank, mode === "nogapless"]);
+  }, [blockBank, mode === "nogapless", contextRate]);
   await page.close();
   return { res, errs };
 }
 
 const results = [];
-results.push({ label: "Szenario Bank:", ...(await scenario("normal")) });
-results.push({ label: "Szenario Fallback (Bank blockiert):", ...(await scenario("blocked")) });
-if (ffmpegPath) {
+// --only bank,fallback,48k,gapless  (Standard: alle; "gapless" braucht ffmpeg)
+const only = argv.includes("--only") ? argv[argv.indexOf("--only") + 1].split(",") : null;
+const want = (k) => !only || only.includes(k);
+if (want("bank")) results.push({ label: "Szenario Bank:", ...(await scenario("normal")) });
+if (want("fallback")) results.push({ label: "Szenario Fallback (Bank blockiert):", ...(await scenario("blocked")) });
+if (want("48k")) results.push({ label: "Szenario Bank bei 48 kHz (Resampling):", ...(await scenario("normal", null, 48000)) });
+if (want("gapless") && ffmpegPath) {
   // MP3 ohne Xing/LAME-Kopf (Stream-Kopie): Decoder kennt den Encoder-Delay nicht mehr
   const stripped = execFileSync(ffmpegPath, ["-v", "error", "-i", path.join(publicAudio, "sfx-bank.mp3"), "-c", "copy", "-write_xing", "0", "-id3v2_version", "0", "-f", "mp3", "-"], { maxBuffer: 64 << 20 });
   results.push({ label: "Szenario ohne Gapless-Kopf (Encoder-Delay ausgleichen):", ...(await scenario("nogapless", stripped)) });
-} else {
+} else if (want("gapless")) {
   console.log("Szenario ohne Gapless-Kopf übersprungen (kein ffmpeg: --ffmpeg <Pfad> oder $FFMPEG)");
 }
 let failed = false;

@@ -25,7 +25,6 @@
 import { build } from "esbuild";
 import http from "node:http";
 import { readFile, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";

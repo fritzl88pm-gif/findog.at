@@ -59,7 +59,9 @@ function rolling(amp: GainNode, t: number, dur: number, peak: number, attack: nu
   let tt = t + attack;
   while (tt < t + dur - 0.3) {
     tt += rnd(0.22, 0.5);
-    const x = (tt - t - attack) / Math.max(0.1, dur - attack);
+    // x auf 0..1 begrenzen: der letzte Zufalls-Schritt kann über `dur` hinausschießen, pow(<0, 1.6) wäre NaN und
+    // linearRampToValueAtTime(NaN) wirft – der Donner-Effekt brach dann lautlos ab (Fallback-Rauchtest, ~1 von 5 Läufen)
+    const x = Math.min(1, (tt - t - attack) / Math.max(0.1, dur - attack));
     g.linearRampToValueAtTime(peak * Math.pow(1 - x, 1.6) * rnd(0.45, 1), Math.min(tt, t + dur - 0.2));
   }
   g.linearRampToValueAtTime(0.0001, t + dur);

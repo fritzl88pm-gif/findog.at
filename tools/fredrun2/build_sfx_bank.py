@@ -16,24 +16,26 @@ Aufruf (aus dem Repo-Root):
     interface-sounds  impact-sounds  digital-audio  sci-fi-sounds  rpg-audio  casino-audio
 
 ``--report`` schreibt zusaetzlich eine Pegel-/Laengentabelle (report.txt) und Spektrogramm-Kontaktboegen (PNG) je Kategorie;
-``--wav`` legt jede fertige Variante als 16-bit-WAV zum Anhoeren ab. ``--only`` baut nur die genannten Effekte in die Analyse
-(nuetzlich beim Feilen an einem Rezept; das Bank-Ergebnis enthaelt dann nur diese Effekte und wird NICHT ueberschrieben, solange
-``--out`` nicht ausdruecklich angegeben ist).
+``--wav`` legt jede fertige Variante als 16-bit-WAV zum Anhoeren ab. ``--only`` baut nur die genannten Effekte (zum Feilen an einem
+Rezept); die Bank im Projekt wird dann NICHT ueberschrieben, solange ``--out`` nicht ausdruecklich angegeben ist.
 
 Ablauf
 ------
-1. Jedes Rezept (``@fx``) holt Quell-Samples (``src()``), bearbeitet sie (Trimmen, EQ, Tonhoehe, Reverse, Layering, Hall ...)
-   und liefert 1-4 Varianten (mono float32, 44.1 kHz).
-2. ``finish()``: Gleichstrom raus, Ein-/Ausblendung an den Schnittkanten (keine Klicks), Varianten eines Effekts auf gleiche
-   Lautheit bringen, Gruppe auf den Ziel-Spitzenpegel des Effekts skalieren, Lookahead-Limiter auf -2 dBFS.
+1. Jedes Rezept (``@fx``) holt Quell-Samples (``src()``), bearbeitet sie (Trimmen, EQ, Tonhoehe/Tempo, Reverse, Layering, Hall,
+   gleitende Filter ...) und liefert 1-4 Varianten (mono, 44.1 kHz). Luft-Whooshes und Rumpeln kommen aus offline erzeugtem
+   Rauschen (deterministisch), alles andere aus den Samples.
+2. ``finish()``: Gleichanteil raus, sauber trimmen und ausblenden (keine Klicks an Schnittkanten), Varianten eines Effekts auf
+   gleiche Lautheit bringen, Gruppe auf die Ziel-Lautheit des Effekts (``lufs``) skalieren, Lookahead-Limiter auf die
+   Spitzengrenze (``ceil``, hoechstens -2 dBFS).
 3. Die Varianten werden mit 150 ms Stille dazwischen in einen Sprite gelegt; am Anfang steht ein Sync-Puls, mit dem die Laufzeit
-   den MP3-Encoder-Delay des jeweiligen Browsers messen und ausgleichen kann (siehe ``bank.ts``).
-4. ffmpeg/libmp3lame kodiert (mono, 112 kbps), das Skript dekodiert das Ergebnis testweise wieder und prueft die Ausrichtung
-   der Schnitte (Selbsttest), dann wird das Manifest geschrieben.
+   den MP3-Encoder-Delay des jeweiligen Browsers messen und ausgleichen kann (siehe ``src/game/fredrun2/audio/bank.ts``).
+4. ffmpeg/libmp3lame kodiert (mono, 112 kbps), das Skript dekodiert das Ergebnis testweise wieder und prueft fuer jede Variante die
+   Ausrichtung der Schnitte (Selbsttest), dann wird das Manifest geschrieben. Das Ergebnis ist reproduzierbar (gleiche Quellen =
+   gleiche Dateien).
 
-Effekte ohne passendes Sample (bee-buzz, pigeon) und die Jingles (gameover, highscore) sind bewusst NICHT in der Bank – dort laeuft
-weiter die prozedurale Stimme bzw. der Jingle-Player. Wer einen neuen Effekt hinzufuegt: Rezept schreiben, Namen aus
-``SFX_NAMES`` (src/game/fredrun2/audio/types.ts) verwenden.
+Nicht in der Bank: ``bee-buzz`` und ``pigeon`` (kein passendes Sample, bleiben prozedural) sowie ``gameover``, ``highscore`` und
+``world-transition`` (Musik-Jingles im Engine-Code; ``world-transition`` bekommt zusaetzlich den atonalen Bank-Effekt). Neuer Effekt:
+Rezept schreiben (Namen aus ``SFX_NAMES`` in src/game/fredrun2/audio/types.ts), Skript laufen lassen.
 
 Abhaengigkeiten: Python 3.10+, numpy, scipy, Pillow (nur fuer --report); ffmpeg (mit libmp3lame) im PATH, per ``--ffmpeg``,
 ``$FFMPEG`` oder das pip-Paket ``imageio-ffmpeg``.
@@ -48,6 +50,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import zlib
 from pathlib import Path
 from typing import Callable
@@ -207,10 +210,6 @@ def lp(x: np.ndarray, f: float, order: int = 2) -> np.ndarray:
 
 def hp(x: np.ndarray, f: float, order: int = 2) -> np.ndarray:
     return signal.sosfilt(_sos("highpass", f, order), x)
-
-
-def bp(x: np.ndarray, f0: float, f1: float, order: int = 2) -> np.ndarray:
-    return signal.sosfilt(_sos("bandpass", (f0, min(f1, SR * 0.45)), order), x)
 
 
 def _rbj(kind: str, f: float, q: float, g_db: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
@@ -373,15 +372,6 @@ def arp(sample: np.ndarray, base_hz: float, notes: list[str] | list[float], step
     return mix(*layers, length=length)
 
 
-def env_follow(x: np.ndarray, ms: float = 8.0) -> np.ndarray:
-    return uniform_filter1d(maximum_filter1d(np.abs(x), size=max(1, int(ms * 0.001 * SR))), size=max(1, int(ms * 0.001 * SR)))
-
-
-def saturate(x: np.ndarray, drive: float = 2.0) -> np.ndarray:
-    """Weiche Saettigung (tanh) – macht Aufpralle dichter/druckvoller."""
-    return np.tanh(x * drive) / np.tanh(drive)
-
-
 def bitcrush(x: np.ndarray, bits: int = 6, hold: int = 4) -> np.ndarray:
     """Sample&Hold + Quantisierung (Glitch/Digital-Look)."""
     y = np.repeat(x[::hold], hold)[: len(x)]
@@ -464,12 +454,6 @@ def limit(x: np.ndarray, ceil_db: float = CEIL_DB, look: float = 0.0025) -> np.n
     return x * np.minimum(gr, 1.0)
 
 
-def bump(dur: float, f: float, decay: float, rng: np.random.Generator | None = None) -> np.ndarray:
-    """Kurzer gedaempfter Sinus (Klopfen/Klick-Koerper) – nur fuer winzige Ergaenzungen der Samples."""
-    t = np.arange(int(dur * SR)) / SR
-    return np.sin(2 * math.pi * f * t) * np.exp(-t / decay)
-
-
 # ---------------------------------------------------------------------------------------------------------------------
 # Rezepte
 # ---------------------------------------------------------------------------------------------------------------------
@@ -533,7 +517,7 @@ def ui_click():
     a = mix((src("ui/select_001"), 0, 0), (src("ui/click_003"), 0, -7))
     b = mix((src("ui/select_002"), 0, 0), (src("ui/click_005"), 0, -8))
     c = mix((fade(cut(tune(src("ui/pluck_001"), hz("A5")), 0, 0.05), 0, 0.03), 0, -3), (src("ui/click_002"), 0, -8))
-    return [lp(v, 9000) for v in (a, b, c)]
+    return [eq(lp(v, 9000), "peak", 2800, 3.0, q=1.0) for v in (a, b, c)]   # Praesenz: der Klick soll "sitzen"
 
 
 @fx("ui-hover", "ui", lufs=-37, ceil=-12, jitter=0.04, reverb=0.02)
@@ -655,7 +639,7 @@ def land():
         ("imp/impactSoft_medium_003", "imp/footstep_concrete_003", "imp/footstep_grass_002"),
         ("imp/impactSoft_medium_004", "imp/footstep_wood_001", "imp/footstep_grass_004"),
     )):
-        b = lp(src(body), 420)
+        b = eq(lp(src(body), 420), "peak", 170, 3.0, q=1.2)   # Koerper des Aufpralls
         s = hp(src(step), 280)
         g = hp(lp(cut(src(scuff), 0, 0.14), 6000), 1100)
         out.append(mix((b, 0, -6), (s, 0, 0), (g, 0.012, -9)))
@@ -771,7 +755,7 @@ def coin():
             (pluck("E6", p2, 0.12), 0.055, 0), (ring("E6", 0.34, rr, -4), 0.055, -5),
             (hp(cut(src(clk), 0, 0.06), 2500), 0, -9),
         )
-        out.append(reverb(v, rt60=0.30, wet=0.14, seed=f"coin{i}"))
+        out.append(eq(reverb(v, rt60=0.30, wet=0.14, seed=f"coin{i}"), "highshelf", 6000, 2.0, q=0.7))   # Glitzer
     return out
 
 
@@ -949,7 +933,7 @@ def combo_break():
 @fx("countdown", "flow", lufs=-27, ceil=-6, jitter=0.0, reverb=0.10, tail=-40)
 def countdown():
     # Countdown-Tick: sauberer Ton A5 (Zupfer + Glas) mit winzigem Klick
-    v = mix((pluck("A5", 1, 0.22), 0, 0), (ring("A5", 0.30, "ui/glass_002", fout=0.2), 0, -5), (src("ui/click_003"), 0, -10))
+    v = mix((pluck("A5", 1, 0.22), 0, 0), (ring("A5", 0.26, "ui/glass_004", fout=0.14), 0, -3), (src("ui/click_003"), 0, -10))
     return [v]
 
 
@@ -1458,7 +1442,8 @@ def main() -> None:
     items = [(n, i, v) for n, vs in finished.items() for i, v in enumerate(vs)]
     sprite, layout = build_sprite(items)
     mp3_name = "sfx-bank.mp3"
-    tmp_mp3 = (out_dir if write_out else Path(args.report or ".")) / mp3_name
+    scratch = None if write_out else Path(tempfile.mkdtemp(prefix="sfx-bank-"))   # --only: nichts ins Projekt schreiben
+    tmp_mp3 = (out_dir if write_out else scratch) / mp3_name  # type: ignore[operator]
     encode_mp3(sprite, tmp_mp3, args.kbps)
     t_sync, worst, problems = self_test(sprite, layout, tmp_mp3)
     size = tmp_mp3.stat().st_size
@@ -1499,6 +1484,7 @@ def main() -> None:
         print(f"geschrieben: {out_dir / mp3_name} ({size / 1024:.0f} KB), {out_dir / 'sfx-bank.json'}")
     else:
         print("(--only ohne --out: Bank nicht in den Projektordner geschrieben)")
+        shutil.rmtree(scratch, ignore_errors=True)  # type: ignore[arg-type]
     missing = [n for n in names if n not in SPECS]
     print("ohne Sample (prozedural bzw. Jingle):", ", ".join(missing))
 
