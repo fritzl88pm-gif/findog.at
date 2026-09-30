@@ -45,6 +45,8 @@ PICKS: dict[str, list[dict]] = {
     "prater": [{"cand": "a", "from": 6}, {"cand": "b", "from": 6}],
     "wachau": [{"cand": "b", "from": 8}, {"cand": "a", "from": 8}],
     "cyber": [{"cand": "a", "from": 40}, {"cand": "b", "from": 40}],
+    "winter": [{"cand": "a", "from": 8}, {"cand": "b", "from": 8}],
+    "oper": [{"cand": "a", "from": 8, "beats": 3}, {"cand": "b", "from": 8, "beats": 3}],
 }
 TARGET_LOOP = (55.0, 80.0)  # Sekunden
 BITRATE = "96k"
@@ -111,20 +113,34 @@ def refine_grid(flux: np.ndarray, bpm0: float) -> tuple[float, float]:
     return best[1], best[2]
 
 
-def downbeat_offset(bass: np.ndarray, bpm: float, phase: float) -> int:
-    """Welcher der 4 Schläge trägt die stärkste Bass-Betonung (Taktanfang)?"""
+def beat_profile(bass: np.ndarray, bpm: float, phase: float, beats: int) -> np.ndarray:
+    """Mittlere Bass-Betonung je Schlag innerhalb eines Takts mit `beats` Schlägen."""
     pf = FPS * 60 / bpm
-    sums = np.zeros(4)
-    cnt = np.zeros(4)
+    sums = np.zeros(beats)
+    cnt = np.zeros(beats)
     k = 0
     t = phase * FPS
     while t < len(bass) - 1:
         i = int(round(t))
-        sums[k % 4] += bass[max(0, i - 1) : i + 2].max()
-        cnt[k % 4] += 1
+        sums[k % beats] += bass[max(0, i - 1) : i + 2].max()
+        cnt[k % beats] += 1
         k += 1
         t += pf
-    return int(np.argmax(sums / np.maximum(cnt, 1)))
+    return sums / np.maximum(cnt, 1)
+
+
+def downbeat_offset(bass: np.ndarray, bpm: float, phase: float, beats: int = 4) -> int:
+    """Welcher Schlag trägt die stärkste Bass-Betonung (Taktanfang)?"""
+    return int(np.argmax(beat_profile(bass, bpm, phase, beats)))
+
+
+def detect_beats_per_bar(bass: np.ndarray, bpm: float, phase: float) -> int:
+    """3 (Walzer) oder 4 Schläge je Takt: die Gruppierung mit dem deutlicheren Betonungsprofil gewinnt (4 bevorzugt)."""
+    def contrast(n: int) -> float:
+        p = beat_profile(bass, bpm, phase, n)
+        return float(p.max() / (p.mean() + 1e-9))
+
+    return 3 if contrast(3) > 1.12 * contrast(4) else 4
 
 
 def env_at(flux: np.ndarray, t0: float, dur: float) -> np.ndarray:
@@ -162,13 +178,15 @@ def outro_start(x: np.ndarray) -> float:
     return (last + 1) * 2.0
 
 
-def plan_loop(x: np.ndarray, want_from: float) -> dict:
+def plan_loop(x: np.ndarray, want_from: float, beats: int | None = None) -> dict:
     flux, bass = onset_curves(x)
     bpm0 = estimate_tempo(flux)
     bpm, phase = refine_grid(flux, bpm0)
     beat = 60 / bpm
-    db_off = downbeat_offset(bass, bpm, phase)
-    bar = 4 * beat
+    if beats is None:
+        beats = detect_beats_per_bar(bass, bpm, phase)
+    db_off = downbeat_offset(bass, bpm, phase, beats)
+    bar = beats * beat
     end_limit = outro_start(x)
     dur = len(x) / SR
     xfade = 2 * beat
@@ -202,7 +220,7 @@ def plan_loop(x: np.ndarray, want_from: float) -> dict:
     p = best_n * bar
     delta = seam_shift(flux, s, p, xfade)
     p += delta
-    return dict(bpm=round(bpm, 2), start=s, period=p, xfade=xfade, bars=best_n, outro=end_limit, dur=dur, downbeat=db_off, seam_shift_ms=int(delta * 1000))
+    return dict(bpm=round(bpm, 2), beats=beats, start=s, period=p, xfade=xfade, bars=best_n, outro=end_limit, dur=dur, downbeat=db_off, seam_shift_ms=int(delta * 1000))
 
 
 def measure_lufs(ff: str, path: Path) -> float:
@@ -220,8 +238,8 @@ def build(ff: str, src: Path, out: Path, ids: list[str], report: bool) -> dict:
             key = tid if idx == 0 else f"{tid}-{idx + 1}"
             raw = src / f"{tid}-{pick['cand']}.mp3"
             x = load_mono(ff, raw)
-            plan = plan_loop(x, pick["from"])
-            print(f"[{key}] {raw.name}: {plan['bpm']} bpm, Start {plan['start']:.2f}s, {plan['bars']} Takte, Periode {plan['period']:.3f}s, X {plan['xfade']:.2f}s, "
+            plan = plan_loop(x, pick["from"], pick.get("beats"))
+            print(f"[{key}] {raw.name}: {plan['bpm']} bpm ({plan['beats']}/4), Start {plan['start']:.2f}s, {plan['bars']} Takte, Periode {plan['period']:.3f}s, X {plan['xfade']:.2f}s, "
                   f"Outro ab {plan['outro']:.0f}s von {plan['dur']:.0f}s (Naht {plan['seam_shift_ms']} ms)")
             if report:
                 continue
@@ -239,6 +257,7 @@ def build(ff: str, src: Path, out: Path, ids: list[str], report: bool) -> dict:
             manifest[key] = dict(
                 file=f"{key}.mp3",
                 bpm=plan["bpm"],
+                beats=plan["beats"],
                 period=round(plan["period"], 4),
                 xfade=round(plan["xfade"], 4),
                 length=round(length, 3),

@@ -38,7 +38,7 @@ check("alle Tabs klickbar", true);
 // Welten
 await page.getByRole("tab", { name: "Welten" }).click();
 const worldCards = await page.locator("button[aria-pressed]").count();
-check("6 Welt-Karten", worldCards === 6, String(worldCards));
+check("8 Welt-Karten", worldCards === 8, String(worldCards));
 await shot("worlds");
 await page.locator("button[aria-pressed]").nth(5).click();
 await page.waitForTimeout(1200);

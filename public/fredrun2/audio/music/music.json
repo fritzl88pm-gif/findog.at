@@ -142,5 +142,45 @@
     "length": 76.281,
     "bytes": 916350,
     "source": "cyber-b.mp3"
+  },
+  "winter": {
+    "file": "winter.mp3",
+    "bpm": 130.1,
+    "beats": 4,
+    "period": 73.8223,
+    "xfade": 0.9223,
+    "length": 74.745,
+    "bytes": 897856,
+    "source": "winter-a.mp3"
+  },
+  "winter-2": {
+    "file": "winter-2.mp3",
+    "bpm": 130.36,
+    "beats": 4,
+    "period": 73.5811,
+    "xfade": 0.9205,
+    "length": 74.502,
+    "bytes": 895035,
+    "source": "winter-b.mp3"
+  },
+  "oper": {
+    "file": "oper.mp3",
+    "bpm": 186.05,
+    "beats": 3,
+    "period": 77.3798,
+    "xfade": 0.645,
+    "length": 78.025,
+    "bytes": 937033,
+    "source": "oper-a.mp3"
+  },
+  "oper-2": {
+    "file": "oper-2.mp3",
+    "bpm": 184.75,
+    "beats": 3,
+    "period": 77.8811,
+    "xfade": 0.6495,
+    "length": 78.531,
+    "bytes": 943302,
+    "source": "oper-b.mp3"
   }
 }

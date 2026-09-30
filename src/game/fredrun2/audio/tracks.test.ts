@@ -11,11 +11,11 @@ const manifest = JSON.parse(readFileSync(path.join(ROOT, "music/music.json"), "u
 
 describe("Musik-Manifest", () => {
   it("enthält alle Welt-Themen und die Heldenauswahl", () => {
-    for (const id of [...WORLD_MUSIC_IDS, "select"]) expect(manifest[id], id).toBeDefined();
+    for (const id of [...WORLD_MUSIC_IDS, "select", "winter", "oper"]) expect(manifest[id], id).toBeDefined();
   });
 
   it("Varianten heißen <id>-<n> und gehören zu einem bekannten Stück", () => {
-    const ids = new Set<string>([...WORLD_MUSIC_IDS, "select"]);
+    const ids = new Set<string>([...WORLD_MUSIC_IDS, "select", "winter", "oper"]);
     for (const key of Object.keys(manifest)) {
       const m = /^([a-z]+)(?:-(\d+))?$/.exec(key);
       expect(m, key).not.toBeNull();
@@ -37,7 +37,7 @@ describe("Musik-Manifest", () => {
       expect(t.bpm).toBeGreaterThan(80);
       expect(t.bpm).toBeLessThan(190);
       // Periode ≈ ganze Takte (4 Schläge) innerhalb der ± 60-ms-Feinjustierung
-      const bar = (4 * 60) / t.bpm;
+      const bar = ((t.beats ?? 4) * 60) / t.bpm;
       const bars = t.period / bar;
       expect(Math.abs(bars - Math.round(bars)) * bar, key).toBeLessThan(0.08);
     }

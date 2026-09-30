@@ -413,7 +413,7 @@ export default function FredRun2({ embedded = false, accessToken = "" }: FredRun
                           <WorldArt id={id} />
                           <span className={styles.cardTitle} title={w.tagline}>{w.name}</span>
                           <span className={styles.tagRow}>
-                            {w.mechanics.slice(0, 2).map((m) => (
+                            {w.mechanics.slice(0, 1).map((m) => (
                               <span key={m} className={styles.tag}>
                                 {m}
                               </span>
@@ -460,7 +460,7 @@ export default function FredRun2({ embedded = false, accessToken = "" }: FredRun
                 </div>
               ) : null}
             </div>
-            {!embedded ? (
+            {!embedded && tab === "play" ? (
               <Link className={styles.backLink} href="/">
                 ← Zurück zu Findog
               </Link>

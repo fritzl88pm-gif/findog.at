@@ -14,6 +14,8 @@ nicht geladen werden kann (offline, Blocker, fehlende Datei) – dann schaltet d
 | `prater` | Prater | 159 bpm | Kirmes-Orgel, Akkordeon, Zirkus-Polka |
 | `wachau` | Wachau | 136 bpm | Gitarre, Akkordeon, Klarinette, sonniger Volks-Pop |
 | `cyber` | Cyber-Wien 2099 | 140 bpm | dunkle Synthwave, Arpeggios, Sidechain-Bass |
+| `winter` | Christkindlmarkt | 130 bpm | Schlittenglocken, Celesta, Glockenspiel, Chor, verspielte tiefe Bläser |
+| `oper` | Opernball | 186 bpm (3/4) | schneller Wiener Walzer: Streicher, Bläser-Fanfaren, Harfe, Celesta |
 
 Jedes Stück gibt es in **zwei Varianten** (`<id>.mp3`, `<id>-2.mp3` – beide Kandidaten des Suno-Auftrags); der Spieler wählt bei jedem
 Start zufällig und nie zweimal hintereinander dieselbe, damit sich die Läufe frisch anfühlen. Es wird immer nur die gewählte Variante geladen.
@@ -40,7 +42,7 @@ python3 tools/fredrun2/make_music.py --src /tmp/audio [--only wien] [--report]
 
 `make_music.py` schätzt Tempo und Taktraster (Onset-Kurve + Kammfilter), legt den Schleifenbeginn auf einen Taktanfang, wählt
 32–44 Takte (≈ 55–80 s), justiert die Länge um ± 60 ms auf die beste Naht und schreibt `period` (Abstand der Kopien) und `xfade`
-(2 Schläge Überblendung) ins Manifest. Lautheit ≈ −15 LUFS, MP3 96 kbps (≈ 0,6–0,9 MB je Variante, 16 Dateien ≈ 13 MB, geladen wird pro Sitzung nur ein Bruchteil).
+(2 Schläge Überblendung) ins Manifest. Lautheit ≈ −15 LUFS, MP3 96 kbps (≈ 0,6–0,9 MB je Variante, 20 Dateien ≈ 16,5 MB, geladen wird pro Sitzung nur ein Bruchteil).
 
 ## Laufzeit
 

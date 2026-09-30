@@ -19,6 +19,8 @@ export const JINGLE_BASE = "/fredrun2/audio/jingles";
 export interface TrackInfo {
   file: string;
   bpm: number;
+  /** Schläge je Takt (4, beim Walzer 3) */
+  beats?: number;
   /** Abstand zwischen den Kopien (Sekunden, ganze Takte) */
   period: number;
   /** Überblendung am Nahtpunkt (Sekunden) */

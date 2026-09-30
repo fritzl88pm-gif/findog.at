@@ -514,7 +514,8 @@
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* acht Welten: 4 × 2 passt ohne Scrollen in den Rahmen */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: calc(var(--px) * 12);
 }
 
@@ -547,7 +548,7 @@
 }
 
 .cardTitle {
-  font-size: calc(var(--px) * 26);
+  font-size: calc(var(--px) * 23);
   font-weight: 1000;
   line-height: 1.05;
 }
@@ -559,12 +560,15 @@
 }
 
 .tag {
-  font-size: calc(var(--px) * 15);
+  font-size: calc(var(--px) * 14);
   font-weight: 800;
   padding: calc(var(--px) * 3) calc(var(--px) * 10);
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.35);
   border: 1px solid rgba(255, 255, 255, 0.18);
+  max-width: 100%;
+  line-height: 1.15;
+  border-radius: calc(var(--px) * 14);
 }
 
 .badge {
