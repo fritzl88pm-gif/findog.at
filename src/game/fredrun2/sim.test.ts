@@ -148,3 +148,61 @@ describe("Sim: Grundphysik", () => {
     }
   });
 });
+
+describe("Sim: Sprungbrett und Startverzögerung", () => {
+  const held = (jump: boolean): SimInput => ({ jump, jumpPressed: false, slide: false, slidePressed: false, dashPressed: false });
+
+  function springApex(holdJump: boolean): number {
+    const s = makeSim();
+    s.ents = [];
+    (s.spawner as unknown as { cursor: number }).cursor = 1e9;
+    s.spawn({ kind: "spring", skin: "spring", x: s.playerWorldX - 10, y: s.groundY - 30, w: 60, h: 30 }, 0);
+    let apex = 0;
+    for (let i = 0; i < 180; i += 1) {
+      s.step(FIXED_DT, held(holdJump));
+      apex = Math.max(apex, s.player.hgt);
+    }
+    return apex;
+  }
+
+  it("Sprungbrett-Bounce hat immer volle Höhe – auch ohne gehaltene Sprungtaste", () => {
+    const released = springApex(false);
+    const holding = springApex(true);
+    expect(released).toBeGreaterThan(380); // ≈ SPRING_V² / (2·g) ≈ 417 px, früher nur ≈ 256 px
+    expect(Math.abs(released - holding)).toBeLessThan(25);
+  });
+
+  it("nach dem Bounce gilt die variable Sprunghöhe wieder (noCut wird am Scheitel zurückgesetzt)", () => {
+    const s = makeSim();
+    s.ents = [];
+    (s.spawner as unknown as { cursor: number }).cursor = 1e9;
+    s.spawn({ kind: "spring", skin: "spring", x: s.playerWorldX - 10, y: s.groundY - 30, w: 60, h: 30 }, 0);
+    for (let i = 0; i < 400 && !(s.player.hgt > 100); i += 1) s.step(FIXED_DT, held(false));
+    expect(s.player.noCut).toBe(true);
+    for (let i = 0; i < 400 && !s.player.grounded; i += 1) s.step(FIXED_DT, held(false));
+    expect(s.player.grounded).toBe(true);
+    expect(s.player.noCut).toBe(false);
+  });
+
+  it("Entität mit p.delay ruht und ist harmlos, bis die Zeit um ist – dann fliegt sie los", () => {
+    const s = makeSim();
+    s.ents = [];
+    (s.spawner as unknown as { cursor: number }).cursor = 1e9;
+    const x0 = s.playerWorldX + 600;
+    const e = s.spawn({ kind: "projectile", skin: "cork", x: x0, y: s.groundY - 200, w: 30, h: 20, harmful: true, vx: -500, p: { delay: 0.5 } }, 0);
+    run(s, 0.4);
+    expect(e.x).toBeCloseTo(x0, 5); // ruht in der Welt (scrollt nur mit dem Boden mit)
+    run(s, 0.4); // 0.8 s: nach 0.5 s Start
+    expect(e.x).toBeLessThan(x0 - 100);
+  });
+
+  it("wartende Entität verletzt nicht, auch wenn sie die Figur überdeckt", () => {
+    const s = makeSim();
+    s.ents = [];
+    (s.spawner as unknown as { cursor: number }).cursor = 1e9;
+    const hearts = s.player.hearts;
+    s.spawn({ kind: "block", skin: "crate", x: s.playerWorldX - 20, y: s.groundY - 80, w: 60, h: 80, harmful: true, p: { delay: 0.3 } }, 0);
+    run(s, 0.12);
+    expect(s.player.hearts).toBe(hearts);
+  });
+});

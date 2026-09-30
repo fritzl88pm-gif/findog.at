@@ -94,6 +94,8 @@ export interface PlayerState {
   onPlatform: Ent | null;
   gravDir: 1 | -1;
   jumpsUsed: number;
+  /** Fremdbeschleunigung (Sprungbrett): Sprunghöhe wird nicht durch Loslassen der Sprungtaste gekürzt, solange sie nach oben trägt */
+  noCut: boolean;
   coyote: number;
   jumpBuf: number;
   sliding: boolean;
@@ -233,6 +235,7 @@ export class Sim {
       onPlatform: null,
       gravDir: 1,
       jumpsUsed: 0,
+      noCut: false,
       coyote: 0,
       jumpBuf: 0,
       sliding: false,
@@ -571,8 +574,10 @@ export class Sim {
         p.jumpBuf = 0;
       }
     }
-    // Sprung abbrechen (variable Höhe)
-    if (!input.jump && p.vy > 0 && p.jumpsUsed > 0 && !p.stomping && p.dashT <= 0 && p.vy < JUMP_V * 0.98) {
+    // Sprungbrett-Schub endet am Scheitel oder bei der Landung
+    if (p.noCut && (p.vy <= 0 || p.grounded)) p.noCut = false;
+    // Sprung abbrechen (variable Höhe) – nicht beim Sprungbrett-Bounce (immer volle Höhe)
+    if (!input.jump && p.vy > 0 && p.jumpsUsed > 0 && !p.noCut && !p.stomping && p.dashT <= 0 && p.vy < JUMP_V * 0.98) {
       p.vy *= 1 - (1 - JUMP_CUT) * Math.min(1, dt * 22);
     }
   }
@@ -593,6 +598,7 @@ export class Sim {
     p.stomping = false;
     p.sliding = false;
     p.jumpsUsed = ev === "jump" ? 1 : 2;
+    p.noCut = false;
     p.gliding = false;
     this.emit(ev);
   }
@@ -788,6 +794,9 @@ export class Sim {
       if (e.dead) continue;
       e.age += dt;
       e.stateT += dt;
+      // Startverzögerung (`p.delay`, Sekunden): Die Entität ist da (Skin darf zeichnen), ruht aber in der Welt und ist harmlos,
+      // bis die Zeit um ist – z. B. ein Korken im Flaschenhals oder ein Schneeball in der Hand, der erst dann losfliegt.
+      if (e.p.delay > 0 && e.age <= e.p.delay) continue;
       switch (e.kind) {
         case "walker": {
           e.x += e.vx * dt;
@@ -957,6 +966,7 @@ export class Sim {
 
     for (const e of this.ents) {
       if (e.dead) continue;
+      if (e.p.delay > 0 && e.age <= e.p.delay) continue; // wartet noch auf den Start (siehe updateEntities)
       if (e.x > px + 260 || e.x + e.w < px - 260) {
         if (e.kind !== "decor") {
           // Nur Nähe-Prüfung für passierte Entitäten (Near-Miss-Bilanz)
@@ -1015,6 +1025,7 @@ export class Sim {
             p.vy = SPRING_V;
             p.grounded = false;
             p.jumpsUsed = 1;
+            p.noCut = true;
             p.stomping = false;
             p.sliding = false;
             p.glideUsed = 0;

@@ -168,9 +168,9 @@ export interface ThrowInfo {
 }
 
 /**
- * Schneeball mit VORAUSBERECHNETER Flugbahn: Die Kugel startet schon beim Spawn (außerhalb des Bildes, unsichtbar bis
- * `p.tRel`) auf der rückwärts verlängerten Parabel und ist ab dem Wurfmoment genau in der Hand des Elfen. So sieht
- * der Bot (und jede Rechnung ohne Weltsystem) die Gefahr von Anfang an, und der Elf „wirft“ trotzdem sichtbar.
+ * Schneeball mit Startverzögerung (`p.delay` = `p.tRel`): Die Kugel existiert ab dem Spawn (der Bot und jede Rechnung ohne
+ * Weltsystem sieht die Gefahr von Anfang an), ruht aber – unsichtbar – in der Hand des Elfen und fliegt erst im Wurfmoment
+ * auf der Parabel los. So „wirft“ der Elf sichtbar, ohne dass die Bahn rückwärts extrapoliert werden muss.
  */
 export function throwBall(c: PatternCtx, o: ThrowOpts): ThrowInfo {
   const s = c.speed;
@@ -192,12 +192,10 @@ export function throwBall(c: PatternCtx, o: ThrowOpts): ThrowInfo {
     u = a * g * flight;
   }
   const { w, h } = DIM.ball;
-  const xh = o.elfCx + vxe * tRel - 8;
-  const bx = xh - vb * tRel;
-  const e0 = Hh - u * tRel - 0.5 * g * tRel * tRel;
-  const spec = c.projectile(bx - w / 2, w, h, e0 - h / 2, { skin: SKIN.ball, vx: vb, gravity: g, hb: HB.ball(w, h) });
-  spec.vy = -(u + g * tRel);
-  spec.p = { ...spec.p, tRel, hand: Hh, flight };
+  const xh = o.elfCx + vxe * tRel - 8; // Weltposition der Hand im Wurfmoment
+  const spec = c.projectile(xh - w / 2, w, h, Hh - h / 2, { skin: SKIN.ball, vx: vb, gravity: g, hb: HB.ball(w, h) });
+  spec.vy = -u; // Abwurfgeschwindigkeit (nach oben) – gilt ab dem Start nach `delay`
+  spec.p = { ...spec.p, delay: tRel, tRel, hand: Hh, flight };
   return { tRel, flight };
 }
 

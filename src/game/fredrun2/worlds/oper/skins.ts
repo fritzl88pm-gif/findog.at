@@ -153,7 +153,7 @@ export class OperSkins {
   /** Ohne geladene Props: schlichte goldene Kästen mit hellem Rand (Gefahren bleiben lesbar) */
   private fallback(g: Ctx2D, e: Ent, sx: number, sy: number): boolean {
     if (!SKIN_NAMES.has(e.skin) || !["block", "overhead", "walker", "projectile", "swinger", "spring"].includes(e.kind)) return false;
-    if (e.skin === SKIN.cork && (e.p.launchD ?? 0) > Math.abs(e.vx) * e.age) return true;
+    if (e.skin === SKIN.cork && e.age <= (e.p.delay ?? 0)) return true;
     g.save();
     g.lineWidth = 3;
     g.strokeStyle = "#fff1c9";
@@ -512,15 +512,15 @@ export class OperSkins {
 
   private drawCork(g: Ctx2D, e: Ent, sx: number, sy: number): boolean {
     if (e.skin !== SKIN.cork) return false;
-    // Der Korken steckt noch in der Flasche, bis er ihre Position erreicht (p.launchD = Weg seit dem Spawn)
-    const launchD = e.p.launchD ?? 0;
-    const flown = Math.abs(e.vx) * e.age;
-    if (flown < launchD - 1) return true;
+    // Der Korken steckt noch in der Flasche, bis der Knall kommt (p.delay = Sekunden bis zum Start)
+    const delay = e.p.delay ?? 0;
+    if (e.age <= delay) return true;
+    const flown = Math.abs(e.vx) * (e.age - delay);
     const b = this.bank.get("oper-cork", 84, { rim: RIM_ENEMY, ax: 0.62, ay: 0.5 });
     if (!b) return false;
     const cx = sx + e.w / 2;
     const t = this.f.time;
-    const fresh = Math.min(1, (flown - launchD) / 260);
+    const fresh = Math.min(1, flown / 260);
     // Der Korken startet am Flaschenhals und sinkt auf seine Trefferhöhe (Treffer-Box liegt darunter)
     const neck = e.p.neck ?? 0;
     const cy0 = sy + e.h / 2;

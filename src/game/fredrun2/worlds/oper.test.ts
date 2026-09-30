@@ -110,7 +110,7 @@ describe("Welt Opernball", () => {
     expect(waltzFactor(0.6)).toBeGreaterThan(waltzFactor(2.6));
   });
 
-  it("Korken: taucht erst am Flaschenhals auf und trifft die Figur zum vorhergesagten Zeitpunkt", () => {
+  it("Korken: sitzt bis zum Knall im Flaschenhals (p.delay) und trifft die Figur zum vorhergesagten Zeitpunkt", () => {
     for (const diff of [2, 5, 8]) {
       for (const id of ["op-cork-low", "op-cork-high"]) {
         const { sim } = isolate(byId(id), Math.max(diff, byId(id).minDiff), 1);
@@ -118,13 +118,10 @@ describe("Welt Opernball", () => {
         const bottle = sim.ents.find((e) => e.skin === SKIN.bottle) as Ent;
         expect(cork).toBeTruthy();
         expect(bottle).toBeTruthy();
-        // Korken startet hinter der Flasche (rechts) und die Startverzögerung stimmt mit dem Weg überein
-        expect(cork.x).toBeGreaterThan(bottle.x);
-        const launchT = cork.p.launchD / Math.abs(cork.vx);
-        expect(launchT).toBeCloseTo(bottle.p.popT, 5);
-        // beim Knall steht der Korken (Mitte) am Flaschenhals
-        const atPop = cork.x + cork.vx * launchT;
-        expect(atPop + cork.w / 2).toBeCloseTo(bottle.x + bottle.w / 2, 0);
+        // Die Startverzögerung des Korkens ist der Knall der Flasche …
+        expect(cork.p.delay).toBeCloseTo(bottle.p.popT, 5);
+        // … und der Korken sitzt bis dahin (Mitte) am Flaschenhals
+        expect(cork.x + cork.w / 2).toBeCloseTo(bottle.x + bottle.w / 2, 0);
       }
     }
   });

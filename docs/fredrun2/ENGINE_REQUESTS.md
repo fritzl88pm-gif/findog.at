@@ -158,6 +158,8 @@ Format: `## <welt>: <Titel>` + Begründung + gewünschte API. Welt-Agenten ände
   allen Bot-Läufen (4 Figuren, 14 Seeds/Startweiten, 0–8000 m).
 
 ## oper: Spring-Bounce wird ohne gehaltene Sprungtaste auf ≈ 256 px gekappt
+
+> **Erledigt (Engine):** `PlayerState.noCut` – der Spring-Bounce ist von der variablen Sprunghöhe ausgenommen (immer ≈ 417 px, `noCut` endet am Scheitel/bei der Landung). Test in `sim.test.ts`. Gilt auch für das Prater-Trampolin.
 * `handleInput` wendet die variable Sprunghöhe (`!input.jump && p.vy > 0 && p.jumpsUsed > 0 && p.vy < JUMP_V·0.98`) auch auf den Bounce eines
   `spring` an (`SPRING_V` 1500 → Scheitel ≈ 416 px nur bei gehaltener Taste, sonst ≈ 256 px, Flugzeit 0.4 s statt 0.9 s bis zur Balkonhöhe).
   Ein Spieler, der beim Überlaufen des Sprungbretts nicht gerade die Taste hält, erreicht Plattformen über ≈ 250 px nicht.
@@ -167,6 +169,8 @@ Format: `## <welt>: <Titel>` + Begründung + gewünschte API. Welt-Agenten ände
   als auch den vollen Bounce (≈ 0.9 s). Test „Flügel trägt auf die Balkonbahn – mit und ohne gehaltene Sprungtaste“ in `worlds/oper.test.ts`.
 
 ## oper: Entitäten mit Startverzögerung (Korken erscheint erst im Flaschenhals)
+
+> **Erledigt (Engine):** `Ent.p.delay` (Sekunden) – die Entität existiert und darf gezeichnet werden, ruht aber in der Welt (scrollt nur mit) und ist harmlos, bis `age > delay`; danach gilt ihr normales Verhalten (`vx`, `gravity`, Kollision). Der Bot-Klon sieht sie von Anfang an. Der Korken nutzt es jetzt (`worlds/oper/patterns.ts`). Test in `sim.test.ts`.
 * Ein Projektil, das „vor den Augen“ aus einem Objekt abgefeuert wird (Champagnerkorken aus der Flasche, Kanonenkugel aus dem Rohr), lässt sich mit Mustern
   nur simulieren: Spawn außerhalb des Bildschirms, Bewegung ab dem Spawn. Der Opernball rechnet über `leadX`/`arriveT` zurück, lässt den Korken bis zum
   Flaschenhals unsichtbar (`p.launchD`, Skin zeichnet nichts) und sichert die Fairness über den Warnpfeil (`warn: true`) und die schüttelnde Flasche.
@@ -180,6 +184,8 @@ Format: `## <welt>: <Titel>` + Begründung + gewünschte API. Welt-Agenten ände
 * Umgehung: kleine Amplitude (Faktoren 1.2 / 1.2 / 0.6) und Dancers sind stompbar; alle Muster sind isoliert 100 % lösbar (auch mit dem „menschlichen“ Bot).
 
 ## winter: Schneeball „aus der Hand“ (Startverzögerung) und Muster-Einschub durch Systeme
+
+> **Erledigt (Engine, Teil 1):** Schneeball nutzt `p.delay` (ruht unsichtbar in der Hand, fliegt im Wurfmoment los) – die Rückrechnung entfällt. **Offen** bleibt der zweite Punkt (Muster-Einschub `spawner.insert` bzw. `weightByStage`); die Umgehung über `spawner.cursor` funktioniert.
 * Der Elf wirft erst auf dem Bildschirm: Der Schneeball muss als `projectile` mit `p.gravity` von Anfang an existieren (der Bot-Klon hat keine Systeme
   und sieht nur, was schon in `sim.ents` steht). Umgehung: rückwärts extrapolierte Parabel (`throwBall` in `winter/patterns.ts`), der Ball ist bis
   `e.age ≥ p.tRel` unsichtbar und trifft/passiert die Figur exakt zum vorhergesagten Zeitpunkt; Skin und Elf-Animation lesen `p.tRel`.

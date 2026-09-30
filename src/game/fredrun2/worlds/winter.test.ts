@@ -140,7 +140,7 @@ describe("Welt Christkindlmarkt", () => {
     expect(build("win-lebkuchenmann", 2).some((s) => s.skin === "gingerbread" && s.stompable)).toBe(true);
   });
 
-  it("Schneeball: vorausberechnete Bogenflug-Bahn trifft im Wurfmoment die Hand und kommt auf Zielhöhe an", () => {
+  it("Schneeball: ruht bis zum Wurf (p.delay) in der Hand und kommt nach dem Bogenflug auf Zielhöhe an", () => {
     for (const diff of [2, 5, 9]) {
       const out: EntSpec[] = [];
       const speed = speedAt(diff);
@@ -150,13 +150,14 @@ describe("Welt Christkindlmarkt", () => {
       expect(b?.kind).toBe("projectile");
       expect(b?.p?.gravity ?? 0).toBeGreaterThan(0);
       expect(info.tRel).toBeGreaterThan(0.2);
-      // Wurfmoment: Ballmitte in Handhöhe
+      // Startverzögerung = Wurfmoment; bis dahin ruht der Ball in der Hand (Ballmitte in Handhöhe)
+      expect(b?.p?.delay).toBeCloseTo(info.tRel, 6);
       const g = b?.p?.gravity ?? 0;
       const vy0 = b?.vy ?? 0;
-      const y = (t: number): number => (b?.y ?? 0) + vy0 * t + 0.5 * g * t * t + (b?.h ?? 0) / 2;
-      expect(590 - y(info.tRel)).toBeCloseTo(86, 0);
+      const y = (t: number): number => (b?.y ?? 0) + vy0 * t + 0.5 * g * t * t + (b?.h ?? 0) / 2; // t = Sekunden seit dem Wurf
+      expect(590 - y(0)).toBeCloseTo(86, 0);
       // Ankunft an der Figur nach `flight`: Zielhöhe
-      expect(590 - y(info.tRel + info.flight)).toBeCloseTo(100, 0);
+      expect(590 - y(info.flight)).toBeCloseTo(100, 0);
       // Flugzeit sichtbar ≥ 0.45 s (Vorwarnung)
       expect(info.flight).toBeGreaterThan(0.45);
     }

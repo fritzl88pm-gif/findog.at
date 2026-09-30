@@ -32,7 +32,8 @@ Boden, Entitäts-Skins, Vordergrund, Wetter, Licht), (3) optionale Sondersysteme
 
 `block, overhead, pit, platform (statisch/beweglich/bröckelnd), walker, flyer, projectile, swinger, zone, spring, portal,
 wind, speedzone, pickup, decor`. Alle bewegen sich zusätzlich mit `vx` (px/s relativ zur Welt; negativ = kommt schneller
-entgegen), Ausnahme swinger/flyer-Sinus (eigene Formeln). `breakable:true` → Dash/Stampf/Turbo zerstört. `stompable:true`
+entgegen), Ausnahme swinger/flyer-Sinus (eigene Formeln). `breakable:true` → Dash/Stampf/Turbo zerstört. **`p.delay` (Sekunden)**: Startverzögerung – die Entität ist da (Skin darf zeichnen), ruht aber in der Welt und ist
+harmlos, bis `age > delay`, danach gilt ihr normales Verhalten (z. B. Korken im Flaschenhals, Schneeball in der Hand, dann `vx`/`gravity`). **Sprungbrett** (`spring`): der Bounce hat immer die volle Höhe (`PlayerState.noCut`), unabhängig von der gehaltenen Sprungtaste. `stompable:true`
 bei walker/flyer → Draufspringen besiegt (Punkte, Bounce). `warn:true` → Warnpfeil am rechten Rand.
 Zone-Phasen `[{name:"warn",dur},{name:"active",dur},{name:"idle",dur}]`: Treffer nur in "active";
 die Engine emittiert Events `custom` mit Tags `zone-warn:<skin>` / `zone-active:<skin>` (Audio: Skins mit "bolt", "stamp",

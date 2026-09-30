@@ -73,23 +73,24 @@ function dancers(c: PatternCtx, dx: number, vx: number): void {
 
 /**
  * Champagnerflasche + Korken. `D` = Musterposition (px), an der Korken und Figur (bei gleichbleibendem Tempo) zusammentreffen.
- * Die Flasche steht ruhig `vx·τF` weiter rechts (zeigt Schütteln/Schaum), der Korken taucht aus ihrem Hals auf und fliegt
- * `flight` Sekunden bis zur Figur. Hoch = Kopfhöhe (rutschen), tief = Fußhöhe (springen). Fair auch ohne exakte Vorhersage.
+ * Die Flasche steht ruhig `vx·τF` weiter rechts (zeigt Schütteln/Schaum); der Korken sitzt bis zum Knall (`p.delay`) in ihrem
+ * Hals und fliegt dann `flight` Sekunden bis zur Figur. Hoch = Kopfhöhe (rutschen), tief = Fußhöhe (springen).
+ * Fair auch ohne exakte Vorhersage.
  */
 function corkShot(c: PatternCtx, D: number, high: boolean, flight = 0.85, vxAbs = 330): number {
   const vx = -vxAbs;
   const tA = arriveT(c, D);
   const tF = Math.min(flight, Math.max(0.35, tA - 0.05));
   const tL = tA - tF;
-  const x0 = D - vx * tA - DIM.cork.w / 2; // Startposition (linke Kante) des Korkens, unsichtbar bis zum Knall
   const xb = D - vx * tF; // Flaschenmitte = Korken-Mitte beim Knall
+  const x0 = xb - DIM.cork.w / 2; // Korken sitzt im Flaschenhals und startet erst nach `delay`
   const elev = high ? 76 : 14;
   c.projectile(x0, DIM.cork.w, DIM.cork.h, elev, {
     skin: SKIN.cork,
     vx,
     warn: true,
     hb: [DIM.cork.w * 0.1, DIM.cork.h * 0.12, DIM.cork.w * 0.8, DIM.cork.h * 0.76],
-    p: { launchD: Math.abs(vx) * tL, neck: DIM.bottleNeck },
+    p: { delay: tL, neck: DIM.bottleNeck },
   });
   c.decor(xb - DIM.bottle.w / 2, DIM.bottle.w, DIM.bottle.h, 0, { skin: SKIN.bottle, p: { popT: tL } });
   return xb + DIM.bottle.w / 2;
