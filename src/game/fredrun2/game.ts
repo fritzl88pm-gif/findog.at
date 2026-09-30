@@ -275,6 +275,19 @@ export class FredRunGame {
   // ------------------------------------------------------------------------------------------
   // Assets
 
+  private fallbackRenderer: WorldRenderer | null = null;
+  private pruneAt = 0;
+
+  /** Gibt Welt-Renderer frei (deren Offscreen-Canvases können vom Browser zurückgewonnen werden) – wichtig für Mobilgeräte. */
+  private pruneWorlds(keep: WorldId[]): void {
+    for (const id of [...this.worldRenderers.keys()]) {
+      if (!keep.includes(id)) {
+        this.worldRenderers.delete(id);
+        this.worldLoading.delete(id);
+      }
+    }
+  }
+
   private async ensureCharacter(id: CharacterId): Promise<void> {
     const sprites = await loadCharacter(id);
     if (this.profile.character === id) this.renderer?.setCharacter(sprites);
@@ -427,6 +440,7 @@ export class FredRunGame {
   async selectWorld(id: WorldId, mode: RunMode = this.profile.mode): Promise<void> {
     this.commitProfile({ ...this.profile, world: id, mode });
     await this.ensureWorld(id);
+    if (this.phase === "menu") this.pruneWorlds([id]);
     if (this.phase === "menu") {
       this.demoWorld = id;
       this.startDemo();
@@ -452,7 +466,9 @@ export class FredRunGame {
     const seed = over.seed ?? (mode === "daily" ? dailySeed() : (Math.random() * 0xffffffff) >>> 0);
     const cfg: RunConfig = { mode, world, character: over.character ?? p.character, seed, startMeters: over.startMeters };
     this.cfg = cfg;
-    await Promise.all([this.ensureCharacter(cfg.character), mode === "tour" ? Promise.all(TOUR_ORDER.map((w) => this.ensureWorld(w))) : this.ensureWorld(world)]);
+    // Nur die Startwelt laden – in der Weltreise wird die nächste Welt rechtzeitig vor dem Tor nachgeladen.
+    await Promise.all([this.ensureCharacter(cfg.character), this.ensureWorld(world)]);
+    this.pruneWorlds([world]);
     const sprites = await loadCharacter(cfg.character);
     this.renderer?.setCharacter(sprites);
     this.sim = new Sim(cfg, WORLDS);
@@ -526,7 +542,10 @@ export class FredRunGame {
     this.audio.music.play("menu", { crossfadeSec: 0.8 });
     this.demoWorld = this.profile.world;
     void this.ensureWorld(this.demoWorld).then(() => {
-      if (this.phase === "menu") this.startDemo();
+      if (this.phase === "menu") {
+        this.pruneWorlds([this.demoWorld]);
+        this.startDemo();
+      }
     });
     this.emitChange();
   }
@@ -626,7 +645,13 @@ export class FredRunGame {
     const rawView = sim.view(this.hitstop > 0 || !simRunning ? 1 : Math.min(1, this.acc / FIXED_DT), this.prev, this.reducedMotion, this.quality, visDt);
     // Jede Welt bekommt nur Stufen im eigenen Bereich; die Zielwelt eines Tores beginnt bei Stufe 0.
     const view: ViewState = { ...rawView, stage: Math.min(rawView.stage, sim.world.stageCount - 1) };
-    const cur = this.worldRenderers.get(sim.world.id) ?? null;
+    let cur = this.worldRenderers.get(sim.world.id) ?? null;
+    if (!cur) {
+      // Welt (noch) nicht geladen, z.B. langsames Nachladen in der Weltreise: neutraler Ersatz, bis sie bereit ist
+      void this.ensureWorld(sim.world.id);
+      this.fallbackRenderer ??= new BasicRenderer(220);
+      cur = this.fallbackRenderer;
+    }
     const gate = sim.nextGate;
     const nxt = gate ? this.worldRenderers.get(gate.to) ?? null : null;
     const nextView: ViewState = { ...rawView, stage: 0, stageBlend: 0, worldMeters: 0 };
@@ -724,6 +749,7 @@ export class FredRunGame {
         case "world-transition":
           this.flashV = 0.7;
           this.flashColor = "#c4b5fd";
+          this.pruneAt = this.time + 3;
           break;
         case "pit-fall":
           this.flashV = 0.6;
@@ -853,6 +879,15 @@ export class FredRunGame {
 
   private worldTick(sim: Sim, dt: number): void {
     const a = this.audio;
+    if (sim.cfg.mode === "tour") {
+      const idx = TOUR_ORDER.indexOf(sim.world.id);
+      const next = TOUR_ORDER[(idx + 1) % TOUR_ORDER.length];
+      if (sim.worldMeters >= TOUR_METERS - 500 && !this.worldRenderers.has(next) && !this.worldLoading.has(next)) void this.ensureWorld(next);
+      if (this.pruneAt > 0 && this.time > this.pruneAt) {
+        this.pruneAt = 0;
+        this.pruneWorlds([sim.world.id, ...(sim.nextGate ? [sim.nextGate.to] : []), ...(this.worldLoading.has(next) && sim.worldMeters >= TOUR_METERS - 500 ? [next] : [])]);
+      }
+    }
     if (!this.demo) {
       // Musik-Intensität & Tempo
       this.lastMusicUpdate += dt;
