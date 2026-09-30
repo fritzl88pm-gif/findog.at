@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { createAudio } from "@/game/fredrun2/audio";
@@ -150,7 +151,14 @@ function WorldArt({ id }: { id: WorldId }): React.ReactElement {
   );
 }
 
-export default function FredRun2(): React.ReactElement {
+export interface FredRun2Props {
+  /** In die App eingebettet (wie das Original-Fredrun): Größe folgt dem Inhaltsbereich, Vollbild über die Schaltfläche. */
+  embedded?: boolean;
+  /** Supabase-Sitzung der App: liefert den Spielernamen aus dem Original-Fredrun-Profil. */
+  accessToken?: string;
+}
+
+export default function FredRun2({ embedded = false, accessToken = "" }: FredRun2Props = {}): React.ReactElement {
   const { game, snap, canvasRef, stageRef } = useGame();
   const [tab, setTab] = useState<Tab>("play");
   const [boardKeyState, setBoardKeyState] = useState<string | null>(null);
@@ -188,8 +196,11 @@ export default function FredRun2(): React.ReactElement {
   useEffect(() => {
     if (!game) return;
     const onKey = (e: KeyboardEvent): void => {
-      const tag = (e.target as HTMLElement | null)?.tagName;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      // Eingebettet gehören Tasten der App (Seitenleiste, Links …): nur im Spielbereich oder ohne Fokus auswerten
+      if (embedded && target && target !== document.body && !stageRef.current?.parentElement?.contains(target)) return;
       if (phase === "menu" && !namePrompt && (e.code === "Enter" || (e.code === "Space" && tag !== "BUTTON")) && tag !== "BUTTON") {
         e.preventDefault();
         startRun();
@@ -205,7 +216,29 @@ export default function FredRun2(): React.ReactElement {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [game, phase, namePrompt, startRun]);
+  }, [game, phase, namePrompt, startRun, embedded, stageRef]);
+
+  // Spielername aus dem Original-Fredrun-Profil übernehmen (nur wenn hier noch keiner gesetzt ist)
+  useEffect(() => {
+    if (!game || !accessToken) return;
+    const controller = new AbortController();
+    void fetch("/api/fredrun/highscores?world=vienna", {
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: controller.signal,
+    })
+      .then((res) => (res.ok ? (res.json() as Promise<{ playerName?: unknown }>) : null))
+      .then((body) => {
+        const remote = typeof body?.playerName === "string" ? body.playerName.trim().slice(0, 16) : "";
+        if (remote && !game.getSnapshot().profile.name) {
+          game.setName(remote);
+          setNameDraft(remote);
+        }
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [game, accessToken]);
 
   const click = useCallback(
     (fn: () => void) => () => {
@@ -222,10 +255,13 @@ export default function FredRun2(): React.ReactElement {
     if (document.fullscreenElement) {
       void document.exitFullscreen();
     } else {
-      void el.requestFullscreen?.().then(() => {
-        const orientation = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
-        void orientation?.lock?.("landscape").catch(() => undefined);
-      });
+      void el
+        .requestFullscreen?.({ navigationUI: "hide" })
+        .then(() => {
+          const orientation = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
+          void orientation?.lock?.("landscape").catch(() => undefined);
+        })
+        .catch(() => undefined);
     }
   }, [stageRef]);
 
@@ -268,7 +304,7 @@ export default function FredRun2(): React.ReactElement {
   }, [game, phase, tab]);
 
   return (
-    <div className={styles.root}>
+    <div className={`${styles.root} ${embedded ? styles.embedded : ""}`}>
       <div className={styles.stage} ref={stageRef}>
         <canvas ref={canvasRef} className={styles.canvas} aria-label="Fredrun 2.0 Spielfläche" role="img" />
 
@@ -424,6 +460,11 @@ export default function FredRun2(): React.ReactElement {
                 </div>
               ) : null}
             </div>
+            {!embedded ? (
+              <Link className={styles.backLink} href="/">
+                ← Zurück zu Findog
+              </Link>
+            ) : null}
           </div>
         ) : null}
 

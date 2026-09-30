@@ -78,6 +78,7 @@ import {
   isFredAgentKey,
   type FredAgentKey,
 } from "@/lib/weknora/fred-agent";
+import dynamic from "next/dynamic";
 import FredRunView from "@/components/fredrun-view";
 import FredLiveView from "@/components/fred-live-view";
 import L17bCountrySelect from "@/components/l17b-country-select";
@@ -133,7 +134,20 @@ type ConversationSummary = {
   telegramIntegrationId?: string | null;
 };
 
-type AppView = "home" | "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "bfg-newsletters" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "fred-live" | "administration" | "data" | "reasonings";
+// Fredrun 2.0 ist groß (Engine, Welten, Audio): erst laden, wenn die Ansicht geöffnet wird
+const FredRun2View = dynamic(() => import("@/components/fredrun2/FredRun2View"), {
+  ssr: false,
+  loading: () => (
+    <section className="forms-panel fredrun-panel" aria-busy="true">
+      <div className="forms-view fredrun-view">
+        <p className="eyebrow">Findog Spielpause</p>
+        <p>Fredrun 2.0 wird geladen …</p>
+      </div>
+    </section>
+  ),
+});
+
+type AppView = "home" | "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "bfg-newsletters" | "german-sv-pension" | "l17b-currency" | "fredrun" | "fredrun2" | "quiz" | "fred-live" | "administration" | "data" | "reasonings";
 
 const TELEGRAM_BOT_USERNAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{4,31}$/u;
 
@@ -1853,6 +1867,7 @@ export default function Home() {
       case "german-sv-pension": openGermanSvPensionView(); break;
       case "l17b-currency": openL17bCurrencyView(); break;
       case "fredrun": openFredRunView(); break;
+      case "fredrun2": openFredRun2View(); break;
       case "quiz": openQuizView(); break;
       case "administration": void openAdministrationView(); break;
     }
@@ -1954,6 +1969,15 @@ export default function Home() {
   function openFredRunView() {
     if (!leaveAdministration()) return;
     setAppView("fredrun");
+    setError("");
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
+      setSettingsOpen(false);
+    }
+  }
+
+  function openFredRun2View() {
+    if (!leaveAdministration()) return;
+    setAppView("fredrun2");
     setError("");
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
@@ -3254,7 +3278,7 @@ export default function Home() {
                         L17b Währungsrechner
                       </button>
                     </SidebarNavigationGroup>
-                    <SidebarNavigationGroup title="Lernen & Spiel" active={["fredrun", "quiz"].includes(appView)}>
+                    <SidebarNavigationGroup title="Lernen & Spiel" active={["fredrun", "fredrun2", "quiz"].includes(appView)}>
                       <button
                         className={`sidebar-view-button ${appView === "fredrun" ? "active" : ""}`}
                         type="button"
@@ -3264,15 +3288,15 @@ export default function Home() {
                         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17h3l2-4 3 2 2-5 2 4h4"></path><path d="M5 7h.01M9 5h.01M13 7h.01"></path></svg>
                         Fredrun
                       </button>
-                      <Link
-                        className="sidebar-view-button"
-                        href="/fredrun2"
-                        style={{ textDecoration: "none" }}
-                        title="Fredrun 2.0 – der neue Endlos-Runner"
+                      <button
+                        className={`sidebar-view-button ${appView === "fredrun2" ? "active" : ""}`}
+                        type="button"
+                        onClick={openFredRun2View}
+                        aria-current={appView === "fredrun2" ? "page" : undefined}
                       >
                         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"></path></svg>
                         Fredrun 2.0
-                      </Link>
+                      </button>
                       {isAdmin ? (<button
                         className={`sidebar-view-button ${appView === "quiz" ? "active" : ""}`}
                         type="button"
@@ -3431,14 +3455,16 @@ export default function Home() {
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17h3l2-4 3 2 2-5 2 4h4"></path><path d="M5 7h.01M9 5h.01M13 7h.01"></path></svg>
             </button>
-            <Link
-              className="icon-button rail-icon-btn"
-              href="/fredrun2"
+            <button
+              className={`icon-button rail-icon-btn ${appView === "fredrun2" ? "active" : ""}`}
+              type="button"
+              onClick={openFredRun2View}
               title="Fredrun 2.0"
               aria-label="Fredrun 2.0"
+              aria-current={appView === "fredrun2" ? "page" : undefined}
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"></path></svg>
-            </Link>
+            </button>
             {isAdmin ? (
               <button
                 className={`icon-button rail-icon-btn ${appView === "quiz" ? "active" : ""}`}
@@ -4046,6 +4072,8 @@ export default function Home() {
         <L17bCurrencyView />
       ) : appView === "fredrun" ? (
         <FredRunView key={user?.id ?? "fredrun"} accessToken={session?.access_token ?? ""} />
+      ) : appView === "fredrun2" ? (
+        <FredRun2View key={user?.id ?? "fredrun2"} accessToken={session?.access_token ?? ""} />
       ) : appView === "quiz" && isAdmin ? (
         <QuizView accessToken={session?.access_token ?? ""} />
       ) : appView === "fred-live" && isAdmin ? (

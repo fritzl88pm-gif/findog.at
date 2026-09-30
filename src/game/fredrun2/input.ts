@@ -81,7 +81,9 @@ export class InputManager {
 
   private onPointerDown = (e: PointerEvent): void => {
     if (!this.enabled) return;
-    if ((e.target as HTMLElement | null)?.closest("[data-fr2-ui]")) return;
+    // Bedienelemente (Schaltflächen, Dialoge, Eingabefelder) sind keine Spielfläche: sonst würde `setPointerCapture`
+    // den Mausklick auf z. B. „Hauptmenü“ im Pause-Dialog auf die Bühne umleiten und die Schaltfläche bliebe tot.
+    if ((e.target as HTMLElement | null)?.closest("[data-fr2-ui], button, a, input, select, textarea, [role='dialog']")) return;
     if (e.pointerType === "mouse" && e.button !== 0) {
       if (e.button === 2) this.edgeDash = true;
       return;

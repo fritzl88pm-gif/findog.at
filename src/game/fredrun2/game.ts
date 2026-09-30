@@ -507,6 +507,7 @@ export class FredRunGame {
   pause(): void {
     if (this.phase !== "running") return;
     this.phase = "paused";
+    this.input.enabled = false;
     this.input.releaseAll();
     this.audio.duck(0.6, 0.2);
     for (const l of this.activeLoops) this.audio.loop(l, false);
@@ -521,6 +522,7 @@ export class FredRunGame {
     this.countdownT = 1.6;
     this.countdownSfx = 2;
     this.resumeCountdown = 1;
+    this.input.enabled = true;
     this.input.releaseAll();
     this.emitChange();
   }

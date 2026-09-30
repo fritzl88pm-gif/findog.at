@@ -94,6 +94,25 @@ check("Spiel steht in Pause", Math.abs(d2 - d1) < 1);
 await page.keyboard.press("Enter");
 await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "running", null, { timeout: 8000 });
 check("Weiter nach Pause", true);
+// Pause-Dialog per Maus (Regression: Pointer-Capture der Bühne verschluckte den Klick auf Schaltflächen im Dialog)
+await page.keyboard.press("Escape");
+await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "paused", null, { timeout: 4000 });
+await page.getByRole("button", { name: "Weiter" }).click();
+await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "running", null, { timeout: 8000 });
+check("Pause-Dialog: Weiter per Mausklick", true);
+await page.keyboard.press("Escape");
+await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "paused", null, { timeout: 4000 });
+await page.getByRole("button", { name: "Hauptmenü" }).click();
+await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "menu", null, { timeout: 4000 });
+check("Pause-Dialog: Hauptmenü per Mausklick", true);
+await page.getByRole("tab", { name: "Spielen" }).first().click();
+await page.getByRole("button", { name: /Los geht/ }).click();
+await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "running", null, { timeout: 12000 }).catch(async () => {
+  const skip = page.getByRole("button", { name: "Überspringen" });
+  if (await skip.count()) await skip.click();
+  await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "running", null, { timeout: 12000 });
+});
+check("Neuer Lauf nach Rückkehr ins Menü", true);
 // Game Over
 await page.evaluate(() => { const s = window.__fr2.game.debugSim; s.player.hearts = 1; s.player.invuln = 0; s.hurt("crate"); });
 await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "gameover", null, { timeout: 8000 });

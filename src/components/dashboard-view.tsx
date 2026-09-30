@@ -22,6 +22,7 @@ export type DashboardAppTarget =
   | "german-sv-pension"
   | "l17b-currency"
   | "fredrun"
+  | "fredrun2"
   | "quiz"
   | "administration";
 
@@ -89,6 +90,7 @@ const QUICK_LINK_GROUPS: QuickLinkGroup[] = [
     title: "Lernen & Spiel",
     links: [
       { label: "Fredrun", description: "Lernspiel starten", icon: "game", target: "fredrun" },
+      { label: "Fredrun 2.0", description: "Neuer Endlos-Runner", icon: "game", target: "fredrun2" },
       { label: "Quiz", description: "Wissen testen", icon: "quiz", target: "quiz", adminOnly: true },
     ],
   },

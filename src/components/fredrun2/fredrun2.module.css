@@ -894,6 +894,119 @@
   box-sizing: border-box;
 }
 
+/* Die App-weiten Regeln `input:hover/:focus { background-color: #fff }` (globals.css) würden sonst weiße Schrift auf
+   weißen Grund legen – deshalb mit höherer Spezifität festhalten. */
+.root .nameInput,
+.root .nameInput:hover,
+.root .nameInput:focus,
+.root .field input[type="text"],
+.root .field input[type="text"]:hover,
+.root .field input[type="text"]:focus,
+.root .field select,
+.root .field select:hover,
+.root .field select:focus {
+  background-color: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  box-shadow: none;
+}
+
+.root .nameInput:focus,
+.root .field input[type="text"]:focus,
+.root .field select:focus {
+  border-color: #7ee8ff;
+  box-shadow: 0 0 0 calc(var(--px) * 3) rgba(126, 232, 255, 0.28);
+}
+
+.root .nameInput::placeholder,
+.root .field input[type="text"]::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.root .field select option {
+  background: #0d1330;
+  color: #fff;
+}
+
+/* --- Zurück zur App (nur die eigenständige Seite) -------------------------------------------------- */
+
+.backLink {
+  position: absolute;
+  left: calc(var(--px) * 56);
+  bottom: calc(var(--px) * 22);
+  padding: calc(var(--px) * 8) calc(var(--px) * 18);
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(14, 18, 34, 0.6);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: calc(var(--px) * 18);
+  font-weight: 800;
+  text-decoration: none;
+  backdrop-filter: blur(calc(var(--px) * 6));
+  -webkit-backdrop-filter: blur(calc(var(--px) * 6));
+}
+
+.backLink:hover,
+.backLink:focus-visible {
+  background: rgba(60, 90, 200, 0.55);
+  color: #fff;
+  outline: none;
+}
+
+/* --- In die App eingebettet (wie das Original-Fredrun) ------------------------------------------------ */
+
+.embedded {
+  position: relative;
+  inset: auto;
+  display: block;
+  /* so breit wie möglich, aber nie höher als der sichtbare Bereich (Kopfzeile der Ansicht ≈ 200 px) */
+  width: min(100%, calc((100dvh - 200px) * 16 / 9));
+  min-width: min(100%, 560px);
+  aspect-ratio: 16 / 9;
+  margin: 0 auto;
+  border: 1px solid rgba(40, 111, 156, 0.18);
+  border-radius: 20px;
+  box-shadow: 0 18px 48px rgba(19, 53, 75, 0.12);
+}
+
+.embedded .stage {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  box-shadow: none;
+}
+
+.embedded:fullscreen {
+  display: grid;
+  place-items: center;
+  width: 100vw;
+  height: 100dvh;
+  min-width: 0;
+  aspect-ratio: auto;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.embedded:fullscreen .stage {
+  position: relative;
+  inset: auto;
+  width: min(100vw, calc(100dvh * 16 / 9));
+  height: min(100dvh, calc(100vw * 9 / 16));
+}
+
+/* Querformat-Hinweis: eingebettet nur im Vollbild (dort gibt es keine Seitenleiste zum Drehen-Ausweichen) */
+.embedded .rotate {
+  display: none !important;
+}
+
+@media (max-aspect-ratio: 1/1) {
+  .embedded:fullscreen .rotate {
+    display: flex !important;
+  }
+}
+
 .rotate {
   position: absolute;
   inset: 0;

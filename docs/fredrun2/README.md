@@ -1,6 +1,6 @@
 # Fredrun 2.0
 
-Endlos-Runner im Browser (Route `/fredrun2`): sechs Welten, fünf Helden (Fred, Frida, Superfred, Cyberfred, Superfrida –
+Endlos-Runner im Browser – als Ansicht der App (Seitenleiste/Icon-Leiste/Dashboard „Fredrun 2.0“, aufgebaut wie das Original-Fredrun: `FredRun2View`, Kopfzeile „Findog Spielpause“, Vollbild-Schaltfläche) und eigenständig unter `/fredrun2`: sechs Welten, fünf Helden (Fred, Frida, Superfred, Cyberfred, Superfrida –
 alle aus dem Originalspiel), Highscore/Bestenliste, Weltreise-Modus und Tageslauf. Läuft ohne Server-Anbindung
 (Speicherstand in `localStorage`), Canvas 2D, fester Zeitschritt (120 Hz) mit Interpolation, adaptive Bildqualität.
 
@@ -24,7 +24,8 @@ src/game/fredrun2/            (Framework-unabhängig, TypeScript strict)
   audio/                      Web-Audio: aufgenommene Musik-Schleifen (tracks.ts), CC0-Sample-Bank für Effekte (bank.ts), prozeduraler Fallback – siehe audio/README.md, MUSIC.md, AUDIO.md
   worlds/<id>.ts              Welt-Module (Muster, Renderer, Systeme) – siehe WORLDS.md
 src/components/fredrun2/      React-Oberfläche (Menüs, Overlays, Touch-Tasten) + CSS-Modul
-src/app/fredrun2/page.tsx     Route
+src/components/fredrun2/FredRun2View.tsx   App-Ansicht (eingebettet, `embedded`-Modus von FredRun2, Spielername aus dem Original-Profil)
+src/app/fredrun2/page.tsx     eigenständige Route
 public/fredrun2/              Sprites (chars/, props/), Vorschaubilder (previews/)
 tools/fredrun2/               Python-Pack-Skripte (Sprites/Props), QA-Werkzeuge (shot.mjs, page-shot.mjs)
 ```
