@@ -14,7 +14,7 @@ import { blitSpr, glowAt, makeGlows, sat, SpriteCache, sprPoint, TAU } from "./g
 import { LAYER_LIGHTS } from "./lights";
 import { EMBERS, LIGHTS, NIGHT, REDGLOW, SKYLANTERN, SNOW, SPARKLE, VEIL, WIND } from "./look";
 import { Backdrop, type StageView } from "./scenery";
-import { drawWinterSkin, type SkinEnv } from "./skins";
+import { drawWinterSkin, warmFallbacks, type SkinEnv } from "./skins";
 import { MAX_STAGE } from "./stages";
 import { Bits, drawBreath, drawEmbers, drawIceSpray, Footprints, Glitter, SkyLanterns, SnowField, WindStreaks } from "./weather";
 
@@ -78,7 +78,17 @@ export class WinterRenderer implements WorldRenderer {
   async load(assets: AssetLoader): Promise<void> {
     this.env.props = assets.props;
     this.env.spr.props = assets.props;
-    await Promise.all([this.back.load(assets), assets.props.preload(WINTER_PROPS)]);
+    // Props IMMER abwarten (kein Lauf mit halb geladenen Props); Fehler einzelner Teile bleiben folgenlos: fehlende Props
+    // ersetzt der prozedurale Fallback (fallback.ts), fehlende Kulissen-Ebenen die Backdrop-Standardfarben.
+    await Promise.all([this.back.load(assets).catch(() => undefined), assets.props.preload(WINTER_PROPS).catch(() => undefined)]);
+    // Fehlen Props (Netzfehler, Blocker, veralteter Cache): Ersatzbilder jetzt backen statt beim ersten Auftritt im Lauf
+    if (WINTER_PROPS.some((id) => !assets.props.has(id))) {
+      try {
+        warmFallbacks(this.env);
+      } catch {
+        // wird beim ersten Zeichnen erneut versucht bzw. übersprungen
+      }
+    }
   }
 
   resize(dpr: number): void {

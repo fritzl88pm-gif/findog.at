@@ -21,7 +21,8 @@ export interface Baked {
   h: number;
 }
 
-const MAX_ENTRIES = 56;
+/** Speicherbudget des Caches (Bytes, RGBA) – die großen Überhang-Sprites sind bei Pixelfaktor 2 mehrere MB schwer */
+const MAX_BYTES = 28 * 1024 * 1024;
 
 /**
  * Silhouette (Höhe/Breite = `aspect`) so in ein Zielrechteck w×h einpassen, dass die Hitbox überdeckt bleibt:
@@ -35,14 +36,25 @@ export function fitBox(aspect: number, w: number, h: number, rmin: number, rmax:
   return { w, h };
 }
 
+/** Auf ein Vielfaches von q aufrunden (weniger verschiedene Sprite-Größen im Cache, Bild nie kleiner als die Hitbox) */
+export function quant(v: number, q = 4): number {
+  return Math.ceil(v / q - 0.001) * q;
+}
+
 export class PropBank {
   private props: PropLibrary | null = null;
   private k = 1;
   private cache = new Map<string, Baked>();
+  private bytes = 0;
 
   setProps(p: PropLibrary | null): void {
     this.props = p;
+    this.clear();
+  }
+
+  private clear(): void {
     this.cache.clear();
+    this.bytes = 0;
   }
 
   /** Pixelfaktor der Zeichenfläche (1 … 2); bei Änderung werden die Sprites neu gebacken. */
@@ -50,7 +62,7 @@ export class PropBank {
     const nk = Math.min(2, Math.max(1, k));
     if (Math.abs(nk - this.k) > 0.2) {
       this.k = nk;
-      this.cache.clear();
+      this.clear();
     }
   }
 
@@ -117,9 +129,12 @@ export class PropBank {
     else paintRegion(og, props, id, rx, ry, rw, rh, tw, th);
     const b: Baked = { c: out, w: tw / k, h: th / k };
     this.cache.set(key, b);
-    if (this.cache.size > MAX_ENTRIES) {
-      const first = this.cache.keys().next().value;
-      if (first !== undefined) this.cache.delete(first);
+    this.bytes += tw * th * 4;
+    // LRU über das Speicherbudget: älteste zuerst; das eben gebackene Sprite bleibt immer
+    for (const [oldKey, old] of this.cache) {
+      if (this.bytes <= MAX_BYTES || oldKey === key) break;
+      this.cache.delete(oldKey);
+      this.bytes -= old.c.width * old.c.height * 4;
     }
     return b;
   }

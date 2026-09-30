@@ -91,7 +91,26 @@ import {
 const TAU = Math.PI * 2;
 const CLOUD_SCALE = [1, 0.72, 1.25, 0.6, 0.9, 1.1];
 
-export const ALPEN_PROPS = ["boulder", "cow", "eagle-fly", "edelweiss", "gondola", "ibex-run", "wood-fence", "landmark-peak", "landmark-chalet", "landmark-church", "landmark-castle"];
+export const ALPEN_PROPS = [
+  "boulder",
+  "cow",
+  "eagle-fly",
+  "edelweiss",
+  "gondola",
+  "ibex-run",
+  "wood-fence",
+  "landmark-peak",
+  "landmark-chalet",
+  "landmark-church",
+  "landmark-castle",
+  "alpen-cairn",
+  "alpen-logs",
+  "alpen-trunk",
+  "alpen-marmot",
+  "alpen-cargo",
+  "alpen-rollstone",
+  "alpen-snowball",
+];
 
 // Ebenen-Geometrie
 const BACK_Y = 40;
@@ -913,25 +932,25 @@ export class AlpenRenderer implements WorldRenderer {
         drawBoulder(g, A, e, sx, k);
         return true;
       case "logs":
-        drawLogs(g, e, sx, sy, k);
+        drawLogs(g, A, e, sx, sy, k);
         return true;
       case "cow":
         drawCow(g, A, e, sx, sy, k);
         return true;
       case "trunk":
-        drawTrunk(g, e, sx, sy, k);
+        drawTrunk(g, A, e, sx, sy, k);
         return true;
       case "marmot":
-        drawMarmot(g, e, sx, sy, k);
+        drawMarmot(g, A, e, sx, sy, k);
         return true;
       case "cairn":
-        drawCairn(g, e, sx, k);
+        drawCairn(g, A, e, sx, k);
         return true;
       case "ledge":
         drawLedge(g, e, sx, sy, k);
         return true;
       case "cargo":
-        drawCargo(g, e, sx, sy, k);
+        drawCargo(g, A, e, sx, sy, k);
         return true;
       case "gorge":
         return true;

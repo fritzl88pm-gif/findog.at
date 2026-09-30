@@ -11,8 +11,188 @@ import { CABLE_SLOPE } from "./patterns";
 
 const TAU = Math.PI * 2;
 
+// --- Hindernis-Props (Steinmandl, Holzstoß, Stamm, Murmeltier, Seilbahn-Kiste, Rollfels, Schneeball) --------------
+
+/** Alpha-Rand der zugeschnittenen Prop-Zellen (tools/fredrun2/pack_props.py) */
+const PROP_PAD = 5;
+/** Sprites werden in doppelter Auflösung gebacken (scharf auch auf hochauflösenden Displays) */
+const BAKE_K = 2;
+
+/** Schneepuder-Verlauf (Zellkoordinaten): weiß bei y0 mit Stärke a0, ausklingend bis y1; wirkt nur, wo das Prop deckt. */
+export interface SnowSpec {
+  y0: number;
+  y1: number;
+  a0: number;
+  /** Anlauf oberhalb von y0 (Zellpixel), damit darüberliegende Teile unberührt bleiben */
+  ramp?: number;
+}
+
+export interface BakeOpts {
+  /** Ausschnitt in Zellpixeln [x0, y0, x1, y1] (Standard: ganze Zelle) */
+  crop?: [number, number, number, number];
+  /** nur diese Rechtecke [x, y, w, h] (Zellpixel) sichtbar */
+  clip?: Array<[number, number, number, number]>;
+  /** nur diese Kreisfläche [cx, cy, r] (Zellpixel) sichtbar */
+  circle?: [number, number, number];
+  flip?: boolean;
+  snow?: SnowSpec;
+}
+
+/**
+ * Vorgerendertes Prop. Koordinaten „Zelle“ = Pixel des Original-Bildes (bei `flip` gespiegelt); `s` = logische px je
+ * Zellpixel; (x0, y0) = Ursprung des Ausschnitts in Zellkoordinaten.
+ */
+export interface Baked {
+  c: HTMLCanvasElement;
+  /** Variante mit Schneepuder (nur wenn `snow` angefordert) */
+  snowC: HTMLCanvasElement | null;
+  s: number;
+  x0: number;
+  y0: number;
+  w: number;
+  h: number;
+  cw: number;
+  ch: number;
+}
+
+export class PropBank {
+  private readonly cache = new Map<string, Baked>();
+
+  constructor(private readonly props: PropLibrary | null) {}
+
+  has(id: string): boolean {
+    return !!this.props?.has(id);
+  }
+
+  cell(id: string): { w: number; h: number } | null {
+    return this.props?.has(id) ? this.props.cell(id) : null;
+  }
+
+  /** Sichtbare Silhouette (Zelle ohne Alpha-Rand) */
+  bbox(id: string): { w: number; h: number } | null {
+    const c = this.cell(id);
+    return c ? { w: c.w - PROP_PAD * 2, h: c.h - PROP_PAD * 2 } : null;
+  }
+
+  /**
+   * Skalierung (logische px je Zellpixel), die die Trefferfläche der Entität deckt, aber höchstens `over`× so groß wie
+   * die Entität wird. `boost` vergrößert das Deckungsmaß leicht (Spieler beurteilen Kollisionen optisch).
+   */
+  coverScale(id: string, e: Ent, over: number, boost = 1): number {
+    const b = this.bbox(id);
+    if (!b) return 1;
+    const [, , hw, hh] = e.hb;
+    const need = Math.max(hw / b.w, hh / b.h) * boost;
+    const cap = Math.min((e.w * over) / b.w, (e.h * over) / b.h);
+    return Math.round(Math.min(need, cap) * 200) / 200;
+  }
+
+  get(id: string, s: number, o: BakeOpts = {}): Baked | null {
+    const props = this.props;
+    if (!props?.has(id)) return null;
+    const sq = Math.round(s * 1000) / 1000;
+    const key = `${id}|${sq}|${o.crop?.join(",") ?? ""}|${o.clip?.map((r) => r.join(",")).join(";") ?? ""}|${o.circle?.join(",") ?? ""}|${o.flip ? 1 : 0}|${o.snow ? `${o.snow.y0},${o.snow.y1},${o.snow.a0}` : ""}`;
+    const hit = this.cache.get(key);
+    if (hit) return hit;
+    const cell = props.cell(id);
+    if (!cell) return null;
+    const b = this.bake(props, id, cell.w, cell.h, sq, o);
+    this.cache.set(key, b);
+    if (this.cache.size > 80) {
+      const first = this.cache.keys().next().value;
+      if (first !== undefined) this.cache.delete(first);
+    }
+    return b;
+  }
+
+  private bake(props: PropLibrary, id: string, cw: number, ch: number, s: number, o: BakeOpts): Baked {
+    const [x0, y0, x1, y1] = o.crop ?? [0, 0, cw, ch];
+    const W = Math.max(2, Math.round((x1 - x0) * s * BAKE_K));
+    const H = Math.max(2, Math.round((y1 - y0) * s * BAKE_K));
+    const t = W / (x1 - x0);
+    const paintTo = (g: Ctx2D, scale: number): void => {
+      g.save();
+      if (o.clip) {
+        g.beginPath();
+        for (const [rx, ry, rw, rh] of o.clip) g.rect((rx - x0) * scale, (ry - y0) * scale, rw * scale, rh * scale);
+        g.clip();
+      }
+      if (o.circle) {
+        g.beginPath();
+        g.arc((o.circle[0] - x0) * scale, (o.circle[1] - y0) * scale, o.circle[2] * scale, 0, TAU);
+        g.clip();
+      }
+      // linke obere Zellecke (im ggf. gespiegelten Bild) liegt bei (-x0, -y0); gespiegelt zeichnet der Anker ax = 1
+      props.draw(g, id, -x0 * scale, -y0 * scale, { scale, ax: o.flip ? 1 : 0, ay: 0, flipX: o.flip });
+      g.restore();
+    };
+    const render = (): HTMLCanvasElement => {
+      const c = paint(W, H, (g) => {
+        g.imageSmoothingQuality = "high";
+        if (t < 0.55) {
+          // starke Verkleinerung: erst auf die doppelte Zielgröße, dann herunter (kein Flimmern)
+          const big = paint(W * 2, H * 2, (bg) => {
+            bg.imageSmoothingQuality = "high";
+            paintTo(bg, t * 2);
+          });
+          g.drawImage(big, 0, 0, W, H);
+        } else {
+          paintTo(g, t);
+        }
+      });
+      return c;
+    };
+    const c = render();
+    let snowC: HTMLCanvasElement | null = null;
+    if (o.snow) {
+      const sn = o.snow;
+      snowC = paint(W, H, (g) => {
+        g.drawImage(c, 0, 0);
+        g.globalCompositeOperation = "source-atop";
+        const ya = (sn.y0 - y0) * t;
+        const yb = (sn.y1 - y0) * t;
+        const ramp = (sn.ramp ?? 0) * t;
+        const grd = g.createLinearGradient(0, ya - ramp, 0, yb);
+        const r0 = ramp > 0 ? ramp / (yb - ya + ramp) : 0;
+        if (ramp > 0) grd.addColorStop(0, "rgba(250,253,255,0)");
+        grd.addColorStop(r0, `rgba(250,253,255,${sn.a0})`);
+        grd.addColorStop(r0 + (1 - r0) * 0.45, `rgba(240,247,255,${sn.a0 * 0.6})`);
+        grd.addColorStop(1, "rgba(225,236,252,0)");
+        g.fillStyle = grd;
+        g.fillRect(0, 0, W, H);
+      });
+    }
+    return { c, snowC, s, x0, y0, w: W / BAKE_K, h: H / BAKE_K, cw, ch };
+  }
+}
+
+/** Zeichnet den Sprite (mit Schneepuder-Überblendung), sodass der Zellpunkt (cx, cy) auf (wx, wy) landet. */
+function blitBaked(g: Ctx2D, b: Baked, snow: number, cx: number, cy: number, wx: number, wy: number, snap = true): void {
+  let dx = wx - (cx - b.x0) * b.s;
+  let dy = wy - (cy - b.y0) * b.s;
+  if (snap) {
+    dx = Math.round(dx);
+    dy = Math.round(dy);
+  }
+  if (!b.snowC || snow < 0.98) g.drawImage(b.c, dx, dy, b.w, b.h);
+  if (b.snowC && snow > 0.02) {
+    const pa = g.globalAlpha;
+    g.globalAlpha = pa * Math.min(1, snow);
+    g.drawImage(b.snowC, dx, dy, b.w, b.h);
+    g.globalAlpha = pa;
+  }
+}
+
+/** Standard-Schneepuder für Bodenhindernisse: oberes Drittel bis knapp die Hälfte der sichtbaren Silhouette */
+function topSnow(cell: { w: number; h: number }, a0 = 0.85): SnowSpec {
+  const h = cell.h - PROP_PAD * 2;
+  return { y0: PROP_PAD, y1: PROP_PAD + h * 0.5, a0 };
+}
+
 export interface SkinAssets {
   props: PropLibrary | null;
+  /** Hindernis-Props (vorgerendert); leer, solange die Props nicht geladen sind */
+  bank: PropBank;
   edelweiss: HTMLCanvasElement;
   coinGlow: HTMLCanvasElement;
   rock: HTMLCanvasElement;
@@ -226,6 +406,7 @@ export function makeSkinAssets(props: PropLibrary | null): SkinAssets {
   }
   return {
     props,
+    bank: new PropBank(props),
     edelweiss: edel ?? edelweissVector(64),
     coinGlow: soft("rgba(255,236,160,0.9)"),
     rock: rockSprite(128, 7),
@@ -317,9 +498,15 @@ export function drawBoulder(g: Ctx2D, A: SkinAssets, e: Ent, sx: number, k: Skin
   snowCap(g, sx + e.w * 0.15, gy - e.h * 0.95, e.w * 0.7, k.snow, 10);
 }
 
-export function drawLogs(g: Ctx2D, e: Ent, sx: number, sy: number, k: SkinCtx): void {
+export function drawLogs(g: Ctx2D, A: SkinAssets, e: Ent, sx: number, sy: number, k: SkinCtx): void {
   const gy = k.groundY;
   shadow(g, sx + e.w / 2, gy, e.w * 0.56, 0.3);
+  const cell = A.bank.cell("alpen-logs");
+  const b = cell ? A.bank.get("alpen-logs", A.bank.coverScale("alpen-logs", e, 1.1), { snow: topSnow(cell, 0.9) }) : null;
+  if (b) {
+    blitBaked(g, b, k.snow, b.cw / 2, b.ch - PROP_PAD, sx + e.w / 2, gy + 3);
+    return;
+  }
   const rows = Math.max(2, Math.round(e.h / 26));
   const rH = e.h / rows;
   const r = rH * 0.52;
@@ -434,9 +621,15 @@ export function drawCow(g: Ctx2D, A: SkinAssets, e: Ent, sx: number, sy: number,
 }
 
 /** Umgestürzter Fichtenstamm: Rinde, Astlöcher, Stirnfläche mit Jahresringen, Moos/Schnee obenauf. */
-export function drawTrunk(g: Ctx2D, e: Ent, sx: number, sy: number, k: SkinCtx): void {
+export function drawTrunk(g: Ctx2D, A: SkinAssets, e: Ent, sx: number, sy: number, k: SkinCtx): void {
   const gy = k.groundY;
   shadow(g, sx + e.w / 2, gy, e.w * 0.55, 0.32);
+  const cell = A.bank.cell("alpen-trunk");
+  const b = cell ? A.bank.get("alpen-trunk", A.bank.coverScale("alpen-trunk", e, 1.06), { snow: topSnow(cell, 0.9) }) : null;
+  if (b) {
+    blitBaked(g, b, k.snow, b.cw / 2, b.ch - PROP_PAD, sx + e.w / 2, gy + 3);
+    return;
+  }
   const r = e.h / 2;
   const x0 = sx + 4;
   const x1 = sx + e.w - r;
@@ -514,9 +707,35 @@ export function drawTrunk(g: Ctx2D, e: Ent, sx: number, sy: number, k: SkinCtx):
 }
 
 /** Murmeltier: stellt sich auf und pfeift (Männchen machen), wenn es nicht läuft; flieht nach Sprung-Treffer. */
-export function drawMarmot(g: Ctx2D, e: Ent, sx: number, sy: number, k: SkinCtx): void {
+export function drawMarmot(g: Ctx2D, A: SkinAssets, e: Ent, sx: number, sy: number, k: SkinCtx): void {
   const gy = k.groundY;
   const cx = sx + e.w / 2;
+  // Sprite blickt nach rechts, das Murmeltier läuft nach links → gespiegelt
+  const mb = A.bank.has("alpen-marmot") ? A.bank.get("alpen-marmot", A.bank.coverScale("alpen-marmot", e, 1.1, 1.08), { flip: e.vx <= 0 }) : null;
+  if (mb) {
+    const fx = mb.cw / 2 - mb.x0;
+    const fy = mb.ch - PROP_PAD - mb.y0;
+    if (e.state === "defeated") {
+      // Sprung-Treffer: purzelt davon und blendet aus
+      g.save();
+      g.globalAlpha = Math.max(0, 1 - e.stateT * 1.5);
+      g.translate(cx, sy + e.h * 0.6);
+      g.rotate(e.stateT * 8);
+      g.drawImage(mb.c, -mb.w / 2, -mb.h / 2, mb.w, mb.h);
+      g.restore();
+      return;
+    }
+    shadow(g, cx, gy, 20, 0.28);
+    // leichtes Wippen im Laufrhythmus (bei reduzierter Bewegung ruhig)
+    const tt = k.reduced ? 0 : k.time + e.id;
+    const bob = Math.abs(Math.sin(tt * 9)) * 3;
+    g.save();
+    g.translate(cx, gy + 2 - bob);
+    g.rotate(Math.sin(tt * 9) * 0.05);
+    g.drawImage(mb.c, -fx * mb.s, -fy * mb.s, mb.w, mb.h);
+    g.restore();
+    return;
+  }
   if (e.state === "defeated") {
     g.save();
     g.globalAlpha = Math.max(0, 1 - e.stateT * 1.5);
@@ -629,9 +848,15 @@ export function drawCrate(g: Ctx2D, e: Ent, sx: number, sy: number, k: SkinCtx):
   snowCap(g, sx, sy, e.w, k.snow, 6);
 }
 
-export function drawCairn(g: Ctx2D, e: Ent, sx: number, k: SkinCtx): void {
+export function drawCairn(g: Ctx2D, A: SkinAssets, e: Ent, sx: number, k: SkinCtx): void {
   const gy = k.groundY;
   shadow(g, sx + e.w / 2, gy, e.w * 0.7, 0.3);
+  const cell = A.bank.cell("alpen-cairn");
+  const b = cell ? A.bank.get("alpen-cairn", A.bank.coverScale("alpen-cairn", e, 1.1), { snow: topSnow(cell, 0.8) }) : null;
+  if (b) {
+    blitBaked(g, b, k.snow, b.cw / 2, b.ch - PROP_PAD, sx + e.w / 2, gy + 3);
+    return;
+  }
   const n = Math.max(4, Math.round(e.h / 20));
   let y = gy + 2;
   const r = mulberry(e.id * 13 + 1);
@@ -836,13 +1061,127 @@ export function drawLedge(g: Ctx2D, e: Ent, sx: number, sy: number, k: SkinCtx):
   }
 }
 
+/**
+ * Seilbahn-Kiste (Zellkoordinaten): Laufwerk auf dem Seil (Radachse), Schnitt durch das einzelne Tragseil zwischen den
+ * Knoten, Seilmitte/-breite, Neigung des Tragseils im Bild und Breite der Kiste. Das Bild ist zu kurz für die
+ * Trefferfläche (bis zum Seil hinauf): Laufwerk und Kiste werden getrennt gezeichnet, dazwischen hängt ein verlängertes Seil.
+ */
+const CARGO = { wheelX: 181, wheelY: 54, cut: 196, ropeX: 183, ropeW: 20, slope: 0.307, crateW: 296, flagX: 198, flagY: 170 };
+
+let ropeTile: HTMLCanvasElement | null = null;
+
+/** Gedrehtes Hanfseil als wiederholbare Kachel (Breite 10, Höhe 12) */
+function getRopeTile(): HTMLCanvasElement {
+  if (ropeTile) return ropeTile;
+  ropeTile = paint(10, 12, (g) => {
+    const grd = g.createLinearGradient(0, 0, 10, 0);
+    grd.addColorStop(0, "#8e5f22");
+    grd.addColorStop(0.4, "#e2b45a");
+    grd.addColorStop(1, "#a06d28");
+    g.fillStyle = grd;
+    g.fillRect(0, 0, 10, 12);
+    g.strokeStyle = "rgba(58,32,8,0.6)";
+    g.lineWidth = 1.5;
+    g.beginPath();
+    g.moveTo(1, 12);
+    g.lineTo(9, 3);
+    g.moveTo(1, 0);
+    g.lineTo(9, -9);
+    g.stroke();
+    g.fillStyle = "#24140a";
+    g.fillRect(0, 0, 1.6, 12);
+    g.fillRect(8.4, 0, 1.6, 12);
+  });
+  return ropeTile;
+}
+
 /** Lastenseilbahn-Kiste: Tragseil oben, Gehänge, tief hängende Holzkiste (drunter durchrutschen). */
-export function drawCargo(g: Ctx2D, e: Ent, sx: number, sy: number, k: SkinCtx): void {
+export function drawCargo(g: Ctx2D, A: SkinAssets, e: Ent, sx: number, sy: number, k: SkinCtx): void {
   const bottom = sy + e.h;
   const cx = sx + e.w / 2;
   const cableY = sy + 8;
   const t = k.reduced ? 0 : k.time;
   const sway = Math.sin(t * 1.6 + e.id) * 0.03;
+  const bb = A.bank.bbox("alpen-cargo");
+  const cell = A.bank.cell("alpen-cargo");
+  if (bb && cell) {
+    const s = Math.round(((e.w * 0.95) / CARGO.crateW) * 200) / 200;
+    const cw = cell.w;
+    const ch = cell.h;
+    const top = A.bank.get("alpen-cargo", s, {
+      crop: [0, 0, cw, CARGO.cut],
+      clip: [
+        [0, 0, cw, CARGO.flagY],
+        [0, CARGO.flagY, CARGO.flagX, CARGO.cut - CARGO.flagY],
+      ],
+    });
+    const low = A.bank.get("alpen-cargo", s, {
+      crop: [0, CARGO.flagY, cw, ch],
+      clip: [
+        [0, CARGO.cut, cw, ch - CARGO.cut],
+        [CARGO.flagX, CARGO.flagY, cw - CARGO.flagX, CARGO.cut - CARGO.flagY],
+      ],
+      snow: { y0: 338, y1: 445, a0: 0.9, ramp: 8 },
+    });
+    if (top && low) {
+      const wy = sy + 12;
+      const yCut = wy + (CARGO.cut - CARGO.wheelY) * s;
+      const yLow = bottom - 2 - (ch - PROP_PAD - CARGO.cut) * s;
+      const len = Math.max(0, yLow - yCut);
+      // Tragseil: läuft mit der Neigung des Seils im Bild von oben links nach unten rechts durch das Laufwerk
+      const slope = CARGO.slope;
+      const x0 = -20;
+      const x1 = 1300;
+      const wc = 17 * s;
+      g.save();
+      g.lineCap = "butt";
+      g.strokeStyle = "#0c0c0f";
+      g.lineWidth = wc + 0.6;
+      g.beginPath();
+      g.moveTo(x0, wy + slope * (x0 - cx));
+      g.lineTo(x1, wy + slope * (x1 - cx));
+      g.stroke();
+      g.strokeStyle = "#9a9ea8";
+      g.lineWidth = Math.max(2, wc - 3.4);
+      g.stroke();
+      g.strokeStyle = "rgba(40,42,50,0.55)";
+      g.setLineDash([2, 4.5]);
+      g.stroke();
+      g.setLineDash([]);
+      // Kiste + Seil pendeln leicht um die Aufhängung
+      const rx = cx + (CARGO.ropeX - CARGO.wheelX) * s;
+      g.save();
+      g.translate(rx, yCut);
+      g.rotate(sway);
+      const rw = Math.max(4, Math.round(CARGO.ropeW * s));
+      const rope = getRopeTile();
+      const pat = g.createPattern(rope, "repeat-y");
+      if (pat) {
+        g.save();
+        g.translate(-rw / 2, -3);
+        g.scale(rw / 10, 1);
+        g.fillStyle = pat;
+        g.fillRect(0, 0, 10, len + 6);
+        g.restore();
+      }
+      g.drawImage(low.c, -(CARGO.ropeX - low.x0) * low.s, len - (CARGO.cut - low.y0) * low.s, low.w, low.h);
+      if (low.snowC && k.snow > 0.02) {
+        g.globalAlpha = Math.min(1, k.snow);
+        g.drawImage(low.snowC, -(CARGO.ropeX - low.x0) * low.s, len - (CARGO.cut - low.y0) * low.s, low.w, low.h);
+        g.globalAlpha = 1;
+      }
+      g.restore();
+      // Laufwerk + Ring + Knoten (fest am Seil)
+      blitBaked(g, top, 0, CARGO.wheelX, CARGO.wheelY, cx, wy, false);
+      g.restore();
+      // Schatten
+      g.fillStyle = "rgba(10,20,30,0.25)";
+      g.beginPath();
+      g.ellipse(cx, k.groundY + 4, e.w * 0.5, 7, 0, 0, TAU);
+      g.fill();
+      return;
+    }
+  }
   // Tragseil (ganze Breite)
   g.strokeStyle = "#1c1c20";
   g.lineWidth = 3;
@@ -1574,6 +1913,27 @@ export function drawRockfall(g: Ctx2D, A: SkinAssets, e: Ent, sx: number, sy: nu
   }
 }
 
+/** Rollfels/Schneeball: gespiegelt gebackenes Sprite + Kugelmittelpunkt (Zellkoordinaten des gespiegelten Bildes) */
+const ROLLER = {
+  "alpen-rollstone": { cx: 300, cy: 250, d: 410 },
+  "alpen-snowball": { cx: -1, cy: -1, d: 502 },
+} as const;
+
+function rollerSprite(A: SkinAssets, e: Ent, snowball: boolean): { b: Baked; disc: Baked | null; cx: number; cy: number } | null {
+  const id = snowball ? "alpen-snowball" : "alpen-rollstone";
+  const cell = A.bank.cell(id);
+  if (!cell) return null;
+  const R = ROLLER[id];
+  const s = Math.round(((e.w * 1.1) / R.d) * 400) / 400;
+  const b = A.bank.get(id, s, { flip: true });
+  if (!b) return null;
+  const cx = R.cx < 0 ? cell.w / 2 : cell.w - R.cx;
+  const cy = R.cy < 0 ? cell.h / 2 : R.cy;
+  // Rollfels: Staubfahne + Splitter stehen still, nur das Innere des Felsens dreht sich
+  const disc = snowball ? null : A.bank.get(id, s, { flip: true, circle: [cx, cy, R.d * 0.46] });
+  return { b, disc, cx, cy };
+}
+
 export function drawRoller(g: Ctx2D, A: SkinAssets, e: Ent, sx: number, sy: number, k: SkinCtx, snowball: boolean): void {
   const gy = k.groundY;
   const s = e.w * 1.12;
@@ -1599,6 +1959,22 @@ export function drawRoller(g: Ctx2D, A: SkinAssets, e: Ent, sx: number, sy: numb
   }
   const ang = e.x / (e.w * 0.5);
   const hop = k.reduced ? 0 : Math.abs(Math.sin(e.x * 0.02)) * 4;
+  const rb = rollerSprite(A, e, snowball);
+  if (rb) {
+    // Rollt nach links: Sprite gespiegelt (Staubfahne hinten), dreht sich um den Kugelmittelpunkt
+    g.save();
+    g.translate(cx, cy - hop);
+    if (rb.disc) {
+      g.drawImage(rb.b.c, -(rb.cx - rb.b.x0) * rb.b.s, -(rb.cy - rb.b.y0) * rb.b.s, rb.b.w, rb.b.h);
+      g.rotate(ang);
+      g.drawImage(rb.disc.c, -(rb.cx - rb.disc.x0) * rb.disc.s, -(rb.cy - rb.disc.y0) * rb.disc.s, rb.disc.w, rb.disc.h);
+    } else {
+      g.rotate(ang);
+      g.drawImage(rb.b.c, -(rb.cx - rb.b.x0) * rb.b.s, -(rb.cy - rb.b.y0) * rb.b.s, rb.b.w, rb.b.h);
+    }
+    g.restore();
+    return;
+  }
   g.save();
   g.translate(cx, cy - hop);
   g.rotate(ang);

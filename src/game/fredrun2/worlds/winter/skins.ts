@@ -9,6 +9,7 @@ import type { Ent, PropLibrary, ViewState } from "../../types";
 import type { Ctx2D } from "../shared-b/canvas";
 import { h1 } from "../shared-b/color";
 import { DIM } from "./dims";
+import { paintIcicleBar } from "./fallback";
 import { blitSpr, easeIn, easeOut, fract, glowAt, groundShadow, sat, smooth01, SpriteCache, sprPoint, TAU, type GlowSet, type Spr } from "./gfx";
 import { PROP_LIGHTS } from "./lights";
 
@@ -32,7 +33,7 @@ const LIGHT_COLORS: Array<keyof GlowSet> = ["warm", "red", "gold", "green", "cya
 
 /** Lichter im Prop funkeln lassen (Positionen aus der Bildanalyse) */
 function twinkle(g: Ctx2D, env: SkinEnv, spr: Spr, cx: number, foot: number, key: string, flip: boolean, e: Ent, t: number, v: ViewState, size: number, multi: boolean, strength = 1): void {
-  const L = PROP_LIGHTS[key];
+  const L = spr.fb ? spr.lights : PROP_LIGHTS[key];
   if (!L || v.quality === 0) return;
   g.globalCompositeOperation = "lighter";
   const n = Math.floor(L.length / 3);
@@ -199,15 +200,18 @@ function drawStall(g: Ctx2D, env: SkinEnv, e: Ent, sx: number, sy: number, v: Vi
   else fallbackBox(g, sx, sy, e.w, e.h, "#8a5a2a");
 }
 
+/** Nachbearbeitung des Hintergrund-Stands: abgedunkelt */
+function stallBgPost(c: Ctx2D, s: Spr): void {
+  c.globalCompositeOperation = "source-atop";
+  c.fillStyle = "rgba(10,16,44,0.34)";
+  c.fillRect(0, 0, s.c.width, s.c.height);
+}
+
 /** Deko-Marktstand im Hintergrund (Elfen-Dach): dunkler und ohne Lichtsaum – wirkt wie Teil der Kulisse, nicht wie ein Hindernis */
 function drawStallBg(g: Ctx2D, env: SkinEnv, e: Ent, sx: number, sy: number, v: ViewState): void {
   const cx = sx + e.w / 2;
   const foot = sy + e.h + 2;
-  const spr = env.spr.get("winter-stall", e.h * 1.04, null, "foot", "bg", (c, s) => {
-    c.globalCompositeOperation = "source-atop";
-    c.fillStyle = "rgba(10,16,44,0.34)";
-    c.fillRect(0, 0, s.c.width, s.c.height);
-  });
+  const spr = env.spr.get("winter-stall", e.h * 1.04, null, "foot", "bg", stallBgPost);
   if (spr) {
     blitSpr(g, spr, cx, foot);
     twinkle(g, env, spr, cx, foot, "winter-stall", false, e, v.time, v, 5, false, 0.7);
@@ -393,19 +397,24 @@ function drawIcicles(g: Ctx2D, env: SkinEnv, e: Ent, sx: number, sy: number, v: 
       }
     }
   } else {
-    g.fillStyle = "#bfeaff";
-    g.strokeStyle = "#1c3a5a";
-    g.lineWidth = 3;
-    const n = Math.max(2, Math.floor(e.w / 34));
-    for (let k = 0; k < n; k += 1) {
-      const x = sx + ((k + 0.5) * e.w) / n;
-      g.beginPath();
-      g.moveTo(x - 9, sy + 12);
-      g.lineTo(x + 9, sy + 12);
-      g.lineTo(x, sy + e.h * (0.6 + 0.35 * h1(k * 7 + e.id)));
-      g.closePath();
-      g.fill();
-      g.stroke();
+    // Ersatz ohne Prop: Balken mit Zapfenreihen, in Breitenstufen (16 px) einmal gebacken und auf die Breite gestreckt
+    const bar = env.spr.proc("icicle-bar", Math.ceil(e.w / 16) * 16, e.h * 1.02, HALO_ICE, "top", paintIcicleBar);
+    if (bar) blitSpr(g, bar, sx + e.w / 2, sy - 2, { sx: e.w / bar.w });
+    else {
+      g.fillStyle = "#bfeaff";
+      g.strokeStyle = "#1c3a5a";
+      g.lineWidth = 3;
+      const n = Math.max(2, Math.floor(e.w / 34));
+      for (let k = 0; k < n; k += 1) {
+        const x = sx + ((k + 0.5) * e.w) / n;
+        g.beginPath();
+        g.moveTo(x - 9, sy + 12);
+        g.lineTo(x + 9, sy + 12);
+        g.lineTo(x, sy + e.h * (0.6 + 0.35 * h1(k * 7 + e.id)));
+        g.closePath();
+        g.fill();
+        g.stroke();
+      }
     }
   }
   if (v.quality > 0) {
@@ -649,6 +658,21 @@ function drawSledHazard(g: Ctx2D, env: SkinEnv, e: Ent, sx: number, sy: number, 
   }
 }
 
+/** Elf nach dem Wurf: Schneeball aus der Hand entfernen (Position aus der Bildanalyse: x 0.128, y 0.252, r 0.07) */
+function elfThrownPost(c: Ctx2D, s: Spr): void {
+  const bx = s.ax - (s.w * s.k) / 2 + 0.128 * s.w * s.k;
+  const by = s.ay - s.h * s.k + 0.252 * s.h * s.k;
+  c.save();
+  c.globalCompositeOperation = "destination-out";
+  const r = 0.078 * s.h * s.k;
+  const grd = c.createRadialGradient(bx, by, r * 0.6, bx, by, r);
+  grd.addColorStop(0, "rgba(0,0,0,1)");
+  grd.addColorStop(1, "rgba(0,0,0,0)");
+  c.fillStyle = grd;
+  c.fillRect(bx - r, by - r, r * 2, r * 2);
+  c.restore();
+}
+
 /** Elf: Wurf-Animation (Ausholen → Wurf → Rückschwung); mit Ball in der Hand vor dem Wurf */
 function drawElf(g: Ctx2D, env: SkinEnv, e: Ent, sx: number, sy: number, v: ViewState): void {
   const cx = sx + e.w / 2;
@@ -657,20 +681,7 @@ function drawElf(g: Ctx2D, env: SkinEnv, e: Ent, sx: number, sy: number, v: View
   const rel = e.p.tRel ?? 0;
   const dt = e.age - rel;
   const cocked = env.spr.get("winter-elf", e.h * 1.06, HALO_WARM, "foot", "cocked");
-  const thrown = env.spr.get("winter-elf", e.h * 1.06, HALO_WARM, "foot", "thrown", (c, s) => {
-    // Schneeball aus der Hand entfernen (Position aus der Bildanalyse: x 0.128, y 0.252, r 0.07)
-    const bx = s.ax - (s.w * s.k) / 2 + 0.128 * s.w * s.k;
-    const by = s.ay - s.h * s.k + 0.252 * s.h * s.k;
-    c.save();
-    c.globalCompositeOperation = "destination-out";
-    const r = 0.078 * s.h * s.k;
-    const grd = c.createRadialGradient(bx, by, r * 0.6, bx, by, r);
-    grd.addColorStop(0, "rgba(0,0,0,1)");
-    grd.addColorStop(1, "rgba(0,0,0,0)");
-    c.fillStyle = grd;
-    c.fillRect(bx - r, by - r, r * 2, r * 2);
-    c.restore();
-  });
+  const thrown = env.spr.get("winter-elf", e.h * 1.06, HALO_WARM, "foot", "thrown", elfThrownPost);
   if (e.state === "defeated") {
     const f = defeatedFx(e);
     g.save();
@@ -1183,6 +1194,33 @@ function drawGateway(g: Ctx2D, env: SkinEnv, e: Ent, sx: number, sy: number, v: 
     g.fill();
     g.stroke();
   }
+}
+
+
+/**
+ * Ersatz-Sprites vorab backen (Ladezeit statt erstem Auftritt mitten im Lauf). Der Renderer ruft das nur auf, wenn Props
+ * fehlen. Maße/Halos entsprechen den Zeichenfunktionen oben (Abweichungen kosten nur einen späteren Bake).
+ */
+export function warmFallbacks(env: SkinEnv): void {
+  const S = env.spr;
+  const jobs: Array<() => unknown> = [
+    () => S.get("winter-snowman", DIM.snowman.h * 1.06, HALO_WARM),
+    () => S.get("winter-presents", DIM.presents.h * 1.05, HALO_WARM),
+    () => S.get("winter-tree", DIM.tree.h * 1.05, HALO_WARM),
+    () => S.get("winter-candycane", DIM.cane.h * 1.05, HALO_WARM),
+    () => S.get("winter-iceblock", DIM.iceblock.h * 1.05, HALO_ICE),
+    () => S.get("winter-stall", DIM.stall.h * 1.03, HALO_WARM),
+    () => S.get("winter-stall", DIM.stallBg.h * 1.04, null, "foot", "bg", stallBgPost),
+    () => S.get("winter-kessel", DIM.kessel.h * 1.05, HALO_WARM),
+    () => S.get("winter-gingerbread", DIM.gingerbread.h * 1.06, HALO_WARM),
+    () => S.get("winter-krampus", DIM.krampus.h * 1.07, HALO_RED),
+    () => S.get("winter-sled", DIM.sled.h, HALO_WARM),
+    () => S.get("winter-sled", DIM.sledRide.h, HALO_WARM),
+    () => S.get("winter-elf", DIM.elf.h * 1.06, HALO_WARM, "foot", "cocked"),
+    () => S.get("winter-elf", DIM.elf.h * 1.06, HALO_WARM, "foot", "thrown", elfThrownPost),
+    () => S.get("winter-snowball", DIM.ball.h * 1.15, HALO_ICE, "center"),
+  ];
+  for (const job of jobs) job();
 }
 
 // --- Verteiler -------------------------------------------------------------------------------------------

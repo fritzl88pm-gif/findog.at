@@ -50,6 +50,7 @@ import {
   type MidTiles,
 } from "./backdrop";
 import {
+  FA_OBSTACLE_PROPS,
   drawBat,
   drawBelt,
   drawBlock,
@@ -75,7 +76,7 @@ import { Chunked } from "./chunked";
 import { DARK, DRAFT, DUST, EMERGENCY, FAULTY, FA_BACKDROPS, GLASS, LAMPS, LEDS, MAX_STAGE, NEON, PALETTE, PAPER } from "./stages";
 
 const TAU = Math.PI * 2;
-export const FA_PROPS = ["office-chair", "bat-fly", "shredder"];
+export const FA_PROPS = ["office-chair", "bat-fly", "shredder", ...FA_OBSTACLE_PROPS];
 const BACK_PAR = 0.08;
 const CAMERAS = [0.15, 0.55, 0.8, 0.6, 0.75];
 const GUESTS = new Set(["odo", "madinger", "jqa", "luki"]);
@@ -328,6 +329,8 @@ export class FinanzamtRenderer implements WorldRenderer {
     if (k !== this.A.cache.k) {
       this.A.cache.k = k;
       this.A.cache.clear();
+      this.A.pcache.k = k;
+      this.A.pcache.clear();
       this.A.coin = makeCoinStrip(k);
       this.A.coinSize = this.A.coin.height;
     }

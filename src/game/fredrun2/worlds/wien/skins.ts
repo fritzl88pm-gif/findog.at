@@ -10,7 +10,7 @@ import type { Ent, PropLibrary, ViewState } from "../../types";
 import { hash } from "../shared-a/gfx";
 
 /** Props, die die Wien-Skins nutzen (werden vor dem Lauf geladen). */
-export const WIEN_TRAM_PROPS = ["wien-tram-n0", "wien-tram-n1", "wien-tram-n2", "wien-tram-n3", "wien-tram-n4"];
+export const WIEN_TRAM_PROPS = ["wien-tram-n0", "wien-tram-n1", "wien-tram-n2", "wien-tram-n3", "wien-tram-n4", "wien-tram-n5", "wien-tram-n6"];
 export const WIEN_PROPS = ["wien-poller", "wien-bauzaun", "wien-rubble", "wien-crane-beam", "wien-sign", ...WIEN_TRAM_PROPS];
 
 /** Alpha-Rand der zugeschnittenen Prop-Zellen (tools/fredrun2/pack_props.py) */
@@ -390,7 +390,7 @@ function paintTramBody(w: number, h: number, id: number): HTMLCanvasElement {
 }
 
 /** logische px je Zellpixel der Straßenbahn-Sprites: Dachkante bis Radunterkante = TRAM_H (156) */
-const TRAM_SPRITE_SCALE = 0.806;
+const TRAM_SPRITE_SCALE = 0.6545;
 
 /** Vorgerenderter Wagen aus einem Straßenbahn-Sprite (Front links), auf die Hitbox-Breite gestreckt. */
 export interface TramSprite {
@@ -468,7 +468,7 @@ export class TramBodies {
 }
 
 /** Scheinwerfer der Bim-Sprites (Front links): Abstand von der Vorderkante und Höhe über der Schiene, logische px */
-const TRAM_LAMP = { front: 13, up: 55 };
+const TRAM_LAMP = { front: 5, up: 65 };
 
 function drawTramSprite(g: CanvasRenderingContext2D, e: Ent, sx: number, v: ViewState, c: SkinCtx, spr: TramSprite): void {
   const x = Math.round(sx);
@@ -480,11 +480,13 @@ function drawTramSprite(g: CanvasRenderingContext2D, e: Ent, sx: number, v: View
   shadow(g, x + e.w / 2, gy, e.w * 0.52, 0.45);
   // Scheinwerferkegel + Reflex auf nasser Straße
   g.globalCompositeOperation = "lighter";
-  g.drawImage(fx.beam, lx - 372, ly - 8);
+  // (Kegel kürzer als der alte: bei Doppelzügen soll er nicht quer über den vorderen Wagen streichen)
+  g.drawImage(fx.beam, lx - 262, ly - 8, 262, 86);
   g.drawImage(fx.refl, lx - 228, gy - 6);
   g.globalCompositeOperation = "source-over";
   const dx = Math.round(x + e.w / 2 - spr.w / 2);
-  const dy = Math.round(gy - spr.foot);
+  // Räder 1–2 px in die Fahrbahn (die Radunterkante liegt im Sprite knapp über der Bildkante)
+  const dy = Math.round(gy - spr.foot + 2);
   g.drawImage(spr.c, dx, dy, spr.w, spr.h);
   // Scheinwerfer + Blitz (nur bei Einschlag hellt der Wagen kurz auf)
   g.globalCompositeOperation = "lighter";

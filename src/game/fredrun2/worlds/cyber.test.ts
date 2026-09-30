@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { FIXED_DT, PLAYER_H } from "../constants";
 import { createPatternCtx } from "../patterns";
@@ -25,6 +27,13 @@ function build(id: string, diff: number, seed: number): { specs: EntSpec[]; len:
 }
 
 describe("Welt Cyber-Wien 2099", () => {
+  it("Schwebe-Plattform-Prop ist vorgeladen und im Manifest vorhanden", () => {
+    const manifest = JSON.parse(readFileSync(path.resolve(__dirname, "../../../../public/fredrun2/props/manifest.json"), "utf8")) as { props: Record<string, { cw: number; ch: number }> };
+    expect(WORLD_CYBER.propIds).toContain("cyber-hover");
+    // Skin skaliert auf Plattformbreite und verankert die begehbare Fläche in Zellzeile 17 (512×119)
+    expect(manifest.props["cyber-hover"]).toMatchObject({ cw: 512, ch: 119 });
+  });
+
   it("Metadaten vollständig", () => {
     expect(WORLD_CYBER.id).toBe("cyber");
     expect(WORLD_CYBER.gravityFlip).toBe(true);

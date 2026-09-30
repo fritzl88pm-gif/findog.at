@@ -1,7 +1,8 @@
 /**
  * Finanzamt – Entitäts-Skins. Statische Hindernisse werden je Größe EINMAL mit Rim-Light-Kontur vorgerendert
  * (SpriteCache) und pro Frame nur geblittet; bewegte Teile (Stempelkolben, Laserstrahlen, Förderband, Pendelleuchte)
- * werden prozedural gezeichnet. Props (Bürostuhl, Fledermaus, Schredder …) mit prozeduralem Fallback.
+ * werden prozedural gezeichnet. Props (Bürostuhl, Fledermaus, Schredder, Ordner, Kartons, Kopierer, Hängeregistratur,
+ * Lüftungskanal, Bankierslampe …) mit prozeduralem Fallback.
  */
 import type { Ent, PropLibrary, ViewState } from "../../types";
 import { glowAt, glowSprite, paint, rr, softSprite, spriteStrip, type Ctx2D } from "../shared-b/canvas";
@@ -130,6 +131,8 @@ export interface FaAssets {
   softCyan: HTMLCanvasElement;
   softGold: HTMLCanvasElement;
   cache: SpriteCache;
+  /** Cache für gebackene Hindernis-Props (größere Sprites, daher kleineres Limit) */
+  pcache: SpriteCache;
 }
 
 export interface SkinCtx {
@@ -239,6 +242,7 @@ export function makeAssets(): FaAssets {
     softCyan: softSprite("rgba(90,200,255,1)"),
     softGold: softSprite("rgba(255,210,90,1)"),
     cache: new SpriteCache(),
+    pcache: new SpriteCache(40),
   };
 }
 
@@ -1093,9 +1097,254 @@ function paintBatFallback(g: Ctx2D, w: number, h: number, up: boolean): void {
 }
 
 // =================================================================================================
+// Hindernis-Props (fal.ai-Sprites, dicke Konturen)
+//
+// Jedes Sprite wird je Zielgröße EINMAL gebacken (zweistufig verkleinert → kein Kantenflimmern, dazu der Rim-Light-Rand
+// der übrigen Skins) und pro Frame nur noch geblittet. Hängende Hindernisse (Hängeregistratur, Lüftungskanal) bekommen
+// ihre Ketten/Stangen bis zur Decke verlängert: ein Stück der Kette/Stange aus dem Sprite wird periodisch nach oben
+// gekachelt und ebenfalls vorgebacken. Fehlt ein Prop (Manifest/Bild nicht ladbar), zeichnet der prozedurale Painter.
+
+const P_BINDERS = "finanzamt-binders";
+const P_BOXES = "finanzamt-boxes";
+const P_COPIER = "finanzamt-copier";
+const P_FILES = "finanzamt-hanging-files";
+const P_DUCT = "finanzamt-duct";
+const P_LAMP = "finanzamt-lamp";
+export const FA_OBSTACLE_PROPS = [P_BINDERS, P_BOXES, P_COPIER, P_FILES, P_DUCT, P_LAMP];
+
+/** Manifest-Zellen sind auf die Alpha-BBox zugeschnitten und haben ringsum 5 px Rand. */
+const CELL_PAD = 5;
+/** Platz für den Rim-Light-Rand um gebackene Props (logische px) */
+const RP = 4;
+
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Ganze Zelle in doppelter Zielauflösung (Zwischenstufe fürs saubere Verkleinern). sx/sy = Gerätepixel je Zellpixel. */
+function bigCell(props: PropLibrary, id: string, cell: { w: number; h: number }, sx: number, sy: number): { c: HTMLCanvasElement; fx: number; fy: number } {
+  const bw = Math.max(2, Math.round(cell.w * sx));
+  const bh = Math.max(2, Math.round(cell.h * sy));
+  const c = paint(bw, bh, (bg) => {
+    bg.imageSmoothingQuality = "high";
+    bg.scale(bw / cell.w, bh / cell.h);
+    props.draw(bg, id, 0, 0, { ax: 0, ay: 0 });
+  });
+  return { c, fx: bw / cell.w, fy: bh / cell.h };
+}
+
+/** Zellausschnitt `src` in das logische Rechteck (dx, dy, dw, dh) zeichnen (optional gespiegelt). */
+function blitRect(g: Ctx2D, big: { c: HTMLCanvasElement; fx: number; fy: number }, src: Rect, dx: number, dy: number, dw: number, dh: number, flipX = false): void {
+  g.save();
+  g.imageSmoothingQuality = "high";
+  if (flipX) {
+    g.translate(dx + dw / 2, 0);
+    g.scale(-1, 1);
+    g.translate(-(dx + dw / 2), 0);
+  }
+  g.drawImage(big.c, src.x * big.fx, src.y * big.fy, src.w * big.fx, src.h * big.fy, dx, dy, dw, dh);
+  g.restore();
+}
+
+/** Bodenhindernisse: Skin → Prop */
+const BLOCK_PROP: Record<string, string> = { binders: P_BINDERS, boxes: P_BOXES, copier: P_COPIER };
+/** Archivkartons: Ausschnitte des 6er-Stapels (Zellpixel). Kürzere Stapel = untere 2 bzw. 3 Kartons. */
+const BOX_CROPS: Rect[] = [
+  { x: 25, y: 352, w: 213, h: 155 },
+  { x: 25, y: 284, w: 213, h: 223 },
+];
+
+/**
+ * Bodenhindernis als Prop zeichnen. Die sichtbare Silhouette deckt die Trefferfläche (`e.hb`) mit ~4 px Rand;
+ * die Höhe stimmt exakt, die Breite darf leicht gestreckt werden (`tol`). Unterkante 2 px im Boden.
+ */
+function propBlock(g: Ctx2D, K: SkinCtx, e: Ent, sx: number, sy: number): boolean {
+  const props = K.A.props;
+  const id = BLOCK_PROP[e.skin];
+  if (!props || !id || !props.has(id)) return false;
+  const cell = props.cell(id);
+  if (!cell) return false;
+  const C = K.A.pcache;
+  const k = C.k;
+  const [hx, hy, hw] = e.hb;
+  const targetW = hw + 8;
+  const top = hy - 3;
+  const H = Math.round(e.h + 2 - top);
+  let src: Rect = { x: CELL_PAD, y: CELL_PAD, w: cell.w - CELL_PAD * 2, h: cell.h - CELL_PAD * 2 };
+  let variant = 0;
+  if (id === P_BOXES) {
+    // Ausschnitt mit dem Seitenverhältnis, das der Zielfläche am nächsten kommt
+    let best = Infinity;
+    BOX_CROPS.forEach((c, i) => {
+      const d = Math.abs(Math.log(c.w / c.h / (targetW / H)));
+      if (d < best) {
+        best = d;
+        variant = i;
+        src = c;
+      }
+    });
+  }
+  const tol = id === P_BINDERS ? 0.14 : 0.16;
+  const scY = H / src.h;
+  const scX = Math.min(scY * (1 + tol), Math.max(scY / (1 + tol), targetW / src.w));
+  const dw = Math.round(src.w * scX);
+  const flip = id !== P_COPIER && (e.id & 1) === 1;
+  const spr = C.get(`pb|${id}|${dw}|${H}|${variant}|${flip ? 1 : 0}`, dw + RP * 2, H + RP * 2, (cg) => {
+    const big = bigCell(props, id, cell, scX * k * 2, scY * k * 2);
+    blitRect(cg, big, src, RP, RP, dw, H, flip);
+    if (id === P_BOXES) {
+      // Schnittkante des abgeschnittenen Stapels als dunkle Kontur schließen
+      cg.globalCompositeOperation = "source-atop";
+      cg.fillStyle = "#0c0e14";
+      cg.fillRect(RP, RP, dw, 1.8);
+      cg.globalCompositeOperation = "source-over";
+    }
+  });
+  const x0 = sx + hx + hw / 2 - dw / 2 - RP;
+  const y0 = sy + top - RP;
+  C.draw(g, spr, x0, y0);
+  if (id === P_COPIER && !K.reduced && K.quality > 0) {
+    // Scanlicht pulsiert im Glas (das Sprite trägt den grünen Grundschein selbst)
+    const u = 0.5 + 0.5 * Math.sin(K.time * 5 + e.id * 1.7);
+    const pa = g.globalAlpha;
+    const op = g.globalCompositeOperation;
+    g.globalCompositeOperation = "lighter";
+    g.globalAlpha = pa * (0.18 + 0.32 * u);
+    glowAt(g, K.A.glowGreen, x0 + RP + dw * 0.56, y0 + RP + H * 0.33, dw * 0.3, dw * 0.15);
+    g.globalAlpha = pa;
+    g.globalCompositeOperation = op;
+  }
+  return true;
+}
+
+/** Aufhängung (Kette/Stange), die aus dem Bild nach oben herausläuft */
+interface Hanger {
+  /** Ausschnitt eines Stücks direkt unter der Körper-Oberkante (Zellpixel); Höhe = Periode */
+  src: Rect;
+  /** Versatz des Musters je Periode nach oben (Zellpixel; Ketten hängen leicht schräg) */
+  dx: number;
+}
+
+interface HangSpec {
+  id: string;
+  /** Körper-Ausschnitt (Zellpixel); Zeile body.y liegt an der Oberkante, wo die Aufhängungen aus dem Bild laufen */
+  body: Rect;
+  /** Zellspalten, die die Trefferbreite decken sollen */
+  span: [number, number];
+  /** Zellzeile, die auf die Unterkante der Trefferfläche fällt */
+  baseRow: number;
+  hangers: Hanger[];
+  /** Körper blendet ab Zeile [0] bis [1] nach unten aus (herumfliegender Staub) */
+  fade?: [number, number];
+}
+
+const HANG_FILES: HangSpec = {
+  id: P_FILES,
+  body: { x: CELL_PAD, y: 12, w: 630, h: 543 },
+  span: [6, 630],
+  baseRow: 545,
+  hangers: [
+    { src: { x: 66, y: 12, w: 76, h: 64 }, dx: 18 },
+    { src: { x: 512, y: 12, w: 70, h: 73 }, dx: -4 },
+  ],
+};
+
+const HANG_DUCT: HangSpec = {
+  id: P_DUCT,
+  body: { x: CELL_PAD, y: 12, w: 630, h: 549 },
+  span: [5, 552],
+  baseRow: 420,
+  hangers: [
+    { src: { x: 106, y: 12, w: 36, h: 21 }, dx: 0 },
+    { src: { x: 484, y: 12, w: 34, h: 21 }, dx: 0 },
+  ],
+  fade: [462, 540],
+};
+
+/** Hängendes Hindernis (Hitbox reicht bis zur Decke): Korpus an der Unterkante, Ketten/Stangen bis nach oben verlängert. */
+function propHang(g: Ctx2D, K: SkinCtx, e: Ent, sx: number, sy: number, S: HangSpec): boolean {
+  const props = K.A.props;
+  if (!props || !props.has(S.id)) return false;
+  const cell = props.cell(S.id);
+  if (!cell) return false;
+  const C = K.A.pcache;
+  const k = C.k;
+  const [hx, hy, hw, hh] = e.hb;
+  const wq = Math.ceil((hw + 6) / 8) * 8; // Breite quantisiert → wenige Cache-Einträge
+  const ks = wq / (S.span[1] - S.span[0]);
+  const b = S.body;
+  const bw = Math.round(b.w * ks);
+  const bh = Math.round(b.h * ks);
+  const body = C.get(`hb|${S.id}|${wq}`, bw + RP * 2, bh + RP, (cg) => {
+    const big = bigCell(props, S.id, cell, ks * k * 2, ks * k * 2);
+    blitRect(cg, big, b, RP, 0, bw, bh);
+    if (S.fade) {
+      cg.globalCompositeOperation = "destination-in";
+      const grd = cg.createLinearGradient(0, (S.fade[0] - b.y) * ks, 0, (S.fade[1] - b.y) * ks);
+      grd.addColorStop(0, "#000");
+      grd.addColorStop(1, "rgba(0,0,0,0)");
+      cg.fillStyle = grd;
+      cg.fillRect(0, 0, bw + RP * 2, bh + RP);
+      cg.globalCompositeOperation = "source-over";
+    }
+  });
+  // Lage des Körpers: mittig zur Trefferfläche, Zeile baseRow auf der Unterkante der Trefferfläche
+  const X0 = Math.round((sx + hx + hw / 2 - ((S.span[0] + S.span[1]) / 2 - b.x) * ks - RP) * k) / k;
+  const Y0 = Math.round((sy + hy + hh - (S.baseRow - b.y) * ks) * k) / k;
+  // Ketten/Stangen bis über die Bildoberkante hinaus
+  const need = Math.ceil(hy + hh - (S.baseRow - b.y) * ks) + 12;
+  S.hangers.forEach((r, i) => {
+    const period = r.src.h * ks;
+    const n = Math.ceil(need / period) + 1;
+    const xs = [r.src.x + r.dx, r.src.x + r.dx * n];
+    const minX = Math.min(xs[0], xs[1]);
+    const maxX = Math.max(xs[0], xs[1]) + r.src.w;
+    const Hs = Math.ceil(n * period * k) / k;
+    const Ws = (maxX - minX) * ks + RP * 2;
+    const strip = C.get(`hr|${S.id}|${wq}|${i}|${need}`, Ws, Hs, (cg) => {
+      const big = bigCell(props, S.id, cell, ks * k * 2, ks * k * 2);
+      for (let j = 1; j <= n; j += 1) {
+        // etwas überlappen (eine Zeile), damit zwischen den Kacheln keine Naht durchscheint
+        blitRect(cg, big, { ...r.src, h: r.src.h + 1 }, RP + (r.src.x + r.dx * j - minX) * ks, Hs - j * period, r.src.w * ks, (r.src.h + 1) * ks);
+      }
+    });
+    C.draw(g, strip, X0 + Math.round((minX - b.x) * ks * k) / k, Y0 - C.lh(strip));
+  });
+  C.draw(g, body, X0, Y0);
+  return true;
+}
+
+/** Bankierslampe (Pendel): Sprite ohne Kabel-Stück; Aufhängepunkt = Lampenkappe, Mittelpunkt = Trefferzentrum. */
+const LAMP_SRC: Rect = { x: CELL_PAD, y: 132, w: 367, h: 375 };
+const LAMP_S = 0.2;
+/** Kappe (Kabelansatz) und Lichtöffnung im Zellraster */
+const LAMP_CAP = { x: 182, y: 132 };
+const LAMP_LIGHT = { x: 265, y: 300 };
+
+/** Backt die Lampe (Rim-Light); Rückgabe null ohne Prop. */
+function lampSprite(K: SkinCtx): { spr: HTMLCanvasElement; w: number; h: number } | null {
+  const props = K.A.props;
+  if (!props || !props.has(P_LAMP)) return null;
+  const cell = props.cell(P_LAMP);
+  if (!cell) return null;
+  const C = K.A.pcache;
+  const k = C.k;
+  const w = Math.round(LAMP_SRC.w * LAMP_S);
+  const h = Math.round(LAMP_SRC.h * LAMP_S);
+  const spr = C.get(`lamp|${w}`, w + RP * 2, h + RP * 2, (cg) => {
+    blitRect(cg, bigCell(props, P_LAMP, cell, LAMP_S * k * 2, LAMP_S * k * 2), LAMP_SRC, RP, RP, w, h);
+  });
+  return { spr, w, h };
+}
+
+// =================================================================================================
 // Öffentliche Zeichenfunktionen
 
 export function drawBlock(g: Ctx2D, K: SkinCtx, e: Ent, sx: number, sy: number): void {
+  if (propBlock(g, K, e, sx, sy)) return;
   const C = K.A.cache;
   const w = Math.round(e.w);
   const h = Math.round(e.h);
@@ -1154,6 +1403,7 @@ export function drawBlock(g: Ctx2D, K: SkinCtx, e: Ent, sx: number, sy: number):
 }
 
 export function drawOverhead(g: Ctx2D, K: SkinCtx, e: Ent, sx: number, sy: number): void {
+  if (propHang(g, K, e, sx, sy, e.skin === "duct" ? HANG_DUCT : HANG_FILES)) return;
   const w = Math.round(e.w);
   const bottom = sy + e.h;
   const C = K.A.cache;
@@ -1393,6 +1643,11 @@ export function drawLampSwing(g: Ctx2D, K: SkinCtx, e: Ent, sx: number, sy: numb
   const cx = sx + e.w / 2;
   const cy = sy + e.h / 2;
   const ang = e.fx.angle ?? 0;
+  const lamp = lampSprite(K);
+  // Kabelansatz: mit Prop die Lampenkappe (auf der Pendellinie, Abstand = halbe Lampenhöhe), sonst wie bisher
+  const a = lamp ? lamp.h / 2 : 14;
+  const capX = lamp ? cx - Math.sin(ang) * a : cx;
+  const capY = lamp ? cy - Math.cos(ang) * a : cy - a;
   // Deckenhalter
   g.fillStyle = "#1b2130";
   g.fillRect(ax - 14, Math.max(0, ay - 10), 28, 12);
@@ -1401,7 +1656,7 @@ export function drawLampSwing(g: Ctx2D, K: SkinCtx, e: Ent, sx: number, sy: numb
   g.lineWidth = 3;
   g.beginPath();
   g.moveTo(ax, ay);
-  g.lineTo(cx, cy - 14);
+  g.lineTo(capX, capY);
   g.stroke();
   g.strokeStyle = "rgba(170,190,220,0.35)";
   g.lineWidth = 1;
@@ -1413,19 +1668,51 @@ export function drawLampSwing(g: Ctx2D, K: SkinCtx, e: Ent, sx: number, sy: numb
   g.translate(cx, cy);
   g.rotate(-ang);
   g.globalCompositeOperation = "lighter";
-  const cone = g.createLinearGradient(0, 10, 0, 200);
-  cone.addColorStop(0, "rgba(255,200,120,0.32)");
-  cone.addColorStop(1, "rgba(255,200,120,0)");
-  g.fillStyle = cone;
-  g.beginPath();
-  g.moveTo(-26, 10);
-  g.lineTo(26, 10);
-  g.lineTo(90, 200);
-  g.lineTo(-90, 200);
-  g.closePath();
-  g.fill();
+  if (lamp) {
+    // Lichtöffnung des Schirms (Lampe hängt schräg: Kegel weist nach rechts unten)
+    const ox = (LAMP_LIGHT.x - LAMP_CAP.x) * LAMP_S;
+    const oy = (LAMP_LIGHT.y - LAMP_CAP.y) * LAMP_S - a;
+    g.translate(ox, oy);
+    g.rotate(-0.4);
+    const cone = g.createLinearGradient(0, 4, 0, 190);
+    cone.addColorStop(0, "rgba(255,200,120,0.3)");
+    cone.addColorStop(1, "rgba(255,200,120,0)");
+    g.fillStyle = cone;
+    g.beginPath();
+    g.moveTo(-20, 4);
+    g.lineTo(20, 4);
+    g.lineTo(84, 190);
+    g.lineTo(-84, 190);
+    g.closePath();
+    g.fill();
+    g.rotate(0.4);
+    g.translate(-ox, -oy);
+  } else {
+    const cone = g.createLinearGradient(0, 10, 0, 200);
+    cone.addColorStop(0, "rgba(255,200,120,0.32)");
+    cone.addColorStop(1, "rgba(255,200,120,0)");
+    g.fillStyle = cone;
+    g.beginPath();
+    g.moveTo(-26, 10);
+    g.lineTo(26, 10);
+    g.lineTo(90, 200);
+    g.lineTo(-90, 200);
+    g.closePath();
+    g.fill();
+  }
   g.globalCompositeOperation = op;
   g.globalAlpha = pa;
+  if (lamp) {
+    const C = K.A.pcache;
+    g.drawImage(lamp.spr, -(RP + (LAMP_CAP.x - CELL_PAD) * LAMP_S), -(RP + a), C.lw(lamp.spr), C.lh(lamp.spr));
+    g.globalCompositeOperation = "lighter";
+    g.globalAlpha = pa * 0.75;
+    glowAt(g, K.A.glowWarm, (LAMP_LIGHT.x - LAMP_CAP.x) * LAMP_S, (LAMP_LIGHT.y - LAMP_CAP.y) * LAMP_S - a, 15);
+    g.globalAlpha = pa;
+    g.globalCompositeOperation = op;
+    g.restore();
+    return;
+  }
   // Emaille-Schirm
   const spr = K.A.cache.get("lampshade", 84 + PAD * 2, 50 + PAD * 2, (cg) => {
     const x = PAD;

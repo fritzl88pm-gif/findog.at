@@ -2,7 +2,7 @@
 import type { Ent, PropLibrary, ViewState } from "../../types";
 import { colorWithAlpha, glowAt, glowSprite, paint, rr, softSprite, spriteStrip, drawStripFrame, type Ctx2D } from "../shared-b/canvas";
 import { heartPath } from "./backdrop";
-import { PropBank, fitBox, type Baked, type PropCrop } from "./propfit";
+import { PropBank, fitBox, quant, type Baked, type PropCrop } from "./propfit";
 
 const TAU = Math.PI * 2;
 
@@ -166,7 +166,7 @@ function blockSprite(g: Ctx2D, A: PraterSkinAssets, id: string, e: Ent, sx: numb
   const asp = A.bank.aspect(id);
   if (asp === null) return false;
   const f = fitBox(asp, e.w, e.h, lim[0], lim[1]);
-  const b = A.bank.get(id, f.w, f.h);
+  const b = A.bank.get(id, quant(f.w), quant(f.h));
   if (!b) return false;
   blit(g, A, b, sx + e.w / 2, sy + e.h + 2);
   return true;
@@ -206,7 +206,7 @@ function hanger(g: Ctx2D, x0: number, y0: number, slope: number, width: number, 
   g.lineWidth = width + 2.6;
   g.stroke();
   g.setLineDash([p * 0.66, p * 0.34]);
-  g.strokeStyle = "#7c7f98";
+  g.strokeStyle = "#62647c";
   g.lineWidth = width;
   g.stroke();
   g.setLineDash([p * 0.34, p * 0.66]);
@@ -216,18 +216,43 @@ function hanger(g: Ctx2D, x0: number, y0: number, slope: number, width: number, 
   g.stroke();
   g.setLineDash([p * 0.26, p * 0.74]);
   g.lineDashOffset = -p * 0.67;
-  g.strokeStyle = "#a9adc6";
+  g.strokeStyle = "#9b9fb8";
   g.lineWidth = width * 0.5;
   g.stroke();
   g.setLineDash([]);
   g.lineDashOffset = 0;
 }
 
+/** Sitz des Kettenkarussells: unterer Ausschnitt von prater-swing-chair (Sitzschale + Schäkel), die Ketten zeichnen wir selbst */
+const SEAT_CROP: PropCrop = [0, 0.388, 1, 1];
+/** Breite des Sitzes (logische px) – Hitbox-Kreis r = 34 (Ø 68), Silhouette knapp darüber */
+const SEAT_W = 98;
+/** Höhenanteil des Ausschnitts, der auf dem Pendel-Mittelpunkt liegt (Schwerpunkt der Sitzschale) */
+const SEAT_CY = 0.6;
+/** Ketten-Ansatz als Anteil der Sprite-Breite (nach Spiegelung) und ob golden (sonst Stahl) */
+const SEAT_CHAINS: ReadonlyArray<readonly [number, boolean]> = [
+  [0.054, false],
+  [0.157, true],
+  [0.806, false],
+  [0.912, true],
+];
+
+function seatSprite(A: PraterSkinAssets, r: number): { b: Baked; w: number; h: number } | null {
+  const asp = A.bank.aspect(OBSTACLE_PROPS.seat, SEAT_CROP);
+  if (asp === null) return null;
+  const w = SEAT_W * (r / 34);
+  const h = w * asp;
+  const b = A.bank.get(OBSTACLE_PROPS.seat, w, h, SEAT_CROP);
+  return b ? { b, w: b.w, h: b.h } : null;
+}
+
 /** Hängender Überhang: Sprite bündig auf der Hitbox-Unterkante, Breite = Hitbox-Breite */
 function overheadSprite(A: PraterSkinAssets, id: string, e: Ent): Baked | null {
   const asp = A.bank.aspect(id);
   if (asp === null) return null;
-  return A.bank.get(id, e.w, e.w * asp);
+  // Breite auf 8 px gerundet (aufwärts): wenige Größen im Cache, das Bild ist nie schmaler als die Hitbox
+  const w = quant(e.w, 8);
+  return A.bank.get(id, w, w * asp);
 }
 
 /** Kettenkarussell-Sitz inkl. Ketten und Baldachin am Ankerpunkt */
@@ -721,7 +746,7 @@ function candyCrateSprite(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, sy:
   const n = Math.max(2, Math.round(1 + (r - 1) / ov));
   const each = e.h / (1 + ov * (n - 1));
   const f = fitBox(asp, e.w, each, 0.8, 1.25);
-  const b = A.bank.get(id, f.w, f.h);
+  const b = A.bank.get(id, quant(f.w), quant(f.h));
   if (!b) return false;
   const cx = sx + e.w / 2;
   const foot = sy + e.h + 2;
@@ -895,7 +920,7 @@ export function drawValance(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, s
   if (b) {
     // Bild bündig auf der Hitbox-Unterkante; die Seile laufen vom Bildrand zum Sprite (Neigung wie im Bild)
     const x = A.bank.snap(sx + (w - b.w) / 2);
-    const y = A.bank.snap(bottom + 1 - b.h);
+    const y = A.bank.snap(bottom - 3 - b.h);
     const kx = b.w / 630;
     for (const [u, dir] of [
       [0.148, 1],
@@ -987,13 +1012,13 @@ export function drawGhostGate(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number,
   if (b) {
     // Tor hängt an zwei Ketten von oben; der Bogen unten deckt die Hitbox
     const x = A.bank.snap(sx + (w - b.w) / 2);
-    const y = A.bank.snap(bottom + 1 - b.h);
+    const y = A.bank.snap(bottom - 3 - b.h);
     const kx = b.w / 622;
     for (const [u, dir] of [
       [0.231, 1],
       [0.766, -1],
     ] as const) {
-      hanger(g, x + u * b.w, y + 2, 0.15 * dir, Math.max(3, 24 * kx), "chain");
+      hanger(g, x + u * b.w, y + 2, 0.15 * dir, Math.max(3, 18 * kx), "chain");
     }
     g.drawImage(b.c, x, y, b.w, b.h);
     // Totenkopf-Augen glimmen (nachts stärker), Schein unter dem Bogen

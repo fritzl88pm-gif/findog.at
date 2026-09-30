@@ -363,10 +363,10 @@ function giftBox(g: Ctx2D, x: number, y: number, w: number, h: number, base: str
 
 function presents(g: Ctx2D): void {
   giftBox(g, 15, 388, 212, 124, "#d6303e", "#8f1424", "#ff6a70", "#fff6ea", "#d9c9b0", "dots", -0.012);
-  bow(g, 121, 396, 15, "#fff6ea", "#cdbba0");
+  bow(g, 121, 410, 13, "#fff6ea", "#cdbba0");
   giftBox(g, 30, 284, 184, 106, "#1f9a4d", "#0d5c2c", "#4fd47c", "#ffd24a", "#c48a10", "stripes", 0.02);
   giftBox(g, 44, 194, 158, 92, "#2f6fe0", "#173f95", "#6aa2ff", "#e23a48", "#8f1424", "flakes", -0.024);
-  bow(g, 129, 202, 14, "#e23a48", "#8f1424");
+  bow(g, 129, 211, 12, "#e23a48", "#8f1424");
   giftBox(g, 56, 118, 134, 78, "#8a3fc2", "#4b1a7c", "#c28aee", "#ffd24a", "#c48a10", "dots", 0.018);
   giftBox(g, 70, 56, 108, 64, "#e23a48", "#8f1424", "#ff8a8e", "#2fa14f", "#146a30", "stripes", -0.016);
   snowCap(g, 62, 186, 54, 11, 12, 5);
@@ -499,7 +499,7 @@ function candycane(g: Ctx2D, w: number, h: number): void {
   const xs = [104, 256, 408];
   const path = (cx: number): void => {
     g.beginPath();
-    g.moveTo(cx, 372);
+    g.moveTo(cx, 350);
     g.lineTo(cx, 112);
     g.arc(cx + 44, 112, 44, Math.PI, 0, false);
     g.lineTo(cx + 88, 146);
@@ -523,13 +523,13 @@ function candycane(g: Ctx2D, w: number, h: number): void {
   const t = makeCanvas(w, h);
   const tg = t.getContext("2d");
   if (tg) {
-    tg.lineCap = "butt";
+    tg.lineCap = "round";
     tg.lineJoin = "round";
     tg.strokeStyle = "#fffaf4";
     tg.lineWidth = 46;
     for (const x of xs) {
       tg.beginPath();
-      tg.moveTo(x, 372);
+      tg.moveTo(x, 350);
       tg.lineTo(x, 112);
       tg.arc(x + 44, 112, 44, Math.PI, 0, false);
       tg.lineTo(x + 88, 146);
@@ -544,9 +544,9 @@ function candycane(g: Ctx2D, w: number, h: number): void {
     tg.restore();
     // Schattierung rechts, Glanz links
     tg.fillStyle = "rgba(60,0,30,0.22)";
-    for (const x of xs) tg.fillRect(x + 8, 100, 16, 280);
+    for (const x of xs) tg.fillRect(x + 8, 100, 16, 260);
     tg.fillStyle = "rgba(255,255,255,0.32)";
-    for (const x of xs) tg.fillRect(x - 17, 112, 8, 260);
+    for (const x of xs) tg.fillRect(x - 17, 112, 8, 240);
     g.drawImage(t, 0, 0);
   }
   for (const x of xs) {
@@ -560,7 +560,7 @@ function candycane(g: Ctx2D, w: number, h: number): void {
     for (const [bx, by] of [[x - 6, 252], [x + 5, 254]]) sphere(g, bx, by, 6, ["#ff8a8a", "#d81e2e", "#7a0a14"], 2);
   }
   // Schnee am Fuß
-  snowCap(g, 20, w - 20, 358, 10, 8, 9);
+  snowCap(g, 20, w - 20, 346, 12, 10, 9);
 }
 
 // --- Eisblock -------------------------------------------------------------------------------------------------
@@ -670,7 +670,7 @@ function stallGoods(g: Ctx2D): void {
     rr(g, 76, y, 360, 12, 3);
     sticker(g, lin(g, 0, y, 0, y + 12, ["#c48a50", "#7a4a22"]), 3);
   }
-  const cols = ["#e23a48", "#ffd24a", "#3fb56a", "#4a86f0", "#ff8ac0"];
+  const cols = BULBS;
   // obere Reihe: Kugeln, Lebkuchenherzen, Sterne
   for (let i = 0; i < 8; i += 1) {
     const x = 100 + i * 45;
@@ -878,7 +878,7 @@ function stall(g: Ctx2D, w: number, h: number): void {
       const u = i / 5;
       const bx = x0 + u * 116;
       const by = 150 + 2 * u * (1 - u) * 46 * 1.0 + 7;
-      sphere(g, bx, by, 6.5, ["#ffffff", cols[(i + s) % 5], "#3a1a30"], 1.8);
+      sphere(g, bx, by, 6.5, ["#ffffff", BULBS[(i + s) % 5], "#3a1a30"], 1.8);
     }
   }
   for (const x of [22, 256, 490]) bow(g, x, 150, 16, "#e23a48", "#8f1424");
@@ -886,8 +886,10 @@ function stall(g: Ctx2D, w: number, h: number): void {
   void h;
 }
 
+const BULBS = ["#e23a48", "#ffd24a", "#3fb56a", "#4a86f0", "#ff8ac0"];
+
 function cols5(i: number): string {
-  return ["#e23a48", "#ffd24a", "#3fb56a", "#4a86f0", "#ff8ac0"][i % 5];
+  return BULBS[i % 5];
 }
 
 // --- Glühweinkessel -------------------------------------------------------------------------------------------
@@ -1226,37 +1228,48 @@ function krampus(g: Ctx2D): void {
   // Nasenlöcher
   ell(g, 481, 196, 4, 6, 0.4);
   fill(g, "#0c0608");
-  // Vorderer Arm + Rute
-  limb(g, [[316, 212], [378, 258], [442, 262]], 46, fur(), 7, "#0c0608");
-  ell(g, 452, 262, 22, 20);
-  sticker(g, fur(), 5, "#0c0608");
+  // Hinterer Arm hebt die Rute über die Schulter
+  limb(g, [[262, 206], [206, 166], [176, 118]], 44, fur(), 7, "#0c0608");
   for (let i = 0; i < 9; i += 1) {
-    const a = -1.4 + i * 0.09;
-    const x1 = 452 + Math.cos(a) * 200 * (0.72 + 0.28 * ((i * 7) % 5) / 4);
-    const y1 = 262 + Math.sin(a) * 220 * (0.72 + 0.28 * ((i * 7) % 5) / 4);
+    const a = -2.1 - i * 0.075;
+    const len = 92 + ((i * 7) % 5) * 9;
+    const x1 = 172 + Math.cos(a) * len;
+    const y1 = 116 + Math.sin(a) * len;
     g.beginPath();
-    g.moveTo(452, 250);
-    g.quadraticCurveTo(452 + (x1 - 452) * 0.4 + 8, 250 + (y1 - 250) * 0.4, x1, y1);
+    g.moveTo(174, 124);
+    g.quadraticCurveTo(174 + (x1 - 174) * 0.5 - 6, 124 + (y1 - 124) * 0.5, x1, y1);
     stroke(g, INK, 8);
     g.beginPath();
-    g.moveTo(452, 250);
-    g.quadraticCurveTo(452 + (x1 - 452) * 0.4 + 8, 250 + (y1 - 250) * 0.4, x1, y1);
+    g.moveTo(174, 124);
+    g.quadraticCurveTo(174 + (x1 - 174) * 0.5 - 6, 124 + (y1 - 124) * 0.5, x1, y1);
     stroke(g, i % 2 ? "#c8a060" : "#a0703a", 4.6);
     g.beginPath();
     g.moveTo(x1, y1);
-    g.lineTo(x1 - 12, y1 + 26);
+    g.lineTo(x1 - 14, y1 - 6);
     g.moveTo(x1, y1);
-    g.lineTo(x1 + 12, y1 + 22);
+    g.lineTo(x1 + 4, y1 - 16);
     stroke(g, i % 2 ? "#c8a060" : "#a0703a", 2.6);
   }
+  ell(g, 176, 122, 20, 18);
+  sticker(g, fur(), 5, "#0c0608");
   g.beginPath();
-  g.moveTo(438, 240);
-  g.lineTo(470, 236);
+  g.moveTo(160, 100);
+  g.lineTo(194, 108);
   stroke(g, INK, 14, "butt");
   g.beginPath();
-  g.moveTo(438, 240);
-  g.lineTo(470, 236);
+  g.moveTo(160, 100);
+  g.lineTo(194, 108);
   stroke(g, "#d81e2e", 8, "butt");
+  // Vorderer Arm greift nach vorn-unten
+  limb(g, [[316, 214], [358, 282], [398, 322]], 46, fur(), 7, "#0c0608");
+  ell(g, 404, 330, 22, 20);
+  sticker(g, fur(), 5, "#0c0608");
+  for (const d of [-1, 0, 1]) {
+    g.beginPath();
+    g.moveTo(404 + d * 9, 340);
+    g.lineTo(404 + d * 12 + 6, 362);
+    stroke(g, "#f6ecd0", 5);
+  }
 }
 
 // --- Rodelschlitten (Blickrichtung links; Kufenschnecke vorn links) --------------------------------------------
@@ -1432,9 +1445,9 @@ function elf(g: Ctx2D): void {
   ell(g, 325, 144, 2.6, 2.6);
   fill(g, "#ffffff");
   g.beginPath();
-  g.moveTo(296, 124);
-  g.quadraticCurveTo(316, 112, 340, 124);
-  stroke(g, "#7a3a12", 5);
+  g.moveTo(300, 132);
+  g.quadraticCurveTo(320, 122, 342, 130);
+  stroke(g, "#7a3a12", 4.5);
   ell(g, 342, 168, 7, 6);
   fill(g, "#f0906a");
   g.beginPath();
@@ -1454,10 +1467,10 @@ function elf(g: Ctx2D): void {
   g.closePath();
   sticker(g, lin(g, 150, 0, 350, 0, ["#4ac878", "#1f9a4d", "#0d5c2c"]), 6);
   g.beginPath();
-  g.moveTo(236, 106);
-  g.quadraticCurveTo(300, 132, 350, 108);
-  g.lineTo(346, 128);
-  g.quadraticCurveTo(300, 150, 240, 126);
+  g.moveTo(236, 96);
+  g.quadraticCurveTo(300, 124, 352, 96);
+  g.lineTo(348, 112);
+  g.quadraticCurveTo(300, 138, 240, 110);
   g.closePath();
   sticker(g, "#fffaf0", 4);
   sphere(g, 152, 82, 16, ["#ffffff", "#f0f4ff", "#a8b8e0"], 4);

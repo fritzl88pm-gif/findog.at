@@ -5,6 +5,7 @@
 import { makeCanvas } from "../../draw-utils";
 import type { PropLibrary } from "../../types";
 import { glowSprite, paint, softSprite, type Ctx2D } from "../shared-b/canvas";
+import { WINTER_FALLBACK } from "./fallback";
 
 export const TAU = Math.PI * 2;
 
@@ -164,6 +165,10 @@ export interface Spr {
   ay: number;
   /** Anker als Anteil der Bildhöhe von oben (Fuß = 1, Mitte = 0.5, oben = 0) */
   an: number;
+  /** true = prozeduraler Ersatz (das gemalte Prop fehlt) */
+  fb?: boolean;
+  /** Lichtpunkte (Promille x, y, r) des Ersatzbildes */
+  lights?: number[];
 }
 
 export type Anchor = "foot" | "center" | "top";
@@ -171,26 +176,62 @@ export type Anchor = "foot" | "center" | "top";
 /**
  * Vorgerenderte Props: Bild + weicher Lichtsaum (damit Gefahren sich auch in dunklen/hellen Stufen klar abheben).
  * Schlüssel = Prop, Höhe, Halo-Farbe, Variante.
+ * Fehlt das gemalte Prop (Netzfehler, Blocker, veralteter Manifest-Cache), backt der Cache stattdessen den prozeduralen
+ * Ersatz aus `fallback.ts` – gleiche Maße, Blickrichtung und Ankerpunkte, sodass alle Animationen unverändert greifen.
  */
 export class SpriteCache {
   dpr = 1;
   private cache = new Map<string, Spr | null>();
+  /** Sprites beliebiger Breite (Eiszapfen-Balken): höchstens CUSTOM_MAX im Speicher */
+  private custom = new Map<string, Spr | null>();
   constructor(public props: PropLibrary) {}
 
   reset(dpr: number): void {
     this.dpr = dpr;
     this.cache.clear();
+    this.custom.clear();
   }
 
   /** Höhe `h` (logisch); `halo` = CSS-Farbe oder null; `variant` unterscheidet nachbearbeitete Kopien (z.B. Elf ohne Ball) */
   get(id: string, h: number, halo: string | null, anchor: Anchor = "foot", variant = "", post?: (g: Ctx2D, s: Spr) => void): Spr | null {
-    const key = `${id}|${Math.round(h)}|${halo ?? ""}|${anchor}|${variant}`;
+    const real = this.props.has(id);
+    const fb = real ? null : (WINTER_FALLBACK[id] ?? null);
+    const key = `${id}|${Math.round(h)}|${halo ?? ""}|${anchor}|${variant}${fb ? "|fb" : ""}`;
     if (this.cache.has(key)) return this.cache.get(key) ?? null;
-    const cell = this.props.cell(id);
-    if (!cell || !this.props.has(id)) {
-      // (noch) nicht geladen: nicht dauerhaft merken
+    const cell = real ? this.props.cell(id) : fb;
+    if (!cell) {
+      // (noch) nicht geladen und kein Ersatz: nicht dauerhaft merken
       return null;
     }
+    const spr = this.bake(h, halo, anchor, cell, (g, x, y, hPx, ayN) => this.props.draw(g, id, x, y, { h: hPx, ax: 0.5, ay: ayN }), fb, post);
+    if (spr) this.cache.set(key, spr);
+    return spr;
+  }
+
+  /** Ersatz-Sprite mit frei wählbarer Breite (`w` × `h` logisch), z. B. Eiszapfen-Balken; nur prozedural, pro Größe gemerkt */
+  proc(key: string, w: number, h: number, halo: string | null, anchor: Anchor, paintFn: (g: Ctx2D, w: number, h: number) => void): Spr | null {
+    const k = `${key}|${Math.round(w)}|${Math.round(h)}|${halo ?? ""}|${anchor}`;
+    const hit = this.custom.get(k);
+    if (hit !== undefined) return hit;
+    const fb = { w, h, paint: paintFn };
+    const spr = this.bake(h, halo, anchor, fb, () => undefined, fb, undefined);
+    this.custom.set(k, spr);
+    if (this.custom.size > CUSTOM_MAX) {
+      const oldest = this.custom.keys().next().value;
+      if (oldest !== undefined) this.custom.delete(oldest);
+    }
+    return spr;
+  }
+
+  private bake(
+    h: number,
+    halo: string | null,
+    anchor: Anchor,
+    cell: { w: number; h: number },
+    drawReal: (g: Ctx2D, x: number, y: number, hPx: number, ayN: number) => boolean | void,
+    fb: { w: number; h: number; paint: (g: Ctx2D, w: number, h: number) => void; lights?: number[] } | null,
+    post?: (g: Ctx2D, s: Spr) => void,
+  ): Spr | null {
     const k = Math.max(1, Math.min(2, this.dpr));
     const w = (h * cell.w) / cell.h;
     const m = Math.ceil((halo ? 14 : 2) * k);
@@ -203,6 +244,23 @@ export class SpriteCache {
     const ay = anchor === "foot" ? m + h * k : anchor === "center" ? ch / 2 : m;
     const ayN = anchor === "foot" ? 1 : anchor === "center" ? 0.5 : 0;
     g.imageSmoothingQuality = "high";
+    let put: (x: number, y: number) => void = (x, y) => void drawReal(g, x, y, h * k, ayN);
+    if (fb) {
+      // Ersatzbild einmal in Zielgröße zeichnen; danach wie ein geladenes Prop behandeln (Halo, Nachbearbeitung)
+      const bw = Math.max(1, Math.round(w * k));
+      const bh = Math.max(1, Math.round(h * k));
+      const body = makeCanvas(bw, bh);
+      const bg = body.getContext("2d");
+      if (!bg) return null;
+      bg.imageSmoothingQuality = "high";
+      bg.scale(bw / fb.w, bh / fb.h);
+      try {
+        fb.paint(bg, fb.w, fb.h);
+      } catch {
+        return null; // Ersatzbild nicht darstellbar → der Skin nutzt seinen einfachen Notbehelf
+      }
+      put = (x, y) => g.drawImage(body, x - bw / 2, y - ayN * bh);
+    }
     if (halo) {
       const far = cw * 2;
       g.save();
@@ -211,17 +269,22 @@ export class SpriteCache {
       g.shadowOffsetY = 0;
       for (const blur of [5 * k, 12 * k]) {
         g.shadowBlur = blur;
-        this.props.draw(g, id, ax - far, ay, { h: h * k, ax: 0.5, ay: ayN });
+        put(ax - far, ay);
       }
       g.restore();
     }
-    this.props.draw(g, id, ax, ay, { h: h * k, ax: 0.5, ay: ayN });
+    put(ax, ay);
     const spr: Spr = { c, k, w, h, ax, ay, an: ayN };
+    if (fb) {
+      spr.fb = true;
+      spr.lights = fb.lights;
+    }
     post?.(g, spr);
-    this.cache.set(key, spr);
     return spr;
   }
 }
+
+const CUSTOM_MAX = 24;
 
 /**
  * Sprite an (cx, y) zeichnen; (cx, y) = Ankerpunkt. Optional Drehung um den Anker, Stauchung/Streckung, Spiegelung.

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPatternCtx } from "../patterns";
 import { Rng } from "../rng";
@@ -16,7 +18,22 @@ function build(id: string, diff: number, seed = 1): EntSpec[] {
   return out;
 }
 
+const OBSTACLE_PROPS = ["finanzamt-binders", "finanzamt-boxes", "finanzamt-copier", "finanzamt-hanging-files", "finanzamt-duct", "finanzamt-lamp"];
+
 describe("Welt Finanzamt bei Nacht", () => {
+  it("Hindernis-Props sind vorgeladen und im Manifest vorhanden", () => {
+    const manifest = JSON.parse(readFileSync(path.resolve(__dirname, "../../../../public/fredrun2/props/manifest.json"), "utf8")) as { props: Record<string, { file: string; cw: number; ch: number }> };
+    for (const id of OBSTACLE_PROPS) {
+      expect(WORLD_FINANZAMT.propIds, id).toContain(id);
+      expect(manifest.props[id], id).toBeTruthy();
+    }
+    // Skins zeichnen gegen diese Zellmaße (Ausschnitte/Ankerzeilen im Skin-Code)
+    expect(manifest.props["finanzamt-boxes"]).toMatchObject({ cw: 249, ch: 512 });
+    expect(manifest.props["finanzamt-hanging-files"]).toMatchObject({ cw: 640, ch: 559 });
+    expect(manifest.props["finanzamt-duct"]).toMatchObject({ cw: 640, ch: 566 });
+    expect(manifest.props["finanzamt-lamp"]).toMatchObject({ cw: 377, ch: 512 });
+  });
+
   it("Metadaten vollständig", () => {
     expect(WORLD_FINANZAMT.name).toBe("Finanzamt bei Nacht");
     expect(WORLD_FINANZAMT.music).toBe("finanzamt");

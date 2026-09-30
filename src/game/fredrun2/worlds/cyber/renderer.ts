@@ -69,6 +69,7 @@ import {
   drawPortal,
   drawRack,
   makeSkinAssets,
+  HOVER_PROP,
   type CyberSkinAssets,
   type SkinCtx,
 } from "./skins";
@@ -79,6 +80,7 @@ export const CYBER_PROPS = [
   "server-rack",
   "data-coin",
   "landmark-cathedral",
+  HOVER_PROP,
   ...GUEST_PROP_IDS,
 ];
 

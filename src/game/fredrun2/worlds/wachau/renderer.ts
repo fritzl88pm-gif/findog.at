@@ -60,7 +60,20 @@ import { WaterFx } from "./water";
 
 const TAU = Math.PI * 2;
 
-export const WACHAU_PROPS = ["raft", "wine-barrel", "bee-swarm", "apricot", "crate-wine", "grape-bunch", ...LANDMARK_IDS];
+export const WACHAU_PROPS = [
+  "raft",
+  "wine-barrel",
+  "bee-swarm",
+  "apricot",
+  "crate-wine",
+  "grape-bunch",
+  "wachau-cask",
+  "wachau-crates",
+  "wachau-wall",
+  "wachau-branch",
+  "wachau-vines",
+  ...LANDMARK_IDS,
+];
 
 /** Ebene: Quelle + Stufen-Varianten + (optional) Lichtkachel */
 interface Layer {
@@ -193,7 +206,8 @@ export class WachauRenderer implements WorldRenderer {
   }
 
   resize(dpr: number): void {
-    void dpr;
+    // Pixelfaktor für die vorgerenderten Hindernis-Sprites
+    this.skins.setScale(dpr);
   }
 
   private build(): void {

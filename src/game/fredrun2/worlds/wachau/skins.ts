@@ -1,12 +1,15 @@
 /**
  * Wachau – Entitäts-Skins. Aufwändige Formen werden einmal pro Größe vorgerendert (Sprite-Cache) und pro
  * Stimmungsstufe leicht getönt (Entitäten bleiben heller als die Kulisse → Gefahren lesbar). Nachts tragen Gefahren
- * einen warmen Rim-Schein. Props (wine-barrel, crate-wine, bee-swarm, apricot) werden genutzt, wenn vorhanden.
+ * einen warmen Rim-Schein. Props (wine-barrel, crate-wine, bee-swarm, apricot) werden genutzt, wenn vorhanden; die
+ * Hindernisse (wachau-cask/-crates/-wall/-branch/-vines) kommen als eng zugeschnittene Silhouetten, einmal pro Zielgröße
+ * gebacken (Pixelfaktor `pk`), mit prozeduralem Fallback ohne Props.
  */
 import type { Ent, PropLibrary, ViewState } from "../../types";
 import { glowAt, glowSprite, paint, rr, softSprite, type Ctx2D } from "../shared-b/canvas";
 import { mulberry } from "../shared-b/color";
 import { MAX_STAGE, STAGES, SpriteCache, mixHex, silhouetteGlow, tintCanvas, withA } from "./palette";
+import { PROP_PAD, bakeProp, bakeStretch, fitBox, propAspect, propScale, quant } from "./propfit";
 import { grapeBunch, grapeLeaf, stoneWall } from "./scenery";
 
 const TAU = Math.PI * 2;
@@ -54,6 +57,8 @@ export class WachauSkins {
   private grapeStrip: HTMLCanvasElement | null = null;
   private apricotFromProp = false;
   static readonly APRICOT = 48;
+  /** Pixelfaktor der Zeichenfläche (1 … 2): Hindernis-Sprites werden dafür vorgerendert */
+  private pk = 1;
 
   setProps(p: PropLibrary): void {
     this.props = p;
@@ -63,8 +68,20 @@ export class WachauSkins {
     this.variants.clear();
   }
 
-  /** Sprite nach Schlüssel (vorgerendert) in Stufen-Tönung; blendet in die nächste Stufe über. */
-  private drawStaged(g: Ctx2D, key: string, make: () => HTMLCanvasElement, x: number, y: number, k: SkinCtx, alpha = 1): HTMLCanvasElement {
+  setScale(k: number): void {
+    const nk = Math.min(2, Math.max(1, k));
+    if (Math.abs(nk - this.pk) > 0.2) {
+      this.pk = nk;
+      this.cache.clear();
+      this.variants.clear();
+    }
+  }
+
+  /**
+   * Sprite nach Schlüssel (vorgerendert) in Stufen-Tönung; blendet in die nächste Stufe über.
+   * `sc` = Pixelfaktor, mit dem das Sprite gebacken wurde (Zeichengröße = Canvas / sc).
+   */
+  private drawStaged(g: Ctx2D, key: string, make: () => HTMLCanvasElement, x: number, y: number, k: SkinCtx, alpha = 1, sc = 1): HTMLCanvasElement {
     const base = this.cache.get(key, make);
     let v = this.variants.get(key);
     if (!v || v.length === 0) {
@@ -79,30 +96,34 @@ export class WachauSkins {
     const a = v[st] ?? (v[st] = entTint(base, st));
     const pa = g.globalAlpha;
     g.globalAlpha = pa * alpha;
-    g.drawImage(a, Math.round(x), Math.round(y));
+    const px = Math.round(x * sc) / sc;
+    const py = Math.round(y * sc) / sc;
+    const dw = a.width / sc;
+    const dh = a.height / sc;
+    g.drawImage(a, px, py, dw, dh);
     if (k.blend > 0.02 && st < MAX_STAGE) {
       const b = v[st + 1] ?? (v[st + 1] = entTint(base, st + 1));
       g.globalAlpha = pa * alpha * k.blend;
-      g.drawImage(b, Math.round(x), Math.round(y));
+      g.drawImage(b, px, py, dw, dh);
     }
     g.globalAlpha = pa;
     return base;
   }
 
-  private rimOf(key: string, base: HTMLCanvasElement, color: string): HTMLCanvasElement {
-    return this.cache.get(`${key}|rim`, () => silhouetteGlow(base, color, 10, 12));
+  private rimOf(key: string, base: HTMLCanvasElement, color: string, sc = 1): HTMLCanvasElement {
+    return this.cache.get(`${key}|rim`, () => silhouetteGlow(base, color, 10 * sc, 12 * sc));
   }
 
   /** Warmes Rimlight hinter Gefahren (nachts stärker) */
-  private rim(g: Ctx2D, key: string, base: HTMLCanvasElement, x: number, y: number, k: SkinCtx, color = "#ffb45a", strength = 1): void {
+  private rim(g: Ctx2D, key: string, base: HTMLCanvasElement, x: number, y: number, k: SkinCtx, color = "#ffb45a", strength = 1, sc = 1): void {
     const a = (0.18 + 0.62 * k.night) * strength;
     if (a < 0.03 || k.quality === 0) return;
-    const r = this.rimOf(key, base, color);
+    const r = this.rimOf(key, base, color, sc);
     const pa = g.globalAlpha;
     const op = g.globalCompositeOperation;
     g.globalCompositeOperation = "lighter";
     g.globalAlpha = pa * Math.min(1, a);
-    g.drawImage(r, Math.round(x - 12), Math.round(y - 12));
+    g.drawImage(r, Math.round(x * sc) / sc - 12, Math.round(y * sc) / sc - 12, r.width / sc, r.height / sc);
     g.globalCompositeOperation = op;
     g.globalAlpha = pa;
   }
@@ -838,6 +859,25 @@ export class WachauSkins {
   // ---------------------------------------------------------------------------------------------
   // Blöcke: Weinkiste (zerbrechlich), Kistenstapel, Trockensteinmauer, stehendes Fass
 
+  /**
+   * Hindernis-Prop als Bodenblock: Silhouette in die Hitbox eingepasst (Unterkante 2 px im Boden), in Stufen-Tönung,
+   * mit Rimlight. false = Prop nicht geladen → prozeduraler Fallback.
+   */
+  private propBlock(g: Ctx2D, id: string, e: Ent, sx: number, sy: number, k: SkinCtx, lim: readonly [number, number], rim: string, rimK: number): boolean {
+    const props = this.props;
+    const asp = propAspect(props, id);
+    if (!props || asp === null) return false;
+    const f = fitBox(asp, e.w, e.h, lim[0], lim[1]);
+    const w = quant(f.w);
+    const h = quant(f.h);
+    const key = `${id}:${w}:${h}`;
+    const x = sx + (e.w - w) / 2;
+    const y = sy + e.h + 2 - h;
+    const base = this.drawStaged(g, key, () => bakeProp(props, id, w, h, this.pk), x, y, k, 1, this.pk);
+    this.rim(g, key, base, x, y, k, rim, rimK, this.pk);
+    return true;
+  }
+
   private crateSprite(w: number, h: number, stack: number): HTMLCanvasElement {
     const props = this.props;
     const useProp = !!props && props.has("crate-wine");
@@ -874,8 +914,10 @@ export class WachauSkins {
     g.beginPath();
     g.ellipse(sx + w / 2, sy + h + 3, w * 0.55, 5, 0, 0, TAU);
     g.fill();
-    const base = this.drawStaged(g, key, () => this.crateSprite(w, h, stack), sx - 8, sy - 8, k);
-    this.rim(g, key, base, sx - 8, sy - 8, k, "#ffc46a", 0.7);
+    if (!(stack === 2 && this.propBlock(g, "wachau-crates", e, sx, sy, k, [0.7, 1.35], "#ffc46a", 0.7))) {
+      const base = this.drawStaged(g, key, () => this.crateSprite(w, h, stack), sx - 8, sy - 8, k);
+      this.rim(g, key, base, sx - 8, sy - 8, k, "#ffc46a", 0.7);
+    }
     // Zerbrechlich: Glitzern
     if (e.breakable) {
       const tw = k.reduced ? 0.6 : 0.5 + 0.5 * Math.sin(v.time * 5 + e.id);
@@ -942,6 +984,7 @@ export class WachauSkins {
   drawWall(g: Ctx2D, e: Ent, sx: number, sy: number, v: ViewState, k: SkinCtx): void {
     const w = Math.round(e.w);
     const h = Math.round(e.h);
+    if (this.propBlock(g, "wachau-wall", e, sx, sy, k, [0.7, 1.5], "#ffc890", 0.6)) return;
     const key = `wall:${w}:${h}`;
     const base = this.drawStaged(g, key, () => this.wallSprite(w, h), sx - 10, sy - 18, k);
     this.rim(g, key, base, sx - 10, sy - 18, k, "#ffc890", 0.6);
@@ -980,6 +1023,7 @@ export class WachauSkins {
     g.beginPath();
     g.ellipse(sx + w / 2, sy + h + 3, w * 0.55, 5, 0, 0, TAU);
     g.fill();
+    if (this.propBlock(g, "wachau-cask", e, sx, sy, k, [0.75, 1.35], "#ffb45a", 0.8)) return;
     const base = this.drawStaged(g, key, () => this.caskSprite(w, h), sx - 8, sy - 2, k);
     this.rim(g, key, base, sx - 8, sy - 2, k, "#ffb45a", 0.8);
     void v;
@@ -1081,7 +1125,77 @@ export class WachauSkins {
     });
   }
 
+  /**
+   * Überhang aus dem Prop (wachau-branch = Marillenzweig, wachau-vines = Weinranken): Breite = Hitbox-Breite, Unterkante auf der
+   * Hitbox-Unterkante. Nach oben verankern wir prozedural: der Zweig bekommt seinen abgeschnittenen Ast (gezogener Streifen des
+   * Bildes, in Ast-Richtung), die Ranken hängen an einer Laube (Querbalken + zwei Pfosten bis zum Bildrand).
+   */
+  private drawHangingProp(g: Ctx2D, e: Ent, sx: number, sy: number, v: ViewState, k: SkinCtx, vines: boolean): boolean {
+    const props = this.props;
+    const id = vines ? "wachau-vines" : "wachau-branch";
+    const asp = propAspect(props, id);
+    if (!props || asp === null) return false;
+    const w = Math.round(e.w);
+    const h = Math.round(w * asp);
+    // Hitbox-Unterkante = bottom − 4; die Ranken hängen etwas tiefer (Trauben statt Ranken-Spitzen decken die Hitbox)
+    const bottom = sy + e.h - 3 + (vines ? 8 : 0);
+    const top = bottom - h;
+    const sway = k.reduced ? 0 : Math.sin(v.time * 1.3 + e.id) * 1.5;
+    const x = sx + sway;
+    const kx = propScale(props, id, w);
+    const cell = props.cell(id);
+    if (vines) {
+      // Laube: zwei Pfosten von oben und ein Querbalken, über dem das Blattwerk hängt
+      const night = k.night;
+      const beamY = top - 4;
+      const beamH = Math.max(20, 60 * kx);
+      const pw = 17;
+      for (const px of [sx + w * 0.08, sx + w * 0.92 - pw]) {
+        g.fillStyle = mixDark("#1c0e06", night);
+        g.fillRect(px - 2.5, -10, pw + 5, beamY + beamH);
+        g.fillStyle = mixDark("#6a4222", night);
+        g.fillRect(px, -10, pw, beamY + beamH);
+        g.fillStyle = mixDark("#9a6630", night);
+        g.fillRect(px + 2, -10, 4, beamY + beamH);
+        g.fillStyle = mixDark("#40260f", night);
+        g.fillRect(px + pw - 4, -10, 4, beamY + beamH);
+        g.fillStyle = mixDark("#40260f", night);
+        for (let gy = 30 + ((px * 7) % 23); gy < beamY; gy += 61) g.fillRect(px + 7, gy, 2, 14);
+      }
+      g.fillStyle = mixDark("#1c0e06", night);
+      g.fillRect(sx - 9, beamY - 2.5, w + 18, beamH + 5);
+      const bg = g.createLinearGradient(0, beamY, 0, beamY + beamH);
+      bg.addColorStop(0, mixDark("#a06a30", night));
+      bg.addColorStop(0.45, mixDark("#75481f", night));
+      bg.addColorStop(1, mixDark("#48290f", night));
+      g.fillStyle = bg;
+      g.fillRect(sx - 6.5, beamY, w + 13, beamH);
+      g.fillStyle = mixDark("#40260f", night);
+      for (let gx = sx + 8; gx < sx + w; gx += 37) g.fillRect(gx, beamY + beamH * 0.3, 14, 1.8);
+      for (let gx = sx + 27; gx < sx + w; gx += 43) g.fillRect(gx, beamY + beamH * 0.62, 10, 1.6);
+    } else if (cell) {
+      // Abgeschnittener Ast oben im Bild: Streifen (Zellspalten 214–362, Zeilen 8–22) in Astrichtung nach oben ziehen
+      const rowY = top + (8 - PROP_PAD) * kx;
+      const extH = Math.ceil(rowY + 14);
+      if (extH > 8) {
+        const ex = x + (214 - PROP_PAD) * kx;
+        this.drawStaged(g, `${id}|ext:${w}:${extH}`, () => bakeStretch(props, id, 214, 362, 8, 22, kx, extH, 1.35), ex, -14, k);
+      }
+    }
+    const key = `${id}:${w}`;
+    const base = this.drawStaged(g, key, () => bakeProp(props, id, w, h, this.pk), x, top, k, 1, this.pk);
+    this.rim(g, key, base, x, top, k, "#ffd27a", 0.55, this.pk);
+    // Leuchtkante der Gefahrenlinie
+    g.globalCompositeOperation = "lighter";
+    g.globalAlpha = 0.25 + 0.35 * k.night;
+    glowAt(g, this.glowGold, sx + w / 2, bottom - 4, w * 0.55, 12);
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = "source-over";
+    return true;
+  }
+
   drawBranch(g: Ctx2D, e: Ent, sx: number, sy: number, v: ViewState, k: SkinCtx, vines: boolean): void {
+    if (this.drawHangingProp(g, e, sx, sy, v, k, vines)) return;
     const w = Math.round(e.w);
     const bottom = sy + e.h;
     const depth = vines ? 150 : 170;

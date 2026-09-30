@@ -5,6 +5,7 @@
  */
 import { makeCanvas } from "../../draw-utils";
 import type { PropLibrary } from "../../types";
+import { OPER_FALLBACK } from "./fallback";
 
 export interface Baked {
   c: HTMLCanvasElement;
@@ -63,20 +64,28 @@ export class SpriteBank {
     return !!this.props?.has(id);
   }
 
-  /** Bild `id` mit der Höhe `h` (logisch) backen; null, wenn das Prop nicht geladen ist. */
+  /**
+   * Bild `id` mit der Höhe `h` (logisch) backen. Fehlt das gemalte Prop (Netzfehler, Blocker, veralteter Manifest-Cache),
+   * entsteht stattdessen der prozedurale Ersatz aus `fallback.ts` (gleiche Maße, Ausrichtung und Ankerpunkte);
+   * null nur für unbekannte Ids ohne Prop.
+   */
   get(id: string, h: number, o: BakeOpts = {}): Baked | null {
-    const key = `${id}|${Math.round(h)}|${o.ax ?? 0.5}|${o.ay ?? 1}|${o.rim ?? 0}|${o.w ?? 0}|${o.rimColor ?? ""}`;
+    const real = !!this.props && this.props.has(id);
+    const fb = real ? null : (OPER_FALLBACK[id] ?? null);
+    const key = `${id}|${Math.round(h)}|${o.ax ?? 0.5}|${o.ay ?? 1}|${o.rim ?? 0}|${o.w ?? 0}|${o.rimColor ?? ""}${fb ? "|fb" : ""}`;
     const hit = this.cache.get(key);
     if (hit !== undefined) return hit;
-    const b = this.bake(id, h, o);
-    this.cache.set(key, b);
+    const b = this.bake(id, h, o, fb);
+    // fehlende Props nicht dauerhaft als „nicht vorhanden“ merken (könnten später noch eintreffen)
+    if (b || real) this.cache.set(key, b);
     return b;
   }
 
-  private bake(id: string, h: number, o: BakeOpts): Baked | null {
+  private bake(id: string, h: number, o: BakeOpts, fb: { w: number; h: number; paint: (g: CanvasRenderingContext2D, w: number, h: number) => void } | null): Baked | null {
     const props = this.props;
-    if (!props || !props.has(id)) return null;
-    const cell = props.cell(id);
+    let cell: { w: number; h: number } | null = null;
+    if (fb) cell = fb;
+    else if (props?.has(id)) cell = props.cell(id);
     if (!cell) return null;
     const k = this.k;
     const ax = o.ax ?? 0.5;
@@ -93,7 +102,16 @@ export class SpriteBank {
     const big = makeCanvas(bw * 2, bh * 2);
     const bg = ctxOf(big);
     bg.imageSmoothingQuality = "high";
-    props.draw(bg, id, ax * bw * 2, ay * bh * 2, { w: bw * 2, ax, ay });
+    if (fb) {
+      bg.save();
+      bg.scale((bw * 2) / fb.w, (bh * 2) / fb.h);
+      try {
+        fb.paint(bg, fb.w, fb.h);
+      } catch {
+        return null; // Ersatzbild nicht darstellbar → der Skin nutzt seinen einfachen Notbehelf
+      }
+      bg.restore();
+    } else props?.draw(bg, id, ax * bw * 2, ay * bh * 2, { w: bw * 2, ax, ay });
     const body = makeCanvas(bw + pad * 2, bh + pad * 2);
     const g = ctxOf(body);
     g.imageSmoothingQuality = "high";

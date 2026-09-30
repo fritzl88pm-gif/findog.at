@@ -1,6 +1,6 @@
 /**
  * Cyber-Wien 2099 – Entitäts-Skins. Leuchteffekte ausschließlich über vorgerenderte Glow-Sprites (kein shadowBlur im
- * Frame). Props (drone-hover, glitch-cube, server-rack, data-coin) werden genutzt, wenn geladen; sonst prozedurale
+ * Frame). Props (drone-hover, glitch-cube, server-rack, data-coin, cyber-hover) werden genutzt, wenn geladen; sonst prozedurale
  * Fallbacks. Neon-Barriere und Laser-Emitter sind bewusst prozedural (bei Spielgröße klarer lesbar als die Props).
  */
 import type { Ent, PropLibrary, ViewState } from "../../types";
@@ -41,6 +41,8 @@ export interface CyberSkinAssets {
   cubeWire: HTMLCanvasElement;
   rack: HTMLCanvasElement | null;
   barrier: HTMLCanvasElement;
+  /** Gebackene Schwebe-Plattformen (Prop cyber-hover) je Breite × Pixeldichte */
+  hover: Map<string, HTMLCanvasElement>;
 }
 
 const CHIP = 64;
@@ -368,6 +370,7 @@ export function makeSkinAssets(): CyberSkinAssets {
     cubeWire,
     rack: null,
     barrier: barrierSprite(),
+    hover: new Map(),
   };
 }
 
@@ -375,6 +378,7 @@ export function makeSkinAssets(): CyberSkinAssets {
 export function bakePropSprites(A: CyberSkinAssets): void {
   const P = A.props;
   if (!P) return;
+  A.hover.clear();
   if (P.has("data-coin")) A.coinStrip = coinStripOf(P, A.chip, A.softCyan);
   if (P.has("glitch-cube")) {
     A.cube = paint(120, 120, (g) => {
@@ -1026,10 +1030,94 @@ export function drawPlasma(g: Ctx2D, A: CyberSkinAssets, e: Ent, sx: number, sy:
   norm(g);
 }
 
-/** Schwebe-Plattform: Glasplatte mit Neonkante, Metallkiel und drei Schubdüsen */
+/** Prop der Schwebe-Plattform (Seitenansicht, 512×119-Zelle mit 5 px Rand) */
+export const HOVER_PROP = "cyber-hover";
+/** Zellzeile der begehbaren Fläche (Mitte der Oberseite): dort steht die Figur, sie liegt auf `e.y` */
+const HOVER_SURF = 17;
+/** Düsenmitten im Zellraster (x, y) */
+const HOVER_NOZZLES: Array<[number, number]> = [
+  [75, 68],
+  [255, 72],
+  [435, 68],
+];
+
+/**
+ * Schwebe-Plattform aus dem Prop backen (zweistufig verkleinert, 1:1 geblittet). Breite = Trefferbreite (Plattenkante
+ * bis Plattenkante), Höhe folgt dem Seitenverhältnis. Rückgabe null, wenn das Prop fehlt.
+ */
+function hoverSprite(A: CyberSkinAssets, w: number, kd: number): { c: HTMLCanvasElement; s: number } | null {
+  const P = A.props;
+  if (!P || !P.has(HOVER_PROP)) return null;
+  const cell = P.cell(HOVER_PROP);
+  if (!cell) return null;
+  const s = w / (cell.w - 10);
+  const key = `${Math.round(w)}|${kd}`;
+  let c = A.hover.get(key);
+  if (!c) {
+    const dw = Math.max(2, Math.round(cell.w * s * kd));
+    const dh = Math.max(2, Math.round(cell.h * s * kd));
+    const big = paint(dw * 2, dh * 2, (bg) => {
+      bg.imageSmoothingQuality = "high";
+      P.draw(bg, HOVER_PROP, 0, 0, { w: dw * 2, ax: 0, ay: 0 });
+    });
+    c = paint(dw, dh, (cg) => {
+      cg.imageSmoothingQuality = "high";
+      cg.drawImage(big, 0, 0, dw, dh);
+    });
+    if (A.hover.size > 48) A.hover.clear();
+    A.hover.set(key, c);
+  }
+  return { c, s };
+}
+
+/** Schwebe-Plattform: Glasplatte mit Neonkante, Metallkiel und drei Schubdüsen (Prop; sonst prozedural) */
 export function drawHover(g: Ctx2D, A: CyberSkinAssets, e: Ent, sx: number, sy: number, v: ViewState, k: SkinCtx): void {
   const falling = e.state === "fallen";
   const warn = e.state === "crumbling";
+  const tk = typeof g.getTransform === "function" ? g.getTransform().a : 1;
+  const kd = Math.max(1, Math.min(2, Math.round(tk * 4) / 4));
+  const spr = hoverSprite(A, e.w, kd);
+  if (spr) {
+    const s = spr.s;
+    const cell = A.props?.cell(HOVER_PROP);
+    const jit = warn && !k.reduced ? Math.sin(v.time * 60 + e.id) * 1.5 : 0;
+    const X = Math.round((sx - 5 * s + jit) * kd) / kd;
+    const Y = Math.round((sy - HOVER_SURF * s) * kd) / kd;
+    const dw = spr.c.width / kd;
+    const dh = spr.c.height / kd;
+    // Unterseiten-Leuchten (hinter dem Körper)
+    add(g);
+    g.globalAlpha = falling ? 0.12 : 0.32 + 0.2 * k.beat;
+    g.drawImage(A.softCyan, sx - 10, sy - 4, e.w + 20, dh - HOVER_SURF * s + 14);
+    norm(g);
+    if (falling) g.globalAlpha = 0.55;
+    g.drawImage(spr.c, X, Y, dw, dh);
+    norm(g);
+    if (warn) {
+      // Absturz-Warnung: Platte glüht magenta
+      add(g);
+      g.globalAlpha = k.reduced ? 0.35 : 0.25 + 0.25 * Math.sin(v.time * 22);
+      glowAt(g, A.softMagenta, sx + e.w / 2, sy + 4, e.w * 0.62, 16);
+      norm(g);
+    }
+    // Schubdüsen: Glimmen im Takt (die Kegel selbst sind im Sprite)
+    if (k.quality > 0 && !falling) {
+      const cw = cell?.w ?? 512;
+      add(g);
+      for (const [nx, ny] of HOVER_NOZZLES) {
+        const px = X + (nx / cw) * dw;
+        const py = Y + ((ny + 6) / (cell?.h ?? 119)) * dh;
+        g.globalAlpha = 0.3 + 0.25 * k.beat;
+        glowAt(g, A.glowMagenta, px, py, 13 * Math.max(0.8, s * 3.2), 9 * Math.max(0.8, s * 3.2));
+        if (!k.reduced) {
+          g.globalAlpha = 0.28;
+          g.drawImage(A.softMagenta, px - 6, py + 4, 12, 20 + 6 * Math.sin(v.time * 20 + nx * 0.09));
+        }
+      }
+      norm(g);
+    }
+    return;
+  }
   // Unterseiten-Leuchten (hinter dem Körper)
   add(g);
   g.globalAlpha = falling ? 0.15 : 0.45 + 0.25 * k.beat;
