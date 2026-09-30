@@ -43,7 +43,7 @@ const character = args.char ?? "fred";
 const meters = (args.meters ?? "0").split(",").map(Number);
 const seconds = (args.seconds ?? "4").split(",").map(Number);
 const seed = Number(args.seed ?? 1);
-const worldMeters = args["world-meters"] !== undefined ? Number(args["world-meters"]) : undefined;
+const worldMetersList = args["world-meters"] !== undefined ? args["world-meters"].split(",").map(Number) : [undefined];
 const [vw, vh] = (args.size ?? "1280x720").split("x").map(Number);
 const dpr = Number(args.dpr ?? 1);
 const outPrefix = args.out ?? "/tmp/fr2-shot";
@@ -94,17 +94,17 @@ page.on("requestfailed", (r) => logs.push(`[requestfailed] ${r.url()}`));
 await page.goto(`http://127.0.0.1:${port}/`);
 await page.waitForFunction(() => document.title === "ready", null, { timeout: 60000 });
 await mkdir(path.dirname(outPrefix), { recursive: true });
-for (const m of meters) {
+for (const wmv of worldMetersList) for (const m of meters) {
   await page.evaluate(async ([w, md, ch, m, sd, wm]) => {
     await window.__fr2.game.debugRun({ world: w, mode: md, character: ch, startMeters: m, seed: sd, startWorldMeters: wm });
-  }, [world, mode, character, m, seed, worldMeters]);
+  }, [world, mode, character, m, seed, wmv]);
   let elapsed = 0;
   for (const s of seconds) {
     const step = Math.max(0.01, s - elapsed);
     const t0 = Date.now();
     const r = await page.evaluate((st) => window.__fr2.game.debugAdvance(st), step);
     elapsed = s;
-    const file = `${outPrefix}-${world === "" ? "x" : world}-${m}m-${s}s.png`;
+    const file = `${outPrefix}-${world === "" ? "x" : world}-${wmv !== undefined ? `wm${wmv}` : `${m}m`}-${s}s.png`;
     await page.locator("#c").screenshot({ path: file });
     console.log(`${file}  score=${r.score} m=${Math.round(r.meters)} hearts=${r.hearts} phase=${r.phase} world=${r.worldId} (${Date.now() - t0}ms)`);
   }
@@ -114,7 +114,7 @@ if (args.live) {
   await page.evaluate(async ([w, md, ch, sd, wm]) => {
     await window.__fr2.game.debugRun({ world: w, mode: md, character: ch, seed: sd, startMeters: 600, startWorldMeters: wm, live: true });
     window.__fr2.game.setManual(false);
-  }, [world, mode, character, seed, worldMeters]);
+  }, [world, mode, character, seed, worldMetersList[0]]);
   const stats = await page.evaluate(
     (ms) =>
       new Promise((resolve) => {

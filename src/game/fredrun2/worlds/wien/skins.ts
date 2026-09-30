@@ -23,205 +23,267 @@ function shadow(g: CanvasRenderingContext2D, cx: number, groundY: number, rx: nu
 }
 
 // ---------------------------------------------------------------------------------------------------
-// Straßenbahn
+// Straßenbahn: der Wagenkasten wird pro Zug EINMAL vorgerendert (Breite variiert je Muster), pro Frame kommen nur
+// Räder, Scheinwerfer, Funken und Glanz dazu.
 
-export function drawTram(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: number, v: ViewState, c: SkinCtx): void {
+const TRAM_OX = 4;
+const TRAM_OY = 22;
+
+interface TramFx {
+  beam: HTMLCanvasElement;
+  refl: HTMLCanvasElement;
+  head: HTMLCanvasElement;
+}
+let tramFx: TramFx | null = null;
+
+function makeCanvas2(w: number, h: number, paint: (g: CanvasRenderingContext2D) => void): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.ceil(w));
+  c.height = Math.max(1, Math.ceil(h));
+  const g = c.getContext("2d");
+  if (g) paint(g);
+  return c;
+}
+
+function getTramFx(): TramFx {
+  if (tramFx) return tramFx;
+  const beam = makeCanvas2(370, 86, (g) => {
+    const grd = g.createLinearGradient(370, 0, 4, 0);
+    grd.addColorStop(0, "rgba(255,236,180,0.32)");
+    grd.addColorStop(1, "rgba(255,236,180,0)");
+    g.fillStyle = grd;
+    g.beginPath();
+    g.moveTo(370, 2);
+    g.lineTo(4, 14);
+    g.lineTo(4, 84);
+    g.lineTo(370, 18);
+    g.closePath();
+    g.fill();
+  });
+  const refl = makeCanvas2(320, 60, (g) => {
+    const grd = g.createRadialGradient(160, 22, 4, 160, 22, 150);
+    grd.addColorStop(0, "rgba(255,230,170,0.28)");
+    grd.addColorStop(1, "rgba(255,230,170,0)");
+    g.fillStyle = grd;
+    g.fillRect(0, 0, 320, 60);
+  });
+  const head = makeCanvas2(68, 68, (g) => {
+    const grd = g.createRadialGradient(34, 34, 0, 34, 34, 34);
+    grd.addColorStop(0, "rgba(255,250,220,1)");
+    grd.addColorStop(0.3, "rgba(255,230,160,0.45)");
+    grd.addColorStop(1, "rgba(255,230,160,0)");
+    g.fillStyle = grd;
+    g.fillRect(0, 0, 68, 68);
+  });
+  tramFx = { beam, refl, head };
+  return tramFx;
+}
+
+/** Statischer Wagenkasten (inkl. Drehgestelle, Stromabnehmer, Fenster, Fahrgäste, Türen, Zielanzeige). */
+function paintTramBody(w: number, h: number, id: number): HTMLCanvasElement {
+  return makeCanvas2(w + TRAM_OX * 2, h + TRAM_OY + 2, (g) => {
+    const x = TRAM_OX;
+    const y = TRAM_OY;
+    const gy = y + h;
+    const bodyB = y + h - 16;
+    // Drehgestelle + Radscheiben
+    const nBog = Math.max(2, Math.round(w / 230));
+    for (let b = 0; b < nBog; b += 1) {
+      const bx = x + 40 + (b * (w - 80)) / (nBog - 1);
+      g.fillStyle = "#15171c";
+      g.fillRect(bx - 38, bodyB - 4, 76, 14);
+      for (const o of [-22, 22]) {
+        g.fillStyle = "#23262d";
+        g.beginPath();
+        g.arc(bx + o, gy - 9, 10, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+    // Wagenkasten
+    const nose = 26;
+    g.beginPath();
+    g.moveTo(x + nose, y + 4);
+    g.lineTo(x + w - 10, y + 4);
+    g.quadraticCurveTo(x + w, y + 4, x + w, y + 16);
+    g.lineTo(x + w, bodyB);
+    g.lineTo(x + 6, bodyB);
+    g.quadraticCurveTo(x, bodyB, x + 1, bodyB - 12);
+    g.lineTo(x + 6, y + 30);
+    g.quadraticCurveTo(x + 10, y + 6, x + nose, y + 4);
+    g.closePath();
+    const bg = g.createLinearGradient(0, y, 0, bodyB);
+    bg.addColorStop(0, "#e02a36");
+    bg.addColorStop(0.55, "#b5121f");
+    bg.addColorStop(1, "#6e0a13");
+    g.fillStyle = bg;
+    g.fill();
+    g.lineWidth = 3;
+    g.strokeStyle = "#2a0508";
+    g.stroke();
+    // Dach
+    g.fillStyle = "#d9dce2";
+    g.fillRect(x + nose - 4, y, w - nose - 4, 8);
+    g.fillStyle = "#8e939d";
+    g.fillRect(x + nose - 4, y + 7, w - nose - 4, 2);
+    // Dachaufbauten (flach)
+    g.fillStyle = "#aeb3bd";
+    const nBox = Math.max(1, Math.floor(w / 260));
+    for (let i = 0; i < nBox; i += 1) {
+      const bx = x + 70 + i * ((w - 140) / Math.max(1, nBox - 1 || 1));
+      roundRect(g, bx, y - 6, 60, 7, 3);
+      g.fill();
+    }
+    // Stromabnehmer (eingeklappt)
+    const px = x + w - 110;
+    g.strokeStyle = "#3a3e47";
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(px, y - 1);
+    g.lineTo(px + 34, y - 16);
+    g.lineTo(px + 62, y - 6);
+    g.stroke();
+    // Fensterband
+    const winTop = y + 20;
+    const winH = 46;
+    const segs = Math.max(1, Math.round(w / 260));
+    const segW = (w - nose) / segs;
+    const wg = g.createLinearGradient(0, winTop, 0, winTop + winH);
+    wg.addColorStop(0, "#f7d9a0");
+    wg.addColorStop(1, "#b0763f");
+    g.fillStyle = wg;
+    g.fillRect(x + nose + 4, winTop, w - nose - 12, winH);
+    // Fahrgäste
+    g.fillStyle = "rgba(60,30,20,0.55)";
+    for (let i = 0; i < Math.floor(w / 46); i += 1) {
+      if (hash(id * 3 + i) < 0.45) continue;
+      const hx = x + nose + 20 + i * 46 + hash(i + id) * 10;
+      g.beginPath();
+      g.arc(hx, winTop + winH - 16, 7, 0, Math.PI * 2);
+      g.fill();
+      g.fillRect(hx - 9, winTop + winH - 10, 18, 10);
+    }
+    // Fensterstege, Türen, Gelenke
+    const dg = g.createLinearGradient(0, winTop, 0, bodyB);
+    dg.addColorStop(0, "rgba(247,217,160,0.95)");
+    dg.addColorStop(1, "rgba(120,70,40,0.9)");
+    for (let sgi = 0; sgi < segs; sgi += 1) {
+      const s0 = x + nose + sgi * segW;
+      g.fillStyle = "#1c0e10";
+      for (let p = s0 + 50; p < s0 + segW - 20; p += 50) g.fillRect(p, winTop, 5, winH);
+      const dx = s0 + segW * 0.38;
+      g.fillStyle = "#6b0a12";
+      g.fillRect(dx, winTop - 6, 40, bodyB - winTop + 2);
+      g.fillStyle = dg;
+      g.fillRect(dx + 4, winTop - 2, 14, bodyB - winTop - 10);
+      g.fillRect(dx + 22, winTop - 2, 14, bodyB - winTop - 10);
+      if (sgi > 0) {
+        g.fillStyle = "#1a1b20";
+        g.fillRect(s0 - 6, y + 10, 12, bodyB - y - 12);
+        g.fillStyle = "#34363d";
+        for (let r = y + 14; r < bodyB - 4; r += 6) g.fillRect(s0 - 6, r, 12, 2);
+      }
+    }
+    // Weißer Zierstreifen
+    g.fillStyle = "#efe9dc";
+    g.fillRect(x + 8, winTop + winH + 4, w - 12, 9);
+    g.fillStyle = "rgba(0,0,0,0.25)";
+    g.fillRect(x + 8, winTop + winH + 12, w - 12, 2);
+    // Front: Frontscheibe + Zielanzeige
+    g.fillStyle = "#1b2430";
+    g.beginPath();
+    g.moveTo(x + nose + 2, winTop - 2);
+    g.lineTo(x + 9, winTop + 10);
+    g.lineTo(x + 6, winTop + winH);
+    g.lineTo(x + nose + 2, winTop + winH);
+    g.closePath();
+    g.fill();
+    g.fillStyle = "rgba(170,200,240,0.35)";
+    g.beginPath();
+    g.moveTo(x + nose - 2, winTop + 2);
+    g.lineTo(x + 14, winTop + 12);
+    g.lineTo(x + 13, winTop + 22);
+    g.closePath();
+    g.fill();
+    g.fillStyle = "#111";
+    g.fillRect(x + nose + 4, y + 8, 46, 11);
+    g.fillStyle = "#ffae2b";
+    g.font = "bold 9px system-ui, sans-serif";
+    g.textBaseline = "middle";
+    g.fillText("D  Ring", x + nose + 8, y + 14);
+  });
+}
+
+/** Vorgerenderte Wagenkästen je Zug (kleiner LRU-Puffer). */
+export class TramBodies {
+  private readonly map = new Map<number, { c: HTMLCanvasElement; w: number; h: number }>();
+
+  get(e: Ent): HTMLCanvasElement {
+    let hit = this.map.get(e.id);
+    if (!hit || hit.w !== e.w || hit.h !== e.h) {
+      hit = { c: paintTramBody(e.w, e.h, e.id), w: e.w, h: e.h };
+      this.map.set(e.id, hit);
+      if (this.map.size > 6) {
+        const first = this.map.keys().next().value;
+        if (first !== undefined) this.map.delete(first);
+      }
+    }
+    return hit.c;
+  }
+}
+
+export function drawTram(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: number, v: ViewState, c: SkinCtx, bodies: TramBodies): void {
   const w = e.w;
   const h = e.h;
   const t = v.time;
-  const x = sx;
-  const y = sy;
+  const x = Math.round(sx);
+  const y = Math.round(sy);
+  const gy = v.groundY;
   const bodyB = y + h - 16;
+  const fx = getTramFx();
   g.save();
-  // Schatten + nasser Reflex unter der Bahn
-  shadow(g, x + w / 2, v.groundY, w * 0.52, 0.45);
-  // Scheinwerferkegel nach links (auf nasser Straße)
-  if (!c.reduced || true) {
-    g.globalCompositeOperation = "lighter";
-    const beam = g.createLinearGradient(x, 0, x - 360, 0);
-    beam.addColorStop(0, "rgba(255,236,180,0.32)");
-    beam.addColorStop(1, "rgba(255,236,180,0)");
-    g.fillStyle = beam;
-    g.beginPath();
-    g.moveTo(x + 6, bodyB - 26);
-    g.lineTo(x - 360, v.groundY - 30);
-    g.lineTo(x - 360, v.groundY + 40);
-    g.lineTo(x + 6, bodyB - 10);
-    g.closePath();
-    g.fill();
-    // Reflex auf der Fahrbahn
-    const refl = g.createRadialGradient(x - 60, v.groundY + 16, 4, x - 60, v.groundY + 16, 150);
-    refl.addColorStop(0, "rgba(255,230,170,0.28)");
-    refl.addColorStop(1, "rgba(255,230,170,0)");
-    g.fillStyle = refl;
-    g.fillRect(x - 220, v.groundY - 6, 320, 60);
-    g.globalCompositeOperation = "source-over";
-  }
-  // Fahrgestell / Räder
+  shadow(g, x + w / 2, gy, w * 0.52, 0.45);
+  // Scheinwerferkegel + Reflex auf nasser Straße
+  g.globalCompositeOperation = "lighter";
+  g.drawImage(fx.beam, x - 364, gy - 44);
+  g.drawImage(fx.refl, x - 220, gy - 6);
+  g.globalCompositeOperation = "source-over";
+  // Wagenkasten (vorgerendert)
+  g.drawImage(bodies.get(e), x - TRAM_OX, y - TRAM_OY);
+  // Radspeichen (drehend)
   const nBog = Math.max(2, Math.round(w / 230));
+  g.strokeStyle = "#5b606b";
+  g.lineWidth = 2;
+  g.beginPath();
   for (let b = 0; b < nBog; b += 1) {
     const bx = x + 40 + (b * (w - 80)) / (nBog - 1);
-    g.fillStyle = "#15171c";
-    g.fillRect(bx - 38, bodyB - 4, 76, 14);
+    const a = -t * 14 + b;
+    const ca = Math.cos(a) * 7;
+    const sa = Math.sin(a) * 7;
     for (const o of [-22, 22]) {
-      const wx = bx + o;
-      g.fillStyle = "#23262d";
-      g.beginPath();
-      g.arc(wx, v.groundY - 9, 10, 0, Math.PI * 2);
-      g.fill();
-      g.strokeStyle = "#5b606b";
-      g.lineWidth = 2;
-      const a = -t * 14 + b;
-      g.beginPath();
-      g.moveTo(wx + Math.cos(a) * 7, v.groundY - 9 + Math.sin(a) * 7);
-      g.lineTo(wx - Math.cos(a) * 7, v.groundY - 9 - Math.sin(a) * 7);
-      g.stroke();
+      g.moveTo(bx + o + ca, gy - 9 + sa);
+      g.lineTo(bx + o - ca, gy - 9 - sa);
     }
   }
-  // Wagenkasten
-  const nose = 26;
-  g.beginPath();
-  g.moveTo(x + nose, y + 4);
-  g.lineTo(x + w - 10, y + 4);
-  g.quadraticCurveTo(x + w, y + 4, x + w, y + 16);
-  g.lineTo(x + w, bodyB);
-  g.lineTo(x + 6, bodyB);
-  g.quadraticCurveTo(x, bodyB, x + 1, bodyB - 12);
-  g.lineTo(x + 6, y + 30);
-  g.quadraticCurveTo(x + 10, y + 6, x + nose, y + 4);
-  g.closePath();
-  const bg = g.createLinearGradient(0, y, 0, bodyB);
-  bg.addColorStop(0, "#e02a36");
-  bg.addColorStop(0.55, "#b5121f");
-  bg.addColorStop(1, "#6e0a13");
-  g.fillStyle = bg;
-  g.fill();
-  g.lineWidth = 3;
-  g.strokeStyle = "#2a0508";
   g.stroke();
-  // Dach
-  g.fillStyle = "#d9dce2";
-  g.fillRect(x + nose - 4, y, w - nose - 4, 8);
-  g.fillStyle = "#8e939d";
-  g.fillRect(x + nose - 4, y + 7, w - nose - 4, 2);
-  // Dachaufbauten (flach)
-  g.fillStyle = "#aeb3bd";
-  const nBox = Math.max(1, Math.floor(w / 260));
-  for (let i = 0; i < nBox; i += 1) {
-    const bx = x + 70 + i * ((w - 140) / Math.max(1, nBox - 1 || 1));
-    roundRect(g, bx, y - 6, 60, 7, 3);
-    g.fill();
-  }
-  // Stromabnehmer (eingeklappt) + Funken
+  // Funken am Stromabnehmer
   const px = x + w - 110;
-  g.strokeStyle = "#3a3e47";
-  g.lineWidth = 3;
-  g.beginPath();
-  g.moveTo(px, y - 1);
-  g.lineTo(px + 34, y - 16);
-  g.lineTo(px + 62, y - 6);
-  g.stroke();
+  g.globalCompositeOperation = "lighter";
   if (!c.reduced && Math.sin(t * 9 + e.id) > 0.93) {
-    g.globalCompositeOperation = "lighter";
     g.fillStyle = "rgba(170,210,255,0.9)";
     for (let i = 0; i < 6; i += 1) {
       const a = hash(e.id + i + Math.floor(t * 20)) * Math.PI * 2;
       g.fillRect(px + 34 + Math.cos(a) * 10, y - 18 + Math.sin(a) * 8, 2, 2);
     }
-    const sg = g.createRadialGradient(px + 34, y - 16, 0, px + 34, y - 16, 26);
-    sg.addColorStop(0, "rgba(180,220,255,0.8)");
-    sg.addColorStop(1, "rgba(180,220,255,0)");
-    g.fillStyle = sg;
-    g.fillRect(px + 8, y - 42, 52, 52);
-    g.globalCompositeOperation = "source-over";
+    g.globalAlpha = 0.8;
+    g.drawImage(fx.head, px + 8, y - 42, 52, 52);
+    g.globalAlpha = 1;
   }
-  // Fensterband
-  const winTop = y + 20;
-  const winH = 46;
-  const segs = Math.max(1, Math.round(w / 260));
-  const segW = (w - nose) / segs;
-  const wg = g.createLinearGradient(0, winTop, 0, winTop + winH);
-  wg.addColorStop(0, "#f7d9a0");
-  wg.addColorStop(1, "#b0763f");
-  g.fillStyle = wg;
-  g.fillRect(x + nose + 4, winTop, w - nose - 12, winH);
-  // Fahrgäste
-  g.fillStyle = "rgba(60,30,20,0.55)";
-  for (let i = 0; i < Math.floor(w / 46); i += 1) {
-    if (hash(e.id * 3 + i) < 0.45) continue;
-    const hx = x + nose + 20 + i * 46 + hash(i + e.id) * 10;
-    g.beginPath();
-    g.arc(hx, winTop + winH - 16, 7, 0, Math.PI * 2);
-    g.fill();
-    g.fillRect(hx - 9, winTop + winH - 10, 18, 10);
-  }
-  // Fensterstege + Türen
-  g.fillStyle = "#1c0e10";
-  for (let s = 0; s < segs; s += 1) {
-    const s0 = x + nose + s * segW;
-    for (let p = s0 + 50; p < s0 + segW - 20; p += 50) g.fillRect(p, winTop, 5, winH);
-    // Tür
-    const dx = s0 + segW * 0.38;
-    g.fillStyle = "#6b0a12";
-    g.fillRect(dx, winTop - 6, 40, bodyB - winTop + 2);
-    const dg = g.createLinearGradient(0, winTop, 0, bodyB);
-    dg.addColorStop(0, "rgba(247,217,160,0.95)");
-    dg.addColorStop(1, "rgba(120,70,40,0.9)");
-    g.fillStyle = dg;
-    g.fillRect(dx + 4, winTop - 2, 14, bodyB - winTop - 10);
-    g.fillRect(dx + 22, winTop - 2, 14, bodyB - winTop - 10);
-    g.fillStyle = "#1c0e10";
-    // Gelenk
-    if (s > 0) {
-      g.fillStyle = "#1a1b20";
-      g.fillRect(s0 - 6, y + 10, 12, bodyB - y - 12);
-      g.fillStyle = "#34363d";
-      for (let r = y + 14; r < bodyB - 4; r += 6) g.fillRect(s0 - 6, r, 12, 2);
-    }
-    g.fillStyle = "#1c0e10";
-  }
-  // Weißer Zierstreifen
-  g.fillStyle = "#efe9dc";
-  g.fillRect(x + 8, winTop + winH + 4, w - 12, 9);
-  g.fillStyle = "rgba(0,0,0,0.25)";
-  g.fillRect(x + 8, winTop + winH + 12, w - 12, 2);
-  // Front: Frontscheibe + Zielanzeige
-  g.fillStyle = "#1b2430";
-  g.beginPath();
-  g.moveTo(x + nose + 2, winTop - 2);
-  g.lineTo(x + 9, winTop + 10);
-  g.lineTo(x + 6, winTop + winH);
-  g.lineTo(x + nose + 2, winTop + winH);
-  g.closePath();
-  g.fill();
-  g.fillStyle = "rgba(170,200,240,0.35)";
-  g.beginPath();
-  g.moveTo(x + nose - 2, winTop + 2);
-  g.lineTo(x + 14, winTop + 12);
-  g.lineTo(x + 13, winTop + 22);
-  g.closePath();
-  g.fill();
-  g.fillStyle = "#111";
-  g.fillRect(x + nose + 4, y + 8, 46, 11);
-  g.fillStyle = "#ffae2b";
-  g.font = "bold 9px system-ui, sans-serif";
-  g.textBaseline = "middle";
-  g.fillText("D  Ring", x + nose + 8, y + 14);
   // Scheinwerfer
-  g.globalCompositeOperation = "lighter";
-  for (const hy of [bodyB - 20]) {
-    const hg = g.createRadialGradient(x + 8, hy, 0, x + 8, hy, 34);
-    hg.addColorStop(0, "rgba(255,250,220,1)");
-    hg.addColorStop(0.3, "rgba(255,230,160,0.45)");
-    hg.addColorStop(1, "rgba(255,230,160,0)");
-    g.fillStyle = hg;
-    g.fillRect(x - 26, hy - 34, 68, 68);
-  }
+  g.drawImage(fx.head, x + 8 - 34, bodyB - 20 - 34);
   // Nässe-Glanz / Blitzreflex
-  const gl = 0.18 + c.flash * 0.6;
-  g.fillStyle = `rgba(210,225,255,${gl})`;
-  g.fillRect(x + nose, y + 10, w - nose - 8, 3);
-  g.fillRect(x + 10, winTop + winH + 16, w - 20, 2);
+  g.fillStyle = `rgba(210,225,255,${(0.18 + c.flash * 0.6).toFixed(3)})`;
+  g.fillRect(x + 26, y + 10, w - 34, 3);
+  g.fillRect(x + 10, y + 82, w - 20, 2);
   g.globalCompositeOperation = "source-over";
   g.restore();
 }
@@ -284,12 +346,31 @@ export function drawFiaker(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: 
 // ---------------------------------------------------------------------------------------------------
 // Taube
 
-export function drawPigeon(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: number, v: ViewState): void {
+export function drawPigeon(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: number, v: ViewState, c: SkinCtx, rim: HTMLCanvasElement | null): void {
   const cx = sx + e.w / 2;
   const cy = sy + e.h / 2;
+  const defeated = e.state === "defeated";
+  // helles Gegenlicht hinter jeder Taube: hebt die graue Taube vor grauen Fassaden ab
+  if (rim && !defeated) {
+    g.save();
+    g.globalCompositeOperation = "lighter";
+    g.globalAlpha = 0.5 + c.flash * 0.3;
+    g.drawImage(rim, Math.round(cx - rim.width / 2), Math.round(cy - 2 - rim.height / 2));
+    g.restore();
+  }
+  if (c.props?.has("pigeon-fly")) {
+    g.save();
+    if (defeated) {
+      g.translate(cx, cy);
+      g.rotate(e.stateT * 6);
+      g.translate(-cx, -cy);
+    }
+    c.props.draw(g, "pigeon-fly", cx, cy - 3, { h: 58, flipX: true, t: v.time + e.id * 0.137 });
+    g.restore();
+    return;
+  }
   const t = v.time * 16 + e.id * 1.3;
   const flap = Math.sin(t);
-  const defeated = e.state === "defeated";
   g.save();
   g.translate(cx, cy);
   if (defeated) g.rotate(e.stateT * 6);
@@ -466,36 +547,45 @@ export function drawBolt(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: nu
     beam.addColorStop(1, `rgba(160,190,255,${0.22 * k * pulse})`);
     g.fillStyle = beam;
     g.fillRect(cx - e.w * 0.35, 0, e.w * 0.7, gy);
-    // Warnsymbol (Blitz-Piktogramm im Kreis) schwebt darüber
-    const iy = gy - 170 - Math.sin(v.time * 6) * 4;
+    // Warnsymbol: Gefahrendreieck mit Blitz, darunter ein schrumpfender Countdown-Balken
+    const iy = gy - 176 - (c.reduced ? 0 : Math.sin(v.time * 6) * 4);
     g.globalCompositeOperation = "source-over";
-    g.globalAlpha = 0.75 + 0.25 * pulse;
-    g.fillStyle = "rgba(20,24,40,0.8)";
-    g.strokeStyle = "#ffd84a";
-    g.lineWidth = 3;
+    g.globalAlpha = 0.8 + 0.2 * pulse;
+    g.lineJoin = "round";
+    g.fillStyle = "#ffcc1f";
+    g.strokeStyle = "#1a1300";
+    g.lineWidth = 4;
     g.beginPath();
-    g.arc(cx, iy, 26, 0, Math.PI * 2);
-    g.fill();
-    g.stroke();
-    // Countdown-Ring
-    g.strokeStyle = "#ffffff";
-    g.lineWidth = 3;
-    g.beginPath();
-    g.arc(cx, iy, 31, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (1 - k));
-    g.stroke();
-    g.fillStyle = "#ffd84a";
-    g.strokeStyle = "#3b2a00";
-    g.lineWidth = 2;
-    g.beginPath();
-    g.moveTo(cx + 4, iy - 18);
-    g.lineTo(cx - 9, iy + 2);
-    g.lineTo(cx - 1, iy + 2);
-    g.lineTo(cx - 5, iy + 18);
-    g.lineTo(cx + 9, iy - 3);
-    g.lineTo(cx + 1, iy - 3);
+    g.moveTo(cx, iy - 30);
+    g.lineTo(cx + 30, iy + 22);
+    g.lineTo(cx - 30, iy + 22);
     g.closePath();
     g.fill();
     g.stroke();
+    g.strokeStyle = `rgba(255,70,50,${0.55 + 0.45 * pulse})`;
+    g.lineWidth = 2.5;
+    g.beginPath();
+    g.moveTo(cx, iy - 38);
+    g.lineTo(cx + 37, iy + 26);
+    g.lineTo(cx - 37, iy + 26);
+    g.closePath();
+    g.stroke();
+    g.fillStyle = "#1a1300";
+    g.beginPath();
+    g.moveTo(cx + 3, iy - 16);
+    g.lineTo(cx - 8, iy + 3);
+    g.lineTo(cx - 1, iy + 3);
+    g.lineTo(cx - 4, iy + 17);
+    g.lineTo(cx + 8, iy - 2);
+    g.lineTo(cx + 1, iy - 2);
+    g.closePath();
+    g.fill();
+    // Countdown-Balken
+    g.fillStyle = "rgba(20,24,40,0.85)";
+    g.fillRect(cx - 30, iy + 32, 60, 6);
+    g.fillStyle = "#ffffff";
+    g.fillRect(cx - 29, iy + 33, 58 * (1 - k), 4);
+    g.globalAlpha = 1;
   } else if (e.state === "active") {
     const flick = c.reduced ? 1 : 0.7 + 0.3 * Math.sin(v.time * 90);
     const seed = e.id * 17 + Math.floor(v.time * (c.reduced ? 4 : 30));
@@ -901,9 +991,18 @@ export function drawRoofTile(g: CanvasRenderingContext2D, e: Ent, sx: number, sy
     g.lineTo(cx + 70 + i * 14, cy - 8 + i * 8);
   }
   g.stroke();
+  // Warnschein (Lesbarkeit vor dunklen Fassaden)
+  g.globalCompositeOperation = "lighter";
+  const rg = g.createRadialGradient(cx, cy, 2, cx, cy, e.w * 0.95);
+  rg.addColorStop(0, "rgba(255,150,90,0.45)");
+  rg.addColorStop(1, "rgba(255,120,60,0)");
+  g.fillStyle = rg;
+  g.fillRect(cx - e.w, cy - e.w, e.w * 2, e.w * 2);
+  g.globalCompositeOperation = "source-over";
   g.translate(cx, cy);
   g.rotate(v.time * -9 + e.id);
-  g.fillStyle = "#b5482c";
+  g.scale(1.25, 1.25);
+  g.fillStyle = "#c9502e";
   g.strokeStyle = "#3a120a";
   g.lineWidth = 2.5;
   g.beginPath();

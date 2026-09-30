@@ -318,18 +318,16 @@ export class Renderer {
     // --- Hintergrund + Boden ---
     const blend = sim.nextGate ? sim.gateBlend : 0;
     const pits = sim.pitsOnScreen(view.dist);
+    const crossfade = blend > 0.001 && !!f.next;
     if (f.current) {
       f.current.drawBackground(g, view);
-      if (blend > 0.001 && f.next) {
-        g.globalAlpha = blend;
-        f.next.drawBackground(g, f.nextView);
-        g.globalAlpha = 1;
-      }
       f.current.drawGround(g, view, pits);
-      if (blend > 0.001 && f.next) {
-        g.globalAlpha = blend;
-        f.next.drawGround(g, f.nextView, pits);
-        g.globalAlpha = 1;
+      if (crossfade && f.next) {
+        // Zielwelt in Zwischenfläche rendern und mit Deckkraft überblenden (unabhängig davon, ob Welten globalAlpha zurücksetzen)
+        this.compositeWorld(g, blend, (xg) => {
+          f.next?.drawBackground(xg, f.nextView);
+          f.next?.drawGround(xg, f.nextView, pits);
+        });
       }
     } else {
       g.fillStyle = "#0e1226";
@@ -353,20 +351,47 @@ export class Renderer {
     this.particles.draw(g);
     if (f.current) {
       f.current.drawForeground(g, view);
-      if (blend > 0.001 && f.next) {
-        g.globalAlpha = blend;
-        f.next.drawForeground(g, f.nextView);
-        g.globalAlpha = 1;
+      if (crossfade && f.next) {
+        this.compositeWorld(g, blend, (xg) => f.next?.drawForeground(xg, f.nextView));
       }
     }
-    this.drawWarnMarkers(g, f);
     g.restore();
 
     // --- Post ---
     if (f.current?.drawOverlay) f.current.drawOverlay(g, view);
+    // Warnpfeile liegen über dem Licht-/Dunkelheits-Overlay (bleiben in dunklen Welten voll sichtbar)
+    this.drawWarnMarkers(g, f);
     this.drawPost(g, f);
     this.particles.drawPopups(g);
     if (f.hud) drawHud(g, f.hud);
+  }
+
+  private xfade: HTMLCanvasElement | null = null;
+
+  /** Zeichnet `paint` in eine Zwischenfläche (gleiche Transformation wie die Hauptfläche) und blendet sie mit `alpha` ein. */
+  private compositeWorld(g: CanvasRenderingContext2D, alpha: number, paint: (xg: CanvasRenderingContext2D) => void): void {
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+    if (!this.xfade || this.xfade.width !== cw || this.xfade.height !== ch) {
+      this.xfade = document.createElement("canvas");
+      this.xfade.width = cw;
+      this.xfade.height = ch;
+    }
+    const xg = this.xfade.getContext("2d");
+    if (!xg) return;
+    xg.setTransform(1, 0, 0, 1, 0, 0);
+    xg.clearRect(0, 0, cw, ch);
+    xg.setTransform(this.scale, 0, 0, this.scale, 0, 0);
+    xg.imageSmoothingEnabled = true;
+    xg.imageSmoothingQuality = "high";
+    xg.globalAlpha = 1;
+    xg.globalCompositeOperation = "source-over";
+    paint(xg);
+    g.save();
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalAlpha = Math.min(1, Math.max(0, alpha));
+    g.drawImage(this.xfade, 0, 0);
+    g.restore();
   }
 
   private drawEnt(g: CanvasRenderingContext2D, f: FrameData, e: Ent, sx: number, sy: number): void {

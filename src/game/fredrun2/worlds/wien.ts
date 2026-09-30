@@ -25,5 +25,5 @@ export const WORLD_WIEN: WorldDef = {
   patterns: WIEN_PATTERNS,
   createSystems: () => [new WienSystem()],
   createRenderer: () => new WienRenderer(),
-  propIds: ["fiaker", "traffic-cone", "park-bench", "wuerstelstand", ...GUEST_PROP_IDS],
+  propIds: ["fiaker", "traffic-cone", "park-bench", "wuerstelstand", "pigeon-fly", ...GUEST_PROP_IDS],
 };

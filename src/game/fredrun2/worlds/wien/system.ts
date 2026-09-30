@@ -37,6 +37,8 @@ export class WienSystem implements WorldSystem {
   private thunder: number[] = [];
   private boltT = 6;
   private time = 0;
+  /** Sperrzeit für das Gurren (ein Laut pro Schwarm) */
+  private cooT = 0;
 
   reset(sim: Sim): void {
     this.rng = new Rng((sim.cfg.seed ^ 0x5a17) >>> 0);
@@ -44,6 +46,7 @@ export class WienSystem implements WorldSystem {
     this.thunder = [];
     this.boltT = 5 + this.rng.range(0, 4);
     this.time = 0;
+    this.cooT = 0;
     sim.vars.lightning = 0;
   }
 
@@ -79,7 +82,8 @@ export class WienSystem implements WorldSystem {
       }
     }
 
-    // Muster-Blitze: Himmel reagiert, Straßenbahn-Klingel
+    // Muster-Blitze: Himmel reagiert, Straßenbahn-Klingel, Taubenschwarm gurrt beim Auftauchen
+    this.cooT = Math.max(0, this.cooT - dt);
     for (const e of sim.ents) {
       if (e.dead) continue;
       if (e.skin === "bolt" && e.state === "active" && !e.fx.flashed) {
@@ -90,6 +94,12 @@ export class WienSystem implements WorldSystem {
       } else if (e.skin === "tram" && !e.fx.bell && e.x - sim.dist < 1280 + 520) {
         e.fx.bell = 1;
         sim.emit("custom", Math.min(1280, e.x - sim.dist), e.y, { tag: "sfx:tram-bell" });
+      } else if (e.skin === "pigeon" && !e.fx.coo && e.x - sim.dist < 1280 + 60) {
+        e.fx.coo = 1;
+        if (this.cooT <= 0) {
+          this.cooT = 1.5;
+          sim.emit("custom", Math.min(1280, e.x - sim.dist), e.y, { tag: "sfx:pigeon" });
+        }
       }
     }
 

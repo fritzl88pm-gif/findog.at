@@ -66,6 +66,11 @@ export const SKY_BOT: RGB[] = [
   [104, 108, 116],
 ];
 
-/** Fassaden-Variante je Stufe (Index in FACADE_VARIANTS) */
-export const FACADE_OF_STAGE = [0, 0, 1, 2, 3, 3, 4, 4];
+/** Fassaden-Variante je Stufe (Index in FACADE_VARIANTS): intakt → Sturmschaden → Rauch → Brand → Ruine → kalte Ruine */
+export const FACADE_OF_STAGE = [0, 0, 1, 2, 3, 3, 4, 5];
 export const ROOF_OF_STAGE = [0, 0, 1, 1, 1, 1, 2, 2];
+/** Dunstdichte vor den Fassaden bzw. am Fuß der Dachlandschaft */
+export const FACADE_HAZE = [0.34, 0.42, 0.46, 0.55, 0.5, 0.5, 0.4, 0.46];
+export const ROOF_HAZE = [0.62, 0.62, 0.62, 0.64, 0.6, 0.6, 0.44, 0.5];
+/** Anteil intakter Oberleitungsfelder (Rest: gerissen, baumelnd; ab Stufe 6 nur noch Stümpfe) */
+export const WIRES = [1, 1, 0.7, 0.5, 0.35, 0.2, 0, 0];

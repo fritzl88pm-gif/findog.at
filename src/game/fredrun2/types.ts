@@ -29,6 +29,7 @@ export type PickupType = "coin" | "gem" | "heart" | "magnet" | "shield" | "slowm
  *  projectile Geschoss mit vx (und optional Bogen p.gravity). Zerstörbar per Dash.
  *  swinger    Pendel (p.ax, p.ay = Ankerpunkt in Weltkoordinaten relativ zum Muster-Start, p.len, p.amp rad, p.per s, p.ph, p.r = Radius).
  *  zone       Zeitgesteuerte Gefahrenzone (Blitz, Stempel, Laser …): `cycle.phases` (warn/active/idle), Treffer nur in harmful-Phase.
+ *             `p.blockStand = 1` verhindert das Aufstehen aus dem Rutschen unter der Zone (wie ein Überhang).
  *  spring     Sprungfeder / Trampolin (Bodenkontakt → SPRING_V).
  *  portal     Schwerkraft-Portal (senkrechte Linie): kippt die Schwerkraft beim Durchlaufen (nur in Welten mit gravityFlip).
  *  wind       Aufwindzone (Rechteck): p.lift = Beschleunigung nach oben (px/s²) solange Spieler drin ist.

@@ -464,10 +464,11 @@ export function drawGhost(g: Ctx2D, A: PraterSkinAssets, e: Ent, sx: number, sy:
   g.globalCompositeOperation = "source-over";
   g.globalAlpha = alpha * 0.92;
   const props = A.props;
+  const id = props?.has("ghost-float") ? "ghost-float" : "ghost";
   const drawn =
     !!props &&
-    props.has("ghost") &&
-    props.draw(g, "ghost", cx, sy + e.h * 1.02, { h: e.h * 1.12, flipX: true, rotation: wob, ax: 0.5, ay: 0.98 });
+    props.has(id) &&
+    props.draw(g, id, cx, sy + e.h * 1.02, { h: e.h * 1.12, flipX: true, rotation: wob, ax: 0.5, ay: 0.98, t: v.time + e.id * 0.29 });
   if (!drawn) {
     // Prozeduraler Geist
     g.save();

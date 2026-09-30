@@ -417,7 +417,7 @@ export class Sim {
     const top = p.gravDir === 1 ? feet - PLAYER_H : feet;
     const box: Box = { x0: cx - PLAYER_W / 2, x1: cx + PLAYER_W / 2, y0: top, y1: top + PLAYER_H };
     for (const e of this.ents) {
-      if (e.kind !== "overhead" || e.dead) continue;
+      if (e.dead || !(e.kind === "overhead" || (e.kind === "zone" && e.p.blockStand))) continue;
       if (e.x > cx + 200 || e.x + e.w < cx - 200) continue;
       if (overlap(box, this.entBox(e))) return false;
     }

@@ -1,37 +1,44 @@
 /**
  * Wien – Renderer: gemalte Katastrophen-Kulisse (8 Stufen, gespiegelt gekachelt) + prozedurale Dachlandschaft,
- * Gründerzeit-Fassaden, Laternen/Platanen, Oberleitung, nasses Kopfsteinpflaster mit Gleisen, Regen/Glut/Asche,
- * Blitze.
+ * Gründerzeit-Fassaden mit Fensterlicht und Leuchtreklamen (Brand → Ruine), Rauchsäulen und Dachbrände, Laternen,
+ * Platanen, Litfaßsäulen, Oberleitungsmasten mit (später gerissener) Fahrleitung, nasses Kopfsteinpflaster mit Gleisen
+ * und Spiegelungen, Regen/Glut/Asche, Blitze.
+ *
+ * Performance: Ebenen werden je Stufe VORGEBACKEN (Dunst eingerechnet) und nur 1:1 an ganzzahligen Positionen
+ * geblittet; Verläufe, Lichthöfe und Rauchwolken liegen als fertige Flächen in fester Größe vor (siehe cache.ts).
  */
 import { clamp } from "../../draw-utils";
 import type { AssetLoader, Ent, PropLibrary, ViewState, WorldRenderer } from "../../types";
 import { Motes, Rain } from "../shared-a/fx";
+import { css, groundSegments, hash, lerpRgb, stageRgb, stageVal, type RGB, type Tile } from "../shared-a/gfx";
+import { StageCache, prepareStaged } from "../shared-b/layers";
+import { MirrorBackdrop, SizedSprites, blitAt, blitRange, blitRow, blitSlice, canvas, ellipseGlow, mod, vGradient } from "./cache";
 import {
-  PaintedBackdrop,
-  blitTiled,
-  blitTiledClip,
-  css,
-  groundSegments,
-  hash,
-  stageRgb,
-  stageVal,
-  type Tile,
-} from "../shared-a/gfx";
-import {
+  MAST_AX,
+  MAST_H,
+  MAST_TIP_X,
+  MAST_TIP_Y,
+  MAST_W,
+  paintBareTree,
   paintClouds,
   paintFacades,
+  paintFlameFrames,
   paintGlow,
   paintLamp,
   paintLampOff,
   paintLitfass,
+  paintMast,
   paintRainSheet,
   paintRooftops,
+  paintShaft,
   paintSmokePuff,
   paintStreet,
   paintTree,
   type FacadeOpts,
+  type FacadeTile,
 } from "./scenery";
 import {
+  TramBodies,
   drawBauzaun,
   drawBolt,
   drawBrick,
@@ -50,17 +57,20 @@ import {
 import {
   ASH,
   CLOUDS,
+  FACADE_HAZE,
   FACADE_OF_STAGE,
   FIRE,
   HAZE,
   LAMPS,
   RAIN,
+  ROOF_HAZE,
   ROOF_OF_STAGE,
   SKY_BOT,
   SKY_TOP,
   SMOKE,
   WIEN_BACKDROPS,
   WIND,
+  WIRES,
 } from "./stages";
 
 const FACADE_VARIANTS: FacadeOpts[] = [
@@ -68,7 +78,8 @@ const FACADE_VARIANTS: FacadeOpts[] = [
   { lit: 0.3, fire: 0, damage: 1 },
   { lit: 0.08, fire: 0.07, damage: 1 },
   { lit: 0, fire: 0.34, damage: 1 },
-  { lit: 0, fire: 0.02, damage: 2 },
+  { lit: 0, fire: 0, damage: 2, embers: true },
+  { lit: 0, fire: 0, damage: 2, embers: false },
 ];
 const ROOF_VARIANTS = [
   { lit: 0.42, ruin: 0 },
@@ -76,116 +87,288 @@ const ROOF_VARIANTS = [
   { lit: 0, ruin: 1 },
 ];
 
-/** Dunstdichte vor den Fassaden je Stufe */
-const FACADE_HAZE = [0.34, 0.42, 0.46, 0.55, 0.5, 0.5, 0.62, 0.66];
+const LAST = 7;
 const FACADE_W = 2048;
 const FACADE_H = 320;
 const FACADE_BOTTOM = 580;
+const FACADE_Y = FACADE_BOTTOM - FACADE_H;
+const FACADE_PAR = 0.38;
 const ROOF_W = 2048;
 const ROOF_H = 200;
+const ROOF_PAR = 0.16;
+/** Gemalte Kulisse: Bildoberkante bei y = -84, Bildhöhe 560; gespeichert wird nur der sichtbare Teil bis BACK_H */
+const BACK_TOP = -84;
+const BACK_DRAW_H = 560;
+const BACK_H = 476;
+const BACK_PAR = 0.06;
 const NEAR_PAR = 0.72;
 const NEAR_SLOT = 190;
-const WIRE_SPAN = 430;
+/** Oberleitung: Masten in jedem 3. Nah-Slot (Slot % 3 === 1) */
+const WIRE_SPAN = NEAR_SLOT * 3;
+const CARRIER_Y = 64 + MAST_TIP_Y;
+const CONTACT_Y = 118;
+const GROUND_H = 130;
+
+/** Farbe unter/hinter der Kulisse (Übergang in den Stadtdunst) */
+function footRgb(s: number): RGB {
+  return lerpRgb(SKY_BOT[s], HAZE[s], 0.55);
+}
+
+function wetOf(s: number): number {
+  return Math.max(RAIN[s], 0.3) * (1 - ASH[s] * 0.8);
+}
 
 export class WienRenderer implements WorldRenderer {
-  private backdrop = new PaintedBackdrop(
-    WIEN_BACKDROPS.map((url) => ({ url, seam: "mirror" as const })),
-    560,
-    3,
-  );
-  private facades: Array<Tile | null> = [];
-  private roofs: Array<Tile | null> = [];
-  private clouds: Tile | null = null;
-  private smoke: Tile | null = null;
-  private steam: Tile | null = null;
-  private street: Tile | null = null;
+  private backdrop = new MirrorBackdrop(WIEN_BACKDROPS, BACK_TOP, BACK_DRAW_H, BACK_H, (s) => ({ foot: css(footRgb(s)) }));
+  private facadeVar = new Map<number, FacadeTile>();
+  private roofVar = new Map<number, Tile>();
+  private facades = new StageCache((s) => this.bakeFacade(s));
+  private roofs = new StageCache((s) => this.bakeRoof(s));
+  private reflections = new StageCache((s) => this.bakeReflection(s));
+  private staged: StageCache[] = [this.backdrop.cache, this.facades, this.roofs, this.reflections];
+  private roofSlots: Array<[number, number, number]> = [];
+
+  private clouds1: HTMLCanvasElement | null = null;
+  private clouds2: HTMLCanvasElement | null = null;
+  private rainSheet: HTMLCanvasElement | null = null;
+  private street: HTMLCanvasElement | null = null;
+  private shaft: HTMLCanvasElement | null = null;
+  private shaftEdge: HTMLCanvasElement | null = null;
+  private puffs: SizedSprites | null = null;
+  private steam: SizedSprites | null = null;
+  private flames: HTMLCanvasElement[] = [];
+  private fx: {
+    skyFlash: HTMLCanvasElement;
+    horizonFire: HTMLCanvasElement;
+    facadeFire: HTMLCanvasElement;
+    facadeFlash: HTMLCanvasElement;
+    groundFade: HTMLCanvasElement;
+    overlayTop: HTMLCanvasElement;
+    overlayFire: HTMLCanvasElement;
+    lampSmall: HTMLCanvasElement;
+    lampBig: HTMLCanvasElement;
+    lampRefl: HTMLCanvasElement;
+    roofGlow: HTMLCanvasElement;
+    ember: HTMLCanvasElement;
+    wurstel: HTMLCanvasElement;
+    fgSmoke: HTMLCanvasElement;
+    pigeonRim: HTMLCanvasElement;
+    spark: HTMLCanvasElement;
+  } | null = null;
+
+  // Nah-Sprites (in Pixeldichte k gerendert)
   private lamp: Tile | null = null;
   private lampOff: Tile | null = null;
+  private mast: Tile | null = null;
+  private mastBroken: Tile | null = null;
   private trees: Tile[] = [];
+  private bareTrees: Tile[] = [];
   private litfass: Tile | null = null;
-  private rainSheet: Tile | null = null;
-  private glowWarm: Tile | null = null;
-  private glowCold: Tile | null = null;
+
   private props: PropLibrary | null = null;
+  private tramBodies = new TramBodies();
   private rain = new Rain(380);
   private motes = new Motes(220);
   private k = 1;
-  private built = false;
+  private nearK = 0;
   private skinCtx: SkinCtx = { props: null, flash: 0, stage: 0, reduced: false };
   private emberT = 0;
   private ashT = 0;
   private debrisT = 0;
-  private lastStage = -1;
   private lightning = 0;
+  private sidewalk: CanvasGradient | null = null;
 
   async load(assets: AssetLoader): Promise<void> {
     this.props = assets.props;
     this.skinCtx.props = assets.props;
-    await this.backdrop.load(assets.image);
+    await Promise.all([this.backdrop.load(assets.image), assets.props.preload(["pigeon-fly"])]);
     this.buildStatic();
-    // große Kacheln verteilt vorbereiten (hält den Hauptthread reaktionsfähig)
-    for (let i = 0; i < FACADE_VARIANTS.length; i += 1) {
-      this.facade(i);
+    await Promise.resolve();
+    this.buildNear();
+    // erste beiden Stufen vorbereiten (verteilt, hält den Hauptthread reaktionsfähig)
+    for (const c of this.staged) {
+      c.get(0);
+      await Promise.resolve();
+      c.get(1);
       await Promise.resolve();
     }
-    for (let i = 0; i < ROOF_VARIANTS.length; i += 1) this.roof(i);
-    this.backdrop.warm(0);
-    this.backdrop.warm(1);
   }
 
   resize(dpr: number): void {
-    const k = clamp(dpr, 1, 2);
-    if (Math.abs(k - this.k) > 0.01) {
-      this.k = k;
-      this.built = false;
-    }
+    this.k = clamp(dpr, 1, 2);
   }
+
+  // --- Vorrendern ----------------------------------------------------------------------------------
 
   private buildStatic(): void {
-    if (this.built) return;
-    this.built = true;
+    if (this.fx) return;
+    const cl = paintClouds(2048, 300).canvas;
+    this.clouds1 = cl;
+    this.clouds2 = canvas(2048, 220, (g) => g.drawImage(cl, 0, 0, 2048, 220));
+    this.rainSheet = paintRainSheet(512, 512).canvas;
+    this.street = paintStreet(512, GROUND_H, 1).canvas;
+    this.shaft = paintShaft(280, GROUND_H);
+    this.shaftEdge = canvas(40, GROUND_H, (g) => {
+      const lg = g.createLinearGradient(0, 0, 40, 0);
+      lg.addColorStop(0, "rgba(0,0,0,0.7)");
+      lg.addColorStop(1, "rgba(0,0,0,0)");
+      g.fillStyle = lg;
+      g.fillRect(0, 0, 40, GROUND_H);
+    });
+    this.puffs = new SizedSprites((s) => paintSmokePuff(s).canvas, 48, 464, 32);
+    this.steam = new SizedSprites((s) => paintGlow(s, "rgba(220,225,235,0.5)").canvas, 32, 208, 16);
+    this.flames = paintFlameFrames(8);
+    const warm = (a: number): Array<[number, string]> => [
+      [0, `rgba(255,196,110,${a})`],
+      [0.25, "rgba(255,196,110,0.35)"],
+      [1, "rgba(255,196,110,0)"],
+    ];
+    const smokeTile = paintSmokePuff(256).canvas;
+    this.fx = {
+      skyFlash: ellipseGlow(1040, 520, [
+        [0, "rgba(170,200,255,0.6)"],
+        [0.25, "rgba(170,200,255,0.35)"],
+        [1, "rgba(170,200,255,0)"],
+      ], 520, 70, 520, 450),
+      horizonFire: vGradient(1280, 410, [
+        [0, "rgba(255,90,20,0)"],
+        [0.6, "rgba(255,110,30,0.22)"],
+        [1, "rgba(255,150,60,0.4)"],
+      ]),
+      facadeFire: vGradient(1280, FACADE_H - 60, [
+        [0, "rgba(255,110,40,0)"],
+        [1, "rgba(255,120,40,0.28)"],
+      ]),
+      facadeFlash: vGradient(1280, FACADE_H - 40, [
+        [0, "rgba(150,175,230,0)"],
+        [0.35, "rgba(150,175,230,0.2)"],
+        [1, "rgba(150,175,230,0.14)"],
+      ]),
+      groundFade: vGradient(1280, GROUND_H, [
+        [0, "rgba(8,10,16,0)"],
+        [1, "rgba(8,10,16,0.5)"],
+      ]),
+      overlayTop: vGradient(1280, 260, [
+        [0, "rgba(6,8,16,0.32)"],
+        [1, "rgba(6,8,16,0)"],
+      ]),
+      overlayFire: vGradient(1280, 260, [
+        [0, "rgba(255,90,30,0)"],
+        [1, "rgba(255,90,30,0.12)"],
+      ]),
+      lampSmall: ellipseGlow(180, 180, warm(0.55)),
+      lampBig: ellipseGlow(320, 260, warm(0.55)),
+      lampRefl: ellipseGlow(44, 120, warm(0.55)),
+      roofGlow: ellipseGlow(220, 200, warm(0.55)),
+      ember: ellipseGlow(36, 24, warm(0.55)),
+      wurstel: ellipseGlow(184, 112, warm(0.55)),
+      fgSmoke: canvas(420, 300, (g) => g.drawImage(smokeTile, 0, 0, 420, 300)),
+      pigeonRim: ellipseGlow(76, 56, [
+        [0, "rgba(235,240,255,0.55)"],
+        [0.5, "rgba(200,215,245,0.22)"],
+        [1, "rgba(200,215,245,0)"],
+      ]),
+      spark: ellipseGlow(40, 40, [
+        [0, "rgba(230,240,255,1)"],
+        [0.3, "rgba(150,190,255,0.5)"],
+        [1, "rgba(120,160,255,0)"],
+      ]),
+    };
+    this.roofSlots = this.facadeVariant(0).roofs;
+  }
+
+  private buildNear(): void {
+    if (this.nearK === this.k && this.lamp) return;
     const k = this.k;
-    this.street = paintStreet(512, 130, k);
+    this.nearK = k;
     this.lamp = paintLamp(k);
     this.lampOff = paintLampOff(k);
+    this.mast = paintMast(k, false);
+    this.mastBroken = paintMast(k, true);
     this.trees = [paintTree(k, 1), paintTree(k, 2), paintTree(k, 3)];
+    this.bareTrees = [paintBareTree(k, 1), paintBareTree(k, 2)];
     this.litfass = paintLitfass(k);
-    if (!this.clouds) this.clouds = paintClouds(2048, 300);
-    if (!this.rainSheet) this.rainSheet = paintRainSheet(512, 512);
-    if (!this.smoke) this.smoke = paintSmokePuff(256);
-    if (!this.steam) {
-      this.steam = paintGlow(128, "rgba(220,225,235,0.5)");
-      this.glowWarm = paintGlow(256, "rgba(255,196,110,0.55)");
-      this.glowCold = paintGlow(256, "rgba(170,200,255,0.6)");
-    }
   }
 
-  private facade(i: number): Tile {
-    let t = this.facades[i];
+  private facadeVariant(i: number): FacadeTile {
+    let t = this.facadeVar.get(i);
     if (!t) {
       t = paintFacades(FACADE_W, FACADE_H, FACADE_VARIANTS[i]);
-      this.facades[i] = t;
+      this.facadeVar.set(i, t);
     }
     return t;
   }
 
-  private roof(i: number): Tile {
-    let t = this.roofs[i];
+  private roofVariant(i: number): Tile {
+    let t = this.roofVar.get(i);
     if (!t) {
       t = paintRooftops(ROOF_W, ROOF_H, ROOF_VARIANTS[i]);
-      this.roofs[i] = t;
+      this.roofVar.set(i, t);
     }
     return t;
   }
+
+  /** Fassaden einer Stufe mit eingerechnetem Dunst (nach unten dichter). */
+  private bakeFacade(s: number): HTMLCanvasElement {
+    const src = this.facadeVariant(FACADE_OF_STAGE[s]).canvas;
+    const haze = HAZE[s];
+    const fh = FACADE_HAZE[s];
+    return canvas(src.width, src.height, (g, w, h) => {
+      g.drawImage(src, 0, 0);
+      g.globalCompositeOperation = "source-atop";
+      const grd = g.createLinearGradient(0, 60, 0, h);
+      grd.addColorStop(0, css(haze, fh * 0.35));
+      grd.addColorStop(1, css(haze, fh));
+      g.fillStyle = grd;
+      g.fillRect(0, 60, w, h - 60);
+    });
+  }
+
+  private bakeRoof(s: number): HTMLCanvasElement {
+    const src = this.roofVariant(ROOF_OF_STAGE[s]).canvas;
+    const haze = HAZE[s];
+    return canvas(src.width, src.height, (g, w, h) => {
+      g.drawImage(src, 0, 0);
+      g.globalCompositeOperation = "source-atop";
+      const grd = g.createLinearGradient(0, 30, 0, h - 10);
+      grd.addColorStop(0, css(haze, 0.12));
+      grd.addColorStop(1, css(haze, ROOF_HAZE[s]));
+      g.fillStyle = grd;
+      g.fillRect(0, 0, w, h);
+    });
+  }
+
+  /** Gespiegelte Fassaden im nassen Pflaster (additiv zu zeichnen; Stärke je Stufe eingerechnet). */
+  private bakeReflection(s: number): HTMLCanvasElement {
+    const src = this.facadeVariant(FACADE_OF_STAGE[s]).canvas;
+    const a = 0.2 * wetOf(s);
+    return canvas(src.width, GROUND_H, (g, w, h) => {
+      if (a < 0.008) return;
+      // Bildschirmzeile gy + ry spiegelt Fassadenzeile 322 - ry
+      g.setTransform(1, 0, 0, -1, 0, 322);
+      g.drawImage(src, 0, 0);
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.globalCompositeOperation = "destination-in";
+      g.fillStyle = `rgba(0,0,0,${a.toFixed(3)})`;
+      g.fillRect(0, 0, w, h);
+    });
+  }
+
+  // --- Ambiente ------------------------------------------------------------------------------------
 
   update(dt: number, v: ViewState): void {
     this.buildStatic();
+    if (this.nearK !== this.k) this.buildNear();
     const d = Math.min(0.05, dt);
-    const st = v.stage;
+    const st = Math.min(LAST, v.stage);
     const bl = v.stageBlend;
-    if (st !== this.lastStage) {
-      this.lastStage = st;
-      this.backdrop.warm(st + 1);
+    // Stufen-Kacheln verteilt vorbereiten (höchstens eine neue pro Frame); nicht mehr benötigte Fassaden-Rohvarianten
+    // freigeben (werden bei Bedarf in ≤ 20 ms neu gemalt) – spart Speicher auf Mobilgeräten
+    prepareStaged(this.staged, st, LAST, 1);
+    if (this.facadeVar.size > 2) {
+      const a = FACADE_OF_STAGE[st];
+      const b = FACADE_OF_STAGE[Math.min(LAST, st + 1)];
+      for (const key of [...this.facadeVar.keys()]) if (key !== a && key !== b) this.facadeVar.delete(key);
     }
     const target = (v.vars.lightning ?? 0) * (v.reducedMotion ? 0.25 : 1);
     this.lightning = Math.max(target, this.lightning - d * 3);
@@ -219,155 +402,192 @@ export class WienRenderer implements WorldRenderer {
     this.skinCtx.reduced = v.reducedMotion;
   }
 
-  // -------------------------------------------------------------------------------------------------
+  // --- Hintergrund ---------------------------------------------------------------------------------
 
   drawBackground(g: CanvasRenderingContext2D, v: ViewState): void {
     this.buildStatic();
-    const st = v.stage;
+    if (!this.lamp) this.buildNear();
+    const fx = this.fx;
+    if (!fx) return;
+    const st = Math.min(LAST, v.stage);
     const bl = v.stageBlend;
+    const nxt = Math.min(LAST, st + 1);
     const W = v.w;
     const gy = v.groundY;
     const fl = this.lightning;
+    const haze = stageRgb(HAZE, st, bl);
 
-    // 1) Himmel
-    const top = stageRgb(SKY_TOP, st, bl);
-    const bot = stageRgb(SKY_BOT, st, bl);
-    const sky = g.createLinearGradient(0, 0, 0, gy);
-    sky.addColorStop(0, css(top));
-    sky.addColorStop(1, css(bot));
-    g.fillStyle = sky;
-    g.fillRect(0, 0, W, gy);
-
-    // 2) Gemalte Fernkulisse (Stephansdom, Rathaus, Riesenrad) mit Stufen-Überblendung
-    const bScroll = v.dist * 0.06;
-    const by = -84;
+    // 1) Gemalte Fernkulisse (Stephansdom, Rathaus, Riesenrad …) mit Stufen-Überblendung
     if (this.backdrop.ready) {
-      this.backdrop.draw(g, st, bScroll, by);
-      if (bl > 0.002) this.backdrop.draw(g, st + 1, bScroll, by, bl);
+      const scroll = v.dist * BACK_PAR;
+      this.backdrop.draw(g, st, scroll);
+      if (bl > 0.002 && st < LAST) this.backdrop.draw(g, nxt, scroll, bl);
       if (fl > 0.02) {
         g.globalCompositeOperation = "lighter";
-        this.backdrop.draw(g, Math.min(7, st + (bl > 0.5 ? 1 : 0)), bScroll, by, fl * 0.45);
+        this.backdrop.draw(g, bl > 0.5 ? nxt : st, scroll, fl * 0.45);
         g.globalCompositeOperation = "source-over";
       }
+      g.fillStyle = css(lerpRgb(footRgb(st), footRgb(nxt), bl));
+      g.fillRect(0, BACK_H, W, gy - BACK_H);
+    } else {
+      const sky = g.createLinearGradient(0, 0, 0, gy);
+      sky.addColorStop(0, css(stageRgb(SKY_TOP, st, bl)));
+      sky.addColorStop(1, css(stageRgb(SKY_BOT, st, bl)));
+      g.fillStyle = sky;
+      g.fillRect(0, 0, W, gy);
     }
 
-    // 3) Ziehende Sturmwolken
+    // 2) Ziehende Sturmwolken
     const cl = stageVal(CLOUDS, st, bl);
-    if (this.clouds && cl > 0.01) {
+    if (this.clouds1 && this.clouds2 && cl > 0.01) {
       g.globalAlpha = cl;
-      blitTiled(g, this.clouds, v.dist * 0.03 + v.time * 22, -40, W);
+      blitRow(g, this.clouds1, v.dist * 0.03 + v.time * 22, -40, W);
       g.globalAlpha = cl * 0.6;
-      blitTiled(g, this.clouds, v.dist * 0.05 + v.time * 38 + 700, 60, W, 220);
+      blitRow(g, this.clouds2, v.dist * 0.05 + v.time * 38 + 700, 60, W);
       g.globalAlpha = 1;
     }
-    // Blitz-Leuchten am Himmel
-    if (fl > 0.02 && this.glowCold) {
-      const bx = v.vars.boltX ?? 640;
+    // Blitz-Leuchten am Himmel + ferner Blitzstrahl
+    if (fl > 0.02) {
       g.globalCompositeOperation = "lighter";
-      g.globalAlpha = fl * 0.9;
-      g.drawImage(this.glowCold.canvas, bx - 520, -380, 1040, 900);
+      g.globalAlpha = Math.min(1, fl * 1.4);
+      g.drawImage(fx.skyFlash, Math.round((v.vars.boltX ?? 640) - 520), 0);
       g.globalAlpha = 1;
       g.globalCompositeOperation = "source-over";
     }
-    // Ferner Blitzstrahl (Ambient)
     const far = v.vars.farBolt ?? 0;
     if (far > 0.05 && !v.reducedMotion) this.drawFarBolt(g, v.vars.boltX ?? 640, far, v.vars.boltSeed ?? 1);
 
-    // 4) Brandschein am Horizont
+    // 3) Brandschein am Horizont + Rauchsäulen
     const fire = stageVal(FIRE, st, bl);
     if (fire > 0.01) {
       const flick = v.reducedMotion ? 1 : 0.85 + 0.15 * Math.sin(v.time * 3.1) * Math.sin(v.time * 7.3 + 1);
       g.globalCompositeOperation = "lighter";
-      const fg = g.createLinearGradient(0, 180, 0, gy);
-      fg.addColorStop(0, "rgba(255,90,20,0)");
-      fg.addColorStop(0.6, `rgba(255,110,30,${0.22 * fire * flick})`);
-      fg.addColorStop(1, `rgba(255,150,60,${0.4 * fire * flick})`);
-      g.fillStyle = fg;
-      g.fillRect(0, 180, W, gy - 180);
+      g.globalAlpha = Math.min(1, fire * flick);
+      g.drawImage(fx.horizonFire, 0, 180);
+      g.globalAlpha = 1;
       g.globalCompositeOperation = "source-over";
     }
-    // Rauchsäulen
     const smoke = stageVal(SMOKE, st, bl);
-    if (smoke > 0.02 && this.smoke) this.drawSmokeColumns(g, v, smoke);
+    if (smoke > 0.02) this.drawSmokeColumns(g, v, smoke);
 
-    // 5) Dunst + ferne Dachlandschaft
-    const haze = stageRgb(HAZE, st, bl);
+    // 4) Dunst + ferne Dachlandschaft (Dunst eingebacken)
     g.fillStyle = css(haze, 0.22);
     g.fillRect(0, 0, W, gy);
-    const rv = ROOF_OF_STAGE[st];
-    const rv2 = ROOF_OF_STAGE[Math.min(7, st + 1)];
     const roofY = gy - ROOF_H + 10;
-    blitTiled(g, this.roof(rv), v.dist * 0.16, roofY, W);
-    if (rv2 !== rv && bl > 0.002) {
+    blitRow(g, this.roofs.get(st), v.dist * ROOF_PAR, roofY, W);
+    if (bl > 0.002 && st < LAST) {
       g.globalAlpha = bl;
-      blitTiled(g, this.roof(rv2), v.dist * 0.16, roofY, W);
+      blitRow(g, this.roofs.get(nxt), v.dist * ROOF_PAR, roofY, W);
       g.globalAlpha = 1;
     }
-    const rh = g.createLinearGradient(0, roofY + 30, 0, gy);
-    rh.addColorStop(0, css(haze, 0.12));
-    rh.addColorStop(1, css(haze, 0.62));
-    g.fillStyle = rh;
-    g.fillRect(0, roofY + 30, W, gy - roofY - 30);
 
-    // 6) Gründerzeit-Fassaden
-    const fv = FACADE_OF_STAGE[st];
-    const fv2 = FACADE_OF_STAGE[Math.min(7, st + 1)];
-    const fy = FACADE_BOTTOM - FACADE_H;
-    const fScroll = v.dist * 0.38;
-    blitTiled(g, this.facade(fv), fScroll, fy, W);
-    if (fv2 !== fv && bl > 0.002) {
+    // 5) Gründerzeit-Fassaden (Dunst eingebacken)
+    const fScroll = v.dist * FACADE_PAR;
+    blitRow(g, this.facades.get(st), fScroll, FACADE_Y, W);
+    if (bl > 0.002 && st < LAST) {
       g.globalAlpha = bl;
-      blitTiled(g, this.facade(fv2), fScroll, fy, W);
+      blitRow(g, this.facades.get(nxt), fScroll, FACADE_Y, W);
       g.globalAlpha = 1;
     }
-    // Lichtstimmung auf den Fassaden (Dunst nach unten dichter, Ruß in späten Stufen)
-    const fh = stageVal(FACADE_HAZE, st, bl);
-    const fhg = g.createLinearGradient(0, fy + 60, 0, FACADE_BOTTOM);
-    fhg.addColorStop(0, css(haze, fh * 0.35));
-    fhg.addColorStop(1, css(haze, fh));
-    g.fillStyle = fhg;
-    g.fillRect(0, fy + 60, W, FACADE_BOTTOM - fy - 60);
     if (fl > 0.02) {
       g.globalCompositeOperation = "lighter";
-      g.fillStyle = `rgba(150,175,230,${0.22 * fl})`;
-      g.fillRect(0, fy, W, FACADE_BOTTOM - fy);
+      g.globalAlpha = Math.min(1, fl);
+      g.drawImage(fx.facadeFlash, 0, FACADE_Y + 40);
+      g.globalAlpha = 1;
       g.globalCompositeOperation = "source-over";
     }
     if (fire > 0.05) {
       const flick = v.reducedMotion ? 1 : 0.8 + 0.2 * Math.sin(v.time * 5.3) * Math.sin(v.time * 2.1);
       g.globalCompositeOperation = "lighter";
-      const fg = g.createLinearGradient(0, fy + 60, 0, FACADE_BOTTOM);
-      fg.addColorStop(0, "rgba(255,110,40,0)");
-      fg.addColorStop(1, `rgba(255,120,40,${0.28 * fire * flick})`);
-      g.fillStyle = fg;
-      g.fillRect(0, fy + 60, W, FACADE_BOTTOM - fy - 60);
+      g.globalAlpha = Math.min(1, fire * flick);
+      g.drawImage(fx.facadeFire, 0, FACADE_Y + 60);
+      g.globalAlpha = 1;
       g.globalCompositeOperation = "source-over";
+    }
+    // Brennende Dachstühle / Rauchfahnen (Ruinen: nur noch Rauch aus den Trümmern)
+    if (fire > 0.15 || smoke > 0.3) {
+      const ruinA = FACADE_VARIANTS[FACADE_OF_STAGE[st]].damage === 2 ? 1 : 0;
+      const ruinB = FACADE_VARIANTS[FACADE_OF_STAGE[nxt]].damage === 2 ? 1 : 0;
+      const ruin = ruinA + (ruinB - ruinA) * bl;
+      this.drawRoofFires(g, v, fire * (1 - ruin), smoke, fScroll, FACADE_Y + ruin * 70);
     }
 
     // Regenvorhänge
     const rainK = stageVal(RAIN, st, bl);
-    if (rainK > 0.05 && this.rainSheet) {
-      const sheet = this.rainSheet;
-      const off = (v.time * 900) % 512;
-      g.globalAlpha = Math.min(1, rainK * 1.1);
-      for (let yy = -512 + off; yy < FACADE_BOTTOM; yy += 512) blitTiled(g, sheet, v.dist * 0.45 - v.time * 120, yy, W);
-      g.globalAlpha = 1;
-    }
+    if (rainK > 0.05) this.drawRainSheets(g, v, rainK);
 
-    // 7) Gehsteig
-    const sw = g.createLinearGradient(0, FACADE_BOTTOM, 0, gy);
-    sw.addColorStop(0, "#2a2e38");
-    sw.addColorStop(1, "#3b404c");
-    g.fillStyle = sw;
+    // 6) Gehsteigkante
+    if (!this.sidewalk) {
+      this.sidewalk = g.createLinearGradient(0, FACADE_BOTTOM, 0, gy);
+      this.sidewalk.addColorStop(0, "#2a2e38");
+      this.sidewalk.addColorStop(1, "#3b404c");
+    }
+    g.fillStyle = this.sidewalk;
     g.fillRect(0, FACADE_BOTTOM, W, gy - FACADE_BOTTOM);
     g.fillStyle = "rgba(180,195,225,0.18)";
     g.fillRect(0, gy - 3, W, 1.5);
 
-    // 8) Nahe Straßenmöbel (Laternen, Platanen, Litfaßsäulen)
+    // 7) Nahe Straßenmöbel + Oberleitung
     this.drawNear(g, v);
-
-    // 9) Oberleitung
     this.drawWires(g, v);
+  }
+
+  private drawRainSheets(g: CanvasRenderingContext2D, v: ViewState, rainK: number): void {
+    const sheet = this.rainSheet;
+    if (!sheet) return;
+    const H = sheet.height;
+    const off = Math.round(mod(v.time * 900, H));
+    const scroll = v.dist * 0.45 - v.time * 120;
+    g.globalAlpha = Math.min(1, rainK * 1.1);
+    for (let y0 = off - H; y0 < FACADE_BOTTOM; y0 += H) {
+      const sy = Math.max(0, -y0);
+      const h = Math.min(H, FACADE_BOTTOM - y0) - sy;
+      if (h > 0) blitRange(g, sheet, scroll, 0, v.w, y0 + sy, h, sy);
+    }
+    g.globalAlpha = 1;
+  }
+
+  private drawRoofFires(g: CanvasRenderingContext2D, v: ViewState, fire: number, smoke: number, scroll: number, fy: number): void {
+    const fx = this.fx;
+    const puffs = this.puffs;
+    if (!fx || !puffs) return;
+    const W = FACADE_W;
+    const off = mod(scroll, W);
+    const t = v.reducedMotion ? 0 : v.time;
+    const k = fire > 0.15 ? Math.min(1, (fire - 0.1) * 1.4) : 0;
+    const smokeA = Math.min(1, 0.35 + smoke) * 0.8;
+    const nFlames = this.flames.length;
+    for (const [rx, rtop, rw] of this.roofSlots) {
+      const hv = hash(rx * 0.013 + 7);
+      if (hv > 0.5) continue;
+      for (let rep = 0; rep <= W; rep += W) {
+        const x = rx - off + rep;
+        if (x + rw < -120 || x > v.w + 120) continue;
+        const cx = x + rw * (0.3 + hv * 0.8);
+        const y = fy + rtop + 4;
+        if (k > 0) {
+          g.globalCompositeOperation = "lighter";
+          g.globalAlpha = 0.55 * k;
+          blitAt(g, fx.roofGlow, cx, y - 20);
+          if (nFlames) {
+            const fr = this.flames[Math.floor(t * 12 + rx * 0.37) % nFlames];
+            g.globalAlpha = k;
+            g.drawImage(fr, Math.round(cx - fr.width / 2), Math.round(y - fr.height + 6));
+          }
+          g.globalCompositeOperation = "source-over";
+        }
+        // Rauchfahne
+        const np = v.quality === 0 ? 2 : 4;
+        for (let p2 = 0; p2 < np; p2 += 1) {
+          const life = (v.time * 0.16 + p2 / np + hv) % 1;
+          const sz = 50 + life * 170;
+          g.globalAlpha = (1 - life) * Math.min(1, life * 4) * smokeA;
+          puffs.draw(g, sz, cx + life * 90, y - 30 - life * 230);
+        }
+      }
+    }
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = "source-over";
   }
 
   private drawFarBolt(g: CanvasRenderingContext2D, bx: number, k: number, seed: number): void {
@@ -378,7 +598,7 @@ export class WienRenderer implements WorldRenderer {
       [7, 0.25],
       [2.2, 0.95],
     ] as Array<[number, number]>) {
-      g.strokeStyle = `rgba(200,220,255,${a * k})`;
+      g.strokeStyle = `rgba(200,220,255,${(a * k).toFixed(3)})`;
       g.lineWidth = lw;
       g.beginPath();
       let x = bx + (hash(seed) - 0.5) * 80;
@@ -403,173 +623,246 @@ export class WienRenderer implements WorldRenderer {
   }
 
   private drawSmokeColumns(g: CanvasRenderingContext2D, v: ViewState, smoke: number): void {
-    const puff = this.smoke;
-    if (!puff) return;
-    const par = 0.1;
+    const puffs = this.puffs;
+    if (!puffs) return;
     const span = 520;
-    const scroll = v.dist * par;
+    const scroll = v.dist * 0.1;
     const first = Math.floor(scroll / span) - 1;
-    g.save();
     for (let s = first; s < first + 5; s += 1) {
       if (hash(s * 3.7) > 0.72) continue;
       const baseX = s * span + hash(s) * 300 - scroll;
       const baseY = 470 - hash(s * 1.3) * 40;
-      for (let p = 0; p < 7; p += 1) {
-        const life = (v.time * 0.09 + p / 7 + hash(s + p)) % 1;
-        const size = 90 + life * 380;
+      const np = v.quality === 0 ? 3 : 6;
+      for (let p = 0; p < np; p += 1) {
+        const life = (v.time * 0.09 + p / np + hash(s + p)) % 1;
+        const size = 90 + life * 370;
         const x = baseX + life * 260 + Math.sin(life * 5 + s) * 20;
-        const y = baseY - life * 460;
+        if (x + size / 2 < 0 || x - size / 2 > v.w) continue;
         g.globalAlpha = smoke * (1 - life) * Math.min(1, life * 5) * 0.9;
-        g.drawImage(puff.canvas, x - size / 2, y - size / 2, size, size);
+        puffs.draw(g, size, x, baseY - life * 460);
       }
     }
-    g.restore();
+    g.globalAlpha = 1;
   }
 
   private drawNear(g: CanvasRenderingContext2D, v: ViewState): void {
-    const st = v.stage;
+    const fx = this.fx;
+    if (!fx) return;
+    const st = Math.min(LAST, v.stage);
     const bl = v.stageBlend;
     const lamps = stageVal(LAMPS, st, bl);
     const scroll = v.dist * NEAR_PAR;
-    const first = Math.floor((scroll - 220) / NEAR_SLOT);
-    const last = Math.floor((scroll + v.w + 220) / NEAR_SLOT);
+    const first = Math.floor((scroll - 240) / NEAR_SLOT);
+    const last = Math.floor((scroll + v.w + 240) / NEAR_SLOT);
     const base = v.groundY - 6;
     const wind = stageVal(WIND, st, bl);
-    const flick = v.reducedMotion ? 1 : st === 2 ? (Math.sin(v.time * 23) > -0.6 ? 1 : 0.2) : 1;
+    const ruined = st >= 6;
+    const bare = st >= 5 || (st === 4 && bl > 0.5);
+    const sway = v.quality === 2 && !v.reducedMotion;
     for (let s = first; s <= last; s += 1) {
-      const x = s * NEAR_SLOT - scroll + (hash(s * 2.9) - 0.5) * 50;
+      const slot = mod(s, 3);
       const hv = hash(s * 7.13 + 1);
-      if (s % 3 === 0) {
+      if (slot === 1) {
+        // Oberleitungsmast (Achse exakt auf dem Slot → Fahrleitung trifft den Ausleger)
+        const x = Math.round(s * NEAR_SLOT - scroll);
+        const broken = ruined && hash(s * 3.3 + 2) < 0.45;
+        const spr = broken ? this.mastBroken : this.mast;
+        if (spr) g.drawImage(spr.canvas, x - MAST_AX, base + 20 - MAST_H, MAST_W, MAST_H);
+        continue;
+      }
+      const x = Math.round(s * NEAR_SLOT - scroll + (hash(s * 2.9) - 0.5) * 50);
+      if (slot === 0) {
+        // Laterne (Stufe 2: jede flackert für sich)
+        const flick = v.reducedMotion || st !== 2 ? 1 : Math.sin(v.time * 23 + s * 2.3) > -0.6 ? 1 : 0.2;
         const on = lamps * flick * (hash(s * 5.1) < 0.12 && st >= 2 ? 0 : 1);
         const spr = on > 0.1 ? this.lamp : this.lampOff;
         if (spr) g.drawImage(spr.canvas, x - 30, base - 300, 60, 320);
-        if (on > 0.05 && this.glowWarm) {
+        if (on > 0.05) {
           g.globalCompositeOperation = "lighter";
-          g.globalAlpha = on * 0.8;
-          g.drawImage(this.glowWarm.canvas, x - 90, base - 330, 180, 180);
+          g.globalAlpha = Math.min(1, on * 0.8);
+          blitAt(g, fx.lampSmall, x, base - 240);
           g.globalAlpha = on * 0.25;
-          g.drawImage(this.glowWarm.canvas, x - 160, base - 200, 320, 260);
+          blitAt(g, fx.lampBig, x, base - 70);
           g.globalAlpha = 1;
           g.globalCompositeOperation = "source-over";
         }
-      } else if (hv < 0.3 && this.trees.length) {
-        const tr = this.trees[s % this.trees.length];
-        const sway = v.reducedMotion ? 0 : (Math.sin(v.time * 1.7 + s) * 0.5 + 0.5) * wind * 0.00018;
-        g.save();
-        g.translate(x, base + 20);
-        g.transform(1, 0, sway, 1, 0, 0);
-        g.drawImage(tr.canvas, -100, -300, 200, 300);
-        g.restore();
+        continue;
+      }
+      // Slot 2: Platane oder Litfaßsäule
+      if (hv < 0.55 && this.trees.length) {
+        const tr = bare ? this.bareTrees[mod(s, this.bareTrees.length)] : this.trees[mod(s, this.trees.length)];
+        if (sway) {
+          const sk = (Math.sin(v.time * 1.7 + s) * 0.5 + 0.5) * wind * 0.00018;
+          g.save();
+          g.translate(x, base + 20);
+          g.transform(1, 0, sk, 1, 0, 0);
+          g.drawImage(tr.canvas, -100, -300, 200, 300);
+          g.restore();
+        } else g.drawImage(tr.canvas, x - 100, base - 280, 200, 300);
+      } else if (hv < 0.78 && this.litfass && !(ruined && hv > 0.7)) {
+        g.drawImage(this.litfass.canvas, x - 35, base - 170, 70, 190);
+        if (lamps > 0.3) {
+          g.globalCompositeOperation = "lighter";
+          g.globalAlpha = lamps * 0.35;
+          blitAt(g, fx.lampSmall, x, base - 110);
+          g.globalAlpha = 1;
+          g.globalCompositeOperation = "source-over";
+        }
       }
     }
   }
 
+  /** Fahrleitung zwischen den Masten: Tragseil, Hänger, Fahrdraht; später gerissen und baumelnd. */
   private drawWires(g: CanvasRenderingContext2D, v: ViewState): void {
-    const scroll = v.dist;
-    const first = Math.floor(scroll / WIRE_SPAN);
-    const cy = 118;
-    const my = 92;
+    const fx = this.fx;
+    const st = Math.min(LAST, v.stage);
+    const scroll = v.dist * NEAR_PAR;
+    const intact = stageVal(WIRES, st, v.stageBlend);
+    const stubs = st >= 6;
+    const m0 = Math.floor((scroll - 400) / WIRE_SPAN);
+    const tip = (m: number): number => Math.round((m * 3 + 1) * NEAR_SLOT - scroll) - MAST_AX + MAST_TIP_X;
+    const mastOk = (m: number): boolean => !(stubs && hash((m * 3 + 1) * 3.3 + 2) < 0.45);
     g.save();
-    g.strokeStyle = "rgba(12,14,20,0.75)";
+    g.strokeStyle = "rgba(12,14,20,0.8)";
     g.lineWidth = 1.4;
     g.beginPath();
-    // Fahrdraht
-    g.moveTo(0, cy);
-    g.lineTo(v.w, cy);
-    for (let s = first; s <= first + 4; s += 1) {
-      const x0 = s * WIRE_SPAN - scroll;
-      const x1 = x0 + WIRE_SPAN;
-      // Tragseil (Kettenlinie)
-      g.moveTo(x0, my);
-      g.quadraticCurveTo((x0 + x1) / 2, my + 30, x1, my);
-      // Hänger
-      for (let d = 1; d < 8; d += 1) {
-        const u = d / 8;
-        const xx = x0 + WIRE_SPAN * u;
-        const yy = my + 30 * 2 * u * (1 - u) * 1;
-        g.moveTo(xx, yy);
-        g.lineTo(xx, cy);
+    const dangling: Array<[number, number]> = [];
+    for (let m = m0; m <= m0 + 4; m += 1) {
+      const x0 = tip(m);
+      const x1 = tip(m + 1);
+      if (x1 < -40 || x0 > v.w + 40) continue;
+      const ok = hash(m * 5.7 + 1) < intact && mastOk(m) && mastOk(m + 1);
+      if (ok) {
+        g.moveTo(x0, CONTACT_Y);
+        g.lineTo(x1, CONTACT_Y);
+        g.moveTo(x0, CARRIER_Y);
+        g.quadraticCurveTo((x0 + x1) / 2, CARRIER_Y + 30, x1, CARRIER_Y);
+        for (let d = 1; d < 8; d += 1) {
+          const u = d / 8;
+          const xx = x0 + (x1 - x0) * u;
+          g.moveTo(xx, CARRIER_Y + 60 * u * (1 - u));
+          g.lineTo(xx, CONTACT_Y);
+        }
+      } else {
+        // gerissen: beide Enden hängen herab (ab Stufe 6 nur noch kurze Stümpfe)
+        const len = stubs ? 40 + hash(m * 2.1) * 40 : 150 + hash(m * 2.1) * 90;
+        const ends: Array<[number, number, number]> = [
+          [x0, 1, len],
+          [x1, -1, len * (0.7 + hash(m * 4.3) * 0.5)],
+        ];
+        for (const [xa, dir, l] of ends) {
+          if (dir === -1 && !mastOk(m + 1)) continue;
+          if (dir === 1 && !mastOk(m)) continue;
+          const ex = xa + dir * (30 + l * 0.35);
+          const ey = CONTACT_Y + l;
+          g.moveTo(xa, CARRIER_Y);
+          g.bezierCurveTo(xa + dir * 30, CARRIER_Y + l * 0.5, ex - dir * 10, ey - 20, ex, ey);
+          g.moveTo(xa, CONTACT_Y);
+          g.quadraticCurveTo(xa + dir * 10, CONTACT_Y + l * 0.6, ex - dir * 18, ey - 12);
+          if (!stubs) dangling.push([ex, ey]);
+        }
       }
     }
     g.stroke();
     // Isolatoren
     g.fillStyle = "#20242d";
-    for (let s = first; s <= first + 4; s += 1) {
-      const x0 = s * WIRE_SPAN - scroll;
-      g.fillRect(x0 - 3, my - 4, 6, 8);
+    for (let m = m0; m <= m0 + 5; m += 1) {
+      if (!mastOk(m)) continue;
+      const x = tip(m);
+      if (x > -10 && x < v.w + 10) g.fillRect(x - 3, CARRIER_Y - 4, 6, 8);
     }
+    // Blitz spiegelt sich im Fahrdraht
     if (this.lightning > 0.05) {
-      g.strokeStyle = `rgba(200,220,255,${this.lightning * 0.7})`;
+      g.strokeStyle = `rgba(200,220,255,${(this.lightning * 0.7).toFixed(3)})`;
       g.lineWidth = 1;
       g.beginPath();
-      g.moveTo(0, cy - 1);
-      g.lineTo(v.w, cy - 1);
+      g.moveTo(0, CONTACT_Y - 1);
+      g.lineTo(v.w, CONTACT_Y - 1);
       g.stroke();
+    }
+    // Funken an den gerissenen Drahtenden (Sturm/Brand), bei reduzierter Bewegung ruhig
+    if (fx && dangling.length && st >= 2 && st <= 5) {
+      g.globalCompositeOperation = "lighter";
+      for (let i = 0; i < dangling.length; i += 1) {
+        const [ex, ey] = dangling[i];
+        const burst = v.reducedMotion ? 0.35 : Math.max(0, Math.sin(v.time * 7 + i * 2.7 + ex * 0.01)) ** 6;
+        if (burst < 0.05) continue;
+        g.globalAlpha = burst;
+        blitAt(g, fx.spark, ex, ey);
+        if (!v.reducedMotion) {
+          g.fillStyle = "rgba(220,235,255,0.95)";
+          for (let p = 0; p < 5; p += 1) {
+            const a = hash(i * 13 + p + Math.floor(v.time * 18)) * Math.PI;
+            const r = 6 + hash(p * 3.1 + i + Math.floor(v.time * 18)) * 18;
+            g.fillRect(ex + Math.cos(a) * r, ey + Math.sin(a) * r * 0.8, 2, 2);
+          }
+        }
+      }
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = "source-over";
     }
     g.restore();
   }
 
-  // -------------------------------------------------------------------------------------------------
+  // --- Boden ---------------------------------------------------------------------------------------
 
   drawGround(g: CanvasRenderingContext2D, v: ViewState, pits: ReadonlyArray<{ x0: number; x1: number; skin: string }>): void {
+    const fx = this.fx;
+    const street = this.street;
+    if (!fx || !street) return;
     const gy = v.groundY;
     const H = v.h - gy;
-    const st = v.stage;
+    const st = Math.min(LAST, v.stage);
     const bl = v.stageBlend;
+    const nxt = Math.min(LAST, st + 1);
     const segs = groundSegments(pits, v.w);
     // Lücken (Gully/Baugrube)
     for (const p of pits) this.drawPit(g, v, p.x0, p.x1);
-    const street = this.street;
     for (let i = 0; i < segs.length; i += 2) {
       const a = segs[i];
       const b = segs[i + 1];
       if (b <= a) continue;
-      if (street) blitTiledClip(g, street, v.dist, gy, a, b);
-      else {
-        g.fillStyle = "#23262e";
-        g.fillRect(a, gy, b - a, H);
-      }
-      // Kante zur Lücke
+      blitRange(g, street, v.dist, a, b, gy);
       if (a > 0) {
         g.fillStyle = "#4b505c";
-        g.fillRect(a - 3, gy, 4, H);
+        g.fillRect(Math.round(a) - 3, gy, 4, H);
       }
       if (b < v.w) {
         g.fillStyle = "#0b0d12";
-        g.fillRect(b - 2, gy, 4, H);
+        g.fillRect(Math.round(b) - 2, gy, 4, H);
       }
     }
-    // Spiegelung der Fassaden im nassen Pflaster
-    const wetK = Math.max(stageVal(RAIN, st, bl), 0.3) * (1 - stageVal(ASH, st, bl) * 0.8);
-    if (wetK > 0.05 && v.quality > 0) {
-      g.save();
-      g.beginPath();
-      for (let i = 0; i < segs.length; i += 2) g.rect(segs[i], gy + 2, segs[i + 1] - segs[i], H);
-      g.clip();
+    // Spiegelung der Fassaden im nassen Pflaster (vorgebacken, additiv)
+    if (v.quality > 0) {
+      const rA = this.reflections.get(st);
+      const rB = bl > 0.002 && st < LAST ? this.reflections.get(nxt) : null;
+      const rs = v.dist * FACADE_PAR;
       g.globalCompositeOperation = "lighter";
-      g.globalAlpha = 0.2 * wetK;
-      g.translate(0, (gy - 4) * 2);
-      g.scale(1, -1);
-      blitTiled(g, this.facade(FACADE_OF_STAGE[st]), v.dist * 0.38, FACADE_BOTTOM - FACADE_H, v.w);
-      g.restore();
-      const fade = g.createLinearGradient(0, gy, 0, v.h);
-      fade.addColorStop(0, "rgba(8,10,16,0)");
-      fade.addColorStop(1, "rgba(8,10,16,0.5)");
-      g.fillStyle = fade;
-      for (let i = 0; i < segs.length; i += 2) g.fillRect(segs[i], gy, segs[i + 1] - segs[i], H);
+      for (let i = 0; i < segs.length; i += 2) {
+        g.globalAlpha = rB ? 1 - bl : 1;
+        blitRange(g, rA, rs, segs[i], segs[i + 1], gy);
+        if (rB) {
+          g.globalAlpha = bl;
+          blitRange(g, rB, rs, segs[i], segs[i + 1], gy);
+        }
+      }
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = "source-over";
+      for (let i = 0; i < segs.length; i += 2) blitSlice(g, fx.groundFade, segs[i], segs[i + 1], gy);
     }
     // Laternen-Spiegelung auf nassem Pflaster
     const lamps = stageVal(LAMPS, st, bl);
     const wet = Math.max(stageVal(RAIN, st, bl), 0.35);
-    if (lamps > 0.05 && this.glowWarm) {
+    if (lamps > 0.05) {
       const scroll = v.dist * NEAR_PAR;
       const first = Math.floor((scroll - 100) / NEAR_SLOT);
       g.globalCompositeOperation = "lighter";
+      g.globalAlpha = lamps * wet * 0.35;
       for (let s = first; s <= first + 9; s += 1) {
-        if (s % 3 !== 0) continue;
+        if (mod(s, 3) !== 0) continue;
         const x = s * NEAR_SLOT - scroll + (hash(s * 2.9) - 0.5) * 50;
-        g.globalAlpha = lamps * wet * 0.35;
-        g.drawImage(this.glowWarm.canvas, x - 22, gy + 2, 44, 120);
+        if (inPit(pits, x)) continue;
+        g.drawImage(fx.lampRefl, Math.round(x - 22), gy + 2);
       }
       g.globalAlpha = 1;
       g.globalCompositeOperation = "source-over";
@@ -577,20 +870,20 @@ export class WienRenderer implements WorldRenderer {
     // Blitz spiegelt sich im nassen Boden
     if (this.lightning > 0.03) {
       g.globalCompositeOperation = "lighter";
-      g.fillStyle = `rgba(160,185,240,${0.18 * this.lightning * wet})`;
+      g.fillStyle = `rgba(160,185,240,${(0.18 * this.lightning * wet).toFixed(3)})`;
       g.fillRect(0, gy, v.w, H);
       g.globalCompositeOperation = "source-over";
     }
     // Asche / Trümmer in späten Stufen
     const ash = stageVal(ASH, st, bl);
     if (ash > 0.05) {
-      g.fillStyle = `rgba(92,90,94,${0.45 * ash})`;
+      g.fillStyle = `rgba(92,90,94,${(0.45 * ash).toFixed(3)})`;
       for (let i = 0; i < segs.length; i += 2) g.fillRect(segs[i], gy, segs[i + 1] - segs[i], H);
-      const scroll = v.dist;
-      const first = Math.floor(scroll / 140);
+      const fire = stageVal(FIRE, st, bl);
+      const first = Math.floor(v.dist / 140);
       for (let s = first; s <= first + 10; s += 1) {
         if (hash(s * 3.3) > ash * 0.8) continue;
-        const x = s * 140 - scroll + hash(s) * 100;
+        const x = s * 140 - v.dist + hash(s) * 100;
         if (inPit(pits, x)) continue;
         const y = gy + 10 + hash(s * 1.7) * (H - 30);
         g.fillStyle = hash(s * 9.1) < 0.5 ? "#5b3226" : "#3d3a38";
@@ -599,80 +892,42 @@ export class WienRenderer implements WorldRenderer {
         g.rotate(hash(s * 4.4) * 3);
         g.fillRect(-9, -4, 18, 8);
         g.restore();
-        const fire = stageVal(FIRE, st, bl);
-        if (fire > 0.2 && hash(s * 6.6) < 0.4 && this.glowWarm) {
+        if (fire > 0.2 && hash(s * 6.6) < 0.4) {
           g.globalCompositeOperation = "lighter";
           g.globalAlpha = fire * 0.5 * (v.reducedMotion ? 1 : 0.7 + 0.3 * Math.sin(v.time * 4 + s));
-          g.drawImage(this.glowWarm.canvas, x - 18, y - 12, 36, 24);
+          g.drawImage(fx.ember, Math.round(x - 18), Math.round(y - 12));
           g.globalAlpha = 1;
           g.globalCompositeOperation = "source-over";
         }
       }
     }
     // Obere Kante (nasser Glanz)
-    g.fillStyle = `rgba(190,205,235,${0.22 + this.lightning * 0.4})`;
+    g.fillStyle = `rgba(190,205,235,${(0.22 + this.lightning * 0.4).toFixed(3)})`;
     for (let i = 0; i < segs.length; i += 2) g.fillRect(segs[i], gy, segs[i + 1] - segs[i], 2);
   }
 
   private drawPit(g: CanvasRenderingContext2D, v: ViewState, x0: number, x1: number): void {
+    const shaft = this.shaft;
+    if (!shaft) return;
     const gy = v.groundY;
     const w = x1 - x0;
-    g.save();
-    g.beginPath();
-    g.rect(x0, gy, w, v.h - gy);
-    g.clip();
-    const sg = g.createLinearGradient(0, gy, 0, v.h);
-    sg.addColorStop(0, "#2a2320");
-    sg.addColorStop(0.35, "#120f0e");
-    sg.addColorStop(1, "#050505");
-    g.fillStyle = sg;
-    g.fillRect(x0, gy, w, v.h - gy);
-    // Ziegelwand im Schacht
-    g.strokeStyle = "rgba(90,60,45,0.35)";
-    g.lineWidth = 1;
-    g.beginPath();
-    for (let y = gy + 6, r = 0; y < v.h - 30; y += 11, r += 1) {
-      g.moveTo(x0, y);
-      g.lineTo(x1, y);
-      const off = (r % 2) * 14 + ((v.dist % 28) + 28) % 28;
-      for (let x = x0 - off; x < x1; x += 28) {
-        g.moveTo(x, y);
-        g.lineTo(x, y + 11);
-      }
-    }
-    g.stroke();
-    const dark = g.createLinearGradient(0, gy, 0, v.h);
-    dark.addColorStop(0, "rgba(0,0,0,0.1)");
-    dark.addColorStop(1, "rgba(0,0,0,0.85)");
-    g.fillStyle = dark;
-    g.fillRect(x0, gy, w, v.h - gy);
-    // Wasser am Grund
-    g.fillStyle = "rgba(40,60,80,0.6)";
-    g.fillRect(x0, v.h - 26, w, 26);
+    // Ziegelwand in der Tiefe (scrollt mit dem Boden)
+    blitRange(g, shaft, v.dist, x0, x1, gy);
     g.fillStyle = "rgba(170,200,240,0.35)";
     for (let i = 0; i < w / 30; i += 1) {
       const gx = x0 + ((i * 37 + v.time * 30) % w);
       g.fillRect(gx, v.h - 24 + (i % 3) * 5, 10, 1.5);
     }
-    // Schattenkanten
-    const lg = g.createLinearGradient(x0, 0, x0 + 40, 0);
-    lg.addColorStop(0, "rgba(0,0,0,0.7)");
-    lg.addColorStop(1, "rgba(0,0,0,0)");
-    g.fillStyle = lg;
-    g.fillRect(x0, gy, 40, v.h - gy);
-    g.restore();
+    if (this.shaftEdge) g.drawImage(this.shaftEdge, Math.round(x0), gy);
     // Dampf
     if (this.steam && !v.reducedMotion) {
-      g.save();
       for (let i = 0; i < 5; i += 1) {
-        const life = (v.time * 0.45 + i / 5 + hash(x0 + v.dist) * 0) % 1;
+        const life = (v.time * 0.45 + i / 5) % 1;
         const cx = x0 + w * (0.3 + 0.4 * hash(i * 3.1)) + Math.sin(life * 6 + i) * 12;
-        const cy = gy + 10 - life * 190;
-        const sz = 60 + life * 140;
         g.globalAlpha = (1 - life) * Math.min(1, life * 4) * 0.45;
-        g.drawImage(this.steam.canvas, cx - sz / 2, cy - sz / 2, sz, sz);
+        this.steam.draw(g, 60 + life * 140, cx, gy + 10 - life * 190);
       }
-      g.restore();
+      g.globalAlpha = 1;
     }
     // abgelegter Kanaldeckel links der Lücke
     g.fillStyle = "#1b1d22";
@@ -684,7 +939,7 @@ export class WienRenderer implements WorldRenderer {
     g.stroke();
   }
 
-  // -------------------------------------------------------------------------------------------------
+  // --- Entitäten -----------------------------------------------------------------------------------
 
   drawEntity(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: number, v: ViewState): boolean {
     const c = this.skinCtx;
@@ -692,7 +947,7 @@ export class WienRenderer implements WorldRenderer {
     const gy = v.groundY;
     switch (e.skin) {
       case "tram":
-        drawTram(g, e, sx, sy, v, c);
+        drawTram(g, e, sx, sy, v, c, this.tramBodies);
         return true;
       case "tram-roof":
       case "manhole":
@@ -701,7 +956,7 @@ export class WienRenderer implements WorldRenderer {
         drawFiaker(g, e, sx, sy, v, c);
         return true;
       case "pigeon":
-        drawPigeon(g, e, sx, sy, v);
+        drawPigeon(g, e, sx, sy, v, c, this.fx?.pigeonRim ?? null);
         return true;
       case "puddle":
         drawPuddle(g, e, sx, v, c);
@@ -773,19 +1028,19 @@ export class WienRenderer implements WorldRenderer {
   }
 
   private drawWurstelLight(g: CanvasRenderingContext2D, sx: number, sy: number, e: Ent, v: ViewState): void {
-    if (!this.glowWarm) return;
+    const fx = this.fx;
+    if (!fx) return;
     g.save();
     g.globalCompositeOperation = "lighter";
     g.globalAlpha = 0.5;
-    g.drawImage(this.glowWarm.canvas, sx - 30, sy - 10, e.w + 60, e.h * 0.9);
+    g.drawImage(fx.wurstel, Math.round(sx + e.w / 2 - fx.wurstel.width / 2), Math.round(sy - 10));
     g.restore();
     // Dampf vom Grill
     if (this.steam && !v.reducedMotion) {
       for (let i = 0; i < 3; i += 1) {
         const life = (v.time * 0.6 + i / 3) % 1;
-        const sz = 30 + life * 60;
         g.globalAlpha = (1 - life) * 0.35;
-        g.drawImage(this.steam.canvas, sx + e.w * 0.6 - sz / 2 + life * 20, sy - life * 90 - sz / 2, sz, sz);
+        this.steam.draw(g, 30 + life * 60, sx + e.w * 0.6 + life * 20, sy - life * 90);
       }
       g.globalAlpha = 1;
     }
@@ -823,10 +1078,10 @@ export class WienRenderer implements WorldRenderer {
     g.restore();
   }
 
-  // -------------------------------------------------------------------------------------------------
+  // --- Vordergrund / Endstufe ----------------------------------------------------------------------
 
   drawForeground(g: CanvasRenderingContext2D, v: ViewState): void {
-    const st = v.stage;
+    const st = Math.min(LAST, v.stage);
     const bl = v.stageBlend;
     // Glut, Asche, Trümmerflug
     this.motes.draw(g, v.time);
@@ -838,45 +1093,38 @@ export class WienRenderer implements WorldRenderer {
     }
     // Bodennaher Rauch vor der Szene
     const smoke = stageVal(SMOKE, st, bl);
-    if (smoke > 0.2 && this.smoke) {
-      g.save();
+    const fx = this.fx;
+    if (smoke > 0.2 && fx) {
       const scroll = v.dist * 1.15 + v.time * 30;
+      g.globalAlpha = (smoke - 0.2) * 0.35;
       for (let i = 0; i < 4; i += 1) {
-        const x = ((i * 460 - scroll) % 1840 + 1840) % 1840 - 280;
-        g.globalAlpha = (smoke - 0.2) * 0.35;
-        g.drawImage(this.smoke.canvas, x, v.groundY - 170 + (i % 2) * 40, 420, 300);
+        const x = mod(i * 460 - scroll, 1840) - 280;
+        g.drawImage(fx.fgSmoke, Math.round(x), v.groundY - 170 + (i % 2) * 40);
       }
-      g.restore();
+      g.globalAlpha = 1;
     }
     // Blitz-Aufhellung der ganzen Szene
     if (this.lightning > 0.03) {
       g.save();
       g.globalCompositeOperation = "lighter";
-      g.fillStyle = `rgba(120,140,190,${0.12 * this.lightning})`;
+      g.fillStyle = `rgba(120,140,190,${(0.12 * this.lightning).toFixed(3)})`;
       g.fillRect(0, 0, v.w, v.h);
       g.restore();
     }
   }
 
   drawOverlay(g: CanvasRenderingContext2D, v: ViewState): void {
+    const fx = this.fx;
+    if (!fx) return;
     // Farbstimmung: oben Gewitterdunkel, unten Brandschein
-    const st = v.stage;
-    const bl = v.stageBlend;
-    const fire = stageVal(FIRE, st, bl);
-    const top = g.createLinearGradient(0, 0, 0, 260);
-    top.addColorStop(0, "rgba(6,8,16,0.32)");
-    top.addColorStop(1, "rgba(6,8,16,0)");
-    g.fillStyle = top;
-    g.fillRect(0, 0, v.w, 260);
+    g.drawImage(fx.overlayTop, 0, 0);
+    const fire = stageVal(FIRE, Math.min(LAST, v.stage), v.stageBlend);
     if (fire > 0.1) {
-      g.save();
       g.globalCompositeOperation = "lighter";
-      const fg = g.createLinearGradient(0, v.h, 0, v.h - 260);
-      fg.addColorStop(0, `rgba(255,90,30,${0.12 * fire})`);
-      fg.addColorStop(1, "rgba(255,90,30,0)");
-      g.fillStyle = fg;
-      g.fillRect(0, v.h - 260, v.w, 260);
-      g.restore();
+      g.globalAlpha = Math.min(1, fire);
+      g.drawImage(fx.overlayFire, 0, v.h - 260);
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = "source-over";
     }
   }
 }

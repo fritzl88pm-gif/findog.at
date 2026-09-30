@@ -1,7 +1,8 @@
 /**
  * Prater – WorldRenderer. Stimmungsbogen: Goldene Stunde → Dämmerung → Lichterzauber → Feuerwerk → Mitternachtszauber.
  * Ebenen (hinten → vorne): Himmel/Sonne/Mond/Sterne/Wolken/Feuerwerk · Wien-Skyline (0.035) · Riesenrad & Praterturm (0.06)
- * · Hochschaubahn mit Zug (0.13) · Luftballons · Budenreihe (0.3) · Kandelaber & Lichterketten (0.6) · Promenade (1.0)
+ * · Hochschaubahn mit Zug (0.13) · gemalte Fahrgeschäfte (Ringelspiel, Zirkuszelt; 0.2) · Luftballons · Budenreihe (0.3)
+ * · Kandelaber & Lichterketten (0.6) · Promenade (1.0)
  * · Vordergrund-Girlande (1.25) + Konfetti.
  * Performance: Ebenen sind pro Stufe vorgebacken (Nacht + Dunst) und werden ganzzahlig geblittet; große Glows sind
  * fertige 1:1-Flächen.
@@ -17,6 +18,8 @@ import {
   coasterTrackY,
   farSkyline,
   groundTile,
+  landmarkTiles,
+  LANDMARK_PROP_IDS,
   lampTiles,
   topGarland,
   trenchTile,
@@ -44,7 +47,7 @@ import {
 const TAU = Math.PI * 2;
 const MAX_STAGE = 4;
 
-export const PRATER_PROPS = ["ghost", "autoscooter"];
+export const PRATER_PROPS = ["ghost", "ghost-float", "autoscooter", ...LANDMARK_PROP_IDS];
 
 const STAGES = [
   { top: "#3b3f92", mid: "#e0808a", low: "#ffc56a", haze: "#f3a07e", sun: "#ffd27a", glow: "#ff9a4a", ground: "#ffcf9a" },
@@ -100,6 +103,7 @@ export class PraterRenderer implements WorldRenderer {
   private sky!: StageCache;
   private far!: StagedLayer;
   private coaster!: StagedLayer;
+  private rides: StagedLayer | null = null;
   private booths!: StagedLayer;
   private lamps!: StagedLayer;
   private garland!: StagedLayer;
@@ -139,6 +143,13 @@ export class PraterRenderer implements WorldRenderer {
     this.build();
     this.A.props = assets.props;
     await assets.props.preload(PRATER_PROPS);
+    // Gemalte Fahrgeschäfte (Ringelspiel, Zirkuszelt) als eigene Tiefenebene zwischen Hochschaubahn und Buden
+    const P = assets.props;
+    const lm = landmarkTiles((id) => P.has(id), (g, id, x, y, o) => P.draw(g, id, x, y, o), 2600, 280);
+    if (lm) {
+      this.rides = stagedLayer(lm.day, 266, 0.2, tintFor("#1b1238", 0.8, 0.26, 0.42), { lights: lm.lights, lights2: lm.lights2 });
+      this.staged.push(this.rides.staged);
+    }
   }
 
   private build(): void {
@@ -285,8 +296,8 @@ export class PraterRenderer implements WorldRenderer {
 
   update(dt: number, v: ViewState): void {
     if (!this.ready) return;
-    prepareStaged(this.staged, v.stage, MAX_STAGE, 1);
-    const s = v.stage + v.stageBlend;
+    prepareStaged(this.staged, Math.min(MAX_STAGE, v.stage), MAX_STAGE, 1);
+    const s = Math.min(MAX_STAGE, v.stage + v.stageBlend);
     // Feuerwerk
     const fw = stageVal(FIREWORKS, s) * (v.quality === 0 ? 0.4 : 1);
     this.skyFlash = Math.max(0, this.skyFlash - dt * 3);
@@ -354,9 +365,9 @@ export class PraterRenderer implements WorldRenderer {
 
   drawBackground(g: Ctx2D, v: ViewState): void {
     this.build();
-    const st = v.stage;
+    const st = Math.min(MAX_STAGE, v.stage);
     const bl = v.stageBlend;
-    const s = st + bl;
+    const s = Math.min(MAX_STAGE, st + bl);
     const P = PAL.css(s);
     const night = stageVal(NIGHT, s);
     const lights = stageVal(LIGHTS, s);
@@ -470,6 +481,9 @@ export class PraterRenderer implements WorldRenderer {
     drawStaged(g, this.coaster, v.dist, st, bl, MAX_STAGE, la, lb);
     this.drawTrain(g, v, night, lights);
 
+    // Fahrgeschäfte (gemalte Landmarks)
+    if (this.rides) drawStaged(g, this.rides, v.dist, st, bl, MAX_STAGE, la * 0.9, lb * 0.9);
+
     // Luftballons
     if (v.quality > 0) this.drawBalloons(g, night);
 
@@ -562,7 +576,7 @@ export class PraterRenderer implements WorldRenderer {
 
   private drawWheel(g: Ctx2D, cx: number, cy: number, rot: number, night: number, lights: number, v: ViewState): void {
     const W = this.wheel;
-    const st = v.stage;
+    const st = Math.min(MAX_STAGE, v.stage);
     const bl = v.stageBlend;
     // Sockel
     const bx = cx - Math.round(W.baseW / 2);
@@ -759,9 +773,9 @@ export class PraterRenderer implements WorldRenderer {
 
   drawGround(g: Ctx2D, v: ViewState, pits: ReadonlyArray<{ x0: number; x1: number; skin: string }>): void {
     this.build();
-    const st = v.stage;
+    const st = Math.min(MAX_STAGE, v.stage);
     const bl = v.stageBlend;
-    const s = st + bl;
+    const s = Math.min(MAX_STAGE, st + bl);
     const lights = stageVal(LIGHTS, s);
     const gy = v.groundY;
     const H = v.h - gy;
@@ -846,7 +860,7 @@ export class PraterRenderer implements WorldRenderer {
 
   drawEntity(g: Ctx2D, e: Ent, sx: number, sy: number, v: ViewState): boolean {
     this.build();
-    const s = v.stage + v.stageBlend;
+    const s = Math.min(MAX_STAGE, v.stage + v.stageBlend);
     const k: SkinCtx = { night: stageVal(NIGHT, s), time: v.time, quality: v.quality, reduced: v.reducedMotion };
     const A = this.A;
     switch (e.kind) {
@@ -892,9 +906,9 @@ export class PraterRenderer implements WorldRenderer {
 
   drawForeground(g: Ctx2D, v: ViewState): void {
     this.build();
-    const st = v.stage;
+    const st = Math.min(MAX_STAGE, v.stage);
     const bl = v.stageBlend;
-    const s = st + bl;
+    const s = Math.min(MAX_STAGE, st + bl);
     const lights = stageVal(LIGHTS, s);
     const chase = v.reducedMotion || v.quality === 0 ? 0 : Math.sin(v.time * 5.5 + 1);
     const q = g.imageSmoothingQuality;
@@ -934,7 +948,7 @@ export class PraterRenderer implements WorldRenderer {
   }
 
   drawOverlay(g: Ctx2D, v: ViewState): void {
-    const s = v.stage + v.stageBlend;
+    const s = Math.min(MAX_STAGE, v.stage + v.stageBlend);
     const night = stageVal(NIGHT, s);
     if (night < 0.95 && v.quality === 2) {
       const sunY = stageVal(SUN_Y, s);

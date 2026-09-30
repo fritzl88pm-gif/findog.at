@@ -1057,6 +1057,8 @@ export class FredRunGame {
       if (sim.phase === "over") break;
     }
     this.hitstop = 0;
+    this.flashV = Math.max(0, this.flashV - seconds * 3.2);
+    this.shake = 0;
     this.frame(0.0001);
     return { score: sim.score, meters: sim.meters, hearts: sim.player.hearts, phase: sim.phase, worldId: sim.world.id };
   }

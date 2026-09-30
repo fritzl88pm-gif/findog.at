@@ -828,3 +828,120 @@ export function trenchTile(W: number, H: number): HTMLCanvasElement {
     g.stroke();
   });
 }
+
+// ------------------------------------------------------------------------------------------------
+// Mittlere Ebene: gemalte Fahrgeschäfte (Landmark-Props „Ringelspiel“ und „Zirkuszelt“) mit Lichterketten
+
+type PropDraw = (g: Ctx2D, id: string, x: number, y: number, o: { h: number }) => boolean;
+
+interface LandmarkPlacement {
+  id: string;
+  /** Mittelpunkt x in der Kachel */
+  x: number;
+  /** Zielhöhe */
+  h: number;
+  /** Quellmaße (Prop-Pixel) */
+  sw: number;
+  sh: number;
+  /** Birnen in Quellkoordinaten */
+  bulbs: Array<[number, number, string]>;
+  /** warmes Innenlicht (Quellkoordinaten: cx, cy, rx, ry, Farbe) */
+  glow?: [number, number, number, number, string];
+}
+
+function arcBulbs(x0: number, x1: number, step: number, y: (x: number) => number, colors: readonly string[]): Array<[number, number, string]> {
+  const out: Array<[number, number, string]> = [];
+  let i = 0;
+  for (let x = x0; x <= x1; x += step) out.push([x, y(x), colors[i++ % colors.length]]);
+  return out;
+}
+
+function lineBulbs(ax: number, ay: number, bx: number, by: number, n: number, color: string): Array<[number, number, string]> {
+  const out: Array<[number, number, string]> = [];
+  for (let i = 1; i < n; i += 1) {
+    const u = i / n;
+    out.push([ax + (bx - ax) * u, ay + (by - ay) * u + Math.sin(u * Math.PI) * 18, color]);
+  }
+  return out;
+}
+
+const LANDMARKS: LandmarkPlacement[] = [
+  {
+    id: "landmark-carousel",
+    x: 520,
+    h: 250,
+    sw: 640,
+    sh: 622,
+    bulbs: [
+      ...arcBulbs(40, 600, 26, (x) => 302 + 12 * ((x - 320) / 280) ** 2, ["#fff0c8", "#ffd36b", "#ff8fc8"]),
+      ...arcBulbs(70, 570, 38, (x) => 232 + 10 * ((x - 320) / 260) ** 2, ["#ffe08a"]),
+      [318, 14, "#fff6e0"],
+    ],
+    glow: [320, 420, 250, 110, "rgba(255,196,120,0.42)"],
+  },
+  {
+    id: "landmark-tent",
+    x: 1880,
+    h: 215,
+    sw: 660,
+    sh: 568,
+    bulbs: [
+      ...arcBulbs(46, 624, 30, () => 352, ["#fff1c2", "#ff5fa8", "#ffd36b", "#6ff3ff"]),
+      ...lineBulbs(338, 98, 44, 340, 10, "#fff0c8"),
+      ...lineBulbs(338, 98, 624, 340, 10, "#fff0c8"),
+      [338, 8, "#ff5a5a"],
+    ],
+    glow: [505, 470, 70, 80, "rgba(255,120,90,0.55)"],
+  },
+];
+
+export const LANDMARK_PROP_IDS = LANDMARKS.map((l) => l.id);
+
+/**
+ * Kachel mit den Landmark-Fahrgeschäften (Tag-Version + zwei Lichterketten-Phasen). null, wenn die Props fehlen –
+ * dann bleibt die Ebene einfach leer (die prozeduralen Ebenen tragen die Welt allein).
+ */
+export function landmarkTiles(
+  has: (id: string) => boolean,
+  draw: PropDraw,
+  W: number,
+  H: number,
+): { day: HTMLCanvasElement; lights: HTMLCanvasElement; lights2: HTMLCanvasElement } | null {
+  const list = LANDMARKS.filter((l) => has(l.id));
+  if (!list.length) return null;
+  const day = paint(W, H, (g) => {
+    for (const l of list) {
+      const w = (l.sw * l.h) / l.sh;
+      wrapDraw(W, l.x - w / 2, w, (x) => {
+        draw(g, l.id, x + w / 2, H, { h: l.h });
+      });
+    }
+  });
+  const mk = (odd: number): HTMLCanvasElement =>
+    paint(W, H, (g) => {
+      for (const l of list) {
+        const k = l.h / l.sh;
+        const w = l.sw * k;
+        const left = l.x - w / 2;
+        const top = H - l.h;
+        wrapDraw(W, left, w, (x) => {
+          if (odd === 0 && l.glow) {
+            const [gx, gy, rx, ry, col] = l.glow;
+            g.save();
+            g.translate(x + gx * k, top + gy * k);
+            g.scale(1, ry / rx);
+            const grd = g.createRadialGradient(0, 0, 0, 0, 0, rx * k);
+            grd.addColorStop(0, col);
+            grd.addColorStop(1, colorWithAlpha(col, 0));
+            g.fillStyle = grd;
+            g.fillRect(-rx * k, -rx * k, rx * k * 2, rx * k * 2);
+            g.restore();
+          }
+          l.bulbs.forEach(([bx, by, c], i) => {
+            if (i % 2 === odd) bulb(g, x + bx * k, top + by * k, 1.9, c, 3.4);
+          });
+        });
+      }
+    });
+  return { day, lights: mk(0), lights2: mk(1) };
+}
