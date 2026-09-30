@@ -1,5 +1,19 @@
 # Fredrun 2.0 – Engine-Wünsche der Welt-Agenten
 
+## Status (Hauptagent, nach Abschluss aller Welten)
+
+Umgesetzt in der Engine: eigene Sicht je Welt beim Tor-Übergang (Zielwelt: Stufe 0; aktuelle Welt: Stufe geklemmt) und Überblendung über eine
+Zwischenfläche (unabhängig von `globalAlpha` der Welten) · `--world-meters`/`startWorldMeters` für Stufen-Screenshots · `--fps` mit Flush ·
+Vignette vorgerendert · Warnpfeile über dem `drawOverlay` · Zonen mit `p.blockStand = 1` verhindern das Aufstehen · Flip um die Körpermitte und
+Spielfeld-Anschlag in Schwerkraft-Welten · `flyer.track` gravitationsrichtig · `p.sinkInPits` für Läufer · Portal-Blitz abgeschwächt und bei
+`reducedMotion` gedämpft · `debugAdvance` lässt Blitz/Wackeln abklingen · Bot: Vorausschau reicht bis nach Planende, Sturz in Lücken zählt als Fehlschlag ·
+Todesursachen-Namen für alle Welten (`death-names.ts` mit Abdeckungstest).
+
+Offen/bewusst nicht umgesetzt: `auditPatterns`-Ausnahme für besurfbare Blöcke (Wien filtert die Meldung im eigenen Test) · `drawGuest` für Overlays
+(Finanzamt zeichnet die Gast-Gegner selbst nach) · `sim.spawn` verbraucht bei `hopEvery`-Läufern RNG des Generators (nur Determinismus-Detail).
+
+---
+
 Format: `## <welt>: <Titel>` + Begründung + gewünschte API. Welt-Agenten ändern keine Engine-Dateien, sondern arbeiten mit einer Umgehung weiter.
 
 ## wien: Tor-Übergang reicht die Stufe der AKTUELLEN Welt an den Renderer der Zielwelt weiter (Absturz Wien → Alpen)

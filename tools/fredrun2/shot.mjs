@@ -19,6 +19,7 @@
  *   --dpr n             Pixeldichte (Standard 1)
  *   --out <prefix>      Ausgabepräfix (Datei = <prefix>-<meters>m-<sekunden>s.png)
  *   --fps               Framezeit-Messung ausgeben (Sim+Render pro Frame, synchron)
+ *   --clean             vor dem Foto weiterlaufen, bis die Figur am Boden steht; Partikel/Popups entfernen
  *   --live <sek>        Echtzeit-Messung: Bot spielt <sek> Sekunden über requestAnimationFrame; gibt fps/p95/p99 aus
  */
 import { build } from "esbuild";
@@ -104,6 +105,7 @@ for (const wmv of worldMetersList) for (const m of meters) {
     const t0 = Date.now();
     const r = await page.evaluate((st) => window.__fr2.game.debugAdvance(st), step);
     elapsed = s;
+    if (args.clean) await page.evaluate(() => window.__fr2.game.debugSettle());
     const file = `${outPrefix}-${world === "" ? "x" : world}-${wmv !== undefined ? `wm${wmv}` : `${m}m`}-${s}s.png`;
     await page.locator("#c").screenshot({ path: file });
     console.log(`${file}  score=${r.score} m=${Math.round(r.meters)} hearts=${r.hearts} phase=${r.phase} world=${r.worldId} (${Date.now() - t0}ms)`);

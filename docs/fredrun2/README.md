@@ -43,12 +43,29 @@ tools/fredrun2/               Python-Pack-Skripte (Sprites/Props), QA-Werkzeuge 
   **Tageslauf** (gleicher Seed für alle am selben Tag).
 * Schwierigkeit: Meter → Schwierigkeitsstufe → Tempo (470 → 1180 px/s) und Musterauswahl; Abstände in Zeit definiert ⇒ jedes Muster bleibt lösbar.
 
+## Welten
+
+| Welt | Signatur | Stufen | Muster |
+|------|----------|--------|--------|
+| Wien im Sturm | Blitz-Vorwarnung, Straßenbahn-Surfen, Katastrophen-Story (8 Stufen mit den Originalhintergründen) | 8 | 18+ |
+| Alpenpanorama | Lawine (fair getaktet), Aufwind, bröckelnde Felsen, Gondeln, Steinschlag | 5 | 28 |
+| Finanzamt bei Nacht | Riesenstempel, Laser-Gitter (springen/rutschen), Förderbänder, Taschenlampen-Dunkelheit | 5 | 29 |
+| Prater | Kettenkarussell-Pendel, Trampoline, Riesenrad-Gondeln, Kanonen | 5 | 18+ |
+| Wachau | Floß-Sprünge über die Donau, rollende Weinfässer, Bienen, Marillen | 5 | 23 |
+| Cyber-Wien 2099 | Schwerkraft-Umkehr (Decken-Lauf), Phasen-Tore, Drohnen, Glitch | 5 | 24 |
+
+Weitere Dokumente: `ASSETS.md` (Sprite-/Prop-Konventionen), `WORLDS.md` + `WORLD_BRIEFS.md` (Welt-Vertrag und Briefings), `ENGINE_REQUESTS.md` (Wünsche der Welt-Autoren + Status).
+
 ## Qualitätssicherung
 
 * `npx vitest run src/game/fredrun2` – Sim-, Profil-, Audio-, Weltentests und **Bot-Lösbarkeitstests** für alle Welten
   (`BOT_WORLDS=wien,alpen npx vitest run src/game/fredrun2/bot.test.ts`).
 * `node tools/fredrun2/shot.mjs --world wien --meters 0,600 --seconds 3,8 --out /tmp/x/wien [--live 8] [--fps]` – Screenshots/Performance im headless Chromium.
 * `npx next dev -p 3111` + `node tools/fredrun2/page-shot.mjs --steps menu,worlds,play,pause,gameover --out /tmp/x/ui` – echte Seite.
+* `node tools/fredrun2/e2e.mjs --base http://localhost:3112` – End-to-End-Test der echten Seite (Menü, Kauf, Lauf, Pause, Game-Over, Persistenz, Weltreise, Konsolenfehler); Server: `npx next build && npx next start -p 3112`.
+* `node tools/fredrun2/previews.mjs` – erzeugt die Vorschaubilder der Welt-Karten (`public/fredrun2/previews/*.webp`); `node tools/fredrun2/anim-gallery.mjs` – Figuren-Animationen im Spielcode.
+* `node tools/fredrun2/audio-smoke.mjs` – Rauchtest der prozeduralen Audio-Engine im Browser.
+* Menschlicher Fairness-Audit: `BOT_AUDIT=1 npx vitest run src/game/fredrun2/bot.test.ts -t menschlicher` (0.2 s Reaktionszeit, begrenzte Sicht).
 * Debug-URL-Parameter: `?debug` (Hook `window.__fr2`), `?unlockall` (alle Helden), `?world=<id>`.
 
 ## Bedienung

@@ -64,10 +64,12 @@ await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "coun
 check("Countdown startet", true);
 await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "running", null, { timeout: 15000 });
 check("Lauf beginnt", true);
-await page.keyboard.press("Space");
-await page.waitForTimeout(500);
+await page.keyboard.down("Space");
+await page.waitForTimeout(260);
 const h0 = await page.evaluate(() => window.__fr2.game.debugSim.player.hgt);
-check("Sprung per Leertaste", h0 > 20, `hgt=${Math.round(h0)}`);
+await page.keyboard.up("Space");
+check("Sprung per Leertaste (gehalten)", h0 > 60, `hgt=${Math.round(h0)}`);
+await page.waitForTimeout(700);
 await page.waitForTimeout(3000);
 await shot("run");
 // Pause
@@ -100,7 +102,7 @@ await page.waitForTimeout(500);
 await page.reload({ waitUntil: "load" });
 await page.waitForFunction(() => window.__fr2 && window.__fr2.game.getSnapshot().phase === "menu", null, { timeout: 90000 });
 const prof = (await snap()).profile;
-check("Profil bleibt nach Reload (Charakter, Lebensdaten)", prof.character === "frida" && prof.lifetime.runs >= 2, `runs=${prof.lifetime.runs}`);
+check("Profil bleibt nach Reload (Charakter, Lebensdaten, Bestwert)", prof.character === "frida" && prof.lifetime.runs >= 1 && Object.keys(prof.best).length >= 1, `runs=${prof.lifetime.runs}`);
 await page.getByRole("tab", { name: "Bestenliste" }).click();
 await shot("board");
 // Weltreise

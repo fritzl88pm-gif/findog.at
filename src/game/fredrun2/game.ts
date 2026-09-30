@@ -1066,6 +1066,19 @@ export class FredRunGame {
     return { score: sim.score, meters: sim.meters, hearts: sim.player.hearts, phase: sim.phase, worldId: sim.world.id };
   }
 
+  /** QA: läuft weiter, bis die Figur am Boden steht, entfernt Partikel/Popups und zeichnet neu (saubere Vorschaubilder). */
+  debugSettle(maxSeconds = 2.5): void {
+    const sim = this.sim;
+    if (!sim) return;
+    let t = 0;
+    while (t < maxSeconds && !(sim.player.grounded && sim.player.hgt <= 0.5 && sim.phase === "running")) {
+      this.debugAdvance(0.05);
+      t += 0.05;
+    }
+    this.renderer?.particles.clear();
+    this.frame(0.0001);
+  }
+
   /** Nur zeichnen (z.B. nach Größenänderung). */
   debugRender(): void {
     this.frame(0.0001);

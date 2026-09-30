@@ -531,7 +531,7 @@
 }
 
 .worldArt {
-  height: calc(var(--px) * 84);
+  height: calc(var(--px) * 76);
   border-radius: calc(var(--px) * 12);
   margin: calc(var(--px) * -4) calc(var(--px) * -4) calc(var(--px) * 4);
   position: relative;
@@ -715,9 +715,8 @@
 
 .pauseBtn {
   position: absolute;
-  top: calc(var(--px) * 24);
-  left: 50%;
-  transform: translateX(-50%);
+  top: calc(var(--px) * 20);
+  right: calc(var(--px) * 196);
   z-index: 12;
   opacity: 0.85;
 }

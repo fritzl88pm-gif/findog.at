@@ -165,7 +165,7 @@ function WorldArt({ id }: { id: WorldId }): React.ReactElement {
           height={192}
           loading="lazy"
           decoding="async"
-          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+          style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "50% 72%", display: "block" }}
           onError={() => setOk(false)}
         />
       ) : null}
@@ -332,6 +332,10 @@ export default function FredRun2(): React.ReactElement {
                     </div>
                     <p className={styles.muted} style={{ margin: 0 }}>
                       Der Endlos-Runner mit sechs Welten, fünf Helden und jeder Menge Chaos.
+                      <br />
+                      <strong style={{ color: profile.mode === "tour" ? "#ddd6fe" : "#e8edff" }}>
+                        {profile.mode === "tour" ? "Weltreise: alle Welten in einem Lauf." : world.tagline}
+                      </strong>
                     </p>
                     <button className={styles.playBtn} onClick={click(startRun)} autoFocus>
                       Los geht’s!
@@ -383,10 +387,9 @@ export default function FredRun2(): React.ReactElement {
                           aria-pressed={selected}
                         >
                           <WorldArt id={id} />
-                          <span className={styles.cardTitle}>{w.name}</span>
-                          <span className={styles.cardTag}>{w.tagline}</span>
+                          <span className={styles.cardTitle} title={w.tagline}>{w.name}</span>
                           <span className={styles.tagRow}>
-                            {w.mechanics.slice(0, 3).map((m) => (
+                            {w.mechanics.slice(0, 2).map((m) => (
                               <span key={m} className={styles.tag}>
                                 {m}
                               </span>

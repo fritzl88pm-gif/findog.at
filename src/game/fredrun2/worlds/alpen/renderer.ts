@@ -15,6 +15,7 @@ import { bigGlow, blitCentered, blitTiled, blitTiledRange, ctxOf, glowAt, paint,
 import { h1, mod, mulberry, stageVal } from "../shared-b/color";
 import { StageCache, prepareStaged } from "../shared-b/layers";
 import { AlpBackdrop, BACKDROP_H, bakeLandmark, propSprite, type LandmarkSet } from "./backdrop";
+import { SnowField } from "./snow";
 import {
   FAR_RIDGE,
   GROUND_TILE_H,
@@ -166,7 +167,8 @@ export class AlpenRenderer implements WorldRenderer {
   private motes = new Motes(260);
   private pollenT = 0;
   private petalT = 0;
-  private snowT = 0;
+  private snowField = new SnowField();
+  private snowAmt = 0;
   private butterflies: Butterfly[] = [];
   private streaks = new Float32Array(24 * 4);
   private rng = mulberry(4711);
@@ -303,11 +305,8 @@ export class AlpenRenderer implements WorldRenderer {
     }
     // Schnee
     const snow = stageVal(SNOW, s) * (0.7 + 0.3 * v.intensity);
-    this.snowT -= d * snow * 70 * q;
-    while (this.snowT < 0) {
-      this.snowT += 1;
-      this.motes.spawn("snow", Math.random() * 1600, -10, -40 - wind * 120, 50 + Math.random() * 70, 12, 1.2 + Math.random() * 2.6, 0.3 + Math.random() * 0.9);
-    }
+    this.snowField.update(d, snow, wind, v.reducedMotion ? v.speed * 0.5 : v.speed, v.time, v.quality);
+    this.snowAmt = snow;
     this.motes.update(d, v.reducedMotion ? v.speed * 0.5 : v.speed, -wind * 60, v.time);
     // Schmetterlinge
     const bf = stageVal(BUTTERFLIES, s);
@@ -450,7 +449,6 @@ export class AlpenRenderer implements WorldRenderer {
     this.drawPeaks(g, v, s);
     // 7) Nebelband an der Kulissen-Basis (vorgebacken je Stufe, Schwaden driften)
     this.drawStagedTile(g, this.mistBand, v, 1400, 150, v.dist * 0.06 + (v.reducedMotion ? 0 : v.time * 6), 330);
-    const hz = STAGE_PAL[st].haze;
     // 8) Ferne Waldhügel (+ Burgruine)
     this.drawStagedTile(g, this.far, v, 2048, 230, v.dist * FAR_PAR, FAR_Y);
     this.drawLandmarkOnRidge(g, v, this.castle, CASTLE_VIS, FAR_PAR, FAR_Y, FAR_RIDGE, 5200, 900, 10);
@@ -996,6 +994,7 @@ export class AlpenRenderer implements WorldRenderer {
     const s = v.stage + v.stageBlend;
     // Pollen, Blütenblätter, Schnee
     this.motes.draw(g, v.time);
+    this.snowField.draw(g, Math.min(1, this.snowAmt * 1.5));
     // Schmetterlinge
     const bf = stageVal(BUTTERFLIES, s);
     if (bf > 0.02 && v.quality > 0) this.drawButterflies(g, v, bf);
