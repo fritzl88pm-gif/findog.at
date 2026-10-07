@@ -10,14 +10,19 @@
  */
 import { PLAYER_SX } from "../../constants";
 import type { AssetLoader, Ent, PropLibrary, ViewState, WorldRenderer } from "../../types";
+import { yieldToMain } from "../../yield";
 import { Motes } from "../shared-a/fx";
 import { bigGlow, blitCentered, blitTiled, blitTiledRange, ctxOf, glowAt, paint, softSprite, solidSegments, type Ctx2D } from "../shared-b/canvas";
 import { h1, mod, mulberry, stageVal } from "../shared-b/color";
-import { StageCache, prepareStaged } from "../shared-b/layers";
+import { StageCache, StagePrep, gradedCache, stageProgress } from "../shared-b/layers";
+import { WarmQueue } from "../shared-b/warm";
 import { AlpBackdrop, BACKDROP_H, bakeLandmark, propSprite, type LandmarkSet } from "./backdrop";
 import { SnowField } from "./snow";
 import {
   FAR_RIDGE,
+  GRADE_FAR,
+  GRADE_MID,
+  GRADE_NEAR,
   GROUND_TILE_H,
   GROUND_TILE_W,
   GROUND_TOP,
@@ -90,6 +95,8 @@ import {
 
 const TAU = Math.PI * 2;
 const CLOUD_SCALE = [1, 0.72, 1.25, 0.6, 0.9, 1.1];
+/** Meter je Stimmungsstufe (wie WORLD_ALPEN.stageMeters; Test in alpen.test.ts hält beides gleich) */
+export const ALPEN_STAGE_METERS = 320;
 
 export const ALPEN_PROPS = [
   "boulder",
@@ -154,7 +161,13 @@ export class AlpenRenderer implements WorldRenderer {
   private mid!: StageCache;
   private near!: StageCache;
   private ground!: StageCache;
+  /** alle Stufen-Caches (Liste gehört dem StagePrep) */
   private staged: StageCache[] = [];
+  private prep = new StagePrep(this.staged, MAX_STAGE);
+  private warmQ = new WarmQueue();
+  private warmInit = false;
+  private loaded = false;
+  private lastStage = 0;
   private canyonRock!: HTMLCanvasElement;
   private canyonIce!: HTMLCanvasElement;
   private clouds: HTMLCanvasElement[] = [];
@@ -196,29 +209,73 @@ export class AlpenRenderer implements WorldRenderer {
   async load(assets: AssetLoader): Promise<void> {
     this.props = assets.props;
     await Promise.all([assets.props.preload(ALPEN_PROPS).catch(() => undefined), this.backdrop.load(assets).catch(() => undefined)]);
-    this.build();
+    // Statisches in Schritten bauen und dazwischen den Hauptthread freigeben (kein Long Task)
+    await this.buildAsync();
     // Stufe 0 (und die Landmarken) vorbacken, damit der erste Frame ruckelfrei ist
     for (const s of this.staged) {
-      s.get(0);
-      await Promise.resolve();
+      while (!s.has(0)) {
+        await yieldToMain();
+        s.step(0);
+      }
     }
-    this.backdrop.stages?.get(1);
+    const bs = this.backdrop.stages;
+    if (bs) {
+      while (!bs.has(1)) {
+        await yieldToMain();
+        bs.step(1);
+      }
+    }
+    this.loaded = true;
   }
 
+  /** Bauschritte des statischen Zeichnens (jeder für sich klein; `load` gibt dazwischen den Hauptthread frei) */
+  private readonly parts: Array<() => void> = [
+    () => this.buildCaches(),
+    () => this.buildLandmarks(),
+    () => this.buildCanyon(false),
+    () => this.buildCanyon(true),
+    () => this.buildClouds(),
+    () => this.buildMisc(),
+  ];
+  private nextPart = 0;
+
+  /** Alles (verbleibende) auf einmal bauen – Fallback für Aufrufe vor/ohne `load` */
   private build(): void {
-    if (this.ready) return;
+    while (this.nextPart < this.parts.length) {
+      const i = this.nextPart;
+      this.nextPart += 1;
+      this.parts[i]();
+    }
+  }
+
+  private async buildAsync(): Promise<void> {
+    while (this.nextPart < this.parts.length) {
+      const i = this.nextPart;
+      this.nextPart += 1;
+      this.parts[i]();
+      await yieldToMain();
+    }
+  }
+
+  private buildCaches(): void {
     const P = this.props;
     this.A = makeSkinAssets(P);
-    this.sky = new StageCache((s) => paintSky(s));
-    this.farRange = new StageCache((s) => paintFarRange(s));
-    this.far = new StageCache((s) => paintFarHills(s));
-    this.mid = new StageCache((s) => paintMidHills(s));
-    this.near = new StageCache((s) => paintNearTrees(s));
-    this.ground = new StageCache((s) => paintGround(s));
-    this.staged = [this.sky, this.far, this.mid, this.near, this.ground];
+    // Stufen-Flächen: verworfene Stufen werden für den nächsten Bake wiederverwendet (keine Neuanlage großer Bitmaps)
+    this.sky = new StageCache((s, reuse) => paintSky(s, reuse), { recycle: true });
+    this.farRange = new StageCache((s, reuse) => paintFarRange(s, reuse), { recycle: true });
+    // Ebenen mit Farbstimmung: Malen und Einfärben als zwei kleine Schritte
+    this.far = gradedCache(paintFarHills, GRADE_FAR);
+    this.mid = gradedCache(paintMidHills, GRADE_MID);
+    this.near = gradedCache(paintNearTrees, GRADE_NEAR);
+    this.ground = new StageCache((s, reuse) => paintGround(s, reuse), { recycle: true });
+    this.staged.push(this.sky, this.far, this.mid, this.near, this.ground);
     const bst = this.backdrop.stages;
     if (bst) this.staged.push(bst);
     else this.staged.push(this.farRange);
+  }
+
+  private buildLandmarks(): void {
+    const P = this.props;
     if (P) {
       this.peak = bakeLandmark(P, "landmark-peak", 400, 0.42);
       this.peakFlip = bakeLandmark(P, "landmark-peak", 330, 0.5, true);
@@ -228,36 +285,59 @@ export class AlpenRenderer implements WorldRenderer {
       this.cabin = propSprite(P, "gondola", 58);
       for (const L of [this.peak, this.peakFlip, this.chalet, this.church, this.castle]) if (L) this.staged.push(L.stages);
     }
-    this.canyonRock = paintCanyon(false);
-    this.canyonIce = paintCanyon(true);
+  }
+
+  private buildCanyon(ice: boolean): void {
+    if (ice) this.canyonIce = paintCanyon(true);
+    else this.canyonRock = paintCanyon(false);
+  }
+
+  private buildClouds(): void {
     for (let i = 0; i < 6; i += 1) {
       const sc = CLOUD_SCALE[i];
       this.clouds.push(paintCloud((i % 3) + 1, Math.round(420 * sc), Math.round(150 * sc), false));
       this.cloudsWarm.push(paintCloud((i % 3) + 1, Math.round(420 * sc), Math.round(150 * sc), true));
     }
+  }
+
+  private buildMisc(): void {
     this.mist = paintMist(1400, 120, "rgba(255,255,255,0.9)");
-    this.mistBand = new StageCache((st) =>
-      paint(1400, 150, (mg) => {
-        const hz = STAGE_PAL[st].haze;
-        const band = mg.createLinearGradient(0, 0, 0, 140);
-        band.addColorStop(0, hexA(hz, 0));
-        band.addColorStop(0.6, hexA(hz, 0.35 + MIST[st] * 0.3));
-        band.addColorStop(1, hexA(hz, 0.2));
-        mg.fillStyle = band;
-        mg.fillRect(0, 0, 1400, 140);
-        mg.globalAlpha = MIST[st] * 0.8;
-        mg.drawImage(this.mist, 0, 30);
-      }),
+    this.mistBand = new StageCache(
+      (st, reuse) =>
+        paint(
+          1400,
+          150,
+          (mg) => {
+            const hz = STAGE_PAL[st].haze;
+            const band = mg.createLinearGradient(0, 0, 0, 140);
+            band.addColorStop(0, hexA(hz, 0));
+            band.addColorStop(0.6, hexA(hz, 0.35 + MIST[st] * 0.3));
+            band.addColorStop(1, hexA(hz, 0.2));
+            mg.fillStyle = band;
+            mg.fillRect(0, 0, 1400, 140);
+            mg.globalAlpha = MIST[st] * 0.8;
+            mg.drawImage(this.mist, 0, 30);
+          },
+          reuse,
+        ),
+      { recycle: true },
     );
     this.lake = paintLake();
-    this.lowHaze = new StageCache((st) =>
-      paint(1280, 72, (lg) => {
-        const low = lg.createLinearGradient(0, 0, 0, 72);
-        low.addColorStop(0, hexA(STAGE_PAL[st].haze, 0));
-        low.addColorStop(1, hexA(STAGE_PAL[st].haze, 0.28));
-        lg.fillStyle = low;
-        lg.fillRect(0, 0, 1280, 72);
-      }),
+    this.lowHaze = new StageCache(
+      (st, reuse) =>
+        paint(
+          1280,
+          72,
+          (lg) => {
+            const low = lg.createLinearGradient(0, 0, 0, 72);
+            low.addColorStop(0, hexA(STAGE_PAL[st].haze, 0));
+            low.addColorStop(1, hexA(STAGE_PAL[st].haze, 0.28));
+            lg.fillStyle = low;
+            lg.fillRect(0, 0, 1280, 72);
+          },
+          reuse,
+        ),
+      { recycle: true },
     );
     this.staged.push(this.mistBand, this.lowHaze);
     this.rays = paintRays(1100, 600, 1060, 40, 3);
@@ -301,12 +381,39 @@ export class AlpenRenderer implements WorldRenderer {
     this.streaks[o + 3] = 900 + this.rng() * 900;
   }
 
+  /**
+   * Skalenwechsel: Alpen backt unabhängig von der Pixeldichte (Hindernis-Sprites fest in doppelter Auflösung, Ebenen in
+   * Welt-Pixeln) – es gibt nichts neu zu bauen, mehrfaches Aufrufen kostet nichts.
+   */
+  resize(): void {
+    // bewusst leer
+  }
+
+  /**
+   * Leerlauf-Aufwärmen (Countdown, Menü-Demo, Lauf-Anfang): backt in Zeitscheiben von ca. `budgetMs` fehlende
+   * Stufen-Varianten (aktuelle und Folgestufe) und den Zwischenpuffer des Tor-Übergangs vor. true = nichts mehr zu tun.
+   */
+  warm(budgetMs: number): boolean {
+    if (!this.loaded) return true; // noch nicht geladen
+    if (!this.warmInit) {
+      this.warmInit = true;
+      this.warmQ.add(() => this.prep.warm(this.lastStage, 0), 6);
+      this.warmQ.add(() => {
+        this.ensureBuf();
+        return true;
+      }, 2);
+    }
+    return this.warmQ.run(budgetMs);
+  }
+
   // ------------------------------------------------------------------------------------------------------
 
   update(dt: number, v: ViewState): void {
     if (!this.ready) return;
     const d = Math.min(0.05, dt);
-    prepareStaged(this.staged, v.stage, MAX_STAGE, 1);
+    // Stufen-Varianten: die Folgestufe erst ab ~28 % der Stufe und höchstens ein Schritt je ~6 Frames (nicht am Stufenanfang)
+    this.lastStage = v.stage;
+    this.prep.step(v.stage, stageProgress(v.worldMeters, ALPEN_STAGE_METERS), v.stageBlend);
     const s = v.stage + v.stageBlend;
     const q = v.quality === 0 ? 0.35 : v.quality === 1 ? 0.7 : 1;
     const wind = stageVal(WIND, s);
@@ -374,17 +481,21 @@ export class AlpenRenderer implements WorldRenderer {
       return;
     }
     if (a <= 0.001) return;
-    if (!this.buf) {
-      this.buf = paint(1280, 720, () => undefined);
-      this.bufG = ctxOf(this.buf);
-    }
+    this.ensureBuf();
     const bg = this.bufG as Ctx2D;
     bg.setTransform(1, 0, 0, 1, 0, 0);
     bg.globalAlpha = 1;
     bg.globalCompositeOperation = "source-over";
     bg.clearRect(0, 0, 1280, 720);
     fn(bg);
-    g.drawImage(this.buf, 0, 0);
+    g.drawImage(this.buf as HTMLCanvasElement, 0, 0);
+  }
+
+  /** Zwischenpuffer für den Tor-Übergang (einmal anlegen) */
+  private ensureBuf(): void {
+    if (this.buf) return;
+    this.buf = paint(1280, 720, () => undefined);
+    this.bufG = ctxOf(this.buf);
   }
 
   private renderBackground(g: Ctx2D, v: ViewState): void {

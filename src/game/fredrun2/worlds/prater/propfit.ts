@@ -7,6 +7,7 @@
  */
 import { makeCanvas } from "../../draw-utils";
 import type { PropLibrary } from "../../types";
+import { touchCanvas } from "../shared-b/canvas";
 
 /** Transparenter Rand um die Silhouette im Quellbild (px) */
 export const PROP_PAD = 5;
@@ -41,10 +42,29 @@ export function quant(v: number, q = 4): number {
   return Math.ceil(v / q - 0.001) * q;
 }
 
+function sameCrop(a: PropCrop | undefined, b: PropCrop | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+}
+
+interface BankEntry {
+  b: Baked;
+  crop: PropCrop | undefined;
+  /** Zähler der letzten Verwendung (kleinster wird zuerst verdrängt) */
+  use: number;
+  bytes: number;
+  id: string;
+  size: number;
+}
+
 export class PropBank {
   private props: PropLibrary | null = null;
   private k = 1;
-  private cache = new Map<string, Baked>();
+  /** id → Zielgröße (tw·16384 + th) → Varianten (Ausschnitt): Treffer ohne String-Schlüssel und ohne Allokation */
+  private cache = new Map<string, Map<number, BankEntry[]>>();
+  private entries: BankEntry[] = [];
+  private tick = 0;
   private bytes = 0;
 
   setProps(p: PropLibrary | null): void {
@@ -54,10 +74,16 @@ export class PropBank {
 
   private clear(): void {
     this.cache.clear();
+    this.entries.length = 0;
     this.bytes = 0;
   }
 
-  /** Pixelfaktor der Zeichenfläche (1 … 2); bei Änderung werden die Sprites neu gebacken. */
+  /** Anzahl gebackener Sprites */
+  get size(): number {
+    return this.entries.length;
+  }
+
+  /** Pixelfaktor der Zeichenfläche (1 … 2); bei Änderung (> 0,2) werden die Sprites neu gebacken. */
   setScale(k: number): void {
     const nk = Math.min(2, Math.max(1, k));
     if (Math.abs(nk - this.k) > 0.2) {
@@ -91,13 +117,17 @@ export class PropBank {
     const k = this.k;
     const tw = Math.max(2, Math.round(w * k));
     const th = Math.max(2, Math.round(h * k));
-    const key = `${id}|${tw}|${th}|${crop ? crop.join(",") : ""}`;
-    const hit = this.cache.get(key);
-    if (hit) {
-      // LRU: ans Ende schieben
-      this.cache.delete(key);
-      this.cache.set(key, hit);
-      return hit;
+    const size = tw * 16384 + th;
+    const byId = this.cache.get(id);
+    const list = byId?.get(size);
+    if (list) {
+      for (let i = 0; i < list.length; i += 1) {
+        const e = list[i];
+        if (sameCrop(e.crop, crop)) {
+          e.use = ++this.tick; // zuletzt benutzt (Verdrängung nach Alter der Nutzung)
+          return e.b;
+        }
+      }
     }
     const cell = props.cell(id);
     if (!cell) return null;
@@ -127,16 +157,42 @@ export class PropBank {
     og.imageSmoothingQuality = "high";
     if (src) og.drawImage(src, 0, 0, tw, th);
     else paintRegion(og, props, id, rx, ry, rw, rh, tw, th);
+    // Rasterkosten jetzt zahlen (beim Vorbacken im Leerlauf), nicht im Frame, in dem das Hindernis zuerst erscheint
+    touchCanvas(out);
     const b: Baked = { c: out, w: tw / k, h: th / k };
-    this.cache.set(key, b);
-    this.bytes += tw * th * 4;
-    // LRU über das Speicherbudget: älteste zuerst; das eben gebackene Sprite bleibt immer
-    for (const [oldKey, old] of this.cache) {
-      if (this.bytes <= MAX_BYTES || oldKey === key) break;
-      this.cache.delete(oldKey);
-      this.bytes -= old.c.width * old.c.height * 4;
+    const entry: BankEntry = { b, crop: crop ? [crop[0], crop[1], crop[2], crop[3]] : undefined, use: ++this.tick, bytes: tw * th * 4, id, size };
+    let m = byId;
+    if (!m) {
+      m = new Map();
+      this.cache.set(id, m);
     }
+    const l = m.get(size);
+    if (l) l.push(entry);
+    else m.set(size, [entry]);
+    this.entries.push(entry);
+    this.bytes += entry.bytes;
+    // LRU über das Speicherbudget: am längsten ungenutzte zuerst; das eben gebackene Sprite bleibt immer
+    while (this.bytes > MAX_BYTES && this.entries.length > 1) this.evictLeastUsed(entry);
     return b;
+  }
+
+  private evictLeastUsed(keep: BankEntry): void {
+    let at = -1;
+    for (let i = 0; i < this.entries.length; i += 1) {
+      const e = this.entries[i];
+      if (e !== keep && (at < 0 || e.use < this.entries[at].use)) at = i;
+    }
+    if (at < 0) return;
+    const old = this.entries[at];
+    this.entries.splice(at, 1);
+    this.bytes -= old.bytes;
+    const m = this.cache.get(old.id);
+    const l = m?.get(old.size);
+    if (!m || !l) return;
+    const i = l.indexOf(old);
+    if (i >= 0) l.splice(i, 1);
+    if (!l.length) m.delete(old.size);
+    if (!m.size) this.cache.delete(old.id);
   }
 
   /** Auf das Pixelraster der Zeichenfläche runden (scharfe Kanten, kein Flimmern) */

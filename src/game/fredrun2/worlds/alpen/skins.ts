@@ -55,10 +55,47 @@ export interface Baked {
   ch: number;
 }
 
+/** gleiche Zahlenliste (oder beide fehlend) – Cache-Treffer ohne String-Schlüssel */
+function sameNums(a: readonly number[] | undefined, b: readonly number[] | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function sameRects(a: ReadonlyArray<readonly number[]> | undefined, b: ReadonlyArray<readonly number[]> | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) if (!sameNums(a[i], b[i])) return false;
+  return true;
+}
+
+/** Schneepuder-Angabe wie im Cache-Schlüssel: nur Lage und Stärke zählen (`ramp` nicht) */
+function sameSnow(a: SnowSpec | undefined, b: SnowSpec | undefined): boolean {
+  if (a === b) return true;
+  return !!a && !!b && a.y0 === b.y0 && a.y1 === b.y1 && a.a0 === b.a0;
+}
+
+interface BankEntry {
+  b: Baked;
+  o: BakeOpts;
+}
+
+/** Obergrenze gespeicherter Sprites (älteste zuerst verworfen) */
+const BANK_MAX = 80;
+
 export class PropBank {
-  private readonly cache = new Map<string, Baked>();
+  /** id → logische px je Zellpixel → Varianten (Ausschnitt/Maske/Spiegelung/Schnee): Treffer ohne String-Schlüssel */
+  private readonly cache = new Map<string, Map<number, BankEntry[]>>();
+  /** Einfügereihenfolge (Verdrängung) */
+  private readonly order: Array<{ id: string; s: number; e: BankEntry }> = [];
 
   constructor(private readonly props: PropLibrary | null) {}
+
+  /** Anzahl gebackener Sprites */
+  get size(): number {
+    return this.order.length;
+  }
 
   has(id: string): boolean {
     return !!this.props?.has(id);
@@ -91,18 +128,45 @@ export class PropBank {
     const props = this.props;
     if (!props?.has(id)) return null;
     const sq = Math.round(s * 1000) / 1000;
-    const key = `${id}|${sq}|${o.crop?.join(",") ?? ""}|${o.clip?.map((r) => r.join(",")).join(";") ?? ""}|${o.circle?.join(",") ?? ""}|${o.flip ? 1 : 0}|${o.snow ? `${o.snow.y0},${o.snow.y1},${o.snow.a0}` : ""}`;
-    const hit = this.cache.get(key);
-    if (hit) return hit;
+    const byId = this.cache.get(id);
+    const list = byId?.get(sq);
+    if (list) {
+      for (let i = 0; i < list.length; i += 1) {
+        const e = list[i];
+        if (!!e.o.flip === !!o.flip && sameNums(e.o.crop, o.crop) && sameRects(e.o.clip, o.clip) && sameNums(e.o.circle, o.circle) && sameSnow(e.o.snow, o.snow)) return e.b;
+      }
+    }
     const cell = props.cell(id);
     if (!cell) return null;
     const b = this.bake(props, id, cell.w, cell.h, sq, o);
-    this.cache.set(key, b);
-    if (this.cache.size > 80) {
-      const first = this.cache.keys().next().value;
-      if (first !== undefined) this.cache.delete(first);
+    // eigene Kopie der Angaben (Aufrufer legen sie oft pro Aufruf neu an)
+    const entry: BankEntry = {
+      b,
+      o: { crop: o.crop && [...o.crop], clip: o.clip?.map((r) => [...r] as [number, number, number, number]), circle: o.circle && [...o.circle], flip: o.flip, snow: o.snow && { ...o.snow } },
+    };
+    let m = byId;
+    if (!m) {
+      m = new Map();
+      this.cache.set(id, m);
     }
+    const l = m.get(sq);
+    if (l) l.push(entry);
+    else m.set(sq, [entry]);
+    this.order.push({ id, s: sq, e: entry });
+    if (this.order.length > BANK_MAX) this.evictOldest();
     return b;
+  }
+
+  private evictOldest(): void {
+    const old = this.order.shift();
+    if (!old) return;
+    const m = this.cache.get(old.id);
+    const l = m?.get(old.s);
+    if (!m || !l) return;
+    const i = l.indexOf(old.e);
+    if (i >= 0) l.splice(i, 1);
+    if (!l.length) m.delete(old.s);
+    if (!m.size) this.cache.delete(old.id);
   }
 
   private bake(props: PropLibrary, id: string, cw: number, ch: number, s: number, o: BakeOpts): Baked {

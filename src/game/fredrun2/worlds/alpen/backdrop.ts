@@ -8,7 +8,7 @@
  */
 import type { AssetLoader, PropLibrary } from "../../types";
 import { paint } from "../shared-b/canvas";
-import { StageCache } from "../shared-b/layers";
+import { StageCache, gradedCache } from "../shared-b/layers";
 import { BACKDROP_OF_STAGE, BACKDROP_URLS, MAX_STAGE, STAGE_PAL } from "./stages";
 
 export const BACKDROP_H = 440;
@@ -25,7 +25,12 @@ export class AlpBackdrop {
     const any = this.imgs.find((i) => !!i);
     if (!any) return;
     this.tileW = Math.round(any.width * (BACKDROP_H / (any.height * CROP_H)));
-    this.cache = new StageCache((s) => this.bake(s));
+    // Bild skalieren (Vorarbeit), Stimmung daraufmalen (Vorarbeit) und Dunst/Ausblendung (Bake) sind drei kleine Schritte
+    // statt einem großen: jeder rastert die 2,8×0,44 Megapixel großen Flächen nur zu einem Teil
+    this.cache = gradedCache(
+      (s, reuse, grade) => this.bake(s, reuse, grade),
+      [(c, s) => this.gradeMood(c, s), (c, s) => this.gradeFinish(c, s)],
+    );
   }
 
   get ready(): boolean {
@@ -36,73 +41,108 @@ export class AlpBackdrop {
     return this.cache;
   }
 
-  private bake(stage: number): HTMLCanvasElement {
-    const img = this.imgs[BACKDROP_OF_STAGE[stage]] ?? this.imgs.find((i) => !!i) ?? null;
+  private imageOf(stage: number): HTMLImageElement | null {
+    return this.imgs[BACKDROP_OF_STAGE[stage]] ?? this.imgs.find((i) => !!i) ?? null;
+  }
+
+  /** Kulissenbild auf Kachelgröße skalieren (`grade` = Färbung gleich mit anwenden) */
+  private bake(stage: number, reuse: HTMLCanvasElement | null, grade: boolean): HTMLCanvasElement {
+    const img = this.imageOf(stage);
     const W = this.tileW;
     const H = BACKDROP_H;
-    return paint(W, H, (g) => {
-      if (!img) return;
-      g.imageSmoothingQuality = "high";
-      g.drawImage(img, 0, 0, img.width, img.height * CROP_H, 0, 0, W, H);
-      const P = STAGE_PAL[stage];
-      // Stimmung
-      if (stage === 0) {
-        g.globalCompositeOperation = "soft-light";
-        g.globalAlpha = 0.4;
-        g.fillStyle = "#ffcf7a";
-        g.fillRect(0, 0, W, H);
-      } else if (stage === 2) {
-        g.globalCompositeOperation = "soft-light";
-        g.globalAlpha = 0.18;
-        g.fillStyle = "#9fd0ff";
-        g.fillRect(0, 0, W, H);
-      } else if (stage === 3) {
-        g.globalCompositeOperation = "saturation";
-        g.globalAlpha = 0.25;
-        g.fillStyle = "#808080";
-        g.fillRect(0, 0, W, H);
-        g.globalCompositeOperation = "soft-light";
-        g.globalAlpha = 0.3;
-        g.fillStyle = "#a8c0dc";
-        g.fillRect(0, 0, W, H);
-      } else if (stage === 4) {
-        // Alpenglühen: Schnee glüht rosa-orange, Täler versinken im Violett
-        g.globalCompositeOperation = "multiply";
-        g.globalAlpha = 1;
-        g.fillStyle = "#f2a88f";
-        g.fillRect(0, 0, W, H);
-        g.globalCompositeOperation = "soft-light";
-        g.globalAlpha = 0.55;
-        g.fillStyle = "#ff7a4a";
-        g.fillRect(0, 0, W, H);
-        g.globalCompositeOperation = "source-over";
-        const low = g.createLinearGradient(0, H * 0.35, 0, H);
-        low.addColorStop(0, "rgba(70,40,110,0)");
-        low.addColorStop(1, "rgba(70,40,110,0.45)");
-        g.globalAlpha = 1;
-        g.fillStyle = low;
-        g.fillRect(0, H * 0.35, W, H * 0.65);
-      }
-      g.globalCompositeOperation = "source-over";
+    const c = paint(
+      W,
+      H,
+      (g) => {
+        if (!img) return;
+        g.imageSmoothingQuality = "high";
+        g.drawImage(img, 0, 0, img.width, img.height * CROP_H, 0, 0, W, H);
+      },
+      reuse,
+    );
+    if (grade) {
+      this.gradeMood(c, stage);
+      this.gradeFinish(c, stage);
+    }
+    return c;
+  }
+
+  /** Stimmung (Mischmodi-Durchgänge) auf das skalierte Kulissenbild legen; false = diese Stufe hat keine */
+  private gradeMood(c: HTMLCanvasElement, stage: number): boolean {
+    if (!this.imageOf(stage)) return false;
+    const g = c.getContext("2d");
+    if (!g) return false;
+    const W = c.width;
+    const H = c.height;
+    if (stage === 0) {
+      g.globalCompositeOperation = "soft-light";
+      g.globalAlpha = 0.4;
+      g.fillStyle = "#ffcf7a";
+      g.fillRect(0, 0, W, H);
+    } else if (stage === 2) {
+      g.globalCompositeOperation = "soft-light";
+      g.globalAlpha = 0.18;
+      g.fillStyle = "#9fd0ff";
+      g.fillRect(0, 0, W, H);
+    } else if (stage === 3) {
+      g.globalCompositeOperation = "saturation";
+      g.globalAlpha = 0.25;
+      g.fillStyle = "#808080";
+      g.fillRect(0, 0, W, H);
+      g.globalCompositeOperation = "soft-light";
+      g.globalAlpha = 0.3;
+      g.fillStyle = "#a8c0dc";
+      g.fillRect(0, 0, W, H);
+    } else if (stage === 4) {
+      // Alpenglühen: Schnee glüht rosa-orange, Täler versinken im Violett
+      g.globalCompositeOperation = "multiply";
       g.globalAlpha = 1;
-      // Luftperspektive: Dunst nach unten (Talboden) und oben (Gipfel im Himmelsblau)
-      const hz = g.createLinearGradient(0, 0, 0, H);
-      hz.addColorStop(0, hexA(P.mid, stage === 4 ? 0.1 : 0.22));
-      hz.addColorStop(0.45, hexA(P.haze, 0.05));
-      hz.addColorStop(1, hexA(P.haze, stage === 3 ? 0.5 : 0.36));
-      g.fillStyle = hz;
+      g.fillStyle = "#f2a88f";
       g.fillRect(0, 0, W, H);
-      // weich in den Himmel ausblenden
-      // (destination-in löscht alles außerhalb der gefüllten Fläche → ganze Kachel füllen)
-      g.globalCompositeOperation = "destination-in";
-      const fade = g.createLinearGradient(0, 0, 0, FADE_H);
-      fade.addColorStop(0, "rgba(0,0,0,0)");
-      fade.addColorStop(0.6, "rgba(0,0,0,0.75)");
-      fade.addColorStop(1, "rgba(0,0,0,1)");
-      g.fillStyle = fade;
+      g.globalCompositeOperation = "soft-light";
+      g.globalAlpha = 0.55;
+      g.fillStyle = "#ff7a4a";
       g.fillRect(0, 0, W, H);
       g.globalCompositeOperation = "source-over";
-    });
+      const low = g.createLinearGradient(0, H * 0.35, 0, H);
+      low.addColorStop(0, "rgba(70,40,110,0)");
+      low.addColorStop(1, "rgba(70,40,110,0.45)");
+      g.globalAlpha = 1;
+      g.fillStyle = low;
+      g.fillRect(0, H * 0.35, W, H * 0.65);
+    } else {
+      return false;
+    }
+    g.globalCompositeOperation = "source-over";
+    g.globalAlpha = 1;
+    return true;
+  }
+
+  /** Luftperspektive (Dunst) und weiche Oberkante auf das skalierte Kulissenbild legen */
+  private gradeFinish(c: HTMLCanvasElement, stage: number): void {
+    if (!this.imageOf(stage)) return;
+    const g = c.getContext("2d");
+    if (!g) return;
+    const W = c.width;
+    const H = c.height;
+    const P = STAGE_PAL[stage];
+    // Luftperspektive: Dunst nach unten (Talboden) und oben (Gipfel im Himmelsblau)
+    const hz = g.createLinearGradient(0, 0, 0, H);
+    hz.addColorStop(0, hexA(P.mid, stage === 4 ? 0.1 : 0.22));
+    hz.addColorStop(0.45, hexA(P.haze, 0.05));
+    hz.addColorStop(1, hexA(P.haze, stage === 3 ? 0.5 : 0.36));
+    g.fillStyle = hz;
+    g.fillRect(0, 0, W, H);
+    // weich in den Himmel ausblenden
+    // (destination-in löscht alles außerhalb der gefüllten Fläche → ganze Kachel füllen)
+    g.globalCompositeOperation = "destination-in";
+    const fade = g.createLinearGradient(0, 0, 0, FADE_H);
+    fade.addColorStop(0, "rgba(0,0,0,0)");
+    fade.addColorStop(0.6, "rgba(0,0,0,0.75)");
+    fade.addColorStop(1, "rgba(0,0,0,1)");
+    g.fillStyle = fade;
+    g.fillRect(0, 0, W, H);
+    g.globalCompositeOperation = "source-over";
   }
 
   /** Gespiegelt gekachelt zeichnen (1:1, ganzzahlig). */
@@ -161,31 +201,38 @@ export function bakeLandmark(props: PropLibrary, id: string, h: number, haze: nu
   const base = paint(w, h, (g) => {
     props.draw(g, id, w / 2, h, { h, flipX: flip });
   });
-  const stages = new StageCache((s) =>
-    paint(w, h, (g) => {
-      g.drawImage(base, 0, 0);
-      const P = STAGE_PAL[s];
-      if (s === 4) {
-        g.globalCompositeOperation = "source-atop";
-        g.fillStyle = "rgba(120,60,110,0.35)";
-        g.fillRect(0, 0, w, h);
-      }
-      g.globalCompositeOperation = "source-atop";
-      const grd = g.createLinearGradient(0, 0, 0, h);
-      grd.addColorStop(0, hexA(P.haze, haze * 0.8));
-      grd.addColorStop(1, hexA(P.haze, Math.min(0.9, haze * 1.35)));
-      g.fillStyle = grd;
-      g.fillRect(0, 0, w, h);
-      if (s === 4) {
-        // Alpenglühen auf der Lichtseite
-        g.globalCompositeOperation = "source-atop";
-        const glow = g.createLinearGradient(w, 0, 0, h);
-        glow.addColorStop(0, "rgba(255,150,100,0.35)");
-        glow.addColorStop(1, "rgba(255,150,100,0)");
-        g.fillStyle = glow;
-        g.fillRect(0, 0, w, h);
-      }
-    }),
+  const stages = new StageCache(
+    (s, reuse) =>
+      paint(
+        w,
+        h,
+        (g) => {
+          g.drawImage(base, 0, 0);
+          const P = STAGE_PAL[s];
+          if (s === 4) {
+            g.globalCompositeOperation = "source-atop";
+            g.fillStyle = "rgba(120,60,110,0.35)";
+            g.fillRect(0, 0, w, h);
+          }
+          g.globalCompositeOperation = "source-atop";
+          const grd = g.createLinearGradient(0, 0, 0, h);
+          grd.addColorStop(0, hexA(P.haze, haze * 0.8));
+          grd.addColorStop(1, hexA(P.haze, Math.min(0.9, haze * 1.35)));
+          g.fillStyle = grd;
+          g.fillRect(0, 0, w, h);
+          if (s === 4) {
+            // Alpenglühen auf der Lichtseite
+            g.globalCompositeOperation = "source-atop";
+            const glow = g.createLinearGradient(w, 0, 0, h);
+            glow.addColorStop(0, "rgba(255,150,100,0.35)");
+            glow.addColorStop(1, "rgba(255,150,100,0)");
+            g.fillStyle = glow;
+            g.fillRect(0, 0, w, h);
+          }
+        },
+        reuse,
+      ),
+    { recycle: true },
   );
   return { stages, w, h };
 }

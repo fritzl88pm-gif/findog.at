@@ -3,6 +3,7 @@
  * Spiegel-/Überblend-Kachelung und Stufen-Überblendung, periodisches Rauschen, Boden-Segmente.
  */
 import { clamp } from "../../draw-utils";
+import { recycled } from "../shared-b/canvas";
 
 // --- Rauschen (periodisch → nahtlose Kacheln) ------------------------------------------------------
 
@@ -58,9 +59,12 @@ export interface Tile {
   h: number;
 }
 
-/** Rendert eine logische Kachel w×h mit Pixelfaktor k (für scharfe Darstellung auf hochauflösenden Displays). */
-export function renderTile(w: number, h: number, k: number, paint: (g: CanvasRenderingContext2D, w: number, h: number) => void): Tile {
-  const c = createCanvas(w * k, h * k);
+/**
+ * Rendert eine logische Kachel w×h mit Pixelfaktor k (für scharfe Darstellung auf hochauflösenden Displays).
+ * Mit `reuse` (gleiche Pixelgröße) wird diese Fläche gelöscht und neu bemalt, statt eine neue anzulegen.
+ */
+export function renderTile(w: number, h: number, k: number, paint: (g: CanvasRenderingContext2D, w: number, h: number) => void, reuse?: Canvas2D | null): Tile {
+  const c = recycled(reuse, w * k, h * k) ?? createCanvas(w * k, h * k);
   const g = c.getContext("2d");
   if (g) {
     g.scale(k, k);

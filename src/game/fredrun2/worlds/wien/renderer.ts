@@ -9,9 +9,12 @@
  */
 import { clamp } from "../../draw-utils";
 import type { AssetLoader, Ent, PropLibrary, ViewState, WorldRenderer } from "../../types";
+import { yieldToMain } from "../../yield";
 import { Motes, Rain } from "../shared-a/fx";
 import { css, groundSegments, hash, lerpRgb, stageRgb, stageVal, type RGB, type Tile } from "../shared-a/gfx";
-import { StageCache, prepareStaged } from "../shared-b/layers";
+import { touchCanvas } from "../shared-b/canvas";
+import { StageCache, StagePrep, stageProgress } from "../shared-b/layers";
+import { WarmQueue } from "../shared-b/warm";
 import { MirrorBackdrop, SizedSprites, blitAt, blitRange, blitRow, blitSlice, canvas, ellipseGlow, mod, vGradient } from "./cache";
 import {
   MAST_AX,
@@ -54,6 +57,8 @@ import {
   drawScaffold,
   drawSign,
   drawTram,
+  propBakeJobs,
+  warmSkinFx,
   type SkinCtx,
 } from "./skins";
 import {
@@ -90,6 +95,10 @@ const ROOF_VARIANTS = [
 ];
 
 const LAST = 7;
+/** Rauchwolken bis zu dieser Größe (px) bäckt `warm` im Leerlauf; die vier größten (≥ 368 px, zusammen 2,8 MB) folgen erst, wenn die Rauchsäulen bald erscheinen */
+const PUFF_WARM_MAX = 336;
+/** Meter je Stimmungsstufe (wie WORLD_WIEN.stageMeters; Test in wien.test.ts hält beides gleich) */
+export const WIEN_STAGE_METERS = 260;
 const FACADE_W = 2048;
 const FACADE_H = 320;
 const FACADE_BOTTOM = 580;
@@ -116,6 +125,17 @@ function footRgb(s: number): RGB {
   return lerpRgb(SKY_BOT[s], HAZE[s], 0.55);
 }
 
+/** Vorgebackene Verläufe/Glühen (Himmel, Fassaden, Boden, Overlay) */
+interface WienGradients {
+  skyFlash: HTMLCanvasElement;
+  horizonFire: HTMLCanvasElement;
+  facadeFire: HTMLCanvasElement;
+  facadeFlash: HTMLCanvasElement;
+  groundFade: HTMLCanvasElement;
+  overlayTop: HTMLCanvasElement;
+  overlayFire: HTMLCanvasElement;
+}
+
 function wetOf(s: number): number {
   return Math.max(RAIN[s], 0.3) * (1 - ASH[s] * 0.8);
 }
@@ -124,11 +144,27 @@ export class WienRenderer implements WorldRenderer {
   private backdrop = new MirrorBackdrop(WIEN_BACKDROPS, BACK_TOP, BACK_DRAW_H, BACK_H, (s) => ({ foot: css(footRgb(s)) }));
   private facadeVar = new Map<number, FacadeTile>();
   private roofVar = new Map<number, Tile>();
-  private facades = new StageCache((s) => this.bakeFacade(s));
-  private roofs = new StageCache((s) => this.bakeRoof(s));
-  private reflections = new StageCache((s) => this.bakeReflection(s));
-  private staged: StageCache[] = [this.backdrop.cache, this.facades, this.roofs, this.reflections];
+  // Stufen-Varianten: Rohvarianten (Fassaden/Dächer) malt die Vorarbeit eines Schritts, der Bake selbst ist ein zweiter,
+  // kleiner Schritt; verworfene Stufen-Flächen werden für den nächsten Bake wiederverwendet (keine Neuanlage großer Bitmaps)
+  private facades = new StageCache((s, reuse) => this.bakeFacade(s, reuse), { recycle: true, prep: (s) => this.prepFacade(s) });
+  private roofs = new StageCache((s, reuse) => this.bakeRoof(s, reuse), { recycle: true, prep: (s) => this.prepRoof(s) });
+  private reflections = new StageCache((s, reuse) => this.bakeReflection(s, reuse), { recycle: true, prep: (s) => this.prepFacade(s) });
+  private readonly allStaged: StageCache[] = [this.backdrop.cache, this.facades, this.roofs, this.reflections];
+  private prep = new StagePrep([...this.allStaged], LAST);
+  /** Spiegelungen werden nur ab Qualität 1 gezeichnet – auf Q0 weder gebacken noch vorgehalten */
+  private reflOn = true;
   private roofSlots: Array<[number, number, number]> = [];
+  /** verworfene Roh-Fassaden zur Wiederverwendung (statt Neuanlage der 2,6-MB-Fläche) */
+  private facadeSpares: HTMLCanvasElement[] = [];
+  private lastStage = 0;
+  private tilesBuilt = false;
+  private tiles2Built = false;
+  private warmQ = new WarmQueue();
+  private warmInit = false;
+  /** große Rauchgrößen (> PUFF_WARM_MAX) fehlen noch: sie werden erst kurz vor den ersten Rauchsäulen gebacken (Speicher) */
+  private puffsLate = true;
+  /** Sekunden bis zum nächsten Bake einer großen Rauchgröße */
+  private puffsLateT = 0;
 
   private clouds1: HTMLCanvasElement | null = null;
   private clouds2: HTMLCanvasElement | null = null;
@@ -139,14 +175,9 @@ export class WienRenderer implements WorldRenderer {
   private puffs: SizedSprites | null = null;
   private steam: SizedSprites | null = null;
   private flames: HTMLCanvasElement[] = [];
-  private fx: {
-    skyFlash: HTMLCanvasElement;
-    horizonFire: HTMLCanvasElement;
-    facadeFire: HTMLCanvasElement;
-    facadeFlash: HTMLCanvasElement;
-    groundFade: HTMLCanvasElement;
-    overlayTop: HTMLCanvasElement;
-    overlayFire: HTMLCanvasElement;
+  /** Verläufe (Teil 3 des statischen Zeichnens), gehen in `fx` auf */
+  private fxA: WienGradients | null = null;
+  private fx: (WienGradients & {
     lampSmall: HTMLCanvasElement;
     lampBig: HTMLCanvasElement;
     lampRefl: HTMLCanvasElement;
@@ -156,7 +187,7 @@ export class WienRenderer implements WorldRenderer {
     fgSmoke: HTMLCanvasElement;
     pigeonRim: HTMLCanvasElement;
     spark: HTMLCanvasElement;
-  } | null = null;
+  }) | null = null;
 
   // Nah-Sprites (in Pixeldichte k gerendert)
   private lamp: Tile | null = null;
@@ -185,32 +216,70 @@ export class WienRenderer implements WorldRenderer {
     this.skinCtx.props = assets.props;
     await Promise.all([this.backdrop.load(assets.image), assets.props.preload(["pigeon-fly", ...WIEN_PROPS]).catch(() => undefined)]);
     this.skinCtx.sprites.setProps(assets.props);
+    // Zwischen den Bake-Schritten den Hauptthread freigeben (Eingaben/Frames laufen weiter, kein Long Task)
+    await yieldToMain();
+    this.buildClouds();
+    await yieldToMain();
+    this.buildTiles();
+    await yieldToMain();
+    this.buildTiles2();
+    await yieldToMain();
+    this.buildFxA();
+    await yieldToMain();
     this.buildStatic();
-    await Promise.resolve();
-    this.buildNear();
-    // erste beiden Stufen vorbereiten (verteilt, hält den Hauptthread reaktionsfähig)
-    for (const c of this.staged) {
-      c.get(0);
-      await Promise.resolve();
-      c.get(1);
-      await Promise.resolve();
+    await yieldToMain();
+    if (!(this.nearK === this.k && this.lamp)) {
+      this.buildNearA();
+      await yieldToMain();
+      this.buildNearB();
+    }
+    // erste beiden Stufen vorbereiten (Vorarbeit und Bake je als eigener Schritt)
+    for (const stage of [0, 1]) {
+      for (const c of this.allStaged) {
+        while (!c.has(stage)) {
+          await yieldToMain();
+          c.step(stage);
+        }
+      }
     }
   }
 
+  /**
+   * Skalenwechsel (Governor, Vollbild, DPR). Idempotent: Werte innerhalb von 0,2 der zuletzt angewandten Skala ändern
+   * nichts (wie PropSprites.setScale); nur eine echte Änderung backt Nah-Sprites (beim nächsten update) und
+   * Hindernis-Sprites neu.
+   */
   resize(dpr: number): void {
-    this.k = clamp(dpr, 1, 2);
-    this.skinCtx.sprites.setScale(this.k);
+    const k = clamp(dpr, 1, 2);
+    if (Math.abs(k - this.k) <= 0.2) return;
+    this.k = k;
+    this.skinCtx.sprites.setScale(k);
+    if (this.warmInit) this.queueProps();
   }
 
   // --- Vorrendern ----------------------------------------------------------------------------------
 
-  private buildStatic(): void {
-    if (this.fx) return;
+  /** Statisches Zeichnen, Teil 1a: Wolken */
+  private buildClouds(): void {
+    if (this.clouds1) return;
     const cl = paintClouds(2048, 300).canvas;
     this.clouds1 = cl;
     this.clouds2 = canvas(2048, 220, (g) => g.drawImage(cl, 0, 0, 2048, 220));
+  }
+
+  /** Statisches Zeichnen, Teil 1b: Regenblatt, Straße (und Wolken, falls noch nicht gebaut) */
+  private buildTiles(): void {
+    if (this.tilesBuilt) return;
+    this.tilesBuilt = true;
+    this.buildClouds();
     this.rainSheet = paintRainSheet(512, 512).canvas;
     this.street = paintStreet(512, GROUND_H, 1).canvas;
+  }
+
+  /** Statisches Zeichnen, Teil 2: Schacht, Rauch-/Dampf-Größen (Hüllen), Flammen */
+  private buildTiles2(): void {
+    if (this.tiles2Built) return;
+    this.tiles2Built = true;
     this.shaft = paintShaft(280, GROUND_H);
     this.shaftEdge = canvas(40, GROUND_H, (g) => {
       const lg = g.createLinearGradient(0, 0, 40, 0);
@@ -222,13 +291,12 @@ export class WienRenderer implements WorldRenderer {
     this.puffs = new SizedSprites((s) => paintSmokePuff(s).canvas, 48, 464, 32);
     this.steam = new SizedSprites((s) => paintGlow(s, "rgba(220,225,235,0.5)").canvas, 32, 208, 16);
     this.flames = paintFlameFrames(8);
-    const warm = (a: number): Array<[number, string]> => [
-      [0, `rgba(255,196,110,${a})`],
-      [0.25, "rgba(255,196,110,0.35)"],
-      [1, "rgba(255,196,110,0)"],
-    ];
-    const smokeTile = paintSmokePuff(256).canvas;
-    this.fx = {
+  }
+
+  /** Statisches Zeichnen, Teil 3: Verläufe (Himmel-/Fassadenglühen, Boden, Overlay) */
+  private buildFxA(): void {
+    if (this.fxA) return;
+    this.fxA = {
       skyFlash: ellipseGlow(1040, 520, [
         [0, "rgba(170,200,255,0.6)"],
         [0.25, "rgba(170,200,255,0.35)"],
@@ -260,6 +328,25 @@ export class WienRenderer implements WorldRenderer {
         [0, "rgba(255,90,30,0)"],
         [1, "rgba(255,90,30,0.12)"],
       ]),
+    };
+  }
+
+  /** Statisches Zeichnen, Teil 4: Lichthöfe und Sprites (`fx` komplett) */
+  private buildStatic(): void {
+    if (this.fx) return;
+    this.buildTiles();
+    this.buildTiles2();
+    this.buildFxA();
+    const fxA = this.fxA;
+    if (!fxA) return;
+    const warm = (a: number): Array<[number, string]> => [
+      [0, `rgba(255,196,110,${a})`],
+      [0.25, "rgba(255,196,110,0.35)"],
+      [1, "rgba(255,196,110,0)"],
+    ];
+    const smokeTile = paintSmokePuff(256).canvas;
+    this.fx = {
+      ...fxA,
       lampSmall: ellipseGlow(180, 180, warm(0.55)),
       lampBig: ellipseGlow(320, 260, warm(0.55)),
       lampRefl: ellipseGlow(44, 120, warm(0.55)),
@@ -283,79 +370,169 @@ export class WienRenderer implements WorldRenderer {
 
   private buildNear(): void {
     if (this.nearK === this.k && this.lamp) return;
+    this.buildNearA();
+    this.buildNearB();
+  }
+
+  /** Nah-Sprites, Teil 1: Laternen und Masten (in Pixeldichte k) */
+  private buildNearA(): void {
     const k = this.k;
-    this.nearK = k;
     this.lamp = paintLamp(k);
     this.lampOff = paintLampOff(k);
     this.mast = paintMast(k, false);
     this.mastBroken = paintMast(k, true);
+  }
+
+  /** Nah-Sprites, Teil 2: Bäume und Litfaßsäule; danach gilt `nearK` */
+  private buildNearB(): void {
+    const k = this.k;
     this.trees = [paintTree(k, 1), paintTree(k, 2), paintTree(k, 3)];
     this.bareTrees = [paintBareTree(k, 1), paintBareTree(k, 2)];
     this.litfass = paintLitfass(k);
+    this.nearK = k;
   }
 
   private facadeVariant(i: number): FacadeTile {
     let t = this.facadeVar.get(i);
     if (!t) {
-      t = paintFacades(FACADE_W, FACADE_H, FACADE_VARIANTS[i]);
+      t = paintFacades(FACADE_W, FACADE_H, FACADE_VARIANTS[i], 1, this.facadeSpares.pop());
+      touchCanvas(t.canvas); // Rohbild jetzt rastern (der Bake dieser Stufe folgt als eigener, kleiner Schritt)
       this.facadeVar.set(i, t);
     }
     return t;
+  }
+
+  /** Vorarbeit eines Fassaden-/Spiegelungs-Bakes: die Rohvariante der Stufe malen (ein eigener, kleinerer Schritt) */
+  private prepFacade(s: number): boolean {
+    const i = FACADE_OF_STAGE[s];
+    if (this.facadeVar.has(i)) return false;
+    this.facadeVariant(i);
+    return true;
+  }
+
+  private prepRoof(s: number): boolean {
+    const i = ROOF_OF_STAGE[s];
+    if (this.roofVar.has(i)) return false;
+    this.roofVariant(i);
+    return true;
   }
 
   private roofVariant(i: number): Tile {
     let t = this.roofVar.get(i);
     if (!t) {
       t = paintRooftops(ROOF_W, ROOF_H, ROOF_VARIANTS[i]);
+      touchCanvas(t.canvas);
       this.roofVar.set(i, t);
     }
     return t;
   }
 
   /** Fassaden einer Stufe mit eingerechnetem Dunst (nach unten dichter). */
-  private bakeFacade(s: number): HTMLCanvasElement {
+  private bakeFacade(s: number, reuse: HTMLCanvasElement | null): HTMLCanvasElement {
     const src = this.facadeVariant(FACADE_OF_STAGE[s]).canvas;
     const haze = HAZE[s];
     const fh = FACADE_HAZE[s];
-    return canvas(src.width, src.height, (g, w, h) => {
-      g.drawImage(src, 0, 0);
-      g.globalCompositeOperation = "source-atop";
-      const grd = g.createLinearGradient(0, 60, 0, h);
-      grd.addColorStop(0, css(haze, fh * 0.35));
-      grd.addColorStop(1, css(haze, fh));
-      g.fillStyle = grd;
-      g.fillRect(0, 60, w, h - 60);
-    });
+    return canvas(
+      src.width,
+      src.height,
+      (g, w, h) => {
+        g.drawImage(src, 0, 0);
+        g.globalCompositeOperation = "source-atop";
+        const grd = g.createLinearGradient(0, 60, 0, h);
+        grd.addColorStop(0, css(haze, fh * 0.35));
+        grd.addColorStop(1, css(haze, fh));
+        g.fillStyle = grd;
+        g.fillRect(0, 60, w, h - 60);
+      },
+      reuse,
+    );
   }
 
-  private bakeRoof(s: number): HTMLCanvasElement {
+  private bakeRoof(s: number, reuse: HTMLCanvasElement | null): HTMLCanvasElement {
     const src = this.roofVariant(ROOF_OF_STAGE[s]).canvas;
     const haze = HAZE[s];
-    return canvas(src.width, src.height, (g, w, h) => {
-      g.drawImage(src, 0, 0);
-      g.globalCompositeOperation = "source-atop";
-      const grd = g.createLinearGradient(0, 30, 0, h - 10);
-      grd.addColorStop(0, css(haze, 0.12));
-      grd.addColorStop(1, css(haze, ROOF_HAZE[s]));
-      g.fillStyle = grd;
-      g.fillRect(0, 0, w, h);
-    });
+    return canvas(
+      src.width,
+      src.height,
+      (g, w, h) => {
+        g.drawImage(src, 0, 0);
+        g.globalCompositeOperation = "source-atop";
+        const grd = g.createLinearGradient(0, 30, 0, h - 10);
+        grd.addColorStop(0, css(haze, 0.12));
+        grd.addColorStop(1, css(haze, ROOF_HAZE[s]));
+        g.fillStyle = grd;
+        g.fillRect(0, 0, w, h);
+      },
+      reuse,
+    );
   }
 
   /** Gespiegelte Fassaden im nassen Pflaster (additiv zu zeichnen; Stärke je Stufe eingerechnet). */
-  private bakeReflection(s: number): HTMLCanvasElement {
+  private bakeReflection(s: number, reuse: HTMLCanvasElement | null): HTMLCanvasElement {
     const src = this.facadeVariant(FACADE_OF_STAGE[s]).canvas;
     const a = 0.2 * wetOf(s);
-    return canvas(src.width, GROUND_H, (g, w, h) => {
-      if (a < 0.008) return;
-      // Bildschirmzeile gy + ry spiegelt Fassadenzeile 322 - ry
-      g.setTransform(1, 0, 0, -1, 0, 322);
-      g.drawImage(src, 0, 0);
-      g.setTransform(1, 0, 0, 1, 0, 0);
-      g.globalCompositeOperation = "destination-in";
-      g.fillStyle = `rgba(0,0,0,${a.toFixed(3)})`;
-      g.fillRect(0, 0, w, h);
-    });
+    return canvas(
+      src.width,
+      GROUND_H,
+      (g, w, h) => {
+        if (a < 0.008) return;
+        // Bildschirmzeile gy + ry spiegelt Fassadenzeile 322 - ry
+        g.setTransform(1, 0, 0, -1, 0, 322);
+        g.drawImage(src, 0, 0);
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        g.globalCompositeOperation = "destination-in";
+        g.fillStyle = `rgba(0,0,0,${a.toFixed(3)})`;
+        g.fillRect(0, 0, w, h);
+      },
+      reuse,
+    );
+  }
+
+  /** Spiegelungen ein-/ausschalten (Q0 zeichnet sie nicht: gebackene Flächen freigeben, nichts vorbacken) */
+  private setReflections(on: boolean): void {
+    this.reflOn = on;
+    if (on) this.prep.add(this.reflections);
+    else {
+      this.prep.remove(this.reflections);
+      this.reflections.clear();
+      this.reflections.dropSpare();
+    }
+  }
+
+  // --- Aufwärmen -----------------------------------------------------------------------------------
+
+  /**
+   * Leerlauf-Aufwärmen (Countdown, Menü-Demo, Lauf-Anfang): backt in Zeitscheiben von ca. `budgetMs` fehlende Stufen-
+   * Varianten, alle Rauch-/Dampfgrößen, die Hindernis-Sprites und die statischen Leuchtflächen vor – damit sie später
+   * nicht mitten im Lauf entstehen. true = nichts mehr zu tun.
+   */
+  warm(budgetMs: number): boolean {
+    if (!this.fx) return true; // noch nicht geladen
+    if (!this.warmInit) this.initWarm();
+    return this.warmQ.run(budgetMs);
+  }
+
+  private initWarm(): void {
+    this.warmInit = true;
+    const q = this.warmQ;
+    q.add(() => this.prep.warm(this.lastStage, 0), 6);
+    q.add(() => this.puffs?.prewarm(1, PUFF_WARM_MAX) ?? true, 4);
+    q.add(() => this.steam?.prewarm(1) ?? true, 2);
+    q.add(() => {
+      warmSkinFx();
+      return true;
+    }, 1);
+    this.queueProps();
+  }
+
+  /** Hindernis-Sprites (bekannte Maße) vorbacken – nach Skalenwechsel erneut */
+  private queueProps(): void {
+    const jobs = propBakeJobs(this.skinCtx.sprites);
+    let i = 0;
+    this.warmQ.add(() => {
+      if (i < jobs.length) jobs[i++]();
+      return i >= jobs.length;
+    }, 3);
   }
 
   // --- Ambiente ------------------------------------------------------------------------------------
@@ -366,15 +543,39 @@ export class WienRenderer implements WorldRenderer {
     const d = Math.min(0.05, dt);
     const st = Math.min(LAST, v.stage);
     const bl = v.stageBlend;
-    // Stufen-Kacheln verteilt vorbereiten (höchstens eine neue pro Frame); nicht mehr benötigte Fassaden-Rohvarianten
-    // freigeben (werden bei Bedarf in ≤ 20 ms neu gemalt) – spart Speicher auf Mobilgeräten
-    prepareStaged(this.staged, st, LAST, 1);
-    if (this.facadeVar.size > 2) {
+    // Stufen-Kacheln: aktuelle Stufe sofort, die Folgestufe erst ab ~28 % der Stufe und höchstens ein Schritt je ~6 Frames
+    // (nicht am Stufenanfang, wo sich sonst alles auf den Übergang drängt); Spiegelungen nur, wenn sie gezeichnet werden
+    this.lastStage = st;
+    const wantRefl = v.quality > 0;
+    if (wantRefl !== this.reflOn) this.setReflections(wantRefl);
+    const progress = stageProgress(v.worldMeters, WIEN_STAGE_METERS);
+    this.prep.step(st, progress, bl);
+    // nicht mehr benötigte Fassaden-Rohvarianten freigeben (werden bei Bedarf in ≤ 20 ms neu gemalt, die Fläche wird
+    // wiederverwendet) – spart Speicher auf Mobilgeräten. Schon beim Stufenwechsel (nicht erst, wenn eine dritte Variante
+    // vorliegt): so steht die Fläche der alten Variante bereit, wenn die Vorarbeit der übernächsten Stufe beginnt.
+    if (this.facadeVar.size > 0) {
       const a = FACADE_OF_STAGE[st];
       const b = FACADE_OF_STAGE[Math.min(LAST, st + 1)];
-      for (const key of [...this.facadeVar.keys()]) if (key !== a && key !== b) this.facadeVar.delete(key);
+      const own = (this.facadeVar.has(a) ? 1 : 0) + (b !== a && this.facadeVar.has(b) ? 1 : 0);
+      if (this.facadeVar.size > own) {
+        for (const [key, t] of this.facadeVar) {
+          if (key === a || key === b) continue;
+          this.facadeVar.delete(key);
+          this.facadeSpares.push(t.canvas);
+        }
+      }
     }
-    const target = (v.vars.lightning ?? 0) * (v.reducedMotion ? 0.25 : 1);
+    // große Rauchgrößen: erst, wenn die Rauchsäulen bald gezeichnet werden (Stufe 0 ab der Hälfte; SMOKE > 0,02 ab der
+    // Überblendung in Stufe 1), dann einer je ~100 ms – gerastert beim Backen, nicht im ersten Frame mit dem Rauch
+    if (this.puffsLate && this.puffs && (st > 0 || progress > 0.5)) {
+      this.puffsLateT -= d;
+      if (this.puffsLateT <= 0) {
+        this.puffsLateT = 0.1;
+        this.puffsLate = !this.puffs.prewarm(1);
+      }
+    }
+    // Blitz-Aufheller: „Blitze“-Regler (flashScale) ersetzt das Dämpfen bei „Weniger Bewegung“ (keine Doppel-Skalierung)
+    const target = (v.vars.lightning ?? 0) * (v.flashScale ?? (v.reducedMotion ? 0.25 : 1));
     this.lightning = Math.max(target, this.lightning - d * 3);
     const rainK = stageVal(RAIN, st, bl) * (0.75 + 0.25 * v.intensity);
     this.rain.wind = stageVal(WIND, st, bl);
@@ -458,7 +659,7 @@ export class WienRenderer implements WorldRenderer {
       g.globalAlpha = 1;
       g.globalCompositeOperation = "source-over";
     }
-    const far = v.vars.farBolt ?? 0;
+    const far = (v.vars.farBolt ?? 0) * Math.min(1, v.flashScale ?? 1);
     if (far > 0.05 && !v.reducedMotion) this.drawFarBolt(g, v.vars.boltX ?? 640, far, v.vars.boltSeed ?? 1);
 
     // 3) Brandschein am Horizont + Rauchsäulen

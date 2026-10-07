@@ -4,6 +4,7 @@
  * Wolken, Nebelschwaden, Tannen-Sprites. Alle Kacheln sind horizontal periodisch (nahtlos).
  */
 import { paint, type Ctx2D } from "../shared-b/canvas";
+import type { GradeStep } from "../shared-b/layers";
 import { hexRgb, mixRgb, css, h1, mulberry, type RGB } from "../shared-b/color";
 import { STAGE_PAL, SNOWCOVER, STARS } from "./stages";
 
@@ -42,15 +43,23 @@ export function blendMasked(g: Ctx2D, w: number, h: number, mode: GlobalComposit
   g.restore();
 }
 
-/** Stufen-Farbstimmung (Morgengold, Wind-Entsättigung, Alpenglühen) + Dunstverlauf auf eine fertige Kachel legen. */
-export function gradeLayer(g: Ctx2D, w: number, h: number, stage: number, hazeTop: number, hazeBottom: number): void {
-  const P = STAGE_PAL[stage];
+/**
+ * Stufen-Farbstimmung (Morgengold, Wind-Entsättigung, Alpenglühen) auf eine fertige Kachel legen: die Mischmodi-Durchgänge.
+ * Rückgabe false = diese Stufe hat keine Stimmungsmischung (nichts zu tun).
+ */
+export function moodLayer(g: Ctx2D, w: number, h: number, stage: number): boolean {
   if (stage === 4) {
     blendMasked(g, w, h, "multiply", "#a99ccf", 1);
     blendMasked(g, w, h, "soft-light", "#ff9a70", 0.35);
-  }
-  else if (stage === 3) blendMasked(g, w, h, "saturation", "#808080", 0.3);
+  } else if (stage === 3) blendMasked(g, w, h, "saturation", "#808080", 0.3);
   else if (stage === 0) blendMasked(g, w, h, "soft-light", "#ffd98a", 0.35);
+  else return false;
+  return true;
+}
+
+/** Dunstverlauf der Stufe über die ganze Kachel (nur wo sie deckt) */
+export function hazeLayer(g: Ctx2D, w: number, h: number, stage: number, hazeTop: number, hazeBottom: number): void {
+  const P = STAGE_PAL[stage];
   g.save();
   g.globalCompositeOperation = "source-atop";
   const grd = g.createLinearGradient(0, 0, 0, h);
@@ -62,9 +71,40 @@ export function gradeLayer(g: Ctx2D, w: number, h: number, stage: number, hazeTo
   g.restore();
 }
 
+/** Stimmung + Dunst in einem Zug (`moodLayer` dann `hazeLayer`) */
+export function gradeLayer(g: Ctx2D, w: number, h: number, stage: number, hazeTop: number, hazeBottom: number): void {
+  moodLayer(g, w, h, stage);
+  hazeLayer(g, w, h, stage, hazeTop, hazeBottom);
+}
+
+/**
+ * Dunstverlauf (oben, unten) je Ebene; `paintX(…, grade = false)` + die Schritte `GRADE_FAR/MID/NEAR` (Stimmung, dann Dunst)
+ * ergeben dasselbe Bild wie `paintX(…, true)` – in zwei kleinen statt einem großen Schritt.
+ */
+const FAR_GRADE = [0.45, 0.2] as const;
+const MID_GRADE = [0.26, 0.08] as const;
+const NEAR_GRADE = [0.14, 0.18] as const;
+
+function gradeSteps(haze: readonly [number, number]): GradeStep[] {
+  return [
+    (c, stage) => {
+      const g = c.getContext("2d");
+      return g ? moodLayer(g, c.width, c.height, stage) : false;
+    },
+    (c, stage) => {
+      const g = c.getContext("2d");
+      if (g) hazeLayer(g, c.width, c.height, stage, haze[0], haze[1]);
+    },
+  ];
+}
+
+export const GRADE_FAR = gradeSteps(FAR_GRADE);
+export const GRADE_MID = gradeSteps(MID_GRADE);
+export const GRADE_NEAR = gradeSteps(NEAR_GRADE);
+
 // --- Himmel -----------------------------------------------------------------------------------------
 
-export function paintSky(stage: number): HTMLCanvasElement {
+export function paintSky(stage: number, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
   const P = STAGE_PAL[stage];
   return paint(1280, 600, (g) => {
     const grd = g.createLinearGradient(0, 0, 0, 600);
@@ -86,7 +126,7 @@ export function paintSky(stage: number): HTMLCanvasElement {
         g.fill();
       }
     }
-  });
+  }, reuse);
 }
 
 // --- Wolken -----------------------------------------------------------------------------------------
@@ -318,7 +358,7 @@ export const NEAR_RIDGE: RidgeSpec = {
 };
 
 /** Ferne Waldhügel (Parallax ~0.1), bläulich-grün im Dunst. H = 230. */
-export function paintFarHills(stage: number): HTMLCanvasElement {
+export function paintFarHills(stage: number, reuse?: HTMLCanvasElement | null, grade = true): HTMLCanvasElement {
   const R = FAR_RIDGE;
   const W = R.W;
   const H = 230;
@@ -370,12 +410,12 @@ export function paintFarHills(stage: number): HTMLCanvasElement {
       else g.lineTo(x, y);
     }
     g.stroke();
-    gradeLayer(g, W, H, stage, 0.45, 0.2);
-  });
+    if (grade) gradeLayer(g, W, H, stage, FAR_GRADE[0], FAR_GRADE[1]);
+  }, reuse);
 }
 
 /** Almhänge mit Wäldern, Wiesen, Felsen, Wegen, Zäunen und Kühen (Parallax ~0.2). H = 250. */
-export function paintMidHills(stage: number): HTMLCanvasElement {
+export function paintMidHills(stage: number, reuse?: HTMLCanvasElement | null, grade = true): HTMLCanvasElement {
   const R = MID_RIDGE;
   const W = R.W;
   const H = 250;
@@ -517,12 +557,12 @@ export function paintMidHills(stage: number): HTMLCanvasElement {
       else g.lineTo(x, y);
     }
     g.stroke();
-    gradeLayer(g, W, H, stage, 0.26, 0.08);
-  });
+    if (grade) gradeLayer(g, W, H, stage, MID_GRADE[0], MID_GRADE[1]);
+  }, reuse);
 }
 
 /** Nahe Tannen auf einem Hangrücken (Parallax ~0.5). H = 360, Kammlinie ≈ 300. */
-export function paintNearTrees(stage: number): HTMLCanvasElement {
+export function paintNearTrees(stage: number, reuse?: HTMLCanvasElement | null, grade = true): HTMLCanvasElement {
   const R = NEAR_RIDGE;
   const W = R.W;
   const H = 360;
@@ -594,8 +634,8 @@ export function paintNearTrees(stage: number): HTMLCanvasElement {
         g.stroke();
       }
     }
-    gradeLayer(g, W, H, stage, 0.14, 0.18);
-  });
+    if (grade) gradeLayer(g, W, H, stage, NEAR_GRADE[0], NEAR_GRADE[1]);
+  }, reuse);
 }
 
 // --- Boden --------------------------------------------------------------------------------------------
@@ -608,7 +648,7 @@ export const GROUND_TILE_H = 152;
  * Bodenkachel (Almrasen → Bergwiese mit Steinen → Fels mit Schneeflecken → Schnee/Gletschereis).
  * Kachel wird bei groundY − GROUND_TOP gezeichnet; Grashalme ragen über die Kante.
  */
-export function paintGround(stage: number): HTMLCanvasElement {
+export function paintGround(stage: number, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
   const W = GROUND_TILE_W;
   const H = GROUND_TILE_H;
   const T = GROUND_TOP;
@@ -821,7 +861,7 @@ export function paintGround(stage: number): HTMLCanvasElement {
     g.fillStyle = "rgba(255,248,210,0.25)";
     g.fillRect(0, T - 1, W, 2);
     darkenBottom(g, W, H, T, snow);
-  });
+  }, reuse);
 }
 
 /** Tiefe: Bodenquerschnitt nach unten abdunkeln (vorgebacken statt pro Frame). */
@@ -992,7 +1032,7 @@ export function paintForeGrass(seed: number, snow: boolean): HTMLCanvasElement {
 export { TAU };
 
 /** Fallback-Fernkulisse ohne Bilder: gezackte Gebirgskette mit Schneekappen (H = 420). */
-export function paintFarRange(stage: number): HTMLCanvasElement {
+export function paintFarRange(stage: number, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
   const W = 2048;
   const H = 420;
   return paint(W, H, (g) => {
@@ -1057,7 +1097,7 @@ export function paintFarRange(stage: number): HTMLCanvasElement {
     fade.addColorStop(1, "rgba(0,0,0,1)");
     g.fillStyle = fade;
     g.fillRect(0, 0, W, H);
-  });
+  }, reuse);
 }
 
 /** Puderschnee-Ballen für die Lawine (Cartoon-Schattierung passend zu den Props: Kontur, blauer Eigenschatten), 128 px */

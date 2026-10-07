@@ -15,6 +15,7 @@ import {
   DIFFICULTY_SPEED_SCALE,
   DOUBLE_JUMP_V,
   ENERGY_MAX,
+  FIXED_DT,
   GRAVITY,
   HURT_INVULN,
   HURT_SPEED_LOSS,
@@ -98,6 +99,8 @@ export interface PlayerState {
   noCut: boolean;
   coyote: number;
   jumpBuf: number;
+  /** Puffer (Sek.) für ↓ kurz vor der Landung: rutscht statt zu stampfen, siehe handleInput/land */
+  slideBuf: number;
   sliding: boolean;
   slideT: number;
   dashT: number;
@@ -149,6 +152,11 @@ interface Box {
 function overlap(a: Box, b: Box): boolean {
   return a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0;
 }
+
+/** Wie lange ein ↓ kurz vor der Landung als „Rutschen bei Landung“ vorgemerkt bleibt (Sek.). */
+const SLIDE_BUFFER = 0.16;
+/** Unterhalb dieser Höhe (px über der Lauffläche) wird ↓ im Fallen nicht zum Stampfen, sondern zum Rutsch-Puffer. */
+const SLIDE_BUFFER_HEIGHT = 75;
 
 function smooth(u: number): number {
   const c = Math.min(1, Math.max(0, u));
@@ -205,6 +213,10 @@ export class Sim {
   tourLoops = 0;
   private tourIndex = 0;
   private startDist: number;
+  /** ↓ im letzten Eingabeschritt gehalten (für „Landung bei gehaltener Taste rutscht“) */
+  private slideHeld = false;
+  /** Sim-Zeit des letzten „dash-denied“-Ereignisses (begrenzt die Häufigkeit; sonst ohne Einfluss auf die Sim) */
+  private lastDashDenied = -10;
 
   constructor(cfg: RunConfig, registry: Record<WorldId, WorldDef>) {
     this.cfg = cfg;
@@ -238,6 +250,7 @@ export class Sim {
       noCut: false,
       coyote: 0,
       jumpBuf: 0,
+      slideBuf: 0,
       sliding: false,
       slideT: 0,
       dashT: 0,
@@ -332,11 +345,12 @@ export class Sim {
 
   spawn(spec: EntSpec, originX: number): Ent {
     const hb = spec.hb ?? defaultHitbox(spec.kind, spec.w, spec.h);
+    const x0 = originX + spec.x;
     const e: Ent = {
       id: this.nextId++,
       kind: spec.kind,
       skin: spec.skin,
-      x: originX + spec.x,
+      x: x0,
       y: spec.y,
       w: spec.w,
       h: spec.h,
@@ -359,6 +373,9 @@ export class Sim {
       passed: false,
       fx: {},
       pat: this.curPattern,
+      // Darstellung: Startposition des letzten Schritts (siehe updateEntities) – zunächst gleich der Position
+      px: x0,
+      py: spec.y,
     };
     // Weltkoordinaten für bewegliche Elemente
     if (e.kind === "platform") {
@@ -521,11 +538,15 @@ export class Sim {
 
   private handleInput(dt: number, input: SimInput): void {
     const p = this.player;
+    // Der Puffer läuft nur außerhalb der Betäubungssperre ab: ein Druck kurz nach dem Treffer feuert dann exakt am Sperrenende
     if (input.jumpPressed) p.jumpBuf = JUMP_BUFFER;
-    else p.jumpBuf = Math.max(0, p.jumpBuf - dt);
+    else if (p.stun <= 0.25) p.jumpBuf = Math.max(0, p.jumpBuf - dt);
+
+    p.slideBuf = Math.max(0, p.slideBuf - dt);
+    this.slideHeld = input.slide;
 
     if (p.stun > 0.25) {
-      // kurz benommen: keine neuen Aktionen (Jump-Buffer bleibt erhalten)
+      // kurz benommen: keine neuen Aktionen (ein gepufferter Sprung bleibt dabei erhalten, siehe oben)
       return;
     }
 
@@ -537,6 +558,10 @@ export class Sim {
       p.sliding = false;
       this.stats.dashes += 1;
       this.emit("dash");
+    } else if (input.dashPressed && p.dashT <= 0 && (p.dashCd > 0 || p.energy < this.perks.dashCost) && this.time - this.lastDashDenied >= 0.4) {
+      // abgelehnter Dash (zu wenig Energie / Abklingzeit): Rückmeldung für Ton und HUD, höchstens alle 0,4 s
+      this.lastDashDenied = this.time;
+      this.emit("dash-denied");
     }
 
     // Slide / Stomp
@@ -546,10 +571,15 @@ export class Sim {
         p.slideT = 0;
         this.emit("slide");
       } else if (!p.grounded && !p.stomping && p.dashT <= 0 && p.turbo <= 0) {
-        p.stomping = true;
-        p.vy = -STOMP_V;
-        p.gliding = false;
-        this.emit("stomp-start");
+        if (p.gravDir === 1 && p.vy <= 0 && p.hgt < SLIDE_BUFFER_HEIGHT) {
+          // kurz vor der Landung: ↓ meint „gleich rutschen“ (z. B. unter einen Überhang) – vormerken statt Stampf-Sturz
+          p.slideBuf = SLIDE_BUFFER;
+        } else {
+          p.stomping = true;
+          p.vy = -STOMP_V;
+          p.gliding = false;
+          this.emit("stomp-start");
+        }
       }
     }
     if (p.sliding) {
@@ -737,9 +767,18 @@ export class Sim {
       this.emit("land", undefined, undefined, { value: impact });
     }
     p.stompChain = 0;
+    // Nur im Landeschritt (wasAir): land() läuft sonst in jedem Bodenschritt
+    const wantsSlide = wasAir && p.gravDir === 1 && (p.slideBuf > 0 || this.slideHeld);
+    if (wasAir) p.slideBuf = 0;
     if (p.jumpBuf > 0 && p.stun <= 0.25) {
+      // gepufferter Sprung hat Vorrang vor dem Rutschen
       this.startJump(JUMP_V, "jump");
       p.jumpBuf = 0;
+    } else if (wantsSlide && !p.sliding && p.dashT <= 0 && p.stun <= 0.25 && this.phase === "running") {
+      // ↓ kurz vor der Landung gedrückt oder noch gehalten (auch nach einer Stampf-Landung): direkt in den Rutsch
+      p.sliding = true;
+      p.slideT = 0;
+      this.emit("slide");
     }
   }
 
@@ -792,6 +831,9 @@ export class Sim {
     const groundY = this.groundY;
     for (const e of this.ents) {
       if (e.dead) continue;
+      // Nur für die Darstellung (Interpolation px→x je alpha); die Sim-Logik liest px/py nie
+      e.px = e.x;
+      e.py = e.y;
       e.age += dt;
       e.stateT += dt;
       // Startverzögerung (`p.delay`, Sekunden): Die Entität ist da (Skin darf zeichnen), ruht aber in der Welt und ist harmlos,
@@ -998,6 +1040,8 @@ export class Sim {
             if (clear < e.minClear) e.minClear = clear;
           }
           if (!overlap(box, eb)) break;
+          // Berührt (Treffer, Schild, Dash, Turbo): kein „Knapp!“ mehr beim Passieren – das wäre Belohnung nach einem Fehler
+          e.fx.touched = 1;
           // Stampfen auf Gegner
           if ((e.kind === "walker" || e.kind === "flyer") && e.stompable && this.isStompHit(e, feet)) {
             this.defeat(e, "stomp");
@@ -1181,7 +1225,7 @@ export class Sim {
 
   private passEnt(e: Ent): void {
     e.passed = true;
-    if (e.minClear < NEAR_MISS_CLEARANCE && e.state !== "defeated") {
+    if (e.minClear < NEAR_MISS_CLEARANCE && e.state !== "defeated" && !e.fx.touched) {
       this.stats.nearMisses += 1;
       this.bumpCombo(1);
       const pts = SCORE_NEAR_MISS * this.combo;
@@ -1319,12 +1363,24 @@ export class Sim {
     return { stage, blend: smooth((into - (w.stageMeters - fadeLen)) / fadeLen) };
   }
 
-  /** Zustand für Renderer. */
-  view(alpha: number, prev: { dist: number; hgt: number }, reducedMotion: boolean, quality: 0 | 1 | 2, dt: number): ViewState {
+  /**
+   * Zustand für Renderer. `alpha` = Anteil 0..1 zwischen dem vorigen (`prev`) und dem aktuellen Sim-Schritt; Entitäten
+   * interpoliert der Renderer selbst über px/py → x/y. `flashScale` (Einstellung „Blitze“) wird nur durchgereicht.
+   */
+  view(
+    alpha: number,
+    prev: { dist: number; hgt: number; gravDir?: 1 | -1 },
+    reducedMotion: boolean,
+    quality: 0 | 1 | 2,
+    dt: number,
+    flashScale = 1,
+  ): ViewState {
     const p = this.player;
     const st = this.stageInfo();
     const dist = prev.dist + (this.dist - prev.dist) * alpha;
-    const hgt = prev.hgt + (p.hgt - prev.hgt) * alpha;
+    // Gravitations-Flip im letzten Schritt: prev.hgt gehört zur alten Fläche, p.hgt zur neuen – nicht darüber hinweg interpolieren
+    const flipped = prev.gravDir !== undefined && prev.gravDir !== p.gravDir;
+    const hgt = flipped ? p.hgt : prev.hgt + (p.hgt - prev.hgt) * alpha;
     const feet = p.gravDir === 1 ? this.groundY - hgt : this.ceilY + hgt;
     const intensity = Math.min(1, this.diff / 10);
     return {
@@ -1332,7 +1388,8 @@ export class Sim {
       h: 720,
       dist,
       speed: this.speed,
-      time: this.time,
+      // Zwischenzeit passend zur interpolierten Position (nie negativ: im ersten Schritt ist time == FIXED_DT)
+      time: Math.max(0, this.time - (1 - alpha) * FIXED_DT),
       dt,
       groundY: this.groundY,
       ceilY: this.ceilY,
@@ -1343,7 +1400,8 @@ export class Sim {
       gravDir: p.gravDir,
       playerX: PLAYER_SX,
       playerFeetY: feet,
-      hurtGlow: Math.min(1, p.invuln > 0 && p.stun > 0 ? p.stun / HURT_STUN : 0),
+      // Beim Sterben ist stun eingefroren (volle Vignette): über deathT sanft von 1 auf 0,3 abklingen (reiner Darstellungswert)
+      hurtGlow: this.phase === "dying" || this.phase === "over" ? 1 - 0.7 * Math.min(1, this.deathT / 1.25) : Math.min(1, p.invuln > 0 && p.stun > 0 ? p.stun / HURT_STUN : 0),
       dashing: p.dashT > 0,
       turbo: p.turbo > 0,
       slowmo: p.slowmo > 0 ? 1 : 0,
@@ -1351,6 +1409,8 @@ export class Sim {
       quality,
       vars: this.vars,
       flash: this.flash,
+      alpha,
+      flashScale,
     };
   }
 

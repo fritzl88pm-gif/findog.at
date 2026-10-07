@@ -123,7 +123,8 @@ const SPECS: Record<LoopName, LoopSpec> = {
     },
   },
   avalanche: {
-    base: 0.7, fadeIn: 0.6, fadeOut: 1.2, reverb: 0.15,
+    // 0.7 -> 0.5 (-2.9 dB): bei Level 0.6 lag die Lawine ca. 4 dB über der Musik und verdeckte in Alpen/Winter alles andere
+    base: 0.5, fadeIn: 0.6, fadeOut: 1.2, reverb: 0.15,
     build(l) {
       const rumble = band(l, "brown", [{ type: "lowpass", f: 230, q: 0.8 }], 1.6);
       lfo(l, 0.7, 0.25, rumble.gain.gain);

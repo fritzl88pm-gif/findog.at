@@ -4,12 +4,14 @@
  * Deshalb werden Fernkulisse (gespiegelt), Verläufe, Lichthöfe und Rauchwolken in fester Größe vorgerendert.
  */
 import { makeCanvas } from "../../draw-utils";
+import { recycled, touchCanvas } from "../shared-b/canvas";
 import { StageCache } from "../shared-b/layers";
 
 export type C2D = CanvasRenderingContext2D;
 
-export function canvas(w: number, h: number, paint: (g: C2D, w: number, h: number) => void): HTMLCanvasElement {
-  const c = makeCanvas(w, h);
+/** Neue Fläche w×h bemalen; mit `reuse` (gleiche Größe) wird diese gelöscht und neu bemalt statt eine neue anzulegen. */
+export function canvas(w: number, h: number, paint: (g: C2D, w: number, h: number) => void, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
+  const c = recycled(reuse, w, h) ?? makeCanvas(w, h);
   const g = c.getContext("2d");
   if (g) paint(g, c.width, c.height);
   return c;
@@ -85,16 +87,33 @@ export function ellipseGlow(w: number, h: number, stops: Array<[number, string]>
 
 /**
  * Sprite in mehreren festen Größen (z.B. wachsende Rauchwolke): statt pro Frame zu skalieren wird die nächstliegende
- * vorgerenderte Größe 1:1 geblittet. Größen werden bei Bedarf erzeugt.
+ * vorgerenderte Größe 1:1 geblittet. Größen werden bei Bedarf erzeugt oder im Leerlauf vorgebacken (`prewarm`).
  */
 export class SizedSprites {
   private readonly cache = new Map<number, HTMLCanvasElement>();
+  /** Zeiger für prewarm: alle Indizes davor sind schon gebacken */
+  private warmIdx = 0;
+  /** Anzahl erreichbarer Größen (min, min+step, … bis max) */
+  readonly count: number;
+
   constructor(
     private readonly paint: (size: number) => HTMLCanvasElement,
     private readonly min: number,
     private readonly max: number,
     private readonly step: number,
-  ) {}
+  ) {
+    this.count = Math.round((max - min) / step) + 1;
+  }
+
+  /** Größe der Stufe `i` (0 … count-1) */
+  sizeAt(i: number): number {
+    return i * this.step + this.min;
+  }
+
+  /** Anzahl bereits gebackener Größen */
+  get baked(): number {
+    return this.cache.size;
+  }
 
   get(size: number): HTMLCanvasElement {
     const s = Math.round((Math.min(this.max, Math.max(this.min, size)) - this.min) / this.step) * this.step + this.min;
@@ -104,6 +123,28 @@ export class SizedSprites {
       this.cache.set(s, c);
     }
     return c;
+  }
+
+  /**
+   * Backt bis zu `n` noch fehlende Größen (aufsteigend, höchstens bis `maxSize`) vor; jede Größe entsteht dabei höchstens
+   * einmal und wird sofort gerastert (siehe `touchCanvas`), damit das erste Zeichnen nur noch ein Blit ist. Mit einem
+   * größeren `maxSize` setzt ein späterer Aufruf die Arbeit fort. Rückgabe true = alle Größen bis `maxSize` liegen vor.
+   */
+  prewarm(n = 1, maxSize = Infinity): boolean {
+    let left = n;
+    while (this.warmIdx < this.count) {
+      const s = this.sizeAt(this.warmIdx);
+      if (s > maxSize) return true;
+      if (!this.cache.has(s)) {
+        if (left <= 0) return false;
+        const c = this.paint(s);
+        touchCanvas(c);
+        this.cache.set(s, c);
+        left -= 1;
+      }
+      this.warmIdx += 1;
+    }
+    return true;
   }
 
   /** Zentriert zeichnen */
@@ -138,7 +179,7 @@ export class MirrorBackdrop {
     readonly visH: number,
     private readonly bake: (stage: number) => BackdropBake,
   ) {
-    this.cache = new StageCache((i) => this.make(i));
+    this.cache = new StageCache((i, reuse) => this.make(i, reuse), { recycle: true });
   }
 
   async load(image: (url: string) => Promise<HTMLImageElement | null>): Promise<void> {
@@ -149,7 +190,7 @@ export class MirrorBackdrop {
     return this.imgs.some((i) => !!i);
   }
 
-  private make(i: number): HTMLCanvasElement {
+  private make(i: number, reuse: HTMLCanvasElement | null): HTMLCanvasElement {
     const img = this.imgs[i] ?? this.imgs.find((x) => !!x) ?? null;
     if (!img) return makeCanvas(1, 1);
     const scale = this.drawH / img.height;
@@ -173,7 +214,7 @@ export class MirrorBackdrop {
       g.globalCompositeOperation = "source-atop";
       g.fillStyle = fade;
       g.fillRect(0, H - 70, w * 2, 70);
-    });
+    }, reuse);
   }
 
   draw(g: C2D, i: number, scroll: number, alpha = 1): void {

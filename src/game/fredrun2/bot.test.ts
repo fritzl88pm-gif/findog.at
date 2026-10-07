@@ -2,10 +2,13 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 import { describe, expect, it } from "vitest";
 import { Bot } from "./bot";
-import { FIXED_DT } from "./constants";
+import { FIXED_DT, GRAVITY, METERS_PER_DIFFICULTY, STOMP_BOUNCE_V } from "./constants";
+import { createPatternCtx } from "./patterns";
+import { Rng } from "./rng";
 import { Sim } from "./sim";
+import { ENEMY_PATTERNS } from "./spawner";
 import { WORLDS } from "./worlds";
-import type { RunConfig, WorldId } from "./types";
+import type { EntSpec, RunConfig, WorldId } from "./types";
 
 export interface BotReport {
   survivedSeconds: number;
@@ -81,6 +84,93 @@ describe("Bot: Weltreise (Tour)", () => {
     }
     expect(visited.size).toBeGreaterThanOrEqual(3);
     expect(sim.stats.worldsVisited.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+/** Zeit (Sek.), die ein Stampf-Bounce bis zur selben Höhe braucht (Formel aus Sim.bounce: v = STOMP_BOUNCE_V + min(4, Kette)·40). */
+function bounceSeconds(chain: number): number {
+  return (2 * (STOMP_BOUNCE_V + Math.min(4, chain) * 40)) / GRAVITY;
+}
+
+/** Baut das Muster „guest-stomp-chain“ bei Schwierigkeit `diff` und liefert die Specs (x relativ zum Musterstart). */
+function buildChain(diff: number, speed: number, seed: number): EntSpec[] {
+  const chain = ENEMY_PATTERNS.find((p) => p.id === "guest-stomp-chain");
+  if (!chain) throw new Error("guest-stomp-chain fehlt");
+  const specs: EntSpec[] = [];
+  const ctx = createPatternCtx({ speed, diff, groundY: 600, ceilY: 80, rng: new Rng(seed), worldId: "wien", defaultSkin: (k) => k }, specs);
+  chain.build(ctx);
+  return specs;
+}
+
+describe("Muster: guest-stomp-chain (feel-core-08)", () => {
+  it("Kettenabstand × Tempo ≥ Bounce-Strecke (ein Bounce passt zwischen zwei Gegner)", () => {
+    for (const diff of [1.2, 2.5, 5, 5.1, 8, 14, 20]) {
+      const speed = 480 + diff * 25; // beliebiges, steigendes Tempo – die Ungleichung ist tempo-unabhängig (beides ∝ v)
+      const walkers = buildChain(diff, speed, 1).filter((e) => e.kind === "walker");
+      expect(walkers.length).toBe(diff > 5 ? 4 : 3);
+      for (let i = 1; i < walkers.length; i += 1) {
+        const gapPx = walkers[i].x - walkers[i - 1].x;
+        // Nach dem i-ten Stampfer (Kette i) muss der Bounce-Bogen kürzer sein als der Abstand zum nächsten Gegner
+        expect(gapPx).toBeGreaterThanOrEqual(speed * bounceSeconds(i));
+      }
+    }
+    // Gegenprobe: der alte Takt (0,58 s) lag unter der Bounce-Dauer – der Test hat also Biss
+    expect(0.58).toBeLessThan(bounceSeconds(1));
+  });
+
+  /** Ein Bot mit 0,3 s Reaktion läuft auf eine einzelne Kette zu; Rückgabe: Treffer (Herzen), die er dabei verliert. */
+  function chainTrial(specs: EntSpec[], seed: number, diff: number): number {
+    const sim = new Sim({ mode: "world", world: "wien", character: "fred", seed, startMeters: diff * METERS_PER_DIFFICULTY }, WORLDS);
+    sim.begin();
+    sim.noSpawn = true;
+    sim.ents = [];
+    sim.player.hearts = 99;
+    const origin = sim.playerWorldX + 1000;
+    let last = 0;
+    for (const sp of specs) {
+      sim.spawn(sp, origin);
+      last = Math.max(last, sp.x + sp.w);
+    }
+    const bot = new Bot({ reaction: 0.3, vision: 850 });
+    const steps = Math.round(((1000 + last) / sim.speed + 2.5) / FIXED_DT);
+    for (let i = 0; i < steps && sim.phase === "running"; i += 1) {
+      sim.step(FIXED_DT, bot.input(sim, FIXED_DT));
+      sim.events.length = 0;
+    }
+    return sim.stats.hurts;
+  }
+
+  it("Bot mit 0,3 s Reaktion scheitert an der Kette in unter 10 % der Fälle (vorher ≈ 40 %)", { timeout: 120_000 }, () => {
+    let trials = 0;
+    let failed = 0;
+    for (const diff of [3, 6, 10]) {
+      const sim = new Sim({ mode: "world", world: "wien", character: "fred", seed: 1, startMeters: diff * METERS_PER_DIFFICULTY }, WORLDS);
+      const speed = sim.speedAtDiff(diff);
+      for (let seed = 1; seed <= 10; seed += 1) {
+        trials += 1;
+        if (chainTrial(buildChain(diff, speed, seed), seed, diff) > 0) failed += 1;
+      }
+    }
+    expect(failed / trials).toBeLessThan(0.1);
+  });
+
+  it("Gegenprobe: derselbe Bot scheitert am alten Takt (0,58 s) deutlich öfter – der Test misst also etwas", { timeout: 120_000 }, () => {
+    let trials = 0;
+    let failed = 0;
+    for (const diff of [3, 6, 10]) {
+      const sim = new Sim({ mode: "world", world: "wien", character: "fred", seed: 1, startMeters: diff * METERS_PER_DIFFICULTY }, WORLDS);
+      const speed = sim.speedAtDiff(diff);
+      for (let seed = 1; seed <= 10; seed += 1) {
+        trials += 1;
+        // alter Takt: Gegner im Abstand 0,58 s statt 0,8 s (nur Gegner, ohne Münzen)
+        let k = 0;
+        const old = buildChain(diff, speed, seed)
+          .filter((e) => e.kind === "walker")
+          .map((e) => ({ ...e, x: speed * 0.58 * k++ }));
+        if (chainTrial(old, seed, diff) > 0) failed += 1;
+      }
+    }
+    expect(failed / trials).toBeGreaterThan(0.2);
   });
 });
 

@@ -12,9 +12,83 @@ export function ctxOf(c: HTMLCanvasElement): Ctx2D {
   return g;
 }
 
-/** Erzeugt eine Offscreen-Fläche und zeichnet einmal hinein. */
-export function paint(w: number, h: number, draw: (g: Ctx2D, w: number, h: number) => void): HTMLCanvasElement {
-  const c = makeCanvas(w, h);
+/**
+ * Wiederverwendbare Fläche: gibt `c` gelöscht und mit Standard-Zeichenzustand zurück, wenn sie genau w×h (gerundet wie
+ * `makeCanvas`) groß ist; sonst null (der Aufrufer legt dann eine neue an). Spart bei Stufen-Bakes die Neuanlage der
+ * großen Bitmaps (Allokation + Speicherdruck); der volle Reset verhindert, dass Zustand (Transform, Clip, Alpha,
+ * Glättung) vom vorigen Inhalt in den neuen Bake wandert.
+ */
+export function recycled(c: HTMLCanvasElement | null | undefined, w: number, h: number): HTMLCanvasElement | null {
+  if (!c) return null;
+  const W = Math.max(1, Math.round(w));
+  const H = Math.max(1, Math.round(h));
+  if (c.width !== W || c.height !== H) return null;
+  const g = c.getContext("2d");
+  if (!g) return null;
+  const reset = (g as CanvasRenderingContext2D & { reset?: () => void }).reset;
+  if (typeof reset === "function") reset.call(g);
+  else c.width = W; // setzt Bitmap und Zustand zurück (Spezifikation)
+  return c;
+}
+
+// --- Rastern erzwingen -----------------------------------------------------------------------------
+
+/** Das Nötigste vom Zeichenkontext der Berührungsfläche (2D-Kontext einer OffscreenCanvas) */
+interface TouchSink {
+  drawImage(src: CanvasImageSource, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number): void;
+  clearRect(x: number, y: number, w: number, h: number): void;
+}
+
+/**
+ * Kantenlänge der Berührungsfläche: knapp über der Größe, ab der Browser 2D-Flächen beschleunigen (Chromium: ca. 128×129 px).
+ * So gehört sie zur selben Klasse wie die großen Kulissen-Kacheln und die Quelle muss nicht auf die CPU zurückgelesen werden.
+ */
+const TOUCH_SIZE = 160;
+
+/** Konstruktor, mit dem `touchSink` angelegt wurde (undefined = noch nie geprüft; ändert sich nur in Tests mit Attrappen) */
+let touchCtor: unknown;
+let touchSink: TouchSink | null = null;
+
+function touchTarget(): TouchSink | null {
+  const ctor = typeof OffscreenCanvas === "undefined" ? null : OffscreenCanvas;
+  if (ctor !== touchCtor) {
+    touchCtor = ctor;
+    touchSink = null;
+    if (ctor) {
+      try {
+        touchSink = new ctor(TOUCH_SIZE, TOUCH_SIZE).getContext("2d");
+      } catch {
+        touchSink = null;
+      }
+    }
+  }
+  return touchSink;
+}
+
+/**
+ * Zwingt den Browser, eine eben bemalte Fläche JETZT zu rastern. Der Zeichenkontext zeichnet nämlich nur auf (das kostet
+ * die JS-Zeit des Malens); die eigentliche Rasterung der Fläche passiert erst beim ersten Lesen – also im ersten Frame,
+ * in dem sie gezeichnet wird, bei großen Kulissen-Kacheln 10 bis 50 ms (Chromium, Software-Raster) mitten in einer
+ * Überblendung. Ein 1×1-Ausschnitt in eine kleine Fläche genügt, damit die Quelle gerastert wird; danach kostet das
+ * erste echte Zeichnen nur noch den Blit. Die Rasterkosten fallen so in den (gedrosselten) Bake-Schritt, ihr Anteil steckt
+ * in `StageCache.costMs` und den Zeitscheiben von `WarmQueue`. Das anschließende `clearRect` lässt die Berührungsfläche
+ * den Verweis auf die Quelle wieder los (sonst hielte sie verworfene Stufen-Bitmaps fest). Ohne OffscreenCanvas (alte
+ * Browser, Vitest „node“) passiert nichts; das Bild bleibt in jedem Fall identisch.
+ */
+export function touchCanvas(c: HTMLCanvasElement): void {
+  const sink = touchTarget();
+  if (!sink || c.width < 1 || c.height < 1) return;
+  try {
+    sink.drawImage(c, 0, 0, 1, 1, 0, 0, 1, 1);
+    sink.clearRect(0, 0, TOUCH_SIZE, TOUCH_SIZE);
+  } catch {
+    // Quelle nicht lesbar (verlorener Kontext o.ä.) → bleibt beim Lazy-Raster
+  }
+}
+
+/** Erzeugt eine Offscreen-Fläche und zeichnet einmal hinein. Mit `reuse` (gleiche Größe) wird diese Fläche neu bemalt. */
+export function paint(w: number, h: number, draw: (g: Ctx2D, w: number, h: number) => void, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
+  const c = recycled(reuse, w, h) ?? makeCanvas(w, h);
   const g = ctxOf(c);
   draw(g, w, h);
   return c;

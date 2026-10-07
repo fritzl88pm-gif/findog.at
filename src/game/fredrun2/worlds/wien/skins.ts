@@ -8,6 +8,7 @@
 import { clamp, roundRect } from "../../draw-utils";
 import type { Ent, PropLibrary, ViewState } from "../../types";
 import { hash } from "../shared-a/gfx";
+import { touchCanvas } from "../shared-b/canvas";
 
 /** Props, die die Wien-Skins nutzen (werden vor dem Lauf geladen). */
 export const WIEN_TRAM_PROPS = ["wien-tram-n0", "wien-tram-n1", "wien-tram-n2", "wien-tram-n3", "wien-tram-n4", "wien-tram-n5", "wien-tram-n6"];
@@ -40,23 +41,60 @@ export interface BakeOpts {
   clip?: Array<[number, number, number, number]>;
 }
 
+/** gleiche Zahlenliste (oder beide fehlend) – für den Cache-Treffer ohne String-Schlüssel */
+function sameNums(a: readonly number[] | undefined, b: readonly number[] | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function sameRects(a: ReadonlyArray<readonly number[]> | undefined, b: ReadonlyArray<readonly number[]> | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) if (!sameNums(a[i], b[i])) return false;
+  return true;
+}
+
+interface PropEntry {
+  spr: PropSprite;
+  crop: readonly number[] | undefined;
+  clip: ReadonlyArray<readonly number[]> | undefined;
+}
+
+/** Obergrenze gespeicherter Sprites (älteste zuerst verworfen) */
+const PROP_CACHE_MAX = 64;
+
 export class PropSprites {
-  private readonly cache = new Map<string, PropSprite>();
+  /** id → logische px je Zellpixel → Varianten (Ausschnitt/Maske): Treffer ohne String-Schlüssel und ohne Allokation */
+  private readonly cache = new Map<string, Map<number, PropEntry[]>>();
+  /** Einfügereihenfolge (Verdrängung) */
+  private readonly order: Array<{ id: string; s: number; e: PropEntry }> = [];
   private k = 1;
 
   constructor(private props: PropLibrary | null = null) {}
 
   setProps(p: PropLibrary | null): void {
     this.props = p;
-    this.cache.clear();
+    this.clear();
   }
 
-  /** Pixelfaktor der Zeichenfläche (1 … 2); bei Änderung werden die Sprites neu gebacken. */
+  private clear(): void {
+    this.cache.clear();
+    this.order.length = 0;
+  }
+
+  /** Anzahl gebackener Sprites */
+  get size(): number {
+    return this.order.length;
+  }
+
+  /** Pixelfaktor der Zeichenfläche (1 … 2); bei Änderung (> 0,2) werden die Sprites neu gebacken. */
   setScale(k: number): void {
     const nk = clamp(k, 1, 2);
     if (Math.abs(nk - this.k) > 0.2) {
       this.k = nk;
-      this.cache.clear();
+      this.clear();
     }
   }
 
@@ -86,18 +124,41 @@ export class PropSprites {
     const props = this.props;
     if (!props?.has(id)) return null;
     const sq = Math.round(s * 1000) / 1000;
-    const key = `${id}|${sq}|${o.crop ? o.crop.join(",") : ""}|${o.clip ? o.clip.map((r) => r.join(",")).join(";") : ""}`;
-    const hit = this.cache.get(key);
-    if (hit) return hit;
+    const byId = this.cache.get(id);
+    const list = byId?.get(sq);
+    if (list) {
+      for (let i = 0; i < list.length; i += 1) {
+        const e = list[i];
+        if (sameNums(e.crop, o.crop) && sameRects(e.clip, o.clip)) return e.spr;
+      }
+    }
     const cell = props.cell(id);
     if (!cell) return null;
     const spr = this.bake(props, id, cell.w, cell.h, sq, o);
-    this.cache.set(key, spr);
-    if (this.cache.size > 64) {
-      const first = this.cache.keys().next().value;
-      if (first !== undefined) this.cache.delete(first);
+    const entry: PropEntry = { spr, crop: o.crop ? [...o.crop] : undefined, clip: o.clip ? o.clip.map((r) => [...r]) : undefined };
+    let m = byId;
+    if (!m) {
+      m = new Map();
+      this.cache.set(id, m);
     }
+    const l = m.get(sq);
+    if (l) l.push(entry);
+    else m.set(sq, [entry]);
+    this.order.push({ id, s: sq, e: entry });
+    if (this.order.length > PROP_CACHE_MAX) this.evictOldest();
     return spr;
+  }
+
+  private evictOldest(): void {
+    const old = this.order.shift();
+    if (!old) return;
+    const m = this.cache.get(old.id);
+    const l = m?.get(old.s);
+    if (!m || !l) return;
+    const i = l.indexOf(old.e);
+    if (i >= 0) l.splice(i, 1);
+    if (!l.length) m.delete(old.s);
+    if (!m.size) this.cache.delete(old.id);
   }
 
   private bake(props: PropLibrary, id: string, cw: number, ch: number, s: number, o: BakeOpts): PropSprite {
@@ -140,6 +201,8 @@ export class PropSprites {
         paintTo(g, t);
       }
     }
+    // Rasterkosten jetzt zahlen (beim Vorbacken im Leerlauf), nicht im Frame, in dem das Hindernis zuerst erscheint
+    touchCanvas(c);
     return { c, s, x0, y0, w: W / k, h: H / k, cw, ch };
   }
 }
@@ -918,7 +981,7 @@ export function drawBolt(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: nu
 // Blöcke
 
 export function drawPoller(g: CanvasRenderingContext2D, sx: number, sy: number, w: number, h: number, gy: number, c: SkinCtx): void {
-  const spr = c.sprites.get("wien-poller", c.sprites.scaleForHeight("wien-poller", Math.round(h * 1.08)));
+  const spr = propBake.poller(c.sprites, h);
   if (spr) {
     // Stahlpoller: Fuß auf der Bodenlinie (3 px eingesunken), Trefferfläche liegt mittig hinter der Säule
     const cx = sx + w / 2;
@@ -958,7 +1021,7 @@ const BAUZAUN_LAMPS: Array<[number, number]> = [
 ];
 
 export function drawBauzaun(g: CanvasRenderingContext2D, sx: number, sy: number, w: number, h: number, gy: number, t: number, reduced: boolean, c: SkinCtx): void {
-  const spr = c.sprites.get("wien-bauzaun", c.sprites.scaleForWidth("wien-bauzaun", Math.round(w * 1.08)));
+  const spr = propBake.bauzaun(c.sprites, w);
   if (spr) {
     const cx = sx + w / 2;
     shadow(g, cx, gy, (spr.cw - 10) * spr.s * 0.56);
@@ -1029,7 +1092,7 @@ export function drawBauzaun(g: CanvasRenderingContext2D, sx: number, sy: number,
 export function drawRubble(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: number, gy: number, t: number, c: SkinCtx): void {
   const w = e.w;
   const h = e.h;
-  const spr = c.sprites.get("wien-rubble", c.sprites.scaleForWidth("wien-rubble", Math.round(w * 1.06)));
+  const spr = propBake.rubble(c.sprites, w);
   if (spr) {
     // Schutthaufen mit Bauhelm; späte Stufen: glimmende Glutnester dazwischen
     const cx = sx + w / 2;
@@ -1211,8 +1274,7 @@ export function drawBurningBeam(g: CanvasRenderingContext2D, e: Ent, sx: number,
   const bottom = sy + e.h;
   const t = v.time;
   // Kranträger: Balken deckt die Trefferfläche, Ketten + Haken darüber, die Seile laufen aus dem Bild
-  const beamW = Math.max(8, Math.round((w * 1.06) / 8) * 8);
-  const spr = c.sprites.get("wien-crane-beam", c.sprites.scaleForWidth("wien-crane-beam", beamW));
+  const spr = propBake.beam(c.sprites, w);
   if (spr) {
     const cx = sx + w / 2;
     const by = bottom - 2;
@@ -1290,6 +1352,79 @@ export function drawBurningBeam(g: CanvasRenderingContext2D, e: Ent, sx: number,
 /** Brezel-Schild (Zellkoordinaten): Schwerpunkt, Schnitt Ausleger/Schild, Aufhängeketten, Breite der Brezel */
 const SIGN = { px: 218, py: 343, cut: 110, chainL: 137, chainR: 307, barY: 106, pretzelW: 308 };
 
+/** Ausschnitte des Brezel-Schilds (einmal angelegt: kein Allokieren pro Frame, Cache-Treffer per Referenz) */
+const SIGN_BODY_OPTS: BakeOpts = {
+  crop: [0, SIGN.cut, 404, 512],
+  clip: [
+    [100, SIGN.cut, 304, 402],
+    [70, 174, 30, 338],
+  ],
+};
+const SIGN_BRACKET_OPTS: BakeOpts = {
+  crop: [0, 0, 404, 254],
+  clip: [
+    [0, 0, 404, SIGN.cut],
+    [0, SIGN.cut, 100, 64],
+    [0, 174, 70, 80],
+  ],
+};
+
+/** Balkenbreite (auf 8 px gerastert, nie schmaler als die Hitbox) für Hitbox-Breite `w` */
+export function beamWidth(w: number): number {
+  return Math.max(8, Math.round((w * 1.06) / 8) * 8);
+}
+
+/**
+ * Hindernis-Sprites der Wien-Skins: Zeichnen und Vorbacken (`WIEN_PROP_SIZES`) rufen dieselben Funktionen auf – gleiche
+ * Maße ergeben denselben Cache-Eintrag. Argument = Maß der Entität (Breite bzw. Höhe, px).
+ */
+export const propBake = {
+  poller: (sp: PropSprites, h: number): PropSprite | null => sp.get("wien-poller", sp.scaleForHeight("wien-poller", Math.round(h * 1.08))),
+  bauzaun: (sp: PropSprites, w: number): PropSprite | null => sp.get("wien-bauzaun", sp.scaleForWidth("wien-bauzaun", Math.round(w * 1.08))),
+  rubble: (sp: PropSprites, w: number): PropSprite | null => sp.get("wien-rubble", sp.scaleForWidth("wien-rubble", Math.round(w * 1.06))),
+  /** Kranträger für Hitbox-Breite `w` */
+  beam: (sp: PropSprites, w: number): PropSprite | null => propBake.beamAt(sp, beamWidth(w)),
+  /** Kranträger in gerasterter Breite `bw` (siehe `beamWidth`) */
+  beamAt: (sp: PropSprites, bw: number): PropSprite | null => sp.get("wien-crane-beam", sp.scaleForWidth("wien-crane-beam", bw)),
+  signBody: (sp: PropSprites, w: number): PropSprite | null => sp.get("wien-sign", (w * 0.97) / SIGN.pretzelW, SIGN_BODY_OPTS),
+  signBracket: (sp: PropSprites, w: number): PropSprite | null => sp.get("wien-sign", ((w * 0.97) / SIGN.pretzelW) * 1.3, SIGN_BRACKET_OPTS),
+};
+
+/**
+ * Maße der Hindernisse (px): Höhe des Pollers, Breiten von Bauzaun, Schutt und Schild (feste Maße in patterns.ts) sowie
+ * die gerasterten Balkenbreiten des Kranträgers (die Hitbox-Breite hängt vom Tempo ab; echte Läufe liefern 203–258 px →
+ * 216–272, die Liste lässt je einen Raster Spielraum; ~0,18 MB je Sprite). Der Test in wien.test.ts prüft die Liste gegen alle Muster.
+ */
+export const WIEN_PROP_SIZES = {
+  poller: [58],
+  bauzaun: [100],
+  rubble: [96, 100, 104, 120],
+  /** gerasterte Balkenbreiten (`beamWidth`) */
+  beam: [208, 216, 224, 232, 240, 248, 256, 264, 272, 280],
+  sign: [68],
+} as const;
+
+/** Backt alle bekannten Hindernis-Sprites vor: ein Aufruf je Sprite (Schritt für die Warteschlange); leer ohne Props. */
+export function propBakeJobs(sp: PropSprites): Array<() => unknown> {
+  const jobs: Array<() => unknown> = [];
+  for (const h of WIEN_PROP_SIZES.poller) jobs.push(() => propBake.poller(sp, h));
+  for (const w of WIEN_PROP_SIZES.bauzaun) jobs.push(() => propBake.bauzaun(sp, w));
+  for (const w of WIEN_PROP_SIZES.rubble) jobs.push(() => propBake.rubble(sp, w));
+  for (const bw of WIEN_PROP_SIZES.beam) jobs.push(() => propBake.beamAt(sp, bw));
+  for (const w of WIEN_PROP_SIZES.sign) {
+    jobs.push(() => propBake.signBody(sp, w));
+    jobs.push(() => propBake.signBracket(sp, w));
+  }
+  return jobs;
+}
+
+/** Statische Leuchtflächen der Skins (Warnlicht, Glut, Bim-Scheinwerfer) vorab anlegen */
+export function warmSkinFx(): void {
+  getGlow("lamp");
+  getGlow("ember");
+  getTramFx();
+}
+
 /** Kettenstrang von (x0, y0) nach (x1, y1): dunkle Kontur, Stahlkern, Gliedernähte. */
 function chainStroke(g: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number, wd: number): void {
   g.lineCap = "round";
@@ -1316,21 +1451,8 @@ export function drawSign(g: CanvasRenderingContext2D, e: Ent, sx: number, sy: nu
   const r = e.w / 2;
   // Brezel-Schild: Eisenausleger (fest) + Kette + Schild (pendelt mit dem Winkel der Physik)
   const sb = (e.w * 0.97) / SIGN.pretzelW;
-  const body = c.sprites.get("wien-sign", sb, {
-    crop: [0, SIGN.cut, 404, 512],
-    clip: [
-      [100, SIGN.cut, 304, 402],
-      [70, 174, 30, 338],
-    ],
-  });
-  const bracket = c.sprites.get("wien-sign", sb * 1.3, {
-    crop: [0, 0, 404, 254],
-    clip: [
-      [0, 0, 404, SIGN.cut],
-      [0, SIGN.cut, 100, 64],
-      [0, 174, 70, 80],
-    ],
-  });
+  const body = propBake.signBody(c.sprites, e.w);
+  const bracket = propBake.signBracket(c.sprites, e.w);
   if (body && bracket) {
     blitSprite(g, bracket, (SIGN.chainL + SIGN.chainR) / 2, SIGN.barY, ax, ay, false);
     // Koordinaten mit Ursprung in der Schildmitte; die –y-Achse zeigt exakt zum Aufhängepunkt

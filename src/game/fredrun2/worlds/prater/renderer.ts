@@ -8,9 +8,11 @@
  * fertige 1:1-Flächen.
  */
 import type { AssetLoader, Ent, ViewState, WorldRenderer } from "../../types";
+import { yieldToMain } from "../../yield";
 import { bigGlow, blitCentered, blitTiled, blitTiledRange, ctxOf, glowAt, glowSprite, paint, softSprite, solidSegments, type Ctx2D } from "../shared-b/canvas";
 import { StagePalette, h1, mod, mulberry, stageVal } from "../shared-b/color";
-import { StageCache, Staged, drawStaged, prepareStaged, stagedLayer, type StageTint, type StagedLayer } from "../shared-b/layers";
+import { StageCache, StagePrep, Staged, drawStaged, stageProgress, stagedLayer, type StageTint, type StagedLayer } from "../shared-b/layers";
+import { WarmQueue } from "../shared-b/warm";
 import {
   BULB_COLORS,
   boothTiles,
@@ -18,7 +20,7 @@ import {
   coasterTrackY,
   farSkyline,
   groundTile,
-  landmarkTiles,
+  landmarkTilesAsync,
   LANDMARK_PROP_IDS,
   lampTiles,
   topGarland,
@@ -41,12 +43,15 @@ import {
   drawValance,
   makeSkinAssets,
   OBSTACLE_PROPS,
+  praterPropJobs,
   type PraterSkinAssets,
   type SkinCtx,
 } from "./skins";
 
 const TAU = Math.PI * 2;
 const MAX_STAGE = 4;
+/** Meter je Stimmungsstufe (wie WORLD_PRATER.stageMeters; Test in prater.test.ts hält beides gleich) */
+export const PRATER_STAGE_METERS = 300;
 
 export const PRATER_PROPS = ["ghost", "ghost-float", "autoscooter", ...Object.values(OBSTACLE_PROPS), ...LANDMARK_PROP_IDS];
 
@@ -112,7 +117,13 @@ export class PraterRenderer implements WorldRenderer {
   private wheel!: WheelSprites;
   private wheelS!: Staged;
   private baseS!: Staged;
+  /** alle Stufen-Caches (Liste gehört dem StagePrep) */
   private staged: StageCache[] = [];
+  private prep = new StagePrep(this.staged, MAX_STAGE);
+  private warmQ = new WarmQueue();
+  private warmInit = false;
+  private loaded = false;
+  private lastStage = 0;
   private trench!: HTMLCanvasElement;
   private moon!: HTMLCanvasElement;
   private clouds: HTMLCanvasElement[] = [];
@@ -143,27 +154,104 @@ export class PraterRenderer implements WorldRenderer {
   /** Pixelfaktor der Zeichenfläche (Hindernis-Sprites werden dafür vorgerendert) */
   private pixelK = 1;
 
+  /**
+   * Skalenwechsel (Governor, Vollbild, DPR). Idempotent: PropBank.setScale ignoriert Änderungen innerhalb von 0,2; nur
+   * eine echte Änderung verwirft die Hindernis-Sprites (und stellt das Vorbacken wieder in die Warteschlange).
+   */
   resize(dpr: number): void {
-    this.pixelK = dpr;
-    if (this.ready) this.A.bank.setScale(dpr);
+    this.pixelK = Math.min(2, Math.max(1, dpr));
+    if (!this.ready) return;
+    const before = this.A.bank.scale;
+    this.A.bank.setScale(this.pixelK);
+    if (this.A.bank.scale !== before && this.warmInit) this.queueProps();
   }
 
   async load(assets: AssetLoader): Promise<void> {
-    this.build();
+    // Statisches in Schritten bauen und dazwischen den Hauptthread freigeben (kein Long Task)
+    await this.buildAsync();
     this.A.props = assets.props;
     this.A.bank.setProps(assets.props);
     await assets.props.preload(PRATER_PROPS);
     // Gemalte Fahrgeschäfte (Ringelspiel, Zirkuszelt) als eigene Tiefenebene zwischen Hochschaubahn und Buden
     const P = assets.props;
-    const lm = landmarkTiles((id) => P.has(id), (g, id, x, y, o) => P.draw(g, id, x, y, o), 2600, 280);
+    await yieldToMain();
+    const lm = await landmarkTilesAsync((id) => P.has(id), (g, id, x, y, o) => P.draw(g, id, x, y, o), 2600, 280, yieldToMain);
     if (lm) {
-      this.rides = stagedLayer(lm.day, 266, 0.2, tintFor("#1b1238", 0.8, 0.26, 0.42), { lights: lm.lights, lights2: lm.lights2 });
+      this.rides = stagedLayer(lm.day, 266, 0.2, tintFor("#1b1238", 0.8, 0.26, 0.42), { lights: lm.lights, lights2: lm.lights2, recycle: true });
       this.staged.push(this.rides.staged);
+    }
+    // erste beiden Stufen vorbacken (Tinten-Schritte einzeln, mit Pausen)
+    for (const stage of [0, 1]) {
+      for (const c of this.staged) {
+        while (!c.has(stage)) {
+          await yieldToMain();
+          c.step(stage);
+        }
+      }
+    }
+    this.loaded = true;
+  }
+
+  // --- Aufwärmen -----------------------------------------------------------------------------------
+
+  /**
+   * Leerlauf-Aufwärmen (Countdown, Menü-Demo, Lauf-Anfang): backt in Zeitscheiben von ca. `budgetMs` fehlende Stufen-
+   * Varianten und alle bekannten Hindernis-Sprites vor, damit sie nicht mitten im Lauf entstehen. true = nichts mehr zu tun.
+   */
+  warm(budgetMs: number): boolean {
+    if (!this.loaded) return true; // noch nicht geladen
+    if (!this.warmInit) this.initWarm();
+    return this.warmQ.run(budgetMs);
+  }
+
+  private initWarm(): void {
+    this.warmInit = true;
+    this.warmQ.add(() => this.prep.warm(this.lastStage, 0), 6);
+    this.queueProps();
+  }
+
+  /** Hindernis-Sprites (bekannte Maße) vorbacken – nach Skalenwechsel erneut */
+  private queueProps(): void {
+    const jobs = praterPropJobs(this.A);
+    let i = 0;
+    this.warmQ.add(() => {
+      if (i < jobs.length) jobs[i++]();
+      return i >= jobs.length;
+    }, 3);
+  }
+
+  /** Bauschritte des statischen Zeichnens (jeder für sich klein; `load` gibt dazwischen den Hauptthread frei) */
+  private readonly parts: Array<() => void> = [
+    () => this.buildSky(),
+    () => this.buildLayers1(),
+    () => this.buildLayers2(),
+    () => this.buildLayers3(),
+    () => this.buildLayers4(),
+    () => this.buildWheel(),
+    () => this.buildSprites(),
+    () => this.buildGlows(),
+  ];
+  private nextPart = 0;
+
+  /** Alles (verbleibende) auf einmal bauen – Fallback für Aufrufe vor/ohne `load` */
+  private build(): void {
+    while (this.nextPart < this.parts.length) {
+      const i = this.nextPart;
+      this.nextPart += 1;
+      this.parts[i]();
     }
   }
 
-  private build(): void {
-    if (this.ready) return;
+  private async buildAsync(): Promise<void> {
+    while (this.nextPart < this.parts.length) {
+      const i = this.nextPart;
+      this.nextPart += 1;
+      this.parts[i]();
+      await yieldToMain();
+    }
+  }
+
+  private buildSky(): void {
     this.A = makeSkinAssets();
     this.A.bank.setScale(this.pixelK);
     const stars = paint(1280, 460, (g) => {
@@ -176,44 +264,74 @@ export class PraterRenderer implements WorldRenderer {
         g.fill();
       }
     });
-    this.sky = new StageCache((s) =>
-      paint(1280, 600, (g) => {
-        const P = STAGES[s];
-        const grd = g.createLinearGradient(0, 0, 0, 600);
-        grd.addColorStop(0, P.top);
-        grd.addColorStop(0.55, P.mid);
-        grd.addColorStop(1, P.low);
-        g.fillStyle = grd;
-        g.fillRect(0, 0, 1280, 600);
-        if (STARS[s] > 0.01) {
-          g.globalAlpha = STARS[s];
-          g.drawImage(stars, 0, 0);
-          g.globalAlpha = 1;
-        }
-      }),
+    this.sky = new StageCache(
+      (s, reuse) =>
+        paint(
+          1280,
+          600,
+          (g) => {
+            const P = STAGES[s];
+            const grd = g.createLinearGradient(0, 0, 0, 600);
+            grd.addColorStop(0, P.top);
+            grd.addColorStop(0.55, P.mid);
+            grd.addColorStop(1, P.low);
+            g.fillStyle = grd;
+            g.fillRect(0, 0, 1280, 600);
+            if (STARS[s] > 0.01) {
+              g.globalAlpha = STARS[s];
+              g.drawImage(stars, 0, 0);
+              g.globalAlpha = 1;
+            }
+          },
+          reuse,
+        ),
+      { recycle: true },
     );
+  }
+
+  private buildLayers1(): void {
     const far = farSkyline(2048, 280);
-    this.far = stagedLayer(far.day, 310, 0.035, tintFor("#1b1740", 0.86, 0.34, 0.62), { lights: far.lights });
+    this.far = stagedLayer(far.day, 310, 0.035, tintFor("#1b1740", 0.86, 0.34, 0.62), { lights: far.lights, recycle: true });
     const co = coasterTiles(2048, 340);
-    this.coaster = stagedLayer(co.day, 250, 0.13, tintFor("#1d1336", 0.84, 0.16, 0.34), { lights: co.lights, lights2: co.lights2 });
+    this.coaster = stagedLayer(co.day, 250, 0.13, tintFor("#1d1336", 0.84, 0.16, 0.34), { lights: co.lights, lights2: co.lights2, recycle: true });
+  }
+
+  private buildLayers2(): void {
     const bo = boothTiles(2048, 240);
-    this.booths = stagedLayer(bo.day, 358, 0.3, tintFor("#1b1030", 0.74, 0.2, 0.3, 0.38), { lights: bo.lights, lights2: bo.lights2 });
+    this.booths = stagedLayer(bo.day, 358, 0.3, tintFor("#1b1030", 0.74, 0.2, 0.3, 0.38), { lights: bo.lights, lights2: bo.lights2, recycle: true });
+  }
+
+  private buildLayers3(): void {
     const la = lampTiles(1536, 540, 512, 290);
-    this.lamps = stagedLayer(la.day, 50, 0.6, (s) => ({ night: { color: "#0d0a18", a: NIGHT[s] * 0.6 } }), { lights: la.lights, lights2: la.lights2 });
+    this.lamps = stagedLayer(la.day, 50, 0.6, (s) => ({ night: { color: "#0d0a18", a: NIGHT[s] * 0.6 } }), { lights: la.lights, lights2: la.lights2, recycle: true });
+  }
+
+  private buildLayers4(): void {
     const ga = topGarland(1400, 96);
-    this.garland = stagedLayer(ga.day, -6, 1.25, (s) => ({ night: { color: "#0b0812", a: NIGHT[s] * 0.45 } }), { lights: ga.lights, lights2: ga.lights2 });
-    this.groundL = stagedLayer(groundTile(1024, 130), 590, 1, (s) => ({
-      night: { color: "#1a1030", a: NIGHT[s] * 0.5 },
-      haze: { color: STAGES[s].ground, aTop: 0.1 * (1 - NIGHT[s] * 0.5), aBottom: 0 },
-    }));
+    this.garland = stagedLayer(ga.day, -6, 1.25, (s) => ({ night: { color: "#0b0812", a: NIGHT[s] * 0.45 } }), { lights: ga.lights, lights2: ga.lights2, recycle: true });
+    this.groundL = stagedLayer(
+      groundTile(1024, 130),
+      590,
+      1,
+      (s) => ({
+        night: { color: "#1a1030", a: NIGHT[s] * 0.5 },
+        haze: { color: STAGES[s].ground, aTop: 0.1 * (1 - NIGHT[s] * 0.5), aBottom: 0 },
+      }),
+      { recycle: true },
+    );
+  }
+
+  private buildWheel(): void {
     this.wheel = wheelSprites(200);
     const wcan = paint(this.wheel.size, this.wheel.size, () => undefined);
     this.wheelCache = { c: wcan, g: ctxOf(wcan), rot: -99, st: -1, bl: 0, la: 0 };
-    this.wheelS = new Staged(this.wheel.wheel, (s) => ({ night: { color: "#1a1233", a: NIGHT[s] * 0.88 }, haze: { color: STAGES[s].haze, aTop: 0.3, aBottom: 0.3 } }));
-    this.baseS = new Staged(this.wheel.base, (s) => ({ night: { color: "#170f2c", a: NIGHT[s] * 0.85 }, haze: { color: STAGES[s].haze, aTop: 0.28, aBottom: 0.45 } }));
-    this.staged = [this.sky, this.far.staged, this.wheelS, this.baseS, this.coaster.staged, this.booths.staged, this.lamps.staged, this.groundL.staged, this.garland.staged];
-    prepareStaged(this.staged, 0, MAX_STAGE, 99);
+    this.wheelS = new Staged(this.wheel.wheel, (s) => ({ night: { color: "#1a1233", a: NIGHT[s] * 0.88 }, haze: { color: STAGES[s].haze, aTop: 0.3, aBottom: 0.3 } }), true);
+    this.baseS = new Staged(this.wheel.base, (s) => ({ night: { color: "#170f2c", a: NIGHT[s] * 0.85 }, haze: { color: STAGES[s].haze, aTop: 0.28, aBottom: 0.45 } }), true);
+    // alle Stufen-Caches beim StagePrep anmelden (die Stufen 0/1 backt `load` in kleinen Schritten, sonst `update`)
+    for (const c of [this.sky, this.far.staged, this.wheelS, this.baseS, this.coaster.staged, this.booths.staged, this.lamps.staged, this.groundL.staged, this.garland.staged]) this.prep.add(c);
+  }
 
+  private buildSprites(): void {
     this.trench = trenchTile(480, 130);
     this.moon = paint(120, 120, (g) => {
       const grd = g.createRadialGradient(50, 48, 4, 60, 60, 36);
@@ -257,6 +375,9 @@ export class PraterRenderer implements WorldRenderer {
         g.drawImage(strip, x, top, 2, h);
       }
     });
+  }
+
+  private buildGlows(): void {
     this.sunGlow = bigGlow(600, 600, [
       [0, "rgba(255,236,190,0.95)"],
       [0.12, "rgba(255,200,120,0.6)"],
@@ -307,7 +428,10 @@ export class PraterRenderer implements WorldRenderer {
 
   update(dt: number, v: ViewState): void {
     if (!this.ready) return;
-    prepareStaged(this.staged, Math.min(MAX_STAGE, v.stage), MAX_STAGE, 1);
+    // Stufen-Varianten: die Folgestufe erst ab ~28 % der Stufe und höchstens ein Schritt je ~6 Frames (nicht am Stufenanfang)
+    const stage = Math.min(MAX_STAGE, v.stage);
+    this.lastStage = stage;
+    this.prep.step(stage, stageProgress(v.worldMeters, PRATER_STAGE_METERS), v.stageBlend);
     const s = Math.min(MAX_STAGE, v.stage + v.stageBlend);
     // Feuerwerk
     const fw = stageVal(FIREWORKS, s) * (v.quality === 0 ? 0.4 : 1);
@@ -326,7 +450,9 @@ export class PraterRenderer implements WorldRenderer {
       if (r.t >= r.dur) {
         this.rockets.splice(i, 1);
         this.bursts.push({ x: r.x, y: r.y1, t: 0, life: 1.6 + this.rng() * 0.6, spr: r.spr, n: v.quality === 2 ? 32 : 20, sp: 190 + this.rng() * 110, seed: this.rng() * 100, ring: this.rng() < 0.3 });
-        if (!v.reducedMotion) this.skyFlash = Math.min(1, this.skyFlash + 0.55);
+        // „Blitze“-Regler (flashScale) ersetzt das Dämpfen bei „Weniger Bewegung“ (keine Doppel-Skalierung)
+        const fs = v.flashScale ?? (v.reducedMotion ? 0 : 1);
+        if (fs > 0) this.skyFlash = Math.min(1, this.skyFlash + 0.55 * fs);
       }
     }
     for (let i = this.bursts.length - 1; i >= 0; i -= 1) {

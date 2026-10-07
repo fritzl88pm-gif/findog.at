@@ -909,7 +909,34 @@ export function landmarkTiles(
 ): { day: HTMLCanvasElement; lights: HTMLCanvasElement; lights2: HTMLCanvasElement } | null {
   const list = LANDMARKS.filter((l) => has(l.id));
   if (!list.length) return null;
-  const day = paint(W, H, (g) => {
+  return { day: landmarkDay(list, draw, W, H), lights: landmarkLights(list, W, H, 0), lights2: landmarkLights(list, W, H, 1) };
+}
+
+/** Wie `landmarkTiles`, aber in kleinen Schritten (je Wahrzeichen) mit `pause()` dazwischen (Hauptthread freigeben, kein Long Task) */
+export async function landmarkTilesAsync(
+  has: (id: string) => boolean,
+  draw: PropDraw,
+  W: number,
+  H: number,
+  pause: () => Promise<void>,
+): Promise<{ day: HTMLCanvasElement; lights: HTMLCanvasElement; lights2: HTMLCanvasElement } | null> {
+  const list = LANDMARKS.filter((l) => has(l.id));
+  if (!list.length) return null;
+  const day = landmarkDay(list, draw, W, H);
+  const lights = paint(W, H, () => undefined);
+  const lights2 = paint(W, H, () => undefined);
+  const g0 = lights.getContext("2d");
+  const g1 = lights2.getContext("2d");
+  for (const l of list) {
+    await pause();
+    if (g0) drawLandmarkLights(g0, l, W, H, 0);
+    if (g1) drawLandmarkLights(g1, l, W, H, 1);
+  }
+  return { day, lights, lights2 };
+}
+
+function landmarkDay(list: typeof LANDMARKS, draw: PropDraw, W: number, H: number): HTMLCanvasElement {
+  return paint(W, H, (g) => {
     for (const l of list) {
       const w = (l.sw * l.h) / l.sh;
       wrapDraw(W, l.x - w / 2, w, (x) => {
@@ -917,31 +944,35 @@ export function landmarkTiles(
       });
     }
   });
-  const mk = (odd: number): HTMLCanvasElement =>
-    paint(W, H, (g) => {
-      for (const l of list) {
-        const k = l.h / l.sh;
-        const w = l.sw * k;
-        const left = l.x - w / 2;
-        const top = H - l.h;
-        wrapDraw(W, left, w, (x) => {
-          if (odd === 0 && l.glow) {
-            const [gx, gy, rx, ry, col] = l.glow;
-            g.save();
-            g.translate(x + gx * k, top + gy * k);
-            g.scale(1, ry / rx);
-            const grd = g.createRadialGradient(0, 0, 0, 0, 0, rx * k);
-            grd.addColorStop(0, col);
-            grd.addColorStop(1, colorWithAlpha(col, 0));
-            g.fillStyle = grd;
-            g.fillRect(-rx * k, -rx * k, rx * k * 2, rx * k * 2);
-            g.restore();
-          }
-          l.bulbs.forEach(([bx, by, c], i) => {
-            if (i % 2 === odd) bulb(g, x + bx * k, top + by * k, 1.9, c, 3.4);
-          });
-        });
-      }
+}
+
+function landmarkLights(list: typeof LANDMARKS, W: number, H: number, odd: number): HTMLCanvasElement {
+  return paint(W, H, (g) => {
+    for (const l of list) drawLandmarkLights(g, l, W, H, odd);
+  });
+}
+
+/** Lichter eines Wahrzeichens (odd 0: Lichthof + jede zweite Glühbirne, odd 1: die übrigen) */
+function drawLandmarkLights(g: CanvasRenderingContext2D, l: (typeof LANDMARKS)[number], W: number, H: number, odd: number): void {
+  const k = l.h / l.sh;
+  const w = l.sw * k;
+  const left = l.x - w / 2;
+  const top = H - l.h;
+  wrapDraw(W, left, w, (x) => {
+    if (odd === 0 && l.glow) {
+      const [gx, gy, rx, ry, col] = l.glow;
+      g.save();
+      g.translate(x + gx * k, top + gy * k);
+      g.scale(1, ry / rx);
+      const grd = g.createRadialGradient(0, 0, 0, 0, 0, rx * k);
+      grd.addColorStop(0, col);
+      grd.addColorStop(1, colorWithAlpha(col, 0));
+      g.fillStyle = grd;
+      g.fillRect(-rx * k, -rx * k, rx * k * 2, rx * k * 2);
+      g.restore();
+    }
+    l.bulbs.forEach(([bx, by, c], i) => {
+      if (i % 2 === odd) bulb(g, x + bx * k, top + by * k, 1.9, c, 3.4);
     });
-  return { day, lights: mk(0), lights2: mk(1) };
+  });
 }

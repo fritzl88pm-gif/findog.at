@@ -87,7 +87,11 @@ function heartPath(g: CanvasRenderingContext2D, r: number): void {
   g.closePath();
 }
 
-export function drawHeartVector(g: CanvasRenderingContext2D, cx: number, cy: number, r: number, t = 0, filled = true, urgent = false): void {
+/**
+ * Herz mit Herzschlag. `glowScale` skaliert nur den Schein (shadowBlur rechnet in Bitmap-Pixeln, nicht in Logikeinheiten): 1 = wie
+ * bisher; beim Vorrendern der HUD-Sprites steht hier die Bake-Skala, damit der Schein in jeder Auflösung gleich groß aussieht.
+ */
+export function drawHeartVector(g: CanvasRenderingContext2D, cx: number, cy: number, r: number, t = 0, filled = true, urgent = false, glowScale = 1): void {
   g.save();
   g.translate(cx, cy);
   // Herzschlag: bei der letzten Leben schneller und stärker
@@ -97,7 +101,7 @@ export function drawHeartVector(g: CanvasRenderingContext2D, cx: number, cy: num
   if (filled) {
     // leuchtendes, gesättigtes Rot mit hellem Rand: hebt sich von jedem Hintergrund ab
     g.shadowColor = urgent ? "rgba(255,40,40,0.95)" : "rgba(255,50,50,0.75)";
-    g.shadowBlur = r * (urgent ? 1.1 : 0.8);
+    g.shadowBlur = r * (urgent ? 1.1 : 0.8) * glowScale;
     g.lineWidth = Math.max(4, r * 0.34);
     g.strokeStyle = "rgba(255,255,255,0.95)";
     g.lineJoin = "round";
@@ -215,6 +219,164 @@ export function drawPowerupVector(g: CanvasRenderingContext2D, type: PickupType,
   g.fill();
   g.restore();
 }
+
+// =====================================================================================================================
+// HUD-Sprites: Herzen, Herzleiste, Münz-Icon und Power-up-Blasen werden einmalig in Renderer-Skala vorgerendert (Schein als
+// fertiger Halo statt shadowBlur, Verläufe und "F" ohne Gradient/fillText im Frame) und per drawImage gezeichnet. Der Cache hält je
+// Variante genau eine Canvas und backt bei Skalenwechsel (cssScale/dpr) neu. Ohne Canvas (Node, Tests) liefert er null: die
+// Aufrufer zeichnen dann mit den Vektor-Funktionen oben.
+// =====================================================================================================================
+
+export type HudSpriteKind = "heart" | "heart-urgent" | "heart-empty" | "heart-bar" | "coin" | "pu-magnet" | "pu-shield" | "pu-slowmo" | "pu-turbo";
+
+/** Radien der HUD-Symbole in Logikeinheiten (Herz und Münze wie bisher im HUD, Power-up-Blase r≈14) */
+export const HUD_HEART_R = 19;
+export const HUD_COIN_R = 15;
+export const HUD_POWERUP_R = 14;
+/** Maße der Herz-Leiste (Logikeinheiten) */
+export const HUD_HEART_BAR = { w: 276, h: 52 } as const;
+
+/**
+ * Halbe Kantenlänge der Sprites (Symbol plus Schein bzw. Glow) in Logikeinheiten, knapp um das Sichtbare gelegt (weniger
+ * Überzeichnung beim drawImage): Herz-Umriss etwa 25, dazu der Schein (0,8 bzw. 1,1 * r) beim gefüllten und dringenden Herz.
+ */
+const HEART_HALF: Record<"heart" | "heart-urgent" | "heart-empty", number> = { heart: 44, "heart-urgent": 48, "heart-empty": 28 };
+const COIN_HALF = 21;
+const POWERUP_HALF = 30;
+/** Rand um die Herz-Leiste (Antialiasing der Kante) */
+const BAR_PAD = 1;
+
+export interface HudSprite {
+  canvas: CanvasImageSource;
+  /** Zielrechteck in Logikeinheiten: relativ zum Mittelpunkt (Herz, Münze, Power-up) bzw. zur linken oberen Ecke (Leiste) */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Bitmap-Pixel je Logikeinheit, in der gebacken wurde */
+  px: number;
+}
+
+/** Das Minimum, das der Cache von einer Zeichenfläche braucht (HTMLCanvasElement erfüllt es) */
+export interface SpriteCanvas {
+  width: number;
+  height: number;
+  getContext(type: "2d"): CanvasRenderingContext2D | null;
+}
+export type SpriteCanvasFactory = () => SpriteCanvas | null;
+
+function defaultSpriteCanvas(): SpriteCanvas | null {
+  if (typeof document === "undefined") return null;
+  return document.createElement("canvas");
+}
+
+/** Rastet die Bake-Skala auf 1/8 (weniger Neubacken bei krummen Skalen) und nie unter 0,5. */
+export function quantizeBakeScale(px: number): number {
+  if (!(px > 0) || !Number.isFinite(px)) return 1;
+  return Math.max(0.5, Math.round(px * 8) / 8);
+}
+
+interface SpriteSlot {
+  surface: SpriteCanvas | null;
+  sprite: HudSprite | null;
+  px: number;
+}
+
+const POWERUP_SPRITE: Partial<Record<HudSpriteKind, PickupType>> = { "pu-magnet": "magnet", "pu-shield": "shield", "pu-slowmo": "slowmo", "pu-turbo": "turbo" };
+
+export class HudSpriteCache {
+  private slots: Partial<Record<HudSpriteKind, SpriteSlot>> = {};
+  /** Anzahl der Bake-Vorgänge (Diagnose/Tests) */
+  bakes = 0;
+  /** Anzahl erzeugter Canvases: je Variante höchstens eine, auch über Skalenwechsel hinweg */
+  canvases = 0;
+
+  constructor(private make: SpriteCanvasFactory = defaultSpriteCanvas) {}
+
+  /** Tauscht die Canvas-Fabrik (Tests, andere Backends) und verwirft alle Sprites. */
+  setFactory(make: SpriteCanvasFactory): void {
+    this.make = make;
+    this.clear();
+  }
+
+  clear(): void {
+    this.slots = {};
+    this.bakes = 0;
+    this.canvases = 0;
+  }
+
+  /**
+   * Sprite der Variante `kind` bei `px` Bitmap-Pixeln je Logikeinheit (Renderer-Skala mal HUD-Skalierung); null, wenn keine
+   * Canvas verfügbar ist (Aufrufer zeichnen dann vektoriell). Im Normalfall ein Property-Lookup, gebacken wird nur bei neuer Skala.
+   */
+  get(kind: HudSpriteKind, px: number): HudSprite | null {
+    const q = quantizeBakeScale(px);
+    let slot = this.slots[kind];
+    if (slot && slot.px === q) return slot.sprite;
+    if (!slot) {
+      slot = { surface: null, sprite: null, px: q };
+      this.slots[kind] = slot;
+    }
+    slot.px = q;
+    slot.sprite = this.bake(kind, q, slot);
+    return slot.sprite;
+  }
+
+  private bake(kind: HudSpriteKind, q: number, slot: SpriteSlot): HudSprite | null {
+    // Zielrechteck in Logikeinheiten (Mittelpunkt-bezogen; die Leiste misst ab ihrer linken oberen Ecke)
+    let x: number;
+    let y: number;
+    let w: number;
+    let h: number;
+    if (kind === "heart-bar") {
+      x = -BAR_PAD;
+      y = -BAR_PAD;
+      w = HUD_HEART_BAR.w + BAR_PAD * 2;
+      h = HUD_HEART_BAR.h + BAR_PAD * 2;
+    } else {
+      const half = kind === "coin" ? COIN_HALF : kind in POWERUP_SPRITE ? POWERUP_HALF : HEART_HALF[kind as keyof typeof HEART_HALF];
+      x = -half;
+      y = -half;
+      w = half * 2;
+      h = half * 2;
+    }
+    const cw = Math.max(1, Math.ceil(w * q));
+    const ch = Math.max(1, Math.ceil(h * q));
+    if (!slot.surface) {
+      slot.surface = this.make();
+      if (slot.surface) this.canvases += 1;
+    }
+    const surface = slot.surface;
+    if (!surface) return null;
+    // Größe setzen leert die Fläche (auch bei gleichem Wert)
+    surface.width = cw;
+    surface.height = ch;
+    const sg = surface.getContext("2d");
+    if (!sg) return null;
+    this.bakes += 1;
+    // Logikeinheiten -> Bitmap; der Ursprung (0,0) liegt im Mittelpunkt des Symbols bzw. in der Ecke der Leiste
+    sg.setTransform(q, 0, 0, q, -x * q, -y * q);
+    if (kind === "heart-bar") {
+      const grd = sg.createLinearGradient(0, 0, 0, HUD_HEART_BAR.h);
+      grd.addColorStop(0, "rgba(150,14,28,0.75)");
+      grd.addColorStop(1, "rgba(70,4,14,0.8)");
+      roundRect(sg, 0, 0, HUD_HEART_BAR.w, HUD_HEART_BAR.h, HUD_HEART_BAR.h / 2);
+      sg.fillStyle = grd;
+      sg.fill();
+    } else if (kind === "coin") {
+      drawCoinVector(sg, 0, 0, HUD_COIN_R, 0, 0);
+    } else if (kind in POWERUP_SPRITE) {
+      drawPowerupVector(sg, POWERUP_SPRITE[kind] ?? "magnet", 0, 0, HUD_POWERUP_R, 0);
+    } else {
+      // Herzschlag t = 0 -> Skala 1; der Schein wird in Bitmap-Pixeln gerechnet, daher mit der Bake-Skala
+      drawHeartVector(sg, 0, 0, HUD_HEART_R, 0, kind !== "heart-empty", kind === "heart-urgent", q);
+    }
+    return { canvas: surface as unknown as CanvasImageSource, x, y, w: cw / q, h: ch / q, px: q };
+  }
+}
+
+/** Gemeinsamer Cache für das HUD (eine Renderer-Skala zur Zeit; bei zwei Spielflächen mit verschiedener Skala wird neu gebacken). */
+export const hudSprites = new HudSpriteCache();
 
 export function drawPickup(
   g: CanvasRenderingContext2D,

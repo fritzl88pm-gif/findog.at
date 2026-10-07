@@ -121,9 +121,12 @@ export const ENEMY_PATTERNS: PatternDef[] = [
     weight: 1.3,
     build(c) {
       const n = c.diff > 5 ? 4 : 3;
-      for (let i = 0; i < n; i += 1) c.walker(c.t(i * 0.58), 64, 110, { skin: guest(c), vx: 0, stompable: true });
-      c.coinArc(c.t(0.1), c.t(0.58 * (n - 1)), 210, 6);
-      return c.t(0.58 * (n - 1)) + 64;
+      // Takt 0,8 s: ein Stampf-Bounce (2·v/g ≈ 0,68–0,77 s, steigt mit der Kettenzahl) passt sauber zwischen zwei Gegner;
+      // bei 0,58 s blieb nur ein Fenster von ≈ 0,26 s (Tap-Hüpfer) und jeder Fehltritt kostete ein Herz.
+      const gap = 0.8;
+      for (let i = 0; i < n; i += 1) c.walker(c.t(i * gap), 64, 110, { skin: guest(c), vx: 0, stompable: true });
+      c.coinArc(c.t(0.1), c.t(gap * (n - 1)), 210, 8);
+      return c.t(gap * (n - 1)) + 64;
     },
   },
   {

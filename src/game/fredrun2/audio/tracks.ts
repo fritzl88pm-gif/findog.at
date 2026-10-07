@@ -48,12 +48,13 @@ export function isJingle(name: string): name is JingleName {
 }
 
 /**
- * Angleichung an den Pegel der prozeduralen Musik/SFX-Kalibrierung (Messung im Browser: Track-RMS war ≈ 4 dB leiser). 1.6 → 1.25:
- * Basis-Rückmeldungen (Sprung, Münze, Countdown) gingen im Musikbett unter. Gemessen (Offline-Render, Median 100-ms-RMS, wien/cyber/oper,
- * beide Varianten) sinkt die Musik um 1,5–2,0 dB (Mittel −1,7 dB); der Kompressor gibt bei weniger Pegel etwas nach, daher
- * ist die Wirkung kleiner als 20·log10(1,25/1,6) = −2,1 dB. Die Master-Spitze bleibt ≤ −2,8 dBFS.
+ * Angleichung an den Pegel der prozeduralen Musik/SFX-Kalibrierung (Messung im Browser: Track-RMS war ≈ 4 dB leiser). 1.6 → 1.25 (pkg-audio-engine)
+ * → 1.2 (pkg-audio-mix): Basis-Rückmeldungen (Sprung, Münze, Countdown) gingen im Musikbett unter. Gemessen (Offline-Render, Median 100-ms-RMS,
+ * wien/cyber/oper, beide Varianten) sinkt die Musik von 1.25 auf 1.2 um weitere 0,3-0,4 dB; mit den neuen SFX-Pegeln (SFX_META.gain) liegt
+ * die 1/3-Oktav-Marge von Sprung/Münze/Doppelsprung/Countdown/Go/Dash im Mittel über +3 dB (impl/pkg-audio-mix/measure.json).
+ * Die Master-Spitze bleibt ≤ −2 dBFS.
  */
-const TRACK_TRIM = 1.25;
+const TRACK_TRIM = 1.2;
 
 const CURVE_N = 64;
 function fadeCurve(out: boolean): Float32Array<ArrayBuffer> {

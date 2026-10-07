@@ -27,6 +27,8 @@ export const SFX_NAMES = [
   // Weltspezifisch
   "lightning-warn", "thunder", "tram-bell", "stamp-thud", "laser-zap", "paper-flutter", "cannon", "splash",
   "barrel-roll", "glitch", "avalanche-warn", "rockfall", "crumble", "bee-buzz", "pigeon", "enemy-defeat",
+  // Zustands-Hinweise (cues.ts): Dash wieder bereit, Herzschlag beim letzten Herz
+  "dash-ready", "heartbeat",
 ] as const;
 export type SfxName = (typeof SFX_NAMES)[number];
 

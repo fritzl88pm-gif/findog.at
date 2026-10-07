@@ -12,9 +12,15 @@ import { SfxBank } from "./bank";
 import { clamp } from "./dsp";
 import type { AudioGraph } from "./graph";
 import type { SfxName, SfxOptions } from "./types";
-import { PARTIALS_BELL, PARTIALS_CHIME, PARTIALS_METAL, SfxVoice } from "./voice";
+import { PARTIALS_BELL, PARTIALS_CHIME, PARTIALS_METAL, SfxVoice, type BellPartial } from "./voice";
 
 type Recipe = (v: SfxVoice, p: number, t: number) => void;
+
+/** Weiche Glocke für Hinweistöne: Grundton, leise Oktave, kaum Metall. */
+const PARTIALS_SOFT: readonly BellPartial[] = [
+  [1, 1, 1],
+  [2, 0.22, 0.5],
+];
 
 const rnd = (a: number, b: number): number => a + Math.random() * (b - a);
 
@@ -67,7 +73,8 @@ function rolling(amp: GainNode, t: number, dur: number, peak: number, attack: nu
   g.linearRampToValueAtTime(0.0001, t + dur);
 }
 
-const RECIPES: Record<SfxName, Recipe> = {
+/** Synthese-Rezepte (Fallback der Sample-Bank); exportiert für die Rezept-Tests. */
+export const RECIPES: Record<SfxName, Recipe> = {
   // -------------------------------------------------------------------------------- UI
   "ui-click": (v, p, t) => {
     v.tone({ t, f: 1600 * p, f2: 950 * p, fT: 0.035, dur: 0.07, peak: 0.34 });
@@ -454,6 +461,23 @@ const RECIPES: Record<SfxName, Recipe> = {
     v.bell({ t: t + 0.06, f: G6 * p, dur: 0.3, peak: 0.16 });
     v.bell({ t: t + 0.12, f: 2349 * p, dur: 0.4, peak: 0.14 });
   },
+
+  // -------------------------------------------------------------------------------- Zustands-Hinweise (cues.ts)
+  // Dash wieder bereit: zwei weiche Glockentöne (Quarte aufwärts), absichtlich leise und ohne Rauschanteil
+  "dash-ready": (v, p, t) => {
+    v.bell({ t, f: G5 * p, dur: 0.24, peak: 0.2, a: 0.006, partials: PARTIALS_SOFT });
+    v.bell({ t: t + 0.1, f: C6 * p, dur: 0.42, peak: 0.2, a: 0.006, partials: PARTIALS_SOFT });
+  },
+  // Herzschlag beim letzten Herz: die beiden Sub-Töne des heart-Rezepts ("lub-dub"); dazu ein Mittenanteil (Klopfen, 90-150 Hz) und ein kurzer
+  // dumpfer Anschlag, sonst verschwindet der Schlag unter dem Bass der Musik und auf kleinen Lautsprechern. Aufrufer spielt ihn mit volume 0.4.
+  heartbeat: (v, p, t) => {
+    v.tone({ t, f: 78 * p, f2: 50 * p, dur: 0.13, peak: 0.5 });
+    v.tone({ t, f: 150 * p, f2: 95 * p, dur: 0.11, peak: 0.42, type: "triangle" });
+    v.noise({ t, dur: 0.04, peak: 0.18, kind: "brown", filters: [{ type: "lowpass", f: 600 }] });
+    v.tone({ t: t + 0.14, f: 70 * p, f2: 46 * p, dur: 0.12, peak: 0.38 });
+    v.tone({ t: t + 0.14, f: 135 * p, f2: 88 * p, dur: 0.1, peak: 0.34, type: "triangle" });
+    v.noise({ t: t + 0.14, dur: 0.035, peak: 0.14, kind: "brown", filters: [{ type: "lowpass", f: 600 }] });
+  },
 };
 
 // -----------------------------------------------------------------------------------------------
@@ -477,26 +501,46 @@ export interface SfxMeta {
 
 const m = (pri: 0 | 1 | 2, gain: number, reverb: number, max = 4, extra: Partial<SfxMeta> = {}): SfxMeta => ({ pri, gain, reverb, max, ...extra });
 
+/**
+ * Pegel-Feinabgleich der Basis-Rückmeldungen (Audit audio-feel-03: Sprung, Münze, Countdown u. a. gingen im Musikbett unter). Jeder Wert ist eine
+ * eigene Konstante und einzeln zurückdrehbar (Standard 1). Messung: Offline-Render des echten Graphen, 1/3-Oktav-Marge über dem Musik-Median
+ * (siehe impl/pkg-audio-mix/measure.json). Obergrenze ist der Stimmen-Clamp 1.5 in `SfxVoice`: ein größerer Wert (Countdown 1.6) wirkt wie 1.5.
+ */
+const G_JUMP = 1.5;
+const G_DOUBLEJUMP = 1.35;
+const G_SLIDE = 1.5;
+const G_DASH = 1.35;
+const G_STOMP_CHAIN = 1.35;
+const G_COIN = 1.25;
+const G_GEM = 1.3;
+const G_COUNTDOWN = 1.6;
+const G_GO = 1.25;
+/** Herzschlag: der Aufrufer spielt ihn mit volume 0.4 (wirkt wie 0.6); die Marge über dem Bass der Musik steckt hier (siehe measure.json). */
+const G_HEARTBEAT = 1.5;
+/** Mikro-Absenkung der Musik [Anteil, Sekunden]: Countdown/Go etwas stärker, Rückmeldungen mittlerer Häufigkeit (nicht die Münze: 3.9/s) leicht. */
+const DUCK_COUNT = [0.3, 0.2] as const;
+const DUCK_MICRO = [0.25, 0.25] as const;
+
 export const SFX_META: Record<SfxName, SfxMeta> = {
   "ui-click": m(1, 1, 0.05, 3),
   "ui-hover": m(0, 0.8, 0.03, 2, { gap: 0.05 }),
   "ui-back": m(1, 1, 0.05, 2),
   "ui-buy": m(1, 1, 0.3, 2),
   "ui-denied": m(1, 1, 0.05, 2, { gap: 0.1 }),
-  jump: m(1, 1, 0.1, 3),
-  doublejump: m(1, 1, 0.14, 3),
+  jump: m(1, G_JUMP, 0.1, 3),
+  doublejump: m(1, G_DOUBLEJUMP, 0.14, 3),
   land: m(1, 1, 0.08, 3, { gap: 0.06 }),
-  slide: m(0, 1, 0.06, 2, { gap: 0.08 }),
-  dash: m(1, 1, 0.12, 2),
+  slide: m(0, G_SLIDE, 0.06, 2, { gap: 0.08 }),
+  dash: m(1, G_DASH, 0.12, 2),
   stomp: m(1, 1, 0.1, 3),
-  "stomp-chain": m(1, 1, 0.22, 3),
+  "stomp-chain": m(1, G_STOMP_CHAIN, 0.22, 3),
   spring: m(1, 1, 0.15, 2),
   portal: m(1, 1, 0.4, 2),
   wallbreak: m(2, 1, 0.3, 2),
-  coin: m(0, 1, 0.2, 5),
-  gem: m(1, 1, 0.35, 3),
-  heart: m(1, 1, 0.3, 2),
-  powerup: m(1, 1, 0.3, 2),
+  coin: m(0, G_COIN, 0.2, 5),
+  gem: m(1, G_GEM, 0.35, 3),
+  heart: m(1, 1, 0.3, 2, { duck: DUCK_MICRO }),
+  powerup: m(1, 1, 0.3, 2, { duck: DUCK_MICRO }),
   "shield-on": m(1, 1, 0.35, 2),
   "shield-hit": m(1, 1, 0.2, 2),
   "slowmo-on": m(1, 1, 0.4, 1),
@@ -504,11 +548,11 @@ export const SFX_META: Record<SfxName, SfxMeta> = {
   "magnet-on": m(1, 1, 0.25, 1),
   hurt: m(2, 1, 0.12, 2, { duck: [0.35, 0.5] }),
   death: m(2, 1, 0.35, 1, { duck: [0.8, 2.2] }),
-  "near-miss": m(0, 1, 0.1, 2, { gap: 0.1 }),
-  "combo-up": m(1, 1, 0.25, 2),
+  "near-miss": m(0, 1, 0.1, 2, { gap: 0.1, duck: DUCK_MICRO }),
+  "combo-up": m(1, 1, 0.25, 2, { duck: DUCK_MICRO }),
   "combo-break": m(1, 1, 0.15, 1),
-  countdown: m(2, 1, 0.12, 1),
-  go: m(2, 1, 0.3, 1),
+  countdown: m(2, G_COUNTDOWN, 0.12, 1, { duck: DUCK_COUNT }),
+  go: m(2, G_GO, 0.3, 1, { duck: DUCK_COUNT }),
   checkpoint: m(2, 1, 0.4, 1, { duck: [0.3, 0.9] }),
   "world-transition": m(2, 1, 0.5, 1, { duck: [0.6, 2.0] }),
   gameover: m(2, 1, 0.55, 1, { duck: [0.9, 3.4] }),
@@ -529,6 +573,8 @@ export const SFX_META: Record<SfxName, SfxMeta> = {
   "bee-buzz": m(0, 1, 0.1, 3, { gap: 0.15 }),
   pigeon: m(0, 1, 0.15, 2, { gap: 0.15 }),
   "enemy-defeat": m(1, 1, 0.2, 3),
+  "dash-ready": m(0, 1, 0.2, 1, { gap: 0.3 }),
+  heartbeat: m(0, G_HEARTBEAT, 0.1, 1, { gap: 0.5 }),
 };
 
 /** Globale Grenzen (Mobilgeräte!) */

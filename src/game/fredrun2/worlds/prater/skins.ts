@@ -161,12 +161,17 @@ function blit(g: Ctx2D, A: PraterSkinAssets, b: Baked, cx: number, foot: number)
   g.drawImage(b.c, A.bank.snap(cx - b.w / 2), A.bank.snap(foot - b.h), b.w, b.h);
 }
 
+/** Block-Sprite für eine Hitbox w×h (Zeichnen und Vorbacken nutzen dieselbe Rechnung → derselbe Cache-Eintrag) */
+function bakeBlock(A: PraterSkinAssets, id: string, w: number, h: number, lim: readonly [number, number]): Baked | null {
+  const asp = A.bank.aspect(id);
+  if (asp === null) return null;
+  const f = fitBox(asp, w, h, lim[0], lim[1]);
+  return A.bank.get(id, quant(f.w), quant(f.h));
+}
+
 /** Bodenblock: Prop in die Hitbox einpassen (Unterkante 2 px in den Boden). false = Prop fehlt → prozeduraler Fallback. */
 function blockSprite(g: Ctx2D, A: PraterSkinAssets, id: string, e: Ent, sx: number, sy: number, lim: readonly [number, number]): boolean {
-  const asp = A.bank.aspect(id);
-  if (asp === null) return false;
-  const f = fitBox(asp, e.w, e.h, lim[0], lim[1]);
-  const b = A.bank.get(id, quant(f.w), quant(f.h));
+  const b = bakeBlock(A, id, e.w, e.h, lim);
   if (!b) return false;
   blit(g, A, b, sx + e.w / 2, sy + e.h + 2);
   return true;
@@ -244,6 +249,26 @@ function seatSprite(A: PraterSkinAssets, r: number): { b: Baked; w: number; h: n
   const h = w * asp;
   const b = A.bank.get(OBSTACLE_PROPS.seat, w, h, SEAT_CROP);
   return b ? { b, w: b.w, h: b.h } : null;
+}
+
+/**
+ * Maße der Hindernisse mit FESTEM Maß (px): Reifen (Hitbox w×h) und Radius des Kettenkarussell-Sitzes. Buden, Kisten,
+ * Behänge und Tore nehmen ihre Maße vom Tempo (35–75 verschiedene Größen je Art in echten Läufen) – sie lassen sich nicht
+ * sinnvoll vorbacken (jede Größe wäre ein eigenes Sprite im Speicher) und entstehen weiter beim ersten Zeichnen
+ * (klein, ca. 3–4 ms). Der Test in prater.test.ts prüft die Liste gegen alle Muster.
+ */
+export const PRATER_PROP_SIZES = {
+  tires: [[88, 70], [88, 96]],
+  /** Radius des Kettenkarussell-Sitzes */
+  seat: [34],
+} as const;
+
+/** Ein Vorback-Auftrag je Sprite (Zeichnen und Vorbacken teilen die Rechnung → gleicher Cache-Eintrag); leer ohne Props. */
+export function praterPropJobs(A: PraterSkinAssets): Array<() => unknown> {
+  const jobs: Array<() => unknown> = [];
+  for (const [w, h] of PRATER_PROP_SIZES.tires) jobs.push(() => bakeBlock(A, OBSTACLE_PROPS.tires, w, h, FIT.tires));
+  for (const r of PRATER_PROP_SIZES.seat) jobs.push(() => seatSprite(A, r));
+  return jobs;
 }
 
 /** Hängender Überhang: Sprite bündig auf der Hitbox-Unterkante, Breite = Hitbox-Breite */

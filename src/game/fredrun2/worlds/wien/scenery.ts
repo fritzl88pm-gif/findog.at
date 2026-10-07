@@ -343,7 +343,7 @@ export interface FacadeTile extends Tile {
   roofs: Array<[number, number, number]>;
 }
 
-export function paintFacades(W: number, H: number, o: FacadeOpts, k = 1): FacadeTile {
+export function paintFacades(W: number, H: number, o: FacadeOpts, k = 1, reuse?: HTMLCanvasElement | null): FacadeTile {
   const roofs: Array<[number, number, number]> = [];
   const tile = renderTile(W, H, k, (g) => {
     let x = 0;
@@ -589,7 +589,7 @@ export function paintFacades(W: number, H: number, o: FacadeOpts, k = 1): Facade
       for (const [hx, hy, hw, hh] of holes) g.fillRect(hx, hy, hw, hh);
       g.restore();
     }
-  });
+  }, reuse);
   return { ...tile, roofs };
 }
 
