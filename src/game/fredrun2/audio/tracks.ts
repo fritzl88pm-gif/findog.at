@@ -8,6 +8,10 @@
  *
  * Es wird immer nur ein Stück (plus das ausblendende Vorgängerstück) dekodiert im Speicher gehalten (≈ 25–35 MB je Stück).
  * Schlägt das Laden fehl (offline, Datei fehlt), meldet `onFail` das an die Engine, die dann auf die prozedurale Musik zurückfällt.
+ *
+ * `MusicLibrary` hält Manifest und Variantenwahl unabhängig vom AudioContext: Das Vorwärmen (nur Download in den HTTP-Cache, kein
+ * Dekodieren) funktioniert damit schon vor dem Entsperren und legt die Variante fest, die `play()` später wirklich spielt.
+ * Die Jingles (Game Over, Highscore, Weltwechsel) sind über `JingleHandle`/`stopAll` abbrechbar.
  */
 import { withRev } from "../asset-rev";
 import { clamp } from "./dsp";
@@ -43,8 +47,13 @@ export function isJingle(name: string): name is JingleName {
   return Object.prototype.hasOwnProperty.call(JINGLES, name);
 }
 
-/** Angleichung an den Pegel der prozeduralen Musik/SFX-Kalibrierung (Messung im Browser: Track-RMS war ≈ 4 dB leiser). */
-const TRACK_TRIM = 1.6;
+/**
+ * Angleichung an den Pegel der prozeduralen Musik/SFX-Kalibrierung (Messung im Browser: Track-RMS war ≈ 4 dB leiser). 1.6 → 1.25:
+ * Basis-Rückmeldungen (Sprung, Münze, Countdown) gingen im Musikbett unter. Gemessen (Offline-Render, Median 100-ms-RMS, wien/cyber/oper,
+ * beide Varianten) sinkt die Musik um 1,5–2,0 dB (Mittel −1,7 dB); der Kompressor gibt bei weniger Pegel etwas nach, daher
+ * ist die Wirkung kleiner als 20·log10(1,25/1,6) = −2,1 dB. Die Master-Spitze bleibt ≤ −2,8 dBFS.
+ */
+const TRACK_TRIM = 1.25;
 
 const CURVE_N = 64;
 function fadeCurve(out: boolean): Float32Array<ArrayBuffer> {
@@ -74,6 +83,17 @@ async function fetchBuffer(ctx: BaseAudioContext, url: string): Promise<AudioBuf
   const res = await fetch(withRev(url));
   if (!res.ok) throw new Error(`${url}: ${res.status}`);
   return decodeBuffer(ctx, await res.arrayBuffer());
+}
+
+/**
+ * Lädt eine Datei nur herunter (niedrige Priorität, Körper vollständig gelesen): der Browser legt sie im HTTP-Cache ab, ohne dass
+ * sie dekodiert wird (kein Speicher für die ca. 25 MB PCM). Ohne fetch (SSR) wirkungslos.
+ */
+export async function downloadOnly(url: string): Promise<void> {
+  if (typeof fetch !== "function") return;
+  const res = await fetch(url, { priority: "low" });
+  if (!res.ok) throw new Error(`${url}: ${res.status}`);
+  await res.arrayBuffer();
 }
 
 /** Ein laufendes Stück (Schleife). */
@@ -224,35 +244,22 @@ export interface TrackPlayOptions {
   intensity?: number;
 }
 
-/** Steuerung der aufgenommenen Musik (ein aktives Stück, ausblendende Vorgänger werden aufgeräumt). */
-export class TrackMusic {
+/**
+ * Manifest, Variantenwahl und Download-Vorwärmen der Musik. Braucht keinen AudioContext: `prefetch` wählt die Variante, die
+ * `play` später spielt (`nextVariant`), und lädt nur diese eine Datei – nicht beide Varianten.
+ */
+export class MusicLibrary {
   private manifest: TrackManifest | null = null;
   private manifestPromise: Promise<TrackManifest> | null = null;
-  private buffers = new Map<string, Promise<AudioBuffer>>();
-  private lastVariant = new Map<string, string>();
-  private active: LoopPlayer | null = null;
-  private fading: LoopPlayer[] = [];
-  private wanted: MusicTrackId | null = null;
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private intensity = 0.3;
-  private disposed = false;
-  /** wird gerufen, wenn ein Stück nicht geladen werden konnte (Engine fällt auf prozedurale Musik zurück) */
-  onFail?: (id: MusicTrackId) => void;
+  /** zuletzt gespielte Variante je Stück (nie zweimal hintereinander dieselbe) */
+  private readonly lastVariant = new Map<string, string>();
+  /** beim Vorwärmen gewählte Variante je Stück; `choose(…, true)` verbraucht sie */
+  private readonly nextVariant = new Map<string, string>();
+  private readonly requested = new Set<string>();
 
-  constructor(
-    private readonly g: AudioGraph,
-    private readonly base: string = MUSIC_BASE,
-  ) {}
+  constructor(readonly base: string = MUSIC_BASE) {}
 
-  get current(): MusicTrackId | null {
-    return this.wanted;
-  }
-
-  get running(): boolean {
-    return this.wanted !== null;
-  }
-
-  private loadManifest(): Promise<TrackManifest> {
+  loadManifest(): Promise<TrackManifest> {
     if (this.manifest) return Promise.resolve(this.manifest);
     if (!this.manifestPromise) {
       this.manifestPromise = fetch(withRev(`${this.base}/music.json`))
@@ -271,6 +278,91 @@ export class TrackMusic {
     return this.manifestPromise;
   }
 
+  /**
+   * Wählt die Variante eines Stücks (Schlüssel `<id>`, `<id>-2` …): eine beim Vorwärmen gemerkte hat Vorrang, sonst zufällig
+   * und nie zweimal hintereinander dieselbe. `consume` = false merkt die Wahl für das nächste `play` (Vorwärmen).
+   */
+  choose(m: TrackManifest, id: string, consume: boolean): string | null {
+    const planned = this.nextVariant.get(id);
+    if (planned !== undefined && m[planned]) {
+      if (consume) this.nextVariant.delete(id);
+      return planned;
+    }
+    const keys = Object.keys(m).filter((k) => k === id || (k.startsWith(`${id}-`) && /^\d+$/.test(k.slice(id.length + 1))));
+    if (keys.length === 0) return null;
+    const last = this.lastVariant.get(id);
+    const pool = keys.length > 1 ? keys.filter((k) => k !== last) : keys;
+    const key = pool[Math.floor(Math.random() * pool.length)];
+    if (!consume) this.nextVariant.set(id, key);
+    return key;
+  }
+
+  /** Merkt die tatsächlich gestartete Variante. */
+  played(id: string, key: string): void {
+    this.lastVariant.set(id, key);
+  }
+
+  /** Merkt eine angeforderte URL (true = neu), damit nichts doppelt vorgewärmt wird. */
+  claim(url: string): boolean {
+    if (this.requested.has(url)) return false;
+    this.requested.add(url);
+    return true;
+  }
+
+  /** Nimmt die Merkung zurück (Anfrage fehlgeschlagen → später erneut versuchbar). */
+  release(url: string): void {
+    this.requested.delete(url);
+  }
+
+  /** Lädt eine Datei einmalig nur herunter (HTTP-Cache). Fehler werden still geschluckt. */
+  warm(url: string): Promise<void> {
+    if (typeof fetch !== "function" || !this.claim(url)) return Promise.resolve();
+    return downloadOnly(url).catch(() => this.release(url));
+  }
+
+  /** Wärmt Manifest und je Stück die gewählte Variante vor (nur Download). Ohne fetch wirkungslos; Fehler werden still geschluckt. */
+  prefetch(ids: readonly string[]): void {
+    if (typeof fetch !== "function") return;
+    for (const id of ids) {
+      void this.loadManifest()
+        .then((m) => {
+          const key = this.choose(m, id, false);
+          return key ? this.warm(withRev(`${this.base}/${m[key].file}`)) : undefined;
+        })
+        .catch(() => {});
+    }
+  }
+}
+
+/** Steuerung der aufgenommenen Musik (ein aktives Stück, ausblendende Vorgänger werden aufgeräumt). */
+export class TrackMusic {
+  private readonly library: MusicLibrary;
+  private buffers = new Map<string, Promise<AudioBuffer>>();
+  private active: LoopPlayer | null = null;
+  private fading: LoopPlayer[] = [];
+  private wanted: MusicTrackId | null = null;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private intensity = 0.3;
+  private disposed = false;
+  /** wird gerufen, wenn ein Stück nicht geladen werden konnte (Engine fällt auf prozedurale Musik zurück) */
+  onFail?: (id: MusicTrackId) => void;
+
+  constructor(
+    private readonly g: AudioGraph,
+    private readonly base: string = MUSIC_BASE,
+    library?: MusicLibrary,
+  ) {
+    this.library = library ?? new MusicLibrary(base);
+  }
+
+  get current(): MusicTrackId | null {
+    return this.wanted;
+  }
+
+  get running(): boolean {
+    return this.wanted !== null;
+  }
+
   private loadBuffer(id: string, info: TrackInfo): Promise<AudioBuffer> {
     let p = this.buffers.get(id);
     if (!p) {
@@ -281,14 +373,12 @@ export class TrackMusic {
     return p;
   }
 
-  /** Lädt Manifest + Puffer vor (z. B. Menü direkt nach dem Entsperren). */
+  /**
+   * Wärmt ein Stück vor: wählt die Variante, merkt sie für `play` und lädt nur diese Datei herunter (HTTP-Cache, kein Dekodieren,
+   * also kein zusätzlicher Speicher). Das spätere `play` spielt dieselbe Variante und findet die Datei im Cache.
+   */
   prefetch(id: MusicTrackId): void {
-    void this.loadManifest()
-      .then((m) => {
-        const key = this.pickVariant(m, id);
-        return key ? this.loadBuffer(key, m[key]) : undefined;
-      })
-      .catch(() => {});
+    this.library.prefetch([id]);
   }
 
   play(id: MusicTrackId, opts: TrackPlayOptions = {}): void {
@@ -301,9 +391,10 @@ export class TrackMusic {
     }
     this.wanted = id;
     const xf = clamp(opts.crossfadeSec ?? 1.5, 0.05, 12);
-    void this.loadManifest()
+    void this.library
+      .loadManifest()
       .then((m) => {
-        const key = this.pickVariant(m, id);
+        const key = this.library.choose(m, id, true);
         if (!key) throw new Error(`kein Stück für ${id}`);
         const info = m[key];
         return this.loadBuffer(key, info).then((buf) => ({ buf, info, key }));
@@ -317,7 +408,7 @@ export class TrackMusic {
           this.active.fadeOut(xf);
           this.fading.push(this.active);
         }
-        this.lastVariant.set(id, key);
+        this.library.played(id, key);
         this.active = new LoopPlayer(this.g, id, buf, info, ctx.currentTime + 0.06, hadMusic ? xf : Math.max(0.5, Math.min(xf, 2.5)), this.intensity);
         this.startTimer();
         this.trimBuffers(key);
@@ -327,15 +418,6 @@ export class TrackMusic {
         this.wanted = null;
         this.onFail?.(id);
       });
-  }
-
-  /** Varianten eines Stücks heißen `<id>`, `<id>-2` … – gewählt wird zufällig, nie zweimal hintereinander dieselbe. */
-  private pickVariant(m: TrackManifest, id: string): string | null {
-    const keys = Object.keys(m).filter((k) => k === id || (k.startsWith(`${id}-`) && /^\d+$/.test(k.slice(id.length + 1))));
-    if (keys.length === 0) return null;
-    const last = this.lastVariant.get(id);
-    const pool = keys.length > 1 ? keys.filter((k) => k !== last) : keys;
-    return pool[Math.floor(Math.random() * pool.length)];
   }
 
   /** Nur den aktiven Puffer behalten, alle anderen dekodierten Stücke freigeben. */
@@ -392,16 +474,69 @@ export class TrackMusic {
   }
 }
 
-/** Kurze Musik-Stinger (Game Over, Highscore, Weltwechsel) als vorab geladene Puffer. */
+/** Handle eines laufenden Jingles (Rückgabe von `JinglePlayer.play`). */
+export interface JingleHandle {
+  readonly name: JingleName;
+  /** true, sobald der Stopp angefordert wurde (die Quelle klingt dann nur noch aus) */
+  readonly stopping: boolean;
+  /** true, sobald die Quelle beendet ist (ausgespielt oder gestoppt) */
+  readonly ended: boolean;
+  /** Blendet den Jingle aus (Zeitkonstante `fadeSec / 4`) und stoppt die Quelle kurz danach. */
+  stop(fadeSec?: number): void;
+}
+
+class JingleVoice implements JingleHandle {
+  stopping = false;
+  ended = false;
+
+  constructor(
+    readonly name: JingleName,
+    private readonly ctx: BaseAudioContext,
+    private readonly src: AudioBufferSourceNode,
+    private readonly gain: GainNode,
+  ) {}
+
+  stop(fadeSec = 0.3): void {
+    if (this.stopping || this.ended) return;
+    this.stopping = true;
+    const fade = Number.isFinite(fadeSec) ? Math.max(0, fadeSec) : 0.3;
+    const now = this.ctx.currentTime;
+    smooth(this.gain.gain, 0, now, Math.max(0.005, fade / 4));
+    // Nach 5 Zeitkonstanten (-43 dB) hart stoppen: der Rest ist unhörbar, die Quelle gibt ihre Puffer frei
+    try {
+      this.src.stop(now + fade * 1.25 + 0.03);
+    } catch {
+      /* egal */
+    }
+  }
+
+  release(): void {
+    this.ended = true;
+    try {
+      this.src.disconnect();
+      this.gain.disconnect();
+    } catch {
+      /* egal */
+    }
+  }
+}
+
+/** Kurze Musik-Stinger (Game Over, Highscore, Weltwechsel) als vorab geladene Puffer; laufende lassen sich ausblenden. */
 export class JinglePlayer {
   private buffers = new Map<JingleName, Promise<AudioBuffer>>();
   private ready = new Map<JingleName, AudioBuffer>();
   private failed = new Set<JingleName>();
+  private readonly active = new Set<JingleVoice>();
 
   constructor(
     private readonly g: AudioGraph,
     private readonly base: string = JINGLE_BASE,
   ) {}
+
+  /** Anzahl der gerade laufenden (nicht beendeten) Jingles. */
+  get playing(): number {
+    return this.active.size;
+  }
 
   prefetch(): void {
     for (const name of Object.keys(JINGLES) as JingleName[]) this.load(name);
@@ -420,12 +555,12 @@ export class JinglePlayer {
     );
   }
 
-  /** Spielt den Jingle, wenn er bereits geladen ist (sonst false → Engine nimmt den synthetischen Effekt). */
-  play(name: JingleName, dest: AudioNode, volume = 1): boolean {
+  /** Spielt den Jingle, wenn er bereits geladen ist (sonst null → Engine nimmt den synthetischen Effekt). */
+  play(name: JingleName, dest: AudioNode, volume = 1): JingleHandle | null {
     const buf = this.ready.get(name);
     if (!buf) {
       this.load(name);
-      return false;
+      return null;
     }
     const ctx = this.g.ctx;
     const src = ctx.createBufferSource();
@@ -434,19 +569,47 @@ export class JinglePlayer {
     src.buffer = buf;
     src.connect(gain);
     gain.connect(dest);
+    const voice = new JingleVoice(name, ctx, src, gain);
+    this.active.add(voice);
     src.onended = () => {
-      try {
-        src.disconnect();
-        gain.disconnect();
-      } catch {
-        /* egal */
-      }
+      this.active.delete(voice);
+      voice.release();
     };
     src.start(ctx.currentTime + 0.01);
-    return true;
+    return voice;
+  }
+
+  /** Blendet alle laufenden Jingles in `fadeSec` aus und stoppt sie. Gibt die Anzahl zurück. */
+  stopAll(fadeSec = 0.3): number {
+    let n = 0;
+    for (const v of this.active) {
+      if (v.stopping) continue;
+      v.stop(fadeSec);
+      n++;
+    }
+    return n;
+  }
+
+  /** Wie `stopAll`, aber nur für Jingles mit diesem Namen (z. B. ein noch laufender Weltwechsel beim Game Over). */
+  stopOf(name: JingleName, fadeSec = 0.3): number {
+    let n = 0;
+    for (const v of this.active) {
+      if (v.name !== name || v.stopping) continue;
+      v.stop(fadeSec);
+      n++;
+    }
+    return n;
   }
 
   dispose(): void {
+    for (const v of this.active) {
+      try {
+        v.stop(0);
+      } catch {
+        /* egal */
+      }
+    }
+    this.active.clear();
     this.buffers.clear();
     this.ready.clear();
   }

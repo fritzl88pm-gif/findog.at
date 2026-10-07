@@ -15,8 +15,21 @@
   overflow: hidden;
 }
 
+/* Sichtbarer Tastaturfokus für alles Bedienbare (auch Slider, Icon-Knöpfe, Zurück-Link). :where() hält die Spezifität niedrig:
+   die eigenen Ringe einzelner Knöpfe (Spielen-Knopf, Karten, Reiter, Charakter-Kacheln) gewinnen weiter. */
+:where(.root) :where(button, a, input, select):focus-visible {
+  outline: max(2px, calc(var(--px) * 3)) solid #7ee8ff;
+  outline-offset: 2px;
+}
+
 .stage {
   --px: calc(100cqw / 1280);
+  /* Tippflächen: --tap ist die Wunschgröße für Touch (44 px), --tap-min der Boden jeder Tippfläche. Auf kleiner Bühne (<= 900 px)
+     und bei grobem Zeiger hebt der Block „Kleine Bühne / Touch“ am Dateiende --tap-min auf --tap; --hit verlängert dann die
+     unsichtbare Trefferfläche runder Knöpfe (::after) über den sichtbaren Rand hinaus. */
+  --tap: 44px;
+  --tap-min: 40px;
+  --hit: 0px;
   position: relative;
   width: min(100vw, calc(100dvh * 16 / 9));
   height: min(100dvh, calc(100vw * 9 / 16));
@@ -97,12 +110,14 @@
   }
 }
 
+/* Glanz läuft in den ersten 40 % (ca. 1,4 s) einmal über den Knopf, den Rest der Schleife ruht er */
 @keyframes shine {
   0% {
-    background-position: -200% 0;
+    background-position: -200% 0, 0 0;
   }
+  40%,
   100% {
-    background-position: 200% 0;
+    background-position: 200% 0, 0 0;
   }
 }
 
@@ -132,7 +147,7 @@
 }
 
 .tip {
-  font-size: calc(var(--px) * 20);
+  font-size: max(11px, calc(var(--px) * 20));
   opacity: 0.75;
   max-width: calc(var(--px) * 640);
   text-align: center;
@@ -202,12 +217,13 @@
   display: inline-flex;
   align-items: center;
   gap: calc(var(--px) * 8);
+  min-height: var(--tap-min);
   padding: calc(var(--px) * 8) calc(var(--px) * 16);
   border-radius: 999px;
   background: rgba(14, 18, 34, 0.6);
   border: 1px solid rgba(255, 255, 255, 0.14);
   font-weight: 800;
-  font-size: calc(var(--px) * 22);
+  font-size: max(11px, calc(var(--px) * 22));
   backdrop-filter: blur(calc(var(--px) * 6));
   -webkit-backdrop-filter: blur(calc(var(--px) * 6));
 }
@@ -221,13 +237,14 @@
 }
 
 .iconBtn {
-  width: calc(var(--px) * 52);
-  height: calc(var(--px) * 52);
+  position: relative;
+  width: max(var(--tap-min), calc(var(--px) * 52));
+  height: max(var(--tap-min), calc(var(--px) * 52));
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(14, 18, 34, 0.6);
   color: #fff;
-  font-size: calc(var(--px) * 24);
+  font-size: max(16px, calc(var(--px) * 24));
   display: grid;
   place-items: center;
   cursor: pointer;
@@ -235,10 +252,22 @@
   -webkit-backdrop-filter: blur(calc(var(--px) * 6));
 }
 
-.iconBtn:hover,
+/* unsichtbare Trefferfläche: auf kleiner Bühne/Touch ragt sie --hit über den sichtbaren Rand hinaus (sonst 0) */
+.iconBtn::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--hit) * -1);
+  border-radius: 50%;
+}
+
 .iconBtn:focus-visible {
   background: rgba(60, 90, 200, 0.55);
-  outline: none;
+}
+
+@media (hover: hover) {
+  .iconBtn:hover {
+    background: rgba(60, 90, 200, 0.55);
+  }
 }
 
 .tabs {
@@ -249,6 +278,7 @@
 }
 
 .tab {
+  min-height: var(--tap-min);
   padding: calc(var(--px) * 9) calc(var(--px) * 14);
   border-radius: calc(var(--px) * 14);
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -256,19 +286,26 @@
   color: rgba(255, 255, 255, 0.85);
   font: inherit;
   font-weight: 800;
-  font-size: calc(var(--px) * 20);
+  font-size: max(11px, calc(var(--px) * 20));
   cursor: pointer;
   white-space: nowrap;
   transition: transform 0.12s ease, background 0.12s ease;
 }
 
-.tab:hover {
-  transform: translateY(calc(var(--px) * -2));
-  background: rgba(60, 90, 200, 0.5);
+/* :hover nur mit Maus; auf Touch bleibt es sonst nach dem Tippen hängen – dort gibt :active die Rückmeldung */
+@media (hover: hover) {
+  .tab:hover {
+    transform: translateY(calc(var(--px) * -2));
+    background: rgba(60, 90, 200, 0.5);
+  }
+}
+
+.tab:active {
+  transform: scale(0.97);
 }
 
 .tab:focus-visible {
-  outline: calc(var(--px) * 3) solid #7ee8ff;
+  outline: max(2px, calc(var(--px) * 3)) solid #7ee8ff;
   outline-offset: 2px;
 }
 
@@ -319,7 +356,7 @@
 
 .heroTagline {
   margin: 0;
-  font-size: calc(var(--px) * 22);
+  font-size: max(11px, calc(var(--px) * 22));
   opacity: 1;
   text-shadow: 0 calc(var(--px) * 2) calc(var(--px) * 8) rgba(0, 0, 0, 0.9), 0 0 calc(var(--px) * 3) rgba(0, 0, 0, 0.8);
 }
@@ -337,6 +374,12 @@
 .logoHero {
   width: calc(var(--px) * 520);
   margin: calc(var(--px) * -30) 0 calc(var(--px) * -12);
+  /* Fehlt dem Hero die Höhe (kleine Bühne mit zweizeiligen Reitern bei Maus, lange Schrift), schrumpft das Logo als Einziges mit
+     (min-height: 0 hebt die Mindesthöhe des Bildes auf, object-fit hält das Seitenverhältnis) – Spielen-Knopf und Karten bleiben
+     ganz sichtbar statt unten von der Bühne abgeschnitten zu werden. Passt alles, ändert sich nichts. */
+  flex: 0 1 auto;
+  min-height: 0;
+  object-fit: contain;
 }
 
 .logoLoading {
@@ -372,12 +415,21 @@
   overflow: auto;
   padding: calc(var(--px) * 22);
   border-radius: calc(var(--px) * 22);
-  background: rgba(10, 14, 32, 0.9);
+  background: rgba(10, 14, 32, 0.94);
   border: 1px solid rgba(255, 255, 255, 0.12);
   backdrop-filter: blur(calc(var(--px) * 14));
   -webkit-backdrop-filter: blur(calc(var(--px) * 14));
+  /* Wischen scrollt nur das Panel (kein Mitziehen der Seite, kein Doppeltipp-Zoom) */
+  touch-action: manipulation;
+  overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+}
+
+/* Scrollbare Panels sind per Tastatur fokussierbar (Pfeile/Bild-Tasten scrollen): Ring innen, damit die Rundung nichts abschneidet */
+.panel:focus-visible {
+  outline: max(2px, calc(var(--px) * 3)) solid #7ee8ff;
+  outline-offset: -4px;
 }
 
 .panelTitle {
@@ -388,7 +440,7 @@
 
 .muted {
   opacity: 0.72;
-  font-size: calc(var(--px) * 20);
+  font-size: max(11px, calc(var(--px) * 20));
   line-height: 1.35;
 }
 
@@ -403,25 +455,22 @@
   font-weight: 1000;
   letter-spacing: 0.03em;
   color: #052b14;
-  background: linear-gradient(180deg, #7dff9a 0%, #2ed36a 55%, #12a44a 100%);
+  /* Glanz-Sweep als oberste Hintergrundebene (nicht als Pseudo-Element über der Beschriftung): der Text liegt immer darüber
+     und bleibt voll lesbar. Ruhelage: Glanz außerhalb des Knopfes (rechts), also auch bei „Weniger Bewegung“ ohne Schleier. */
+  background:
+    linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.5) 50%, transparent 70%) -200% 0 / 200% 100% no-repeat,
+    linear-gradient(180deg, #7dff9a 0%, #2ed36a 55%, #12a44a 100%);
   box-shadow: 0 calc(var(--px) * 8) 0 #0b6a30, 0 calc(var(--px) * 18) calc(var(--px) * 40) rgba(40, 230, 110, 0.35);
   cursor: pointer;
   transition: transform 0.12s ease, box-shadow 0.12s ease;
   text-transform: uppercase;
-}
-
-.playBtn::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.5) 50%, transparent 70%);
-  background-size: 200% 100%;
   animation: shine 3.4s linear infinite;
-  pointer-events: none;
 }
 
-.playBtn:hover {
-  transform: translateY(calc(var(--px) * -3)) scale(1.02);
+@media (hover: hover) {
+  .playBtn:hover {
+    transform: translateY(calc(var(--px) * -3)) scale(1.02);
+  }
 }
 
 .playBtn:active {
@@ -437,6 +486,7 @@
 }
 
 .btn {
+  min-height: var(--tap-min);
   padding: calc(var(--px) * 13) calc(var(--px) * 26);
   border-radius: calc(var(--px) * 16);
   border: 1px solid rgba(255, 255, 255, 0.22);
@@ -444,19 +494,29 @@
   color: #fff;
   font: inherit;
   font-weight: 900;
-  font-size: calc(var(--px) * 24);
+  font-size: max(11px, calc(var(--px) * 24));
   cursor: pointer;
   transition: transform 0.12s ease, filter 0.12s ease;
 }
 
-.btn:hover {
-  transform: translateY(calc(var(--px) * -2));
-  filter: brightness(1.15);
+@media (hover: hover) {
+  .btn:hover {
+    transform: translateY(calc(var(--px) * -2));
+    filter: brightness(1.15);
+  }
+}
+
+.btn:active {
+  transform: scale(0.97);
 }
 
 .btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+  transform: none;
+}
+
+.btn:disabled:active {
   transform: none;
 }
 
@@ -476,6 +536,7 @@
   display: flex;
   align-items: center;
   gap: calc(var(--px) * 16);
+  min-height: var(--tap-min);
   padding: calc(var(--px) * 14) calc(var(--px) * 18);
   border-radius: calc(var(--px) * 18);
   background: rgba(10, 14, 32, 0.62);
@@ -487,18 +548,24 @@
   transition: transform 0.12s ease, background 0.12s ease;
 }
 
-.summaryCard:hover {
-  transform: translateY(calc(var(--px) * -2));
-  background: rgba(40, 60, 140, 0.55);
+@media (hover: hover) {
+  .summaryCard:hover {
+    transform: translateY(calc(var(--px) * -2));
+    background: rgba(40, 60, 140, 0.55);
+  }
+}
+
+.summaryCard:active {
+  transform: scale(0.97);
 }
 
 .summaryCard strong {
   display: block;
-  font-size: calc(var(--px) * 26);
+  font-size: max(11px, calc(var(--px) * 26));
 }
 
 .summaryCard span {
-  font-size: calc(var(--px) * 19);
+  font-size: max(11px, calc(var(--px) * 19));
   opacity: 0.75;
 }
 
@@ -537,9 +604,15 @@
   min-width: 0;
 }
 
-.card:hover {
-  transform: translateY(calc(var(--px) * -4)) scale(1.015);
-  border-color: rgba(255, 255, 255, 0.5);
+@media (hover: hover) {
+  .card:hover {
+    transform: translateY(calc(var(--px) * -4)) scale(1.015);
+    border-color: rgba(255, 255, 255, 0.5);
+  }
+}
+
+.card:active {
+  transform: scale(0.97);
 }
 
 .cardSelected {
@@ -548,7 +621,7 @@
 }
 
 .cardTitle {
-  font-size: calc(var(--px) * 23);
+  font-size: max(11px, calc(var(--px) * 23));
   font-weight: 1000;
   line-height: 1.05;
 }
@@ -560,7 +633,7 @@
 }
 
 .tag {
-  font-size: calc(var(--px) * 14);
+  font-size: max(11px, calc(var(--px) * 14));
   font-weight: 800;
   padding: calc(var(--px) * 3) calc(var(--px) * 10);
   border-radius: 999px;
@@ -578,7 +651,7 @@
   padding: calc(var(--px) * 4) calc(var(--px) * 12);
   border-radius: 999px;
   font-weight: 900;
-  font-size: calc(var(--px) * 16);
+  font-size: max(11px, calc(var(--px) * 16));
   background: rgba(0, 0, 0, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.3);
 }
@@ -609,12 +682,12 @@
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: calc(var(--px) * 24);
+  font-size: max(12px, calc(var(--px) * 24));
 }
 
 .table th {
   text-align: left;
-  font-size: calc(var(--px) * 17);
+  font-size: max(11px, calc(var(--px) * 17));
   opacity: 0.6;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -648,16 +721,25 @@
   align-items: center;
   justify-content: space-between;
   gap: calc(var(--px) * 20);
+  min-height: var(--tap-min);
   padding: calc(var(--px) * 10) 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  font-size: calc(var(--px) * 24);
+  font-size: max(12px, calc(var(--px) * 24));
   font-weight: 800;
 }
 
+/* Schalter-Zeilen sind <label>: ein Tipp auf die Beschriftung schaltet (ganze Zeile klickbar) */
+label.field {
+  cursor: pointer;
+}
+
+/* Regler: das Feld selbst ist mindestens --tap-min hoch (Tippfläche); der Rand (2 px wie im Browser-Standard für Regler, minus der
+   zusätzlichen Höhe) hält die Zeilenhöhe wie zuvor */
 .field input[type="range"] {
   width: calc(var(--px) * 300);
   accent-color: #4d8bff;
-  height: calc(var(--px) * 28);
+  height: max(var(--tap-min), calc(var(--px) * 28));
+  margin-block: calc(2px - (max(var(--tap-min), calc(var(--px) * 28)) - var(--px) * 28) / 2);
 }
 
 .field select,
@@ -669,39 +751,58 @@
   border: 1px solid rgba(255, 255, 255, 0.25);
   background: rgba(0, 0, 0, 0.4);
   color: #fff;
-  font-size: calc(var(--px) * 22);
+  /* mindestens 16 px: darunter zoomt iOS beim Fokussieren in das Feld */
+  font-size: max(16px, calc(var(--px) * 22));
   min-width: calc(var(--px) * 220);
+  min-height: var(--tap-min);
 }
 
+/* Schalter: die Tippfläche ist der Knopf selbst (mindestens --tap-min hoch und breit), die sichtbare Spur (::before) und der Griff
+   (::after) behalten ihre Maße; der negative Rand hält die Zeilenhöhe wie zuvor. */
 .toggle {
-  width: calc(var(--px) * 64);
+  position: relative;
+  flex: 0 0 auto;
+  width: max(var(--tap-min), calc(var(--px) * 64));
+  height: max(var(--tap-min), calc(var(--px) * 34));
+  margin-block: calc((max(var(--tap-min), calc(var(--px) * 34)) - var(--px) * 34) / -2);
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.toggle::before {
+  content: "";
+  box-sizing: border-box;
+  position: absolute;
+  inset: 50% 0 auto;
   height: calc(var(--px) * 34);
+  margin-top: calc(var(--px) * -17);
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.3);
   background: rgba(255, 255, 255, 0.12);
-  position: relative;
-  cursor: pointer;
   transition: background 0.15s ease;
 }
 
 .toggle::after {
   content: "";
   position: absolute;
-  top: calc(var(--px) * 3);
-  left: calc(var(--px) * 3);
+  top: 50%;
+  left: calc(var(--px) * 4);
+  margin-top: calc(var(--px) * -13);
   width: calc(var(--px) * 26);
   height: calc(var(--px) * 26);
   border-radius: 50%;
   background: #fff;
-  transition: transform 0.15s ease;
+  transition: left 0.15s ease;
 }
 
-.toggleOn {
+.toggleOn::before {
   background: #2ed36a;
 }
 
 .toggleOn::after {
-  transform: translateX(calc(var(--px) * 30));
+  left: calc(100% - var(--px) * 30);
 }
 
 /* --- Anleitung ------------------------------------------------------------------------------------ */
@@ -721,13 +822,13 @@
 
 .helpCard h3 {
   margin: 0 0 calc(var(--px) * 6);
-  font-size: calc(var(--px) * 24);
+  font-size: max(12px, calc(var(--px) * 24));
 }
 
 .helpCard p,
 .helpCard li {
   margin: 0;
-  font-size: calc(var(--px) * 19);
+  font-size: max(11px, calc(var(--px) * 19));
   line-height: 1.4;
   opacity: 0.88;
 }
@@ -744,7 +845,7 @@
   background: rgba(255, 255, 255, 0.18);
   border: 1px solid rgba(255, 255, 255, 0.3);
   font-weight: 900;
-  font-size: 0.92em;
+  font-size: max(11px, 0.92em);
 }
 
 /* --- Spiel-Overlays ------------------------------------------------------------------------------ */
@@ -766,41 +867,48 @@
   animation: pop 0.55s ease-out both;
 }
 
+/* Im Lauf liegen diese Bedienelemente über dem 60-fps-Canvas: kein backdrop-filter (der Kompositor müsste den Hintergrund
+   jeden Frame neu weichzeichnen), dafür ein dichterer Hintergrund. Blur gibt es nur noch über eingefrorenem Bild (Pause/Ergebnis). */
 .pauseBtn {
   position: absolute;
   top: calc(var(--px) * 20);
   right: calc(var(--px) * 196);
   z-index: 12;
   opacity: 0.85;
+  background: rgba(14, 18, 34, 0.72);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .touch {
+  /* Abstand zum Bildschirmrand (Notch/Home-Indikator): nur so viel, wie nicht schon der Letterbox-Rand der Bühne abdeckt */
+  --safe-l: max(0px, calc(env(safe-area-inset-left, 0px) - (100vw - 100cqw) / 2));
+  --safe-r: max(0px, calc(env(safe-area-inset-right, 0px) - (100vw - 100cqw) / 2));
+  --safe-b: max(0px, calc(env(safe-area-inset-bottom, 0px) - (100dvh - 100cqh) / 2));
   position: absolute;
-  bottom: calc(var(--px) * 24);
+  bottom: calc(var(--px) * 24 + var(--safe-b));
   z-index: 12;
   width: calc(var(--px) * 130);
   height: calc(var(--px) * 130);
   border-radius: 50%;
   border: calc(var(--px) * 4) solid rgba(255, 255, 255, 0.55);
-  background: rgba(20, 30, 70, 0.45);
+  background: rgba(14, 18, 34, 0.72);
   color: #fff;
   font: inherit;
   font-weight: 1000;
-  font-size: calc(var(--px) * 22);
+  font-size: max(16px, calc(var(--px) * 22));
   display: grid;
   place-items: center;
-  backdrop-filter: blur(calc(var(--px) * 4));
-  -webkit-backdrop-filter: blur(calc(var(--px) * 4));
   touch-action: none;
 }
 
 .touchSlide {
-  left: calc(var(--px) * 26);
-  bottom: calc(var(--px) * 26);
+  left: calc(var(--px) * 26 + var(--safe-l));
+  bottom: calc(var(--px) * 26 + var(--safe-b));
 }
 
 .touchDash {
-  right: calc(var(--px) * 26);
+  right: calc(var(--px) * 26 + var(--safe-r));
 }
 
 .touchReady {
@@ -844,7 +952,7 @@
   background: linear-gradient(90deg, #ffd23f, #ff9f1c);
   color: #2b1300;
   font-weight: 1000;
-  font-size: calc(var(--px) * 26);
+  font-size: max(11px, calc(var(--px) * 26));
   letter-spacing: 0.06em;
   text-transform: uppercase;
   animation: pop 0.6s 0.2s ease-out both;
@@ -878,7 +986,7 @@
 }
 
 .stat span {
-  font-size: calc(var(--px) * 16);
+  font-size: max(11px, calc(var(--px) * 16));
   opacity: 0.7;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -887,7 +995,9 @@
 .nameInput {
   font: inherit;
   font-weight: 900;
-  font-size: calc(var(--px) * 26);
+  /* mindestens 16 px: darunter zoomt iOS beim Fokussieren in das Feld */
+  font-size: max(16px, calc(var(--px) * 26));
+  min-height: var(--tap-min);
   padding: calc(var(--px) * 10) calc(var(--px) * 16);
   border-radius: calc(var(--px) * 12);
   border: 2px solid rgba(255, 255, 255, 0.3);
@@ -921,6 +1031,13 @@
   box-shadow: 0 0 0 calc(var(--px) * 3) rgba(126, 232, 255, 0.28);
 }
 
+/* Die Wurzel sperrt die Textauswahl (Spiel); in Eingabefeldern muss sie an sein – WebKit nimmt sonst keine Eingabe an */
+.root .nameInput,
+.root .field input[type="text"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 .root .nameInput::placeholder,
 .root .field input[type="text"]::placeholder {
   color: rgba(255, 255, 255, 0.45);
@@ -937,23 +1054,31 @@
   position: absolute;
   left: calc(var(--px) * 56);
   bottom: calc(var(--px) * 22);
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap-min);
   padding: calc(var(--px) * 8) calc(var(--px) * 18);
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(14, 18, 34, 0.6);
   color: rgba(255, 255, 255, 0.85);
-  font-size: calc(var(--px) * 18);
+  font-size: max(11px, calc(var(--px) * 18));
   font-weight: 800;
   text-decoration: none;
   backdrop-filter: blur(calc(var(--px) * 6));
   -webkit-backdrop-filter: blur(calc(var(--px) * 6));
 }
 
-.backLink:hover,
 .backLink:focus-visible {
   background: rgba(60, 90, 200, 0.55);
   color: #fff;
-  outline: none;
+}
+
+@media (hover: hover) {
+  .backLink:hover {
+    background: rgba(60, 90, 200, 0.55);
+    color: #fff;
+  }
 }
 
 /* --- In die App eingebettet (wie das Original-Fredrun) ------------------------------------------------ */
@@ -1030,7 +1155,7 @@
   border-radius: calc(var(--px) * 14);
   background: rgba(200, 40, 60, 0.35);
   border: 1px solid rgba(255, 120, 120, 0.5);
-  font-size: calc(var(--px) * 20);
+  font-size: max(11px, calc(var(--px) * 20));
 }
 
 .fps {
@@ -1038,7 +1163,7 @@
   top: calc(var(--px) * 8);
   right: calc(var(--px) * 8);
   z-index: 50;
-  font-size: calc(var(--px) * 16);
+  font-size: max(11px, calc(var(--px) * 16));
   font-weight: 800;
   padding: calc(var(--px) * 3) calc(var(--px) * 8);
   border-radius: calc(var(--px) * 6);
@@ -1052,18 +1177,180 @@
   }
 }
 
+/* --- Weniger Bewegung ---------------------------------------------------------------------------- */
+
+/* Gilt bei Einstellung „Weniger Bewegung“ ODER Systemvorgabe: die Oberfläche setzt dafür data-reduced am Wurzelelement (FredRun2.tsx).
+   Der @media-Block bleibt als Rückfall bis zum ersten Effekt (Server-Render) und ohne Skript. */
 @media (prefers-reduced-motion: reduce) {
   .logo,
   .logoImg,
-  .playBtn::after,
+  .playBtn,
   .overlay,
   .modalCard,
-  .countNum {
+  .countNum,
+  .newBest {
     animation: none !important;
   }
+}
+
+.root[data-reduced="true"] :is(.logo, .logoImg, .playBtn, .overlay, .modalCard, .countNum, .newBest) {
+  animation: none !important;
+}
+
+.root[data-reduced="true"] * {
+  transition-duration: 0.01ms !important;
+}
+
+/* --- Im Lauf kein Blur ------------------------------------------------------------------------------ */
+
+/* Sicherheitsnetz: Während Countdown und Lauf bewegt sich der Canvas hinter den Bedienelementen jeden Frame; ein backdrop-filter
+   würde dort pro Frame neu berechnet. (Pause und Ergebnis liegen über eingefrorenem Bild und dürfen weichzeichnen.) */
+.root:is([data-phase="running"], [data-phase="countdown"]) :is(.iconBtn, .touch, .chip) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .rowMe td {
   background: rgba(255, 210, 63, 0.16);
   font-weight: 800;
+}
+
+/* --- Kleine Bühne / Touch ----------------------------------------------------------------------------- */
+
+/* Grober Zeiger (Touch): Tippflächen mindestens --tap, Trefferflächen runder Knöpfe etwas größer als sichtbar */
+@media (pointer: coarse) {
+  .stage {
+    --tap-min: var(--tap);
+    --hit: 9px;
+  }
+}
+
+/* Schmale Bühne (Handy quer, schmales Einbetten): dieselben Mindestgrößen, dazu kompaktere Ränder. Die Bühne ist der Container;
+   --px ist hier klein (0,44 bis 0,7), deshalb tragen Schriftböden (max(11px, …)) und --tap-min die Lesbarkeit. */
+@container (max-width: 900px) {
+  .stage > * {
+    --tap-min: var(--tap);
+    --hit: 9px;
+  }
+
+  /* Kopfzeile: engere Ränder. Menü-Reiter und Bestenlisten-Chips brechen bei Platzmangel in eine zweite Zeile um statt zu
+     scrollen: mit der Maus lässt sich eine unsichtbare, einzeilige Leiste nicht erreichen (kein Rad, keine Leiste). Die zweite
+     Zeile kostet Höhe: Panels scrollen darunter senkrecht, der Hero der Startseite (kein Scroller, die Bühne schneidet ab) fängt
+     das über das schrumpfende Logo (.logoHero) ab. */
+  .menu {
+    padding: max(8px, calc(var(--px) * 20)) max(12px, calc(var(--px) * 28));
+    gap: max(6px, calc(var(--px) * 12));
+  }
+
+  .menuTop {
+    align-items: center;
+    gap: 6px;
+  }
+
+  .chips {
+    gap: 4px;
+  }
+
+  .tabs,
+  .boardTabs {
+    gap: 3px;
+    flex-wrap: wrap;
+  }
+
+  .boardTabs {
+    margin-bottom: 8px;
+  }
+
+  .panel {
+    padding: max(8px, calc(var(--px) * 16));
+  }
+
+  .playBtn {
+    min-height: var(--tap-min);
+  }
+
+  /* Welt-Tags sind auf kleiner Bühne zu klein zum Lesen und kosten Platz für die zweite Kartenreihe */
+  .tagRow {
+    display: none;
+  }
+}
+
+/* Winzige Bühne (<= 480 px, z. B. Hochformat mit „Trotzdem spielen“) auch mit der Maus: bis zu drei Reiter-Zeilen à 44 px verdrängen
+   dort Hero und Panels (die Karten der Startseite rutschen aus der Bühne). Wie bei Touch bleibt es bei einer Zeile; mit feinem
+   Zeiger zeigt sie eine dünne Bildlaufleiste – nicht versteckt, die Reiter sind per Ziehen, Rad und Tastatur (Pfeile, Tab) erreichbar.
+   Steht vor dem Touch-Block, damit dessen scrollbar-width: none bei grobem Zeiger gewinnt. */
+@container (max-width: 480px) {
+  .menuTop > .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px;
+    margin: -4px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.4) transparent;
+    touch-action: pan-x;
+  }
+
+  .menuTop > .tabs > .tab {
+    flex: 0 0 auto;
+  }
+}
+
+/* Touch auf kleiner Bühne: die Menü-Reiter bleiben einzeilig und wischbar – jede zweite Zeile (je 44 px) fehlt einem Handy quer
+   (ab 640 px passen sie ohnehin nebeneinander). Mit der Maus gilt der Umbruch oben. Modus- und Bestenlisten-Chips brechen immer
+   um: sie liegen im senkrecht scrollenden Panel, dort kostet eine zweite Zeile nichts. */
+@media (pointer: coarse) {
+  @container (max-width: 900px) {
+    .menuTop > .tabs {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      overflow-y: hidden;
+      /* Platz für Fokusring und Anheben, die sonst vom Scroll-Container abgeschnitten würden */
+      padding: 4px;
+      margin: -4px;
+      scrollbar-width: none;
+      touch-action: pan-x;
+    }
+
+    .menuTop > .tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .menuTop > .tabs > .tab {
+      flex: 0 0 auto;
+    }
+  }
+}
+
+/* Kleine Handys quer (z. B. 667 px): die sechs Reiter samt Münz-Chip und Icon-Knöpfen sollen ohne Scrollen in die Kopfzeile passen */
+@container (max-width: 700px) {
+  .menu {
+    padding-inline: 12px;
+  }
+
+  .tab {
+    padding-inline: 6px;
+  }
+}
+
+/* Winzige Bühne (Hochformat mit „Trotzdem spielen“, ca. 390 px breit): Logo und Spruch weichen, damit Spielen-Knopf und Karten sichtbar bleiben */
+@container (max-width: 480px) {
+  .logoHero,
+  .heroTagline {
+    display: none;
+  }
+}
+
+/* Sehr schmale Bühne: der Zurück-Link würde die Karten der Startseite berühren – nur der Pfeil bleibt (aria-label trägt den Namen) */
+@container (max-width: 620px) {
+  .backLink {
+    left: max(10px, calc(var(--px) * 24));
+    min-width: var(--tap-min);
+    justify-content: center;
+    padding-inline: 12px;
+  }
+
+  .backLinkText {
+    display: none;
+  }
 }

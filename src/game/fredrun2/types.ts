@@ -109,6 +109,12 @@ export interface Ent {
   fx: Record<string, number>;
   /** ID des Musters, das dieses Element erzeugt hat (Diagnose/Tests) */
   pat: string;
+  /**
+   * Position zu Beginn des letzten Sim-Schritts – NUR für die Darstellung (Interpolation zwischen zwei 120-Hz-Schritten:
+   * ex = px + (x - px) * view.alpha). Die Sim-Logik liest sie nie (Determinismus); fehlend = nicht interpolieren (x/y).
+   */
+  px?: number;
+  py?: number;
 }
 
 /** Pattern-Baustein; alle x relativ zum Muster-Start, y absolut (Bildschirm), aber nutze die Builder in PatternCtx. */
@@ -241,6 +247,16 @@ export interface ViewState {
   readonly vars: Readonly<Record<string, number>>;
   /** Kurzer Blitz-/Flashwert 0..1 vom Sim (z.B. Blitz) */
   readonly flash: number;
+  /**
+   * Interpolationsanteil 0..1 zwischen dem vorigen und dem aktuellen Sim-Schritt (Entitäten: px/py → x/y).
+   * Optional (ältere Mocks/Aufrufer): Leser nutzen `view.alpha ?? 1` (= aktueller Schritt, nicht interpolieren).
+   */
+  readonly alpha?: number;
+  /**
+   * Blitz-Skalierung 0..1 aus Einstellung "Blitze" (bei "Weniger Bewegung" höchstens 0,3). Welten multiplizieren ihre
+   * Wetter-Aufheller/Blitze damit; die Sim (`flash`) bleibt unverändert. Optional: Leser nutzen `view.flashScale ?? 1`.
+   */
+  readonly flashScale?: number;
 }
 
 export interface SpriteOpts {
@@ -301,6 +317,11 @@ export interface WorldRenderer {
   drawForeground(g: CanvasRenderingContext2D, v: ViewState): void;
   /** Optionale Endstufe (Licht/Dunkelheit/Color-Grading) über allem außer HUD */
   drawOverlay?(g: CanvasRenderingContext2D, v: ViewState): void;
+  /**
+   * Optionales Vorwärmen (Caches, Sprites, Offscreen-Ebenen) in kleinen Häppchen, z. B. im Menü oder in der Ladephase.
+   * Pro Aufruf höchstens ca. `budgetMs` Millisekunden arbeiten. Rückgabe true = nichts mehr zu tun (der Aufrufer ruft nicht mehr auf).
+   */
+  warm?(budgetMs: number): boolean;
 }
 
 // --- Welt-Definition ------------------------------------------------------------------------------
@@ -366,6 +387,7 @@ export type SimEventType =
   | "enemy-defeat"
   | "wallbreak"
   | "pit-fall"
+  | "dash-denied"
   | "world-transition"
   | "milestone"
   | "custom";

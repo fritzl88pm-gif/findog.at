@@ -43,7 +43,8 @@ const NAMES: Array<[RegExp, string]> = [
   [/boxes/, "Kartons"],
   [/hanging/, "Hängeregister"],
   [/file-cart/, "Aktenwagen"],
-  [/office-chair|chair|stuhl/, "Bürostuhl"],
+  // "swing-chair" (Prater-Kettenkarussell) darf hier nicht greifen: nur der Bürostuhl selbst
+  [/office-chair|^chair$|stuhl/, "Bürostuhl"],
   [/copier/, "Kopierer"],
   [/duct/, "Lüftungsrohr"],
   [/\bbat\b|^bat/, "Fledermaus"],
@@ -84,9 +85,13 @@ const NAMES: Array<[RegExp, string]> = [
   ...OPER_DEATH_NAMES,
 ];
 
+/** Todesursache "quit": Lauf aus der Pause beendet (kein Gegner) */
+const QUIT_LABEL = "Lauf beendet";
+
 export function deathLabel(cause: string | undefined | null): string {
   if (!cause) return "";
   const c = cause.toLowerCase();
+  if (c === "quit") return QUIT_LABEL;
   for (const [re, name] of NAMES) if (re.test(c)) return name;
   return "";
 }

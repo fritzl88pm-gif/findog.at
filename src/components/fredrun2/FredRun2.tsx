@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { withRev } from "@/game/fredrun2/asset-rev";
 import { createAudio } from "@/game/fredrun2/audio";
@@ -54,6 +54,84 @@ const LOADING: GameSnapshot = {
 
 function fmt(n: number): string {
   return Math.floor(n).toLocaleString("de-AT");
+}
+
+/** Systemvorgabe „Bewegung reduzieren“ als externer Speicher: serverseitig false, im Browser live (inkl. change-Ereignis). */
+const REDUCED_QUERY = "(prefers-reduced-motion: reduce)";
+let reducedMq: MediaQueryList | null | undefined;
+function reducedMotionQuery(): MediaQueryList | null {
+  if (reducedMq === undefined) reducedMq = typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(REDUCED_QUERY) : null;
+  return reducedMq;
+}
+function subscribeReducedMotion(onChange: () => void): () => void {
+  const mq = reducedMotionQuery();
+  mq?.addEventListener("change", onChange);
+  return () => mq?.removeEventListener("change", onChange);
+}
+const getSystemReducedMotion = (): boolean => reducedMotionQuery()?.matches === true;
+const getSystemReducedMotionServer = (): boolean => false;
+
+interface TabStripProps<T extends string> {
+  items: ReadonlyArray<{ id: T; label: string }>;
+  value: T | null;
+  /** `byKeyboard`: Auswahl per Pfeiltaste/Pos1/Ende (der Fokus bleibt dann in der Leiste). */
+  onSelect: (id: T, byKeyboard: boolean) => void;
+  label: string;
+  className?: string;
+  style?: React.CSSProperties;
+  /** Basis für die ids der Reiter (`<idBase>-tab-<id>`), damit ein Tabpanel per aria-labelledby darauf zeigen kann. */
+  idBase?: string;
+  /** id des zugehörigen Tabpanels (aria-controls des aktiven Reiters). */
+  panelId?: string;
+}
+
+/**
+ * Reiter-Leiste nach dem ARIA-Tab-Muster: nur der aktive Reiter ist per Tab erreichbar (Roving-Tabindex), Links/Rechts wechselt
+ * (mit Umbruch) und wählt sofort aus, Pos1/Ende springen zum ersten/letzten Reiter.
+ */
+function TabStrip<T extends string>({ items, value, onSelect, label, className, style, idBase, panelId }: TabStripProps<T>): React.ReactElement {
+  const refs = useRef<Array<HTMLButtonElement | null>>([]);
+  const activeIdx = items.findIndex((t) => t.id === value);
+  const tabbable = activeIdx >= 0 ? activeIdx : 0;
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const at = refs.current.indexOf(e.target as HTMLButtonElement);
+    const from = at >= 0 ? at : tabbable;
+    let next = -1;
+    if (e.key === "ArrowRight") next = (from + 1) % items.length;
+    else if (e.key === "ArrowLeft") next = (from - 1 + items.length) % items.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = items.length - 1;
+    if (next < 0) return;
+    e.preventDefault();
+    onSelect(items[next].id, true);
+    refs.current[next]?.focus();
+  };
+  return (
+    <div className={className ?? styles.tabs} style={style} role="tablist" aria-label={label} onKeyDown={onKeyDown}>
+      {items.map((t, i) => {
+        const on = i === activeIdx;
+        return (
+          <button
+            key={t.id}
+            ref={(el) => {
+              refs.current[i] = el;
+            }}
+            id={idBase ? `${idBase}-tab-${t.id}` : undefined}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            aria-controls={on ? panelId : undefined}
+            tabIndex={i === tabbable ? 0 : -1}
+            className={`${styles.tab} ${on ? styles.tabActive : ""}`}
+            onClick={() => onSelect(t.id, false)}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 const MODE_LABEL: Record<RunMode, string> = { world: "Welt-Lauf", tour: "Weltreise", daily: "Tageslauf" };
@@ -163,7 +241,10 @@ export interface FredRun2Props {
 export default function FredRun2({ embedded = false, accessToken: accessTokenProp = "" }: FredRun2Props = {}): React.ReactElement {
   const { game, snap, canvasRef, stageRef } = useGame();
   const accessToken = useAccessToken(accessTokenProp);
+  const uid = useId();
   const [tab, setTab] = useState<Tab>("play");
+  /** Reiter zuletzt per Tastatur gewechselt: dann holt der Spielen-Knopf den Fokus nicht an sich (der bliebe sonst nicht in der Leiste). */
+  const [tabByKeyboard, setTabByKeyboard] = useState(false);
   const [boardKeyState, setBoardKeyState] = useState<string | null>(null);
   const [tipIdx, setTipIdx] = useState(0);
   const [ignoreRotate, setIgnoreRotate] = useState(false);
@@ -172,6 +253,9 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
   const [isTouch, setIsTouch] = useState(false);
   const profile = snap.profile;
   const phase = snap.phase;
+  // „Weniger Bewegung“ gilt als Einstellung ODER Systemvorgabe; das Wurzelelement trägt es als data-reduced (CSS), die Heldenauswahl bekommt es als Prop
+  const systemReduced = useSyncExternalStore(subscribeReducedMotion, getSystemReducedMotion, getSystemReducedMotionServer);
+  const reduced = profile.settings.reducedMotion || systemReduced;
 
   useEffect(() => {
     const id = requestAnimationFrame(() => {
@@ -301,7 +385,11 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
     return list;
   }, []);
 
+  const boardItems = useMemo(() => boards.map((b) => ({ id: b.key, label: b.label })), [boards]);
+  const modeItems = useMemo(() => (["world", "tour", "daily"] as RunMode[]).map((m) => ({ id: m, label: MODE_LABEL[m] })), []);
+
   const showMenu = phase === "menu";
+  const panelId = `${uid}-panel`;
 
   // Die Heldenauswahl hat ein eigenes Musikstück; alle anderen Menü-Tabs spielen das Menü-Thema.
   const wasSelecting = useRef(false);
@@ -319,7 +407,7 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
   }, [game, phase, tab]);
 
   return (
-    <div className={`${styles.root} ${embedded ? styles.embedded : ""}`}>
+    <div className={`${styles.root} ${embedded ? styles.embedded : ""}`} data-phase={phase} data-reduced={reduced ? "true" : undefined}>
       <div className={styles.stage} ref={stageRef}>
         <canvas ref={canvasRef} className={styles.canvas} aria-label="Fredrun 2.0 Spielfläche" role="img" />
 
@@ -340,19 +428,19 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
         {showMenu ? (
           <div className={`${styles.overlay} ${tab === "play" ? styles.veilCenter : styles.veil} ${styles.menu}`}>
             <div className={styles.menuTop}>
-              <div className={styles.tabs} role="tablist" aria-label="Menü">
-                {TABS.map((t) => (
-                  <button
-                    key={t.id}
-                    role="tab"
-                    aria-selected={tab === t.id}
-                    className={`${styles.tab} ${tab === t.id ? styles.tabActive : ""}`}
-                    onClick={click(() => setTab(t.id))}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
+              <TabStrip
+                items={TABS}
+                value={tab}
+                label="Menü"
+                idBase={uid}
+                panelId={panelId}
+                onSelect={(id, byKeyboard) =>
+                  click(() => {
+                    setTabByKeyboard(byKeyboard);
+                    setTab(id);
+                  })()
+                }
+              />
               <div className={styles.chips}>
                 <span className={styles.chip} title="Münzen">
                   <i className={styles.coinDot} /> {fmt(profile.coins)}
@@ -366,7 +454,7 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
               </div>
             </div>
 
-            <div className={styles.body}>
+            <div className={styles.body} role="tabpanel" id={panelId} aria-labelledby={`${uid}-tab-${tab}`}>
               {tab === "play" ? (
                 <>
                   <div className={`${styles.hero} ${styles.heroCenter}`}>
@@ -376,7 +464,7 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
                         {profile.mode === "tour" ? "Weltreise: alle Welten in einem Lauf." : world.tagline}
                       </strong>
                     </p>
-                    <button className={styles.playBtn} onClick={click(startRun)} autoFocus>
+                    <button className={styles.playBtn} onClick={click(startRun)} autoFocus={!tabByKeyboard}>
                       Los geht’s!
                     </button>
                     <div className={styles.row}>
@@ -402,13 +490,7 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
 
               {tab === "worlds" ? (
                 <div className={styles.panel}>
-                  <div className={styles.tabs} style={{ marginBottom: 8 }}>
-                    {(["world", "tour", "daily"] as RunMode[]).map((m) => (
-                      <button key={m} className={`${styles.tab} ${profile.mode === m ? styles.tabActive : ""}`} onClick={click(() => game?.setMode(m))}>
-                        {MODE_LABEL[m]}
-                      </button>
-                    ))}
-                  </div>
+                  <TabStrip items={modeItems} value={profile.mode} label="Modus" style={{ marginBottom: 8 }} onSelect={(m) => click(() => game?.setMode(m))()} />
                   <p className={styles.muted} style={{ margin: "0 0 12px" }}>
                     {MODE_DESC[profile.mode]}
                   </p>
@@ -442,7 +524,7 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
                 </div>
               ) : null}
 
-              {tab === "characters" ? <CharacterSelect profile={profile} game={game} reducedMotion={profile.settings.reducedMotion} /> : null}
+              {tab === "characters" ? <CharacterSelect profile={profile} game={game} reducedMotion={reduced} /> : null}
 
               {tab === "board" ? (
                 <div className={styles.panel}>
@@ -450,13 +532,7 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
                   <p className={styles.muted} style={{ margin: "-4px 0 10px" }}>
                     {accessToken ? "Weltweit – jeder gegen jeden, je Spieler zählt der beste Lauf." : "Nur dieses Gerät – melde dich in Findog an, um weltweit gegen alle anzutreten."}
                   </p>
-                  <div className={styles.boardTabs}>
-                    {boards.map((b) => (
-                      <button key={b.key} className={`${styles.tab} ${activeBoard === b.key ? styles.tabActive : ""}`} onClick={click(() => setBoardKeyState(b.key))}>
-                        {b.label}
-                      </button>
-                    ))}
-                  </div>
+                  <TabStrip className={styles.boardTabs} items={boardItems} value={activeBoard} label="Bestenliste wählen" onSelect={(key) => click(() => setBoardKeyState(key))()} />
                   {accessToken ? (
                     <GlobalBoard state={board.state} onRetry={board.retry} />
                   ) : (
@@ -485,8 +561,9 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
               ) : null}
             </div>
             {!embedded && tab === "play" ? (
-              <Link className={styles.backLink} href="/">
-                ← Zurück zu Findog
+              <Link className={styles.backLink} href="/" aria-label="Zurück zu Findog">
+                <span aria-hidden="true">←</span>
+                <span className={styles.backLinkText}>&nbsp;Zurück zu Findog</span>
               </Link>
             ) : null}
           </div>
@@ -768,10 +845,10 @@ function SettingsForm({ game, snap }: { game: FredRunGame | null; snap: GameSnap
         <label htmlFor="fr2-sfx">Effekte</label>
         <input id="fr2-sfx" type="range" min={0} max={1} step={0.05} value={s.sfx} onChange={(e) => game?.setSettings({ sfx: Number(e.target.value) })} />
       </div>
-      <div className={styles.field}>
+      <label className={styles.field}>
         <span>Ton aus</span>
         <Toggle on={s.muted} onChange={(v) => game?.setSettings({ muted: v })} label="Ton aus" />
-      </div>
+      </label>
       <div className={styles.field}>
         <label htmlFor="fr2-quality">Grafikqualität</label>
         <select id="fr2-quality" value={s.quality} onChange={(e) => game?.setSettings({ quality: e.target.value as typeof s.quality })}>
@@ -781,18 +858,18 @@ function SettingsForm({ game, snap }: { game: FredRunGame | null; snap: GameSnap
           <option value="low">Niedrig (Akku schonen)</option>
         </select>
       </div>
-      <div className={styles.field}>
+      <label className={styles.field}>
         <span>Weniger Bewegung (kein Wackeln/Blitzen)</span>
         <Toggle on={s.reducedMotion} onChange={(v) => game?.setSettings({ reducedMotion: v })} label="Weniger Bewegung" />
-      </div>
-      <div className={styles.field}>
+      </label>
+      <label className={styles.field}>
         <span>Einsteiger-Hinweise im Spiel</span>
         <Toggle on={s.hints} onChange={(v) => game?.setSettings({ hints: v })} label="Hinweise" />
-      </div>
-      <div className={styles.field}>
+      </label>
+      <label className={styles.field}>
         <span>FPS-Anzeige</span>
         <Toggle on={s.showFps} onChange={(v) => game?.setSettings({ showFps: v })} label="FPS-Anzeige" />
-      </div>
+      </label>
     </div>
   );
 }

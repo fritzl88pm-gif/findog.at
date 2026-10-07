@@ -15,13 +15,46 @@ audio.music.play("wien", { intensity: 0.3 });   // menu | wien | alpen | finanza
 audio.music.setIntensity(0.8, 0.6);    // 0..1: Pad → +Bass → +Drums → +Lead/Arpeggio (weich überblendet)
 audio.sfx("coin", { pitch: 1.2 });     // 51 Effekte, siehe SFX_NAMES; Polyphonie-Cap + Drosselung gegen Überlast
 audio.loop("rain", true, 0.6);         // Dauerklänge (rain, wind, avalanche, magnet, laser-hum, crowd-fair, river, …)
+audio.stopStingers();                  // Jingle (Game Over/Highscore/Weltwechsel) ausblenden, Musik-Duck aufheben (Neustart/Menü)
+audio.music.setMuffle(1, 0.12);        // Musik dämpfen (Pause/Zeitlupe): Tiefpass 900 Hz, -5 dB; 0 = frei; play()/stop() setzen zurück
+audio.prefetch({ music: ["wien"] });   // Dateien vorwärmen (nur Download, vor dem Entsperren erlaubt); auch preloadAudio() aus index.ts
 ```
 
 Dateien: `types.ts` (API + Namenslisten), `themes.ts` (Kompositionsdaten: Akkordfolgen, Melodien, Drum-Patterns – reine Daten),
 `notation.ts` (Parser der Notenstrings), `music.ts` (Look-ahead-Scheduler über `AudioContext.currentTime`, robust gegen Tab-Throttling),
 `synth.ts` (Instrumente), `sfx.ts` (Effekte), `loops.ts` (Dauerklänge), `voice.ts`/`dsp.ts`/`noise.ts`/`graph.ts` (Bausteine, Master-Graph),
-`engine.ts` (Lebenszyklus, Lautstärken, Ducking, Tempo-Skalierung). Tests: `themes.test.ts` (Takte füllen exakt ihre Steps, Namenslisten,
-Scheduler-Monotonie). Rauchtest im echten Browser: `node tools/fredrun2/audio-smoke.mjs`.
+`engine.ts` (Lebenszyklus, Lautstärken, Ducking, Tempo-Skalierung), `tracks.ts` (aufgenommene Musik, `MusicLibrary`, Jingles). Tests:
+`themes.test.ts` (Takte füllen exakt ihre Steps, Namenslisten, Scheduler-Monotonie), `graph.test.ts`/`engine.test.ts`/`tracks.test.ts`
+(Fake-Kontext). Rauchtest im echten Browser: `node tools/fredrun2/audio-smoke.mjs`.
+
+## Engine-Mechanik (Entsperren, Stinger, Dämpfung, Vorwärmen)
+
+* **Entsperren ist wiederholbar.** `unlock()` wartet höchstens ≈ 1,2 s auf `ctx.resume()`; das Zeitlimit beendet nur das Promise. Läuft der
+  Kontext erst später (langsames Gerät, Safari/iOS, Bluetooth), entscheidet `onstatechange`: beim ersten „running“ wird `everRunning`
+  gesetzt und alles Gemerkte (`music.play()`/`loop()` vor dem Entsperren) startet; bei jedem weiteren Wechsel auf „running“ wird das
+  Gemerkte erneut geleert (`flushPending`). Jeder weitere `unlock()`-Aufruf (nächste Geste) versucht `resume()` erneut, `sfx()` vor dem
+  „running“ ebenfalls (gedrosselt auf 500 ms). `unlocked` bleibt „Kontext war einmal running“.
+* **Stinger** (`gameover`, `highscore`, `world-transition`) laufen über `graph.stingerBus` (Pegel = Musiklautstärke, kein Duck) statt über
+  `sfxDry`: Musik aus ⇒ kein Jingle (auch kein synthetischer Ersatz), Effekte aus ⇒ Jingle bleibt. Der Effekt-Anteil des Weltwechsels
+  (Bank/Synthese) bleibt am Effekt-Regler. `JinglePlayer.play` liefert ein `JingleHandle` (`stop(fadeSec)`), `stopAll(fadeSec)`/`stopOf(name)`
+  blenden per `setTargetAtTime` (τ = fade/4) aus und stoppen die Quelle nach 1,25·fade + 30 ms. `audio.stopStingers(fadeSec = 0.3)` ruft
+  `stopAll`, setzt `graph.duckUntil = 0` und führt `duckDry`/`duckWet` mit τ 0,12 s auf 1 zurück (`releaseDuck`). `gameover`/`highscore` lösen
+  einen noch laufenden Weltwechsel-Jingle selbst ab.
+* **Dämpfung** (`music.setMuffle(amount 0..1, rampSec = 0.12)`): Tiefpass (`musicLP`, Hall-Pfad `musicWetLP`, Q −3 dB) und Pegelstufe
+  (`muffleDry`/`muffleWet`) zwischen Musikbus und Duck; 0 = offen (22 kHz, höchstens Nyquist), 1 = 900 Hz und −5 dB, dazwischen logarithmisch
+  in der Frequenz und linear in dB. `rampSec` ist die Zeitkonstante (`setTargetAtTime`); ≈ 3 · τ bis zum Ziel. `music.play()`/`music.stop()`
+  setzen auf 0 zurück, ein Aufruf vor dem Entsperren gilt, sobald der Graph existiert. SFX und Stinger werden nicht gedämpft.
+* **Vorwärmen** (`audio.prefetch({ music?: string[] })`, `preloadAudio()` in `index.ts`): lädt per `fetch(…, { priority: "low" })` SFX-Bank
+  (Manifest + MP3 unter derselben URL wie `bank.ts`), `music.json` und je Stück **eine** Variante in den HTTP-Cache – ohne Dekodieren (kein
+  zusätzlicher Speicher), ohne AudioContext und ohne Geste. Die Wahl merkt `MusicLibrary` (`nextVariant`), `music.play()` spielt dieselbe Datei
+  (Cache-Treffer). `music` fehlt ⇒ nur das Menüstück, `[]` ⇒ nur Bank und Manifest; ohne `fetch` (SSR) ein No-Op. Engine und `preloadAudio` teilen
+  eine Bibliothek, damit eine vor dem Entsperren gewärmte Variante auch gespielt wird.
+* **iOS-Stummschalter:** `unlock()` setzt (Feature-Check, try/catch) `navigator.audioSession.type = "playback"`, solange nicht stummgeschaltet
+  und nicht pausiert; `setMuted(true)`, `suspend()` (verstecktes Tab) und `dispose()` stellen auf „auto“ zurück, `resume()`/`setMuted(false)`
+  wieder auf „playback“. Nur per Code geprüft – vor dem Merge am echten iPhone testen (Stummschalter an). Hinweis: „playback“ kann auf iOS
+  Hintergrundmusik anderer Apps unterbrechen (Audio-Session-Spezifikation); Ton-Taste/Lautstärkeregler bleiben maßgeblich.
+* **Prüfung:** Vitest mit Fake-Kontext (`graph.test.ts`, `engine.test.ts`, `tracks.test.ts`); im echten Chromium `node tools/fredrun2/audio-smoke.mjs`
+  (Szenarien `bank`, `fallback`, `48k`, `gapless` sowie `stinger-stop`, `late-resume`, `muffle`, `stinger-bus`, `prefetch`, einzeln per `--only`).
 
 Die App (Game-Controller) speichert Lautstärken/Stummschaltung selbst (`profile.ts`) und verknüpft Sim-Ereignisse mit Effekten (`game.ts`).
 Welten lösen Klänge über `sim.emit("custom", x, y, { tag: "sfx:<name>" })` und Dauerklänge über `sim.vars["loop:<name>"]` aus.

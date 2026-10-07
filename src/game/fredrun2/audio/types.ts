@@ -46,10 +46,25 @@ export interface SfxOptions {
 }
 
 export interface FredAudio {
-  /** Aus einer User-Geste aufrufen (Click/Touch/Key). Erzeugt/resumed den AudioContext (iOS/Safari-sicher). Idempotent. */
+  /**
+   * Aus einer User-Geste aufrufen (Click/Touch/Key). Erzeugt/resumed den AudioContext (iOS/Safari-sicher). Idempotent und
+   * wiederholbar: Läuft der Kontext nach der Wartezeit (≈ 1.2 s) noch nicht, genügt der nächste Aufruf; ein später eintreffendes
+   * „running“ startet wartende Musik/Dauerklänge von selbst. Setzt (wo vorhanden) navigator.audioSession.type auf „playback“.
+   */
   unlock(): Promise<void>;
+  /** true, sobald der Kontext einmal „running“ war (und nicht pausiert/suspendiert ist) */
   readonly unlocked: boolean;
   sfx(name: SfxName, opts?: SfxOptions): void;
+  /**
+   * Beendet laufende Musik-Stinger (Game Over, Highscore, Weltwechsel): blendet sie in `fadeSec` (Standard 0.3 s) aus und hebt
+   * die Musik-Absenkung (duck) auf. Aufruf beim Neustart/Zurück ins Menü, damit kein Jingle in den nächsten Lauf hineinläuft.
+   */
+  stopStingers(fadeSec?: number): void;
+  /**
+   * Lädt Dateien vor, ohne zu dekodieren (HTTP-Cache wärmen): SFX-Bank, Musik-Manifest und je angegebenem Stück genau eine
+   * Variante (dieselbe, die `music.play` später wählt). Ohne fetch (SSR) wirkungslos; vor dem Entsperren erlaubt.
+   */
+  prefetch(opts: { music?: string[] }): void;
   /** Dauerklänge (Regen, Wind…) an/aus mit sanften Fades; level 0..1 */
   loop(name: LoopName, on: boolean, level?: number): void;
   music: {
@@ -57,6 +72,11 @@ export interface FredAudio {
     /** 0..1: mehr Layer (Drums, Bass, Arpeggio) je höher; weich geblendet */
     setIntensity(v: number, rampSec?: number): void;
     stop(fadeSec?: number): void;
+    /**
+     * Dämpft die Musik (Pause, Zeitlupe): amount 0..1 (geklemmt; 1 = Tiefpass 900 Hz und -5 dB), `rampSec` = Zeitkonstante
+     * des weichen Übergangs (Standard 0.12 s). `play()` und `stop()` setzen die Dämpfung auf 0 zurück.
+     */
+    setMuffle(amount: number, rampSec?: number): void;
     readonly current: MusicTrackId | null;
   };
   setMasterVolume(v: number): void;

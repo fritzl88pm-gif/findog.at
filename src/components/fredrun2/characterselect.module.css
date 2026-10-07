@@ -85,9 +85,16 @@
     filter 0.16s ease;
 }
 
-.tile:hover {
-  transform: translateX(calc(var(--px) * 4));
-  border-color: rgba(255, 255, 255, 0.45);
+/* :hover nur mit Maus (auf Touch bleibt es nach dem Tippen hängen); dort gibt :active die Rückmeldung */
+@media (hover: hover) {
+  .tile:hover {
+    transform: translateX(calc(var(--px) * 4));
+    border-color: rgba(255, 255, 255, 0.45);
+  }
+}
+
+.tile:active {
+  transform: scale(0.97);
 }
 
 .tile:focus-visible {
@@ -103,7 +110,8 @@
   transform: translateX(calc(var(--px) * 8));
 }
 
-.tileOn:hover {
+.tileOn:hover,
+.tileOn:active {
   transform: translateX(calc(var(--px) * 8));
 }
 
@@ -135,7 +143,7 @@
 }
 
 .tileName {
-  font-size: calc(var(--px) * 18);
+  font-size: max(11px, calc(var(--px) * 18));
   font-weight: 900;
   line-height: 1.1;
   letter-spacing: -0.01em;
@@ -148,7 +156,7 @@
   align-items: center;
   justify-content: center;
   gap: calc(var(--px) * 6);
-  font-size: calc(var(--px) * 16);
+  font-size: max(11px, calc(var(--px) * 16));
   font-weight: 800;
   line-height: 1.15;
   opacity: 0.85;
@@ -239,7 +247,7 @@
   border-radius: 999px;
   background: rgba(8, 11, 28, 0.78);
   border: 1px solid rgba(255, 255, 255, 0.22);
-  font-size: calc(var(--px) * 17);
+  font-size: max(11px, calc(var(--px) * 17));
   font-weight: 900;
   letter-spacing: 0.02em;
 }
@@ -264,7 +272,7 @@
   top: calc(var(--px) * 18);
   right: calc(var(--px) * 18);
   z-index: 3;
-  font-size: calc(var(--px) * 18);
+  font-size: max(11px, calc(var(--px) * 18));
   font-weight: 900;
   letter-spacing: 0.06em;
   opacity: 0.7;
@@ -274,8 +282,8 @@
   position: absolute;
   top: 40%;
   z-index: 3;
-  width: calc(var(--px) * 46);
-  height: calc(var(--px) * 46);
+  width: max(var(--tap-min, 40px), calc(var(--px) * 46));
+  height: max(var(--tap-min, 40px), calc(var(--px) * 46));
   padding: 0;
   display: grid;
   place-items: center;
@@ -296,9 +304,16 @@
   height: 52%;
 }
 
-.nav:hover {
+@media (hover: hover) {
+  .nav:hover {
+    opacity: 1;
+    background: color-mix(in srgb, var(--c1) 55%, rgba(8, 11, 28, 0.6));
+  }
+}
+
+.nav:active {
   opacity: 1;
-  background: color-mix(in srgb, var(--c1) 55%, rgba(8, 11, 28, 0.6));
+  transform: scale(0.94);
 }
 
 .navPrev {
@@ -350,7 +365,7 @@
   right: calc(var(--px) * 18);
   bottom: calc(var(--px) * 18);
   z-index: 3;
-  min-height: calc(var(--px) * 38);
+  min-height: max(var(--tap-min, 40px), calc(var(--px) * 38));
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
@@ -358,14 +373,14 @@
 }
 
 .chip {
-  height: calc(var(--px) * 38);
+  height: max(var(--tap-min, 40px), calc(var(--px) * 38));
   padding: 0 calc(var(--px) * 14);
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.24);
   background: rgba(8, 11, 28, 0.74);
   color: #fff;
   font: inherit;
-  font-size: calc(var(--px) * 17);
+  font-size: max(11px, calc(var(--px) * 17));
   font-weight: 900;
   line-height: 1;
   white-space: nowrap;
@@ -389,10 +404,16 @@
   }
 }
 
-.chip:hover {
-  transform: translateY(calc(var(--px) * -2));
-  background: color-mix(in srgb, var(--c1) 45%, rgba(8, 11, 28, 0.7));
-  border-color: rgba(255, 255, 255, 0.5);
+@media (hover: hover) {
+  .chip:hover {
+    transform: translateY(calc(var(--px) * -2));
+    background: color-mix(in srgb, var(--c1) 45%, rgba(8, 11, 28, 0.7));
+    border-color: rgba(255, 255, 255, 0.5);
+  }
+}
+
+.chip:active {
+  transform: scale(0.97);
 }
 
 .chip:focus-visible {
@@ -482,7 +503,7 @@
 
 .tagline {
   margin: calc(var(--px) * -4) 0 0;
-  font-size: calc(var(--px) * 20);
+  font-size: max(11px, calc(var(--px) * 20));
   font-weight: 800;
   line-height: 1.15;
   color: color-mix(in srgb, var(--c1) 45%, #fff);
@@ -525,13 +546,13 @@
 }
 
 .abilityText strong {
-  font-size: calc(var(--px) * 24);
+  font-size: max(12px, calc(var(--px) * 24));
   font-weight: 900;
   line-height: 1.1;
 }
 
 .abilityText span {
-  font-size: calc(var(--px) * 18);
+  font-size: max(11px, calc(var(--px) * 18));
   font-weight: 500;
   line-height: 1.25;
   opacity: 0.86;
@@ -560,7 +581,7 @@
 
 .statLabel {
   grid-area: label;
-  font-size: calc(var(--px) * 18);
+  font-size: max(11px, calc(var(--px) * 18));
   font-weight: 800;
   line-height: 1.1;
   white-space: nowrap;
@@ -620,7 +641,7 @@
   grid-area: value;
   min-width: calc(var(--px) * 58);
   text-align: right;
-  font-size: calc(var(--px) * 18);
+  font-size: max(11px, calc(var(--px) * 18));
   font-weight: 800;
   line-height: 1;
   white-space: nowrap;
@@ -650,12 +671,12 @@
   justify-content: center;
   gap: calc(var(--px) * 10);
   width: 100%;
-  height: calc(var(--px) * 56);
+  height: max(var(--tap-min, 40px), calc(var(--px) * 56));
   padding: 0 calc(var(--px) * 20);
   border-radius: calc(var(--px) * 18);
   border: 1px solid rgba(255, 255, 255, 0.4);
   font: inherit;
-  font-size: calc(var(--px) * 27);
+  font-size: max(12px, calc(var(--px) * 27));
   font-weight: 1000;
   letter-spacing: 0.02em;
   line-height: 1;
@@ -690,9 +711,11 @@
     0 calc(var(--px) * 12) calc(var(--px) * 28) rgba(60, 110, 255, 0.35);
 }
 
-.ctaSelect:hover {
-  transform: translateY(calc(var(--px) * -2));
-  filter: brightness(1.1);
+@media (hover: hover) {
+  .ctaSelect:hover {
+    transform: translateY(calc(var(--px) * -2));
+    filter: brightness(1.1);
+  }
 }
 
 .ctaSelect:active {
@@ -717,9 +740,11 @@
     0 calc(var(--px) * 12) calc(var(--px) * 28) rgba(255, 190, 40, 0.32);
 }
 
-.ctaBuy:hover {
-  transform: translateY(calc(var(--px) * -2));
-  filter: brightness(1.07);
+@media (hover: hover) {
+  .ctaBuy:hover {
+    transform: translateY(calc(var(--px) * -2));
+    filter: brightness(1.07);
+  }
 }
 
 .ctaBuy:active {
@@ -728,7 +753,8 @@
 }
 
 .ctaPoor,
-.ctaPoor:hover {
+.ctaPoor:hover,
+.ctaPoor:active {
   transform: none;
   filter: grayscale(0.75) brightness(0.72);
   box-shadow: 0 calc(var(--px) * 6) 0 rgba(70, 50, 20, 0.8);
@@ -739,7 +765,7 @@
   margin: 0;
   min-height: calc(var(--px) * 22);
   text-align: center;
-  font-size: calc(var(--px) * 18);
+  font-size: max(11px, calc(var(--px) * 18));
   font-weight: 500;
   line-height: 1.2;
   opacity: 0.8;
@@ -781,10 +807,147 @@
   margin: calc(var(--px) * 8) 0 0;
   padding-top: calc(var(--px) * 8);
   border-top: 1px solid rgba(255, 255, 255, 0.09);
-  font-size: calc(var(--px) * 16);
+  font-size: max(11px, calc(var(--px) * 16));
   font-weight: 500;
   line-height: 1.3;
   opacity: 0.62;
+}
+
+/* --- Kleine Bühne (Handy quer) ---------------------------------------------------------------------- */
+
+/* Die Bühne (.stage der Oberfläche) ist der Container. Hier ist --px klein (0,44 bis 0,7): Schriftböden (11 px) und Tippflächen (--tap-min)
+   machen Texte und Knöpfe größer als die Skalierung, also rücken Ränder zusammen und Nebensächliches entfällt. */
+@container (max-width: 900px) {
+  .root {
+    gap: max(8px, calc(var(--px) * 14));
+    grid-template-columns: max(76px, calc(var(--px) * 132)) minmax(0, 1fr) max(196px, calc(var(--px) * 468));
+  }
+
+  .rail {
+    gap: max(4px, calc(var(--px) * 8));
+  }
+
+  /* Bewegungs-Chips: kompakter, bei Platzmangel zweizeilig (Standard). Nur für grobe Zeiger (Touch) macht der Block darunter eine
+     einzeilige, wischbare Leiste daraus. */
+  .chips {
+    left: max(8px, calc(var(--px) * 18));
+    right: max(8px, calc(var(--px) * 18));
+    bottom: max(6px, calc(var(--px) * 14));
+  }
+
+  .chip {
+    padding: 0 max(10px, calc(var(--px) * 14));
+  }
+
+  /* Touch: zwei Zeilen à 44 px würden die Figur halb verdecken, deshalb eine Zeile, seitlich wischbar. Mit der Maus wäre eine
+     solche Leiste unerreichbar (kein senkrechtes Rad, keine sichtbare Leiste) – dort bleibt es beim Umbruch. */
+  @media (pointer: coarse) {
+    .chips {
+      flex-wrap: nowrap;
+      justify-content: safe center;
+      overflow-x: auto;
+      scrollbar-width: none;
+      touch-action: pan-x;
+    }
+
+    .chips::-webkit-scrollbar {
+      display: none;
+    }
+
+    .chip {
+      flex: 0 0 auto;
+    }
+  }
+
+  .info {
+    padding: max(8px, calc(var(--px) * 16)) max(10px, calc(var(--px) * 20)) max(8px, calc(var(--px) * 12));
+  }
+
+  /* passt der Inhalt nicht, scrollt er hier (die Aktionen darunter bleiben stehen) statt sich über sie zu legen */
+  .infoBody {
+    gap: max(4px, calc(var(--px) * 7));
+    /* Polster + negativer Rand: der Scroll-Container beschneidet sonst Glühen und Kontur des Namens an den Kanten */
+    margin: -8px -8px 0;
+    padding: 8px 8px 2px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    touch-action: pan-y;
+  }
+
+  .infoBody::-webkit-scrollbar {
+    display: none;
+  }
+
+  .ability {
+    gap: max(8px, calc(var(--px) * 12));
+    padding: max(5px, calc(var(--px) * 9)) max(8px, calc(var(--px) * 12));
+  }
+
+  .abilityIcon {
+    width: max(26px, calc(var(--px) * 46));
+    height: max(26px, calc(var(--px) * 46));
+  }
+
+  .stats {
+    gap: max(4px, calc(var(--px) * 6)) max(10px, calc(var(--px) * 18));
+  }
+
+  .statLabel {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .actions {
+    margin-top: max(4px, calc(var(--px) * 8));
+    gap: max(2px, calc(var(--px) * 4));
+  }
+
+  /* der feste Hinweistext ist hier Beiwerk */
+  .note {
+    display: none;
+  }
+}
+
+/* Winzige Bühne (<= 480 px, z. B. Hochformat mit „Trotzdem spielen“) mit der Maus: die Figurenkarte ist dort nur rund 75 px breit, zwei
+   oder mehr Chip-Zeilen legen sich über die Figur. Wie bei Touch eine Zeile; mit feinem Zeiger bleibt eine dünne Bildlaufleiste
+   sichtbar (nicht versteckt), die Chips sind per Ziehen, Rad und Tastatur erreichbar. */
+@media (pointer: fine) {
+  @container (max-width: 480px) {
+    .chips {
+      flex-wrap: nowrap;
+      justify-content: safe center;
+      overflow-x: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.4) transparent;
+    }
+
+    .chip {
+      flex: 0 0 auto;
+    }
+  }
+}
+
+/* Schmale Bühne (bis ca. 700 px, z. B. Einbetten ab 560 px mit der Maus): die Menü-Reiter brechen dort in eine zweite Zeile um und
+   lassen der Reihe der Helden-Kacheln zu wenig Höhe. Statt die Kacheln unter Tippgröße zu quetschen, scrollt die Reihe senkrecht –
+   das Mausrad wirkt dort von Haus aus. */
+@container (max-width: 700px) {
+  .tile {
+    flex: 1 0 var(--tap-min, 40px);
+  }
+
+  .rail {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    /* Polster + negativer Rand: der Scroll-Container beschneidet sonst Ring, Glühen und das seitliche Anheben der Kacheln */
+    padding: 10px;
+    margin: -10px;
+  }
+
+  .rail::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 /* --- Weniger Bewegung -------------------------------------------------------------------------- */

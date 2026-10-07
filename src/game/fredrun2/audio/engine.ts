@@ -3,8 +3,12 @@
  *
  * Lebenszyklus: Vor `unlock()` existiert kein AudioContext (Autoplay-Policy). `unlock()` erzeugt und resumed ihn
  * synchron innerhalb der Geste. Aufrufe wie `music.play()`/`loop(on)` VOR dem Unlock werden gemerkt und starten,
- * sobald der Kontext läuft. Ohne Web-Audio (SSR/Node/alte Browser) liefert `createNoopAudio()` ein stummes Objekt.
+ * sobald der Kontext läuft – auch wenn das „running“ erst Sekunden nach dem (1.2-s-)Ende von `unlock()` eintrifft
+ * (langsames Gerät, Safari/iOS): die Entscheidung trifft `onstatechange`, nicht das Zeitlimit. Ohne Web-Audio
+ * (SSR/Node/alte Browser) liefert `createNoopAudio()` ein stummes Objekt.
  */
+import { withRev } from "../asset-rev";
+import { BANK_BASE_URL, BANK_MANIFEST_FILE } from "./bank";
 import { clamp } from "./dsp";
 import {
   applyMaster,
@@ -14,6 +18,9 @@ import {
   clamp01,
   DEFAULT_VOLUMES,
   duckMusic,
+  musicAudible,
+  releaseDuck,
+  setMuffle as applyMuffle,
   sfxAudible,
   type AudioGraph,
   type Volumes,
@@ -21,7 +28,7 @@ import {
 import { LoopBank } from "./loops";
 import { MusicDirector, TIMER_MS, type NoteLogEntry } from "./music";
 import { SFX_META, SfxPlayer } from "./sfx";
-import { isJingle, JINGLES, JinglePlayer, TrackMusic } from "./tracks";
+import { isJingle, JINGLES, JinglePlayer, MUSIC_BASE, MusicLibrary, TrackMusic } from "./tracks";
 import type { FredAudio, LoopName, MusicTrackId, SfxName, SfxOptions, WorldMusicId } from "./types";
 
 type AudioCtor = new (options?: AudioContextOptions) => AudioContext;
@@ -41,12 +48,15 @@ export function createNoopAudio(): FredAudio {
       return false;
     },
     sfx: () => {},
+    stopStingers: () => {},
+    prefetch: () => {},
     loop: () => {},
     music: {
       play(id) {
         current = id;
       },
       setIntensity: () => {},
+      setMuffle: () => {},
       stop() {
         current = null;
       },
@@ -71,12 +81,40 @@ export function createNoopAudio(): FredAudio {
   };
 }
 
+/**
+ * Wärmt den HTTP-Cache für Audiodateien vor: SFX-Bank (Manifest + MP3), Musik-Manifest und je angegebenem Stück genau eine
+ * Variante (dieselbe, die `music.play` später wählt). Nur Download mit niedriger Priorität, kein Dekodieren (kein zusätzlicher
+ * Speicher), kein AudioContext und keine Geste nötig; ohne fetch (SSR) wirkungslos. `music` fehlt → nur das Menüstück,
+ * `music: []` → nur Bank und Manifest.
+ */
+export function prefetchAudio(library: MusicLibrary, opts: { music?: readonly string[] } = {}): void {
+  if (typeof fetch !== "function") return;
+  const manifestUrl = withRev(BANK_BASE_URL + BANK_MANIFEST_FILE);
+  if (library.claim(manifestUrl)) {
+    fetch(manifestUrl, { priority: "low" })
+      .then((r) => {
+        if (!r.ok) throw new Error(`${manifestUrl}: ${r.status}`);
+        return r.json() as Promise<{ file?: unknown; rev?: unknown }>;
+      })
+      .then((m) => {
+        if (typeof m.file !== "string") return undefined;
+        // dieselbe URL wie SfxBank.load (bank.ts), damit der Browser-Cache trifft
+        return library.warm(typeof m.rev === "string" && m.rev ? `${BANK_BASE_URL}${m.file}?v=${m.rev}` : withRev(BANK_BASE_URL + m.file));
+      })
+      .catch(() => library.release(manifestUrl));
+  }
+  library.prefetch(opts.music ?? ["menu"]);
+}
+
 export interface EngineDebug {
   readonly ctx: AudioContext | null;
   readonly graph: AudioGraph | null;
   readonly sfxPlayer: SfxPlayer | null;
   readonly director: MusicDirector | null;
   readonly loops: LoopBank | null;
+  readonly tracks: TrackMusic | null;
+  readonly jingles: JinglePlayer | null;
+  readonly library: MusicLibrary;
   readonly timerActive: boolean;
   /** Ein Scheduler-Tick von Hand (Tests, ohne echten Timer). */
   tick(): void;
@@ -87,7 +125,9 @@ export interface EngineDebug {
 
 const noop = (): void => {};
 
-export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: EngineDebug } {
+/** `library`: gemeinsame Musik-Bibliothek (Variantenwahl/Vorwärmen), z. B. mit `preloadAudio` aus index.ts geteilt. */
+export function createEngine(Ctor: AudioCtor, opts: { library?: MusicLibrary } = {}): { audio: FredAudio; debug: EngineDebug } {
+  const library = opts.library ?? new MusicLibrary();
   let ctx: AudioContext | null = null;
   let graph: AudioGraph | null = null;
   let sfxPlayer: SfxPlayer | null = null;
@@ -103,8 +143,13 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
   let disposed = false;
   let suspended = false;
   let everRunning = false;
+  let jinglePrefetchTimer = false;
   let lastResumeTry = -Infinity;
   let tempo = 1;
+  /** gewünschte Musikdämpfung (setMuffle), gilt auch für einen Kontext, der erst später entsteht */
+  let muffleAmount = 0;
+  /** unlock() wurde mindestens einmal aufgerufen: erst dann darf audioSession angefasst werden */
+  let sessionWanted = false;
   let volumes: Volumes = { ...DEFAULT_VOLUMES };
   let pendingPlay: { id: MusicTrackId; opts?: { crossfadeSec?: number; intensity?: number } } | null = null;
   const pendingLoops = new Map<LoopName, number | null>();
@@ -148,7 +193,7 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
         if (debugState.recordNotes) debugState.noteLog.push(e);
       };
       director.setTempoScale(tempo);
-      tracks = new TrackMusic(graph);
+      tracks = new TrackMusic(graph, MUSIC_BASE, library);
       tracks.onFail = (id) => {
         // Datei nicht ladbar (offline/fehlt): dauerhaft auf die prozedurale Musik zurückfallen
         tracksFailed = true;
@@ -159,12 +204,12 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
       };
       jingles = new JinglePlayer(graph);
       loops = new LoopBank(graph);
+      if (muffleAmount > 0) applyMuffle(graph, muffleAmount, 0.005);
       ctx.onstatechange = () => {
-        // Browser hat den Kontext (z.B. nach iOS-Unterbrechung) wieder gestartet
-        if (ctx && ctx.state === "running" && everRunning && !suspended) {
-          director?.resync();
-          startTimer();
-        }
+        // Der Kontext läuft: erstmals (Entsperren dauerte länger als das Zeitlimit von unlock(), z. B. Safari/iOS, Bluetooth,
+        // langsames Gerät) oder wieder (nach einer Unterbrechung) – wartende Musik/Dauerklänge starten in beiden Fällen
+        if (!ctx || disposed || suspended || ctx.state !== "running") return;
+        onRunning();
       };
       return true;
     } catch {
@@ -194,8 +239,8 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
     startTimer();
   }
 
-  function onRunning(): void {
-    everRunning = true;
+  /** Startet gemerkte Dauerklänge und die gemerkte Musik (bei jedem Wechsel auf „running“). */
+  function flushPending(): void {
     if (!ready()) return;
     for (const [name, level] of pendingLoops) loops?.set(name, level !== null, level ?? 0);
     pendingLoops.clear();
@@ -204,20 +249,49 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
       pendingPlay = null;
       startMusic(p.id, p.opts);
     }
+  }
+
+  /** Der Kontext ist (wieder) „running“: gemerkte Aufrufe starten, Scheduler neu aufsetzen. Idempotent. */
+  function onRunning(): void {
+    everRunning = true;
+    if (!ready()) return;
+    director?.resync();
+    flushPending();
     startTimer();
     // Stinger (Game Over/Highscore/Weltwechsel) erst nach dem ersten Stück laden, damit sich die Downloads nicht bremsen
-    if (jingles) {
+    if (jingles && !jinglePrefetchTimer) {
+      jinglePrefetchTimer = true;
       const j = jingles;
       const t = setTimeout(() => j.prefetch(), 2500);
       (t as unknown as { unref?: () => void }).unref?.();
     }
   }
 
+  /**
+   * iOS/Safari 16.4+: audioSession.type „playback“ lässt Web Audio auch bei aktivem Stummschalter klingen. Nur nach unlock(),
+   * solange nicht stummgeschaltet, nicht pausiert (verstecktes Tab) und nicht entsorgt; sonst „auto“. Ohne API wirkungslos.
+   */
+  function syncAudioSession(): void {
+    try {
+      const nav = (globalThis as { navigator?: { audioSession?: { type?: string } } }).navigator;
+      if (!nav || !("audioSession" in nav) || !nav.audioSession) return;
+      const want = sessionWanted && !disposed && !volumes.muted && !suspended ? "playback" : "auto";
+      if (nav.audioSession.type !== want) nav.audioSession.type = want;
+    } catch {
+      /* egal */
+    }
+  }
+
   function unlock(): Promise<void> {
     if (disposed || !ensureContext() || !ctx) return Promise.resolve();
     const c = ctx;
-    if (everRunning && c.state === "running") return Promise.resolve();
+    sessionWanted = true;
+    if (everRunning && c.state === "running") {
+      syncAudioSession();
+      return Promise.resolve();
+    }
     suspended = false;
+    syncAudioSession();
     // iOS/Safari: einen (stillen) Puffer innerhalb der Geste starten schaltet die Ausgabe frei
     try {
       const b = c.createBuffer(1, 1, 22050);
@@ -248,7 +322,8 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
         if (!disposed && c.state === "running") onRunning();
         resolve();
       };
-      // resume() kann in Safari ohne Geste ewig hängen -> nie länger als ~1.2 s warten
+      // resume() kann in Safari ohne Geste ewig hängen -> nie länger als ~1.2 s warten. Das Zeitlimit beendet nur das Promise;
+      // läuft der Kontext erst danach, startet onstatechange das Gemerkte (und jeder weitere unlock()-Aufruf versucht es erneut)
       const t = setTimeout(finish, 1200);
       (t as unknown as { unref?: () => void }).unref?.();
       p.then(finish, finish);
@@ -256,7 +331,7 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
   }
 
   function tryAutoResume(): void {
-    if (!ctx || !everRunning || suspended || disposed || typeof ctx.resume !== "function") return;
+    if (!ctx || suspended || disposed || typeof ctx.resume !== "function") return;
     const now = Date.now();
     if (now - lastResumeTry < 500) return;
     lastResumeTry = now;
@@ -273,13 +348,22 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
       tryAutoResume();
       return;
     }
-    if (!sfxAudible(graph)) return;
-    if (jingles && isJingle(name) && jingles.play(name, graph.sfxDry, opts?.volume ?? 1)) {
-      const [amount, sec] = JINGLES[name].duck;
-      duckMusic(graph, amount, sec);
-      // Game-Over/Highscore sind reine Musik-Stinger; der Weltwechsel bekommt zusätzlich den Effekt
-      if (name !== "world-transition") return;
+    if (isJingle(name)) {
+      // Jingles sind Musik-Stinger: Sichtbarkeit und Pegel folgen dem Musik-Regler (stingerBus), nicht dem Effekt-Regler
+      if (musicAudible(graph) && jingles) {
+        // Game Over/Highscore lösen einen noch klingenden Weltwechsel-Jingle ab (sonst liefen beide übereinander)
+        if (name !== "world-transition") jingles.stopOf("world-transition", 0.25);
+        if (jingles.play(name, graph.stingerBus, opts?.volume ?? 1)) {
+          const [amount, sec] = JINGLES[name].duck;
+          duckMusic(graph, amount, sec);
+          // Game-Over/Highscore sind reine Musik-Stinger; der Weltwechsel bekommt zusätzlich den Effekt
+          if (name !== "world-transition") return;
+        }
+      } else if (name !== "world-transition") {
+        return; // Musik aus/leise gestellt: kein Stinger, auch kein synthetischer Ersatz
+      }
     }
+    if (!sfxAudible(graph)) return;
     const voice = sfxPlayer.play(name, opts);
     if (voice) {
       const d = SFX_META[name].duck;
@@ -296,9 +380,17 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
     loops.set(name, on, level);
   }
 
+  /** Dämpfung zurücknehmen (neues/beendetes Stück); ohne Dämpfung bleibt der Graph unberührt. */
+  function resetMuffle(tau: number): void {
+    if (muffleAmount === 0 && (!graph || graph.muffle === 0)) return;
+    muffleAmount = 0;
+    if (graph) applyMuffle(graph, 0, tau);
+  }
+
   const music: FredAudio["music"] = {
     play(id, opts) {
       if (disposed) return;
+      resetMuffle(0.3);
       if (!ready() || !director) {
         pendingPlay = { id, opts };
         return;
@@ -311,10 +403,16 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
       director?.setIntensity(v, rampSec);
       tracks?.setIntensity(v, rampSec);
     },
+    setMuffle(amount, rampSec) {
+      if (disposed) return;
+      muffleAmount = clamp01(amount);
+      if (graph) applyMuffle(graph, muffleAmount, rampSec);
+    },
     stop(fadeSec) {
       pendingPlay = null;
       lastPlay = null;
       if (disposed) return;
+      resetMuffle(Math.max(0.3, fadeSec ?? 0));
       director?.stop(fadeSec);
       tracks?.stop(fadeSec);
     },
@@ -330,6 +428,15 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
       return !disposed && ctx !== null && everRunning && (suspended || ctx.state === "running");
     },
     sfx,
+    stopStingers(fadeSec = 0.3) {
+      if (disposed || !graph) return;
+      jingles?.stopAll(fadeSec);
+      releaseDuck(graph);
+    },
+    prefetch(opts) {
+      if (disposed) return;
+      prefetchAudio(library, opts);
+    },
     loop,
     music,
     setMasterVolume(v) {
@@ -347,6 +454,7 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
     setMuted(m) {
       volumes.muted = !!m;
       if (graph) applyMaster(graph);
+      syncAudioSession();
     },
     get muted() {
       return volumes.muted;
@@ -358,6 +466,7 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
       if (disposed || !ctx) return;
       suspended = true;
       stopTimer();
+      syncAudioSession();
       try {
         ctx.suspend().catch(noop);
       } catch {
@@ -367,14 +476,11 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
     resume() {
       if (disposed || !ctx) return;
       suspended = false;
+      syncAudioSession();
       const c = ctx;
       const after = (): void => {
         if (disposed || suspended) return;
-        if (c.state === "running") {
-          everRunning = true;
-          director?.resync();
-          startTimer();
-        }
+        if (c.state === "running") onRunning();
       };
       try {
         c.resume().then(after, noop);
@@ -389,6 +495,7 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
     dispose() {
       if (disposed) return;
       disposed = true;
+      syncAudioSession();
       stopTimer();
       pendingPlay = null;
       pendingLoops.clear();
@@ -433,6 +540,13 @@ export function createEngine(Ctor: AudioCtor): { audio: FredAudio; debug: Engine
     get loops() {
       return loops;
     },
+    get tracks() {
+      return tracks;
+    },
+    get jingles() {
+      return jingles;
+    },
+    library,
     get timerActive() {
       return timer !== null;
     },

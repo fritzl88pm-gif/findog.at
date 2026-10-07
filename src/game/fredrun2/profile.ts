@@ -3,6 +3,8 @@ import { CHARACTERS, isCharacterId } from "./characters";
 import { CHARACTER_IDS, WORLD_IDS, type CharacterId, type RunMode, type WorldId } from "./types";
 
 export const PROFILE_KEY = "findog.fredrun2.profile.v1";
+/** Sicherungsschlüssel für defekte Roh-Daten (JSON-Parsefehler), bevor sie überschrieben werden */
+export const PROFILE_BACKUP_KEY = `${PROFILE_KEY}.bak`;
 export const TOP_LIMIT = 10;
 export const NAME_MAX = 16;
 /**
@@ -30,6 +32,18 @@ export interface Settings {
   quality: "auto" | "low" | "medium" | "high";
   showFps: boolean;
   hints: boolean;
+  /** Verkürzter Countdown bei Wiederholung desselben Laufs (ab dem zweiten Lauf) */
+  quickRestart: boolean;
+  /** Vibration (Android) und Controller-Rumble bei Treffer/Tod; wirkt nie in der Demo */
+  haptics: boolean;
+  /** Stärke des Screen-Shakes 0..1 (1 = bisher); "Weniger Bewegung" überstimmt mit 0 */
+  shake: number;
+  /** Intensität von Vollbild-Blitzen/Wetter-Aufhellern 0..1 (1 = bisher); "Weniger Bewegung" begrenzt auf 0,3 */
+  flashes: number;
+  /** Sprung-Assistent: Tippen führt zu einem vollen Sprung (wirkt im InputManager, die Sim bleibt unverändert) */
+  jumpAssist: boolean;
+  /** Akustische Signale (Dash bereit, letztes Herz, Ende der Zeitlupe) */
+  cues: boolean;
 }
 
 export interface Lifetime {
@@ -76,7 +90,22 @@ export function defaultProfile(): Profile {
     mode: "world",
     best: {},
     top: {},
-    settings: { master: 0.85, music: 0.6, sfx: 0.9, muted: false, reducedMotion: false, quality: "auto", showFps: false, hints: true },
+    settings: {
+      master: 0.85,
+      music: 0.6,
+      sfx: 0.9,
+      muted: false,
+      reducedMotion: false,
+      quality: "auto",
+      showFps: false,
+      hints: true,
+      quickRestart: true,
+      haptics: true,
+      shake: 1,
+      flashes: 1,
+      jumpAssist: false,
+      cues: true,
+    },
     lifetime: { runs: 0, meters: 0, coins: 0, stomps: 0, nearMisses: 0, playSeconds: 0 },
     seenIntro: false,
     dailyKey: "",
@@ -156,6 +185,12 @@ export function normalizeProfile(raw: unknown): Profile {
       quality: s.quality === "low" || s.quality === "medium" || s.quality === "high" || s.quality === "auto" ? s.quality : "auto",
       showFps: s.showFps === true,
       hints: s.hints !== false,
+      quickRestart: s.quickRestart !== false,
+      haptics: s.haptics !== false,
+      shake: num(s.shake, d.settings.shake, 0, 1),
+      flashes: num(s.flashes, d.settings.flashes, 0, 1),
+      jumpAssist: s.jumpAssist === true,
+      cues: s.cues !== false,
     },
     lifetime: {
       runs: Math.floor(num(l.runs, 0)),
@@ -182,16 +217,30 @@ function storage(): StorageLike | null {
   }
 }
 
+/** Sichert defekte Roh-Daten einmalig unter dem Backup-Schlüssel; ein vorhandenes Backup bleibt unangetastet. Wirft nie. */
+function backupBrokenProfile(store: StorageLike, raw: string): void {
+  try {
+    if (store.getItem(PROFILE_BACKUP_KEY)) return;
+    store.setItem(PROFILE_BACKUP_KEY, raw);
+  } catch {
+    /* Backup ist nur ein Zusatz (Storage voll/gesperrt) */
+  }
+}
+
 export function loadProfile(store: StorageLike | null = storage()): Profile {
   if (!store) return defaultProfile();
+  let raw: string | null = null;
   try {
-    const raw = store.getItem(PROFILE_KEY);
+    raw = store.getItem(PROFILE_KEY);
     return raw ? normalizeProfile(JSON.parse(raw)) : defaultProfile();
   } catch {
+    // JSON-Parsefehler bei vorhandenen Daten: vor dem späteren Überschreiben sichern (kein Backup, wenn schon der Zugriff scheiterte)
+    if (raw) backupBrokenProfile(store, raw);
     return defaultProfile();
   }
 }
 
+/** Speichert das Profil. `false` bei fehlendem, gesperrtem oder vollem Speicher (wirft nie) – der Hub leitet daraus `storageOk` ab. */
 export function saveProfile(p: Profile, store: StorageLike | null = storage()): boolean {
   if (!store) return false;
   try {

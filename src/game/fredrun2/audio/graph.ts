@@ -3,10 +3,15 @@
  *
  *   SFX-Stimmen ─► sfxDry ───────────────────────────────┐
  *   SFX-Sends   ─► sfxWet ─► reverbIn ─► HP ─► Convolver ─► reverbReturn ─┤
- *   Musik-Layer ─► musicDry ─► duckDry ──────────────────┤
- *   Musik-Sends ─► musicWet ─► duckWet ─► reverbIn       │
+ *   Musik-Layer ─► musicDry ─► musicLP ─► muffleDry ─► duckDry ───────────┤
+ *   Musik-Sends ─► musicWet ─► musicWetLP ─► muffleWet ─► duckWet ─► reverbIn
+ *   Stinger     ─► stingerBus (Musik-Regler, kein Duck) ───┤
  *                                                        ▼
  *                                   mix ─► Kompressor ─► Soft-Clipper ─► master ─► destination
+ *
+ * `musicLP`/`muffleDry` (und die Hall-Pfad-Entsprechung) sind die „Dämpfung“ (setMuffle): Tiefpass + Pegelabsenkung für
+ * Pause/Zeitlupe. `stingerBus` trägt die Jingles (Game Over, Highscore, Weltwechsel): sie folgen dem Musik-Regler und werden
+ * nicht von der Musik-Absenkung (duck) erfasst.
  *
  * Der Kompressor glättet Spitzen, der Soft-Clipper (linear bis ±0.8, danach tanh-Knie) garantiert,
  * dass nichts hart clippt. `master` sitzt hinter der Begrenzung: Lautstärke-Regler ändern die
@@ -28,6 +33,14 @@ export const MUSIC_TRIM = 1.0;
 export const SFX_TRIM = 1.0;
 /** Rückführungspegel des Halls. */
 export const REVERB_RETURN = 0.9;
+/** Dämpfung (setMuffle): Grenzfrequenz des Tiefpasses bei amount 1 und Pegelabsenkung in dB; offen = bis ca. 22 kHz. */
+export const MUFFLE_HZ = 900;
+export const MUFFLE_DB = -5;
+export const MUFFLE_OPEN_HZ = 22000;
+/** Standard-Zeitkonstante der Dämpfung (Sekunden, setTargetAtTime). */
+export const MUFFLE_TAU = 0.12;
+/** Zeitkonstante, mit der releaseDuck() die Musik wieder aufblendet. */
+export const DUCK_RELEASE_TAU = 0.12;
 
 export interface AudioGraph {
   ctx: BaseAudioContext;
@@ -40,8 +53,15 @@ export interface AudioGraph {
   sfxWet: GainNode;
   musicDry: GainNode;
   musicWet: GainNode;
+  /** Tiefpass der Musik (Trocken-/Hall-Pfad) und zugehörige Pegelstufen: siehe setMuffle */
+  musicLP: BiquadFilterNode;
+  musicWetLP: BiquadFilterNode;
+  muffleDry: GainNode;
+  muffleWet: GainNode;
   duckDry: GainNode;
   duckWet: GainNode;
+  /** Bus für die Musik-Stinger (Jingles): Pegel = Musiklautstärke, ohne Duck */
+  stingerBus: GainNode;
   reverbIn: GainNode;
   reverbReturn: GainNode;
   /** Cache für PeriodicWaves (pro Kontext einmal erzeugt). */
@@ -49,6 +69,8 @@ export interface AudioGraph {
   volumes: Volumes;
   duckUntil: number;
   duckTarget: number;
+  /** zuletzt gesetzte Dämpfung 0..1 (setMuffle) */
+  muffle: number;
 }
 
 export function clamp01(v: number): number {
@@ -105,10 +127,27 @@ export function buildGraph(ctx: BaseAudioContext, initial?: Partial<Volumes>): A
   const sfxWet = gain(volumes.sfx * SFX_TRIM);
   const musicDry = gain(volumes.music * MUSIC_TRIM);
   const musicWet = gain(volumes.music * MUSIC_TRIM);
+  const stingerBus = gain(volumes.music * MUSIC_TRIM);
   const duckDry = gain(1);
   const duckWet = gain(1);
+  // Dämpfung: offen (Cutoff nahe Nyquist, Pegel 1) bis amount 1 (900 Hz, -5 dB); Q -3 dB = Butterworth ohne Überhöhung
+  const openHz = muffleOpenHz(ctx);
+  const lowpass = (): BiquadFilterNode => {
+    const f = ctx.createBiquadFilter();
+    f.type = "lowpass";
+    f.frequency.value = openHz;
+    f.Q.value = -3;
+    return f;
+  };
+  const musicLP = lowpass();
+  const musicWetLP = lowpass();
+  const muffleDry = gain(1);
+  const muffleWet = gain(1);
   sfxDry.connect(mix);
-  musicDry.connect(duckDry);
+  stingerBus.connect(mix);
+  musicDry.connect(musicLP);
+  musicLP.connect(muffleDry);
+  muffleDry.connect(duckDry);
   duckDry.connect(mix);
 
   // Hall: Send-Bus -> Hochpass (Bässe nicht verwaschen) -> Convolver -> Rückführung
@@ -121,7 +160,9 @@ export function buildGraph(ctx: BaseAudioContext, initial?: Partial<Volumes>): A
   convolver.buffer = createImpulseResponse(ctx);
   const reverbReturn = gain(REVERB_RETURN);
   sfxWet.connect(reverbIn);
-  musicWet.connect(duckWet);
+  musicWet.connect(musicWetLP);
+  musicWetLP.connect(muffleWet);
+  muffleWet.connect(duckWet);
   duckWet.connect(reverbIn);
   reverbIn.connect(reverbHp);
   reverbHp.connect(convolver);
@@ -139,14 +180,20 @@ export function buildGraph(ctx: BaseAudioContext, initial?: Partial<Volumes>): A
     sfxWet,
     musicDry,
     musicWet,
+    musicLP,
+    musicWetLP,
+    muffleDry,
+    muffleWet,
     duckDry,
     duckWet,
+    stingerBus,
     reverbIn,
     reverbReturn,
     waves: new Map(),
     volumes,
     duckUntil: 0,
     duckTarget: 1,
+    muffle: 0,
   };
 }
 
@@ -160,6 +207,7 @@ export function applyMusicVolume(g: AudioGraph): void {
   const target = g.volumes.music * MUSIC_TRIM;
   smooth(g.musicDry.gain, target, now, 0.03);
   smooth(g.musicWet.gain, target, now, 0.03);
+  smooth(g.stingerBus.gain, target, now, 0.03);
 }
 
 export function applySfxVolume(g: AudioGraph): void {
@@ -185,6 +233,44 @@ export function duckMusic(g: AudioGraph, amount: number, sec: number): void {
     p.setTargetAtTime(depth, now, 0.03);
     p.setTargetAtTime(1, g.duckUntil, 0.28);
   }
+}
+
+/**
+ * Hebt eine laufende Musik-Absenkung auf (Jingle abgebrochen, Neustart): `duckUntil` verfällt, beide Duck-Stufen
+ * blenden mit `tau` zurück auf 1. Ohne diesen Schritt bliebe die Musik nach einem Game-Over-Duck (bis 9 s) leise.
+ */
+export function releaseDuck(g: AudioGraph, tau = DUCK_RELEASE_TAU): void {
+  g.duckUntil = 0;
+  g.duckTarget = 1;
+  const now = g.ctx.currentTime;
+  smooth(g.duckDry.gain, 1, now, tau);
+  smooth(g.duckWet.gain, 1, now, tau);
+}
+
+/** Offene Grenzfrequenz des Dämpfungs-Tiefpasses: 22 kHz, höchstens Nyquist des Kontexts. */
+export function muffleOpenHz(ctx: BaseAudioContext): number {
+  const nyquist = (ctx.sampleRate > 0 ? ctx.sampleRate : 44100) / 2;
+  return Math.min(MUFFLE_OPEN_HZ, nyquist);
+}
+
+/**
+ * Dämpft die Musik (Trocken- und Hall-Pfad): amount 0..1 (0 = unverändert, 1 = Tiefpass 900 Hz und -5 dB), Grenzfrequenz
+ * logarithmisch zwischen offen und 900 Hz, Pegel linear in dB. `tau` ist die Zeitkonstante des weichen Übergangs (Sekunden).
+ * Der Duck (duckMusic) liegt dahinter und bleibt unberührt; Stinger und SFX werden nicht gedämpft. Gibt den geklemmten Wert zurück.
+ */
+export function setMuffle(g: AudioGraph, amount: number, tau = MUFFLE_TAU): number {
+  const a = clamp01(amount);
+  g.muffle = a;
+  const now = g.ctx.currentTime;
+  const t = Number.isFinite(tau) ? Math.max(0.005, tau) : MUFFLE_TAU;
+  const open = muffleOpenHz(g.ctx);
+  const hz = open * Math.pow(MUFFLE_HZ / open, a);
+  const level = Math.pow(10, (MUFFLE_DB * a) / 20);
+  smooth(g.musicLP.frequency, hz, now, t);
+  smooth(g.musicWetLP.frequency, hz, now, t);
+  smooth(g.muffleDry.gain, level, now, t);
+  smooth(g.muffleWet.gain, level, now, t);
+  return a;
 }
 
 /** Wird true, wenn Musik hörbar sein könnte (spart CPU beim Stummschalten). */
