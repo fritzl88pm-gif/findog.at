@@ -31,7 +31,7 @@ import {
   type ButtonCenter,
   type HudState,
 } from "./hud";
-import { HudSpriteCache, hudSprites, quantizeBakeScale, type HudSpriteKind, type SpriteCanvas } from "./pickups";
+import { HUD_PANELS, HudSpriteCache, hudSprites, quantizeBakeScale, type HudSpriteKind, type SpriteCanvas } from "./pickups";
 import { formatNumber } from "./ui-logic";
 
 // --- Hilfen ---------------------------------------------------------------------------------------------------------
@@ -462,7 +462,7 @@ describe("HudFx", () => {
 // --- Sprite-Cache -----------------------------------------------------------------------------------------------------
 
 describe("HudSpriteCache", () => {
-  const KINDS: HudSpriteKind[] = ["heart", "heart-urgent", "heart-empty", "heart-bar", "coin", "pu-magnet", "pu-shield", "pu-slowmo", "pu-turbo"];
+  const KINDS: HudSpriteKind[] = ["heart", "heart-urgent", "heart-empty", "heart-bar", "coin", "pu-magnet", "pu-shield", "pu-slowmo", "pu-turbo", "panel-tl", "panel-tl-best", "panel-coin", "panel-combo"];
 
   it("liefert je Variante genau eine Canvas und backt nur einmal je Skala", () => {
     const f = fakeFactory();
@@ -579,8 +579,34 @@ describe("drawHud", () => {
     expect(sets.filter(([k, v]) => k === "shadowBlur" && Number(v) > 0)).toHaveLength(0);
     expect(calls.filter((c) => c.name === "createLinearGradient")).toHaveLength(0);
     expect(calls.filter((c) => c.name === "createRadialGradient")).toHaveLength(0);
-    // Herzen, Münze, Leiste und Power-up-Blasen laufen über drawImage
-    expect(calls.filter((c) => c.name === "drawImage").length).toBeGreaterThanOrEqual(5 + 1 + 1 + 2);
+    // Herzen, Münze, Leiste, Power-up-Blasen und die drei festen Platten (Herz/Score, Münzen, Kombo) laufen über drawImage
+    expect(calls.filter((c) => c.name === "drawImage").length).toBeGreaterThanOrEqual(5 + 1 + 1 + 2 + 3);
+  });
+
+  it("feste Platten als Sprites: je Platte ein drawImage statt Rundrechteck-Pfad (4 arcTo)", () => {
+    const st = baseState({ combo: 3, best: 500, score: 200 });
+    const withSprites = fakeCtx();
+    drawHud(withSprites.g, st);
+    hudSprites.setFactory(() => null);
+    const vector = fakeCtx();
+    drawHud(vector.g, st);
+    const arcTos = (c: FakeCall[]): number => c.filter((x) => x.name === "arcTo").length;
+    // Herz-Score-Platte, Münz-Platte, Kombo-Platte und die Füllung der Herz-Leiste (vektoriell mit Verlauf): 4 Pfade weniger
+    expect(arcTos(vector.calls) - arcTos(withSprites.calls)).toBe(4 * 4);
+    expect(withSprites.calls.filter((x) => x.name === "drawImage").length - vector.calls.filter((x) => x.name === "drawImage").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("Platten-Sprites decken Platte plus Rand (Ecke links oben, Rand ragt 2 Einheiten hinaus)", () => {
+    const cache = new HudSpriteCache(fakeFactory().make);
+    for (const kind of ["panel-tl", "panel-tl-best", "panel-coin", "panel-combo"] as const) {
+      const sp = cache.get(kind, 1);
+      expect(sp).not.toBeNull();
+      if (!sp) continue;
+      expect(sp.x).toBe(-2);
+      expect(sp.y).toBe(-2);
+      expect(sp.w).toBe(HUD_PANELS[kind].w + 4);
+      expect(sp.h).toBe(HUD_PANELS[kind].h + 4);
+    }
   });
 
   it("ohne Canvas fällt es auf Vektor-Zeichnung zurück und wirft nicht", () => {
@@ -593,7 +619,7 @@ describe("drawHud", () => {
   it("warmHudSprites backt alle Varianten vorab; danach backt drawHud nichts mehr", () => {
     expect(warmHudSprites(1)).toBe(true);
     const bakes = hudSprites.bakes;
-    expect(bakes).toBe(9);
+    expect(bakes).toBe(13);
     const { g } = fakeCtx();
     drawHud(g, baseState({ hearts: 1, powerups: [{ kind: "magnet", frac: 0.5 }, { kind: "shield", frac: 0.5 }, { kind: "slowmo", frac: 0.5 }, { kind: "turbo", frac: 0.5 }] }));
     expect(hudSprites.bakes).toBe(bakes);

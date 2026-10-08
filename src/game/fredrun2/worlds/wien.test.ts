@@ -7,10 +7,12 @@ import { Sim } from "../sim";
 import type { EntSpec } from "../types";
 import { WORLDS } from "./index";
 import { auditPatterns, botRuns } from "./shared-b/audit";
-import { FAKE_IMAGE, assetsOf, installCanvasStub, installTouchStub, manifestProps, stubView } from "./shared-b/test-kit";
+import { FAKE_IMAGE, assetsOf, installCanvasStub, installRecordingStub, installTouchStub, manifestProps, stubView, type RecordingCanvas } from "./shared-b/test-kit";
 import type { StageCache } from "./shared-b/layers";
 import { WORLD_WIEN } from "./wien";
 import { WIEN_STAGE_METERS, WienRenderer } from "./wien/renderer";
+import { MirrorBackdrop } from "./wien/cache";
+import { paintClouds, paintCloudsA, paintCloudsB, paintFacades, startFacades, type FacadeOpts } from "./wien/scenery";
 import { PropSprites, WIEN_PROP_SIZES, beamWidth, propBake, propBakeJobs } from "./wien/skins";
 import type { SizedSprites } from "./wien/cache";
 import { WIEN_BACKDROPS } from "./wien/stages";
@@ -151,6 +153,11 @@ describe("Welt Wien im Sturm", () => {
 // --- Stufen-Backen, Vorbacken, Skalenwechsel, Blitz-Regler (Canvas-Attrappe, ohne DOM) ----------------------------------
 
 interface WienInternals {
+  clouds1: unknown;
+  clouds2: unknown;
+  cloudsPartial: unknown;
+  fx: unknown;
+  roofSlots: unknown[];
   puffs: SizedSprites;
   steam: SizedSprites;
   reflections: StageCache;
@@ -159,6 +166,7 @@ interface WienInternals {
   backdrop: { cache: StageCache };
   skinCtx: { sprites: PropSprites };
   facadeVar: Map<number, unknown>;
+  facadeBuild: Map<number, unknown>;
   facadeSpares: unknown[];
 }
 
@@ -297,22 +305,151 @@ describe("Wien – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () => {
     at(0.02);
     at(0.2);
     expect(i.backdrop.cache.has(2) || i.facades.has(2) || i.roofs.has(2)).toBe(false);
-    at(0.3);
     const count = (): number => [i.backdrop.cache, i.facades, i.roofs, i.reflections].filter((c) => c.has(2)).length;
-    expect(count()).toBe(1); // ein Schritt (Backdrop), nicht alle auf einmal
-    at(0.31); // innerhalb der Lücke (< 100 ms): nichts Neues
-    expect(count()).toBe(1);
-    clock += 120;
-    at(0.31);
-    expect(i.facades.has(2)).toBe(false); // Fassade: erst die Vorarbeit (Rohvariante) …
-    clock += 120;
-    at(0.32);
-    expect(i.facades.has(2)).toBe(true); // … dann der Bake
-    for (let k = 0; k < 8; k += 1) {
+    const stepOnce = (progress: number): void => {
       clock += 120;
-      at(0.4 + k * 0.01);
-    }
+      at(progress);
+    };
+    at(0.3); // Schritt 1: Kulisse, linke Hälfte
+    expect(count()).toBe(0); // ein Teilschritt, nichts ist fertig
+    at(0.31); // innerhalb der Lücke (< 100 ms): nichts Neues
+    expect(count()).toBe(0);
+    expect(i.facadeBuild.size).toBe(0);
+    stepOnce(0.31); // Schritt 2: Kulisse, gespiegelte Hälfte
+    stepOnce(0.32); // Schritt 3: Dunstverlauf, Kulisse fertig
+    expect(i.backdrop.cache.has(2)).toBe(true);
+    expect(i.facades.has(2) || i.roofs.has(2)).toBe(false); // nicht alles auf einmal
+    stepOnce(0.33); // Fassade: Vorarbeit (Rohvariante) in Teilschritten – erster Teil
+    expect(i.facadeVar.has(1)).toBe(false);
+    expect(i.facadeBuild.has(1)).toBe(true);
+    stepOnce(0.34);
+    expect(i.facadeVar.has(1)).toBe(false);
+    stepOnce(0.35); // dritter Teil: Rohvariante fertig
+    expect(i.facadeVar.has(1)).toBe(true);
+    expect(i.facadeBuild.size).toBe(0);
+    expect(i.facades.has(2)).toBe(false);
+    stepOnce(0.36); // … dann der Bake
+    expect(i.facades.has(2)).toBe(true);
+    for (let k = 0; k < 8; k += 1) stepOnce(0.4 + k * 0.01);
     for (const c of [i.backdrop.cache, i.facades, i.roofs, i.reflections]) expect(c.has(2)).toBe(true);
+  });
+
+  it("Fassaden in Teilschritten ergeben dieselben Zeichenbefehle wie am Stück (alle Schadensgrade, mit und ohne Brand)", () => {
+    installRecordingStub();
+    const variants: FacadeOpts[] = [
+      { lit: 0.62, fire: 0, damage: 0 },
+      { lit: 0.08, fire: 0.07, damage: 1 },
+      { lit: 0, fire: 0.34, damage: 1 },
+      { lit: 0, fire: 0, damage: 2, embers: true },
+    ];
+    for (const o of variants) {
+      const b = startFacades(2048, 320, o);
+      let steps = 1;
+      while (!b.step()) steps += 1;
+      expect(steps, `Teilschritte (damage ${o.damage}, fire ${o.fire})`).toBe(3); // 11 Gebäude zu je 4 → 3 Schritte
+      const direct = paintFacades(2048, 320, o);
+      const log = (b.tile.canvas as unknown as RecordingCanvas).log;
+      expect(log.length).toBeGreaterThan(100);
+      expect(log).toEqual((direct.canvas as unknown as RecordingCanvas).log);
+      expect(b.tile.roofs).toEqual(direct.roofs);
+      expect(b.step()).toBe(true); // fertig bleibt fertig
+    }
+  });
+
+  it("Wolken in zwei Teilen ergeben dieselben Zeichenbefehle wie am Stück", () => {
+    installRecordingStub();
+    const t = paintCloudsA(2048, 300);
+    const halfLog = (t.canvas as unknown as RecordingCanvas).log.length;
+    paintCloudsB(t);
+    const full = paintClouds(2048, 300);
+    expect(halfLog).toBeGreaterThan(50);
+    expect((t.canvas as unknown as RecordingCanvas).log.length).toBeGreaterThan(halfLog); // Teil 2 malt weiter
+    expect((t.canvas as unknown as RecordingCanvas).log).toEqual((full.canvas as unknown as RecordingCanvas).log);
+  });
+
+  it("Kulisse in drei Schritten (linke Hälfte, Spiegelung, Dunstverlauf) ergibt dieselben Zeichenbefehle wie am Stück", async () => {
+    installRecordingStub();
+    const img = { width: 100, height: 50 } as unknown as HTMLImageElement;
+    const mk = (): MirrorBackdrop => new MirrorBackdrop(["a", "b", "c"], -10, 50, 40, (st) => ({ foot: `#00000${st}` }));
+    const a = mk();
+    const b = mk();
+    await a.load(async () => img);
+    await b.load(async () => img);
+    for (let stage = 0; stage <= 2; stage += 1) {
+      let steps = 0;
+      while (!a.cache.has(stage) && steps < 6) {
+        a.cache.step(stage);
+        steps += 1;
+      }
+      expect(steps, `Stufe ${stage}`).toBe(3);
+      const stepwise = (a.cache.get(stage) as unknown as RecordingCanvas).log;
+      const direct = (b.cache.get(stage) as unknown as RecordingCanvas).log;
+      expect(stepwise.length).toBeGreaterThan(5);
+      expect(stepwise, `Stufe ${stage}`).toEqual(direct);
+    }
+    // ohne Bild (Ersatzkulisse): kein Schritt malt, die Fläche ist 1×1
+    const none = mk();
+    await none.load(async () => null);
+    expect(none.ready).toBe(false);
+    expect(none.cache.get(0).width).toBe(1);
+  });
+
+  it("Qualität 0: die Folgestufe wird erst ab ~60 % der Stufe gebacken, im Leerlauf (warm) gar nicht", async () => {
+    const { r } = await loaded();
+    const i = inner(r);
+    let clock = 10_000;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const run = (rr: WienRenderer, quality: 0 | 1 | 2, progress: number, n = 4): void => {
+      for (let k = 0; k < n; k += 1) {
+        clock += 120;
+        rr.update(1 / 60, stubView({ stage: 1, quality, worldMeters: 260 + progress * 260 }));
+      }
+    };
+    const has2 = (w: WienInternals): boolean => [w.backdrop.cache, w.facades, w.roofs].some((c) => c.has(2));
+    run(r, 0, 0.3);
+    run(r, 0, 0.5);
+    expect(has2(i)).toBe(false);
+    r.warm(1000);
+    expect(has2(i)).toBe(false);
+    run(r, 0, 0.62);
+    expect(has2(i)).toBe(true);
+    // normale Qualität: schon ab ~28 % (Gegenprobe)
+    const n = await loaded();
+    run(n.r, 2, 0.3);
+    expect(has2(inner(n.r))).toBe(true);
+  });
+
+  it("das Kulissenbild der Folgestufe wird kurz vor dem Vorbacken vordekodiert (einmal je Stufe, ab ~18 % der Stufe)", async () => {
+    const { r } = await loaded();
+    const spy = vi.spyOn(MirrorBackdrop.prototype, "predecode");
+    const at = (stage: number, progress: number): void => r.update(1 / 60, stubView({ stage, worldMeters: stage * 260 + progress * 260 }));
+    at(1, 0.05);
+    at(1, 0.17);
+    expect(spy).not.toHaveBeenCalled();
+    at(1, 0.2);
+    at(1, 0.25);
+    expect(spy.mock.calls).toEqual([[2]]);
+    at(2, 0.3);
+    expect(spy.mock.calls).toEqual([[2], [3]]);
+    at(7, 0.9); // letzte Stufe: nichts mehr
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("load baut Wolken, Leuchtflächen und Dachfenster-Plätze in eigenen Schritten – das Ergebnis liegt danach vollständig vor", async () => {
+    const { r } = await loaded();
+    const i = inner(r);
+    expect(i.clouds1).toBeTruthy();
+    expect(i.clouds2).toBeTruthy();
+    expect(i.cloudsPartial).toBeNull(); // keine halb gemalte Kachel zurückgeblieben
+    expect(i.fx).toBeTruthy();
+    expect(i.roofSlots.length).toBeGreaterThan(0);
+    // ohne load (Fallback): der erste update baut alles auf einmal, Wolken und Plätze sind danach da
+    installCanvasStub();
+    const lazy = new WienRenderer();
+    lazy.update(1 / 60, stubView());
+    expect(inner(lazy).clouds2).toBeTruthy();
+    expect(inner(lazy).cloudsPartial).toBeNull();
+    expect(inner(lazy).roofSlots.length).toBe(i.roofSlots.length);
   });
 
   it("ein ganzer Lauf durch alle 8 Stufen legt kaum neue Flächen an (verworfene Stufen werden wiederverwendet)", async () => {

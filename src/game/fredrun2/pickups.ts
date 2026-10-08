@@ -227,7 +227,20 @@ export function drawPowerupVector(g: CanvasRenderingContext2D, type: PickupType,
 // Aufrufer zeichnen dann mit den Vektor-Funktionen oben.
 // =====================================================================================================================
 
-export type HudSpriteKind = "heart" | "heart-urgent" | "heart-empty" | "heart-bar" | "coin" | "pu-magnet" | "pu-shield" | "pu-slowmo" | "pu-turbo";
+export type HudSpriteKind =
+  | "heart"
+  | "heart-urgent"
+  | "heart-empty"
+  | "heart-bar"
+  | "coin"
+  | "pu-magnet"
+  | "pu-shield"
+  | "pu-slowmo"
+  | "pu-turbo"
+  | "panel-tl"
+  | "panel-tl-best"
+  | "panel-coin"
+  | "panel-combo";
 
 /** Radien der HUD-Symbole in Logikeinheiten (Herz und Münze wie bisher im HUD, Power-up-Blase r≈14) */
 export const HUD_HEART_R = 19;
@@ -235,6 +248,17 @@ export const HUD_COIN_R = 15;
 export const HUD_POWERUP_R = 14;
 /** Maße der Herz-Leiste (Logikeinheiten) */
 export const HUD_HEART_BAR = { w: 276, h: 52 } as const;
+/**
+ * Feste HUD-Platten (Breite, Höhe, Eckenradius in Logikeinheiten): Pfad, Füllung und Rand kosten im Frame mehr als ein drawImage,
+ * daher werden sie wie die Symbole vorgerendert. Größe und Radius müssen zu den panel()-Aufrufen in hud.ts passen.
+ */
+export const HUD_PANELS = {
+  "panel-tl": { w: 292, h: 118, r: 18 },
+  "panel-tl-best": { w: 292, h: 124, r: 18 },
+  "panel-coin": { w: 156, h: 52, r: 18 },
+  "panel-combo": { w: 150, h: 58, r: 20 },
+} as const;
+type PanelKind = keyof typeof HUD_PANELS;
 
 /**
  * Halbe Kantenlänge der Sprites (Symbol plus Schein bzw. Glow) in Logikeinheiten, knapp um das Sichtbare gelegt (weniger
@@ -243,12 +267,13 @@ export const HUD_HEART_BAR = { w: 276, h: 52 } as const;
 const HEART_HALF: Record<"heart" | "heart-urgent" | "heart-empty", number> = { heart: 44, "heart-urgent": 48, "heart-empty": 28 };
 const COIN_HALF = 21;
 const POWERUP_HALF = 30;
-/** Rand um die Herz-Leiste (Antialiasing der Kante) */
+/** Rand um die Herz-Leiste (Antialiasing der Kante) und um die Platten (halbe Randstärke 1 plus Antialiasing) */
 const BAR_PAD = 1;
+const PANEL_PAD = 2;
 
 export interface HudSprite {
   canvas: CanvasImageSource;
-  /** Zielrechteck in Logikeinheiten: relativ zum Mittelpunkt (Herz, Münze, Power-up) bzw. zur linken oberen Ecke (Leiste) */
+  /** Zielrechteck in Logikeinheiten: relativ zum Mittelpunkt (Herz, Münze, Power-up) bzw. zur linken oberen Ecke (Leiste, Platten) */
   x: number;
   y: number;
   w: number;
@@ -328,7 +353,13 @@ export class HudSpriteCache {
     let y: number;
     let w: number;
     let h: number;
-    if (kind === "heart-bar") {
+    const panel = kind in HUD_PANELS ? HUD_PANELS[kind as PanelKind] : null;
+    if (panel) {
+      x = -PANEL_PAD;
+      y = -PANEL_PAD;
+      w = panel.w + PANEL_PAD * 2;
+      h = panel.h + PANEL_PAD * 2;
+    } else if (kind === "heart-bar") {
       x = -BAR_PAD;
       y = -BAR_PAD;
       w = HUD_HEART_BAR.w + BAR_PAD * 2;
@@ -356,7 +387,15 @@ export class HudSpriteCache {
     this.bakes += 1;
     // Logikeinheiten -> Bitmap; der Ursprung (0,0) liegt im Mittelpunkt des Symbols bzw. in der Ecke der Leiste
     sg.setTransform(q, 0, 0, q, -x * q, -y * q);
-    if (kind === "heart-bar") {
+    if (panel) {
+      // wie panel() in hud.ts: dunkle Platte mit hellem Rand
+      roundRect(sg, 0, 0, panel.w, panel.h, panel.r);
+      sg.fillStyle = "rgba(14,18,34,0.55)";
+      sg.fill();
+      sg.lineWidth = 2;
+      sg.strokeStyle = "rgba(255,255,255,0.14)";
+      sg.stroke();
+    } else if (kind === "heart-bar") {
       const grd = sg.createLinearGradient(0, 0, 0, HUD_HEART_BAR.h);
       grd.addColorStop(0, "rgba(150,14,28,0.75)");
       grd.addColorStop(1, "rgba(70,4,14,0.8)");

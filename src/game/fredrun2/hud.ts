@@ -323,6 +323,14 @@ const TR_ROOM = 166;
 const POWER_X = 148;
 const POWER_X_TOUCH = 158;
 
+/** Feste Platte als vorgerendertes Sprite (Ecke bei x, y); false ohne Canvas (Node): dann zeichnet der Aufrufer mit panel(). */
+function panelSprite(g: CanvasRenderingContext2D, kind: HudSpriteKind, x: number, y: number, bake: number): boolean {
+  const sprite = hudSprites.get(kind, bake);
+  if (!sprite) return false;
+  drawSprite(g, sprite, x, y);
+  return true;
+}
+
 function panel(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r = 18, fill = "rgba(14,18,34,0.55)"): void {
   roundRect(g, x, y, w, h, r);
   g.fillStyle = fill;
@@ -417,7 +425,7 @@ function drawTopLeft(g: CanvasRenderingContext2D, h: HudState, fx: HudFx | null,
   const hasBest = h.best > 0;
   g.save();
   if (s !== 1) anchor(g, TL_X, TL_Y, s);
-  panel(g, 22, 18, 292, hasBest ? 124 : 118);
+  if (!panelSprite(g, hasBest ? "panel-tl-best" : "panel-tl", 22, 18, bake)) panel(g, 22, 18, 292, hasBest ? 124 : 118);
   // rot hinterlegte Herz-Leiste (Verlauf als Sprite)
   const hx = 30;
   const hy = 25;
@@ -499,12 +507,13 @@ function drawTopLeft(g: CanvasRenderingContext2D, h: HudState, fx: HudFx | null,
 function drawTopRight(g: CanvasRenderingContext2D, h: HudState, fx: HudFx | null, u: number, ps: number, score: number, reduced: boolean): void {
   // Münzen: auf kleiner Bühne kompakt (Breite nach Ziffern) und höchstens so groß, dass die Pause-Taste frei bleibt
   const coins = cachedNum(coinsText, h.coins);
-  const w = u > 1.0001 ? clamp(77 + coins.length * 17.5, 100, 156) : 156;
+  const w = u > 1.0001 ? clamp(85 + coins.length * 17.5, 108, 156) : 156;
   const s = Math.max(1, Math.min(u, TR_ROOM / w));
   g.save();
   if (s !== 1) anchor(g, TR_X, TL_Y, s);
   const left = TR_X - w;
-  panel(g, left, 18, w, 52);
+  // feste Breite (156): Sprite; die schmale Münz-Platte kleiner Bühnen wird gezeichnet
+  if (w !== 156 || !panelSprite(g, "panel-coin", left, 18, ps * s)) panel(g, left, 18, w, 52);
   const iconX = left + 30;
   const sprite = hudSprites.get("coin", ps * s);
   {
@@ -541,10 +550,10 @@ function drawTopRight(g: CanvasRenderingContext2D, h: HudState, fx: HudFx | null
   }
 }
 
-function drawCombo(g: CanvasRenderingContext2D, h: HudState, fx: HudFx | null, reduced: boolean): void {
+function drawCombo(g: CanvasRenderingContext2D, h: HudState, fx: HudFx | null, reduced: boolean, bake: number): void {
   const cx = VIEW_W / 2;
   const w = 150;
-  panel(g, cx - w / 2, 18, w, 58, 20);
+  if (!panelSprite(g, "panel-combo", cx - w / 2, 18, bake)) panel(g, cx - w / 2, 18, w, 58, 20);
   const bump = bumpScale(fx ? fx.comboBump : 0, reduced);
   if (bump !== 1) {
     g.save();
@@ -845,8 +854,9 @@ export function warmHudSprites(pixelScale: number, cssScale?: number): boolean {
   const u = uiScaleFor(cssScale);
   const uTL = Math.min(u, UI_SCALE_TOP_LEFT_MAX);
   let ok = true;
-  for (const kind of ["heart", "heart-urgent", "heart-empty", "heart-bar"] as const) ok = hudSprites.get(kind, pixelScale * uTL) !== null && ok;
-  ok = hudSprites.get("coin", pixelScale * u) !== null && ok;
+  for (const kind of ["heart", "heart-urgent", "heart-empty", "heart-bar", "panel-tl", "panel-tl-best"] as const) ok = hudSprites.get(kind, pixelScale * uTL) !== null && ok;
+  ok = hudSprites.get("panel-combo", pixelScale) !== null && ok;
+  for (const kind of ["coin", "panel-coin"] as const) ok = hudSprites.get(kind, pixelScale * u) !== null && ok;
   for (const kind of ["pu-magnet", "pu-shield", "pu-slowmo", "pu-turbo"] as const) ok = hudSprites.get(kind, pixelScale * u) !== null && ok;
   return ok;
 }
@@ -871,7 +881,7 @@ export function drawHud(g: CanvasRenderingContext2D, h: HudState, ctx?: HudDrawC
   drawTopRight(g, h, fx, u, ps, score, reduced);
 
   // --- Combo (oben Mitte) ---
-  if (h.combo > 1) drawCombo(g, h, fx, reduced);
+  if (h.combo > 1) drawCombo(g, h, fx, reduced, ps);
 
   // --- Energie / Dash und aktive Power-ups ---
   if (h.touch) {

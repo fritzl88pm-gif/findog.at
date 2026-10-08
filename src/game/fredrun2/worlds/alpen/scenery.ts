@@ -99,7 +99,17 @@ function gradeSteps(haze: readonly [number, number]): GradeStep[] {
 }
 
 export const GRADE_FAR = gradeSteps(FAR_GRADE);
-export const GRADE_MID = gradeSteps(MID_GRADE);
+const midGrade = gradeSteps(MID_GRADE);
+/** Rest des Rohbilds (zwei Teile), dann Stimmung und Dunst (Schritte wie bei den anderen Ebenen) */
+export const GRADE_MID: GradeStep[] = [
+  (c) => continueMid(c),
+  (c) => continueMid(c),
+  (c, stage) => {
+    finishMid(c); // Schutz: sollte der Rest noch ausstehen, kommt er vor der Stimmung
+    return midGrade[0](c, stage);
+  },
+  midGrade[1],
+];
 export const GRADE_NEAR = gradeSteps(NEAR_GRADE);
 
 // --- Himmel -----------------------------------------------------------------------------------------
@@ -415,150 +425,221 @@ export function paintFarHills(stage: number, reuse?: HTMLCanvasElement | null, g
 }
 
 /** Almhänge mit Wäldern, Wiesen, Felsen, Wegen, Zäunen und Kühen (Parallax ~0.2). H = 250. */
-export function paintMidHills(stage: number, reuse?: HTMLCanvasElement | null, grade = true): HTMLCanvasElement {
+const MID_H = 250;
+
+/**
+ * Rohbild der Mittelhügel in drei Teilen (`yield` dazwischen): Hang, Flecken, Fels, Weg · erste Hälfte der Wälder ·
+ * zweite Hälfte, Zäune/Kühe und Kammlicht. Die Zeichenbefehle sind dieselben wie am Stück (`r` läuft durch alle Teile).
+ */
+function* midSteps(g: Ctx2D, stage: number): Generator<void, void, void> {
   const R = MID_RIDGE;
   const W = R.W;
-  const H = 250;
+  const H = MID_H;
   const snow = SNOWCOVER[stage];
   const rock = [0.1, 0.12, 0.45, 0.6, 0.5][stage];
-  return paint(W, H, (g) => {
-    const P = STAGE_PAL[stage];
-    const meadowTop = mixHex(P.grass, "#f4f7fb", snow * 0.92);
-    const meadowBot = mixHex(P.grassDark, "#b9c9da", snow * 0.8);
-    // Hang
+  const P = STAGE_PAL[stage];
+  const meadowTop = mixHex(P.grass, "#f4f7fb", snow * 0.92);
+  const meadowBot = mixHex(P.grassDark, "#b9c9da", snow * 0.8);
+  // Hang
+  g.beginPath();
+  g.moveTo(0, H);
+  for (let x = 0; x <= W; x += 4) g.lineTo(x, ridgeY(R, x));
+  g.lineTo(W, H);
+  g.closePath();
+  const grd = g.createLinearGradient(0, 40, 0, H);
+  grd.addColorStop(0, meadowTop);
+  grd.addColorStop(1, meadowBot);
+  g.fillStyle = grd;
+  g.fill();
+  g.save();
+  g.clip();
+  const r = mulberry(101 + stage * 7);
+  // Wiesenflecken / Licht-Schatten-Mulden
+  for (let i = 0; i < 70; i += 1) {
+    const x = r() * W;
+    const y = ridgeY(R, x) + 20 + r() * 150;
+    const rx = 40 + r() * 120;
+    g.fillStyle = r() < 0.5 ? `rgba(255,250,210,${(0.1 + r() * 0.08).toFixed(3)})` : `rgba(20,50,40,${(0.08 + r() * 0.06).toFixed(3)})`;
     g.beginPath();
-    g.moveTo(0, H);
-    for (let x = 0; x <= W; x += 4) g.lineTo(x, ridgeY(R, x));
-    g.lineTo(W, H);
-    g.closePath();
-    const grd = g.createLinearGradient(0, 40, 0, H);
-    grd.addColorStop(0, meadowTop);
-    grd.addColorStop(1, meadowBot);
-    g.fillStyle = grd;
+    g.ellipse(x, y, rx, rx * 0.22, 0, 0, TAU);
     g.fill();
-    g.save();
-    g.clip();
-    const r = mulberry(101 + stage * 7);
-    // Wiesenflecken / Licht-Schatten-Mulden
-    for (let i = 0; i < 70; i += 1) {
-      const x = r() * W;
-      const y = ridgeY(R, x) + 20 + r() * 150;
-      const rx = 40 + r() * 120;
-      g.fillStyle = r() < 0.5 ? `rgba(255,250,210,${(0.1 + r() * 0.08).toFixed(3)})` : `rgba(20,50,40,${(0.08 + r() * 0.06).toFixed(3)})`;
+  }
+  // Felsaufschlüsse
+  const rockCol = mixHex("#8a8f96", "#aeb8c4", snow * 0.5);
+  for (let i = 0; i < 26 * rock + 6; i += 1) {
+    const x = r() * W;
+    const y = ridgeY(R, x) + 10 + r() * 90;
+    const s = 10 + r() * 26;
+    g.fillStyle = rockCol;
+    g.beginPath();
+    g.moveTo(x - s, y + s * 0.4);
+    g.lineTo(x - s * 0.4, y - s * 0.5);
+    g.lineTo(x + s * 0.3, y - s * 0.3);
+    g.lineTo(x + s, y + s * 0.4);
+    g.closePath();
+    g.fill();
+    g.fillStyle = "rgba(255,255,255,0.28)";
+    g.beginPath();
+    g.moveTo(x - s * 0.4, y - s * 0.5);
+    g.lineTo(x + s * 0.3, y - s * 0.3);
+    g.lineTo(x + s * 0.5, y);
+    g.closePath();
+    g.fill();
+    if (snow > 0.2) {
+      g.fillStyle = "rgba(250,252,255,0.9)";
       g.beginPath();
-      g.ellipse(x, y, rx, rx * 0.22, 0, 0, TAU);
-      g.fill();
-    }
-    // Felsaufschlüsse
-    const rockCol = mixHex("#8a8f96", "#aeb8c4", snow * 0.5);
-    for (let i = 0; i < 26 * rock + 6; i += 1) {
-      const x = r() * W;
-      const y = ridgeY(R, x) + 10 + r() * 90;
-      const s = 10 + r() * 26;
-      g.fillStyle = rockCol;
-      g.beginPath();
-      g.moveTo(x - s, y + s * 0.4);
+      g.moveTo(x - s * 0.6, y - s * 0.1);
       g.lineTo(x - s * 0.4, y - s * 0.5);
       g.lineTo(x + s * 0.3, y - s * 0.3);
-      g.lineTo(x + s, y + s * 0.4);
+      g.lineTo(x + s * 0.6, y);
       g.closePath();
       g.fill();
-      g.fillStyle = "rgba(255,255,255,0.28)";
+    }
+  }
+  // Serpentinenweg
+  g.strokeStyle = snow > 0.6 ? "rgba(170,185,205,0.6)" : "rgba(214,196,150,0.75)";
+  g.lineWidth = 2.2;
+  g.beginPath();
+  for (let x = 0; x <= W; x += 8) {
+    const y = ridgeY(R, x) + 60 + Math.sin((x / W) * TAU * 6) * 34;
+    if (x === 0) g.moveTo(x, y);
+    else g.lineTo(x, y);
+  }
+  g.stroke();
+  yield; // Ende des ersten Teils (Hang, Flecken, Fels, Weg)
+  // Waldstücke
+  const fir: FirColors = {
+    dark: mixHex("#1f4632", "#6c7f93", snow * 0.55),
+    mid: mixHex("#2f6a42", "#7f94a8", snow * 0.5),
+    light: mixHex("#5d9a55", "#c2d0de", snow * 0.5),
+    trunk: "#3b2a1f",
+  };
+  const clusters = 14;
+  for (let cI = 0; cI < clusters; cI += 1) {
+    if (cI === clusters >> 1) yield; // Mitte der Wälder
+    const cx = (cI + r() * 0.6) * (W / clusters);
+    const spread = 50 + r() * 110;
+    const n = 10 + Math.floor(r() * 16);
+    for (let k = 0; k < n; k += 1) {
+      let x = cx + (r() - 0.5) * spread * 2;
+      x = ((x % W) + W) % W;
+      const y = ridgeY(R, x) + 14 + r() * 110;
+      const h = 20 + r() * 22 + (y - ridgeY(R, x)) * 0.12;
+      const fv = firVariant(fir, r());
+      drawFir(g, x, y, h, fv, snow, cI * 100 + k);
+      if (x + h * 0.25 > W) drawFir(g, x - W, y, h, fv, snow, cI * 100 + k);
+      if (x - h * 0.25 < 0) drawFir(g, x + W, y, h, fv, snow, cI * 100 + k);
+    }
+  }
+  // Zäune & Kühe (nur grüne Stufen)
+  if (snow < 0.5) {
+    g.strokeStyle = "rgba(92,64,40,0.8)";
+    g.lineWidth = 1.2;
+    for (let f = 0; f < 5; f += 1) {
+      const x0 = r() * (W - 240) + 20;
+      const len = 80 + r() * 140;
       g.beginPath();
-      g.moveTo(x - s * 0.4, y - s * 0.5);
-      g.lineTo(x + s * 0.3, y - s * 0.3);
-      g.lineTo(x + s * 0.5, y);
-      g.closePath();
-      g.fill();
-      if (snow > 0.2) {
-        g.fillStyle = "rgba(250,252,255,0.9)";
-        g.beginPath();
-        g.moveTo(x - s * 0.6, y - s * 0.1);
-        g.lineTo(x - s * 0.4, y - s * 0.5);
-        g.lineTo(x + s * 0.3, y - s * 0.3);
-        g.lineTo(x + s * 0.6, y);
-        g.closePath();
-        g.fill();
+      for (let x = x0; x < x0 + len; x += 10) {
+        const y = ridgeY(R, x) + 40 + (x - x0) * 0.08;
+        g.moveTo(x, y);
+        g.lineTo(x, y - 7);
       }
+      const ys = ridgeY(R, x0) + 40;
+      g.moveTo(x0, ys - 5);
+      g.lineTo(x0 + len, ridgeY(R, x0 + len) + 40 + len * 0.08 - 5);
+      g.stroke();
     }
-    // Serpentinenweg
-    g.strokeStyle = snow > 0.6 ? "rgba(170,185,205,0.6)" : "rgba(214,196,150,0.75)";
-    g.lineWidth = 2.2;
-    g.beginPath();
-    for (let x = 0; x <= W; x += 8) {
-      const y = ridgeY(R, x) + 60 + Math.sin((x / W) * TAU * 6) * 34;
-      if (x === 0) g.moveTo(x, y);
-      else g.lineTo(x, y);
+    for (let k = 0; k < 16; k += 1) {
+      const x = 20 + r() * (W - 40);
+      const y = ridgeY(R, x) + 30 + r() * 80;
+      const s = 0.8 + r() * 0.4;
+      g.fillStyle = "#f7f3ea";
+      g.fillRect(x - 5 * s, y - 4 * s, 10 * s, 5 * s);
+      g.fillStyle = "#7a4a2a";
+      g.fillRect(x - 2 * s, y - 4 * s, 4 * s, 3 * s);
+      g.fillStyle = "#3a2a20";
+      g.fillRect(x + (r() < 0.5 ? 4 : -7) * s, y - 4 * s, 3 * s, 3 * s);
+      g.fillRect(x - 4 * s, y + 1 * s, 1.2, 2.5 * s);
+      g.fillRect(x + 3 * s, y + 1 * s, 1.2, 2.5 * s);
     }
-    g.stroke();
-    // Waldstücke
-    const fir: FirColors = {
-      dark: mixHex("#1f4632", "#6c7f93", snow * 0.55),
-      mid: mixHex("#2f6a42", "#7f94a8", snow * 0.5),
-      light: mixHex("#5d9a55", "#c2d0de", snow * 0.5),
-      trunk: "#3b2a1f",
-    };
-    const clusters = 14;
-    for (let cI = 0; cI < clusters; cI += 1) {
-      const cx = (cI + r() * 0.6) * (W / clusters);
-      const spread = 50 + r() * 110;
-      const n = 10 + Math.floor(r() * 16);
-      for (let k = 0; k < n; k += 1) {
-        let x = cx + (r() - 0.5) * spread * 2;
-        x = ((x % W) + W) % W;
-        const y = ridgeY(R, x) + 14 + r() * 110;
-        const h = 20 + r() * 22 + (y - ridgeY(R, x)) * 0.12;
-        const fv = firVariant(fir, r());
-        drawFir(g, x, y, h, fv, snow, cI * 100 + k);
-        if (x + h * 0.25 > W) drawFir(g, x - W, y, h, fv, snow, cI * 100 + k);
-        if (x - h * 0.25 < 0) drawFir(g, x + W, y, h, fv, snow, cI * 100 + k);
-      }
-    }
-    // Zäune & Kühe (nur grüne Stufen)
-    if (snow < 0.5) {
-      g.strokeStyle = "rgba(92,64,40,0.8)";
-      g.lineWidth = 1.2;
-      for (let f = 0; f < 5; f += 1) {
-        const x0 = r() * (W - 240) + 20;
-        const len = 80 + r() * 140;
-        g.beginPath();
-        for (let x = x0; x < x0 + len; x += 10) {
-          const y = ridgeY(R, x) + 40 + (x - x0) * 0.08;
-          g.moveTo(x, y);
-          g.lineTo(x, y - 7);
-        }
-        const ys = ridgeY(R, x0) + 40;
-        g.moveTo(x0, ys - 5);
-        g.lineTo(x0 + len, ridgeY(R, x0 + len) + 40 + len * 0.08 - 5);
-        g.stroke();
-      }
-      for (let k = 0; k < 16; k += 1) {
-        const x = 20 + r() * (W - 40);
-        const y = ridgeY(R, x) + 30 + r() * 80;
-        const s = 0.8 + r() * 0.4;
-        g.fillStyle = "#f7f3ea";
-        g.fillRect(x - 5 * s, y - 4 * s, 10 * s, 5 * s);
-        g.fillStyle = "#7a4a2a";
-        g.fillRect(x - 2 * s, y - 4 * s, 4 * s, 3 * s);
-        g.fillStyle = "#3a2a20";
-        g.fillRect(x + (r() < 0.5 ? 4 : -7) * s, y - 4 * s, 3 * s, 3 * s);
-        g.fillRect(x - 4 * s, y + 1 * s, 1.2, 2.5 * s);
-        g.fillRect(x + 3 * s, y + 1 * s, 1.2, 2.5 * s);
-      }
-    }
-    g.restore();
-    // Kammlicht
-    g.strokeStyle = `rgba(255,250,230,${(0.5 - snow * 0.2).toFixed(3)})`;
-    g.lineWidth = 2;
-    g.beginPath();
-    for (let x = 0; x <= W; x += 4) {
-      const y = ridgeY(R, x) + 1;
-      if (x === 0) g.moveTo(x, y);
-      else g.lineTo(x, y);
-    }
-    g.stroke();
-    if (grade) gradeLayer(g, W, H, stage, MID_GRADE[0], MID_GRADE[1]);
+  }
+  g.restore();
+  // Kammlicht
+  g.strokeStyle = `rgba(255,250,230,${(0.5 - snow * 0.2).toFixed(3)})`;
+  g.lineWidth = 2;
+  g.beginPath();
+  for (let x = 0; x <= W; x += 4) {
+    const y = ridgeY(R, x) + 1;
+    if (x === 0) g.moveTo(x, y);
+    else g.lineTo(x, y);
+  }
+  g.stroke();
+}
+
+/** Unfertig gemaltes Rohbild der Mittelhügel: `step()` malt den nächsten Teil, true = fertig */
+export interface MidBuild {
+  readonly canvas: HTMLCanvasElement;
+  step(): boolean;
+}
+
+/** Rohbild der Mittelhügel in Teilschritten (Stimmung/Dunst folgen mit `GRADE_MID` bzw. `paintMidHills(…, true)`) */
+export function startMidHills(stage: number, reuse?: HTMLCanvasElement | null): MidBuild {
+  if (reuse) midPending.delete(reuse); // ein früher angefangener Bau dieser (wiederverwendeten) Fläche ist hinfällig
+  let gen: Generator<void, void, void> | null = null;
+  const canvas = paint(MID_RIDGE.W, MID_H, (g) => {
+    gen = midSteps(g, stage);
   }, reuse);
+  return {
+    canvas,
+    step(): boolean {
+      if (!gen) return true;
+      if (!gen.next().done) return false;
+      gen = null;
+      return true;
+    },
+  };
+}
+
+/** Almhänge am Stück (`grade`: Stimmung und Dunst gleich mit anwenden) */
+export function paintMidHills(stage: number, reuse?: HTMLCanvasElement | null, grade = true): HTMLCanvasElement {
+  const b = startMidHills(stage, reuse);
+  while (!b.step()) {
+    // weiter bis zum Ende
+  }
+  if (grade) {
+    const g = b.canvas.getContext("2d");
+    if (g) gradeLayer(g, MID_RIDGE.W, MID_H, stage, MID_GRADE[0], MID_GRADE[1]);
+  }
+  return b.canvas;
+}
+
+/** angefangene Rohbilder der Mittelhügel (Schlüssel: die Fläche; für `gradedCache`, siehe `paintMidBase`) */
+const midPending = new WeakMap<HTMLCanvasElement, MidBuild>();
+
+/** Rohbild für `gradedCache`: ohne `grade` nur der erste Teil, der Rest folgt in den ersten Schritten von `GRADE_MID` */
+export function paintMidBase(stage: number, reuse: HTMLCanvasElement | null, grade: boolean): HTMLCanvasElement {
+  if (grade) return paintMidHills(stage, reuse, true);
+  const b = startMidHills(stage, reuse);
+  if (!b.step()) midPending.set(b.canvas, b);
+  return b.canvas;
+}
+
+/** nächsten Teil des angefangenen Rohbilds malen; false, wenn nichts (mehr) aussteht */
+function continueMid(c: HTMLCanvasElement): boolean {
+  const b = midPending.get(c);
+  if (!b) return false;
+  if (b.step()) midPending.delete(c);
+  return true;
+}
+
+/** Rest des Rohbilds am Stück malen (bevor die Stimmung daraufgelegt wird) */
+function finishMid(c: HTMLCanvasElement): void {
+  const b = midPending.get(c);
+  if (!b) return;
+  midPending.delete(c);
+  while (!b.step()) {
+    // weiter bis zum Ende
+  }
 }
 
 /** Nahe Tannen auf einem Hangrücken (Parallax ~0.5). H = 360, Kammlinie ≈ 300. */

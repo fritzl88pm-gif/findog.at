@@ -3,9 +3,10 @@
  * Positionen sind billig; skalierte/subpixel-versetzte drawImage-Aufrufe und Verlaufsfüllungen kosten ~8× so viel.
  * Deshalb werden Fernkulisse (gespiegelt), Verläufe, Lichthöfe und Rauchwolken in fester Größe vorgerendert.
  */
+import { warmImage } from "../../assets";
 import { makeCanvas } from "../../draw-utils";
 import { recycled, touchCanvas } from "../shared-b/canvas";
-import { StageCache } from "../shared-b/layers";
+import { StageCache, gradedCache } from "../shared-b/layers";
 
 export type C2D = CanvasRenderingContext2D;
 
@@ -164,6 +165,8 @@ export interface BackdropBake {
  * Gemalte Panoramen je Stufe, auf Zielhöhe vorskaliert und mit gespiegelter Kopie in EINER Kachel (Breite 2·w) –
  * pro Frame genügen ein bis zwei 1:1-Blits. Nur der sichtbare Streifen (y 0 … visH) wird gespeichert; der untere
  * Rand läuft weich in die Stufen-Dunstfarbe aus. Es werden nur die aktuelle und die nächste Stufe gehalten.
+ * Das Backen geschieht in drei kleinen Schritten (linke Hälfte, gespiegelte Hälfte, Dunstverlauf) statt eines
+ * 14-ms-Blocks (`gradedCache`); auf Anforderung (`get` ohne Vorarbeit) am Stück mit demselben Ergebnis.
  */
 export class MirrorBackdrop {
   private imgs: Array<HTMLImageElement | null> = [];
@@ -179,7 +182,7 @@ export class MirrorBackdrop {
     readonly visH: number,
     private readonly bake: (stage: number) => BackdropBake,
   ) {
-    this.cache = new StageCache((i, reuse) => this.make(i, reuse), { recycle: true });
+    this.cache = gradedCache((i, reuse, grade) => this.paintBase(i, reuse, grade), [(c, i) => this.paintMirror(c, i), (c, i) => this.paintFade(c, i)]);
   }
 
   async load(image: (url: string) => Promise<HTMLImageElement | null>): Promise<void> {
@@ -190,31 +193,72 @@ export class MirrorBackdrop {
     return this.imgs.some((i) => !!i);
   }
 
-  private make(i: number, reuse: HTMLCanvasElement | null): HTMLCanvasElement {
-    const img = this.imgs[i] ?? this.imgs.find((x) => !!x) ?? null;
-    if (!img) return makeCanvas(1, 1);
+  private imageOf(i: number): HTMLImageElement | null {
+    return this.imgs[i] ?? this.imgs.find((x) => !!x) ?? null;
+  }
+
+  /**
+   * Kulissenbild der Stufe vordekodieren (der Browser dekodiert ein Bild erst beim ersten Zeichnen: 5-15 ms, die sonst
+   * zusammen mit dem Malen im ersten Bake-Schritt anfielen). Aufruf kurz vor dem Vorbacken der Folgestufe (`StagePrep.onApproach`).
+   */
+  predecode(i: number): void {
+    const img = this.imageOf(i);
+    if (img) void warmImage(img);
+  }
+
+  /** Breite des skalierten Bildes (Kachel = 2·w) und Quellausschnitt (ab sy, Höhe sh) */
+  private geom(img: HTMLImageElement): { w: number; sy: number; sh: number } {
     const scale = this.drawH / img.height;
-    const w = Math.round(img.width * scale);
-    const H = this.visH;
-    const sy = -this.top / scale;
-    const sh = H / scale;
-    const foot = this.bake(i).foot;
-    return canvas(w * 2, H, (g) => {
-      g.imageSmoothingQuality = "high";
-      g.drawImage(img, 0, sy, img.width, sh, 0, 0, w, H);
-      g.save();
-      g.translate(w * 2, 0);
-      g.scale(-1, 1);
-      g.drawImage(img, 0, sy, img.width, sh, 0, 0, w, H);
-      g.restore();
-      // weicher Übergang in den Dunst unterhalb der Kulisse
-      const fade = g.createLinearGradient(0, H - 70, 0, H);
-      fade.addColorStop(0, "rgba(0,0,0,0)");
-      fade.addColorStop(1, foot);
-      g.globalCompositeOperation = "source-atop";
-      g.fillStyle = fade;
-      g.fillRect(0, H - 70, w * 2, 70);
-    }, reuse);
+    return { w: Math.round(img.width * scale), sy: -this.top / scale, sh: this.visH / scale };
+  }
+
+  /** Schritt 1: Kachel anlegen (oder die übergebene wiederverwenden) und die linke Hälfte malen; mit `finish` gleich alles */
+  private paintBase(i: number, reuse: HTMLCanvasElement | null, finish: boolean): HTMLCanvasElement {
+    const img = this.imageOf(i);
+    if (!img) return makeCanvas(1, 1);
+    const { w, sy, sh } = this.geom(img);
+    const c = canvas(
+      w * 2,
+      this.visH,
+      (g) => {
+        g.imageSmoothingQuality = "high";
+        g.drawImage(img, 0, sy, img.width, sh, 0, 0, w, this.visH);
+      },
+      reuse,
+    );
+    if (finish) {
+      this.paintMirror(c, i);
+      this.paintFade(c, i);
+    }
+    return c;
+  }
+
+  /** Schritt 2: gespiegelte Kopie in der rechten Hälfte */
+  private paintMirror(c: HTMLCanvasElement, i: number): boolean {
+    const img = this.imageOf(i);
+    const g = img ? c.getContext("2d") : null;
+    if (!img || !g) return false;
+    const { w, sy, sh } = this.geom(img);
+    g.save();
+    g.translate(w * 2, 0);
+    g.scale(-1, 1);
+    g.drawImage(img, 0, sy, img.width, sh, 0, 0, w, c.height);
+    g.restore();
+    return true;
+  }
+
+  /** Schritt 3: weicher Übergang in den Dunst unterhalb der Kulisse */
+  private paintFade(c: HTMLCanvasElement, i: number): boolean {
+    const g = this.imageOf(i) ? c.getContext("2d") : null;
+    if (!g) return false;
+    const H = c.height;
+    const fade = g.createLinearGradient(0, H - 70, 0, H);
+    fade.addColorStop(0, "rgba(0,0,0,0)");
+    fade.addColorStop(1, this.bake(i).foot);
+    g.globalCompositeOperation = "source-atop";
+    g.fillStyle = fade;
+    g.fillRect(0, H - 70, c.width, 70);
+    return true;
   }
 
   draw(g: C2D, i: number, scroll: number, alpha = 1): void {

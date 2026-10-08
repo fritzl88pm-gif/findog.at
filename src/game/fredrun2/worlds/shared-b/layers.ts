@@ -148,7 +148,7 @@ export type GradeStep = (canvas: HTMLCanvasElement, stage: number) => boolean | 
  * die `grade`-Schritte die Stufen-Färbung darauf – alle bis auf den letzten als Vorarbeit, der letzte ist der eigentliche
  * Bake. Jeder Schritt wird sofort gerastert (`touchCanvas`), damit seine Kosten nicht im ersten Frame mit der Fläche
  * anfallen. Die Schritte nacheinander müssen dasselbe Bild ergeben wie `paintBase(stage, reuse, true)` (Direktweg ohne
- * Vorarbeit, wenn die Stufe sofort gebraucht wird). Höchstens 3 Schritte (StagePrep erlaubt 4 je Variante und Aufruf).
+ * Vorarbeit, wenn die Stufe sofort gebraucht wird). Höchstens 5 Schritte insgesamt (StagePrep erlaubt 6 je Variante und Aufruf).
  * Ein unfertiges Rohbild lebt nur so lange wie seine Stufe: `keep(a, b)` verwirft die anderer Stufen, `clear()` (Skalenwechsel)
  * alle – danach beginnt die Stufe von vorn, in der dann gültigen Größe.
  */
@@ -336,12 +336,23 @@ export function stageProgress(worldMeters: number, stageMeters: number): number 
   return p - Math.floor(p);
 }
 
+/** `onApproach` kommt so viel Stufenfortschritt vor dem Beginn des Vorbackens (≈ 2,5 s bei 260 m Stufenlänge und 25 m/s) */
+const APPROACH_LEAD = 0.1;
+
 /** höchstens so viele Schritte (Vorarbeit + Bake) je Variante und Aufruf – Schutz gegen eine fehlerhafte Vorarbeit */
-const MAX_STEPS_PER_VARIANT = 4;
+const MAX_STEPS_PER_VARIANT = 6;
 
 export interface StagePrepOpts {
   /** Folgestufe erst ab diesem Fortschritt (0..1) der aktuellen Stufe vorbacken (Standard 0,28) */
   nextFrom?: number;
+  /** Wie `nextFrom` auf Qualität 0 (`setLow`; Standard 0,6): die Folgestufe belegt dort möglichst kurz Speicher */
+  nextFromLow?: number;
+  /**
+   * Einmal je Stufe, kurz bevor die Folgestufe vorbereitet wird (Fortschritt ab `nextFrom` − 0,1, auf Qualität 0 ab
+   * `nextFromLow` − 0,1): Parameter = Folgestufe. Für Arbeit, die nicht in den Bake-Schritt gehört und sonst im selben
+   * Frame zuschlüge (z.B. das Kulissenbild der Folgestufe vordekodieren). Läuft im Frame der Meldung, nie am Stufenanfang.
+   */
+  onApproach?: (next: number) => void;
   /** Mindestabstand zweier Bake-Schritte in Millisekunden (Standard 100 ≈ 6 Frames) */
   gapMs?: number;
   /** Uhr (Tests); Standard performance.now */
@@ -356,7 +367,12 @@ export interface StagePrepOpts {
  */
 export class StagePrep {
   private lastAt = -1e9;
+  private low = false;
+  /** Stufe, für die `onApproach` schon gemeldet wurde */
+  private approached = -1;
+  private readonly onApproach: ((next: number) => void) | undefined;
   private readonly nextFrom: number;
+  private readonly nextFromLow: number;
   private readonly gapMs: number;
   private readonly now: () => number;
 
@@ -366,8 +382,19 @@ export class StagePrep {
     opts: StagePrepOpts = {},
   ) {
     this.nextFrom = opts.nextFrom ?? 0.28;
+    this.nextFromLow = opts.nextFromLow ?? 0.6;
+    this.onApproach = opts.onApproach;
     this.gapMs = opts.gapMs ?? 100;
     this.now = opts.now ?? nowMs;
+  }
+
+  /**
+   * Qualität 0 (schwache Geräte, wenig Speicher): die Folgestufe wird nicht im Leerlauf (`warm`) und erst ab `nextFromLow`
+   * des Stufen-Fortschritts vorgebacken; beginnt die Überblendung, wird Fehlendes wie immer sofort nachgeholt. Läuft pro
+   * Frame (nur eine Zuweisung).
+   */
+  setLow(on: boolean): void {
+    this.low = on;
   }
 
   /** Cache nachträglich aufnehmen (z.B. Landmarken, die erst beim Laden entstehen) */
@@ -400,7 +427,12 @@ export class StagePrep {
     }
     if (next === stage) return made;
     const urgent = blend > 0.001;
-    if (!urgent && progress < this.nextFrom) return made;
+    const from = this.low ? this.nextFromLow : this.nextFrom;
+    if (this.onApproach && this.approached !== stage && progress >= from - APPROACH_LEAD) {
+      this.approached = stage;
+      this.onApproach(next);
+    }
+    if (!urgent && progress < from) return made;
     const t = this.now();
     if (!urgent) {
       if (t < this.lastAt) this.lastAt = t; // Uhr zurückgesetzt
@@ -424,10 +456,10 @@ export class StagePrep {
 
   /**
    * Leerlauf (Countdown, Menü-Demo, Lauf-Anfang): fehlende Varianten der Stufe und der Folgestufe backen, solange das
-   * Budget reicht (der erste Schritt läuft immer). true = nichts mehr zu tun.
+   * Budget reicht (der erste Schritt läuft immer); auf Qualität 0 (`setLow`) nur die aktuelle Stufe. true = nichts mehr zu tun.
    */
   warm(stage: number, budgetMs: number): boolean {
-    const next = Math.min(this.maxStage, stage + 1);
+    const next = this.low ? stage : Math.min(this.maxStage, stage + 1);
     const t0 = this.now();
     let did = false;
     for (let pass = 0; pass < 2; pass += 1) {

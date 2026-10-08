@@ -24,8 +24,9 @@ import {
   MAST_TIP_Y,
   MAST_W,
   paintBareTree,
-  paintClouds,
-  paintFacades,
+  paintCloudsA,
+  paintCloudsB,
+  startFacades,
   paintFlameFrames,
   paintGlow,
   paintLamp,
@@ -38,6 +39,7 @@ import {
   paintSmokePuff,
   paintStreet,
   paintTree,
+  type FacadeBuild,
   type FacadeOpts,
   type FacadeTile,
 } from "./scenery";
@@ -144,6 +146,8 @@ function wetOf(s: number): number {
 export class WienRenderer implements WorldRenderer {
   private backdrop = new MirrorBackdrop(WIEN_BACKDROPS, BACK_TOP, BACK_DRAW_H, BACK_H, (s) => ({ foot: css(footRgb(s)) }));
   private facadeVar = new Map<number, FacadeTile>();
+  /** angefangene Rohfassaden (werden in Teilschritten gemalt, siehe prepFacade) */
+  private facadeBuild = new Map<number, FacadeBuild>();
   private roofVar = new Map<number, Tile>();
   // Stufen-Varianten: Rohvarianten (Fassaden/Dächer) malt die Vorarbeit eines Schritts, der Bake selbst ist ein zweiter,
   // kleiner Schritt; verworfene Stufen-Flächen werden für den nächsten Bake wiederverwendet (keine Neuanlage großer Bitmaps)
@@ -151,10 +155,11 @@ export class WienRenderer implements WorldRenderer {
   private roofs = new StageCache((s, reuse) => this.bakeRoof(s, reuse), { recycle: true, prep: (s) => this.prepRoof(s) });
   private reflections = new StageCache((s, reuse) => this.bakeReflection(s, reuse), { recycle: true, prep: (s) => this.prepFacade(s) });
   private readonly allStaged: StageCache[] = [this.backdrop.cache, this.facades, this.roofs, this.reflections];
-  private prep = new StagePrep([...this.allStaged], LAST);
+  private prep = new StagePrep([...this.allStaged], LAST, { onApproach: (next) => this.backdrop.predecode(next) });
   /** Spiegelungen werden nur ab Qualität 1 gezeichnet – auf Q0 weder gebacken noch vorgehalten */
   private reflOn = true;
   private roofSlots: Array<[number, number, number]> = [];
+  private roofSlotsBuilt = false;
   /** verworfene Roh-Fassaden zur Wiederverwendung (statt Neuanlage der 2,6-MB-Fläche) */
   private facadeSpares: HTMLCanvasElement[] = [];
   private lastStage = 0;
@@ -168,6 +173,8 @@ export class WienRenderer implements WorldRenderer {
   private puffsLateT = 0;
 
   private clouds1: HTMLCanvasElement | null = null;
+  /** Wolkenkachel mit erster Hälfte der Ballen (bis `buildClouds` sie fertigstellt) */
+  private cloudsPartial: Tile | null = null;
   private clouds2: HTMLCanvasElement | null = null;
   private rainSheet: HTMLCanvasElement | null = null;
   private street: HTMLCanvasElement | null = null;
@@ -177,7 +184,9 @@ export class WienRenderer implements WorldRenderer {
   private steam: SizedSprites | null = null;
   private flames: HTMLCanvasElement[] = [];
   /** Verläufe (Teil 3 des statischen Zeichnens), gehen in `fx` auf */
+  private fxA1: Pick<WienGradients, "skyFlash" | "horizonFire" | "facadeFire"> | null = null;
   private fxA: WienGradients | null = null;
+  private fxLamps: Pick<NonNullable<WienRenderer["fx"]>, "lampSmall" | "lampBig" | "lampRefl" | "roofGlow" | "ember" | "wurstel"> | null = null;
   private fx: (WienGradients & {
     lampSmall: HTMLCanvasElement;
     lampBig: HTMLCanvasElement;
@@ -219,15 +228,30 @@ export class WienRenderer implements WorldRenderer {
     this.skinCtx.sprites.setProps(assets.props);
     // Zwischen den Bake-Schritten den Hauptthread freigeben (Eingaben/Frames laufen weiter, kein Long Task)
     await yieldToMain();
-    this.buildClouds();
+    this.buildCloudsA();
+    await yieldToMain();
+    this.buildCloudsB();
+    await yieldToMain();
+    this.buildCloudsC();
     await yieldToMain();
     this.buildTiles();
     await yieldToMain();
     this.buildTiles2();
     await yieldToMain();
+    this.buildFxA1();
+    await yieldToMain();
     this.buildFxA();
     await yieldToMain();
-    this.buildStatic();
+    this.buildFxLamps();
+    await yieldToMain();
+    this.buildFx();
+    await yieldToMain();
+    // Rohfassade der Stufe 0 (liefert die Dachfenster-Plätze) in Teilschritten – der größte Einzelblock des Weltladens
+    for (let guard = 0; !this.facadeVar.has(FACADE_OF_STAGE[0]) && guard < 8; guard += 1) {
+      this.prepFacade(0);
+      await yieldToMain();
+    }
+    this.buildRoofSlots();
     await yieldToMain();
     if (!(this.nearK === this.k && this.lamp)) {
       this.buildNearA();
@@ -260,12 +284,40 @@ export class WienRenderer implements WorldRenderer {
 
   // --- Vorrendern ----------------------------------------------------------------------------------
 
-  /** Statisches Zeichnen, Teil 1a: Wolken */
-  private buildClouds(): void {
+  /** Statisches Zeichnen, Teil 1a: Wolken, erste Hälfte der Ballen (jeder Teil für sich gemalt und gerastert: drei kleine Schritte statt eines großen) */
+  private buildCloudsA(): void {
+    if (this.clouds1 || this.cloudsPartial) return;
+    const t = paintCloudsA(2048, 300);
+    touchCanvas(t.canvas);
+    this.cloudsPartial = t;
+  }
+
+  /** Statisches Zeichnen, Teil 1b: Wolken, Rest der Ballen und Ausblendung (ohne Teil 1a malt dies die ganze Kachel) */
+  private buildCloudsB(): void {
     if (this.clouds1) return;
-    const cl = paintClouds(2048, 300).canvas;
-    this.clouds1 = cl;
-    this.clouds2 = canvas(2048, 220, (g) => g.drawImage(cl, 0, 0, 2048, 220));
+    this.buildCloudsA();
+    const t = this.cloudsPartial;
+    if (!t) return;
+    paintCloudsB(t);
+    touchCanvas(t.canvas);
+    this.cloudsPartial = null;
+    this.clouds1 = t.canvas;
+  }
+
+  /** Statisches Zeichnen, Teil 1c: verkleinerte Zweitkachel der Wolken; ohne die Teile davor werden sie mit gebaut */
+  private buildCloudsC(): void {
+    if (this.clouds2) return;
+    this.buildCloudsB();
+    const cl = this.clouds1;
+    if (!cl) return;
+    const c2 = canvas(2048, 220, (g) => g.drawImage(cl, 0, 0, 2048, 220));
+    touchCanvas(c2);
+    this.clouds2 = c2;
+  }
+
+  /** Statisches Zeichnen, Teil 1 auf einmal (Fallback für Aufrufe vor/ohne `load`) */
+  private buildClouds(): void {
+    this.buildCloudsC();
   }
 
   /** Statisches Zeichnen, Teil 1b: Regenblatt, Straße (und Wolken, falls noch nicht gebaut) */
@@ -294,10 +346,10 @@ export class WienRenderer implements WorldRenderer {
     this.flames = paintFlameFrames(8);
   }
 
-  /** Statisches Zeichnen, Teil 3: Verläufe (Himmel-/Fassadenglühen, Boden, Overlay) */
-  private buildFxA(): void {
-    if (this.fxA) return;
-    this.fxA = {
+  /** Statisches Zeichnen, Teil 3a: Verläufe, erste Hälfte (Himmelsblitz, Horizont-/Fassadenbrand) */
+  private buildFxA1(): void {
+    if (this.fxA1 || this.fxA) return;
+    this.fxA1 = {
       skyFlash: ellipseGlow(1040, 520, [
         [0, "rgba(170,200,255,0.6)"],
         [0.25, "rgba(170,200,255,0.35)"],
@@ -312,6 +364,17 @@ export class WienRenderer implements WorldRenderer {
         [0, "rgba(255,110,40,0)"],
         [1, "rgba(255,120,40,0.28)"],
       ]),
+    };
+  }
+
+  /** Statisches Zeichnen, Teil 3b: Verläufe, zweite Hälfte (Fassadenblitz, Boden, Overlay); danach liegt `fxA` komplett vor */
+  private buildFxA(): void {
+    if (this.fxA) return;
+    this.buildFxA1();
+    const first = this.fxA1;
+    if (!first) return;
+    this.fxA = {
+      ...first,
       facadeFlash: vGradient(1280, FACADE_H - 40, [
         [0, "rgba(150,175,230,0)"],
         [0.35, "rgba(150,175,230,0.2)"],
@@ -330,30 +393,47 @@ export class WienRenderer implements WorldRenderer {
         [1, "rgba(255,90,30,0.12)"],
       ]),
     };
+    this.fxA1 = null;
   }
 
-  /** Statisches Zeichnen, Teil 4: Lichthöfe und Sprites (`fx` komplett) */
+  /** Statisches Zeichnen, Teile 4 und 5 auf einmal (Fallback für Aufrufe vor/ohne `load`, das sie getrennt baut) */
   private buildStatic(): void {
-    if (this.fx) return;
-    this.buildTiles();
-    this.buildTiles2();
-    this.buildFxA();
-    const fxA = this.fxA;
-    if (!fxA) return;
+    this.buildFx();
+    this.buildRoofSlots();
+  }
+
+  /** Statisches Zeichnen, Teil 4a: warme Lichthöfe (Laternen, Dachbrand, Glut, Würstelstand) */
+  private buildFxLamps(): void {
+    if (this.fxLamps || this.fx) return;
     const warm = (a: number): Array<[number, string]> => [
       [0, `rgba(255,196,110,${a})`],
       [0.25, "rgba(255,196,110,0.35)"],
       [1, "rgba(255,196,110,0)"],
     ];
-    const smokeTile = paintSmokePuff(256).canvas;
-    this.fx = {
-      ...fxA,
+    this.fxLamps = {
       lampSmall: ellipseGlow(180, 180, warm(0.55)),
       lampBig: ellipseGlow(320, 260, warm(0.55)),
       lampRefl: ellipseGlow(44, 120, warm(0.55)),
       roofGlow: ellipseGlow(220, 200, warm(0.55)),
       ember: ellipseGlow(36, 24, warm(0.55)),
       wurstel: ellipseGlow(184, 112, warm(0.55)),
+    };
+  }
+
+  /** Statisches Zeichnen, Teil 4b: Rauch, Taubenlicht, Funke (`fx` komplett) */
+  private buildFx(): void {
+    if (this.fx) return;
+    this.buildTiles();
+    this.buildTiles2();
+    this.buildFxA();
+    this.buildFxLamps();
+    const fxA = this.fxA;
+    const lamps = this.fxLamps;
+    if (!fxA || !lamps) return;
+    const smokeTile = paintSmokePuff(256).canvas;
+    this.fx = {
+      ...fxA,
+      ...lamps,
       fgSmoke: canvas(420, 300, (g) => g.drawImage(smokeTile, 0, 0, 420, 300)),
       pigeonRim: ellipseGlow(76, 56, [
         [0, "rgba(235,240,255,0.55)"],
@@ -366,6 +446,13 @@ export class WienRenderer implements WorldRenderer {
         [1, "rgba(120,160,255,0)"],
       ]),
     };
+    this.fxLamps = null;
+  }
+
+  /** Statisches Zeichnen, Teil 5: Dachfenster-Plätze der Fassade (malt deren Rohvariante der Stufe 0, die der erste Bake ohnehin braucht) */
+  private buildRoofSlots(): void {
+    if (this.roofSlotsBuilt) return;
+    this.roofSlotsBuilt = true;
     this.roofSlots = this.facadeVariant(0).roofs;
   }
 
@@ -393,21 +480,42 @@ export class WienRenderer implements WorldRenderer {
     this.nearK = k;
   }
 
+  /** Rohvariante `i` der Fassaden: fertig gemalt (ein angefangener Bau wird zu Ende geführt) */
   private facadeVariant(i: number): FacadeTile {
     let t = this.facadeVar.get(i);
     if (!t) {
-      t = paintFacades(FACADE_W, FACADE_H, FACADE_VARIANTS[i], 1, this.facadeSpares.pop());
-      touchCanvas(t.canvas); // Rohbild jetzt rastern (der Bake dieser Stufe folgt als eigener, kleiner Schritt)
-      this.facadeVar.set(i, t);
+      const b = this.facadeBuild.get(i) ?? this.beginFacade(i);
+      while (!b.step()) {
+        // Rest am Stück (nur wenn die Rohvariante sofort gebraucht wird)
+      }
+      t = this.finishFacade(i, b);
     }
     return t;
   }
 
-  /** Vorarbeit eines Fassaden-/Spiegelungs-Bakes: die Rohvariante der Stufe malen (ein eigener, kleinerer Schritt) */
+  private beginFacade(i: number): FacadeBuild {
+    const b = startFacades(FACADE_W, FACADE_H, FACADE_VARIANTS[i], 1, this.facadeSpares.pop());
+    this.facadeBuild.set(i, b);
+    return b;
+  }
+
+  private finishFacade(i: number, b: FacadeBuild): FacadeTile {
+    this.facadeBuild.delete(i);
+    touchCanvas(b.tile.canvas); // Rohbild jetzt rastern (der Bake dieser Stufe folgt als eigener, kleiner Schritt)
+    this.facadeVar.set(i, b.tile);
+    return b.tile;
+  }
+
+  /**
+   * Vorarbeit eines Fassaden-/Spiegelungs-Bakes: die Rohvariante der Stufe in Teilschritten malen (je ein Schritt von ca.
+   * 5 ms statt eines 15-20-ms-Blocks); false, wenn sie schon vorliegt.
+   */
   private prepFacade(s: number): boolean {
     const i = FACADE_OF_STAGE[s];
     if (this.facadeVar.has(i)) return false;
-    this.facadeVariant(i);
+    const b = this.facadeBuild.get(i) ?? this.beginFacade(i);
+    if (b.step()) this.finishFacade(i, b);
+    else touchCanvas(b.tile.canvas); // schon der angefangene Teil wird gerastert (Kosten in diesem Schritt, nicht im Zeichenframe)
     return true;
   }
 
@@ -550,11 +658,12 @@ export class WienRenderer implements WorldRenderer {
     const wantRefl = v.quality > 0;
     if (wantRefl !== this.reflOn) this.setReflections(wantRefl);
     const progress = stageProgress(v.worldMeters, WIEN_STAGE_METERS);
+    this.prep.setLow(v.quality === 0); // Qualität 0: Folgestufe später (ab ~60 %) und nicht im Leerlauf vorbacken (Speicher)
     this.prep.step(st, progress, bl);
     // nicht mehr benötigte Fassaden-Rohvarianten freigeben (werden bei Bedarf in ≤ 20 ms neu gemalt, die Fläche wird
     // wiederverwendet) – spart Speicher auf Mobilgeräten. Schon beim Stufenwechsel (nicht erst, wenn eine dritte Variante
     // vorliegt): so steht die Fläche der alten Variante bereit, wenn die Vorarbeit der übernächsten Stufe beginnt.
-    if (this.facadeVar.size > 0) {
+    if (this.facadeVar.size > 0 || this.facadeBuild.size > 0) {
       const a = FACADE_OF_STAGE[st];
       const b = FACADE_OF_STAGE[Math.min(LAST, st + 1)];
       const own = (this.facadeVar.has(a) ? 1 : 0) + (b !== a && this.facadeVar.has(b) ? 1 : 0);
@@ -563,6 +672,14 @@ export class WienRenderer implements WorldRenderer {
           if (key === a || key === b) continue;
           this.facadeVar.delete(key);
           this.facadeSpares.push(t.canvas);
+        }
+      }
+      // ein angefangener Bau einer Variante, die nicht mehr gebraucht wird (Stufe übersprungen): Fläche zurücklegen
+      if (this.facadeBuild.size > 0) {
+        for (const [key, fb] of this.facadeBuild) {
+          if (key === a || key === b) continue;
+          this.facadeBuild.delete(key);
+          this.facadeSpares.push(fb.tile.canvas);
         }
       }
     }

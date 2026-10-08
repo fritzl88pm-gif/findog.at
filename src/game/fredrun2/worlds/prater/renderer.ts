@@ -432,6 +432,7 @@ export class PraterRenderer implements WorldRenderer {
     // Stufen-Varianten: die Folgestufe erst ab ~28 % der Stufe und höchstens ein Schritt je ~6 Frames (nicht am Stufenanfang)
     const stage = Math.min(MAX_STAGE, v.stage);
     this.lastStage = stage;
+    this.prep.setLow(v.quality === 0); // Qualität 0: Folgestufe später (ab ~60 %) und nicht im Leerlauf vorbacken (Speicher)
     this.prep.step(stage, stageProgress(v.worldMeters, PRATER_STAGE_METERS), v.stageBlend);
     const s = Math.min(MAX_STAGE, v.stage + v.stageBlend);
     // Feuerwerk

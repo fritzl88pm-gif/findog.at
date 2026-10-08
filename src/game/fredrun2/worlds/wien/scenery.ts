@@ -343,289 +343,349 @@ export interface FacadeTile extends Tile {
   roofs: Array<[number, number, number]>;
 }
 
-export function paintFacades(W: number, H: number, o: FacadeOpts, k = 1, reuse?: HTMLCanvasElement | null): FacadeTile {
-  const roofs: Array<[number, number, number]> = [];
-  const tile = renderTile(W, H, k, (g) => {
-    let x = 0;
-    let i = 0;
-    const holes: Array<[number, number, number, number]> = [];
-    const glows: Array<[number, number, number]> = [];
-    while (x < W) {
-      let w = 130 + hash(i * 3.1 + 11) * 110;
-      if (W - (x + w) < 130) w = W - x;
-      const floors = 3 + Math.floor(hash(i * 1.7 + 5) * 3);
-      const floorH = 30 + Math.floor(hash(i * 2.9) * 5);
-      const groundH = 40;
-      const bodyH = groundH + floors * floorH + 12;
-      const top = H - bodyH;
-      if (o.damage === 2) {
-        roofs.push([x, top - 20 - hash(i * 4.4) * 12, w]);
-        ruinBuilding(g, x, w, i, H, o, holes, glows);
-        x += w;
-        i += 1;
-        continue;
-      }
-      const col0 = FACADE_COLORS[Math.floor(hash(i * 5.3 + 2) * FACADE_COLORS.length)];
-      const col = o.fire > 0.15 ? shadeHex(col0, 0.72) : col0;
-      const style = hash(i * 8.1 + 4);
-      const roofKind = hash(i * 6.7 + 9);
+/** Gebäude je Teilschritt beim schrittweisen Malen der Fassaden (2048 px = 11 Gebäude → 3 Schritte von je ca. 5 ms) */
+const FACADE_STEP = 4;
 
-      // Dach
-      const roofH = 20 + hash(i * 4.4) * 12;
-      if (o.damage < 2) {
-        g.fillStyle = roofKind < 0.2 ? "#35574f" : "#2a303c";
-        g.beginPath();
-        g.moveTo(x + 2, top);
-        if (roofKind < 0.2 && w > 160) {
-          // Eckkuppel (Kupfer-Patina)
-          const cx = x + w - 28;
-          g.lineTo(x + 10, top - roofH);
-          g.lineTo(cx - 20, top - roofH);
-          g.lineTo(cx - 20, top - roofH - 10);
-          g.quadraticCurveTo(cx - 20, top - roofH - 42, cx, top - roofH - 46);
-          g.lineTo(cx, top - roofH - 66);
-          g.lineTo(cx + 2, top - roofH - 46);
-          g.quadraticCurveTo(cx + 22, top - roofH - 42, cx + 22, top - roofH - 10);
-          g.lineTo(cx + 22, top);
-        } else {
-          g.lineTo(x + 12, top - roofH);
-          g.lineTo(x + w - 12, top - roofH);
-          g.lineTo(x + w - 2, top);
-        }
-        g.closePath();
-        g.fill();
-        // Dachfenster (Gauben)
-        const ng = Math.floor((w - 40) / 38);
-        for (let d = 0; d < ng; d += 1) {
-          const dx = x + 22 + d * 38;
-          g.fillStyle = "#3b4252";
-          g.fillRect(dx, top - roofH + 6, 12, roofH - 6);
-          g.beginPath();
-          g.moveTo(dx - 2, top - roofH + 7);
-          g.lineTo(dx + 6, top - roofH + 1);
-          g.lineTo(dx + 14, top - roofH + 7);
-          g.fill();
-          const hv = hash(i * 17 + d * 3.1);
-          g.fillStyle = hv < o.lit * 0.6 ? "#f2b766" : "#141a26";
-          g.fillRect(dx + 3, top - roofH + 9, 6, roofH - 11);
-        }
-        // Schornsteine
-        g.fillStyle = "#2a2f38";
-        for (let c = 0; c < 2; c += 1) {
-          const cx = x + 20 + hash(i * 3.7 + c) * (w - 50);
-          g.fillRect(cx, top - roofH - 12, 8, 16);
-          g.fillRect(cx - 2, top - roofH - 14, 12, 3);
-        }
-        if (o.damage === 1) {
-          // Sturmschäden: Loch im Dach
-          g.fillStyle = "#11141c";
-          const hx = x + 30 + hash(i * 9.9) * (w - 90);
-          g.beginPath();
-          g.moveTo(hx, top - roofH + 2);
-          g.lineTo(hx + 30, top - roofH + 4);
-          g.lineTo(hx + 22, top - 6);
-          g.lineTo(hx + 6, top - 10);
-          g.closePath();
-          g.fill();
-        }
-      }
-
-      roofs.push([x, top - roofH, w]);
-      // Fassade
-      const grd = g.createLinearGradient(0, top, 0, H);
-      grd.addColorStop(0, shade(col, 1.12));
-      grd.addColorStop(0.55, shade(col, 0.82));
-      grd.addColorStop(1, shade(col, 0.55));
-      g.fillStyle = grd;
-      g.fillRect(x, top, w, bodyH);
-      // Gebäudefuge
-      g.fillStyle = "rgba(0,0,0,0.35)";
-      g.fillRect(x, top, 2, bodyH);
-      // Hauptgesims
-      g.fillStyle = shade(col, 1.3);
-      g.fillRect(x - 2, top, w + 4, 6);
-      g.fillStyle = "rgba(0,0,0,0.35)";
-      g.fillRect(x, top + 6, w, 4);
-      // Rustika-Sockel
-      g.fillStyle = shade(col, 0.85);
-      g.fillRect(x, H - groundH, w, groundH);
-      g.fillStyle = "rgba(0,0,0,0.18)";
-      for (let yy = H - groundH + 7; yy < H; yy += 7) g.fillRect(x, yy, w, 1);
-
-      // Fensterachsen
-      const cols = Math.max(2, Math.floor((w - 20) / 30));
-      const pitch = (w - 20) / cols;
-      for (let f = 0; f < floors; f += 1) {
-        const fy = top + 14 + f * floorH;
-        // Gurtgesims
-        g.fillStyle = shade(col, 1.18);
-        g.fillRect(x + 2, fy + floorH - 6, w - 4, 3);
-        for (let c = 0; c < cols; c += 1) {
-          const wx = x + 10 + c * pitch + pitch / 2 - 6;
-          const wy = fy + 6;
-          const ww = 12;
-          const wh = floorH - 14;
-          const hv = hash(i * 57.3 + f * 11.1 + c * 3.7);
-          const arched = style > 0.66;
-          // Fensterrahmen / Verdachung
-          g.fillStyle = shade(col, 1.25);
-          if (f === floors - 1 && style < 0.5) {
-            // Dreiecksgiebel (Beletage oben)
-            g.beginPath();
-            g.moveTo(wx - 4, wy - 1);
-            g.lineTo(wx + ww / 2, wy - 8);
-            g.lineTo(wx + ww + 4, wy - 1);
-            g.closePath();
-            g.fill();
-          } else {
-            g.fillRect(wx - 3, wy - 4, ww + 6, 3);
-          }
-          g.fillRect(wx - 2, wy + wh, ww + 4, 3);
-          const fire = hv > 1 - o.fire;
-          const lit = !fire && hv < o.lit;
-          if (fire || lit) glows.push([wx + ww / 2, wy + wh / 2, fire ? 1 : 0]);
-          if (fire) {
-            const fg = g.createLinearGradient(0, wy, 0, wy + wh);
-            fg.addColorStop(0, "#ffe08a");
-            fg.addColorStop(0.5, "#ff8a2a");
-            fg.addColorStop(1, "#b3261e");
-            g.fillStyle = fg;
-          } else if (lit) {
-            const lg = g.createLinearGradient(0, wy, 0, wy + wh);
-            lg.addColorStop(0, "#ffe2a6");
-            lg.addColorStop(1, "#e89a45");
-            g.fillStyle = lg;
-          } else {
-            const ug = g.createLinearGradient(0, wy, 0, wy + wh);
-            ug.addColorStop(0, "#3d4a63");
-            ug.addColorStop(1, "#141a27");
-            g.fillStyle = ug;
-          }
-          if (arched) {
-            g.beginPath();
-            g.moveTo(wx, wy + wh);
-            g.lineTo(wx, wy + 6);
-            g.arc(wx + ww / 2, wy + 6, ww / 2, Math.PI, 0);
-            g.lineTo(wx + ww, wy + wh);
-            g.closePath();
-            g.fill();
-          } else {
-            g.fillRect(wx, wy, ww, wh);
-          }
-          // Fensterkreuz
-          g.fillStyle = lit || fire ? "rgba(60,30,10,0.55)" : "rgba(120,130,150,0.35)";
-          g.fillRect(wx + ww / 2 - 0.75, wy + 2, 1.5, wh - 2);
-          g.fillRect(wx, wy + wh * 0.42, ww, 1.5);
-          if (fire) {
-            // Rußfahne
-            const sg = g.createLinearGradient(0, wy - 30, 0, wy);
-            sg.addColorStop(0, "rgba(0,0,0,0)");
-            sg.addColorStop(1, "rgba(10,6,4,0.65)");
-            g.fillStyle = sg;
-            g.fillRect(wx - 4, wy - 30, ww + 8, 30);
-          }
-        }
-      }
-      // Erdgeschoss: Portal + Geschäfte
-      const doorX = x + w * (0.3 + hash(i * 2.2) * 0.4);
-      g.fillStyle = "#1a1d24";
-      g.beginPath();
-      g.moveTo(doorX - 10, H);
-      g.lineTo(doorX - 10, H - 26);
-      g.arc(doorX, H - 26, 10, Math.PI, 0);
-      g.lineTo(doorX + 10, H);
-      g.fill();
-      for (let s = 0; s < 2; s += 1) {
-        const sxx = s === 0 ? x + 8 : x + w - 46;
-        if (Math.abs(sxx + 19 - doorX) < 32) continue;
-        const shopLit = hash(i * 23 + s) < o.lit * 1.1;
-        const sg = g.createLinearGradient(0, H - 30, 0, H - 3);
-        sg.addColorStop(0, shopLit ? "#f6c983" : "#27303f");
-        sg.addColorStop(1, shopLit ? "#b86d34" : "#141922");
-        g.fillStyle = sg;
-        g.fillRect(sxx, H - 30, 38, 27);
-        // Markise
-        const aw = ["#7c2a2a", "#2d5a3d", "#6b5a2a", "#2f4a6b"][Math.floor(hash(i * 3 + s) * 4)];
-        g.fillStyle = aw;
-        g.beginPath();
-        g.moveTo(sxx - 3, H - 35);
-        g.lineTo(sxx + 41, H - 35);
-        g.lineTo(sxx + 45, H - 28);
-        g.lineTo(sxx - 7, H - 28);
-        g.closePath();
-        g.fill();
-        g.fillStyle = "rgba(255,255,255,0.12)";
-        for (let st = 0; st < 6; st += 2) g.fillRect(sxx - 3 + st * 7.5, H - 35, 7.5, 7);
-      }
-      // Leuchtreklame (Nasenschild) an der Hausecke
-      if (hash(i * 7.3 + 1) < 0.34 && w > 150 && x + w < W - 40) {
-        const lit = o.fire < 0.2 && hash(i * 2.9 + 4) < o.lit * 1.4;
-        neonSign(g, x + w - 18, H - 40 - 44, Math.floor(hash(i * 1.3 + 8) * 60), lit);
-      }
+/**
+ * Fassaden malen, nach je `FACADE_STEP` Gebäuden mit `yield` unterbrochen (der Aufrufer treibt den Generator Schritt für
+ * Schritt, siehe `startFacades`); die Zeichenbefehle sind dieselben wie am Stück.
+ */
+function* facadeSteps(g: CanvasRenderingContext2D, W: number, H: number, o: FacadeOpts, roofs: Array<[number, number, number]>): Generator<void, void, void> {
+  let x = 0;
+  let i = 0;
+  const holes: Array<[number, number, number, number]> = [];
+  const glows: Array<[number, number, number]> = [];
+  while (x < W) {
+    if (i > 0 && i % FACADE_STEP === 0) yield;
+    let w = 130 + hash(i * 3.1 + 11) * 110;
+    if (W - (x + w) < 130) w = W - x;
+    const floors = 3 + Math.floor(hash(i * 1.7 + 5) * 3);
+    const floorH = 30 + Math.floor(hash(i * 2.9) * 5);
+    const groundH = 40;
+    const bodyH = groundH + floors * floorH + 12;
+    const top = H - bodyH;
+    if (o.damage === 2) {
+      roofs.push([x, top - 20 - hash(i * 4.4) * 12, w]);
+      ruinBuilding(g, x, w, i, H, o, holes, glows);
       x += w;
       i += 1;
+      continue;
     }
-    if (glows.length) {
-      g.save();
-      g.globalCompositeOperation = "lighter";
-      const warm = g.createRadialGradient(0, 0, 0, 0, 0, 22);
-      warm.addColorStop(0, "rgba(255,190,110,0.28)");
-      warm.addColorStop(1, "rgba(255,190,110,0)");
-      const hot = g.createRadialGradient(0, 0, 0, 0, 0, 30);
-      hot.addColorStop(0, "rgba(255,120,40,0.45)");
-      hot.addColorStop(1, "rgba(255,90,30,0)");
-      for (const [gx, gy2, f] of glows) {
-        g.save();
-        g.translate(gx, gy2);
-        g.fillStyle = f ? hot : warm;
-        g.fillRect(-30, -30, 60, 60);
-        g.restore();
+    const col0 = FACADE_COLORS[Math.floor(hash(i * 5.3 + 2) * FACADE_COLORS.length)];
+    const col = o.fire > 0.15 ? shadeHex(col0, 0.72) : col0;
+    const style = hash(i * 8.1 + 4);
+    const roofKind = hash(i * 6.7 + 9);
+
+    // Dach
+    const roofH = 20 + hash(i * 4.4) * 12;
+    if (o.damage < 2) {
+      g.fillStyle = roofKind < 0.2 ? "#35574f" : "#2a303c";
+      g.beginPath();
+      g.moveTo(x + 2, top);
+      if (roofKind < 0.2 && w > 160) {
+        // Eckkuppel (Kupfer-Patina)
+        const cx = x + w - 28;
+        g.lineTo(x + 10, top - roofH);
+        g.lineTo(cx - 20, top - roofH);
+        g.lineTo(cx - 20, top - roofH - 10);
+        g.quadraticCurveTo(cx - 20, top - roofH - 42, cx, top - roofH - 46);
+        g.lineTo(cx, top - roofH - 66);
+        g.lineTo(cx + 2, top - roofH - 46);
+        g.quadraticCurveTo(cx + 22, top - roofH - 42, cx + 22, top - roofH - 10);
+        g.lineTo(cx + 22, top);
+      } else {
+        g.lineTo(x + 12, top - roofH);
+        g.lineTo(x + w - 12, top - roofH);
+        g.lineTo(x + w - 2, top);
       }
-      g.restore();
+      g.closePath();
+      g.fill();
+      // Dachfenster (Gauben)
+      const ng = Math.floor((w - 40) / 38);
+      for (let d = 0; d < ng; d += 1) {
+        const dx = x + 22 + d * 38;
+        g.fillStyle = "#3b4252";
+        g.fillRect(dx, top - roofH + 6, 12, roofH - 6);
+        g.beginPath();
+        g.moveTo(dx - 2, top - roofH + 7);
+        g.lineTo(dx + 6, top - roofH + 1);
+        g.lineTo(dx + 14, top - roofH + 7);
+        g.fill();
+        const hv = hash(i * 17 + d * 3.1);
+        g.fillStyle = hv < o.lit * 0.6 ? "#f2b766" : "#141a26";
+        g.fillRect(dx + 3, top - roofH + 9, 6, roofH - 11);
+      }
+      // Schornsteine
+      g.fillStyle = "#2a2f38";
+      for (let c = 0; c < 2; c += 1) {
+        const cx = x + 20 + hash(i * 3.7 + c) * (w - 50);
+        g.fillRect(cx, top - roofH - 12, 8, 16);
+        g.fillRect(cx - 2, top - roofH - 14, 12, 3);
+      }
+      if (o.damage === 1) {
+        // Sturmschäden: Loch im Dach
+        g.fillStyle = "#11141c";
+        const hx = x + 30 + hash(i * 9.9) * (w - 90);
+        g.beginPath();
+        g.moveTo(hx, top - roofH + 2);
+        g.lineTo(hx + 30, top - roofH + 4);
+        g.lineTo(hx + 22, top - 6);
+        g.lineTo(hx + 6, top - 10);
+        g.closePath();
+        g.fill();
+      }
     }
-    if (holes.length) {
+
+    roofs.push([x, top - roofH, w]);
+    // Fassade
+    const grd = g.createLinearGradient(0, top, 0, H);
+    grd.addColorStop(0, shade(col, 1.12));
+    grd.addColorStop(0.55, shade(col, 0.82));
+    grd.addColorStop(1, shade(col, 0.55));
+    g.fillStyle = grd;
+    g.fillRect(x, top, w, bodyH);
+    // Gebäudefuge
+    g.fillStyle = "rgba(0,0,0,0.35)";
+    g.fillRect(x, top, 2, bodyH);
+    // Hauptgesims
+    g.fillStyle = shade(col, 1.3);
+    g.fillRect(x - 2, top, w + 4, 6);
+    g.fillStyle = "rgba(0,0,0,0.35)";
+    g.fillRect(x, top + 6, w, 4);
+    // Rustika-Sockel
+    g.fillStyle = shade(col, 0.85);
+    g.fillRect(x, H - groundH, w, groundH);
+    g.fillStyle = "rgba(0,0,0,0.18)";
+    for (let yy = H - groundH + 7; yy < H; yy += 7) g.fillRect(x, yy, w, 1);
+
+    // Fensterachsen
+    const cols = Math.max(2, Math.floor((w - 20) / 30));
+    const pitch = (w - 20) / cols;
+    for (let f = 0; f < floors; f += 1) {
+      const fy = top + 14 + f * floorH;
+      // Gurtgesims
+      g.fillStyle = shade(col, 1.18);
+      g.fillRect(x + 2, fy + floorH - 6, w - 4, 3);
+      for (let c = 0; c < cols; c += 1) {
+        const wx = x + 10 + c * pitch + pitch / 2 - 6;
+        const wy = fy + 6;
+        const ww = 12;
+        const wh = floorH - 14;
+        const hv = hash(i * 57.3 + f * 11.1 + c * 3.7);
+        const arched = style > 0.66;
+        // Fensterrahmen / Verdachung
+        g.fillStyle = shade(col, 1.25);
+        if (f === floors - 1 && style < 0.5) {
+          // Dreiecksgiebel (Beletage oben)
+          g.beginPath();
+          g.moveTo(wx - 4, wy - 1);
+          g.lineTo(wx + ww / 2, wy - 8);
+          g.lineTo(wx + ww + 4, wy - 1);
+          g.closePath();
+          g.fill();
+        } else {
+          g.fillRect(wx - 3, wy - 4, ww + 6, 3);
+        }
+        g.fillRect(wx - 2, wy + wh, ww + 4, 3);
+        const fire = hv > 1 - o.fire;
+        const lit = !fire && hv < o.lit;
+        if (fire || lit) glows.push([wx + ww / 2, wy + wh / 2, fire ? 1 : 0]);
+        if (fire) {
+          const fg = g.createLinearGradient(0, wy, 0, wy + wh);
+          fg.addColorStop(0, "#ffe08a");
+          fg.addColorStop(0.5, "#ff8a2a");
+          fg.addColorStop(1, "#b3261e");
+          g.fillStyle = fg;
+        } else if (lit) {
+          const lg = g.createLinearGradient(0, wy, 0, wy + wh);
+          lg.addColorStop(0, "#ffe2a6");
+          lg.addColorStop(1, "#e89a45");
+          g.fillStyle = lg;
+        } else {
+          const ug = g.createLinearGradient(0, wy, 0, wy + wh);
+          ug.addColorStop(0, "#3d4a63");
+          ug.addColorStop(1, "#141a27");
+          g.fillStyle = ug;
+        }
+        if (arched) {
+          g.beginPath();
+          g.moveTo(wx, wy + wh);
+          g.lineTo(wx, wy + 6);
+          g.arc(wx + ww / 2, wy + 6, ww / 2, Math.PI, 0);
+          g.lineTo(wx + ww, wy + wh);
+          g.closePath();
+          g.fill();
+        } else {
+          g.fillRect(wx, wy, ww, wh);
+        }
+        // Fensterkreuz
+        g.fillStyle = lit || fire ? "rgba(60,30,10,0.55)" : "rgba(120,130,150,0.35)";
+        g.fillRect(wx + ww / 2 - 0.75, wy + 2, 1.5, wh - 2);
+        g.fillRect(wx, wy + wh * 0.42, ww, 1.5);
+        if (fire) {
+          // Rußfahne
+          const sg = g.createLinearGradient(0, wy - 30, 0, wy);
+          sg.addColorStop(0, "rgba(0,0,0,0)");
+          sg.addColorStop(1, "rgba(10,6,4,0.65)");
+          g.fillStyle = sg;
+          g.fillRect(wx - 4, wy - 30, ww + 8, 30);
+        }
+      }
+    }
+    // Erdgeschoss: Portal + Geschäfte
+    const doorX = x + w * (0.3 + hash(i * 2.2) * 0.4);
+    g.fillStyle = "#1a1d24";
+    g.beginPath();
+    g.moveTo(doorX - 10, H);
+    g.lineTo(doorX - 10, H - 26);
+    g.arc(doorX, H - 26, 10, Math.PI, 0);
+    g.lineTo(doorX + 10, H);
+    g.fill();
+    for (let s = 0; s < 2; s += 1) {
+      const sxx = s === 0 ? x + 8 : x + w - 46;
+      if (Math.abs(sxx + 19 - doorX) < 32) continue;
+      const shopLit = hash(i * 23 + s) < o.lit * 1.1;
+      const sg = g.createLinearGradient(0, H - 30, 0, H - 3);
+      sg.addColorStop(0, shopLit ? "#f6c983" : "#27303f");
+      sg.addColorStop(1, shopLit ? "#b86d34" : "#141922");
+      g.fillStyle = sg;
+      g.fillRect(sxx, H - 30, 38, 27);
+      // Markise
+      const aw = ["#7c2a2a", "#2d5a3d", "#6b5a2a", "#2f4a6b"][Math.floor(hash(i * 3 + s) * 4)];
+      g.fillStyle = aw;
+      g.beginPath();
+      g.moveTo(sxx - 3, H - 35);
+      g.lineTo(sxx + 41, H - 35);
+      g.lineTo(sxx + 45, H - 28);
+      g.lineTo(sxx - 7, H - 28);
+      g.closePath();
+      g.fill();
+      g.fillStyle = "rgba(255,255,255,0.12)";
+      for (let st = 0; st < 6; st += 2) g.fillRect(sxx - 3 + st * 7.5, H - 35, 7.5, 7);
+    }
+    // Leuchtreklame (Nasenschild) an der Hausecke
+    if (hash(i * 7.3 + 1) < 0.34 && w > 150 && x + w < W - 40) {
+      const lit = o.fire < 0.2 && hash(i * 2.9 + 4) < o.lit * 1.4;
+      neonSign(g, x + w - 18, H - 40 - 44, Math.floor(hash(i * 1.3 + 8) * 60), lit);
+    }
+    x += w;
+    i += 1;
+  }
+  if (glows.length) {
+    g.save();
+    g.globalCompositeOperation = "lighter";
+    const warm = g.createRadialGradient(0, 0, 0, 0, 0, 22);
+    warm.addColorStop(0, "rgba(255,190,110,0.28)");
+    warm.addColorStop(1, "rgba(255,190,110,0)");
+    const hot = g.createRadialGradient(0, 0, 0, 0, 0, 30);
+    hot.addColorStop(0, "rgba(255,120,40,0.45)");
+    hot.addColorStop(1, "rgba(255,90,30,0)");
+    for (const [gx, gy2, f] of glows) {
       g.save();
-      g.globalCompositeOperation = "destination-out";
-      for (const [hx, hy, hw, hh] of holes) g.fillRect(hx, hy, hw, hh);
+      g.translate(gx, gy2);
+      g.fillStyle = f ? hot : warm;
+      g.fillRect(-30, -30, 60, 60);
       g.restore();
     }
-  }, reuse);
-  return { ...tile, roofs };
+    g.restore();
+  }
+  if (holes.length) {
+    g.save();
+    g.globalCompositeOperation = "destination-out";
+    for (const [hx, hy, hw, hh] of holes) g.fillRect(hx, hy, hw, hh);
+    g.restore();
+  }
+}
+
+/** Unfertig gemalte Fassaden-Kachel: `step()` malt den nächsten Teil, true = fertig (danach ist `tile` vollständig) */
+export interface FacadeBuild {
+  readonly tile: FacadeTile;
+  step(): boolean;
+}
+
+/** Wie `paintFacades`, aber in Teilschritten (Rohvariante einer Stufe, ohne einen 15-20-ms-Block im Frame). */
+export function startFacades(W: number, H: number, o: FacadeOpts, k = 1, reuse?: HTMLCanvasElement | null): FacadeBuild {
+  const roofs: Array<[number, number, number]> = [];
+  let gen: Generator<void, void, void> | null = null;
+  const tile = renderTile(
+    W,
+    H,
+    k,
+    (g) => {
+      gen = facadeSteps(g, W, H, o, roofs);
+    },
+    reuse,
+  );
+  return {
+    tile: { ...tile, roofs },
+    step(): boolean {
+      if (!gen) return true;
+      if (!gen.next().done) return false;
+      gen = null;
+      return true;
+    },
+  };
+}
+
+export function paintFacades(W: number, H: number, o: FacadeOpts, k = 1, reuse?: HTMLCanvasElement | null): FacadeTile {
+  const b = startFacades(W, H, o, k, reuse);
+  while (!b.step()) {
+    // weiter bis zum Ende
+  }
+  return b.tile;
 }
 
 // ---------------------------------------------------------------------------------------------------
 // Sturmwolken (nahtlos, halbtransparent)
 
-export function paintClouds(W: number, H: number): Tile {
-  return renderTile(W, H, 1, (g) => {
-    const n = 46;
-    for (let i = 0; i < n; i += 1) {
-      const cx = (i / n) * W + hash(i * 3.3) * 60;
-      const cy = 40 + hash(i * 1.1) * (H - 110);
-      const r = 70 + hash(i * 7.7) * 120;
-      for (const off of [-W, 0, W]) {
-        const x = cx + off;
-        if (x + r < 0 || x - r > W) continue;
-        const grd = g.createRadialGradient(x, cy, r * 0.1, x, cy, r);
-        const d = 0.25 + hash(i * 5.5) * 0.35;
-        grd.addColorStop(0, `rgba(18,22,34,${d})`);
-        grd.addColorStop(0.6, `rgba(24,28,40,${d * 0.55})`);
-        grd.addColorStop(1, "rgba(24,28,40,0)");
-        g.fillStyle = grd;
-        g.beginPath();
-        g.ellipse(x, cy, r * 1.6, r * 0.55, 0, 0, Math.PI * 2);
-        g.fill();
-      }
+/** Anzahl der Wolkenballen einer Kachel; `paintCloudsA` malt die erste Hälfte, `paintCloudsB` den Rest und die Ausblendung unten */
+const CLOUD_N = 46;
+
+function cloudBlobs(g: CanvasRenderingContext2D, W: number, H: number, i0: number, i1: number): void {
+  for (let i = i0; i < i1; i += 1) {
+    const cx = (i / CLOUD_N) * W + hash(i * 3.3) * 60;
+    const cy = 40 + hash(i * 1.1) * (H - 110);
+    const r = 70 + hash(i * 7.7) * 120;
+    for (const off of [-W, 0, W]) {
+      const x = cx + off;
+      if (x + r < 0 || x - r > W) continue;
+      const grd = g.createRadialGradient(x, cy, r * 0.1, x, cy, r);
+      const d = 0.25 + hash(i * 5.5) * 0.35;
+      grd.addColorStop(0, `rgba(18,22,34,${d})`);
+      grd.addColorStop(0.6, `rgba(24,28,40,${d * 0.55})`);
+      grd.addColorStop(1, "rgba(24,28,40,0)");
+      g.fillStyle = grd;
+      g.beginPath();
+      g.ellipse(x, cy, r * 1.6, r * 0.55, 0, 0, Math.PI * 2);
+      g.fill();
     }
-      g.globalCompositeOperation = "destination-in";
-    const m = g.createLinearGradient(0, 0, 0, H);
-    m.addColorStop(0, "rgba(0,0,0,1)");
-    m.addColorStop(0.62, "rgba(0,0,0,1)");
-    m.addColorStop(1, "rgba(0,0,0,0)");
-    g.fillStyle = m;
-    g.fillRect(0, 0, W, H);
-    g.globalCompositeOperation = "source-over";
-  });
+  }
+}
+
+/** Wolken, Teil 1: die erste Hälfte der Ballen (Teil 2 folgt in `paintCloudsB`; zusammen genau `paintClouds`) */
+export function paintCloudsA(W: number, H: number): Tile {
+  return renderTile(W, H, 1, (g) => cloudBlobs(g, W, H, 0, CLOUD_N >> 1));
+}
+
+/** Wolken, Teil 2: restliche Ballen und die Ausblendung nach unten auf die in Teil 1 begonnene Kachel */
+export function paintCloudsB(t: Tile): void {
+  const g = t.canvas.getContext("2d");
+  if (!g) return;
+  cloudBlobs(g, t.w, t.h, CLOUD_N >> 1, CLOUD_N);
+  g.globalCompositeOperation = "destination-in";
+  const m = g.createLinearGradient(0, 0, 0, t.h);
+  m.addColorStop(0, "rgba(0,0,0,1)");
+  m.addColorStop(0.62, "rgba(0,0,0,1)");
+  m.addColorStop(1, "rgba(0,0,0,0)");
+  g.fillStyle = m;
+  g.fillRect(0, 0, t.w, t.h);
+  g.globalCompositeOperation = "source-over";
+}
+
+export function paintClouds(W: number, H: number): Tile {
+  const t = paintCloudsA(W, H);
+  paintCloudsB(t);
+  return t;
 }
 
 /** Weiche Rauchwolke (Sprite). */

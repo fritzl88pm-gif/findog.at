@@ -192,6 +192,21 @@ describe("Prater – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () =>
     expect(list.every((c) => c.has(2))).toBe(true);
   });
 
+  it("Qualität 0: die Folgestufe wird erst ab ~60 % der Stufe gebacken, im Leerlauf (warm) gar nicht", async () => {
+    const { r } = await loaded();
+    const list = inner(r).staged;
+    vi.spyOn(performance, "now").mockImplementation(() => 5000);
+    const at = (progress: number): void => r.update(1 / 60, stubView({ stage: 1, quality: 0, worldMeters: 300 + progress * 300 }));
+    at(0.02);
+    at(0.3);
+    at(0.5);
+    expect(list.filter((c) => c.has(2)).length).toBe(0);
+    r.warm(1000);
+    expect(list.filter((c) => c.has(2)).length).toBe(0);
+    at(0.62);
+    expect(list.filter((c) => c.has(2)).length).toBe(1);
+  });
+
   it("ein ganzer Lauf durch alle 5 Stufen legt keine neuen Flächen an (Stufenflächen werden wiederverwendet)", async () => {
     const { r, stub } = await loaded();
     let clock = 0;

@@ -253,6 +253,63 @@ describe("StagePrep", () => {
     expect(list[0].calls).toEqual([0, 1]);
   });
 
+  it("onApproach: einmal je Stufe, 0,1 vor dem Vorbacken der Folgestufe (Qualität 0: vor 0,6), nie auf der letzten Stufe", () => {
+    const clock = { t: 1000 };
+    const seen: number[] = [];
+    const list = [counting()];
+    const prep = new StagePrep(list.map((x) => x.cache), 2, { now: () => clock.t, onApproach: (n) => seen.push(n) });
+    prep.step(0, 0.05, 0);
+    prep.step(0, 0.17, 0);
+    expect(seen).toEqual([]);
+    expect(list[0].calls).toEqual([0]); // noch nichts vorgebacken
+    prep.step(0, 0.19, 0); // ab 0,18: Meldung, noch kein Bake (der beginnt bei 0,28)
+    expect(seen).toEqual([1]);
+    expect(list[0].calls).toEqual([0]);
+    prep.step(0, 0.3, 0);
+    prep.step(0, 0.5, 0);
+    expect(seen).toEqual([1]); // nur einmal je Stufe
+    prep.step(1, 0.2, 0); // nächste Stufe, wieder einmal
+    expect(seen).toEqual([1, 2]);
+    prep.step(2, 0.5, 0); // letzte Stufe: keine Folgestufe
+    expect(seen).toEqual([1, 2]);
+    // Qualität 0: später
+    const low: number[] = [];
+    const p2 = new StagePrep([counting().cache], 3, { now: () => clock.t, onApproach: (n) => low.push(n) });
+    p2.setLow(true);
+    p2.step(0, 0.3, 0);
+    p2.step(0, 0.49, 0);
+    expect(low).toEqual([]);
+    p2.step(0, 0.5, 0);
+    expect(low).toEqual([1]);
+  });
+
+  it("Qualität 0 (setLow): Folgestufe erst ab 60 % und im Leerlauf nicht; die Überblendung holt Fehlendes nach; setLow(false) stellt es zurück", () => {
+    const { prep, list } = setup(2);
+    prep.setLow(true);
+    prep.step(0, 0.1, 0);
+    prep.step(0, 0.3, 0); // normal würde ab 28 % vorgebacken
+    prep.step(0, 0.5, 0);
+    for (const x of list) expect(x.calls).toEqual([0]);
+    expect(prep.warm(0, 100)).toBe(true); // Leerlauf: nur die aktuelle Stufe (liegt vor)
+    for (const x of list) expect(x.calls).toEqual([0]);
+    prep.step(0, 0.65, 0);
+    expect(list.map((x) => x.calls)).toEqual([[0, 1], [0]]); // ab 60 % ein Schritt
+    prep.step(0, 0.7, 0.1); // Überblendung: sofort alles
+    for (const x of list) expect(x.calls).toEqual([0, 1]);
+    const normal = setup(1);
+    normal.prep.setLow(true);
+    normal.prep.setLow(false);
+    normal.prep.step(0, 0.3, 0);
+    expect(normal.list[0].calls).toEqual([0, 1]);
+    const idle = setup(1);
+    idle.prep.setLow(true);
+    expect(idle.prep.warm(0, 100)).toBe(true);
+    expect(idle.list[0].calls).toEqual([0]);
+    idle.prep.setLow(false);
+    expect(idle.prep.warm(0, 100)).toBe(true);
+    expect(idle.list[0].calls).toEqual([0, 1]);
+  });
+
   it("warm: hält das Zeitbudget (erster Schritt läuft immer), true erst wenn alles da ist", () => {
     const clock = { t: 0 };
     const list = Array.from({ length: 3 }, () => {

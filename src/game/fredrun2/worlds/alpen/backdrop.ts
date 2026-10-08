@@ -6,6 +6,7 @@
  * Alpenglühen) und blenden die obere Kante weich in den Himmel aus (die Bilder sind oben hart beschnitten).
  * Gekachelt wird gespiegelt (Motive ohne Schrift) – pro Frame ein bis zwei 1:1-Blits.
  */
+import { warmImage } from "../../assets";
 import type { AssetLoader, PropLibrary } from "../../types";
 import { paint } from "../shared-b/canvas";
 import { StageCache, gradedCache } from "../shared-b/layers";
@@ -25,11 +26,11 @@ export class AlpBackdrop {
     const any = this.imgs.find((i) => !!i);
     if (!any) return;
     this.tileW = Math.round(any.width * (BACKDROP_H / (any.height * CROP_H)));
-    // Bild skalieren (Vorarbeit), Stimmung daraufmalen (Vorarbeit) und Dunst/Ausblendung (Bake) sind drei kleine Schritte
-    // statt einem großen: jeder rastert die 2,8×0,44 Megapixel großen Flächen nur zu einem Teil
+    // Bild skalieren (Vorarbeit), Stimmung daraufmalen (Vorarbeit), Dunst daraufmalen (Vorarbeit) und weiche Oberkante (Bake)
+    // sind vier kleine Schritte statt eines großen: jeder füllt/rastert die 2,8×0,44 Megapixel großen Flächen nur einmal
     this.cache = gradedCache(
       (s, reuse, grade) => this.bake(s, reuse, grade),
-      [(c, s) => this.gradeMood(c, s), (c, s) => this.gradeFinish(c, s)],
+      [(c, s) => this.gradeMood(c, s), (c, s) => this.gradeHaze(c, s), (c, s) => this.gradeFade(c, s)],
     );
   }
 
@@ -43,6 +44,15 @@ export class AlpBackdrop {
 
   private imageOf(stage: number): HTMLImageElement | null {
     return this.imgs[BACKDROP_OF_STAGE[stage]] ?? this.imgs.find((i) => !!i) ?? null;
+  }
+
+  /**
+   * Kulissenbild der Stufe vordekodieren (der Browser dekodiert ein Bild erst beim ersten Zeichnen: 5-15 ms, die sonst
+   * zusammen mit dem Skalieren im ersten Bake-Schritt anfielen). Aufruf kurz vor dem Vorbacken der Folgestufe (`StagePrep.onApproach`).
+   */
+  predecode(stage: number): void {
+    const img = this.imageOf(stage);
+    if (img) void warmImage(img);
   }
 
   /** Kulissenbild auf Kachelgröße skalieren (`grade` = Färbung gleich mit anwenden) */
@@ -62,7 +72,8 @@ export class AlpBackdrop {
     );
     if (grade) {
       this.gradeMood(c, stage);
-      this.gradeFinish(c, stage);
+      this.gradeHaze(c, stage);
+      this.gradeFade(c, stage);
     }
     return c;
   }
@@ -118,23 +129,31 @@ export class AlpBackdrop {
     return true;
   }
 
-  /** Luftperspektive (Dunst) und weiche Oberkante auf das skalierte Kulissenbild legen */
-  private gradeFinish(c: HTMLCanvasElement, stage: number): void {
-    if (!this.imageOf(stage)) return;
+  /** Luftperspektive: Dunst nach unten (Talboden) und oben (Gipfel im Himmelsblau) auf das skalierte Kulissenbild legen */
+  private gradeHaze(c: HTMLCanvasElement, stage: number): boolean {
+    if (!this.imageOf(stage)) return false;
     const g = c.getContext("2d");
-    if (!g) return;
+    if (!g) return false;
     const W = c.width;
     const H = c.height;
     const P = STAGE_PAL[stage];
-    // Luftperspektive: Dunst nach unten (Talboden) und oben (Gipfel im Himmelsblau)
     const hz = g.createLinearGradient(0, 0, 0, H);
     hz.addColorStop(0, hexA(P.mid, stage === 4 ? 0.1 : 0.22));
     hz.addColorStop(0.45, hexA(P.haze, 0.05));
     hz.addColorStop(1, hexA(P.haze, stage === 3 ? 0.5 : 0.36));
     g.fillStyle = hz;
     g.fillRect(0, 0, W, H);
-    // weich in den Himmel ausblenden
-    // (destination-in löscht alles außerhalb der gefüllten Fläche → ganze Kachel füllen)
+    return true;
+  }
+
+  /** Weich in den Himmel ausblenden (die Bilder sind oben hart beschnitten) */
+  private gradeFade(c: HTMLCanvasElement, stage: number): boolean {
+    if (!this.imageOf(stage)) return false;
+    const g = c.getContext("2d");
+    if (!g) return false;
+    const W = c.width;
+    const H = c.height;
+    // destination-in löscht alles außerhalb der gefüllten Fläche → ganze Kachel füllen
     g.globalCompositeOperation = "destination-in";
     const fade = g.createLinearGradient(0, 0, 0, FADE_H);
     fade.addColorStop(0, "rgba(0,0,0,0)");
@@ -143,6 +162,7 @@ export class AlpBackdrop {
     g.fillStyle = fade;
     g.fillRect(0, 0, W, H);
     g.globalCompositeOperation = "source-over";
+    return true;
   }
 
   /** Gespiegelt gekachelt zeichnen (1:1, ganzzahlig). */

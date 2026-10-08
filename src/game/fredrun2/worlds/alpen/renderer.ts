@@ -34,7 +34,7 @@ import {
   paintForeGrass,
   paintGround,
   paintLake,
-  paintMidHills,
+  paintMidBase,
   paintMist,
   paintNearTrees,
   paintPuff,
@@ -163,7 +163,7 @@ export class AlpenRenderer implements WorldRenderer {
   private ground!: StageCache;
   /** alle Stufen-Caches (Liste gehört dem StagePrep) */
   private staged: StageCache[] = [];
-  private prep = new StagePrep(this.staged, MAX_STAGE);
+  private prep = new StagePrep(this.staged, MAX_STAGE, { onApproach: (next) => this.backdrop.predecode(next) });
   private warmQ = new WarmQueue();
   private warmInit = false;
   private loaded = false;
@@ -236,6 +236,8 @@ export class AlpenRenderer implements WorldRenderer {
     () => this.buildCanyon(true),
     () => this.buildClouds(),
     () => this.buildMisc(),
+    () => this.buildRays(),
+    () => this.buildGlows(),
   ];
   private nextPart = 0;
 
@@ -265,7 +267,7 @@ export class AlpenRenderer implements WorldRenderer {
     this.farRange = new StageCache((s, reuse) => paintFarRange(s, reuse), { recycle: true });
     // Ebenen mit Farbstimmung: Malen und Einfärben als zwei kleine Schritte
     this.far = gradedCache(paintFarHills, GRADE_FAR);
-    this.mid = gradedCache(paintMidHills, GRADE_MID);
+    this.mid = gradedCache(paintMidBase, GRADE_MID);
     this.near = gradedCache(paintNearTrees, GRADE_NEAR);
     this.ground = new StageCache((s, reuse) => paintGround(s, reuse), { recycle: true });
     this.staged.push(this.sky, this.far, this.mid, this.near, this.ground);
@@ -340,6 +342,10 @@ export class AlpenRenderer implements WorldRenderer {
       { recycle: true },
     );
     this.staged.push(this.mistBand, this.lowHaze);
+  }
+
+  /** Statisches Zeichnen, Teil 2: Sonnenstrahlen und Sonne */
+  private buildRays(): void {
     this.rays = paintRays(1100, 600, 1060, 40, 3);
     this.sunGlow = bigGlow(520, 520, [
       [0, "rgba(255,250,230,1)"],
@@ -352,6 +358,10 @@ export class AlpenRenderer implements WorldRenderer {
       [0.5, "rgba(255,200,150,0.22)"],
       [1, "rgba(255,180,120,0)"],
     ]);
+  }
+
+  /** Statisches Zeichnen, Teil 3: Leucht-/Rauchsprites, Vordergrund, Wetter-Zustand; danach ist die Welt bereit */
+  private buildGlows(): void {
     this.glowWarm = softSprite("rgba(255,200,120,1)");
     this.warmFoot = paint(1280, 200, (wg) => {
       const bot = wg.createLinearGradient(0, 0, 0, 200);
@@ -413,6 +423,7 @@ export class AlpenRenderer implements WorldRenderer {
     const d = Math.min(0.05, dt);
     // Stufen-Varianten: die Folgestufe erst ab ~28 % der Stufe und höchstens ein Schritt je ~6 Frames (nicht am Stufenanfang)
     this.lastStage = v.stage;
+    this.prep.setLow(v.quality === 0); // Qualität 0: Folgestufe später (ab ~60 %) und nicht im Leerlauf vorbacken (Speicher)
     this.prep.step(v.stage, stageProgress(v.worldMeters, ALPEN_STAGE_METERS), v.stageBlend);
     const s = v.stage + v.stageBlend;
     const q = v.quality === 0 ? 0.35 : v.quality === 1 ? 0.7 : 1;

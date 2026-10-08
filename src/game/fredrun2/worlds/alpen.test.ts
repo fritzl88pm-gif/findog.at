@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FIXED_DT } from "../constants";
 import { Sim } from "../sim";
 import { WORLD_ALPEN } from "./alpen";
+import { AlpBackdrop } from "./alpen/backdrop";
 import { ALPEN_STAGE_METERS, AlpenRenderer } from "./alpen/renderer";
 import { PropBank } from "./alpen/skins";
 import { AVALANCHE_MIN_DIFF, AVALANCHE_MIN_STAGE, AlpenSystem } from "./alpen/system";
@@ -184,6 +185,23 @@ describe("Alpen – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () => 
     expect(list.every((c) => c.has(1))).toBe(true);
   });
 
+  it("Qualität 0: die Folgestufe wird erst ab ~60 % der Stufe gebacken, im Leerlauf (warm) gar nicht", async () => {
+    const { r } = await loaded();
+    const list = inner(r).staged;
+    vi.spyOn(performance, "now").mockImplementation(() => 7000);
+    const at = (progress: number): void => r.update(1 / 60, stubView({ stage: 0, quality: 0, worldMeters: progress * ALPEN_STAGE_METERS }));
+    const next = (): number => list.filter((c) => c.has(1)).length;
+    const before = next(); // load backt für die Kulisse bereits Stufe 1
+    at(0.02);
+    at(0.3);
+    at(0.5);
+    expect(next()).toBe(before);
+    r.warm(1000);
+    expect(next()).toBe(before);
+    at(0.62);
+    expect(next()).toBeGreaterThan(before);
+  });
+
   it("ein ganzer Lauf durch alle 5 Stufen: Stufenflächen werden wiederverwendet (nur die Farbmasken der Einfärbung legen Zwischenflächen an)", async () => {
     const { r, stub } = await loaded();
     let clock = 0;
@@ -205,7 +223,7 @@ describe("Alpen – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () => 
     expect(inner(r).staged.every((c) => c.has(4))).toBe(true);
   });
 
-  it("Einfärben in Schritten (Rohbild, Stimmung, Abschluss) ergibt dieselben Zeichenbefehle wie am Stück – Ebenen und Kulisse, alle Stufen", async () => {
+  it("Einfärben in Schritten (Rohbild, Stimmung, Dunst, Oberkante) ergibt dieselben Zeichenbefehle wie am Stück – Ebenen und Kulisse, alle Stufen", async () => {
     installRecordingStub();
     const a = new AlpenRenderer();
     const b = new AlpenRenderer();
@@ -234,11 +252,13 @@ describe("Alpen – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () => 
         fresh(A[k][1]);
         fresh(B[k][1]);
         let steps = 0;
-        while (!A[k][1].has(stage) && steps < 4) {
+        while (!A[k][1].has(stage) && steps < 6) {
           A[k][1].step(stage);
           steps += 1;
         }
-        expect(steps, `${A[k][0]} Stufe ${stage}: höchstens 3 Schritte`).toBeLessThanOrEqual(3);
+        const maxSteps = A[k][0] === "backdrop" ? 4 : A[k][0] === "mid" ? 5 : 3; // Kulisse: Bild, Stimmung, Dunst, Oberkante; Mittelhügel: 3 Teile + Stimmung + Dunst
+        expect(steps, `${A[k][0]} Stufe ${stage}: höchstens ${maxSteps} Schritte`).toBeLessThanOrEqual(maxSteps);
+        if (A[k][0] === "mid") expect(steps, `mid Stufe ${stage} braucht mehr als einen Schritt für das Rohbild`).toBeGreaterThanOrEqual(stage === 1 || stage === 2 ? 4 : 5);
         const stepwise = (A[k][1].get(stage) as unknown as RecordingCanvas).log;
         const direct = (B[k][1].get(stage) as unknown as RecordingCanvas).log;
         expect(stepwise.length, `${A[k][0]} Stufe ${stage}`).toBeGreaterThan(0);
@@ -249,7 +269,46 @@ describe("Alpen – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () => 
     expect(compared).toBe(20);
   });
 
-  it("die Stufen-Schritte rastern gleich: Rohbild, Stimmung und Bake werden einzeln berührt (touchCanvas)", async () => {
+  it("das Kulissenbild der Folgestufe wird kurz vor dem Vorbacken vordekodiert (einmal je Stufe, ab ~18 % der Stufe)", async () => {
+    const { r } = await loaded();
+    const spy = vi.spyOn(AlpBackdrop.prototype, "predecode");
+    const at = (stage: number, progress: number): void => r.update(1 / 60, stubView({ stage, worldMeters: stage * ALPEN_STAGE_METERS + progress * ALPEN_STAGE_METERS }));
+    at(0, 0.1);
+    at(0, 0.17);
+    expect(spy).not.toHaveBeenCalled();
+    at(0, 0.2);
+    at(0, 0.3);
+    expect(spy.mock.calls).toEqual([[1]]);
+    at(1, 0.25);
+    expect(spy.mock.calls).toEqual([[1], [2]]);
+    at(4, 0.9);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("Mittelhügel: ein angefangenes Rohbild wird bei clear() verworfen und die Stufe danach neu und vollständig aufgebaut", async () => {
+    const { r } = await loaded();
+    const mid = inner(r).mid;
+    mid.clear();
+    mid.dropSpare();
+    mid.step(3); // erster Teil des Rohbilds
+    expect(mid.has(3)).toBe(false);
+    mid.clear(); // Skalenwechsel o.ä.: die angefangene Fläche geht als Ersatz an den nächsten Bake
+    expect(mid.has(3)).toBe(false);
+    let steps = 0;
+    while (!mid.has(3) && steps < 8) {
+      mid.step(3);
+      steps += 1;
+    }
+    expect(mid.has(3)).toBe(true);
+    expect(steps).toBe(5); // Rohbild in drei Teilen, Stimmung, Dunst – wieder von vorn
+    // andere Stufe auf der wiederverwendeten Fläche: ebenfalls vollständig
+    mid.keep(4, 4);
+    for (let k = 0; k < 8 && !mid.has(4); k += 1) mid.step(4);
+    expect(mid.has(4)).toBe(true);
+    expect(mid.has(3)).toBe(false);
+  });
+
+  it("die Stufen-Schritte rastern gleich: Rohbild, Stimmung, Dunst und Bake werden einzeln berührt (touchCanvas)", async () => {
     const rec = installTouchStub();
     const { r } = await loaded();
     const bs = inner(r).backdrop.stages;
@@ -261,14 +320,19 @@ describe("Alpen – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () => 
     expect(rec.touched.length - before).toBe(1);
     bs.step(3); // Stimmung (Stufe 3: Sättigung + Weichlicht)
     expect(rec.touched.length - before).toBe(2);
-    bs.step(3); // Abschluss (Dunst, Ausblendung) = Bake
+    bs.step(3); // Dunst
     expect(rec.touched.length - before).toBe(3);
+    expect(bs.has(3)).toBe(false);
+    bs.step(3); // weiche Oberkante = Bake
+    expect(rec.touched.length - before).toBe(4);
     expect(bs.has(3)).toBe(true);
-    // Stufe 1 hat keine Stimmung: Rohbild, dann gleich der Abschluss
+    // Stufe 1 hat keine Stimmung: Rohbild, dann gleich Dunst, dann der Bake
     bs.step(1);
+    bs.step(1);
+    expect(bs.has(1)).toBe(false);
     bs.step(1);
     expect(bs.has(1)).toBe(true);
-    expect(rec.touched.length - before).toBe(5);
+    expect(rec.touched.length - before).toBe(7);
   });
 
   it("warm legt den Zwischenpuffer des Tor-Übergangs an und meldet danach, dass nichts mehr zu tun ist", async () => {
