@@ -32,6 +32,14 @@ export interface StageCacheOpts {
    * es wurde jetzt Arbeit geleistet (der eigentliche Bake folgt im nächsten Schritt), false = nichts (mehr) vorzubereiten.
    */
   prep?: (stage: number) => boolean;
+  /**
+   * Hält die Vorarbeit eigenen Zustand je Stufe (z.B. ein unfertiges Rohbild), muss er mit den Stufen des Caches
+   * verschwinden: wird bei jedem `keep(a, b)` aufgerufen (auch bei leerem Cache, vor dem Verwerfen) und soll allen Zustand
+   * für andere Stufen als a und b verwerfen. Läuft pro Frame – ohne Allokation, im Normalfall nur eine Längenprüfung.
+   */
+  onKeep?: (a: number, b: number) => void;
+  /** Wie `onKeep`, für `clear()`: allen Zustand der Vorarbeit verwerfen (er gehört zur alten Skala/Größe) */
+  onClear?: () => void;
 }
 
 /** Lazy erzeugte Zeichenflächen pro Stufe (z.B. Himmel), mit Verwerfen alter Stufen. */
@@ -40,6 +48,8 @@ export class StageCache {
   private spare: HTMLCanvasElement | null = null;
   private readonly recycle: boolean;
   private readonly prep: ((stage: number) => boolean) | undefined;
+  private readonly onKeep: ((a: number, b: number) => void) | undefined;
+  private readonly onClear: (() => void) | undefined;
   /** Anzahl tatsächlich gebackener Varianten seit Erzeugung (Diagnose, Tests) */
   baked = 0;
   /** gleitender Mittelwert der Bake-Dauer in ms (Schätzung für Zeitbudgets) */
@@ -51,6 +61,8 @@ export class StageCache {
   ) {
     this.recycle = !!opts.recycle;
     this.prep = opts.prep;
+    this.onKeep = opts.onKeep;
+    this.onClear = opts.onClear;
   }
 
   has(stage: number): boolean {
@@ -86,6 +98,7 @@ export class StageCache {
 
   /** Nur die Stufen a und b im Cache behalten (Normalfall ohne Iteration und Allokation) */
   keep(a: number, b: number): void {
+    this.onKeep?.(a, b); // Zustand der Vorarbeit für andere Stufen mit verwerfen (auch bei leerem Cache)
     const n = this.cache.size;
     if (n === 0) return;
     let own = 0;
@@ -101,8 +114,14 @@ export class StageCache {
 
   /** Alles verwerfen (z.B. bei Skalenwechsel), die Flächen bleiben zur Wiederverwendung erhalten */
   clear(): void {
+    this.onClear?.();
     for (const [, c] of this.cache) if (this.recycle) this.spare = c;
     this.cache.clear();
+  }
+
+  /** Eine verworfene Fläche (z.B. ein unfertiges Rohbild der vorigen Stufe) für den nächsten Bake anbieten; nur mit `recycle` */
+  offerSpare(c: HTMLCanvasElement): void {
+    if (this.recycle) this.spare = c;
   }
 
   /** Zwischengelagerte Fläche freigeben (Speicher) */
@@ -130,6 +149,8 @@ export type GradeStep = (canvas: HTMLCanvasElement, stage: number) => boolean | 
  * Bake. Jeder Schritt wird sofort gerastert (`touchCanvas`), damit seine Kosten nicht im ersten Frame mit der Fläche
  * anfallen. Die Schritte nacheinander müssen dasselbe Bild ergeben wie `paintBase(stage, reuse, true)` (Direktweg ohne
  * Vorarbeit, wenn die Stufe sofort gebraucht wird). Höchstens 3 Schritte (StagePrep erlaubt 4 je Variante und Aufruf).
+ * Ein unfertiges Rohbild lebt nur so lange wie seine Stufe: `keep(a, b)` verwirft die anderer Stufen, `clear()` (Skalenwechsel)
+ * alle – danach beginnt die Stufe von vorn, in der dann gültigen Größe.
  */
 export function gradedCache(
   paintBase: (stage: number, reuse: HTMLCanvasElement | null, grade: boolean) => HTMLCanvasElement,
@@ -166,6 +187,20 @@ export function gradedCache(
           }
         }
         return false;
+      },
+      // Unfertige Rohbilder gehören zu ihrer Stufe und Größe: mit der Stufe (keep) bzw. beim Skalenwechsel (clear) verwerfen,
+      // sonst setzt das nächste step/get mit einem Rohbild in alter Größe fort. Die Flächen gehen als Ersatz an den Cache.
+      onKeep: (a, b) => {
+        if (pending.size === 0) return;
+        for (const [k, p] of pending) {
+          if (k === a || k === b) continue;
+          pending.delete(k);
+          cache.offerSpare(p.c);
+        }
+      },
+      onClear: () => {
+        for (const [, p] of pending) cache.offerSpare(p.c);
+        pending.clear();
       },
     },
   );

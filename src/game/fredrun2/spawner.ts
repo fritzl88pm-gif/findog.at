@@ -25,6 +25,10 @@ export function restSeconds(diff: number): number {
   return 1.15 - 0.7 * Math.min(1, diff / 9);
 }
 
+/** Streuung der Pause zwischen zwei Mustern (Faktor auf restSeconds); die untere Grenze ist der Worst-Case für Landeräume. */
+export const REST_JITTER_MIN = 0.9;
+export const REST_JITTER_MAX = 1.15;
+
 /** Welt-unabhängige Belohnungsmuster (Münzen, Edelsteine, Power-ups). */
 export const REWARD_PATTERNS: PatternDef[] = [
   {
@@ -124,9 +128,14 @@ export const ENEMY_PATTERNS: PatternDef[] = [
       // Takt 0,8 s: ein Stampf-Bounce (2·v/g ≈ 0,68–0,77 s, steigt mit der Kettenzahl) passt sauber zwischen zwei Gegner;
       // bei 0,58 s blieb nur ein Fenster von ≈ 0,26 s (Tap-Hüpfer) und jeder Fehltritt kostete ein Herz.
       const gap = 0.8;
+      // Landeraum: Der Bounce nach dem LETZTEN Stampfer landet erst ≈ 0,87–0,93 s später (Sprungtaste gehalten, im Sim
+      // gemessen). Die Pause bis zum Folgemuster (restSeconds ab Schwierigkeit 9 nur 0,45 s, mal ≥ 0,9) reicht dafür
+      // nicht – ohne Schwanz läge das nächste Hindernis noch im Fallbogen (Treffer im Folgemuster im Bot-Audit
+      // 7–14 % statt ≈ 1 %). Schwanz + Pause ≈ Bounce-Dauer: Test in bot.test.ts.
+      const tail = 0.5;
       for (let i = 0; i < n; i += 1) c.walker(c.t(i * gap), 64, 110, { skin: guest(c), vx: 0, stompable: true });
       c.coinArc(c.t(0.1), c.t(gap * (n - 1)), 210, 8);
-      return c.t(gap * (n - 1)) + 64;
+      return c.t(gap * (n - 1) + tail) + 64;
     },
   },
   {
@@ -302,7 +311,7 @@ export class Spawner {
     else this.tagRun = { tag, count: 1 };
     this.sinceReward = isReward ? 0 : this.sinceReward + 1;
     this.patternCount += 1;
-    const rest = restSeconds(diff) * ctx.speed * sim.rng.range(0.9, 1.15);
+    const rest = restSeconds(diff) * ctx.speed * sim.rng.range(REST_JITTER_MIN, REST_JITTER_MAX);
     this.cursor += Math.max(length, 60) + (isReward ? rest * 0.55 : rest);
   }
 

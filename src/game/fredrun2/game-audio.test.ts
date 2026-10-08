@@ -5,7 +5,7 @@ import { COIN_STEPS } from "./audio/sfx";
 import { SFX_NAMES } from "./audio/types";
 import { VIEW_W } from "./constants";
 import type { AudioLike } from "./game";
-import { ZONE_MIN_GAP_SEC, createGameAudio, type AudioSink, type GameAudioEvent, type SimLike } from "./game-audio";
+import { ZONE_AUDIBLE_VOLUME, ZONE_MIN_GAP_SEC, ZONE_WINDOW_SEC, createGameAudio, type AudioSink, type GameAudioEvent, type SimLike } from "./game-audio";
 import type { Sim } from "./sim";
 import type { SimEvent } from "./types";
 
@@ -232,20 +232,46 @@ describe("Zonen-Sounds", () => {
     ]);
   });
 
-  it("Zonen außerhalb des Bildes sind leiser, weit draußen am Boden (20 %)", () => {
+  it("Zonen neben dem Bild sind leiser; weit draußen (unter ZONE_AUDIBLE_VOLUME) bleiben sie stumm", () => {
     const f = fakeSink();
     const ga = createGameAudio(f.sink, { cuesEnabled: ON });
     const vols: number[] = [];
-    for (const x of [640, 1300, 1500, 1700]) {
+    for (const x of [640, 1300, 1500, 1650]) {
       f.clear();
       ga.onEvent(zone("active", "bolt", x), fakeSim());
       vols.push(f.calls[0].opts!.volume!);
-      ga.tick(1, fakeSim(), false);
+      ga.tick(1.1, fakeSim(), false);
     }
     expect(vols[0]).toBe(1);
-    for (let i = 1; i < vols.length; i++) expect(vols[i]).toBeLessThanOrEqual(vols[i - 1]);
-    expect(vols[3]).toBeLessThan(0.3);
-    expect(vols[3]).toBeGreaterThanOrEqual(0.2);
+    for (let i = 1; i < vols.length; i++) expect(vols[i]).toBeLessThanOrEqual(vols[i - 1]); // dicht am Bild (x = 1300) noch voll
+    expect(vols[2]).toBeLessThan(vols[0]);
+    expect(vols[3]).toBeLessThan(vols[2]);
+    expect(vols[3]).toBeGreaterThanOrEqual(ZONE_AUDIBLE_VOLUME);
+    expect(vols[3]).toBeLessThan(0.4);
+    // darüber hinaus (x = 1700 wäre Boden 0.2): kein Ton, links wie rechts
+    f.clear();
+    for (const x of [1700, -420, 3000, -2000]) {
+      ga.onEvent(zone("active", "bolt", x), fakeSim());
+      ga.tick(1.1, fakeSim(), false);
+    }
+    expect(f.calls).toEqual([]);
+  });
+
+  it("jeder gespielte Zonen-Ton ist mindestens ZONE_AUDIBLE_VOLUME laut (Weite über das ganze Feld, alle Gruppen)", () => {
+    const f = fakeSink();
+    const ga = createGameAudio(f.sink, { cuesEnabled: ON });
+    let played = 0;
+    for (const skin of ["bolt", "stamp", "laser-low", "rockfall", "phase-cyan"]) {
+      for (const phase of ["warn", "active"] as const) {
+        for (let x = -900; x <= 2200; x += 25) {
+          ga.tick(1.1, fakeSim(), false); // jeder Versuch in einer freien Sekunde
+          ga.onEvent(zone(phase, skin, x), fakeSim());
+          played = f.calls.length;
+        }
+      }
+    }
+    expect(played).toBeGreaterThan(100);
+    for (const c of f.calls) expect(c.opts!.volume, c.name).toBeGreaterThanOrEqual(ZONE_AUDIBLE_VOLUME);
   });
 
   it("Mindestabstand 0.35 s je Skin-Gruppe", () => {
@@ -288,21 +314,81 @@ describe("Zonen-Sounds", () => {
     expect(f.names()).toEqual(["laser-zap", "rockfall", "stamp-thud"]);
   });
 
-  it("leise (weit entfernte) Zonen-Töne belegen nie den zweiten Platz", () => {
+  it("Signal schlägt Warnung: eine Warnung braucht eine freie Sekunde, der aktive Ton nur einen freien Platz", () => {
+    // Finanzamt Seed 32 (Prüfbericht): Stempel aktiv, 0.26 s später Laser-Warnung, 0.45 s darauf Laser aktiv im Bild. Früher belegten
+    // Stempel und Warnung beide Plätze, das Feuern blieb stumm.
     const f = fakeSink();
     const ga = createGameAudio(f.sink, { cuesEnabled: ON });
     const sim = fakeSim();
-    ga.onEvent(zone("active", "laser-low", 640), sim); // laut
+    ga.onEvent(zone("active", "stamp", 640), sim);
+    ga.tick(0.26, sim, false);
+    ga.onEvent(zone("warn", "laser-high", 900), sim); // Warnung: kein freies Fenster -> verworfen
+    ga.tick(0.45, sim, false);
+    ga.onEvent(zone("active", "laser-high", 755), sim);
+    expect(f.names()).toEqual(["stamp-thud", "laser-zap"]);
+    expect(f.calls[1].opts).toEqual({ pitch: 1, volume: 1, pan: expect.any(Number) });
+  });
+
+  it("eine gespielte Warnung nimmt dem aktiven Ton danach nicht den Platz und nicht die Gruppe", () => {
+    const f = fakeSink();
+    const ga = createGameAudio(f.sink, { cuesEnabled: ON });
+    const sim = fakeSim();
+    ga.onEvent(zone("warn", "laser-low", 640), sim); // freie Sekunde -> spielt
+    ga.tick(0.2, sim, false);
+    ga.onEvent(zone("active", "laser-low", 640), sim); // gleiche Gruppe, 0.2 s später: die Warnung sperrt die Gruppe nicht
+    expect(f.calls.map((c) => c.opts!.pitch)).toEqual([0.6, 1]);
+    // beide Plätze belegt: weder Warnung noch weiteres Signal in diesem Fenster
+    ga.tick(0.2, sim, false);
+    ga.onEvent(zone("warn", "rockfall", 640), sim);
+    ga.onEvent(zone("active", "stamp", 640), sim);
+    expect(f.calls.length).toBe(2);
+  });
+
+  it("Warnungen kommen auch nach einem einzelnen aktiven Ton erst nach einer ganz freien Sekunde", () => {
+    const f = fakeSink();
+    const ga = createGameAudio(f.sink, { cuesEnabled: ON });
+    const sim = fakeSim();
+    ga.onEvent(zone("active", "stamp", 640), sim);
+    ga.tick(ZONE_WINDOW_SEC, sim, false); // genau ein Fenster: noch nicht frei (strikt "größer")
+    ga.onEvent(zone("warn", "rockfall", 640), sim);
+    expect(f.names()).toEqual(["stamp-thud"]);
+    ga.tick(0.01, sim, false);
+    ga.onEvent(zone("warn", "rockfall", 640), sim);
+    expect(f.names()).toEqual(["stamp-thud", "rockfall"]);
+  });
+
+  it("zwei Signale binnen einer Sekunde spielen immer, auch wenn davor weit entfernte Zonen feuern", () => {
+    // Weit draußen (Boden 0.2: Cyber Seed 31 / x = 2954) und unhörbare Warnungen belegten früher beide Plätze.
+    const f = fakeSink();
+    const ga = createGameAudio(f.sink, { cuesEnabled: ON });
+    const sim = fakeSim();
+    ga.onEvent(zone("active", "beam-fence", 1708), sim);
     ga.tick(0.1, sim, false);
-    ga.onEvent(zone("active", "rockfall", 1750), sim); // leise (x weit draußen): verworfen, obwohl noch ein Platz frei wäre
-    expect(f.names()).toEqual(["laser-zap"]);
-    ga.onEvent(zone("active", "stamp", 640), sim); // laut: bekommt den zweiten Platz
+    ga.onEvent(zone("warn", "laser-floor", 3455), sim);
+    ga.onEvent(zone("active", "laser-floor", 2954), sim);
+    ga.onEvent(zone("warn", "rockfall", 2200), sim);
+    ga.tick(0.1, sim, false);
+    expect(f.calls).toEqual([]); // nichts davon ist hörbar
+    ga.onEvent(zone("active", "laser-low", 293), sim); // gleiche Gruppe wie die stummen: nicht gesperrt
+    ga.tick(0.3, sim, false);
+    ga.onEvent(zone("active", "stamp", 700), sim);
     expect(f.names()).toEqual(["laser-zap", "stamp-thud"]);
-    // allein in einer freien Sekunde darf ein leiser Ton spielen
-    ga.tick(2, sim, false);
-    ga.onEvent(zone("active", "rockfall", 1750), sim);
-    expect(f.names()).toEqual(["laser-zap", "stamp-thud", "rockfall"]);
-    expect(f.calls[2].opts!.volume).toBeLessThan(0.3);
+    expect(f.calls[0].opts!.volume).toBe(1);
+  });
+
+  it("ein Ton an der Hörbarkeitsgrenze spielt allein, zählt aber wie jeder andere (Signal: ein Platz)", () => {
+    const f = fakeSink();
+    const ga = createGameAudio(f.sink, { cuesEnabled: ON });
+    const sim = fakeSim();
+    ga.onEvent(zone("active", "rockfall", 1680), sim); // 400 px neben dem Bild: Volume ca. 0.26
+    expect(f.names()).toEqual(["rockfall"]);
+    expect(f.calls[0].opts!.volume).toBeGreaterThanOrEqual(ZONE_AUDIBLE_VOLUME);
+    expect(f.calls[0].opts!.volume).toBeLessThan(0.3);
+    ga.tick(0.1, sim, false);
+    ga.onEvent(zone("active", "laser-low", 640), sim);
+    ga.tick(0.1, sim, false);
+    ga.onEvent(zone("active", "stamp", 640), sim); // dritter binnen einer Sekunde
+    expect(f.names()).toEqual(["rockfall", "laser-zap"]);
   });
 
   it("ein verworfener oder stummer Zonen-Ton sperrt die Gruppe nicht", () => {
@@ -311,6 +397,12 @@ describe("Zonen-Sounds", () => {
     ga.onEvent(zone("active", "phase-cyan", 1700), fakeSim()); // Phasentor außerhalb des Bildes: kein Ton
     ga.onEvent(zone("active", "phase-cyan", 500), fakeSim());
     expect(f.calls).toEqual([{ name: "glitch", opts: { volume: 0.45, pan: -0.6 * (140 / 640) } }]);
+    // auch ein unhörbarer Ton (Zone weit neben dem Bild) sperrt weder Gruppe noch Deckel
+    f.clear();
+    ga.tick(2, fakeSim(), false);
+    ga.onEvent(zone("active", "laser-low", 2900), fakeSim());
+    ga.onEvent(zone("active", "laser-low", 640), fakeSim());
+    expect(f.calls.map((c) => c.opts!.volume)).toEqual([1]);
   });
 
   it("Phasentore: nur aktiver Takt, Warnung still; Zonen ohne Sound (Eis, Würfel) bleiben still", () => {
@@ -349,6 +441,41 @@ describe("Zonen-Sounds", () => {
     expect(times.length).toBeLessThanOrEqual(13); // 60 Ereignisse in 6 s -> höchstens 2 je Sekunde
     for (let i = 1; i < times.length; i++) expect(times[i] - times[i - 1]).toBeGreaterThanOrEqual(ZONE_MIN_GAP_SEC - 1e-9);
     for (let i = 2; i < times.length; i++) expect(times[i] - times[i - 2]).toBeGreaterThan(1);
+  });
+});
+
+describe("Zonen-Sounds unter Zufallslast", () => {
+  const zone = (phase: "warn" | "active", skin: string, x: number): GameAudioEvent => ({ type: "custom", x, y: 400, tag: `zone-${phase}:${skin}`, skin });
+
+  it("Deckel 2 je Sekunde, Warnungen nur in freier Sekunde, nichts unter ZONE_AUDIBLE_VOLUME", () => {
+    const f = fakeSink();
+    const ga = createGameAudio(f.sink, { cuesEnabled: ON });
+    const sim = fakeSim();
+    let state = 20260508; // lineare Kongruenz: deterministisch, kein Math.random im Test
+    const rnd = (): number => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      return state / 4294967296;
+    };
+    const skins = ["bolt", "stamp", "laser-low", "beam-fence", "rockfall", "phase-cyan"];
+    const played: Array<{ t: number; warn: boolean }> = [];
+    let t = 0;
+    for (let i = 0; i < 6000; i++) {
+      for (let k = rnd() < 0.3 ? 2 : 1; k > 0; k--) {
+        const warn = rnd() < 0.5;
+        const x = -300 + rnd() * 2100;
+        const before = f.calls.length;
+        ga.onEvent(zone(warn ? "warn" : "active", skins[Math.floor(rnd() * skins.length)], x), sim);
+        const did = f.calls.length > before;
+        if (did) played.push({ t, warn });
+      }
+      const dt = rnd() * 0.25;
+      ga.tick(dt, sim, false);
+      t += dt;
+    }
+    expect(played.length).toBeGreaterThan(400);
+    for (let i = 2; i < played.length; i++) expect(played[i].t - played[i - 2].t, `Ton ${i}`).toBeGreaterThan(ZONE_WINDOW_SEC);
+    for (let i = 1; i < played.length; i++) if (played[i].warn) expect(played[i].t - played[i - 1].t, `Warnung ${i}`).toBeGreaterThan(ZONE_WINDOW_SEC);
+    for (const c of f.calls) expect(c.opts!.volume, c.name).toBeGreaterThanOrEqual(ZONE_AUDIBLE_VOLUME);
   });
 });
 

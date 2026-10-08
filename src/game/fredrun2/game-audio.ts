@@ -57,15 +57,29 @@ export interface GameAudio {
   reset(): void;
 }
 
-/** Mindestabstand zweier Zonen-Sounds derselben Skin-Gruppe (Sekunden); begrenzt Salven mehrerer gleichzeitiger Zonen. */
+/** Mindestabstand zweier aktiver Zonen-Sounds derselben Skin-Gruppe (Sekunden); begrenzt Salven mehrerer gleichzeitiger Zonen. */
 export const ZONE_MIN_GAP_SEC = 0.35;
 /**
- * Gesamtdeckel über alle Gruppen: höchstens zwei Zonen-Sounds je `ZONE_WINDOW_SEC`. Der Gruppen-Abstand allein lässt bis
- * zu 3 Töne je Sekunde zu (Bot-Tally Finanzamt/Cyber: Stempel + Laser-Warnung + Laser-aktiv), mehr als zwei verschiedene Zonen-Klänge
- * pro Sekunde sind nicht mehr zu unterscheiden. Leise Töne (weit entfernte Zonen) belegen nie den zweiten Platz.
+ * Gesamtdeckel über alle Gruppen: höchstens zwei Zonen-Sounds je `ZONE_WINDOW_SEC`. Der Gruppen-Abstand allein lässt bis zu 3 Töne je
+ * Sekunde zu (Bot-Tally Finanzamt/Cyber: Stempel + Laser-Warnung + Laser-aktiv), mehr als zwei verschiedene Zonen-Klänge pro Sekunde sind
+ * nicht mehr zu unterscheiden. Die zwei Plätze sind nicht gleichwertig, damit der Deckel nie das Wichtige verdrängt:
+ *  - Signal = der aktive Takt ("jetzt gefährlich"): braucht nur einen freien der zwei Plätze (`clock - zoneT2 > ZONE_WINDOW_SEC`).
+ *  - Hinweis = die Warnung ("gleich gefährlich"): spielt nur in einer ganz freien Sekunde (`clock - zoneT1 > ZONE_WINDOW_SEC`). Sie belegt
+ *    einen Platz, nie beide, und nimmt kein Signal vorweg, das schon im Fenster liegt.
+ *  - unhörbar (`cue.volume < ZONE_AUDIBLE_VOLUME`, Zone weit neben dem Bild): wird weder gespielt noch gezählt und sperrt nichts.
+ * Auch ein Hinweis kann das dritte Ereignis eines Fensters nicht verhindern (Hinweis, Signal, Signal binnen einer Sekunde: das letzte
+ * fällt weg); das ist der Preis der harten Obergrenze und im Bot-Tally die Ausnahme (unter 1 % der lauten Signale).
  */
 export const ZONE_WINDOW_SEC = 1;
-export const ZONE_QUIET_VOLUME = 0.3;
+/**
+ * Unter dieser Lautstärke (-12 dB) bringt ein Zonen-Ton nichts mehr: Laser, Steinschlag, Stempel und Phasen-Glitch liegen dort im Terzband
+ * meist unter der Musik (Offline-Render Wien/Cyber: Mittel -5 bis 0 dB, schlechtester Fall bis -10 dB; nur der Donner bleibt bei +1 bis +6 dB).
+ * Das sind Laser- und Steinschlag-Warnungen ab ca. 300 px und alle übrigen Töne ab ca. 400 px neben dem Bildrand (`zoneCue` blendet bis auf 0.2
+ * ab). Solche Töne belegen weder einen Platz im Gesamtdeckel noch sperren sie eine Gruppe. Eine Schwelle von 0.15 reichte nicht: Der Boden 0.2
+ * der aktiven Töne liegt darüber, und weit entfernte Zonen verdrängten weiter laute Signale (Bot-Tally 4 Seeds x 8 Welten x 180 s: 7 statt 1
+ * von 314 verworfen).
+ */
+export const ZONE_AUDIBLE_VOLUME = 0.25;
 /** Herzschlag und Stampf-Whoosh: Lautstärken der Hinweise. */
 const HEARTBEAT_VOLUME = 0.4;
 const DASH_DENIED_VOLUME = 0.5;
@@ -78,7 +92,7 @@ export function createGameAudio(audio: AudioSink, opts: GameAudioOptions): GameA
   const tracker = new CueTracker();
   /** wiederverwendetes Eingabeobjekt: kein Objekt pro Frame */
   const cueIn: CueInput = { t: 0, energy: 0, dashCost: 0, dashCd: 0, hearts: 0, slowmo: 0, paused: false };
-  /** Zeit (Sekunden, aus den `tick`-dt summiert) und Zeitstempel des letzten Zonen-Sounds je Skin-Gruppe */
+  /** Zeit (Sekunden, aus den `tick`-dt summiert) und Zeitstempel des letzten aktiven Zonen-Sounds je Skin-Gruppe */
   let clock = 0;
   const zoneLast = new Map<ZoneGroup, number>();
   /** Zeitstempel der letzten beiden gespielten Zonen-Sounds (neuester zuerst), für den Gesamtdeckel */
@@ -97,16 +111,22 @@ export function createGameAudio(audio: AudioSink, opts: GameAudioOptions): GameA
     const skin = ev.skin ?? tag.split(":")[1] ?? "";
     const group = zoneGroup(skin);
     if (!group) return;
-    const cue = zoneCue(skin, tag.startsWith("zone-active:") ? "active" : "warn", ev.x);
-    if (!cue) return;
-    const last = zoneLast.get(group);
-    if (last !== undefined && clock - last < ZONE_MIN_GAP_SEC) return;
-    // Gesamtdeckel (strikt "> Fenster", damit auch ein Fenster mit beiden Rändern höchstens zwei Töne enthält)
-    if (clock - zoneT2 <= ZONE_WINDOW_SEC) return;
-    if (cue.volume < ZONE_QUIET_VOLUME && clock - zoneT1 <= ZONE_WINDOW_SEC) return;
+    const active = tag.startsWith("zone-active:");
+    const cue = zoneCue(skin, active ? "active" : "warn", ev.x);
+    if (!cue || cue.volume < ZONE_AUDIBLE_VOLUME) return;
+    if (active) {
+      // Signal: Salven einer Gruppe dünnen und einen der zwei Plätze des Gesamtdeckels nehmen. Eine Warnung sperrt die Gruppe nicht.
+      const last = zoneLast.get(group);
+      if (last !== undefined && clock - last < ZONE_MIN_GAP_SEC) return;
+      // strikt "> Fenster", damit auch ein Fenster mit beiden Rändern höchstens zwei Töne enthält
+      if (clock - zoneT2 <= ZONE_WINDOW_SEC) return;
+      zoneLast.set(group, clock);
+    } else if (clock - zoneT1 <= ZONE_WINDOW_SEC) {
+      // Hinweis: nur in einer ganz freien Sekunde (das schließt den Mindestabstand der Gruppe ein)
+      return;
+    }
     zoneT2 = zoneT1;
     zoneT1 = clock;
-    zoneLast.set(group, clock);
     audio.sfx(cue.name, cue.pitch === undefined ? { volume: cue.volume, pan: panOf(ev.x) } : { pitch: cue.pitch, volume: cue.volume, pan: panOf(ev.x) });
   }
 

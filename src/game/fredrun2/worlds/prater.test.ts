@@ -296,8 +296,15 @@ describe("Prater – Blitz-Regler (flashScale)", () => {
     expect(await skyFlashAfterBurst({ flashScale: 0 })).toBe(0);
   });
 
-  it("„Weniger Bewegung“ ohne flashScale: kein Blitz wie bisher; mit flashScale ersetzt dieser Wert das Verbot", async () => {
+  it("„Weniger Bewegung“ ohne flashScale: kein Blitz wie bisher; mit gekapptem flashScale ersetzt dieser Wert das Verbot", async () => {
     expect(await skyFlashAfterBurst({ reducedMotion: true })).toBe(0);
     expect(await skyFlashAfterBurst({ reducedMotion: true, flashScale: 0.3 })).toBeCloseTo(0.165, 6);
+    expect(await skyFlashAfterBurst({ reducedMotion: true, flashScale: 0.1 })).toBeCloseTo(0.055, 6);
+    expect(await skyFlashAfterBurst({ reducedMotion: true, flashScale: 0 })).toBe(0);
+  });
+
+  it("„Weniger Bewegung“: höchstens 0,3, auch wenn der Aufrufer flashScale nicht kappt (sim.view liefert Standard 1)", async () => {
+    expect(await skyFlashAfterBurst({ reducedMotion: true, flashScale: 1 })).toBeCloseTo(0.165, 6);
+    expect(await skyFlashAfterBurst({ reducedMotion: true, flashScale: 0.6 })).toBeCloseTo(0.165, 6);
   });
 });

@@ -537,9 +537,35 @@ describe("Wien – Blitz-Regler (flashScale)", () => {
     expect(await flashAlpha({ flashScale: 0 })).toBeNull();
   });
 
-  it("„Weniger Bewegung“ ohne flashScale: wie bisher 25 %; mit flashScale ersetzt dieser Wert das Dämpfen (keine Doppel-Skalierung)", async () => {
+  it("„Weniger Bewegung“ ohne flashScale: wie bisher 25 %; mit gekapptem flashScale ersetzt dieser Wert das Dämpfen (keine Doppel-Skalierung)", async () => {
     expect(await flashAlpha({ reducedMotion: true })).toBeCloseTo(0.03, 6);
     expect(await flashAlpha({ reducedMotion: true, flashScale: 0.3 })).toBeCloseTo(0.036, 6);
-    expect(await flashAlpha({ reducedMotion: true, flashScale: 1 })).toBeCloseTo(0.12, 6);
+    expect(await flashAlpha({ reducedMotion: true, flashScale: 0.1 })).toBeCloseTo(0.012, 6);
+    expect(await flashAlpha({ reducedMotion: true, flashScale: 0 })).toBeNull();
+  });
+
+  it("„Weniger Bewegung“: höchstens 0,3, auch wenn der Aufrufer flashScale nicht kappt (sim.view liefert Standard 1)", async () => {
+    expect(await flashAlpha({ reducedMotion: true, flashScale: 1 })).toBeCloseTo(0.036, 6);
+    expect(await flashAlpha({ reducedMotion: true, flashScale: 0.6 })).toBeCloseTo(0.036, 6);
+  });
+
+  it("Fernblitz: bei „Weniger Bewegung“ nie gezeichnet, sonst mit flashScale skaliert", async () => {
+    const { r } = await loaded();
+    const farBolt = vi.spyOn(r as unknown as { drawFarBolt: (...a: unknown[]) => void }, "drawFarBolt").mockImplementation(() => undefined);
+    const g = document.createElement("canvas").getContext("2d") as CanvasRenderingContext2D;
+    const draw = (over: Partial<ReturnType<typeof stubView>>): void => {
+      const v = stubView({ vars: { farBolt: 1 }, ...over });
+      r.update(1 / 60, v);
+      r.drawBackground(g, v);
+    };
+    draw({});
+    expect(farBolt).toHaveBeenCalledTimes(1);
+    expect(farBolt.mock.calls[0][2]).toBeCloseTo(1, 6);
+    draw({ flashScale: 0.3 });
+    expect(farBolt.mock.calls[1][2]).toBeCloseTo(0.3, 6);
+    draw({ flashScale: 0 });
+    expect(farBolt).toHaveBeenCalledTimes(2);
+    draw({ reducedMotion: true, flashScale: 1 });
+    expect(farBolt).toHaveBeenCalledTimes(2);
   });
 });

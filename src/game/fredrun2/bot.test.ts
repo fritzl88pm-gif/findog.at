@@ -2,11 +2,11 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 import { describe, expect, it } from "vitest";
 import { Bot } from "./bot";
-import { FIXED_DT, GRAVITY, METERS_PER_DIFFICULTY, STOMP_BOUNCE_V } from "./constants";
+import { FIXED_DT, GRAVITY, METERS_PER_DIFFICULTY, PLAYER_W, STOMP_BOUNCE_V } from "./constants";
 import { createPatternCtx } from "./patterns";
 import { Rng } from "./rng";
-import { Sim } from "./sim";
-import { ENEMY_PATTERNS } from "./spawner";
+import { NO_INPUT, Sim } from "./sim";
+import { ENEMY_PATTERNS, REST_JITTER_MIN, restSeconds } from "./spawner";
 import { WORLDS } from "./worlds";
 import type { EntSpec, RunConfig, WorldId } from "./types";
 
@@ -92,14 +92,53 @@ function bounceSeconds(chain: number): number {
   return (2 * (STOMP_BOUNCE_V + Math.min(4, chain) * 40)) / GRAVITY;
 }
 
-/** Baut das Muster „guest-stomp-chain“ bei Schwierigkeit `diff` und liefert die Specs (x relativ zum Musterstart). */
-function buildChain(diff: number, speed: number, seed: number): EntSpec[] {
+/** Baut das Muster „guest-stomp-chain“ bei Schwierigkeit `diff`; liefert die Specs (x relativ zum Musterstart) und die Rückgabelänge. */
+function buildChainWithLength(diff: number, speed: number, seed: number): { specs: EntSpec[]; length: number } {
   const chain = ENEMY_PATTERNS.find((p) => p.id === "guest-stomp-chain");
   if (!chain) throw new Error("guest-stomp-chain fehlt");
   const specs: EntSpec[] = [];
   const ctx = createPatternCtx({ speed, diff, groundY: 600, ceilY: 80, rng: new Rng(seed), worldId: "wien", defaultSkin: (k) => k }, specs);
-  chain.build(ctx);
-  return specs;
+  const length = chain.build(ctx);
+  return { specs, length };
+}
+
+/** Wie buildChainWithLength, nur die Specs. */
+function buildChain(diff: number, speed: number, seed: number): EntSpec[] {
+  return buildChainWithLength(diff, speed, seed).specs;
+}
+
+/**
+ * Misst im echten Sim, wie lange die Figur nach dem `chainNo`-ten (letzten) Stampfer bis zur Landung braucht.
+ * Sprungtaste gehalten (Worst-Case: losgelassen wird der Bounce auf ≈ 0,4 s gekappt); die Stampfhöhe (Gegner-Oberkante
+ * bis hgt ≈ 41) wird über alle Absprung-Zeitpunkte durchprobiert, gewertet wird der längste Bounce.
+ */
+function lastBounceSeconds(chainNo: number, walker: EntSpec): number {
+  let worst = 0;
+  for (let delay = 0; delay < 100; delay += 1) {
+    const sim = new Sim({ mode: "world", world: "wien", character: "fred", seed: 1 }, WORLDS);
+    sim.begin();
+    sim.noSpawn = true;
+    sim.ents = [];
+    sim.player.hearts = 99;
+    sim.spawn({ ...walker, x: 0 }, sim.playerWorldX + 500);
+    let bouncedAt = -1;
+    for (let i = 0; i < 400 && sim.phase === "running"; i += 1) {
+      // Die Sim setzt stompChain am Boden zurück – vor dem Stampfer auf den Stand der Kette bringen
+      if (bouncedAt < 0 && !sim.player.grounded) sim.player.stompChain = chainNo - 1;
+      sim.step(FIXED_DT, { ...NO_INPUT, jump: i >= delay, jumpPressed: i === delay });
+      let landed = false;
+      for (const ev of sim.events) {
+        if (ev.type === "bounce" && bouncedAt < 0) bouncedAt = i;
+        else if (ev.type === "land" && bouncedAt >= 0) landed = true;
+      }
+      sim.events.length = 0;
+      if (landed) {
+        worst = Math.max(worst, (i - bouncedAt) * FIXED_DT);
+        break;
+      }
+    }
+  }
+  return worst;
 }
 
 describe("Muster: guest-stomp-chain (feel-core-08)", () => {
@@ -116,6 +155,48 @@ describe("Muster: guest-stomp-chain (feel-core-08)", () => {
     }
     // Gegenprobe: der alte Takt (0,58 s) lag unter der Bounce-Dauer – der Test hat also Biss
     expect(0.58).toBeLessThan(bounceSeconds(1));
+  });
+
+  /**
+   * Landeraum (Fix-Runde 1): Der Bounce nach dem LETZTEN Stampfer landet ≈ 0,87–0,93 s später (gemessen, Taste gehalten –
+   * mehr als die 2·v/g-Schätzung oben, weil der Stampfer ≈ 90 px über dem Boden geschieht und der Scheitel gedehnt wird).
+   * Ohne Schwanz begann das Folgemuster nach restSeconds (ab Schwierigkeit 9: 0,45 s · 0,9) noch im Fallbogen.
+   * Spätester Stampf-Punkt + Bounce-Strecke darf höchstens eine Körperbreite (0,06 s) hinter dem frühesten Folgemuster liegen.
+   */
+  const LAND_TOLERANCE_S = 0.06;
+  /** Abstand (px) der Landung hinter dem frühesten Beginn des Folgemusters (> 0 = Figur ist beim Muster noch in der Luft) und gemessene Bounce-Dauer. */
+  function landingOverrun(diff: number, speed: number, tailSeconds: number | null): { overrun: number; bounce: number; chainNo: number } {
+    const { specs, length } = buildChainWithLength(diff, speed, 1);
+    const walkers = specs.filter((e) => e.kind === "walker");
+    const last = walkers[walkers.length - 1];
+    const hb = last.hb ?? [0, 0, last.w, last.h];
+    // spätester Stampf-Punkt: Figurenmitte am hinteren Rand der Gegner-Hitbox + halbe Körperbreite (px ab Gegner-x)
+    const stompX = hb[0] + hb[2] + PLAYER_W / 2;
+    const bounce = lastBounceSeconds(walkers.length, last);
+    const landX = stompX + bounce * speed;
+    // frühester Beginn des Folgemusters (px ab Gegner-x): Rückgabelänge (= rechter Rand + Schwanz; für die Gegenprobe
+    // mit anderem Schwanz neu gerechnet) + kürzeste Pause
+    const base = tailSeconds === null ? length - last.x : last.w + tailSeconds * speed;
+    const nextX = base + REST_JITTER_MIN * restSeconds(diff) * speed;
+    return { overrun: landX - nextX, bounce, chainNo: walkers.length };
+  }
+
+  it("Landeraum: nach dem letzten Stampfer landet die Figur (fast) vor dem frühesten Folgemuster", { timeout: 60_000 }, () => {
+    for (const diff of [1.2, 2.5, 5, 5.1, 8, 14, 20]) {
+      const speed = new Sim({ mode: "world", world: "wien", character: "fred", seed: 1, startMeters: diff * METERS_PER_DIFFICULTY }, WORLDS).speedAtDiff(diff);
+      const r = landingOverrun(diff, speed, null);
+      // Messung plausibel: länger als die 2·v/g-Schätzung (sonst hätte der Test nichts gemessen) und nicht absurd lang
+      expect(r.bounce).toBeGreaterThan(bounceSeconds(r.chainNo));
+      expect(r.bounce).toBeLessThan(1.2);
+      expect(r.overrun).toBeLessThanOrEqual(LAND_TOLERANCE_S * speed);
+    }
+  });
+
+  it("Gegenprobe: ohne Schwanz läge das Folgemuster ab mittlerer Schwierigkeit noch im Fallbogen", { timeout: 60_000 }, () => {
+    for (const diff of [5.1, 8, 14, 20]) {
+      const speed = new Sim({ mode: "world", world: "wien", character: "fred", seed: 1, startMeters: diff * METERS_PER_DIFFICULTY }, WORLDS).speedAtDiff(diff);
+      expect(landingOverrun(diff, speed, 0).overrun).toBeGreaterThan(LAND_TOLERANCE_S * speed);
+    }
   });
 
   /** Ein Bot mit 0,3 s Reaktion läuft auf eine einzelne Kette zu; Rückgabe: Treffer (Herzen), die er dabei verliert. */

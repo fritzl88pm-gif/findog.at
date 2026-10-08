@@ -13,6 +13,7 @@ import { yieldToMain } from "../../yield";
 import { Motes, Rain } from "../shared-a/fx";
 import { css, groundSegments, hash, lerpRgb, stageRgb, stageVal, type RGB, type Tile } from "../shared-a/gfx";
 import { touchCanvas } from "../shared-b/canvas";
+import { flashFactor } from "../shared-b/flash";
 import { StageCache, StagePrep, stageProgress } from "../shared-b/layers";
 import { WarmQueue } from "../shared-b/warm";
 import { MirrorBackdrop, SizedSprites, blitAt, blitRange, blitRow, blitSlice, canvas, ellipseGlow, mod, vGradient } from "./cache";
@@ -574,8 +575,9 @@ export class WienRenderer implements WorldRenderer {
         this.puffsLate = !this.puffs.prewarm(1);
       }
     }
-    // Blitz-Aufheller: „Blitze“-Regler (flashScale) ersetzt das Dämpfen bei „Weniger Bewegung“ (keine Doppel-Skalierung)
-    const target = (v.vars.lightning ?? 0) * (v.flashScale ?? (v.reducedMotion ? 0.25 : 1));
+    // Blitz-Aufheller: „Blitze“-Regler (flashScale) ersetzt das Dämpfen bei „Weniger Bewegung“ (keine Doppel-Skalierung),
+    // bei „Weniger Bewegung“ aber nie über 0,3 – auch wenn der Aufrufer den Regler nicht kappt (flashFactor)
+    const target = (v.vars.lightning ?? 0) * flashFactor(v, 0.25);
     this.lightning = Math.max(target, this.lightning - d * 3);
     const rainK = stageVal(RAIN, st, bl) * (0.75 + 0.25 * v.intensity);
     this.rain.wind = stageVal(WIND, st, bl);
@@ -659,7 +661,7 @@ export class WienRenderer implements WorldRenderer {
       g.globalAlpha = 1;
       g.globalCompositeOperation = "source-over";
     }
-    const far = (v.vars.farBolt ?? 0) * Math.min(1, v.flashScale ?? 1);
+    const far = (v.vars.farBolt ?? 0) * flashFactor(v);
     if (far > 0.05 && !v.reducedMotion) this.drawFarBolt(g, v.vars.boltX ?? 640, far, v.vars.boltSeed ?? 1);
 
     // 3) Brandschein am Horizont + Rauchsäulen

@@ -329,6 +329,53 @@ describe("recycled / paint mit Wiederverwendung", () => {
   });
 });
 
+describe("StageCache – Hooks der Vorarbeit (onKeep, onClear, offerSpare)", () => {
+  it("keep ruft onKeep immer auf (auch bei leerem Cache und wenn nichts zu verwerfen ist), clear ruft onClear", () => {
+    const keeps: Array<[number, number]> = [];
+    let clears = 0;
+    const cache = new StageCache(() => fakeCanvas(), {
+      onKeep: (a, b) => keeps.push([a, b]),
+      onClear: () => {
+        clears += 1;
+      },
+    });
+    cache.keep(1, 2); // leer
+    cache.get(1);
+    cache.keep(1, 2); // nichts zu verwerfen
+    cache.keep(3, 4); // alles weg
+    expect(keeps).toEqual([
+      [1, 2],
+      [1, 2],
+      [3, 4],
+    ]);
+    expect(clears).toBe(0);
+    cache.clear();
+    expect(clears).toBe(1);
+  });
+
+  it("offerSpare: das Angebot geht an den nächsten Bake – nur mit recycle", () => {
+    const offered: Array<HTMLCanvasElement | null> = [];
+    const spare = fakeCanvas();
+    const rec = new StageCache((_s, reuse) => {
+      offered.push(reuse);
+      return fakeCanvas();
+    }, { recycle: true });
+    rec.offerSpare(spare);
+    rec.get(0);
+    rec.get(1);
+    expect(offered).toEqual([spare, null]);
+
+    const plain: Array<HTMLCanvasElement | null> = [];
+    const c2 = new StageCache((_s, reuse) => {
+      plain.push(reuse);
+      return fakeCanvas();
+    });
+    c2.offerSpare(spare);
+    c2.get(0);
+    expect(plain).toEqual([null]);
+  });
+});
+
 describe("gradedCache", () => {
   it("zwei Schritte (Rohbild, Färbung) ergeben dasselbe wie ein Schritt am Stück", () => {
     const log: string[] = [];
@@ -421,5 +468,89 @@ describe("gradedCache", () => {
     cache.step(3);
     expect(log).toEqual(["base3", "grade3"]);
     expect(cache.has(3)).toBe(true);
+  });
+
+  it("clear() verwirft unfertige Rohbilder: danach entsteht die Stufe in der neuen Größe", () => {
+    let size = 100;
+    const log: string[] = [];
+    const make = (s: number, _reuse: HTMLCanvasElement | null, grade: boolean): HTMLCanvasElement => {
+      log.push(`base${s}${grade ? "+grade" : ""}@${size}`);
+      return fakeCanvas(size, size);
+    };
+    const cache = gradedCache(make, () => undefined);
+    cache.step(1); // Rohbild in Größe 100
+    expect(cache.has(1)).toBe(false);
+    size = 200; // Skalenwechsel
+    cache.clear();
+    expect(cache.get(1).width).toBe(200);
+    expect(log).toEqual(["base1@100", "base1+grade@200"]);
+  });
+
+  it("clear() mitten in der Stufe: der nächste Schritt malt das Rohbild neu (statt mit dem alten fortzufahren)", () => {
+    let size = 100;
+    const log: string[] = [];
+    const cache = gradedCache(
+      (s, _r, g) => {
+        log.push(`base${s}${g ? "+grade" : ""}@${size}`);
+        return fakeCanvas(size, size);
+      },
+      (c, s) => {
+        log.push(`grade${s}@${c.width}`);
+      },
+    );
+    cache.step(2);
+    size = 200;
+    cache.clear();
+    cache.step(2);
+    cache.step(2);
+    expect(cache.has(2)).toBe(true);
+    expect(cache.get(2).width).toBe(200);
+    expect(log).toEqual(["base2@100", "base2@200", "grade2@200"]);
+  });
+
+  it("keep(a, b) verwirft unfertige Rohbilder anderer Stufen (auch bei leerem Cache) und lässt die von a und b stehen", () => {
+    const log: string[] = [];
+    const cache = gradedCache(
+      (s, _r, g) => {
+        log.push(`base${s}${g ? "+grade" : ""}`);
+        return fakeCanvas();
+      },
+      (_c, s) => {
+        log.push(`grade${s}`);
+      },
+    );
+    cache.step(1);
+    cache.step(4);
+    cache.keep(4, 5); // Stufe 1 ist weg, Stufe 4 bleibt
+    cache.step(1); // beginnt von vorn
+    cache.step(4); // setzt fort
+    expect(log).toEqual(["base1", "base4", "base1", "grade4"]);
+    expect(cache.has(4)).toBe(true);
+    cache.keep(4, 5);
+    cache.step(1);
+    cache.keep(1, 1);
+    cache.step(1);
+    expect(log.slice(4)).toEqual(["base1", "grade1"]);
+  });
+
+  it("verworfene Rohbilder gehen als Ersatzfläche an den nächsten Bake (kein zusätzliches Bitmap)", () => {
+    const seen: Array<HTMLCanvasElement | null> = [];
+    const made: HTMLCanvasElement[] = [];
+    const cache = gradedCache(
+      (_s, reuse) => {
+        seen.push(reuse);
+        const c = reuse ?? fakeCanvas();
+        made.push(c);
+        return c;
+      },
+      () => undefined,
+    );
+    cache.step(1); // Rohbild (reuse = null)
+    cache.clear(); // Rohbild verworfen → Ersatzfläche
+    cache.step(1); // neues Rohbild bekommt sie angeboten und malt darauf
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toBeNull();
+    expect(seen[1]).toBe(made[0]);
+    expect(made[1]).toBe(made[0]);
   });
 });

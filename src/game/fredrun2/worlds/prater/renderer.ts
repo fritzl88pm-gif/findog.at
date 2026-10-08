@@ -11,6 +11,7 @@ import type { AssetLoader, Ent, ViewState, WorldRenderer } from "../../types";
 import { yieldToMain } from "../../yield";
 import { bigGlow, blitCentered, blitTiled, blitTiledRange, ctxOf, glowAt, glowSprite, paint, softSprite, solidSegments, type Ctx2D } from "../shared-b/canvas";
 import { StagePalette, h1, mod, mulberry, stageVal } from "../shared-b/color";
+import { flashFactor } from "../shared-b/flash";
 import { StageCache, StagePrep, Staged, drawStaged, stageProgress, stagedLayer, type StageTint, type StagedLayer } from "../shared-b/layers";
 import { WarmQueue } from "../shared-b/warm";
 import {
@@ -450,8 +451,9 @@ export class PraterRenderer implements WorldRenderer {
       if (r.t >= r.dur) {
         this.rockets.splice(i, 1);
         this.bursts.push({ x: r.x, y: r.y1, t: 0, life: 1.6 + this.rng() * 0.6, spr: r.spr, n: v.quality === 2 ? 32 : 20, sp: 190 + this.rng() * 110, seed: this.rng() * 100, ring: this.rng() < 0.3 });
-        // „Blitze“-Regler (flashScale) ersetzt das Dämpfen bei „Weniger Bewegung“ (keine Doppel-Skalierung)
-        const fs = v.flashScale ?? (v.reducedMotion ? 0 : 1);
+        // „Blitze“-Regler (flashScale) ersetzt das Dämpfen bei „Weniger Bewegung“ (keine Doppel-Skalierung), dort aber nie
+        // über 0,3 – auch wenn der Aufrufer den Regler nicht kappt; ohne Regler bleibt es bei „kein Blitz“ (flashFactor)
+        const fs = flashFactor(v, 0);
         if (fs > 0) this.skyFlash = Math.min(1, this.skyFlash + 0.55 * fs);
       }
     }
