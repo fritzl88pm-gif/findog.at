@@ -7,11 +7,14 @@
  * Weinzeilen am Weg (0.62) · Uferweg (1.0) · Weinlaub-Girlande (1.25) · Gräser (1.4) · Blätter, Glühwürmchen, Nebel.
  * Performance: alle Ebenen sind pro Stufe vorgebacken (Licht multipliziert + Dunst) und werden ganzzahlig geblittet.
  */
+import { clamp } from "../../draw-utils";
 import type { AssetLoader, Ent, ViewState, WorldRenderer } from "../../types";
+import { yieldToMain } from "../../yield";
 import { Motes } from "../shared-a/fx";
 import { blitCentered, blitTiled, blitTiledRange, bigGlow, glowAt, glowSprite, paint, softSprite, solidSegments, wrapDraw, type Ctx2D } from "../shared-b/canvas";
 import { h1, mod, mulberry, stageVal } from "../shared-b/color";
-import { StageCache, prepareStaged } from "../shared-b/layers";
+import { StageCache, StagePrep, stageProgress } from "../shared-b/layers";
+import { WarmQueue } from "../shared-b/warm";
 import { LANDMARK_IDS, buildLandmark, steamshipLights, type Landmark, type LandmarkSpec } from "./landmarks";
 import {
   ENT_NIGHT,
@@ -38,7 +41,7 @@ import {
   CLOUD_H,
   CLOUD_W,
   GRASS_LIP,
-  bankTile,
+  bankTileSteps,
   birdStrip,
   cloudAtlas,
   colorize,
@@ -48,7 +51,7 @@ import {
   grassTile,
   groundTile,
   moonSprite,
-  nearBankTile,
+  nearBankTileSteps,
   raysSprite,
   reflectionTile,
   riverShimmer,
@@ -59,6 +62,12 @@ import { WachauSkins, type SkinCtx } from "./skins";
 import { WaterFx } from "./water";
 
 const TAU = Math.PI * 2;
+
+/** Meter je Stimmungsstufe (wie WORLD_WACHAU.stageMeters; Test in wachau.test.ts hält beides gleich) */
+export const WACHAU_STAGE_METERS = 300;
+
+/** Gerät meldet weniger als 4 GB Arbeitsspeicher (Chromium: `navigator.deviceMemory`); sonst false */
+const LOW_MEMORY = typeof navigator !== "undefined" && ((navigator as { deviceMemory?: number }).deviceMemory ?? 8) < 4;
 
 export const WACHAU_PROPS = [
   "raft",
@@ -91,7 +100,12 @@ interface Layer {
 function cropRows(c: HTMLCanvasElement): { canvas: HTMLCanvasElement; dy: number } {
   const g = c.getContext("2d");
   if (!g) return { canvas: c, dy: 0 };
-  const data = g.getImageData(0, 0, c.width, c.height).data;
+  let data: Uint8ClampedArray;
+  try {
+    data = g.getImageData(0, 0, c.width, c.height).data;
+  } catch {
+    return { canvas: c, dy: 0 }; // Pixel nicht lesbar (Kontextverlust o. Ä.): ungeschnitten weiterverwenden
+  }
   let y0 = c.height;
   let y1 = -1;
   for (let y = 0; y < c.height; y += 1) {
@@ -113,7 +127,8 @@ function cropRows(c: HTMLCanvasElement): { canvas: HTMLCanvasElement; dy: number
 
 function layer(src: HTMLCanvasElement, y: number, factor: number, tint: (s: number) => Parameters<typeof tintCanvas>[1], lights: HTMLCanvasElement | null = null): Layer {
   const cropped = lights ? cropRows(lights) : null;
-  return { staged: new StageCache((s) => tintCanvas(src, tint(s))), lights: cropped?.canvas ?? null, lightsDy: cropped?.dy ?? 0, w: src.width, h: src.height, y, factor };
+  // verworfene Stufenflächen werden für den nächsten Bake wiederverwendet (keine Neuanlage großer Bitmaps)
+  return { staged: new StageCache((s, reuse) => tintCanvas(src, tint(s), false, reuse), { recycle: true }), lights: cropped?.canvas ?? null, lightsDy: cropped?.dy ?? 0, w: src.width, h: src.height, y, factor };
 }
 
 // Geometrie (logische Pixel)
@@ -128,6 +143,9 @@ const NEAR_Y = 262;
 const VINE_Y = 436;
 const BANK_F = 0.07;
 const SHIP_F = 0.1;
+
+/** Wahrzeichen mit `up` unter diesem Wert stehen direkt am Wasser und spiegeln sich in der Donau */
+const MIRROR_UP = 40;
 
 const LANDMARKS: Array<{ spec: LandmarkSpec; x: number; up: number }> = [
   { spec: { id: "landmark-abbey", h: 226, fade: 0.3, haze: 0.4, flood: 1 }, x: BANK_SPOTS.abbey, up: -30 },
@@ -156,7 +174,15 @@ export class WachauRenderer implements WorldRenderer {
   private landmarks: Array<{ lm: Landmark; x: number; up: number }> = [];
   private ship: Landmark | null = null;
   private shipLights: HTMLCanvasElement | null = null;
+  /** alle Stufen-Caches (Liste gehört dem StagePrep) */
   private staged: StageCache[] = [];
+  private prep = new StagePrep(this.staged, MAX_STAGE);
+  private warmQ = new WarmQueue();
+  private warmInit = false;
+  private loaded = false;
+  private lastStage = 0;
+  /** Qualität 0 (schwache Geräte): Folgestufe erst spät und nicht im Leerlauf vorbacken – spart Speicher in der ersten Stufenhälfte */
+  private lowQ = false;
   private shimmer!: HTMLCanvasElement;
   private bankLightsRefl!: HTMLCanvasElement;
   private shimmer2!: HTMLCanvasElement;
@@ -201,29 +227,145 @@ export class WachauRenderer implements WorldRenderer {
     this.props = assets.props;
     await assets.props.preload(WACHAU_PROPS).catch(() => undefined);
     this.skins.setProps(assets.props);
+    // Statisches in Schritten bauen und dazwischen den Hauptthread freigeben (kein Long Task, Eingaben laufen weiter)
     this.ready = false;
-    this.build();
+    this.loaded = false;
+    this.nextPart = 0;
+    this.partGen = null;
+    this.staged.length = 0;
+    this.warmQ.clear();
+    this.warmInit = false;
+    while (this.stepBuild()) await yieldToMain();
+    this.ready = true;
+    // erste beiden Stufen vorbacken (jeder Bake ein eigener Schritt, dazwischen Pausen)
+    for (const stage of [0, 1]) {
+      for (const c of this.staged) {
+        while (!c.has(stage)) {
+          await yieldToMain();
+          c.get(stage);
+        }
+      }
+    }
+    this.loaded = true;
   }
 
+  /**
+   * Skalenwechsel (Governor, Vollbild, DPR). Idempotent: `setScale` ignoriert Werte innerhalb von 0,2 der zuletzt
+   * angewandten Skala; nur eine echte Änderung verwirft die Hindernis-Sprites (und stellt das Vorbacken wieder in die
+   * Warteschlange). Vor dem Laden wird nur die Skala gemerkt.
+   */
   resize(dpr: number): void {
-    // Pixelfaktor für die vorgerenderten Hindernis-Sprites
+    const before = this.skins.pixelScale;
     this.skins.setScale(dpr);
+    if (this.skins.pixelScale !== before && this.warmInit) this.queueProps();
   }
 
+  // --- Aufwärmen -----------------------------------------------------------------------------------
+
+  /**
+   * Leerlauf-Aufwärmen (Countdown, Menü-Demo, Lauf-Anfang): backt in Zeitscheiben von ca. `budgetMs` die fehlenden Stufen-
+   * Varianten (aktuelle und Folgestufe) und die Sprites mit festen Maßen vor, damit sie nicht mitten im Lauf entstehen.
+   * true = nichts mehr zu tun.
+   */
+  warm(budgetMs: number): boolean {
+    if (!this.loaded) return true; // noch nicht geladen
+    if (!this.warmInit) {
+      this.warmInit = true;
+      this.warmQ.add(() => this.warmStages(), 6);
+      this.warmQ.add(() => this.warmWork(), 1);
+      this.queueProps();
+    }
+    return this.warmQ.run(budgetMs);
+  }
+
+  /** Stufen-Varianten vorbacken: aktuelle + Folgestufe; auf Qualität 0 nur die aktuelle (Folgestufe siehe `prepProgress`) */
+  private warmStages(): boolean {
+    if (!this.lowQ) return this.prep.warm(this.lastStage, 0);
+    this.prep.step(this.lastStage, 0, 0);
+    return true;
+  }
+
+  /** Arbeitsflächen der Wahrzeichen-Bakes anlegen (aus dem Leerlauf, nicht beim ersten Nacht-Bake); auf Qualität 0 und bei wenig Speicher nicht */
+  private warmWork(): boolean {
+    if (this.lowQ || LOW_MEMORY) return true;
+    for (const L of this.landmarks) L.lm.warmWork();
+    this.ship?.warmWork();
+    return true;
+  }
+
+  /** Stufenfortschritt für die Vorbereitung der Folgestufe: auf Qualität 0 beginnt sie erst ab ~60 % statt ~28 % der Stufe */
+  private prepProgress(progress: number): number {
+    return this.lowQ ? progress * (0.28 / 0.6) : progress;
+  }
+
+  /** Sprites mit festen Maßen (Marillen-/Trauben-Streifen, Fässer) vorbacken – nach Skalenwechsel erneut */
+  private queueProps(): void {
+    const jobs = this.skins.warmJobs();
+    let i = 0;
+    this.warmQ.add(() => {
+      if (i < jobs.length) jobs[i++]();
+      return i >= jobs.length;
+    }, 2);
+  }
+
+  /**
+   * Bauabschnitte des statischen Zeichnens. Jeder ist ein Generator, der zwischen seinen Teilstücken `yield`et: `load` gibt
+   * dort den Hauptthread frei (kein Long Task, auch bei 4× gedrosselter CPU), der Fallback `build` läuft einfach durch.
+   */
+  private readonly parts: Array<() => Generator<void, void, void>> = [
+    () => this.buildSky(),
+    () => this.buildBank(),
+    () => this.buildNear(),
+    () => this.buildGround(),
+    () => this.buildLandmarks(),
+    () => this.buildSprites(),
+  ];
+  private nextPart = 0;
+  private partGen: Generator<void, void, void> | null = null;
+
+  /** Ein Teilstück des Bauens ausführen; false = alles gebaut */
+  private stepBuild(): boolean {
+    if (!this.partGen) {
+      if (this.nextPart >= this.parts.length) return false;
+      this.partGen = this.parts[this.nextPart]();
+      this.nextPart += 1;
+    }
+    if (this.partGen.next().done) this.partGen = null;
+    return true;
+  }
+
+  /** Alles (verbleibende) auf einmal bauen – Fallback für Aufrufe vor/ohne `load` */
   private build(): void {
     if (this.ready) return;
-    this.sky = new StageCache((s) => skyCanvas(s, 1280, SKY_H));
-    this.clouds = new StageCache((s) => cloudAtlas(s));
+    while (this.stepBuild()) {
+      /* durchlaufen */
+    }
+    this.ready = true;
+    this.prep.step(0, 0, 0);
+    for (const c of this.staged) c.get(1);
+  }
+
+  private *buildSky(): Generator<void, void, void> {
+    this.sky = this.addStaged(new StageCache((s, reuse) => skyCanvas(s, 1280, SKY_H, reuse), { recycle: true }));
+    this.clouds = this.addStaged(new StageCache((s, reuse) => cloudAtlas(s, reuse), { recycle: true }));
     const fogW = fogTile(1024, 150, 11);
-    this.fogs = new StageCache((s) => colorize(fogW, STAGES[s].fog));
-    this.ridge = layer(farRidge(2048, 236), RIDGE_Y, 0.025, (s) => layerTint(s, 0.62, 0.78));
-    const bank = bankTile(3072, BANK_H);
-    this.bank = layer(bank.canvas, BANK_Y, BANK_F, (s) => layerTint(s, 0.36, 0.5), bank.lights);
+    this.fogs = this.addStaged(new StageCache((s, reuse) => colorize(fogW, STAGES[s].fog, reuse), { recycle: true }));
+    this.ridge = this.addLayer(layer(farRidge(2048, 236), RIDGE_Y, 0.025, (s) => layerTint(s, 0.62, 0.78)));
+  }
+
+  private *buildBank(): Generator<void, void, void> {
+    const bank = yield* bankTileSteps(3072, BANK_H);
+    yield;
+    this.bank = this.addLayer(layer(bank.canvas, BANK_Y, BANK_F, (s) => layerTint(s, 0.36, 0.5), bank.lights));
+    yield;
     const refl = reflectionTile(bank.canvas, 120, RIVER_BOTTOM - WATERLINE);
     this.bankLightsRefl = reflectionTile(bank.lights, 120, RIVER_BOTTOM - WATERLINE);
-    this.bankRefl = layer(refl, WATERLINE + 2, BANK_F, (s) => ({ ...layerTint(s, 0.3, 0.4), flat: { color: STAGES[s].water, a: 0.25 } }));
+    this.bankRefl = this.addLayer(layer(refl, WATERLINE + 2, BANK_F, (s) => ({ ...layerTint(s, 0.3, 0.4), flat: { color: STAGES[s].water, a: 0.25 } })));
+  }
+
+  private *buildNear(): Generator<void, void, void> {
     const props = this.props;
-    const near = nearBankTile(2560, 332, (g, W, shoreY) => {
+    const near = yield* nearBankTileSteps(2560, 332, (g, W, shoreY) => {
       if (!props || !props.has("raft")) return;
       for (const bx of [1900, 2480]) {
         wrapDraw(W, bx, 60, (x) => {
@@ -231,38 +373,46 @@ export class WachauRenderer implements WorldRenderer {
         });
       }
     });
-    this.near = layer(near.canvas, NEAR_Y, 0.3, (s) => layerTint(s, 0.2, 0.12, 0.35), near.lights);
+    yield;
+    this.near = this.addLayer(layer(near.canvas, NEAR_Y, 0.3, (s) => layerTint(s, 0.2, 0.12, 0.35), near.lights));
+  }
+
+  private *buildGround(): Generator<void, void, void> {
     const vr = vineRowTile(2048, 160);
-    this.vines = layer(vr.canvas, VINE_Y, 0.62, (s) => layerTint(s, 0.06, 0, 0.62, 0.95), vr.lights);
-    this.ground = layer(groundTile(1024, 140), 590 - GRASS_LIP, 1, (s) => ({ mul: mixLight(s, 0.85), haze: { color: STAGES[s].haze, aTop: 0.06, aBottom: 0 } }));
+    yield;
+    this.vines = this.addLayer(layer(vr.canvas, VINE_Y, 0.62, (s) => layerTint(s, 0.06, 0, 0.62, 0.95), vr.lights));
+    this.ground = this.addLayer(layer(groundTile(1024, 140), 590 - GRASS_LIP, 1, (s) => ({ mul: mixLight(s, 0.85), haze: { color: STAGES[s].haze, aTop: 0.06, aBottom: 0 } })));
+    yield;
     const ga = garlandTile(1600, 150);
-    this.garland = layer(ga.canvas, -10, 1.25, (s) => ({ mul: mixLight(s, 0.9), flat: { color: "#0a0e1c", a: NIGHT[s] * 0.25 } }), ga.lights);
-    this.grass = layer(grassTile(1600, 84), 720 - 84, 1.4, (s) => ({ mul: mixLight(s, 1), flat: { color: "#0c0f18", a: 0.25 + NIGHT[s] * 0.35 } }));
-    this.landmarks = LANDMARKS.map((d) => ({ lm: buildLandmark(d.spec, this.props), x: d.x, up: d.up }));
+    yield;
+    this.garland = this.addLayer(layer(ga.canvas, -10, 1.25, (s) => ({ mul: mixLight(s, 0.9), flat: { color: "#0a0e1c", a: NIGHT[s] * 0.25 } }), ga.lights));
+    yield;
+    this.grass = this.addLayer(layer(grassTile(1600, 84), 720 - 84, 1.4, (s) => ({ mul: mixLight(s, 1), flat: { color: "#0c0f18", a: 0.25 + NIGHT[s] * 0.35 } })));
+  }
+
+  private *buildLandmarks(): Generator<void, void, void> {
+    this.landmarks = [];
+    for (const d of LANDMARKS) {
+      this.landmarks.push({ lm: buildLandmark(d.spec, this.props), x: d.x, up: d.up });
+      yield;
+    }
     this.ship = buildLandmark({ id: "landmark-steamship", h: 62, fade: 0, haze: 0.22, flood: 0.4 }, this.props);
     this.shipLights = steamshipLights(this.ship.w, this.ship.h);
-    this.staged = [
-      this.sky,
-      this.clouds,
-      this.fogs,
-      this.ridge.staged,
-      this.bank.staged,
-      this.bankRefl.staged,
-      this.near.staged,
-      this.vines.staged,
-      this.ground.staged,
-      this.garland.staged,
-      this.grass.staged,
-      ...this.landmarks.flatMap((l) => [l.lm.staged, l.lm.refl]),
-      this.ship.staged,
-      this.ship.refl,
-    ];
-    prepareStaged(this.staged, 0, MAX_STAGE, 99);
+    for (const l of this.landmarks) {
+      this.addStaged(l.lm.staged);
+      this.addStaged(l.lm.refl);
+    }
+    this.addStaged(this.ship.staged);
+    this.addStaged(this.ship.refl);
+  }
+
+  private *buildSprites(): Generator<void, void, void> {
     this.shimmer = riverShimmer(1024, RIVER_BOTTOM - WATERLINE, 21);
     this.shimmer2 = riverShimmer(1024, RIVER_BOTTOM - WATERLINE, 57);
     this.moon = moonSprite();
     this.birds = birdStrip();
     this.rays = [raysSprite(1280, 440, 1010, 250, 3, "#ffe8c0")];
+    yield;
     this.sunGlow = bigGlow(620, 620, [
       [0, "rgba(255,240,200,0.95)"],
       [0.12, "rgba(255,210,140,0.55)"],
@@ -284,14 +434,36 @@ export class WachauRenderer implements WorldRenderer {
     this.softFog = softSprite("rgba(255,255,255,1)");
     this.softWarm = softSprite("rgba(255,190,110,1)");
     this.water = new WaterFx(this.glowWhite);
-    this.ready = true;
+  }
+
+  /** Stufen-Cache in die Verwaltung (StagePrep) aufnehmen */
+  private addStaged(c: StageCache): StageCache {
+    this.staged.push(c);
+    return c;
+  }
+
+  private addLayer(L: Layer): Layer {
+    this.staged.push(L.staged);
+    return L;
   }
 
   // ---------------------------------------------------------------------------------------------
 
   update(dt: number, v: ViewState): void {
     if (!this.ready) this.build();
-    prepareStaged(this.staged, v.stage, MAX_STAGE, 1);
+    this.skins.beginFrame();
+    // Stufen-Varianten: die aktuelle sofort, die Folgestufe erst ab ~28 % der Stufe und höchstens ein Schritt je ~6 Frames
+    // (nicht am Stufenanfang, wo sich sonst alles auf den Übergang drängt)
+    const stage = clamp(Math.floor(v.stage), 0, MAX_STAGE);
+    this.lastStage = stage;
+    this.lowQ = v.quality === 0;
+    this.prep.step(stage, this.prepProgress(stageProgress(v.worldMeters, WACHAU_STAGE_METERS)), v.stageBlend);
+    // wenig Speicher (Qualität 0 oder Gerät mit < 4 GB): verworfene Stufenflächen nicht für den nächsten Bake aufheben
+    if (this.lowQ || LOW_MEMORY) {
+      for (const c of this.staged) c.dropSpare();
+      for (const L of this.landmarks) L.lm.dropWork();
+      this.ship?.dropWork();
+    }
     const s = v.stage + v.stageBlend;
     const q = v.quality;
     const scroll = v.speed;
@@ -561,7 +733,7 @@ export class WachauRenderer implements WorldRenderer {
             g.globalAlpha = 1;
             g.globalCompositeOperation = "source-over";
           }
-        } else if (L.up < 40) {
+        } else if (L.up < MIRROR_UP) {
           // Spiegelung nur für Wahrzeichen direkt am Wasser
           this.drawStagedSprite(g, lm.refl, v, cx - lm.w / 2 - 4, WATERLINE + 2 + (bottom - WATERLINE), 0.8);
         }

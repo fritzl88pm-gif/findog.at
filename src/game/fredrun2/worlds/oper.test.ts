@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Bot } from "../bot";
 import { FIXED_DT, METERS_PER_DIFFICULTY, PLAYER_SX } from "../constants";
 import { deathLabel } from "../death-names";
@@ -10,8 +10,13 @@ import { WORLDS } from "./index";
 import { WORLD_OPER } from "./oper";
 import { SKIN } from "./oper/dims";
 import { OPER_DEATH_NAMES } from "./oper/death-names";
+import { OPER_STAGE_METERS, OperRenderer } from "./oper/renderer";
+import { FarLayers, bakeFar, bakeFarSteps, bakeMid, bakeMidSteps, loadPlain } from "./oper/backdrop";
+import { SpriteBank } from "./oper/sprites";
 import { waltzFactor } from "./oper/system";
 import { auditPatterns, botRuns } from "./shared-b/audit";
+import type { StageCache } from "./shared-b/layers";
+import { assetsOf, installCanvasStub, installRecordingStub, manifestProps, stubView } from "./shared-b/test-kit";
 
 /** Baut ein Muster isoliert in einer leeren Sim (Rückgabe: Sim, Musterlänge, Ursprung). */
 function isolate(p: PatternDef, diff: number, seed: number): { sim: Sim; len: number; origin: number; specs: EntSpec[] } {
@@ -222,3 +227,297 @@ describe("Welt Opernball", () => {
     for (const r of runs) expect(r.hurts).toBeLessThanOrEqual(2);
   });
 });
+
+// --- Weltladen, Stufen-Vorbereitung, Skalenwechsel (Canvas- und Bild-Attrappe, ohne DOM) --------------------------------------
+
+interface OperInternals {
+  ground: StageCache | null;
+  far: { has(stage: number): boolean };
+  k: number;
+  skins: { bank: { size?: number; setScale(k: number): void } };
+}
+
+const inner = (r: OperRenderer): OperInternals => r as unknown as OperInternals;
+
+/** Bild-Attrappe: meldet jede geladene URL und löst `onload` in einem Mikrotask aus (Größe wie die Originale) */
+function stubImages(): string[] {
+  const loads: string[] = [];
+  class FakeImage {
+    decoding = "";
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    width = 2240;
+    height = 768;
+    private url = "";
+    set src(v: string) {
+      this.url = v;
+      if (v) {
+        loads.push(v);
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    get src(): string {
+      return this.url;
+    }
+  }
+  vi.stubGlobal("Image", FakeImage);
+  return loads;
+}
+
+async function loaded(): Promise<{ r: OperRenderer; stub: ReturnType<typeof installCanvasStub>; loads: string[] }> {
+  const stub = installCanvasStub();
+  const loads = stubImages();
+  const r = new OperRenderer();
+  await r.load(assetsOf(manifestProps()));
+  return { r, stub, loads };
+}
+
+describe("Oper – Stufenlänge, Weltladen, Vorbereitung der Folgestufe, Skalenwechsel", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("OPER_STAGE_METERS entspricht der Welt-Definition", () => {
+    expect(OPER_STAGE_METERS).toBe(WORLD_OPER.stageMeters);
+  });
+
+  it("load backt Fernebenen der Stufen 0 und 1 und die Bodenkacheln der Stufe 0", async () => {
+    const { r } = await loaded();
+    const i = inner(r);
+    expect(i.far.has(0)).toBe(true);
+    expect(i.far.has(1)).toBe(true);
+    expect(i.far.has(2)).toBe(false);
+    r.update(1 / 60, stubView({ stage: 0, worldMeters: 5 }));
+    expect(i.ground?.has(0)).toBe(true);
+  });
+
+  it("Folgestufe: Fernebene und Bodenkachel erst ab ~28 % der Stufe (Boden höchstens ein Schritt je ~100 ms)", async () => {
+    const { r, loads } = await loaded();
+    const i = inner(r);
+    const clock = 5000;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const at = (progress: number): void => r.update(1 / 60, stubView({ stage: 1, worldMeters: OPER_STAGE_METERS + progress * OPER_STAGE_METERS }));
+    at(0.02);
+    await Promise.resolve();
+    const before = loads.length;
+    at(0.25);
+    await Promise.resolve();
+    expect(i.far.has(2)).toBe(false);
+    expect(i.ground?.has(2)).toBe(false);
+    expect(loads.length).toBe(before); // nichts Neues geladen
+    at(0.3);
+    await new Promise((res) => setTimeout(res, 0));
+    expect(loads.length).toBeGreaterThan(before);
+    expect(i.far.has(2)).toBe(true);
+    expect(i.ground?.has(2)).toBe(true);
+  });
+
+  it("beginnt die Überblendung, wird die Folgestufe (Boden) sofort nachgeholt", async () => {
+    const { r } = await loaded();
+    const i = inner(r);
+    r.update(1 / 60, stubView({ stage: 1, worldMeters: OPER_STAGE_METERS + 3 }));
+    expect(i.ground?.has(2)).toBe(false);
+    r.update(1 / 60, stubView({ stage: 1, worldMeters: OPER_STAGE_METERS + 250, stageBlend: 0.1 }));
+    expect(i.ground?.has(2)).toBe(true);
+  });
+
+  it("resize ist idempotent; nur eine echte Änderung ersetzt die Bodenkacheln (und verwirft die Sprites)", async () => {
+    const { r, stub } = await loaded();
+    const i = inner(r);
+    r.update(1 / 60, stubView({ stage: 0, worldMeters: 5 }));
+    const g0 = i.ground;
+    const n = stub.created;
+    r.resize(1);
+    r.resize(1.1);
+    r.resize(1.19);
+    r.resize(1);
+    expect(i.ground).toBe(g0);
+    expect(stub.created).toBe(n);
+    r.resize(1.5);
+    expect(i.k).toBe(1.5);
+    expect(i.ground).not.toBe(g0);
+    r.update(1 / 60, stubView({ stage: 0, worldMeters: 6 }));
+    const m = stub.created;
+    expect(m).toBeGreaterThan(n); // Bodenkachel der Stufe 0 in neuer Dichte, genau einmal
+    r.resize(1.5);
+    r.resize(1.45);
+    r.update(1 / 60, stubView({ stage: 0, worldMeters: 7 }));
+    expect(stub.created).toBe(m);
+  });
+
+  it("resize vor dem Laden merkt die Skala", async () => {
+    installCanvasStub();
+    stubImages();
+    const r = new OperRenderer();
+    r.resize(2);
+    await r.load(assetsOf(manifestProps()));
+    expect(inner(r).k).toBe(2);
+    expect(inner(r).ground).not.toBeNull();
+  });
+});
+
+describe("Oper – Sprite-Bake außerhalb des Bildes", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("SpriteBank: außerhalb höchstens ein Bake je Frame (get liefert null und merkt nichts), sichtbar immer sofort", () => {
+    const stub = installCanvasStub();
+    const bank = new SpriteBank(manifestProps());
+    bank.off = true;
+    const a = bank.get("oper-waiter", 140);
+    expect(a).not.toBeNull();
+    const n = stub.created;
+    expect(bank.get("oper-dancers", 140)).toBeNull(); // wartet
+    expect(stub.created).toBe(n);
+    bank.off = false;
+    expect(bank.get("oper-dancers", 140)).not.toBeNull(); // sichtbar → sofort
+    bank.off = true;
+    bank.baked = 0; // nächster Frame
+    expect(bank.get("oper-cork", 84)).not.toBeNull();
+    const m = stub.created;
+    expect(bank.get("oper-waiter", 140)).toBe(a); // Treffer
+    expect(stub.created).toBe(m);
+  });
+
+  it("FarLayers.ensure: gleichzeitige Aufrufe laden und backen eine Stufe nur einmal", async () => {
+    installCanvasStub();
+    const loads = stubImages();
+    const far = new FarLayers();
+    await Promise.all([far.ensure(2), far.ensure(2), far.ensure(2)]);
+    expect(loads.length).toBe(1);
+    expect(far.has(2)).toBe(true);
+    await far.ensure(2); // vorhanden: nichts mehr
+    expect(loads.length).toBe(1);
+  });
+
+  it("bakeFarSteps gibt mehrfach die Kontrolle ab und liefert dieselbe Fläche wie bakeFar am Stück", () => {
+    installCanvasStub();
+    const img = { width: 2240, height: 768 } as unknown as HTMLImageElement;
+    const it = bakeFarSteps(img, 1);
+    let steps = 0;
+    for (;;) {
+      const r = it.next();
+      if (r.done) {
+        expect(r.value.width).toBe(bakeFar(img, 1).width);
+        expect(r.value.height).toBe(bakeFar(img, 1).height);
+        break;
+      }
+      steps += 1;
+    }
+    expect(steps).toBeGreaterThanOrEqual(5); // vier Bildbänder + Verläufe (+ Kegel)
+  });
+
+  it("SpriteBank: unbekannte Ids ohne Prop bleiben null", () => {
+    installCanvasStub();
+    const bank = new SpriteBank(manifestProps());
+    expect(bank.get("unbekannt", 100)).toBeNull();
+  });
+});
+
+describe("Oper – Bilder laden und Mittelgrund backen ohne Long Task", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const URL0 = "/fredrun2/worlds/oper/far-foyer.webp";
+
+  /** fetch + createImageBitmap als Attrappen; `closed` zählt die freigegebenen Bitmaps */
+  function stubBitmaps(opts: { ok?: boolean; reject?: boolean } = {}): { fetched: string[]; closed: number[] } {
+    const fetched: string[] = [];
+    const closed: number[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (u: string) => {
+        fetched.push(u);
+        return { ok: opts.ok ?? true, blob: async () => ({}) };
+      }),
+    );
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(async () => {
+        if (opts.reject) throw new Error("nicht dekodierbar");
+        return { width: 2240, height: 768, close: () => closed.push(1) };
+      }),
+    );
+    return { fetched, closed };
+  }
+
+  it("loadPlain bevorzugt ImageBitmap (Abruf und Dekodierung außerhalb des Hauptthreads) und lädt dann kein <img>", async () => {
+    const { fetched } = stubBitmaps();
+    const loads = stubImages();
+    const pic = await loadPlain(URL0);
+    expect(pic).not.toBeNull();
+    expect("close" in (pic as object)).toBe(true);
+    expect(fetched.length).toBe(1);
+    expect(fetched[0].startsWith(URL0)).toBe(true); // mit Revisionsparameter wie das <img>
+    expect(loads.length).toBe(0);
+  });
+
+  it("loadPlain: Abruf nicht ok, Dekodierung scheitert oder keine Bitmap-Unterstützung → Rückfall auf <img>", async () => {
+    for (const mode of ["notOk", "reject", "none"] as const) {
+      vi.unstubAllGlobals();
+      if (mode === "notOk") stubBitmaps({ ok: false });
+      else if (mode === "reject") stubBitmaps({ reject: true });
+      else {
+        vi.stubGlobal("fetch", undefined);
+        vi.stubGlobal("createImageBitmap", undefined);
+      }
+      const loads = stubImages();
+      const pic = await loadPlain(URL0);
+      expect(pic, mode).not.toBeNull();
+      expect("close" in (pic as object), mode).toBe(false);
+      expect(loads.length, mode).toBe(1);
+    }
+  });
+
+  it("FarLayers.ensure gibt das Bitmap nach dem Backen frei (auch wenn die Ebenen inzwischen verworfen wurden)", async () => {
+    installCanvasStub();
+    const { closed } = stubBitmaps();
+    stubImages();
+    const far = new FarLayers();
+    await far.ensure(2);
+    expect(far.has(2)).toBe(true);
+    expect(closed.length).toBe(1);
+    const late = far.ensure(3);
+    far.dispose();
+    await late;
+    expect(far.has(3)).toBe(false);
+    expect(closed.length).toBe(2);
+  });
+
+  it("bakeMidSteps: Nahtbereinigung in 3 waagerechten Bändern, Weichzeichner in 4 beschnittenen Teilstücken, Ergebnis wie am Stück", () => {
+    const { canvases } = installRecordingStub();
+    const src = { width: 2240, height: 768 } as unknown as HTMLImageElement;
+    const it = bakeMidSteps(src, 742, "56,20,24", 0.34);
+    let steps = 0;
+    let layer: ReturnType<typeof bakeMid> | null = null;
+    for (;;) {
+      const r = it.next();
+      if (r.done) {
+        layer = r.value;
+        break;
+      }
+      steps += 1;
+    }
+    expect(steps).toBeGreaterThanOrEqual(8);
+    const rects = (c: { log: string[] }): string[] => c.log.filter((l) => l.startsWith("rect("));
+    // Quellbild 1:1 in drei waagerechten Bändern (je Band ein Schritt): lückenlos, ohne Überlappung
+    const seam = rects(canvases[0]);
+    expect(seam).toEqual([0, 256, 512].map((y) => `rect(0,${y},2240,256)`));
+    // Weichzeichner: Seitenkopien nur auf ihren Randstreifen (PAD 24 + 8), die mittlere Kopie in zwei waagerechten Hälften
+    expect(canvases[1].width).toBe(1437);
+    expect(rects(canvases[1])).toEqual(["rect(0,0,32,476)", "rect(0,0,1437,238)", "rect(0,238,1437,238)", "rect(1405,0,32,476)"]);
+    expect(canvases[1].log.filter((l) => l.startsWith("drawImage(")).length).toBe(4);
+    expect(canvases[1].log.filter((l) => l === "clip()").length).toBe(4);
+    const whole = bakeMid(src, 742, "56,20,24", 0.34);
+    expect(layer).not.toBeNull();
+    expect(layer?.w).toBe(whole.w);
+    expect(layer?.h).toBe(whole.h);
+    expect(layer?.footY).toBe(whole.footY);
+  });
+});
+

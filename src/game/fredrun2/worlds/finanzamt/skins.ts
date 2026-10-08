@@ -4,6 +4,7 @@
  * werden prozedural gezeichnet. Props (Bürostuhl, Fledermaus, Schredder, Ordner, Kartons, Kopierer, Hängeregistratur,
  * Lüftungskanal, Bankierslampe …) mit prozeduralem Fallback.
  */
+import { VIEW_W } from "../../constants";
 import type { Ent, PropLibrary, ViewState } from "../../types";
 import { glowAt, glowSprite, paint, rr, softSprite, spriteStrip, type Ctx2D } from "../shared-b/canvas";
 import { h1 } from "../shared-b/color";
@@ -15,14 +16,48 @@ export const RIM = "rgba(165,215,255,0.9)";
 // =================================================================================================
 // Sprite-Cache mit Rim-Light
 
+/**
+ * Bake-Budget je Frame. Maße wie Kistengröße, Hängebreite oder Fledermausflügel variieren mit Muster und Tempo, die Sprites
+ * lassen sich daher nicht vorbacken und entstehen beim ersten Zeichnen. Die Engine zeichnet eine Entität schon 260 px vor dem
+ * rechten Bildrand; solange sie noch ganz außerhalb steht (`off`), darf pro Frame nur EIN Bake laufen (`n`), alle weiteren
+ * warten einen Frame (die Caches liefern dann `EMPTY`, unsichtbar). Sichtbare Sprites werden immer sofort gebacken.
+ */
+export interface BakeBudget {
+  /** Bakes im laufenden Frame */
+  n: number;
+  /** die gerade gezeichnete Entität steht noch ganz außerhalb des Bildes */
+  off: boolean;
+}
+
+/** x ab dem eine Entität als „noch außerhalb“ gilt: Sprites reichen bis ca. 40 px links über die Trefferfläche hinaus */
+export const OFFSCREEN_X = VIEW_W + 40;
+
+let emptyCanvas: HTMLCanvasElement | null = null;
+/** Durchsichtiger Platzhalter für einen wartenden Bake (1×1, wird nie gecacht) */
+function EMPTY(): HTMLCanvasElement {
+  return (emptyCanvas ??= paint(1, 1, () => undefined));
+}
+
+/** Soll der Bake auf den nächsten Frame warten? (außerhalb des Bildes und in diesem Frame ist schon einer gelaufen) */
+function mustWait(b: BakeBudget | undefined): boolean {
+  if (!b) return false;
+  if (b.off && b.n > 0) return true;
+  b.n += 1;
+  return false;
+}
+
 export class SpriteCache {
   private map = new Map<string, HTMLCanvasElement>();
   /** Pixeldichte der Zeichenfläche (Sprites werden in Zielauflösung gerendert → scharf auf Hi-DPI) */
   k = 1;
-  constructor(private readonly max = 90) {}
+  constructor(
+    private readonly max = 90,
+    private readonly budget?: BakeBudget,
+  ) {}
   get(key: string, w: number, h: number, draw: (g: Ctx2D) => void, rim: string | null = RIM, rimW = 2): HTMLCanvasElement {
     let c = this.map.get(key);
     if (!c) {
+      if (mustWait(this.budget)) return EMPTY();
       const k = this.k;
       const src = paint(Math.max(1, Math.ceil(w * k)), Math.max(1, Math.ceil(h * k)), (g) => {
         g.scale(k, k);
@@ -74,12 +109,14 @@ export function withRim(src: HTMLCanvasElement, color: string, width = 2): HTMLC
 /** Weicher, elliptischer Leuchtfleck in exakter Zielgröße (1:1 blitten statt kleine Sprites hochzuskalieren) */
 export class GlowCache {
   private map = new Map<string, HTMLCanvasElement>();
+  constructor(private readonly budget?: BakeBudget) {}
   get(color: string, rx: number, ry: number, core = 0.45): HTMLCanvasElement {
     const qx = Math.max(4, Math.round(rx / 4) * 4);
     const qy = Math.max(4, Math.round(ry / 4) * 4);
     const key = `${color}|${qx}|${qy}|${core}`;
     let c = this.map.get(key);
     if (!c) {
+      if (mustWait(this.budget)) return EMPTY();
       c = paint(qx * 2, qy * 2, (g) => {
         g.translate(qx, qy);
         g.scale(1, qy / qx);
@@ -117,6 +154,8 @@ export function blitC(g: Ctx2D, spr: HTMLCanvasElement, cx: number, cy: number):
 
 export interface FaAssets {
   props: PropLibrary | null;
+  /** Bake-Budget des Frames (geteilt von Sprite- und Glow-Caches); der Renderer setzt es pro Frame/Entität */
+  budget: BakeBudget;
   glow: GlowCache;
   coin: HTMLCanvasElement;
   coinSize: number;
@@ -224,11 +263,13 @@ export function makeCoinStrip(k: number): HTMLCanvasElement {
   });
 }
 
-export function makeAssets(): FaAssets {
-  const coin = makeCoinStrip(1);
+export function makeAssets(k = 1): FaAssets {
+  const coin = makeCoinStrip(k);
+  const budget: BakeBudget = { n: 0, off: false };
   return {
     props: null,
-    glow: new GlowCache(),
+    budget,
+    glow: new GlowCache(budget),
     coin,
     coinSize: coin.height,
     glowRed: glowSprite("#ff2a44", 0.2),
@@ -241,8 +282,8 @@ export function makeAssets(): FaAssets {
     softWarm: softSprite("rgba(255,190,110,1)"),
     softCyan: softSprite("rgba(90,200,255,1)"),
     softGold: softSprite("rgba(255,210,90,1)"),
-    cache: new SpriteCache(),
-    pcache: new SpriteCache(40),
+    cache: new SpriteCache(90, budget),
+    pcache: new SpriteCache(40, budget),
   };
 }
 

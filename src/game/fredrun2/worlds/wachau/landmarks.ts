@@ -4,6 +4,7 @@
  * Zielgröße vorgerendert, pro Stimmungsstufe getönt (Licht + Dunst, nachts angestrahlt) und als Spiegelung auf der
  * Donau wiederverwendet. Ohne Props: prozedurale Silhouetten gleicher Größe.
  */
+import { makeCanvas } from "../../draw-utils";
 import type { PropLibrary } from "../../types";
 import { paint, type Ctx2D } from "../shared-b/canvas";
 import { mulberry } from "../shared-b/color";
@@ -36,6 +37,22 @@ export interface Landmark {
   refl: StageCache;
   w: number;
   h: number;
+  /** Arbeitsflächen der Bakes freigeben (Speicher); sie entstehen beim nächsten Bake neu */
+  dropWork(): void;
+  /**
+   * Arbeitsflächen im Leerlauf anlegen (statt beim ersten Nacht-Bake mitten im Lauf): die Lichtmaske nur, wenn das Wahrzeichen
+   * nachts angestrahlt wird, dazu die Fläche für das Rohbild der Spiegelung. Mehrfach aufrufbar (legt nichts doppelt an).
+   */
+  warmWork(): void;
+}
+
+/**
+ * Zwischenflächen der Stufen-Bakes (Lichtmaske, Rohbild der Spiegelung). Sie bleiben zwischen den Bakes erhalten und werden
+ * neu bemalt, statt je Bake neue Bitmaps anzulegen (der Bake einer Landmarken-Stufe ist sonst ein Stoß aus vier Neuanlagen).
+ */
+interface Work {
+  lit: HTMLCanvasElement | null;
+  mirror: HTMLCanvasElement | null;
 }
 
 function fallback(id: LandmarkId, w: number, h: number): HTMLCanvasElement {
@@ -103,53 +120,83 @@ export function buildLandmark(spec: LandmarkSpec, props: PropLibrary | null): La
       g.fillRect(0, y0, w, h - y0);
     });
   }
-  const staged = new StageCache((stage) => stageVariant(src, spec, stage));
-  const refl = new StageCache((stage) => reflectSprite(staged.get(stage), stage));
-  return { spec, src, staged, refl, w, h };
+  // Stufenflächen werden beim Verwerfen einer Stufe für den nächsten Bake wiederverwendet, ebenso die Arbeitsflächen
+  const work: Work = { lit: null, mirror: null };
+  const staged = new StageCache((stage, reuse) => stageVariant(src, spec, stage, reuse, work), { recycle: true });
+  const refl = new StageCache((stage, reuse) => reflectSprite(staged.get(stage), stage, reuse, work), { recycle: true });
+  return {
+    spec,
+    src,
+    staged,
+    refl,
+    w,
+    h,
+    dropWork: () => {
+      work.lit = null;
+      work.mirror = null;
+    },
+    warmWork: () => {
+      if (spec.flood >= 0.05) work.lit ??= makeCanvas(w, h);
+      work.mirror ??= makeCanvas(w + 8, h);
+    },
+  };
 }
 
-function stageVariant(src: HTMLCanvasElement, spec: LandmarkSpec, stage: number): HTMLCanvasElement {
+function stageVariant(src: HTMLCanvasElement, spec: LandmarkSpec, stage: number, reuse: HTMLCanvasElement | null | undefined, work: Work): HTMLCanvasElement {
   const S = STAGES[stage];
   const hk = HAZE_K[stage];
-  const base = tintCanvas(src, {
+  const tint = {
     mul: S.light,
     haze: { color: S.haze, aTop: Math.min(0.9, spec.haze * hk * 0.9), aBottom: Math.min(0.95, spec.haze * hk * 1.15) },
-  });
+  };
   const flood = spec.flood * LIGHTS[stage] * (NIGHT[stage] > 0.5 ? 1 : 0.3);
-  if (flood < 0.03) return base;
-  // Nachts: warm angestrahlt (von unten), leuchtet aus dem Dunkel heraus
-  const lit = tintCanvas(src, { mul: "#ffd79a", haze: { color: mixHex(S.haze, "#ffb070", 0.4), aTop: 0.28, aBottom: 0.1 } });
-  const mask = paint(src.width, src.height, (g, w, h) => {
-    g.drawImage(lit, 0, 0);
-    g.globalCompositeOperation = "destination-in";
-    const grd = g.createLinearGradient(0, 0, 0, h);
-    grd.addColorStop(0, "rgba(0,0,0,0.35)");
-    grd.addColorStop(0.7, "rgba(0,0,0,0.9)");
-    grd.addColorStop(1, "rgba(0,0,0,0.6)");
-    g.fillStyle = grd;
-    g.fillRect(0, 0, w, h);
-  });
-  return paint(src.width, src.height, (g) => {
-    g.drawImage(base, 0, 0);
-    g.globalAlpha = Math.min(1, flood);
-    g.drawImage(mask, 0, 0);
-  });
+  // die getönte Fläche wird gleich das Ergebnis (kein Zwischenbild, das danach nur kopiert würde)
+  const out = tintCanvas(src, tint, false, reuse);
+  if (flood < 0.03) return out;
+  // Nachts: warm angestrahlt (von unten), leuchtet aus dem Dunkel heraus. Die Lichtmaske entsteht auf der Arbeitsfläche:
+  // getönte Kopie, dann in derselben Fläche nach unten hin ausmaskiert.
+  const lit = tintCanvas(src, { mul: "#ffd79a", haze: { color: mixHex(S.haze, "#ffb070", 0.4), aTop: 0.28, aBottom: 0.1 } }, false, work.lit);
+  work.lit = lit;
+  const lg = lit.getContext("2d");
+  const g = out.getContext("2d");
+  if (!lg || !g) return out;
+  const w = src.width;
+  const h = src.height;
+  lg.globalCompositeOperation = "destination-in";
+  lg.globalAlpha = 1;
+  const grd = lg.createLinearGradient(0, 0, 0, h);
+  grd.addColorStop(0, "rgba(0,0,0,0.35)");
+  grd.addColorStop(0.7, "rgba(0,0,0,0.9)");
+  grd.addColorStop(1, "rgba(0,0,0,0.6)");
+  lg.fillStyle = grd;
+  lg.fillRect(0, 0, w, h);
+  g.globalCompositeOperation = "source-over";
+  g.globalAlpha = Math.min(1, flood);
+  g.drawImage(lit, 0, 0);
+  g.globalAlpha = 1;
+  return out;
 }
 
 /** Gespiegelte, gewellte und ausgeblendete Kopie für die Wasseroberfläche */
-function reflectSprite(src: HTMLCanvasElement, stage: number): HTMLCanvasElement {
+function reflectSprite(src: HTMLCanvasElement, stage: number, reuse: HTMLCanvasElement | null | undefined, work: Work): HTMLCanvasElement {
   const w = src.width;
   const h = src.height;
   const S = STAGES[stage];
-  const out = paint(w + 8, h, (g) => {
-    for (let y = 0; y < h; y += 2) {
-      const sy = h - 1 - y;
-      const dx = 4 + Math.sin(y * 0.8) * (1 + y * 0.03) + Math.sin(y * 0.21 + 2) * 1.2;
-      g.globalAlpha = Math.max(0, 0.7 * (1 - y / (h * 0.8))) * (y % 6 === 4 ? 0.35 : 1);
-      g.drawImage(src, 0, sy, w, 1, dx, y, w, 2);
-    }
-  });
-  return tintCanvas(out, { mul: mixHex(S.water, "#ffffff", 0.35), flat: { color: S.water, a: 0.22 } });
+  const mirror = paint(
+    w + 8,
+    h,
+    (g) => {
+      for (let y = 0; y < h; y += 2) {
+        const sy = h - 1 - y;
+        const dx = 4 + Math.sin(y * 0.8) * (1 + y * 0.03) + Math.sin(y * 0.21 + 2) * 1.2;
+        g.globalAlpha = Math.max(0, 0.7 * (1 - y / (h * 0.8))) * (y % 6 === 4 ? 0.35 : 1);
+        g.drawImage(src, 0, sy, w, 1, dx, y, w, 2);
+      }
+    },
+    work.mirror,
+  );
+  work.mirror = mirror;
+  return tintCanvas(mirror, { mul: mixHex(S.water, "#ffffff", 0.35), flat: { color: S.water, a: 0.22 } }, false, reuse);
 }
 
 // ------------------------------------------------------------------------------------------------

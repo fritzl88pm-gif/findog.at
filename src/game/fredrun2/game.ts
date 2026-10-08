@@ -8,21 +8,10 @@ import { Bot } from "./bot";
 import { CHARACTERS } from "./characters";
 import { FIXED_DT, MAGNET_TIME, PLAYER_SX, SHIELD_TIME, SLOWMO_TIME, TURBO_TIME, VIEW_H, VIEW_W } from "./constants";
 import { InputManager } from "./input";
-import {
-  boardKey,
-  defaultProfile,
-  loadProfile,
-  purchaseCharacter,
-  recordRun,
-  saveProfile,
-  type Profile,
-  type PurchaseStatus,
-  type RecordResult,
-  type ScoreEntry,
-  type Settings,
-} from "./profile";
+import { boardKey, defaultProfile, loadProfile, purchaseCharacter, saveProfile, type Profile, type PurchaseStatus, type RecordResult, type Settings } from "./profile";
 import { Renderer, type FrameData } from "./render";
 import { dailySeed, dateKey } from "./rng";
+import { bankRun, countdownDisplay, isBankable, newRunId, QUICK_COUNTDOWN_S, summarizeRun, toRunResult, wantsQuickCountdown, type FullRunSummary, type RunResult } from "./run-summary";
 import { NO_INPUT, Sim, TOUR_METERS, TOUR_ORDER, dailyWorld, type SimInput } from "./sim";
 import type { HudState, HudToast } from "./hud";
 import type { CharacterId, Ent, RunConfig, RunMode, SimEvent, ViewState, WorldDef, WorldId, WorldRenderer } from "./types";
@@ -52,29 +41,8 @@ export interface AudioLike {
 
 export type GamePhase = "loading" | "menu" | "countdown" | "running" | "paused" | "gameover";
 
-export interface RunResult {
-  score: number;
-  meters: number;
-  coins: number;
-  gems: number;
-  stomps: number;
-  nearMisses: number;
-  maxCombo: number;
-  dashes: number;
-  seconds: number;
-  deathCause: string;
-  world: WorldId;
-  mode: RunMode;
-  character: CharacterId;
-  isNewBest: boolean;
-  rank: number | null;
-  previousBest: number;
-  worldsVisited: WorldId[];
-  top: ScoreEntry[];
-  /** Board-Schlüssel (`world:<id>` | `tour` | `daily:<Datum>`) und eindeutige Lauf-ID für die globale Bestenliste */
-  board: string;
-  runId: string;
-}
+// Die Ergebnis-Karte lebt in run-summary.ts (Tod und „Lauf beenden“ teilen sie); die UI importiert sie weiter von hier.
+export type { RunResult };
 
 export interface GameSnapshot {
   phase: GamePhase;
@@ -82,13 +50,23 @@ export interface GameSnapshot {
   countdown: number;
   profile: Profile;
   result: RunResult | null;
-  /** Live-Werte fürs UI (Touch-Buttons etc.) */
-  live: { dashReady: boolean; hearts: number; score: number };
+  /** Live-Werte fürs UI (Touch-Buttons etc.); `coins` = Münzen des laufenden Laufs */
+  live: { dashReady: boolean; hearts: number; score: number; coins?: number };
   fps: number;
   quality: 0 | 1 | 2;
   audioUnlocked: boolean;
   demoWorld: WorldId;
   error: string | null;
+  /**
+   * Es wird per Touch gespielt (Startwert: grober Zeiger oder ontouchstart, danach folgt es der zuletzt benutzten Zeigerart).
+   * `touch`, `storageOk`, `loadingWorld` und `live.coins` setzt getSnapshot() immer; optional typisiert, solange
+   * der feste Ladezustand (LOADING) in FredRun2.tsx sie noch nicht trägt.
+   */
+  touch?: boolean;
+  /** false, sobald das Profil nicht gespeichert werden konnte (Privatmodus, Speicher voll); nach erfolgreichem Schreiben wieder true */
+  storageOk?: boolean;
+  /** Welt, die gerade (nach)geladen wird und deren Laden den Spieler aufhält; null = keine (Füllung folgt mit pkg-hub-perf) */
+  loadingWorld?: WorldId | null;
 }
 
 const HINTS: Array<{ at: number; text: string }> = [
@@ -105,6 +83,14 @@ const ZONE_SFX: Array<[RegExp, { warn?: string; active?: string }]> = [
 ];
 
 const TITLE_CASE: Record<WorldId, string> = { wien: "Wien", alpen: "Alpen", finanzamt: "Finanzamt", prater: "Prater", wachau: "Wachau", cyber: "Cyber-Wien", winter: "Christkindlmarkt", oper: "Opernball" };
+
+/** Wie ein Lauf endet, den der Spieler abbricht (siehe quitRun) */
+export type QuitMode = "result" | "menu" | "restart";
+
+/** Schlüssel „Welt/Modus/Held“ eines Laufs: gleicher Schlüssel = Wiederholung */
+function runKey(cfg: Pick<RunConfig, "mode" | "world" | "character">): string {
+  return `${cfg.mode}|${cfg.world}|${cfg.character}`;
+}
 
 export interface GameOptions {
   canvas: HTMLCanvasElement;
@@ -171,6 +157,25 @@ export class FredRunGame {
   private stageToastShown = false;
   reducedMotion = false;
   private touchMode = false;
+  /** Profil ließ sich zuletzt speichern (false: localStorage gesperrt/voll) */
+  private storageOk = true;
+  /** Welt, die den Spieler gerade aufhält (Platzhalter: füllt pkg-hub-perf) */
+  private loadingWorld: WorldId | null = null;
+  /** Hochformat-Hinweis der UI liegt über dem Spiel */
+  private portraitBlocked = false;
+  /** Menü liegt unter einer Vollbild-Ebene (Einstellungen o. Ä.); die Wirkung folgt mit pkg-hub-perf */
+  private menuCovered = false;
+  /** Fenster hat Fokus / Seite ist sichtbar – nur aus focus/blur/visibilitychange gepflegt (kein document.hasFocus()-Polling) */
+  private winFocused = true;
+  private winVisible = true;
+  /** Der aktuelle Lauf ist schon ins Profil gebucht (Tod oder „Lauf beenden“): höchstens einmal je Lauf */
+  private runBanked = false;
+  /** Welt/Modus/Held des zuletzt gestarteten Laufs (nur diese Sitzung): nur eine Wiederholung bekommt den kurzen Countdown */
+  private lastRunKey = "";
+  /** zuletzt dem UI gemeldete Countdown-Zahl */
+  private shownCount = -1;
+  /** Ergebnis-Karte nach „Lauf beenden“: Szene bleibt eingefroren wie in der Pause */
+  private frozen = false;
   /** Harness/Tests: Frames werden nur manuell (debugAdvance) berechnet. */
   manual = false;
 
@@ -188,7 +193,7 @@ export class FredRunGame {
     try {
       this.profile = loadProfile();
       if (typeof window !== "undefined") {
-        this.touchMode = window.matchMedia?.("(pointer: coarse)").matches === true;
+        this.touchMode = window.matchMedia?.("(pointer: coarse)").matches === true || "ontouchstart" in window;
         const q = new URLSearchParams(window.location.search);
         if (q.has("unlockall")) this.profile = { ...this.profile, unlocked: [...Object.keys(CHARACTERS)] as CharacterId[] };
         const w = q.get("world");
@@ -201,11 +206,23 @@ export class FredRunGame {
       this.renderer.reducedMotion = this.reducedMotion;
       this.applySettings();
       this.observeSize();
-      this.input.attach(this.container);
+      // Eingabe an der ganzen Spielfläche (Wurzel) statt nur an der 16:9-Bühne: auch die Seitenbalken springen. Die Bühne bleibt fürs Messen (observeSize).
+      this.input.attach(this.container.parentElement ?? this.container);
       this.input.listener = {
         onPause: () => this.togglePause(),
         onMute: () => this.setSettings({ muted: !this.profile.settings.muted }),
-        onAnyInput: () => this.unlockAudio(),
+        onAnyInput: () => {
+          this.unlockAudio();
+          // Eingabe im Spiel beweist, dass das Fenster aktiv ist: heilt ein verpasstes focus-Ereignis (sonst bliebe der Countdown stehen)
+          this.winFocused = true;
+        },
+      };
+      this.input.onPointerKind = (kind) => {
+        if (kind === "pen") return;
+        const touch = kind === "touch";
+        if (touch === this.touchMode) return;
+        this.touchMode = touch;
+        this.emitChange();
       };
       this.setProgress(0.05);
       await this.assets.props.ensureManifest();
@@ -226,7 +243,9 @@ export class FredRunGame {
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.tick);
     document.addEventListener("visibilitychange", this.onVisibility);
+    document.addEventListener("fullscreenchange", this.onFullscreenChange);
     window.addEventListener("blur", this.onBlur);
+    window.addEventListener("focus", this.onFocus);
     this.emitChange();
   }
 
@@ -236,7 +255,9 @@ export class FredRunGame {
     this.input.detach();
     this.ro?.disconnect();
     document.removeEventListener("visibilitychange", this.onVisibility);
+    document.removeEventListener("fullscreenchange", this.onFullscreenChange);
     window.removeEventListener("blur", this.onBlur);
+    window.removeEventListener("focus", this.onFocus);
     this.audio.music.stop(0.2);
     for (const l of this.activeLoops) this.audio.loop(l, false);
     this.audio.dispose();
@@ -248,10 +269,16 @@ export class FredRunGame {
   }
 
   private onBlur = (): void => {
+    this.winFocused = false;
     if (this.phase === "running") this.pause();
   };
 
+  private onFocus = (): void => {
+    this.winFocused = true;
+  };
+
   private onVisibility = (): void => {
+    this.winVisible = !document.hidden;
     if (document.hidden) {
       if (this.phase === "running") this.pause();
       this.audio.suspend();
@@ -259,6 +286,11 @@ export class FredRunGame {
       this.audio.resume();
       this.last = performance.now();
     }
+  };
+
+  /** Beim VERLASSEN des Vollbilds (Esc gehört dem Browser, erreicht das Spiel nicht) pausiert der Lauf; Betreten pausiert nie. */
+  private onFullscreenChange = (): void => {
+    if (document.fullscreenElement === null && this.phase === "running") this.pause();
   };
 
   private observeSize(): void {
@@ -334,7 +366,7 @@ export class FredRunGame {
     const key = [
       this.phase,
       this.loadProgress,
-      Math.ceil(this.countdownT),
+      this.countdownShown(),
       this.result ? 1 : 0,
       this.profileVersion,
       this.audioUnlocked ? 1 : 0,
@@ -342,28 +374,36 @@ export class FredRunGame {
       Math.round(this.fps / 5),
       sim ? sim.player.hearts : 0,
       sim ? Math.floor(sim.score / 10) : 0,
+      sim ? sim.stats.coins : 0,
       sim && sim.player.energy >= sim.perks.dashCost ? 1 : 0,
       this.demoWorld,
       this.error ?? "",
+      this.touchMode ? 1 : 0,
+      this.storageOk ? 1 : 0,
+      this.loadingWorld ?? "",
     ].join("|");
     if (this.snapshotCache && key === this.lastSnapshotKey) return this.snapshotCache;
     this.lastSnapshotKey = key;
     this.snapshotCache = {
       phase: this.phase,
       loadProgress: this.loadProgress,
-      countdown: Math.max(0, Math.ceil(this.countdownT)),
+      countdown: this.countdownShown(),
       profile: this.profile,
       result: this.result,
       live: {
         dashReady: !!sim && sim.player.energy >= sim.perks.dashCost,
         hearts: sim?.player.hearts ?? 0,
         score: sim?.score ?? 0,
+        coins: sim?.stats.coins ?? 0,
       },
       fps: this.fps,
       quality: this.quality,
       audioUnlocked: this.audioUnlocked,
       demoWorld: this.demoWorld,
       error: this.error,
+      touch: this.touchMode,
+      storageOk: this.storageOk,
+      loadingWorld: this.loadingWorld,
     };
     return this.snapshotCache;
   }
@@ -373,10 +413,35 @@ export class FredRunGame {
     this.onChange();
   }
 
+  /** Countdown-Zahl fürs UI (nie 4, siehe countdownDisplay) */
+  private countdownShown(): number {
+    return countdownDisplay(this.countdownT);
+  }
+
   private commitProfile(p: Profile): void {
     this.profile = p;
     this.profileVersion += 1;
-    saveProfile(p);
+    const ok = saveProfile(p);
+    if (ok !== this.storageOk) {
+      this.storageOk = ok;
+      this.emitChange();
+    }
+  }
+
+  /** Hochformat-Hinweis der UI: sichtbar = das Spiel ist verdeckt. Ein laufender Lauf wird dabei pausiert (nicht beim „Trotzdem spielen“, das meldet false). */
+  setPortraitBlocked(blocked: boolean): void {
+    if (blocked === this.portraitBlocked) return;
+    this.portraitBlocked = blocked;
+    if (blocked && this.phase === "running") this.pause();
+  }
+
+  /** Menü liegt verdeckt (Einstellungen, Heldenauswahl …): die Demo dahinter darf sparen. Hier nur gespeichert, die Wirkung folgt in pkg-hub-perf. */
+  setMenuCovered(covered: boolean): void {
+    this.menuCovered = covered;
+  }
+
+  get isMenuCovered(): boolean {
+    return this.menuCovered;
   }
 
   setSettings(patch: Partial<Settings>): void {
@@ -405,6 +470,7 @@ export class FredRunGame {
     this.reducedMotion =
       s.reducedMotion || (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true);
     if (this.renderer) this.renderer.reducedMotion = this.reducedMotion;
+    this.input.setJumpAssist(s.jumpAssist);
     this.autoQuality = s.quality === "auto";
     if (!this.autoQuality) this.setQuality(s.quality === "low" ? 0 : s.quality === "medium" ? 1 : 2);
   }
@@ -457,8 +523,11 @@ export class FredRunGame {
     this.emitChange();
   }
 
-  /** Startet einen echten Lauf (mit Countdown). */
-  async startRun(over: Partial<RunConfig> = {}): Promise<void> {
+  /**
+   * Startet einen echten Lauf (mit Countdown). `opts.quick` erzwingt (true) oder verbietet (false) den kurzen Countdown;
+   * ohne Angabe entscheidet quickStartWanted() (Einstellung, Lauf-Zähler, gleiche Welt/Modus/Held wie zuletzt).
+   */
+  async startRun(over: Partial<RunConfig> = {}, opts: { quick?: boolean } = {}): Promise<void> {
     if (this.phase === "loading") return;
     this.unlockAudio();
     const p = this.profile;
@@ -469,6 +538,8 @@ export class FredRunGame {
     const seed = over.seed ?? (mode === "daily" ? dailySeed() : (Math.random() * 0xffffffff) >>> 0);
     const cfg: RunConfig = { mode, world, character: over.character ?? p.character, seed, startMeters: over.startMeters };
     this.cfg = cfg;
+    // Vor dem Laden entscheiden: danach hat sich die Phase (Menü/Game-Over) womöglich schon geändert
+    const quick = opts.quick ?? this.quickStartWanted(cfg);
     // Nur die Startwelt laden – in der Weltreise wird die nächste Welt rechtzeitig vor dem Tor nachgeladen.
     await Promise.all([this.ensureCharacter(cfg.character), this.ensureWorld(world)]);
     this.pruneWorlds([world]);
@@ -480,6 +551,10 @@ export class FredRunGame {
     this.demo = false;
     this.result = null;
     this.victory = false;
+    this.runBanked = false;
+    this.frozen = false;
+    this.resumeCountdown = 0;
+    this.lastRunKey = runKey(cfg);
     this.acc = 0;
     this.hitstop = 0;
     this.shake = 0;
@@ -491,19 +566,110 @@ export class FredRunGame {
     this.hintShow = 0;
     this.toast = null;
     this.stageToastShown = false;
-    this.flashV = 1;
+    // Kurzer Countdown: eine Sekunde, ein Zähl-Ton („1“) und „Los“; der Schwarz-Blitz ist nur halb so lang
+    this.flashV = quick ? 0.5 : 1;
     this.flashColor = "#000000";
     this.phase = "countdown";
-    this.countdownT = 3.2;
-    this.countdownSfx = 4;
+    this.countdownT = quick ? QUICK_COUNTDOWN_S : 3.2;
+    this.countdownSfx = quick ? 2 : 4;
+    this.shownCount = this.countdownShown();
     this.input.enabled = true;
     this.input.releaseAll();
     this.audio.music.play(WORLDS[TOUR_ORDER.includes(this.sim.world.id) ? this.sim.world.id : world].music, { crossfadeSec: 0.6, intensity: 0.15 });
     this.emitChange();
   }
 
+  /** Kurzer Countdown für diesen Start? (Regel in wantsQuickCountdown; „zuletzt“ = zuletzt gestarteter Lauf dieser Sitzung) */
+  private quickStartWanted(cfg: RunConfig): boolean {
+    return wantsQuickCountdown({
+      quickRestart: this.profile.settings.quickRestart,
+      runs: this.profile.lifetime.runs,
+      fromMenu: this.phase === "menu",
+      sameAsLast: this.lastRunKey === runKey(cfg),
+    });
+  }
+
+  /** Läuft ein echter (kein Demo-)Lauf, der noch nicht gebucht ist? (Countdown und Pause zählen dazu) */
+  private runInProgress(): boolean {
+    return !this.demo && !this.runBanked && !!this.sim && !!this.cfg && (this.phase === "running" || this.phase === "paused" || this.phase === "countdown");
+  }
+
+  /** Dauerklänge beenden (Dash, Rutschen, Weltschleifen). */
+  private stopLoops(): void {
+    for (const l of this.activeLoops) this.audio.loop(l, false);
+    this.activeLoops.clear();
+  }
+
+  /**
+   * Bucht den laufenden Lauf, höchstens einmal je Lauf und nur wenn etwas erreicht wurde (siehe isBankable).
+   * Gibt Zusammenfassung und Ergebnis der Buchung zurück oder null, wenn nichts gebucht wurde.
+   */
+  private bankRunning(): { summary: FullRunSummary; rec: RecordResult } | null {
+    const sim = this.sim;
+    if (!sim || !this.runInProgress()) return null;
+    const summary = summarizeRun(sim, { dailyKey: this.dailyKey, quit: true });
+    if (!isBankable(summary)) return null;
+    return this.commitRun(summary);
+  }
+
+  private commitRun(summary: FullRunSummary): { summary: FullRunSummary; rec: RecordResult } {
+    this.runBanked = true;
+    const rec = bankRun(this.profile, summary);
+    this.commitProfile(rec.profile);
+    return { summary, rec };
+  }
+
+  /**
+   * Lauf aus der Pause (oder mitten im Lauf) beenden, ohne dass er verloren geht:
+   * `result` bucht und zeigt die normale Ergebnis-Karte (Ursache „quit“, ohne Todes-Jingle; nichts erreicht: zurück ins Menü),
+   * `restart` bucht still und startet neu, `menu` bucht still und geht ins Menü. Demo-Läufe und bereits gebuchte Läufe zählen nie doppelt.
+   */
+  quitRun(mode: QuitMode): void {
+    if (mode === "menu") {
+      this.toMenu();
+      return;
+    }
+    if (mode === "restart") {
+      this.restart();
+      return;
+    }
+    const sim = this.sim;
+    if (!sim || !this.runInProgress()) return;
+    const banked = this.bankRunning();
+    if (!banked) {
+      this.toMenu();
+      return;
+    }
+    this.frozen = true;
+    this.resumeCountdown = 0;
+    this.showResult(toRunResult(banked.summary, banked.rec, newRunId()), true);
+  }
+
+  /** Ergebnis-Karte anzeigen: Phase, Eingabe, Dauerklänge und Musik aufräumen (Tod und „Lauf beenden“). Beim Abbruch kein Todes-Jingle. */
+  private showResult(result: RunResult, quit: boolean): void {
+    this.result = result;
+    this.victory = result.isNewBest;
+    this.phase = "gameover";
+    this.input.enabled = false;
+    this.input.releaseAll();
+    this.stopLoops();
+    if (result.isNewBest) this.audio.sfx("highscore");
+    else if (!quit) this.audio.sfx("gameover");
+    this.audio.music.stop(1.4);
+    this.emitChange();
+  }
+
   restart(): void {
     if (!this.cfg) return;
+    if (this.runInProgress()) {
+      // Pause → Neustart: der laufende Lauf zählt (Münzen, Rekord), dann sofort anhalten – das Laden der Welt ist asynchron
+      this.bankRunning();
+      if (this.phase === "running" || this.phase === "countdown") this.phase = "paused";
+      this.resumeCountdown = 0;
+      this.input.enabled = false;
+      this.input.releaseAll();
+      this.stopLoops();
+    }
     void this.startRun({ ...this.cfg, seed: this.cfg.mode === "daily" ? this.cfg.seed : undefined });
   }
 
@@ -513,8 +679,7 @@ export class FredRunGame {
     this.input.enabled = false;
     this.input.releaseAll();
     this.audio.duck(0.6, 0.2);
-    for (const l of this.activeLoops) this.audio.loop(l, false);
-    this.activeLoops.clear();
+    this.stopLoops();
     this.audio.sfx("ui-back");
     this.emitChange();
   }
@@ -524,6 +689,7 @@ export class FredRunGame {
     this.phase = "countdown";
     this.countdownT = 1.6;
     this.countdownSfx = 2;
+    this.shownCount = this.countdownShown();
     this.resumeCountdown = 1;
     this.input.enabled = true;
     this.input.releaseAll();
@@ -537,13 +703,16 @@ export class FredRunGame {
   }
 
   toMenu(): void {
+    // Pause → Hauptmenü darf den Lauf nicht verwerfen: still buchen (die Ergebnis-Karte zeigt quitRun("result"))
+    if (this.runInProgress()) this.bankRunning();
     this.input.enabled = false;
     this.input.releaseAll();
     this.result = null;
     this.phase = "menu";
     this.victory = false;
-    for (const l of this.activeLoops) this.audio.loop(l, false);
-    this.activeLoops.clear();
+    this.frozen = false;
+    this.resumeCountdown = 0;
+    this.stopLoops();
     this.audio.music.play("menu", { crossfadeSec: 0.8 });
     this.demoWorld = this.profile.world;
     void this.ensureWorld(this.demoWorld).then(() => {
@@ -595,23 +764,35 @@ export class FredRunGame {
 
     // Countdown
     if (this.phase === "countdown") {
-      this.countdownT -= dt;
-      const shown = Math.ceil(this.countdownT);
-      if (shown < this.countdownSfx && shown >= 1) {
-        this.countdownSfx = shown;
-        this.audio.sfx("countdown");
-      }
-      if (this.countdownT <= 0) {
-        this.phase = "running";
-        this.audio.sfx("go");
-        if (this.resumeCountdown) {
-          this.resumeCountdown = 0;
-        } else {
-          sim.begin();
-          this.runStartMs = performance.now();
-          this.showToast(sim.world.name, sim.world.tagline, sim.world.accent);
+      // Eingaben aus Pause/Countdown dürfen nie in den Lauf rutschen (sonst springt die Figur bei „Los“ von allein)
+      this.input.discardEdges();
+      // Der Countdown läuft nur, solange das Spiel zu sehen und das Fenster aktiv ist (Fokusverlust, Hochformat-Hinweis halten ihn an)
+      if (this.winFocused && this.winVisible && !this.portraitBlocked) {
+        this.countdownT -= dt;
+        const shown = Math.ceil(this.countdownT);
+        if (shown < this.countdownSfx && shown >= 1) {
+          this.countdownSfx = shown;
+          this.audio.sfx("countdown");
         }
-        this.emitChange();
+        const count = this.countdownShown();
+        if (count !== this.shownCount) {
+          // Zahl genau beim Wechsel melden, nicht erst mit dem nächsten FPS-Tick
+          this.shownCount = count;
+          this.emitChange();
+        }
+        if (this.countdownT <= 0) {
+          this.phase = "running";
+          this.input.discardEdges();
+          this.audio.sfx("go");
+          if (this.resumeCountdown) {
+            this.resumeCountdown = 0;
+          } else {
+            sim.begin();
+            this.runStartMs = performance.now();
+            this.showToast(sim.world.name, sim.world.tagline, sim.world.accent);
+          }
+          this.emitChange();
+        }
       }
     }
 
@@ -646,7 +827,8 @@ export class FredRunGame {
     if (active && sim.phase === "running") this.worldTick(sim, dt);
 
     // Visuelle Zeit
-    const visDt = this.phase === "paused" ? 0 : dt;
+    const still = this.phase === "paused" || this.frozen;
+    const visDt = still ? 0 : dt;
     const rawView = sim.view(this.hitstop > 0 || !simRunning ? 1 : Math.min(1, this.acc / FIXED_DT), this.prev, this.reducedMotion, this.quality, visDt);
     // Jede Welt bekommt nur Stufen im eigenen Bereich; die Zielwelt eines Tores beginnt bei Stufe 0.
     const view: ViewState = { ...rawView, stage: Math.min(rawView.stage, sim.world.stageCount - 1) };
@@ -660,7 +842,7 @@ export class FredRunGame {
     const gate = sim.nextGate;
     const nxt = gate ? this.worldRenderers.get(gate.to) ?? null : null;
     const nextView: ViewState = { ...rawView, stage: 0, stageBlend: 0, worldMeters: 0 };
-    if (this.phase !== "paused") {
+    if (!still) {
       this.guard(sim.world.id, () => cur?.update(visDt, view));
       if (nxt && gate && sim.gateBlend > 0.001) this.guard(gate.to, () => nxt.update(visDt, nextView));
       r.update(visDt, sim, sim.phase === "running" ? sim.speed : 0);
@@ -975,52 +1157,11 @@ export class FredRunGame {
     };
   }
 
+  /** Tod: Lauf buchen und die Ergebnis-Karte zeigen (ein schon gebuchter Lauf, z. B. durch „Lauf beenden“, zählt nicht doppelt). */
   private finishRun(sim: Sim): void {
-    const summary = {
-      mode: sim.cfg.mode,
-      world: sim.cfg.world,
-      character: sim.cfg.character,
-      score: sim.score,
-      meters: sim.meters,
-      coins: sim.stats.coins,
-      stomps: sim.stats.stomps,
-      nearMisses: sim.stats.nearMisses,
-      seconds: sim.time,
-      dailyKey: this.dailyKey,
-    };
-    const rec: RecordResult = recordRun(this.profile, summary);
-    this.commitProfile(rec.profile);
-    this.result = {
-      score: sim.score,
-      meters: sim.meters,
-      coins: sim.stats.coins,
-      gems: sim.stats.gems,
-      stomps: sim.stats.stomps,
-      nearMisses: sim.stats.nearMisses,
-      maxCombo: sim.stats.maxCombo,
-      dashes: sim.stats.dashes,
-      seconds: sim.time,
-      deathCause: sim.deathCause,
-      world: sim.cfg.world,
-      mode: sim.cfg.mode,
-      character: sim.cfg.character,
-      isNewBest: rec.isNewBest && sim.score > 0,
-      rank: rec.rank,
-      previousBest: rec.previousBest,
-      worldsVisited: sim.stats.worldsVisited,
-      top: rec.profile.top[rec.key] ?? [],
-      board: rec.key,
-      runId: newRunId(),
-    };
-    this.victory = this.result.isNewBest;
-    this.phase = "gameover";
-    this.input.enabled = false;
-    this.input.releaseAll();
-    for (const l of this.activeLoops) this.audio.loop(l, false);
-    this.activeLoops.clear();
-    this.audio.sfx(this.result.isNewBest ? "highscore" : "gameover");
-    this.audio.music.stop(1.4);
-    this.emitChange();
+    if (this.runBanked) return;
+    const { summary, rec } = this.commitRun(summarizeRun(sim, { dailyKey: this.dailyKey }));
+    this.showResult(toRunResult(summary, rec, newRunId()), false);
   }
 
   private trackPerformance(rawDt: number): void {
@@ -1074,6 +1215,10 @@ export class FredRunGame {
     this.bot = cfg.bot === false ? null : new Bot();
     this.demo = cfg.live === true;
     this.phase = "running";
+    this.runBanked = false;
+    this.frozen = false;
+    this.resumeCountdown = 0;
+    this.result = null;
     this.prev = { dist: sim.dist, hgt: 0 };
     this.renderer?.particles.clear();
     this.input.enabled = true;
@@ -1141,17 +1286,4 @@ export class FredRunGame {
   get logicalSize(): { w: number; h: number; playerX: number } {
     return { w: VIEW_W, h: VIEW_H, playerX: PLAYER_SX };
   }
-}
-
-/** Eindeutige Lauf-ID (UUID v4) – macht Einreichungen an die globale Bestenliste idempotent. */
-function newRunId(): string {
-  const c = typeof globalThis.crypto !== "undefined" ? globalThis.crypto : null;
-  if (c && typeof c.randomUUID === "function") return c.randomUUID();
-  const b = new Uint8Array(16);
-  if (c && typeof c.getRandomValues === "function") c.getRandomValues(b);
-  else for (let i = 0; i < 16; i += 1) b[i] = Math.floor(Math.random() * 256);
-  b[6] = (b[6] & 0x0f) | 0x40;
-  b[8] = (b[8] & 0x3f) | 0x80;
-  const h = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }

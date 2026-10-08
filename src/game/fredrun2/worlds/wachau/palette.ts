@@ -138,8 +138,8 @@ export interface Tint {
   flat?: { color: string; a: number };
 }
 
-/** Getönte Kopie (Alpha bleibt erhalten): Multiplizieren → Dunst → Schatten. */
-export function tintCanvas(src: HTMLCanvasElement, t: Tint, flipY = false): HTMLCanvasElement {
+/** Getönte Kopie (Alpha bleibt erhalten): Multiplizieren → Dunst → Schatten. Mit `reuse` (gleiche Größe) wird diese Fläche neu bemalt. */
+export function tintCanvas(src: HTMLCanvasElement, t: Tint, flipY = false, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
   return paint(src.width, src.height, (g, w, h) => {
     if (flipY) {
       g.translate(0, h);
@@ -181,7 +181,7 @@ export function tintCanvas(src: HTMLCanvasElement, t: Tint, flipY = false): HTML
       g.fillStyle = grd;
       g.fillRect(0, y0, w, h - y0);
     }
-  });
+  }, reuse);
 }
 
 export function withA(hex: string, a: number): string {
@@ -217,6 +217,11 @@ export function layerTint(stage: number, hazeTop: number, hazeBottom: number, sh
 export class SpriteCache {
   private map = new Map<string, HTMLCanvasElement>();
   constructor(private readonly max = 48) {}
+
+  /** Liegt der Eintrag vor? (ohne die LRU-Reihenfolge zu ändern) */
+  has(key: string): boolean {
+    return this.map.has(key);
+  }
 
   get(key: string, make: () => HTMLCanvasElement): HTMLCanvasElement {
     let c = this.map.get(key);

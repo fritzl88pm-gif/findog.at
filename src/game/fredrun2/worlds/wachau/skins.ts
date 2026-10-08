@@ -5,6 +5,7 @@
  * Hindernisse (wachau-cask/-crates/-wall/-branch/-vines) kommen als eng zugeschnittene Silhouetten, einmal pro Zielgröße
  * gebacken (Pixelfaktor `pk`), mit prozeduralem Fallback ohne Props.
  */
+import { VIEW_W } from "../../constants";
 import type { Ent, PropLibrary, ViewState } from "../../types";
 import { glowAt, glowSprite, paint, rr, softSprite, type Ctx2D } from "../shared-b/canvas";
 import { mulberry } from "../shared-b/color";
@@ -35,6 +36,9 @@ export interface SkinCtx {
 
 type Variants = Array<HTMLCanvasElement | undefined>;
 
+/** Durchmesser der rollenden Weinfässer (px, gerade): 66 … 76 in den Mustern (`barrel(c, D, vx, size)`); Test in wachau.test.ts */
+export const WACHAU_BARREL_SIZES = [66, 68, 70, 72, 74, 76] as const;
+
 /** Stufen-Varianten eines Sprites: Entitäten bekommen ~55 % des Szenenlichts */
 function entTint(src: HTMLCanvasElement, stage: number): HTMLCanvasElement {
   const L = STAGES[stage].light;
@@ -44,7 +48,7 @@ function entTint(src: HTMLCanvasElement, stage: number): HTMLCanvasElement {
 
 export class WachauSkins {
   props: PropLibrary | null = null;
-  private cache = new SpriteCache(64);
+  private cache = new SpriteCache(96);
   private variants = new Map<string, Variants>();
   readonly glowWarm = glowSprite("#ffc46a", 0.2);
   readonly glowGold = glowSprite("#ffe08a", 0.22);
@@ -59,6 +63,33 @@ export class WachauSkins {
   static readonly APRICOT = 48;
   /** Pixelfaktor der Zeichenfläche (1 … 2): Hindernis-Sprites werden dafür vorgerendert */
   private pk = 1;
+  /** Bakes im laufenden Frame (siehe `sprite`); `beginFrame` setzt zurück */
+  private baked = 0;
+
+  /** Angewandte Skala (Pixelfaktor) der Hindernis-Sprites */
+  get pixelScale(): number {
+    return this.pk;
+  }
+
+  /** Neuer Frame: Bake-Zähler zurücksetzen (aus `WachauRenderer.update`) */
+  beginFrame(): void {
+    this.baked = 0;
+  }
+
+  /**
+   * Sprite aus dem Cache oder frisch gebacken. Maße wie Kistengröße, Floßbreite oder Astlänge variieren mit dem Muster, die
+   * Sprites lassen sich daher nicht vorbacken und entstehen beim ersten Zeichnen. Steht die Entität dann noch ganz rechts
+   * außerhalb des Bildes (`x` ≥ VIEW_W; die Engine zeichnet sie schon 260 px davor), wird höchstens EIN Bake je Frame
+   * ausgeführt, die übrigen warten einen Frame (Rückgabe null, unsichtbar): so entsteht kein Mehrfach-Bake-Ruckler. Sichtbare
+   * Sprites werden immer sofort gebacken.
+   */
+  private sprite(key: string, make: () => HTMLCanvasElement, x: number): HTMLCanvasElement | null {
+    if (!this.cache.has(key)) {
+      if (x >= VIEW_W && this.baked > 0) return null;
+      this.baked += 1;
+    }
+    return this.cache.get(key, make);
+  }
 
   setProps(p: PropLibrary): void {
     this.props = p;
@@ -81,8 +112,9 @@ export class WachauSkins {
    * Sprite nach Schlüssel (vorgerendert) in Stufen-Tönung; blendet in die nächste Stufe über.
    * `sc` = Pixelfaktor, mit dem das Sprite gebacken wurde (Zeichengröße = Canvas / sc).
    */
-  private drawStaged(g: Ctx2D, key: string, make: () => HTMLCanvasElement, x: number, y: number, k: SkinCtx, alpha = 1, sc = 1): HTMLCanvasElement {
-    const base = this.cache.get(key, make);
+  private drawStaged(g: Ctx2D, key: string, make: () => HTMLCanvasElement, x: number, y: number, k: SkinCtx, alpha = 1, sc = 1): HTMLCanvasElement | null {
+    const base = this.sprite(key, make, x);
+    if (!base) return null;
     let v = this.variants.get(key);
     if (!v || v.length === 0) {
       v = [];
@@ -93,7 +125,12 @@ export class WachauSkins {
       }
     }
     const st = k.stage;
-    const a = v[st] ?? this.tinted(v, base, st);
+    let a = v[st];
+    if (!a) {
+      if (x >= VIEW_W && this.baked > 0) return null;
+      this.baked += 1;
+      a = this.tinted(v, base, st);
+    }
     const pa = g.globalAlpha;
     g.globalAlpha = pa * alpha;
     const px = Math.round(x * sc) / sc;
@@ -102,7 +139,15 @@ export class WachauSkins {
     const dh = a.height / sc;
     g.drawImage(a, px, py, dw, dh);
     if (k.blend > 0.02 && st < MAX_STAGE) {
-      const b = v[st + 1] ?? this.tinted(v, base, st + 1);
+      let b = v[st + 1];
+      if (!b) {
+        if (x >= VIEW_W && this.baked > 0) {
+          g.globalAlpha = pa;
+          return base;
+        }
+        this.baked += 1;
+        b = this.tinted(v, base, st + 1);
+      }
       g.globalAlpha = pa * alpha * k.blend;
       g.drawImage(b, px, py, dw, dh);
     }
@@ -118,15 +163,17 @@ export class WachauSkins {
     return t;
   }
 
-  private rimOf(key: string, base: HTMLCanvasElement, color: string, sc = 1): HTMLCanvasElement {
-    return this.cache.get(`${key}|rim`, () => silhouetteGlow(base, color, 10 * sc, 12 * sc));
+  private rimOf(key: string, base: HTMLCanvasElement, color: string, x: number, sc = 1): HTMLCanvasElement | null {
+    return this.sprite(`${key}|rim`, () => silhouetteGlow(base, color, 10 * sc, 12 * sc), x);
   }
 
-  /** Warmes Rimlight hinter Gefahren (nachts stärker) */
-  private rim(g: Ctx2D, key: string, base: HTMLCanvasElement, x: number, y: number, k: SkinCtx, color = "#ffb45a", strength = 1, sc = 1): void {
+  /** Warmes Rimlight hinter Gefahren (nachts stärker); `base` null = Sprite wartet noch auf seinen Bake (nichts zu zeichnen) */
+  private rim(g: Ctx2D, key: string, base: HTMLCanvasElement | null, x: number, y: number, k: SkinCtx, color = "#ffb45a", strength = 1, sc = 1): void {
+    if (!base) return;
     const a = (0.18 + 0.62 * k.night) * strength;
     if (a < 0.03 || k.quality === 0) return;
-    const r = this.rimOf(key, base, color, sc);
+    const r = this.rimOf(key, base, color, x, sc);
+    if (!r) return;
     const pa = g.globalAlpha;
     const op = g.globalCompositeOperation;
     g.globalCompositeOperation = "lighter";
@@ -134,6 +181,31 @@ export class WachauSkins {
     g.drawImage(r, Math.round(x * sc) / sc - 12, Math.round(y * sc) / sc - 12, r.width / sc, r.height / sc);
     g.globalCompositeOperation = op;
     g.globalAlpha = pa;
+  }
+
+  /**
+   * Vorback-Aufträge (jeder klein, einzeln aufrufbar) für Sprites mit festen Maßen: Marillen-/Trauben-Streifen und die
+   * sechs Fassgrößen (Durchmesser 66 … 76, gerade; so groß sind alle Fässer der Muster). Zeichnen und Vorbacken teilen die
+   * Rechnung (`sprite`/`rimOf` mit denselben Schlüsseln) → derselbe Cache-Eintrag. Alles andere (Kisten, Mauern, Flöße,
+   * Äste …) nimmt seine Maße von Muster und Tempo und entsteht beim ersten Zeichnen (siehe `sprite`).
+   */
+  warmJobs(): Array<() => void> {
+    const jobs: Array<() => void> = [
+      () => {
+        this.apricotStrip ??= this.buildApricots();
+        this.grapeStrip ??= this.buildGrapes();
+      },
+    ];
+    for (const d of WACHAU_BARREL_SIZES) {
+      jobs.push(() => {
+        const key = `barrel:${d}`;
+        this.cache.get(key, () => this.barrelHead(d));
+        this.cache.get(`${key}|sh`, () => this.barrelShade(d));
+        const body = this.cache.get(`${key}|b`, () => this.barrelBody(d));
+        this.rimOf(`${key}|b`, body, "#ffae4a", -1);
+      });
+    }
+    return jobs;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -765,11 +837,12 @@ export class WachauSkins {
     let cy = sy + e.h - r;
     if (sunk) cy = k.waterY + 4 + (k.reduced ? 0 : Math.sin(v.time * 2.5 + e.id) * 2);
     const key = `barrel:${d}`;
-    const head = this.cache.get(key, () => this.barrelHead(d));
-    const shade = this.cache.get(`${key}|sh`, () => this.barrelShade(d));
     const oy = Math.round(d * 0.3);
     const bodyX = cx - r - 2;
     const bodyY = cy - r - oy - 2;
+    const head = this.sprite(key, () => this.barrelHead(d), bodyX);
+    const shade = this.sprite(`${key}|sh`, () => this.barrelShade(d), bodyX);
+    if (!head || !shade) return; // wartet (noch außerhalb des Bildes) auf den Bake im nächsten Frame
     const air = gy - (sy + e.h);
     // Bodenschatten (wächst beim Herabfallen)
     if (!sunk) {
@@ -1357,8 +1430,9 @@ export class WachauSkins {
   }
 
   drawGateArch(g: Ctx2D, e: Ent, sx: number, sy: number, v: ViewState, k: SkinCtx): void {
-    const spr = this.cache.get("gate", () => this.gateSprite());
+    const spr = this.sprite("gate", () => this.gateSprite(), sx);
     const cx = sx + e.w / 2;
+    if (!spr) return;
     const bottom = sy + e.h;
     g.drawImage(spr, Math.round(cx - 150), Math.round(bottom - 500));
     const flick = k.reduced ? 1 : 0.85 + 0.15 * Math.sin(v.time * 9) * Math.sin(v.time * 4.3);

@@ -2,9 +2,13 @@
 import { FredRunGame, type AudioLike } from "./game";
 
 const noop = (): void => {};
+/** Aufgerufene Effektnamen (QA: Zähl-Töne, Jingles prüfen); begrenzt, damit lange Läufe nichts anhäufen. */
+const sfxLog: string[] = [];
 const nullAudio: AudioLike = {
   unlock: async () => {},
-  sfx: noop,
+  sfx: (name) => {
+    if (sfxLog.length < 500) sfxLog.push(name);
+  },
   loop: noop,
   music: { play: noop, setIntensity: noop, stop: noop },
   setMasterVolume: noop,
@@ -20,7 +24,7 @@ const nullAudio: AudioLike = {
 
 declare global {
   interface Window {
-    __fr2: { game: FredRunGame };
+    __fr2: { game: FredRunGame; sfxLog: string[] };
   }
 }
 
@@ -30,7 +34,7 @@ async function main(): Promise<void> {
   const game = new FredRunGame({ canvas, container, audio: nullAudio, onChange: noop });
   game.manual = true;
   await game.init();
-  window.__fr2 = { game };
+  window.__fr2 = { game, sfxLog };
   document.title = "ready";
 }
 

@@ -6,7 +6,7 @@
  * Ebenen: Himmel (0.02) · Ferne Stadt (0.06) · Fernschnee · Mittelgrund Markt/Eisbahn/Krampusmarkt (0.4) · Mittelschnee ·
  * Tannen (0.85) · Boden (1.0) · Entitäten · Nahschnee, Eisspur, Atem, Krampus, Funken, Lichterkette.
  */
-import { PLAYER_SX } from "../../constants";
+import { PLAYER_SX, VIEW_W } from "../../constants";
 import type { AssetLoader, Ent, ViewState, WorldRenderer } from "../../types";
 import { bigGlow, blitTiled, paint, type Ctx2D } from "../shared-b/canvas";
 import { mod, mulberry, stageVal } from "../shared-b/color";
@@ -39,7 +39,12 @@ export const WINTER_PROPS = [
 
 /** Lichterkette am oberen Rand: 1 in Marktstufen, gedämpft im Sturm, aus im Krampuslauf */
 const GARLAND = [1, 1, 1, 0.4, 0];
-const STAGE_METERS = 300;
+/** Meter je Stimmungsstufe (wie WORLD_WINTER.stageMeters; Test in winter.test.ts hält beides gleich) */
+export const WINTER_STAGE_METERS = 300;
+
+/** x ab dem eine Entität als „noch außerhalb des Bildes“ gilt: Sprites reichen bis ca. 40 px links über die Trefferfläche hinaus */
+const OFFSCREEN_X = VIEW_W + 40;
+const STAGE_METERS = WINTER_STAGE_METERS;
 const NO_PROPS = { has: () => false, preload: async () => undefined, draw: () => false, cell: () => null };
 
 interface Bulb {
@@ -91,8 +96,9 @@ export class WinterRenderer implements WorldRenderer {
     }
   }
 
+  /** Skalenwechsel: idempotent – nur eine echte Änderung der Dichte verwirft die gebackenen Sprites (siehe SpriteCache.setScale) */
   resize(dpr: number): void {
-    this.env.spr.reset(dpr);
+    this.env.spr.setScale(dpr);
   }
 
   private stageView(v: ViewState): StageView {
@@ -105,12 +111,13 @@ export class WinterRenderer implements WorldRenderer {
   // --- Update ----------------------------------------------------------------------------------------------
 
   update(dt: number, v: ViewState): void {
+    this.env.spr.baked = 0;
     const sv = this.stageView(v);
     const s = sv.stage + sv.blend;
     this.env.s = s;
     this.env.night = stageVal(NIGHT, s);
     const progress = sat((v.worldMeters - sv.stage * STAGE_METERS) / STAGE_METERS);
-    this.back.prepare(sv.stage, progress);
+    this.back.prepare(sv.stage, progress, sv.blend);
     const gust = v.vars.gust ?? 0;
     const storm = stageVal(VEIL, s);
     this.snow.cool = sat(storm * 1.1);
@@ -234,7 +241,14 @@ export class WinterRenderer implements WorldRenderer {
       if (e.skin === "ice") this.back.drawIceZone(g, v.dist, v.groundY, sx, e.w, this.stageView(v), v.time, v.reducedMotion, v.quality, e.id);
       return true;
     }
-    return drawWinterSkin(g, this.env, e, sx, sy, v);
+    // noch ganz außerhalb des Bildes: höchstens ein Sprite-Bake je Frame (siehe SpriteCache.baked)
+    const spr = this.env.spr;
+    spr.off = sx >= OFFSCREEN_X;
+    try {
+      return drawWinterSkin(g, this.env, e, sx, sy, v);
+    } finally {
+      spr.off = false;
+    }
   }
 
   // --- Vordergrund -----------------------------------------------------------------------------------------

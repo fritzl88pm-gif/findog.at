@@ -8,7 +8,8 @@
  */
 import { withRev } from "../../asset-rev";
 import { makeCanvas } from "../../draw-utils";
-import { paint, type Ctx2D } from "../shared-b/canvas";
+import { yieldToMain } from "../../yield";
+import { paint, touchCanvas, type Ctx2D } from "../shared-b/canvas";
 import { CHANDELIERS, FAR_H, FAR_W } from "./glints";
 import { coneSprite } from "./fx";
 import { COLORS, DARK, FAR_URLS, GROUND_KIND, GROUND_URLS, MAX_STAGE, MID_COLUMNS_URL, MID_TABLES_URL, NEAR_URL } from "./stages";
@@ -18,8 +19,23 @@ export const NEAR_H = 200;
 export const GROUND_TILE_W = 736;
 export const GROUND_TILE_H = 130;
 
-/** Bild ohne globalen Cache laden (Referenz kann nach dem Vorrendern verworfen werden). */
-export function loadPlain(url: string): Promise<HTMLImageElement | null> {
+/** Geladenes Quellbild: `ImageBitmap` (bereits dekodiert) oder – Rückfall – `HTMLImageElement` */
+export type Pic = HTMLImageElement | ImageBitmap;
+
+/** Bild als `ImageBitmap` laden: Abruf und Dekodierung laufen außerhalb des Hauptthreads, das erste Zeichnen kostet nichts mehr */
+async function loadBitmap(url: string): Promise<ImageBitmap | null> {
+  if (typeof createImageBitmap !== "function" || typeof fetch !== "function") return null;
+  try {
+    const res = await fetch(withRev(url));
+    if (!res.ok) return null;
+    return await createImageBitmap(await res.blob());
+  } catch {
+    return null; // Netzfehler oder nicht dekodierbar → Rückfall auf <img>
+  }
+}
+
+/** Rückfall: Bild über ein <img> laden und dekodieren (das erste Zeichnen in eine Fläche dekodiert dann nochmals, ca. 45 ms bei 1×) */
+function loadElement(url: string): Promise<HTMLImageElement | null> {
   if (typeof Image === "undefined") return Promise.resolve(null);
   return new Promise((resolve) => {
     const img = new Image();
@@ -35,8 +51,42 @@ export function loadPlain(url: string): Promise<HTMLImageElement | null> {
   });
 }
 
-function release(img: HTMLImageElement | null): void {
-  if (img) img.src = "";
+/**
+ * Bild ohne globalen Cache laden (Referenz kann nach dem Vorrendern verworfen werden). Bevorzugt als `ImageBitmap`: ein
+ * <img> dekodiert beim ersten Zeichnen in eine Fläche (auch nach `decode()`) nochmals auf dem Hauptthread – bei den großen
+ * Wandbildern 150–250 ms Long Task bei 4× gedrosselter CPU, nicht in Schritte teilbar. Das Bitmap ist schon dekodiert (der
+ * Abruf läuft über `fetch`, die Dekodierung außerhalb des Hauptthreads). 1:1 gezeichnet sind die Pixel dieselben; beim
+ * Verkleinern (Fernebene, Vorhang) nimmt die Fläche für Bitmaps ein anderes Resampling als für <img>: mittlere Abweichung
+ * 0,5 von 255 Stufen, höchstens 12 an harten Kanten.
+ */
+export async function loadPlain(url: string): Promise<Pic | null> {
+  return (await loadBitmap(url)) ?? loadElement(url);
+}
+
+function release(img: Pic | null): void {
+  if (!img) return;
+  if ("close" in img) img.close(); // ImageBitmap: Pixelspeicher sofort freigeben
+  else img.src = "";
+}
+
+/**
+ * Generator in Schritten ausführen und zwischen den Schritten den Hauptthread freigeben (Welt-Laden ohne Long Task);
+ * das Ergebnis ist dasselbe wie bei einem Durchlauf am Stück.
+ */
+async function runSteps<T>(it: Generator<void, T, void>): Promise<T> {
+  for (;;) {
+    const r = it.next();
+    if (r.done) return r.value;
+    await yieldToMain();
+  }
+}
+
+/** Generator am Stück ausführen (Tests, Fallbacks) */
+function runSync<T>(it: Generator<void, T, void>): T {
+  for (;;) {
+    const r = it.next();
+    if (r.done) return r.value;
+  }
 }
 
 // --- Fernebene -------------------------------------------------------------------------------------------------------------
@@ -45,45 +95,71 @@ function release(img: HTMLImageElement | null): void {
  * Fernebene auf 2100×720 vorrendern: leicht gedämpft, unten (Bodenspiegelung) ruhiger, in den Logen/der Polonaise abgedunkelt,
  * mit Lichtkegeln unter den Kronleuchtern (statisch eingebacken – spart Füllrate pro Frame).
  */
-export function bakeFar(img: HTMLImageElement, stage: number): HTMLCanvasElement {
+export function* bakeFarSteps(img: Pic, stage: number): Generator<void, HTMLCanvasElement, void> {
   const st = Math.min(stage, MAX_STAGE);
-  return paint(FAR_W, FAR_H, (g, w, h) => {
-    g.imageSmoothingQuality = "high";
+  const c = paint(FAR_W, FAR_H, () => undefined);
+  const g = c.getContext("2d");
+  if (!g) return c;
+  const w = FAR_W;
+  const h = FAR_H;
+  // Das Skalieren des großen Bildes ist der teuerste Teil (ca. 60 ms): in vier senkrechten Bändern zeichnen (Beschnitt statt
+  // Quellausschnitt → pixelgleich zum Zeichnen am Stück) und jedes Band gleich rastern, nicht erst im ersten Frame
+  g.imageSmoothingQuality = "high";
+  const band = w / FAR_BANDS;
+  for (let i = 0; i < FAR_BANDS; i += 1) {
+    g.save();
+    g.beginPath();
+    g.rect(i * band, 0, band, h);
+    g.clip();
     g.drawImage(img, 0, 0, w, h);
-    // Dunst: die Wand tritt zurück
-    const haze = g.createLinearGradient(0, 0, 0, h);
-    const c = HAZE[st];
-    haze.addColorStop(0, `rgba(${c},0.05)`);
-    haze.addColorStop(0.55, `rgba(${c},0.10)`);
-    haze.addColorStop(1, `rgba(${c},0.22)`);
-    g.fillStyle = haze;
+    g.restore();
+    touchCanvas(c);
+    yield;
+  }
+  // Dunst: die Wand tritt zurück
+  const haze = g.createLinearGradient(0, 0, 0, h);
+  const hc = HAZE[st];
+  haze.addColorStop(0, `rgba(${hc},0.05)`);
+  haze.addColorStop(0.55, `rgba(${hc},0.10)`);
+  haze.addColorStop(1, `rgba(${hc},0.22)`);
+  g.fillStyle = haze;
+  g.fillRect(0, 0, w, h);
+  // Saalabdunklung der Stufe (Logen dramatisch, Polonaise dämmrig)
+  if (DARK[st] > 0.02) {
+    g.fillStyle = `rgba(8,0,4,${Math.min(0.6, DARK[st] * 1.5)})`;
     g.fillRect(0, 0, w, h);
-    // Saalabdunklung der Stufe (Logen dramatisch, Polonaise dämmrig)
-    if (DARK[st] > 0.02) {
-      g.fillStyle = `rgba(8,0,4,${Math.min(0.6, DARK[st] * 1.5)})`;
-      g.fillRect(0, 0, w, h);
+  }
+  // Laufbereich beruhigen (Boden dunkler, Hindernisse heben sich ab)
+  const floor = g.createLinearGradient(0, 470, 0, 640);
+  floor.addColorStop(0, "rgba(12,4,4,0)");
+  floor.addColorStop(1, "rgba(12,4,4,0.36)");
+  g.fillStyle = floor;
+  g.fillRect(0, 470, w, 250);
+  touchCanvas(c);
+  yield;
+  // Lichtkegel unter den Kronleuchtern
+  const cone = coneSprite(300, 540, COLORS.css(st).cone);
+  g.globalCompositeOperation = "lighter";
+  g.globalAlpha = 0.2;
+  for (const [cx, cy] of CHANDELIERS[st]) {
+    for (const off of [0, -w, w]) {
+      const x = cx + off - 150;
+      if (x > w || x + 300 < 0) continue;
+      g.drawImage(cone, x, cy + 24);
     }
-    // Laufbereich beruhigen (Boden dunkler, Hindernisse heben sich ab)
-    const floor = g.createLinearGradient(0, 470, 0, 640);
-    floor.addColorStop(0, "rgba(12,4,4,0)");
-    floor.addColorStop(1, "rgba(12,4,4,0.36)");
-    g.fillStyle = floor;
-    g.fillRect(0, 470, w, 250);
-    // Lichtkegel unter den Kronleuchtern
-    const cone = coneSprite(300, 540, COLORS.css(st).cone);
-    g.globalCompositeOperation = "lighter";
-    g.globalAlpha = 0.2;
-    for (const [cx, cy] of CHANDELIERS[st]) {
-      for (const off of [0, -w, w]) {
-        const x = cx + off - 150;
-        if (x > w || x + 300 < 0) continue;
-        g.drawImage(cone, x, cy + 24);
-      }
-    }
-    g.globalAlpha = 1;
-    g.globalCompositeOperation = "source-over";
-  });
+  }
+  g.globalAlpha = 1;
+  g.globalCompositeOperation = "source-over";
+  touchCanvas(c);
+  return c;
 }
+
+/** Fernebene am Stück (Tests, Fallbacks); bitgleich zu `bakeFarSteps` */
+export function bakeFar(img: Pic, stage: number): HTMLCanvasElement {
+  return runSync(bakeFarSteps(img, stage));
+}
+/** Senkrechte Bänder, in denen `bakeFarSteps` das Bild zeichnet */
+const FAR_BANDS = 4;
 const HAZE = ["255,236,205", "255,205,130", "150,20,20", "205,222,255", "60,30,110"];
 
 /** Lazy geladene Fernebenen mit Speicherbegrenzung (aktuelle + nächste Stufe). */
@@ -113,12 +189,18 @@ export class FarLayers {
 
   async ensure(stage: number): Promise<void> {
     if (stage < 0 || stage > MAX_STAGE || this.tiles[stage] || this.loading.has(stage) || this.disposed) return;
+    // `loading` gilt bis das fertige Bild eingehängt ist (der Bake läuft in Schritten): sonst finge `update` ein zweites an
     this.loading.add(stage);
-    const img = await loadPlain(FAR_URLS[stage]);
-    this.loading.delete(stage);
-    if (!img || this.disposed) return;
-    this.tiles[stage] = bakeFar(img, stage);
-    release(img);
+    try {
+      const img = await loadPlain(FAR_URLS[stage]);
+      if (this.disposed) release(img);
+      if (!img || this.disposed) return;
+      const tile = await runSteps(bakeFarSteps(img, stage));
+      release(img);
+      if (!this.disposed) this.tiles[stage] = tile;
+    } finally {
+      this.loading.delete(stage);
+    }
   }
 
   /** Nur Stufen `a` und `b` behalten, den Rest freigeben. */
@@ -186,18 +268,36 @@ function occupancy(c: HTMLCanvasElement): { top: number; spans: Array<[number, n
   }
 }
 
+/** Waagerechte Bänder, in denen `cleanSeamSteps` das Quellbild zeichnet */
+const SEAM_BANDS = 3;
+/** Breite des Randstreifens (Spalten), in dem die Geister gelöscht werden */
+const SEAM_W = 72;
+
 /**
  * Die gemalten Kacheln haben an der Naht halbtransparente „Geister“ (Säulen-/Stuhlreste vom Überblenden). Am linken Rand
  * werden alle Pixel mit Alpha < 200 gelöscht; die volldeckenden Objekte bleiben unberührt.
+ * Das Zeichnen des ganzen 2240×768-Bildes lief früher gerastert im ersten `getImageData` (ca. 230–250 ms bei 4× CPU am Stück).
+ * Jetzt in waagerechten Bändern zeichnen (Beschnitt statt Quellausschnitt → pixelgleich zum Zeichnen am Stück), jedes Band
+ * gleich rastern und dazwischen die Kontrolle abgeben; gelesen werden danach nur die 72 Randspalten. Bei einem `ImageBitmap`
+ * kostet ein Band ca. 2–4 ms (4× CPU); beim <img>-Rückfall steckt im ersten Band das Dekodieren (150–250 ms bei 4×).
  */
-function cleanSeam(img: HTMLImageElement): HTMLImageElement | HTMLCanvasElement {
+function* cleanSeamSteps(img: Pic): Generator<void, Pic | HTMLCanvasElement, void> {
   try {
     const c = makeCanvas(img.width, img.height);
     const g = c.getContext("2d", { willReadFrequently: true });
     if (!g) return img;
-    g.drawImage(img, 0, 0);
-    const W = 72;
-    const d = g.getImageData(0, 0, W, img.height);
+    const bh = Math.ceil(img.height / SEAM_BANDS);
+    for (let i = 0; i < SEAM_BANDS; i += 1) {
+      g.save();
+      g.beginPath();
+      g.rect(0, i * bh, img.width, bh);
+      g.clip();
+      g.drawImage(img, 0, 0);
+      g.restore();
+      touchCanvas(c);
+      yield;
+    }
+    const d = g.getImageData(0, 0, Math.min(SEAM_W, img.width), img.height);
     for (let i = 3; i < d.data.length; i += 4) if (d.data[i] < 200) d.data[i] = 0;
     g.putImageData(d, 0, 0);
     return c;
@@ -211,8 +311,8 @@ function cleanSeam(img: HTMLImageElement): HTMLImageElement | HTMLCanvasElement 
  * gedämpfte Farben und ein Schleier über dem Fußbereich sorgen dafür, dass Vasen, Seile und Tafeln im Hintergrund nie mit den
  * scharfen, hell gerandeten Hindernissen verwechselt werden.
  */
-export function bakeMid(src: HTMLImageElement, contentBottom: number, tone: string, a: number): MidLayer {
-  const img = cleanSeam(src);
+export function* bakeMidSteps(src: Pic, contentBottom: number, tone: string, a: number): Generator<void, MidLayer, void> {
+  const img = yield* cleanSeamSteps(src);
   const w = Math.round(img.width * MID_SCALE);
   const h = Math.round(img.height * MID_SCALE);
   const PAD = 24;
@@ -226,9 +326,32 @@ export function bakeMid(src: HTMLImageElement, contentBottom: number, tone: stri
     } catch {
       /* Filter nicht unterstützt: ohne Unschärfe weiter */
     }
-    for (const dx of [-w, 0, w]) wg.drawImage(img, dx + PAD, 0, w, h);
+    // Der Weichzeichner läuft beim Rastern und ist der teuerste Teil: drei volle Kopien kosten je 20–30 ms bei 1× (80–150 ms bei 4×),
+    // auch die zwei Seitenkopien, von denen nur ein schmaler Streifen sichtbar wird. Je Teilstück ein Schritt: die Seitenkopien auf
+    // ihren Randstreifen beschnitten (der Weichzeichner-Saum reicht ca. 5 px ins Bild, daher 8 px Zugabe), die mittlere in zwei
+    // waagerechte Hälften (je ca. 45–60 ms bei 4×). Das sichtbare Ergebnis ist pixelgleich zu drei vollen Kopien (gemessen);
+    // mit drei oder mehr Bändern weicht es um Rundungsrauschen ab, daher genau zwei.
+    const W = w + PAD * 2;
+    const E = PAD + 8;
+    const half = h >> 1;
+    for (const [dx, cx, cy, cw, ch] of [
+      [-w, 0, 0, E, h],
+      [0, 0, 0, W, half],
+      [0, 0, half, W, h - half],
+      [w, W - E, 0, E, h],
+    ]) {
+      wg.save();
+      wg.beginPath();
+      wg.rect(cx, cy, cw, ch);
+      wg.clip();
+      wg.drawImage(img, dx + PAD, 0, w, h);
+      wg.restore();
+      touchCanvas(wide);
+      yield;
+    }
     wg.filter = "none";
   }
+  yield;
   const c = paint(w, h, (g) => {
     g.drawImage(wide, PAD, 0, w, h, 0, 0, w, h);
     g.globalCompositeOperation = "source-atop";
@@ -249,6 +372,8 @@ export function bakeMid(src: HTMLImageElement, contentBottom: number, tone: stri
     g.fillStyle = fade;
     g.fillRect(0, foot - 110, w, h - foot + 114);
   });
+  touchCanvas(c); // Verläufe und Ausblendung jetzt rastern, nicht erst im ersten Frame
+  yield;
   const occ = occupancy(c);
   const top = Math.min(occ.top, Math.floor(contentBottom * MID_SCALE) - 8);
   const crop = makeCanvas(w, h - top);
@@ -256,14 +381,21 @@ export function bakeMid(src: HTMLImageElement, contentBottom: number, tone: stri
   return { c: crop, w, h: h - top, footY: contentBottom * MID_SCALE - top, spans: occ.spans };
 }
 
+/** Mittelgrund am Stück (Tests, Fallbacks) */
+export function bakeMid(src: Pic, contentBottom: number, tone: string, a: number): MidLayer {
+  return runSync(bakeMidSteps(src, contentBottom, tone, a));
+}
+
 export const COLUMNS_BOTTOM = 742;
 export const TABLES_BOTTOM = 735;
 
 export async function loadMids(): Promise<{ cols: MidLayer | null; tabs: MidLayer | null }> {
   const [ci, ti] = await Promise.all([loadPlain(MID_COLUMNS_URL), loadPlain(MID_TABLES_URL)]);
-  const cols = ci ? bakeMid(ci, COLUMNS_BOTTOM, "56,20,24", 0.34) : null;
-  const tabs = ti ? bakeMid(ti, TABLES_BOTTOM, "56,20,24", 0.3) : null;
+  // jede Schicht in Schritten, dazwischen den Hauptthread freigeben (kein Long Task)
+  const cols = ci ? await runSteps(bakeMidSteps(ci, COLUMNS_BOTTOM, "56,20,24", 0.34)) : null;
   release(ci);
+  await yieldToMain();
+  const tabs = ti ? await runSteps(bakeMidSteps(ti, TABLES_BOTTOM, "56,20,24", 0.3)) : null;
   release(ti);
   return { cols, tabs };
 }
@@ -283,20 +415,37 @@ export async function loadNear(): Promise<NearLayer | null> {
   const k = FAR_H / img.height;
   const w = Math.round(img.width * k);
   const srcH = Math.round(NEAR_H / k);
-  const c = paint(w, NEAR_H, (g, ww, hh) => {
-    g.imageSmoothingQuality = "high";
+  const c = paint(w, NEAR_H, () => undefined);
+  const g = c.getContext("2d");
+  if (!g) return null;
+  const ww = c.width;
+  const hh = c.height;
+  // Das Skalieren des Bildes in drei senkrechten Bändern (Beschnitt statt Quellausschnitt → pixelgleich zum Zeichnen am Stück),
+  // jedes Band gleich gerastert und mit Pause dazwischen (kein Long Task)
+  g.imageSmoothingQuality = "high";
+  const band = ww / 3;
+  for (let i = 0; i < 3; i += 1) {
+    g.save();
+    g.beginPath();
+    g.rect(i * band, 0, band, hh);
+    g.clip();
     g.drawImage(img, 0, 0, img.width, srcH, 0, 0, ww, hh);
-    // unterer Rand blendet aus (Seitenvorhänge enden weich)
-    g.globalCompositeOperation = "destination-out";
-    const fade = g.createLinearGradient(0, hh * 0.55, 0, hh);
-    fade.addColorStop(0, "rgba(0,0,0,0)");
-    fade.addColorStop(1, "rgba(0,0,0,1)");
-    g.fillStyle = fade;
-    g.fillRect(0, hh * 0.55, ww, hh * 0.45);
-    g.globalCompositeOperation = "source-atop";
-    g.fillStyle = "rgba(40,6,10,0.16)";
-    g.fillRect(0, 0, ww, hh);
-  });
+    g.restore();
+    touchCanvas(c);
+    await yieldToMain();
+  }
+  // unterer Rand blendet aus (Seitenvorhänge enden weich)
+  g.globalCompositeOperation = "destination-out";
+  const fade = g.createLinearGradient(0, hh * 0.55, 0, hh);
+  fade.addColorStop(0, "rgba(0,0,0,0)");
+  fade.addColorStop(1, "rgba(0,0,0,1)");
+  g.fillStyle = fade;
+  g.fillRect(0, hh * 0.55, ww, hh * 0.45);
+  g.globalCompositeOperation = "source-atop";
+  g.fillStyle = "rgba(40,6,10,0.16)";
+  g.fillRect(0, 0, ww, hh);
+  touchCanvas(c);
+  await yieldToMain();
   const layer = { c, w: c.width, h: c.height, spans: occupancy(c).spans };
   release(img);
   return layer;
@@ -312,17 +461,19 @@ export interface GroundBase {
 /** Oberen Streifen (260 Quellzeilen ≙ 130 logische px bei Maßstab 0,5) beider Bodenbilder vorhalten. */
 export async function loadGroundBase(): Promise<GroundBase> {
   const [ci, pi] = await Promise.all([loadPlain(GROUND_URLS.carpet), loadPlain(GROUND_URLS.parquet)]);
-  const crop = (img: HTMLImageElement | null): HTMLCanvasElement | null => {
+  const crop = (img: Pic | null): HTMLCanvasElement | null => {
     if (!img) return null;
     const rows = Math.min(img.height, 300);
     const c = makeCanvas(img.width, rows);
     c.getContext("2d")?.drawImage(img, 0, 0, img.width, rows, 0, 0, img.width, rows);
     return c;
   };
-  const base = { carpet: crop(ci), parquet: crop(pi) };
+  const carpet = crop(ci);
   release(ci);
+  await yieldToMain();
+  const parquet = crop(pi);
   release(pi);
-  return base;
+  return { carpet, parquet };
 }
 
 interface GroundTint {

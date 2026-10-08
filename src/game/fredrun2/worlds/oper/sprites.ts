@@ -41,6 +41,14 @@ export class SpriteBank {
   private k = 1;
   private cache = new Map<string, Baked | null>();
   private reflCache = new Map<string, HTMLCanvasElement>();
+  /**
+   * Bakes im laufenden Frame und „die gerade gezeichnete Entität steht noch ganz außerhalb des Bildes“. Maße wie Kellner- oder
+   * Vorhanghöhe variieren mit dem Tempo, die Sprites lassen sich nicht vorbacken und entstehen beim ersten Zeichnen. Die Engine
+   * zeichnet eine Entität schon 260 px vor dem rechten Bildrand: solange sie dort noch ganz außerhalb steht, läuft pro Frame
+   * höchstens EIN Bake, `get` liefert bis dahin null (der Skin nimmt seinen Notbehelf, unsichtbar). Sichtbare Sprites immer sofort.
+   */
+  baked = 0;
+  off = false;
 
   constructor(private props: PropLibrary | null = null) {}
 
@@ -75,6 +83,8 @@ export class SpriteBank {
     const key = `${id}|${Math.round(h)}|${o.ax ?? 0.5}|${o.ay ?? 1}|${o.rim ?? 0}|${o.w ?? 0}|${o.rimColor ?? ""}${fb ? "|fb" : ""}`;
     const hit = this.cache.get(key);
     if (hit !== undefined) return hit;
+    if (this.off && this.baked > 0) return null; // wartet bis zum nächsten Frame (nicht gemerkt)
+    this.baked += 1;
     const b = this.bake(id, h, o, fb);
     // fehlende Props ohne Ersatz nicht dauerhaft als „nicht vorhanden“ merken (könnten später noch eintreffen)
     if (b || real || fb) this.cache.set(key, b);

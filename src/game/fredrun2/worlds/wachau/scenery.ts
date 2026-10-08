@@ -4,7 +4,7 @@
  * nahes Ufer (Pappeln, Weiden, Marillenbäume, Weinberghang, Heurigen) · Weinzeilen am Wegrand · Uferweg ·
  * Weinlaub-Girlande (Vordergrund oben) · Gräser (Vordergrund unten) · Nebelbänder · Wolken · Lichtstrahlen.
  */
-import { paint, wrapDraw, type Ctx2D } from "../shared-b/canvas";
+import { ctxOf, paint, wrapDraw, type Ctx2D } from "../shared-b/canvas";
 import { mulberry } from "../shared-b/color";
 import { MILKY, STAGES, STARS, withA, type StageColors } from "./palette";
 
@@ -279,7 +279,7 @@ export function stoneWall(g: Ctx2D, x: number, y: number, w: number, h: number, 
 // ------------------------------------------------------------------------------------------------
 // Himmel
 
-export function skyCanvas(stage: number, W: number, Hc: number): HTMLCanvasElement {
+export function skyCanvas(stage: number, W: number, Hc: number, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
   const S = STAGES[stage];
   const H = 600;
   return paint(W, Hc, (g) => {
@@ -336,13 +336,13 @@ export function skyCanvas(stage: number, W: number, Hc: number): HTMLCanvasEleme
         g.fill();
       }
     }
-  });
+  }, reuse);
 }
 
 /** Wolken-Atlas pro Stufe (4 Wolken übereinander, je 420×120) */
 export const CLOUD_W = 420;
 export const CLOUD_H = 120;
-export function cloudAtlas(stage: number): HTMLCanvasElement {
+export function cloudAtlas(stage: number, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
   const tops = ["#fff4f0", "#ffffff", "#ffe2cf", "#8e86c0", "#2c3866"];
   const bots = ["#d9c2d4", "#dbe6f2", "#e86a6a", "#5a4a8e", "#141d3e"];
   const lits = ["#ffe9d0", "#fffaf0", "#ffcf7a", "#ffb0c0", "#8aa0d8"];
@@ -369,7 +369,7 @@ export function cloudAtlas(stage: number): HTMLCanvasElement {
       }
       g.globalAlpha = 1;
     }
-  });
+  }, reuse);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -436,7 +436,11 @@ export const BANK_SPOTS = {
   tower: 1540,
 };
 
-export function bankTile(W: number, H: number): BankInfo {
+/**
+ * Wie `bankTile`, aber in Schritten: nach jedem Teilstück (Terrassenzeilen, Weichzeichnen, …) gibt die Funktion die Kontrolle
+ * ab (`yield`), damit der Aufrufer beim Laden den Hauptthread freigeben kann. Das Ergebnis ist bitgleich zum Durchlauf am Stück.
+ */
+export function* bankTileSteps(W: number, H: number): Generator<void, BankInfo, void> {
   const prof = hillProfile(
     W,
     [
@@ -473,7 +477,10 @@ export function bankTile(W: number, H: number): BankInfo {
       x += w + 2 + Math.floor(rnd() * 8);
     }
   }
-  const canvas = paint(W, H, (g) => {
+  const canvas = paint(W, H, () => undefined);
+  const g = ctxOf(canvas);
+  yield;
+  {
     // Hügelkörper
     const body = g.createLinearGradient(0, 0, 0, H);
     body.addColorStop(0, "#5b6a38");
@@ -485,10 +492,12 @@ export function bankTile(W: number, H: number): BankInfo {
     g.save();
     profilePath(g, W, base, prof, 3);
     g.clip();
+    yield;
     // Weinterrassen, Wald- und Wiesenflecken (2D-Rauschen → natürliche Parzellen)
     const vineCols = ["#d6a432", "#c8782c", "#b0502e", "#8f9234", "#e0b848", "#a88a30"];
     for (let y = base - 6; y > base - 215; y -= 6) {
       const row = Math.round((base - y) / 6);
+      if (row > 0 && row % 3 === 0) yield; // ca. 5–8 ms je Teilstück
       for (let x = 0; x < W; x += 3) {
         const hh = prof(x);
         const up = base - y;
@@ -542,6 +551,7 @@ export function bankTile(W: number, H: number): BankInfo {
         });
       }
     }
+    yield;
     // Zeilen weich verwischen (aus der Ferne verschmelzen die Rebzeilen)
     const snap = paint(W, H, (tg) => tg.drawImage(g.canvas, 0, 0));
     g.globalAlpha = 0.34;
@@ -599,7 +609,8 @@ export function bankTile(W: number, H: number): BankInfo {
     }
     // Dürnsteiner Stiftsturm (blau-weiß, barock)
     wrapDraw(W, BANK_SPOTS.tower, 20, (x) => baroqueTower(g, x, base - 2, 72));
-  });
+  }
+  yield;
   const lights = paint(W, H, (g) => {
     const r2 = mulberry(4242);
     for (const h of houses) {
@@ -634,6 +645,15 @@ export function bankTile(W: number, H: number): BankInfo {
     }
   });
   return { canvas, lights, W, H, prof };
+}
+
+/** Gegenüberliegendes Ufer am Stück (Tests, Fallback ohne `load`) */
+export function bankTile(W: number, H: number): BankInfo {
+  const it = bankTileSteps(W, H);
+  for (;;) {
+    const r = it.next();
+    if (r.done) return r.value;
+  }
 }
 
 /** Barocker Kirchturm (Dürnstein: blau-weiß mit Zwiebelhelm) */
@@ -715,7 +735,8 @@ export interface NearInfo {
 /** Optionale Zusatz-Zeichnung (z.B. Props) in die Kachel: (g, W, x → Uferlinie-y) */
 export type NearExtra = (g: Ctx2D, W: number, shoreY: (x: number) => number) => void;
 
-export function nearBankTile(W: number, H: number, extra?: NearExtra): NearInfo {
+/** Wie `nearBankTile`, aber in Schritten (`yield` nach Teilstücken, damit der Aufrufer beim Laden den Hauptthread freigeben kann); bitgleich zum Durchlauf am Stück */
+export function* nearBankTileSteps(W: number, H: number, extra?: NearExtra): Generator<void, NearInfo, void> {
   const rnd = mulberry(8080);
   const base = H - 2;
   const bankTop = (x: number): number => 46 + 8 * Math.sin((x / W) * TAU * 5 + 0.3) + 4 * Math.sin((x / W) * TAU * 13 + 1.2);
@@ -741,7 +762,9 @@ export function nearBankTile(W: number, H: number, extra?: NearExtra): NearInfo 
   const slopeMask = (x: number): number => (slope(x) > 30 ? 1 : 0);
   const heuriger = { x: 420, w: 120, h: 70 };
   const chapel = { x: 1300, w: 30, h: 34 };
-  const canvas = paint(W, H, (g) => {
+  const canvas = paint(W, H, () => undefined);
+  const g = ctxOf(canvas);
+  {
     // Weinberghang (hinten)
     g.save();
     g.beginPath();
@@ -759,6 +782,7 @@ export function nearBankTile(W: number, H: number, extra?: NearExtra): NearInfo 
     const cols = ["#c99c3a", "#b86c30", "#9a4c30", "#8a8c3a", "#d2ac4a", "#a8843a"];
     for (let y = base - 40; y > base - 290; y -= 12) {
       const row = Math.round((base - y) / 12);
+      if (row > 0 && row % 7 === 0) yield; // ca. 5 ms je Teilstück
       for (let x = (row % 2) * 3; x < W; x += 6) {
         const h = slope(x);
         const up = base - 34 - y;
@@ -843,6 +867,7 @@ export function nearBankTile(W: number, H: number, extra?: NearExtra): NearInfo 
       g.fillStyle = "#4a3a36";
       g.fillRect(x - 4, y - 16, 8, 16);
     });
+    yield;
     // Pappeln & Weiden am Ufer (hinter der Böschung)
     for (let i = 0; i < 16; i += 1) {
       const x = (i / 16) * W + rnd() * 80;
@@ -944,7 +969,8 @@ export function nearBankTile(W: number, H: number, extra?: NearExtra): NearInfo 
         g.fillRect(xx, y, 2.2, 2.2);
       });
     }
-  });
+  }
+  yield;
   const lights = paint(W, H, (g) => {
     wrapDraw(W, heuriger.x, heuriger.w, (x) => {
       const y = base - bankTop(heuriger.x) + 18;
@@ -975,6 +1001,15 @@ export function nearBankTile(W: number, H: number, extra?: NearExtra): NearInfo 
     });
   });
   return { canvas, lights, W, H };
+}
+
+/** Nahes Ufer am Stück (Tests, Fallback ohne `load`) */
+export function nearBankTile(W: number, H: number, extra?: NearExtra): NearInfo {
+  const it = nearBankTileSteps(W, H, extra);
+  for (;;) {
+    const r = it.next();
+    if (r.done) return r.value;
+  }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1356,13 +1391,13 @@ export function fogTile(W: number, H: number, seed: number): HTMLCanvasElement {
 }
 
 /** Einfärben einer weißen Kachel (für Nebel in Stufenfarbe) */
-export function colorize(src: HTMLCanvasElement, color: string): HTMLCanvasElement {
+export function colorize(src: HTMLCanvasElement, color: string, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
   return paint(src.width, src.height, (g, w, h) => {
     g.drawImage(src, 0, 0);
     g.globalCompositeOperation = "source-in";
     g.fillStyle = color;
     g.fillRect(0, 0, w, h);
-  });
+  }, reuse);
 }
 
 /** Lichtstrahlen-Fächer (additiv), Ursprung (ox, oy) in der Fläche */

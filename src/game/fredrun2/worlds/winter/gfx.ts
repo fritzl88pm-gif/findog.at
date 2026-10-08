@@ -181,6 +181,14 @@ export type Anchor = "foot" | "center" | "top";
  */
 export class SpriteCache {
   dpr = 1;
+  /**
+   * Bakes im laufenden Frame und „die gerade gezeichnete Entität steht noch ganz außerhalb des Bildes“. Die Sprites variieren
+   * mit Muster und Tempo und entstehen beim ersten Zeichnen; die Engine zeichnet eine Entität schon 260 px vor dem rechten
+   * Bildrand. Solange sie dort noch ganz außerhalb steht, läuft pro Frame höchstens EIN Bake, `get`/`proc` liefern bis dahin
+   * null (der Skin nimmt seinen Notbehelf, unsichtbar). Sichtbare Sprites werden immer sofort gebacken.
+   */
+  baked = 0;
+  off = false;
   private cache = new Map<string, Spr | null>();
   /** Sprites beliebiger Breite (Eiszapfen-Balken): höchstens CUSTOM_MAX im Speicher */
   private custom = new Map<string, Spr | null>();
@@ -190,6 +198,17 @@ export class SpriteCache {
     this.dpr = dpr;
     this.cache.clear();
     this.custom.clear();
+  }
+
+  /**
+   * Skalenwechsel (Governor, Vollbild, DPR). Idempotent: Werte innerhalb von 0,2 der angewandten Dichte (1 … 2) ändern nichts;
+   * nur eine echte Änderung verwirft die gebackenen Sprites (sie entstehen beim nächsten Zeichnen neu). true = verworfen.
+   */
+  setScale(dpr: number): boolean {
+    const k = Math.max(1, Math.min(2, dpr));
+    if (!(Math.abs(k - Math.max(1, Math.min(2, this.dpr))) > 0.2)) return false;
+    this.reset(dpr);
+    return true;
   }
 
   /** Höhe `h` (logisch); `halo` = CSS-Farbe oder null; `variant` unterscheidet nachbearbeitete Kopien (z.B. Elf ohne Ball) */
@@ -203,6 +222,8 @@ export class SpriteCache {
       // (noch) nicht geladen und kein Ersatz: nicht dauerhaft merken
       return null;
     }
+    if (this.off && this.baked > 0) return null; // wartet bis zum nächsten Frame (nicht gemerkt)
+    this.baked += 1;
     const spr = this.bake(h, halo, anchor, cell, (g, x, y, hPx, ayN) => this.props.draw(g, id, x, y, { h: hPx, ax: 0.5, ay: ayN }), fb, post);
     if (spr) this.cache.set(key, spr);
     return spr;
@@ -218,6 +239,8 @@ export class SpriteCache {
       this.custom.set(k, hit);
       return hit;
     }
+    if (this.off && this.baked > 0) return null; // wartet bis zum nächsten Frame (nicht gemerkt)
+    this.baked += 1;
     const fb = { w, h, paint: paintFn };
     const spr = this.bake(h, halo, anchor, fb, () => undefined, fb, undefined);
     this.custom.set(k, spr);

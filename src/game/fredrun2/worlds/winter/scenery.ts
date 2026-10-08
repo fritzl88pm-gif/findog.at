@@ -10,7 +10,7 @@
 import type { AssetLoader } from "../../types";
 import { blitTiled, blitTiledRange, glowSprite, paint, solidSegments, type Ctx2D } from "../shared-b/canvas";
 import { mod, stageVal } from "../shared-b/color";
-import { StageCache, Staged, tinted, type StageTint } from "../shared-b/layers";
+import { StageCache, Staged, nowMs, tinted, type StageTint } from "../shared-b/layers";
 import { glowAt, makeGlows, sat, TAU, type GlowSet } from "./gfx";
 import { LAYER_LIGHTS, SKY_STARS } from "./lights";
 import {
@@ -35,6 +35,11 @@ import {
 import { MAX_STAGE } from "./stages";
 
 const BASE = "/fredrun2/worlds/winter/";
+
+/** Folgestufe erst ab diesem Fortschritt (0..1) der aktuellen Stufe vorbacken … */
+const NEXT_FROM = 0.28;
+/** … und höchstens einen Bake je so vielen Millisekunden (≈ 6 Frames) */
+const NEXT_GAP_MS = 100;
 
 interface ImgSpec {
   file: string;
@@ -99,6 +104,8 @@ export class Backdrop {
   private veil: HTMLCanvasElement | null = null;
   private glare: HTMLCanvasElement;
   private lastStage = -1;
+  /** Zeitpunkt (ms) des letzten Bakes für die Folgestufe */
+  private nextAt = -1e9;
   private starSprite: HTMLCanvasElement;
 
   constructor() {
@@ -327,32 +334,48 @@ export class Backdrop {
 
   // --- Update / Vorbereitung ------------------------------------------------------------------------
 
-  /** Pro Frame: Nachladen, höchstens eine fehlende Variante backen */
-  prepare(stage: number, progress: number): void {
+  /**
+   * Pro Frame: Nachladen, höchstens eine fehlende Variante backen. Die Varianten der aktuellen Stufe sofort; die der Folgestufe
+   * nicht am Stufenanfang (dort drängt sich sonst alles auf den Übergang), sondern erst ab `NEXT_FROM` des Stufen-Fortschritts
+   * und höchstens eine je `NEXT_GAP_MS`; beginnt die Überblendung (`blend` > 0), wird nachgeholt (eine je Frame).
+   */
+  prepare(stage: number, progress: number, blend = 0): void {
     const next = Math.min(MAX_STAGE, stage + 1);
     if (stage !== this.lastStage) {
       this.lastStage = stage;
       for (const k of [...this.skyMap.keys()]) if (k !== stage && k !== next) this.skyMap.delete(k);
     }
     this.manage(stage, progress);
-    const jobs: Array<() => void> = [];
-    if (!this.hasSky(stage)) jobs.push(() => void this.getSky(stage));
+    const now: Array<() => void> = [];
+    const later: Array<() => void> = [];
+    if (!this.hasSky(stage)) now.push(() => void this.getSky(stage));
     for (const L of this.layers) {
       const staged = L.staged;
       if (!staged) continue;
       staged.keep(stage, next);
       for (const st of [stage, next]) {
-        if (L.vis[st] > 0 && !staged.has(st)) jobs.push(() => void staged.get(st));
+        if (L.vis[st] > 0 && !staged.has(st)) (st === stage ? now : later).push(() => void staged.get(st));
       }
     }
     for (const G of [this.ground, this.ice]) {
       if (!G) continue;
       G.keep(stage, next);
-      for (const st of [stage, next]) if (!G.has(st)) jobs.push(() => void G.get(st));
+      for (const st of [stage, next]) if (!G.has(st)) (st === stage ? now : later).push(() => void G.get(st));
     }
-    if (!this.hasSky(next)) jobs.push(() => void this.getSky(next));
-    // höchstens eine fehlende Variante pro Frame backen (Kosten verteilen)
-    jobs[0]?.();
+    if (!this.hasSky(next)) later.push(() => void this.getSky(next));
+    // höchstens eine fehlende Variante pro Frame backen (Kosten verteilen); die Folgestufe erst spät (siehe oben)
+    if (now.length) {
+      now[0]();
+      return;
+    }
+    if (!later.length) return;
+    const urgent = blend > 0.001;
+    if (!urgent && progress < NEXT_FROM) return;
+    const t = nowMs();
+    if (t < this.nextAt) this.nextAt = t; // Uhr zurückgesetzt
+    if (!urgent && t - this.nextAt < NEXT_GAP_MS) return;
+    this.nextAt = t;
+    later[0]();
   }
 
   // --- Zeichnen -----------------------------------------------------------------------------------------

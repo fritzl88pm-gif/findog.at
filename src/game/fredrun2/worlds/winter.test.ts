@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Bot } from "../bot";
 import { FIXED_DT, METERS_PER_DIFFICULTY, PLAYER_SX } from "../constants";
 import { deathLabel } from "../death-names";
@@ -11,7 +11,10 @@ import { auditPatterns, botRuns } from "./shared-b/audit";
 import { WORLD_WINTER } from "./winter";
 import { ICE_MULT } from "./winter/dims";
 import { boostPath, ICE_RUN, steamCol, throwBall } from "./winter/patterns";
+import { WINTER_STAGE_METERS, WinterRenderer } from "./winter/renderer";
 import { CHASE_MIN_STAGE, WinterSystem } from "./winter/system";
+import { FAKE_IMAGE, assetsOf, installCanvasStub, manifestProps, stubView } from "./shared-b/test-kit";
+import type { Spr } from "./winter/gfx";
 
 const IDLE = { jump: false, jumpPressed: false, slide: false, slidePressed: false, dashPressed: false };
 
@@ -344,5 +347,120 @@ describe("Welt Christkindlmarkt", () => {
     ]);
     for (const r of runs) if (r.log.length) console.log("winter", r.seed, r.meters, r.log.join("\n  "));
     for (const r of runs) expect(r.hurts).toBeLessThanOrEqual(2);
+  });
+});
+
+// --- Skalenwechsel (Canvas-Attrappe, ohne DOM) -----------------------------------------------------------------------------------
+
+interface WinterInternals {
+  env: { spr: { dpr: number; get(id: string, h: number, halo: string | null): Spr | null } };
+}
+
+const inner = (r: WinterRenderer): WinterInternals => r as unknown as WinterInternals;
+
+describe("Winter – Stufenlänge, Skalenwechsel", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("WINTER_STAGE_METERS entspricht der Welt-Definition", () => {
+    expect(WINTER_STAGE_METERS).toBe(WORLD_WINTER.stageMeters);
+  });
+
+  it("resize ist idempotent; nur eine echte Änderung der Dichte verwirft die gebackenen Sprites (genau einmal neu)", async () => {
+    const stub = installCanvasStub();
+    const r = new WinterRenderer();
+    await r.load(assetsOf(manifestProps(), FAKE_IMAGE));
+    const spr = inner(r).env.spr;
+    const a = spr.get("winter-stall", 120, null);
+    expect(a).not.toBeNull();
+    const n = stub.created;
+    expect(spr.get("winter-stall", 120, null)).toBe(a); // Treffer
+    r.resize(1);
+    r.resize(1);
+    r.resize(1.1);
+    r.resize(1.19);
+    expect(spr.get("winter-stall", 120, null)).toBe(a); // unverändert gecacht
+    expect(stub.created).toBe(n);
+    r.resize(1.5);
+    expect(spr.dpr).toBe(1.5);
+    const b = spr.get("winter-stall", 120, null);
+    expect(b).not.toBe(a);
+    const m = stub.created;
+    expect(m).toBeGreaterThan(n);
+    r.resize(1.5);
+    r.resize(1.45);
+    r.resize(1.6);
+    expect(spr.get("winter-stall", 120, null)).toBe(b);
+    expect(stub.created).toBe(m);
+  });
+
+  it("resize vor dem Laden merkt die Dichte", async () => {
+    installCanvasStub();
+    const r = new WinterRenderer();
+    r.resize(2);
+    await r.load(assetsOf(manifestProps(), FAKE_IMAGE));
+    expect(inner(r).env.spr.dpr).toBe(2);
+  });
+});
+
+describe("Winter – Sprite-Bake außerhalb des Bildes, Vorbereitung der Folgestufe", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("SpriteCache: außerhalb höchstens ein Bake je Frame (get liefert null, nichts gemerkt), sichtbar immer sofort", async () => {
+    const stub = installCanvasStub();
+    const r = new WinterRenderer();
+    await r.load(assetsOf(manifestProps(), FAKE_IMAGE));
+    const spr = inner(r).env.spr as unknown as { get: (id: string, h: number, halo: string | null) => Spr | null; off: boolean; baked: number };
+    spr.off = true;
+    spr.baked = 0;
+    const a = spr.get("winter-stall", 120, null);
+    expect(a).not.toBeNull();
+    const n = stub.created;
+    expect(spr.get("winter-snowman", 100, null)).toBeNull(); // wartet
+    expect(stub.created).toBe(n);
+    spr.off = false;
+    expect(spr.get("winter-snowman", 100, null)).not.toBeNull(); // sichtbar → sofort
+    spr.off = true;
+    spr.baked = 0;
+    expect(spr.get("winter-presents", 100, null)).not.toBeNull();
+    expect(spr.get("winter-stall", 120, null)).toBe(a); // Treffer
+  });
+
+  it("Folgestufe: Varianten erst ab ~28 % der Stufe und höchstens eine je ~100 ms", async () => {
+    installCanvasStub();
+    const r = new WinterRenderer();
+    await r.load(assetsOf(manifestProps(), FAKE_IMAGE));
+    const layers = (r as unknown as { back: { layers: Array<{ staged: { has(s: number): boolean } | null; vis: readonly number[] }> } }).back.layers;
+    const loadedLayers = layers.filter((L) => L.staged && L.vis[2] > 0);
+    expect(loadedLayers.length).toBeGreaterThan(0);
+    let clock = 5000;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const at = (progress: number, blend = 0): void => r.update(1 / 60, stubView({ stage: 1, worldMeters: WINTER_STAGE_METERS + progress * WINTER_STAGE_METERS, stageBlend: blend }));
+    // aktuelle Stufe zuerst vollständig backen
+    for (let i = 0; i < 40; i += 1) {
+      clock += 120;
+      at(0.05);
+    }
+    const bakedNext = (): number => loadedLayers.filter((L) => L.staged?.has(2)).length;
+    expect(bakedNext()).toBe(0);
+    clock += 120;
+    at(0.25);
+    expect(bakedNext()).toBe(0);
+    clock += 120;
+    at(0.3);
+    expect(bakedNext()).toBeLessThanOrEqual(1);
+    const first = bakedNext();
+    at(0.31); // Lücke < 100 ms
+    expect(bakedNext()).toBe(first);
+    for (let i = 0; i < 40; i += 1) {
+      clock += 120;
+      at(0.4);
+    }
+    expect(bakedNext()).toBe(loadedLayers.length);
   });
 });

@@ -1,12 +1,16 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPatternCtx } from "../patterns";
 import { Rng } from "../rng";
 import type { EntSpec } from "../types";
 import { WORLD_FINANZAMT } from "./finanzamt";
+import { Chunked } from "./finanzamt/chunked";
+import { FA_STAGE_METERS, FinanzamtRenderer } from "./finanzamt/renderer";
+import { GlowCache, OFFSCREEN_X, SpriteCache, type BakeBudget } from "./finanzamt/skins";
 import { WORLDS } from "./index";
 import { auditPatterns, botRuns } from "./shared-b/audit";
+import { FAKE_IMAGE, assetsOf, installCanvasStub, manifestProps, stubView } from "./shared-b/test-kit";
 
 function build(id: string, diff: number, seed = 1): EntSpec[] {
   const p = WORLD_FINANZAMT.patterns.find((x) => x.id === id);
@@ -118,5 +122,216 @@ describe("Welt Finanzamt bei Nacht", () => {
     ]);
     for (const r of runs) if (r.log.length) console.log("finanzamt", r.seed, r.meters, r.log.join("\n  "));
     for (const r of runs) expect(r.hurts).toBeLessThanOrEqual(2);
+  });
+});
+
+// --- Weltladen, Stufen-Vorbereitung, Skalenwechsel (Canvas-Attrappe, ohne DOM) -----------------------------------------------
+
+interface FaInternals {
+  A: { cache: { k: number; clear(): void }; pcache: { k: number }; coin: { height: number } };
+  mids: Map<number, unknown>;
+  backdrop: { has(stage: number): boolean };
+  built: boolean;
+  pixelK: number;
+}
+
+const inner = (r: FinanzamtRenderer): FaInternals => r as unknown as FaInternals;
+
+/** Canvas-Attrappe der gemeinsamen Test-Hilfen, ergänzt um `measureText` und `getTransform` (dort ohne Rückgabewert) */
+function installStub(): ReturnType<typeof installCanvasStub> {
+  const stub = installCanvasStub();
+  const doc = (globalThis as unknown as { document: { createElement: () => { getContext(k: string): CanvasRenderingContext2D } } }).document;
+  const make = doc.createElement;
+  doc.createElement = () => {
+    const c = make();
+    const orig = c.getContext.bind(c);
+    let wrapped: CanvasRenderingContext2D | null = null;
+    c.getContext = (k: string) =>
+      (wrapped ??= new Proxy(orig(k), {
+        get(t, p) {
+          if (p === "measureText") return () => ({ width: 40 });
+          if (p === "getTransform") return () => ({ a: 1 });
+          return Reflect.get(t, p);
+        },
+      }));
+    return c;
+  };
+  return stub;
+}
+
+async function loaded(dpr?: number): Promise<{ r: FinanzamtRenderer; stub: ReturnType<typeof installCanvasStub> }> {
+  const stub = installStub();
+  const r = new FinanzamtRenderer();
+  if (dpr !== undefined) r.resize(dpr);
+  await r.load(assetsOf(manifestProps(), FAKE_IMAGE));
+  return { r, stub };
+}
+
+describe("Finanzamt – Stufenlänge, Weltladen, Folgestufe, Skalenwechsel", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("FA_STAGE_METERS entspricht der Welt-Definition", () => {
+    expect(FA_STAGE_METERS).toBe(WORLD_FINANZAMT.stageMeters);
+  });
+
+  it("load baut alles und legt Mittelgrund der Stufen 0 und 1 an", async () => {
+    const { r } = await loaded();
+    const i = inner(r);
+    expect(i.built).toBe(true);
+    expect(i.mids.has(0)).toBe(true);
+    expect(i.mids.has(1)).toBe(true);
+    expect(i.mids.has(2)).toBe(false);
+  });
+
+  it("Chunked.steps liefert dieselbe Zerlegung wie der Konstruktor (auch wenn die Pixel nicht lesbar sind)", () => {
+    installStub();
+    const src = document.createElement("canvas");
+    src.width = 2048;
+    src.height = 320;
+    const a = new Chunked(src, 64, 3, 32);
+    const it = Chunked.steps(src, 64, 3, 32);
+    for (;;) {
+      const r = it.next();
+      if (r.done) {
+        expect(r.value.coverage).toBeCloseTo(a.coverage, 12);
+        break;
+      }
+    }
+  });
+
+  it("Chunked.steps gibt bei lesbaren Pixeln alle 640 Spalten die Kontrolle ab", () => {
+    installStub();
+    const src = document.createElement("canvas");
+    src.width = 2048;
+    src.height = 64;
+    const data = new Uint8ClampedArray(2048 * 64 * 4);
+    for (let i = 3; i < data.length; i += 4) data[i] = 255;
+    (src.getContext("2d") as unknown as { getImageData: () => { data: Uint8ClampedArray } }).getImageData = () => ({ data });
+    const it = Chunked.steps(src, 64, 3, 32);
+    let steps = 0;
+    for (;;) {
+      const r = it.next();
+      if (r.done) {
+        expect(r.value.coverage).toBe(1);
+        break;
+      }
+      steps += 1;
+    }
+    expect(steps).toBeGreaterThanOrEqual(3); // Auslesen + ca. 2048/640 Zerlegungsschritte
+  });
+
+  it("die Folgestufe wird erst ab ~28 % der Stufe und höchstens ein Schritt je ~100 ms vorbereitet", async () => {
+    const { r } = await loaded();
+    const i = inner(r);
+    let clock = 5000;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const at = (progress: number): void => r.update(1 / 60, stubView({ stage: 1, worldMeters: FA_STAGE_METERS + progress * FA_STAGE_METERS }));
+    at(0.02);
+    at(0.25);
+    expect(i.mids.has(2)).toBe(false);
+    at(0.3);
+    expect(i.mids.has(2)).toBe(true);
+    at(0.31); // Lücke < 100 ms
+    expect(i.backdrop.has(2)).toBe(false);
+    clock += 120;
+    at(0.35);
+    expect(i.backdrop.has(2)).toBe(true);
+  });
+
+  it("beginnt die Überblendung, obwohl die Folgestufe fehlt, wird sie sofort nachgeholt", async () => {
+    const { r } = await loaded();
+    const i = inner(r);
+    r.update(1 / 60, stubView({ stage: 1, worldMeters: FA_STAGE_METERS + 5, stageBlend: 0 }));
+    expect(i.mids.has(2)).toBe(false);
+    r.update(1 / 60, stubView({ stage: 1, worldMeters: FA_STAGE_METERS + 20, stageBlend: 0.2 }));
+    expect(i.mids.has(2)).toBe(true);
+  });
+
+  it("resize ist idempotent; nur eine echte Änderung backt Münzstreifen und Sprite-Caches neu", async () => {
+    const { r, stub } = await loaded();
+    const i = inner(r);
+    expect(i.A.cache.k).toBe(1);
+    const coin0 = i.A.coin;
+    const n = stub.created;
+    r.resize(1);
+    r.resize(1);
+    r.resize(1.05); // rundet auf 1
+    expect(stub.created).toBe(n);
+    expect(i.A.coin).toBe(coin0);
+    r.resize(1.5);
+    expect(i.A.cache.k).toBe(1.5);
+    expect(i.A.pcache.k).toBe(1.5);
+    expect(i.A.coin).not.toBe(coin0);
+    const m = stub.created;
+    expect(m).toBeGreaterThan(n);
+    r.resize(1.5);
+    r.resize(1.45); // rundet auf 1,5
+    expect(stub.created).toBe(m);
+  });
+
+  it("resize vor dem Laden: gleich in der richtigen Dichte bauen (keine zweite Münzstreifen-Erzeugung beim Zeichnen)", async () => {
+    const { r } = await loaded(2);
+    const i = inner(r);
+    expect(i.A.cache.k).toBe(2);
+    expect(i.A.pcache.k).toBe(2);
+    expect(i.A.coin.height).toBe(Math.round(41 * 2));
+  });
+});
+
+describe("Finanzamt – Sprite-Bake außerhalb des Bildes", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const draw = (): void => undefined;
+
+  it("SpriteCache: außerhalb höchstens ein Bake je Frame (Rest wartet mit durchsichtigem Platzhalter), sichtbar immer sofort", () => {
+    const stub = installStub();
+    const budget: BakeBudget = { n: 0, off: true };
+    const C = new SpriteCache(90, budget);
+    const a = C.get("a", 20, 20, draw);
+    expect(a.width).toBeGreaterThan(1);
+    const wait = C.get("b", 30, 30, draw); // gleicher Frame: wartet
+    expect(wait.width).toBe(1);
+    const n = stub.created; // der Platzhalter entsteht einmal
+    expect(C.get("c", 30, 30, draw)).toBe(wait); // derselbe Platzhalter
+    expect(stub.created).toBe(n);
+    budget.off = false;
+    const b = C.get("b", 30, 30, draw); // sichtbar: sofort
+    expect(b.width).toBeGreaterThan(1);
+    budget.off = true;
+    budget.n = 0; // nächster Frame
+    const c = C.get("c", 30, 30, draw);
+    expect(c.width).toBeGreaterThan(1);
+    expect(C.get("a", 20, 20, draw)).toBe(a); // Treffer kostet nichts und zählt nicht
+    expect(budget.n).toBe(1);
+  });
+
+  it("GlowCache und SpriteCache teilen das Budget des Frames", () => {
+    installStub();
+    const budget: BakeBudget = { n: 0, off: true };
+    const C = new SpriteCache(90, budget);
+    const G = new GlowCache(budget);
+    expect(G.get("rgba(255,0,0,1)", 40, 20).width).toBeGreaterThan(1);
+    expect(C.get("x", 20, 20, draw).width).toBe(1); // das Budget ist verbraucht
+    budget.n = 0;
+    expect(C.get("x", 20, 20, draw).width).toBeGreaterThan(1);
+    expect(G.get("rgba(0,255,0,1)", 40, 20).width).toBe(1);
+  });
+
+  it("ohne Budget (Tests, ältere Aufrufer) wird immer sofort gebacken", () => {
+    installStub();
+    const C = new SpriteCache(90);
+    expect(C.get("a", 20, 20, draw).width).toBeGreaterThan(1);
+    expect(C.get("b", 20, 20, draw).width).toBeGreaterThan(1);
+  });
+
+  it("OFFSCREEN_X liegt knapp hinter dem rechten Bildrand (die Engine zeichnet ab 260 px dahinter)", () => {
+    expect(OFFSCREEN_X).toBeGreaterThan(1280);
+    expect(OFFSCREEN_X).toBeLessThan(1280 + 260);
   });
 });

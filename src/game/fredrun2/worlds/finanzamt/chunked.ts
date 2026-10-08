@@ -4,15 +4,44 @@
  */
 import type { Ctx2D } from "../shared-b/canvas";
 
+/** Pixelspalten, nach denen die schrittweise Zerlegung (`Chunked.steps`) die Kontrolle abgibt (ca. 3 ms) */
+const COLS_PER_STEP = 640;
+
 export class Chunked {
   /** je Box: x, y, w, h (Quellkoordinaten), nach x sortiert */
   private boxes: number[] = [];
   readonly w: number;
   readonly h: number;
 
-  constructor(readonly src: HTMLCanvasElement, cellW = 128, alphaMin = 3, cellH = 64) {
+  /**
+   * `lazy`: nur anlegen, die Zerlegung folgt in Schritten über `Chunked.steps` (Laden ohne Long Task); sonst am Stück.
+   */
+  constructor(
+    readonly src: HTMLCanvasElement,
+    private readonly cellW = 128,
+    private readonly alphaMin = 3,
+    private readonly cellH = 64,
+    lazy = false,
+  ) {
     this.w = src.width;
     this.h = src.height;
+    if (lazy) return;
+    for (const _ of this.scan()) void _; // am Stück
+  }
+
+  /**
+   * Wie `new Chunked(…)`, aber in Schritten: nach etwa je `COLS_PER_STEP` Spalten (zusammen ca. 3 ms) gibt der Generator die
+   * Kontrolle ab. Das Ergebnis ist dasselbe wie bei der Zerlegung am Stück.
+   */
+  static *steps(src: HTMLCanvasElement, cellW = 128, alphaMin = 3, cellH = 64): Generator<void, Chunked, void> {
+    const c = new Chunked(src, cellW, alphaMin, cellH, true);
+    yield* c.scan();
+    return c;
+  }
+
+  /** Zerlegung in Zellspalten; `yield` jeweils nach `COLS_PER_STEP` Pixelspalten */
+  private *scan(): Generator<void, void, void> {
+    const { src, cellW, alphaMin, cellH } = this;
     const g = src.getContext("2d");
     let data: Uint8ClampedArray | null = null;
     try {
@@ -20,8 +49,15 @@ export class Chunked {
     } catch {
       data = null;
     }
+    if (data) yield; // das Auslesen der Pixel war der erste Schritt
+    let cols = 0;
     for (let x0 = 0; x0 < this.w; x0 += cellW) {
+      if (data && cols >= COLS_PER_STEP) {
+        cols = 0;
+        yield;
+      }
       const cw = Math.min(cellW, this.w - x0);
+      cols += cw;
       if (!data) {
         this.boxes.push(x0, 0, cw, this.h);
         continue;

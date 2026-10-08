@@ -9,9 +9,11 @@
  */
 import { drawPickup } from "../../pickups";
 import type { AssetLoader, Ent, PropLibrary, ViewState, WorldRenderer } from "../../types";
+import { yieldToMain } from "../../yield";
 import { Motes } from "../shared-a/fx";
 import { blitTiled, blitTiledRange, glowAt, paint, solidSegments, type Ctx2D } from "../shared-b/canvas";
 import { h1, mod, stageVal } from "../shared-b/color";
+import { nowMs, stageProgress } from "../shared-b/layers";
 import {
   BACK_FLOOR_Y,
   BACK_H,
@@ -66,6 +68,7 @@ import {
   drawOverhead,
   drawPlane,
   drawStamp,
+  OFFSCREEN_X,
   blitC,
   makeAssets,
   makeCoinStrip,
@@ -73,9 +76,22 @@ import {
   type SkinCtx,
 } from "./skins";
 import { Chunked } from "./chunked";
-import { DARK, DRAFT, DUST, EMERGENCY, FAULTY, FA_BACKDROPS, GLASS, LAMPS, LEDS, MAX_STAGE, NEON, PALETTE, PAPER } from "./stages";
+import { DARK, DRAFT, DUST, EMERGENCY, FAULTY, FA_BACKDROPS, FA_STAGE_METERS, GLASS, LAMPS, LEDS, MAX_STAGE, NEON, PALETTE, PAPER } from "./stages";
 
 const TAU = Math.PI * 2;
+
+/** Meter je Stimmungsstufe (wie WORLD_FINANZAMT.stageMeters; Test in finanzamt.test.ts hält beides gleich) */
+export { FA_STAGE_METERS };
+
+/** Mittelgrund einer Stufe samt zerlegten Lichtkacheln */
+type MidEntry = MidTiles & { cl: Chunked; cl2: Chunked | null };
+
+/** Pixeldichte der Sprites: Skala der Zeichenfläche, auf Viertel gerundet, 1 … 2 (beim Zeichnen aus der Transformation, in `resize` aus der gemeldeten Skala – dieselbe Rechnung) */
+function faDensity(scale: number): number {
+  if (!(scale > 0)) return 1;
+  return Math.max(1, Math.min(2, Math.round(scale * 4) / 4));
+}
+
 export const FA_PROPS = ["office-chair", "bat-fly", "shredder", ...FA_OBSTACLE_PROPS];
 const BACK_PAR = 0.08;
 const CAMERAS = [0.15, 0.55, 0.8, 0.6, 0.75];
@@ -89,7 +105,7 @@ export class FinanzamtRenderer implements WorldRenderer {
   private props: PropLibrary | null = null;
   private built = false;
   private ceil!: { base: HTMLCanvasElement; lights: Chunked };
-  private mids = new Map<number, MidTiles & { cl: Chunked; cl2: Chunked | null }>();
+  private mids = new Map<number, MidEntry>();
   private floors: HTMLCanvasElement[] = [];
   private farFloors: HTMLCanvasElement[] = [];
   private columns: HTMLCanvasElement[] = [];
@@ -127,6 +143,10 @@ export class FinanzamtRenderer implements WorldRenderer {
   private recY: number[] = [];
   private recN = 0;
   private lastStage = -1;
+  /** Pixeldichte der Sprites (aus `resize`, beim Zeichnen nachgeführt) */
+  private pixelK = 1;
+  /** Zeitpunkt (ms) des letzten Vorbereitungsschritts der Folgestufe */
+  private prepAt = -1e9;
   private time = 0;
   private burstSeen = 0;
   private sparkT = 0;
@@ -134,33 +154,107 @@ export class FinanzamtRenderer implements WorldRenderer {
   async load(assets: AssetLoader): Promise<void> {
     this.props = assets.props;
     await Promise.all([this.backdrop.load(assets.image), assets.props.preload(FA_PROPS).catch(() => undefined)]);
-    this.build();
+    // Statisches in Schritten bauen und dazwischen den Hauptthread freigeben (kein Long Task, Eingaben laufen weiter)
+    while (this.stepBuild()) await yieldToMain();
     this.A.props = assets.props;
-    this.mid(0);
-    await Promise.resolve();
-    this.mid(1);
+    for (const stage of [0, 1]) {
+      const it = this.midSteps(stage);
+      for (;;) {
+        const r = it.next();
+        if (r.done) break;
+        await yieldToMain();
+      }
+      await yieldToMain();
+    }
     this.backdrop.tile(0);
-    await Promise.resolve();
+    await yieldToMain();
     this.backdrop.tile(1);
   }
 
+  /**
+   * Skalenwechsel (Governor, Vollbild, DPR). Idempotent: dieselbe Pixeldichte (auf Viertel gerundet) ändert nichts; nur eine
+   * echte Änderung verwirft die Hindernis-Sprites und backt den Münzstreifen neu (sonst erst beim nächsten Zeichnen). Vor
+   * dem Laden wird nur die Dichte gemerkt, damit beim Bauen gleich in der richtigen Auflösung gebacken wird.
+   */
+  resize(dpr: number): void {
+    this.applyScale(faDensity(dpr));
+  }
+
+  private applyScale(k: number): void {
+    this.pixelK = k;
+    const A = this.A as FaAssets | undefined;
+    if (!A || A.cache.k === k) return;
+    A.cache.k = k;
+    A.cache.clear();
+    A.pcache.k = k;
+    A.pcache.clear();
+    A.coin = makeCoinStrip(k);
+    A.coinSize = A.coin.height;
+  }
+
+  /**
+   * Bauabschnitte des statischen Zeichnens. Jeder ist ein Generator, der zwischen seinen Teilstücken `yield`et: `load` gibt
+   * dort den Hauptthread frei (kein Long Task, auch bei 4× gedrosselter CPU), der Fallback `build` läuft einfach durch.
+   */
+  private readonly parts: Array<() => Generator<void, void, void>> = [
+    () => this.buildAssets(),
+    () => this.buildCeiling(),
+    () => this.buildGrounds(),
+    () => this.buildFixtures(),
+    () => this.buildOverlays(),
+  ];
+  private nextPart = 0;
+  private partGen: Generator<void, void, void> | null = null;
+
+  /** Ein Teilstück des Bauens ausführen; false = alles gebaut */
+  private stepBuild(): boolean {
+    if (!this.partGen) {
+      if (this.nextPart >= this.parts.length) return false;
+      this.partGen = this.parts[this.nextPart]();
+      this.nextPart += 1;
+    }
+    if (this.partGen.next().done) this.partGen = null;
+    return true;
+  }
+
+  /** Alles (verbleibende) auf einmal bauen – Fallback für Aufrufe vor/ohne `load` */
   private build(): void {
     if (this.built) return;
-    this.built = true;
-    this.A = makeAssets();
+    while (this.stepBuild()) {
+      /* durchlaufen */
+    }
+  }
+
+  private *buildAssets(): Generator<void, void, void> {
+    this.A = makeAssets(this.pixelK);
     this.A.props = this.props;
+    this.A.cache.k = this.pixelK;
+    this.A.pcache.k = this.pixelK;
     this.K = { A: this.A, time: 0, reduced: false, quality: 2, dark: 0 };
+    yield;
+  }
+
+  private *buildCeiling(): Generator<void, void, void> {
     const ce = paintCeiling();
-    this.ceil = { base: ce.base, lights: new Chunked(ce.lights, 128) };
+    yield;
+    this.ceil = { base: ce.base, lights: yield* Chunked.steps(ce.lights, 128) };
+  }
+
+  private *buildGrounds(): Generator<void, void, void> {
     for (let s = 0; s <= MAX_STAGE; s += 1) {
       this.floors.push(paintFloor(s));
       this.farFloors.push(paintFarFloor(s));
       this.columns.push(paintColumn(s));
+      yield;
     }
     this.colDeco = [paintColumnDeco(0), paintColumnDeco(1), paintColumnDeco(2)];
+  }
+
+  private *buildFixtures(): Generator<void, void, void> {
     this.fixture = paintFixture();
     this.fixGlow = paintFixtureGlow("#cfe2ff");
-    this.fixGlowC = new Chunked(this.fixGlow, 60);
+    this.fixGlowC = yield* Chunked.steps(this.fixGlow, 60);
+    yield;
     this.fixRefl = paint(360, 110, (g) => {
       const blob = (cx: number, cy: number, rx: number, ry: number, col: string, a: number): void => {
         g.save();
@@ -193,11 +287,17 @@ export class FinanzamtRenderer implements WorldRenderer {
       g.fillStyle = grd;
       g.fillRect(0, 0, 1280, 220);
     });
+  }
+
+  private *buildOverlays(): Generator<void, void, void> {
     this.shaft = paintShaft("#cfe2ff");
     this.exitSign = paintExitSign();
     this.fgTop = paintFgTop();
+    yield;
     this.mask = paintFlashlightMask("#02050d");
-    this.beam = new Chunked(paintBeam("#fff1d6"), 80, 2, 40);
+    yield;
+    this.beam = yield* Chunked.steps(paintBeam("#fff1d6"), 80, 2, 40);
+    this.built = true;
   }
 
   private shredderProp = (g: Ctx2D, x: number, base: number, h: number): void => {
@@ -210,36 +310,63 @@ export class FinanzamtRenderer implements WorldRenderer {
     }
   };
 
-  private mid(stage: number): MidTiles & { cl: Chunked; cl2: Chunked | null } {
+  /** Mittelgrund einer Stufe, in Schritten (Kacheln malen, Lichtkacheln zerlegen); `mid` läuft am Stück durch */
+  private *midSteps(stage: number): Generator<void, MidEntry, void> {
     let m = this.mids.get(stage);
-    if (!m) {
-      const t = paintMid(stage, this.props ? this.shredderProp : null);
-      m = { ...t, cl: new Chunked(t.lights, 64, 3, 32), cl2: t.lights2 ? new Chunked(t.lights2, 64, 3, 32) : null };
-      this.mids.set(stage, m);
-      if (this.mids.size > 3) {
-        for (const k of [...this.mids.keys()]) {
-          if (this.mids.size <= 3) break;
-          if (k !== stage && k !== this.lastStage && k !== this.lastStage + 1) this.mids.delete(k);
-        }
+    if (m) return m;
+    const t = paintMid(stage, this.props ? this.shredderProp : null);
+    yield;
+    const cl = yield* Chunked.steps(t.lights, 64, 3, 32);
+    yield;
+    const cl2 = t.lights2 ? yield* Chunked.steps(t.lights2, 64, 3, 32) : null;
+    m = { ...t, cl, cl2 };
+    this.mids.set(stage, m);
+    if (this.mids.size > 3) {
+      for (const k of [...this.mids.keys()]) {
+        if (this.mids.size <= 3) break;
+        if (k !== stage && k !== this.lastStage && k !== this.lastStage + 1) this.mids.delete(k);
       }
     }
     return m;
+  }
+
+  private mid(stage: number): MidEntry {
+    const hit = this.mids.get(stage);
+    if (hit) return hit;
+    const it = this.midSteps(stage);
+    for (;;) {
+      const r = it.next();
+      if (r.done) return r.value;
+    }
   }
 
   update(dt: number, v: ViewState): void {
     this.build();
     const d = Math.min(0.05, dt);
     this.time += d;
+    this.A.budget.n = 0;
     const st = v.stage;
     const s = st + v.stageBlend;
-    // nächste Stufe verteilt vorbereiten (höchstens ein großer Aufbau pro Frame)
-    if (st !== this.lastStage) {
-      this.lastStage = st;
-    } else if (st < MAX_STAGE) {
-      if (!this.mids.has(st + 1)) this.mid(st + 1);
-      else if (!this.backdrop.has(st + 1)) this.backdrop.tile(st + 1);
-    }
+    // Folgestufe verteilt vorbereiten: nicht am Stufenanfang (dort drängt sich sonst alles auf den Übergang), sondern ab ~28 %
+    // der Stufe, ein Schritt (Mittelgrund bzw. Kulissenkachel) je ~100 ms; beginnt die Überblendung, wird nachgeholt
+    this.lastStage = st;
     if (!this.mids.has(st)) this.mid(st);
+    if (st < MAX_STAGE) {
+      const urgent = v.stageBlend > 0.001;
+      if (urgent || stageProgress(v.worldMeters, FA_STAGE_METERS) >= 0.28) {
+        const t = nowMs();
+        if (t < this.prepAt) this.prepAt = t; // Uhr zurückgesetzt
+        if (urgent || t - this.prepAt >= 100) {
+          if (!this.mids.has(st + 1)) {
+            this.mid(st + 1);
+            this.prepAt = t;
+          } else if (!this.backdrop.has(st + 1)) {
+            this.backdrop.tile(st + 1);
+            this.prepAt = t;
+          }
+        }
+      }
+    }
     // Papier im Luftzug + Staub
     const q = v.quality === 0 ? 0.3 : v.quality === 1 ? 0.6 : 1;
     const draft = stageVal(DRAFT, s);
@@ -325,15 +452,8 @@ export class FinanzamtRenderer implements WorldRenderer {
     g.imageSmoothingQuality = "low";
     // Pixeldichte der Zeichenfläche → Entitäts-Sprites in Zielauflösung (scharf auf Hi-DPI)
     const tk = typeof g.getTransform === "function" ? g.getTransform().a : 1;
-    const k = Math.max(1, Math.min(2, Math.round(tk * 4) / 4));
-    if (k !== this.A.cache.k) {
-      this.A.cache.k = k;
-      this.A.cache.clear();
-      this.A.pcache.k = k;
-      this.A.pcache.clear();
-      this.A.coin = makeCoinStrip(k);
-      this.A.coinSize = this.A.coin.height;
-    }
+    const k = faDensity(tk);
+    if (k !== this.A.cache.k) this.applyScale(k);
     this.K.time = v.time;
     this.K.reduced = v.reducedMotion;
     this.K.quality = v.quality;
@@ -891,7 +1011,14 @@ export class FinanzamtRenderer implements WorldRenderer {
     this.build();
     if (e.skin === "gateway") return false;
     this.sideEffects(e, sx, v);
-    const ok = this.paint(g, e, sx, sy, v);
+    // noch ganz außerhalb des Bildes: höchstens ein Sprite-Bake je Frame (siehe BakeBudget)
+    this.A.budget.off = sx >= OFFSCREEN_X;
+    let ok: boolean;
+    try {
+      ok = this.paint(g, e, sx, sy, v);
+    } finally {
+      this.A.budget.off = false;
+    }
     if (ok && e.skin !== "laser-guard" && (e.harmful || e.kind === "zone" || e.kind === "pickup" || e.kind === "walker" || e.kind === "flyer" || e.kind === "swinger" || e.kind === "projectile" || e.kind === "overhead" || e.kind === "block")) {
       if (e.state !== "defeated") this.record(e, sx, sy);
     }
@@ -983,7 +1110,9 @@ export class FinanzamtRenderer implements WorldRenderer {
           const e = this.rec[i];
           if (e.dead) continue;
           g.globalAlpha = k;
+          this.A.budget.off = this.recX[i] >= OFFSCREEN_X;
           this.paint(g, e, this.recX[i], this.recY[i], v);
+          this.A.budget.off = false;
         }
       }
       g.globalAlpha = 1;

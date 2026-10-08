@@ -4,13 +4,13 @@
  */
 import type { PropLibrary } from "../../types";
 import { makeCanvas } from "../../draw-utils";
-import { colorWithAlpha, ctxOf, paint, rr, wrapDraw, type Ctx2D } from "../shared-b/canvas";
+import { colorWithAlpha, ctxOf, paint, recycled, rr, wrapDraw, type Ctx2D } from "../shared-b/canvas";
 import { hexRgb, mulberry, type RGB } from "../shared-b/color";
 import { CYAN, MAGENTA, MINT, TAU, VIOLET } from "./palette";
 
 /** Deckende Offscreen-Fläche (alpha:false) – wird im Software-Rendering ohne Mischen geblittet (schneller). */
-export function paintOpaque(w: number, h: number, draw: (g: Ctx2D, w: number, h: number) => void): HTMLCanvasElement {
-  const c = makeCanvas(w, h);
+export function paintOpaque(w: number, h: number, draw: (g: Ctx2D, w: number, h: number) => void, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
+  const c = recycled(reuse, w, h) ?? makeCanvas(w, h);
   const g = c.getContext("2d", { alpha: false });
   if (!g) return paint(w, h, draw);
   draw(g, w, h);
@@ -623,23 +623,30 @@ export function rainStrips(color: string, n: number, H: number, seed: number): H
 // ------------------------------------------------------------------------------------------------
 // Hologramm-Verarbeitung (Stephansdom & Reklame-Motive)
 
+/** Zeilen je Block der Sobel-Schleife in `holoSteps` (zwischen zwei Blöcken gibt der Aufrufer die Kontrolle ab) */
+const HOLO_ROWS = 96;
+
 /**
  * Macht aus einer farbigen Quelle ein Hologramm: Graustufen → Sobel-Kanten (Cyan/Weiß) + schwacher Körper (Violett) +
  * Scanlines + Ausblendung zum Sockel. Ergebnis ist für additives Zeichnen gedacht.
+ * Als Generator in Schritten (`yield` nach Pixelvorbereitung, je Zeilenblock und vor dem Schreiben): der Aufrufer beim Laden
+ * gibt dazwischen den Hauptthread frei; `holoFromSource` läuft am Stück durch und liefert dasselbe Bild.
  */
-export function holoFromSource(src: HTMLCanvasElement, edge: string, bodyCol: string, opts: { scan?: number; fadeBottom?: number; gain?: number } = {}): HTMLCanvasElement {
+export function* holoSteps(src: HTMLCanvasElement, edge: string, bodyCol: string, opts: { scan?: number; fadeBottom?: number; gain?: number } = {}): Generator<void, HTMLCanvasElement, void> {
   const W = src.width;
   const H = src.height;
   const out = paint(W, H, () => undefined);
   const sg = ctxOf(src);
   const og = ctxOf(out);
-  let data: ImageData;
+  let data: ImageData | undefined;
   try {
     data = sg.getImageData(0, 0, W, H);
   } catch {
     return src;
   }
+  if (!data || !data.data) return src; // Pixel nicht lesbar: Quelle unverändert
   const d = data.data;
+  yield;
   const lum = new Float32Array(W * H);
   const al = new Float32Array(W * H);
   for (let i = 0; i < W * H; i += 1) {
@@ -647,6 +654,7 @@ export function holoFromSource(src: HTMLCanvasElement, edge: string, bodyCol: st
     al[i] = a;
     lum[i] = ((0.3 * d[i * 4] + 0.59 * d[i * 4 + 1] + 0.11 * d[i * 4 + 2]) / 255) * a;
   }
+  yield;
   const E = hexRgb(edge);
   const B = hexRgb(bodyCol);
   const res = og.createImageData(W, H);
@@ -655,6 +663,7 @@ export function holoFromSource(src: HTMLCanvasElement, edge: string, bodyCol: st
   const fadeB = opts.fadeBottom ?? 0.18;
   const gain = opts.gain ?? 2.4;
   for (let y = 1; y < H - 1; y += 1) {
+    if (y % HOLO_ROWS === 0) yield; // Sobel in Zeilenblöcken (ca. 3 ms je Block)
     const scanK = y % scan === 0 ? 0.35 : 1;
     const fy = y / H;
     const fade = fy > 1 - fadeB ? Math.max(0.15, (1 - fy) / fadeB) : 1;
@@ -682,8 +691,18 @@ export function holoFromSource(src: HTMLCanvasElement, edge: string, bodyCol: st
       o[k + 3] = Math.min(255, Math.min(1, tot) * 255 * scanK * fade);
     }
   }
+  yield;
   og.putImageData(res, 0, 0);
   return out;
+}
+
+/** Hologramm am Stück (Fallback ohne `load`, Tests); bitgleich zu `holoSteps` */
+export function holoFromSource(src: HTMLCanvasElement, edge: string, bodyCol: string, opts: { scan?: number; fadeBottom?: number; gain?: number } = {}): HTMLCanvasElement {
+  const it = holoSteps(src, edge, bodyCol, opts);
+  for (;;) {
+    const r = it.next();
+    if (r.done) return r.value;
+  }
 }
 
 /** Stephansdom-Quelle: gemaltes Landmark (falls geladen) oder prozedurale Silhouette. */
@@ -926,69 +945,87 @@ export function adIcons(size: number): HTMLCanvasElement[] {
 // ------------------------------------------------------------------------------------------------
 // Boden & Decke
 
-/** Bodengrund pro Stufe (Lauffläche von groundY nach unten): Verlauf + statische Tiefenlinien */
-export function floorBase(W: number, H: number, floor: string, grid: string, haze: string): HTMLCanvasElement {
-  return paintOpaque(W, H, (g) => {
-    const grd = g.createLinearGradient(0, 0, 0, H);
-    grd.addColorStop(0, colorWithAlpha(haze, 1));
-    grd.addColorStop(0.06, floor);
-    grd.addColorStop(1, "#010104");
-    g.fillStyle = grd;
-    g.fillRect(0, 0, W, H);
-    // Tiefenlinien (perspektivisch, näher = weiter auseinander)
-    for (let i = 1; i < 9; i += 1) {
-      const u = i / 8;
-      const y = Math.round(H * u * u);
-      g.fillStyle = colorWithAlpha(grid, 0.18 + 0.3 * (1 - u));
-      g.fillRect(0, y, W, 1 + u);
-    }
-    // Horizont-Glühen direkt unter der Kante
-    const hg = g.createLinearGradient(0, 0, 0, 26);
-    hg.addColorStop(0, colorWithAlpha(grid, 0.45));
-    hg.addColorStop(1, colorWithAlpha(grid, 0));
-    g.fillStyle = hg;
-    g.fillRect(0, 0, W, 26);
-  });
+/**
+ * Bodengrund pro Stufe (Lauffläche von groundY nach unten): Verlauf + statische Tiefenlinien. Mit `reuse` (gleiche Größe) wird
+ * eine verworfene Stufenfläche neu bemalt, statt eine neue anzulegen.
+ */
+export function floorBase(W: number, H: number, floor: string, grid: string, haze: string, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
+  return paintOpaque(
+    W,
+    H,
+    (g) => {
+      const grd = g.createLinearGradient(0, 0, 0, H);
+      grd.addColorStop(0, colorWithAlpha(haze, 1));
+      grd.addColorStop(0.06, floor);
+      grd.addColorStop(1, "#010104");
+      g.fillStyle = grd;
+      g.fillRect(0, 0, W, H);
+      // Tiefenlinien (perspektivisch, näher = weiter auseinander)
+      for (let i = 1; i < 9; i += 1) {
+        const u = i / 8;
+        const y = Math.round(H * u * u);
+        g.fillStyle = colorWithAlpha(grid, 0.18 + 0.3 * (1 - u));
+        g.fillRect(0, y, W, 1 + u);
+      }
+      // Horizont-Glühen direkt unter der Kante
+      const hg = g.createLinearGradient(0, 0, 0, 26);
+      hg.addColorStop(0, colorWithAlpha(grid, 0.45));
+      hg.addColorStop(1, colorWithAlpha(grid, 0));
+      g.fillStyle = hg;
+      g.fillRect(0, 0, W, 26);
+    },
+    reuse,
+  );
 }
 
-/** Deckengrund pro Stufe (0 … ceilY): dunkles Glas, Tiefenlinien, Glühen an der Unterkante */
-export function ceilBase(W: number, H: number, floor: string, grid: string, haze: string): HTMLCanvasElement {
-  return paintOpaque(W, H, (g) => {
-    const grd = g.createLinearGradient(0, H, 0, 0);
-    grd.addColorStop(0, colorWithAlpha(haze, 1));
-    grd.addColorStop(0.06, floor);
-    grd.addColorStop(1, "#010104");
-    g.fillStyle = grd;
-    g.fillRect(0, 0, W, H);
-    for (let i = 1; i < 9; i += 1) {
-      const u = i / 8;
-      const y = Math.round(H - H * u * u);
-      g.fillStyle = colorWithAlpha(grid, 0.16 + 0.28 * (1 - u));
-      g.fillRect(0, y, W, 1 + u);
-    }
-    const hg = g.createLinearGradient(0, H, 0, H - 26);
-    hg.addColorStop(0, colorWithAlpha(grid, 0.45));
-    hg.addColorStop(1, colorWithAlpha(grid, 0));
-    g.fillStyle = hg;
-    g.fillRect(0, H - 26, W, 26);
-  });
+/** Deckengrund pro Stufe (0 … ceilY): dunkles Glas, Tiefenlinien, Glühen an der Unterkante (`reuse` wie bei `floorBase`) */
+export function ceilBase(W: number, H: number, floor: string, grid: string, haze: string, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
+  return paintOpaque(
+    W,
+    H,
+    (g) => {
+      const grd = g.createLinearGradient(0, H, 0, 0);
+      grd.addColorStop(0, colorWithAlpha(haze, 1));
+      grd.addColorStop(0.06, floor);
+      grd.addColorStop(1, "#010104");
+      g.fillStyle = grd;
+      g.fillRect(0, 0, W, H);
+      for (let i = 1; i < 9; i += 1) {
+        const u = i / 8;
+        const y = Math.round(H - H * u * u);
+        g.fillStyle = colorWithAlpha(grid, 0.16 + 0.28 * (1 - u));
+        g.fillRect(0, y, W, 1 + u);
+      }
+      const hg = g.createLinearGradient(0, H, 0, H - 26);
+      hg.addColorStop(0, colorWithAlpha(grid, 0.45));
+      hg.addColorStop(1, colorWithAlpha(grid, 0));
+      g.fillStyle = hg;
+      g.fillRect(0, H - 26, W, 26);
+    },
+    reuse,
+  );
 }
 
-/** Leuchtkante (weißer Kern + farbiger Schein), 1:1 geblittet */
-export function edgeGlow(W: number, color: string): HTMLCanvasElement {
+/** Leuchtkante (weißer Kern + farbiger Schein), 1:1 geblittet (`reuse` wie bei `floorBase`) */
+export function edgeGlow(W: number, color: string, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
   const H = 30;
-  return paint(W, H, (g) => {
-    const grd = g.createLinearGradient(0, 0, 0, H);
-    grd.addColorStop(0, colorWithAlpha(color, 0));
-    grd.addColorStop(0.4, colorWithAlpha(color, 0.35));
-    grd.addColorStop(0.5, colorWithAlpha(color, 0.95));
-    grd.addColorStop(0.6, colorWithAlpha(color, 0.35));
-    grd.addColorStop(1, colorWithAlpha(color, 0));
-    g.fillStyle = grd;
-    g.fillRect(0, 0, W, H);
-    g.fillStyle = "rgba(255,255,255,0.9)";
-    g.fillRect(0, H / 2 - 1, W, 2);
-  });
+  return paint(
+    W,
+    H,
+    (g) => {
+      const grd = g.createLinearGradient(0, 0, 0, H);
+      grd.addColorStop(0, colorWithAlpha(color, 0));
+      grd.addColorStop(0.4, colorWithAlpha(color, 0.35));
+      grd.addColorStop(0.5, colorWithAlpha(color, 0.95));
+      grd.addColorStop(0.6, colorWithAlpha(color, 0.35));
+      grd.addColorStop(1, colorWithAlpha(color, 0));
+      g.fillStyle = grd;
+      g.fillRect(0, 0, W, H);
+      g.fillStyle = "rgba(255,255,255,0.9)";
+      g.fillRect(0, H / 2 - 1, W, 2);
+    },
+    reuse,
+  );
 }
 
 /** Spiegelung der Stadtlichter im Hochglanzboden (gestaucht, nach unten ausgeblendet) */

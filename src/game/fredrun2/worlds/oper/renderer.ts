@@ -6,11 +6,13 @@
  * Schatten und Spiegelung · Vordergrund: Vorhangsaum (0.9), Konfetti, Champagner-Perlen, Effektpartikel · Overlay: Verdunklung.
  * Speicher: nur aktuelle + nächste Fernebene, Quellbilder werden nach dem Vorrendern freigegeben.
  */
+import { VIEW_W } from "../../constants";
 import { clamp } from "../../draw-utils";
 import type { AssetLoader, Ent, ViewState, WorldRenderer } from "../../types";
+import { yieldToMain } from "../../yield";
 import { bigGlow, blitTiled, colorWithAlpha, glowSprite, paint, solidSegments, type Ctx2D } from "../shared-b/canvas";
 import { h1, mod, stageVal } from "../shared-b/color";
-import { StageCache } from "../shared-b/layers";
+import { StageCache, StagePrep, stageProgress } from "../shared-b/layers";
 import {
   FarLayers,
   GROUND_TILE_H,
@@ -29,6 +31,12 @@ import { OPER_PROPS, OperSkins } from "./skins";
 import { BEAT, BUBBLES, COLORS, CONFETTI, FIREWORKS, FLOOR_LIGHT, GLINT, MAX_STAGE, MID_COLUMNS, MID_TABLES } from "./stages";
 import { drawGateway } from "./gateway";
 import { drawPit } from "./pit";
+
+/** Meter je Stimmungsstufe (wie WORLD_OPER.stageMeters; Test in oper.test.ts hält beides gleich) */
+export const OPER_STAGE_METERS = 300;
+
+/** x ab dem eine Entität als „noch außerhalb des Bildes“ gilt: Sprites reichen bis ca. 40 px links über die Trefferfläche hinaus */
+const OFFSCREEN_X = VIEW_W + 40;
 
 const FAR_PAR = 0.05;
 const COLS_PAR = 0.3;
@@ -73,6 +81,8 @@ export class OperRenderer implements WorldRenderer {
   private near: NearLayer | null = null;
   private groundBase: GroundBase = { carpet: null, parquet: null };
   private ground: StageCache | null = null;
+  /** Bodenvarianten: aktuelle Stufe sofort, Folgestufe erst ab ~28 % der Stufe (Liste: nur `ground`, siehe makeGroundCache) */
+  private prep = new StagePrep([], MAX_STAGE);
   private skins = new OperSkins();
   private confetti = new Confetti(120);
   private bubbles = new Bubbles(56);
@@ -90,9 +100,11 @@ export class OperRenderer implements WorldRenderer {
   async load(assets: AssetLoader): Promise<void> {
     this.skins.setProps(assets.props);
     this.skins.bank.setScale(this.k);
+    // Die gemalten Ebenen backen jeweils in Schritten und geben dazwischen den Hauptthread frei (kein Long Task)
     const [, mids, near, gb] = await Promise.all([assets.props.preload(OPER_PROPS).catch(() => undefined), loadMids(), loadNear(), loadGroundBase()]);
     // Fehlen Props (Netzfehler, Blocker, veralteter Cache): Ersatzbilder jetzt backen statt beim ersten Auftritt im Lauf
     if (OPER_PROPS.some((id) => !assets.props.has(id))) {
+      await yieldToMain();
       try {
         this.skins.warm();
       } catch {
@@ -103,16 +115,28 @@ export class OperRenderer implements WorldRenderer {
     this.tabs = mids.tabs;
     this.near = near;
     this.groundBase = gb;
+    await yieldToMain();
     this.makeGroundCache();
-    this.floorLights = [0, 1, 2, 3, 4].map((s) => floorGlow(COLORS.css(s).floor));
-    await Promise.all([this.far.ensure(0), this.far.ensure(1)]);
+    this.floorLights = [];
+    for (let s = 0; s <= 4; s += 1) this.floorLights.push(floorGlow(COLORS.css(s).floor));
+    await yieldToMain();
+    await this.far.ensure(0);
+    await yieldToMain();
+    await this.far.ensure(1);
     this.ready = true;
   }
 
   private makeGroundCache(): void {
+    if (this.ground) this.prep.remove(this.ground);
     this.ground = new StageCache((s) => bakeGround(this.groundBase, s, this.k));
+    this.prep.add(this.ground);
   }
 
+  /**
+   * Skalenwechsel (Governor, Vollbild, DPR). Idempotent: Werte innerhalb von 0,2 der zuletzt angewandten Skala ändern nichts
+   * (wie SpriteBank.setScale); nur eine echte Änderung verwirft die Bodenkacheln und die Hindernis-Sprites (sie entstehen
+   * beim nächsten Zeichnen bzw. in `update` neu, die Bodenkachel der Stufe sofort).
+   */
   resize(dpr: number): void {
     const k = clamp(dpr, 1, 2);
     if (Math.abs(k - this.k) > 0.2) {
@@ -126,21 +150,21 @@ export class OperRenderer implements WorldRenderer {
 
   update(dt: number, v: ViewState): void {
     this.time = v.time;
+    this.skins.bank.baked = 0;
     const stage = clamp(v.stage, 0, MAX_STAGE);
     const s = Math.min(MAX_STAGE, stage + v.stageBlend);
     if (stage !== this.lastStage) {
       this.lastStage = stage;
     }
-    // Fernebenen: aktuelle + nächste laden, den Rest freigeben
+    // Fernebenen: die aktuelle laden, die nächste erst ab ~28 % der Stufe (nicht am Stufenanfang: dort läge sonst Laden,
+    // Dekodieren und Backen auf dem Übergang; die erste Folgestufe liegt schon seit `load` vor), den Rest freigeben
+    const progress = stageProgress(v.worldMeters, OPER_STAGE_METERS);
+    const wantNext = stage < MAX_STAGE && (progress >= 0.28 || v.stageBlend > 0.001);
     void this.far.ensure(stage);
-    if (stage < MAX_STAGE) void this.far.ensure(stage + 1);
+    if (wantNext) void this.far.ensure(stage + 1);
     this.far.keep(stage, Math.min(MAX_STAGE, stage + 1));
-    // Bodenvarianten: höchstens eine pro Frame nachbacken
-    if (this.ground) {
-      this.ground.keep(stage, Math.min(MAX_STAGE, stage + 1));
-      if (!this.ground.has(stage)) this.ground.get(stage);
-      else if (v.stageBlend > 0.02 && !this.ground.has(stage + 1) && stage < MAX_STAGE) this.ground.get(stage + 1);
-    }
+    // Bodenvarianten: aktuelle sofort, Folgestufe ab ~28 % und höchstens ein Schritt je ~100 ms (bei Überblendung sofort)
+    if (this.ground) this.prep.step(stage, progress, v.stageBlend);
     const q = v.quality === 0 ? 0.35 : v.quality === 1 ? 0.7 : 1;
     const reduced = v.reducedMotion;
     const scroll = v.speed;
@@ -422,7 +446,14 @@ export class OperRenderer implements WorldRenderer {
       drawGateway(g, e, sx, sy, v, this.skins.f.time);
       return true;
     }
-    return this.skins.draw(g, e, sx, sy, v);
+    // noch ganz außerhalb des Bildes: höchstens ein Sprite-Bake je Frame (siehe SpriteBank.baked)
+    const bank = this.skins.bank;
+    bank.off = sx >= OFFSCREEN_X;
+    try {
+      return this.skins.draw(g, e, sx, sy, v);
+    } finally {
+      bank.off = false;
+    }
   }
 
   // --- Vordergrund -----------------------------------------------------------------------------------------------------------------

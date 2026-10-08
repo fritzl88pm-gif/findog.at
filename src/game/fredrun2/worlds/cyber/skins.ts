@@ -3,6 +3,7 @@
  * Frame). Props (drone-hover, glitch-cube, server-rack, data-coin, cyber-hover) werden genutzt, wenn geladen; sonst prozedurale
  * Fallbacks. Neon-Barriere und Laser-Emitter sind bewusst prozedural (bei Spielgröße klarer lesbar als die Props).
  */
+import { VIEW_W } from "../../constants";
 import type { Ent, PropLibrary, ViewState } from "../../types";
 import { colorWithAlpha, drawStripFrame, glowAt, glowSprite, paint, rr, softSprite, spriteStrip, type Ctx2D } from "../shared-b/canvas";
 import { h1, mod } from "../shared-b/color";
@@ -43,6 +44,8 @@ export interface CyberSkinAssets {
   barrier: HTMLCanvasElement;
   /** Gebackene Schwebe-Plattformen (Prop cyber-hover) je Breite × Pixeldichte */
   hover: Map<string, HTMLCanvasElement>;
+  /** Bakes im laufenden Frame (siehe `hoverSprite`); der Renderer setzt sie in `update` zurück */
+  baked: number;
 }
 
 const CHIP = 64;
@@ -371,6 +374,7 @@ export function makeSkinAssets(): CyberSkinAssets {
     rack: null,
     barrier: barrierSprite(),
     hover: new Map(),
+    baked: 0,
   };
 }
 
@@ -1042,10 +1046,25 @@ const HOVER_NOZZLES: Array<[number, number]> = [
 ];
 
 /**
+ * Pixeldichte, in der die Schwebe-Plattformen gebacken werden: Skala des Zeichenkontexts, auf Viertel gerundet, 1 … 2
+ * (beim Zeichnen aus der Transformation, in `resize` aus der gemeldeten Skala – dieselbe Rechnung).
+ */
+export function hoverDensity(scale: number): number {
+  if (!(scale > 0)) return 1;
+  return Math.max(1, Math.min(2, Math.round(scale * 4) / 4));
+}
+
+/** `hoverSprite` wartet noch auf den Bake (im nächsten Frame) */
+const HOVER_WAIT = false;
+
+/**
  * Schwebe-Plattform aus dem Prop backen (zweistufig verkleinert, 1:1 geblittet). Breite = Trefferbreite (Plattenkante
  * bis Plattenkante), Höhe folgt dem Seitenverhältnis. Rückgabe null, wenn das Prop fehlt.
+ * Die Breite variiert mit dem Tempo (150 … 230 px), die Plattformen lassen sich also nicht vorbacken. Steht die Plattform noch
+ * ganz rechts außerhalb des Bildes (`x` ≥ VIEW_W; die Engine zeichnet sie schon 260 px davor), wird höchstens EIN Bake je Frame
+ * ausgeführt – die übrigen warten (Rückgabe false, unsichtbar) –, sichtbare Plattformen werden immer sofort gebacken.
  */
-function hoverSprite(A: CyberSkinAssets, w: number, kd: number): { c: HTMLCanvasElement; s: number } | null {
+function hoverSprite(A: CyberSkinAssets, w: number, kd: number, x: number): { c: HTMLCanvasElement; s: number } | null | typeof HOVER_WAIT {
   const P = A.props;
   if (!P || !P.has(HOVER_PROP)) return null;
   const cell = P.cell(HOVER_PROP);
@@ -1054,6 +1073,8 @@ function hoverSprite(A: CyberSkinAssets, w: number, kd: number): { c: HTMLCanvas
   const key = `${Math.round(w)}|${kd}`;
   let c = A.hover.get(key);
   if (!c) {
+    if (x >= VIEW_W && A.baked > 0) return HOVER_WAIT;
+    A.baked += 1;
     const dw = Math.max(2, Math.round(cell.w * s * kd));
     const dh = Math.max(2, Math.round(cell.h * s * kd));
     const big = paint(dw * 2, dh * 2, (bg) => {
@@ -1075,8 +1096,9 @@ export function drawHover(g: Ctx2D, A: CyberSkinAssets, e: Ent, sx: number, sy: 
   const falling = e.state === "fallen";
   const warn = e.state === "crumbling";
   const tk = typeof g.getTransform === "function" ? g.getTransform().a : 1;
-  const kd = Math.max(1, Math.min(2, Math.round(tk * 4) / 4));
-  const spr = hoverSprite(A, e.w, kd);
+  const kd = hoverDensity(tk);
+  const spr = hoverSprite(A, e.w, kd, sx);
+  if (spr === HOVER_WAIT) return; // noch außerhalb des Bildes: der Bake folgt im nächsten Frame
   if (spr) {
     const s = spr.s;
     const cell = A.props?.cell(HOVER_PROP);
