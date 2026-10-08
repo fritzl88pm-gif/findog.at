@@ -1,18 +1,22 @@
 /**
  * Game-Controller: verbindet Sim, Renderer, Eingabe, Audio und Persistenz und stellt der UI (React) einen
  * einfachen, abonnierbaren Zustand bereit. Enthält Spielschleife (fester Zeitschritt + Interpolation),
- * Countdown, Pause, Game-Over, Demo-Modus (Bot spielt hinter dem Menü) und adaptive Bildqualität.
+ * Countdown, Pause, Game-Over, Demo-Modus (Bot spielt hinter dem Menü) und adaptive Bildqualität
+ * (QualityGovernor + Render-Skala, siehe quality-governor.ts / render-scale.ts; Zeichen-Drosselung: frame-policy.ts).
  */
-import { createAssetLoader, loadCharacter, type GameAssets } from "./assets";
+import { createAssetLoader, loadCharacter, type AnimName, type GameAssets } from "./assets";
 import { Bot } from "./bot";
 import { CHARACTERS } from "./characters";
 import { FIXED_DT, MAGNET_TIME, PLAYER_SX, SHIELD_TIME, SLOWMO_FACTOR, SLOWMO_TIME, TURBO_TIME, VIEW_H, VIEW_W } from "./constants";
+import { isFullRate, shouldDraw, type DrawPhase } from "./frame-policy";
 import { createGameAudio, type GameAudio } from "./game-audio";
 import { haptic, type HapticOpts } from "./haptics";
 import { HINT_MAX_RUNS, HintScheduler, type HintContext } from "./hints";
 import { InputManager } from "./input";
 import { boardKey, defaultProfile, loadProfile, purchaseCharacter, saveProfile, type Profile, type PurchaseStatus, type RecordResult, type Settings } from "./profile";
+import { QUALITY_STORAGE_KEY, QualityGovernor, type DeviceHints, type QualityLevel } from "./quality-governor";
 import { Renderer, type FrameData } from "./render";
+import { effectiveDpr, pickRenderScale } from "./render-scale";
 import { dailySeed, dateKey } from "./rng";
 import { bankRun, countdownDisplay, isBankable, newRunId, QUICK_COUNTDOWN_S, summarizeRun, toRunResult, wantsQuickCountdown, type FullRunSummary, type RunResult } from "./run-summary";
 import { NO_INPUT, Sim, TOUR_METERS, TOUR_ORDER, dailyWorld, type SimInput } from "./sim";
@@ -21,6 +25,7 @@ import type { CharacterId, Ent, RunConfig, RunMode, SimEvent, ViewState, WorldDe
 import { formatNumber } from "./ui-logic";
 import { WORLDS } from "./worlds";
 import { BasicRenderer } from "./worlds/basic";
+import { yieldToMain } from "./yield";
 
 /** Strukturelle Schnittstelle des Audio-Moduls (siehe ./audio). */
 export interface AudioLike {
@@ -77,7 +82,7 @@ export interface GameSnapshot {
   touch?: boolean;
   /** false, sobald das Profil nicht gespeichert werden konnte (Privatmodus, Speicher voll); nach erfolgreichem Schreiben wieder true */
   storageOk?: boolean;
-  /** Welt, die gerade (nach)geladen wird und deren Laden den Spieler aufhält; null = keine (Füllung folgt mit pkg-hub-perf) */
+  /** Welt, die gerade (nach)geladen wird und deren Laden den Spieler aufhält (Menü-Weltwahl, Laufstart); null = keine */
   loadingWorld?: WorldId | null;
 }
 
@@ -98,6 +103,56 @@ const RECORD_COLOR = "#ffd23f";
 /** Controller-Rumble (stark 0..1, ms) bei Treffer und Tod */
 const RUMBLE_HURT: readonly [number, number] = [0.6, 150];
 const RUMBLE_DEATH: readonly [number, number] = [1, 320];
+/** Kern-Animationen des Helden (Menü-Demo, erste Sekunden); der Rest lädt danach im Hintergrund (Warmup-Vertrag in assets.ts) */
+const CORE_ANIMS: AnimName[] = ["run", "jump", "fall", "idle"];
+/** Zeitscheibe je Frame (ms) für WorldRenderer.warm() der aktuellen Welt (Countdown, Menü-Demo, Lauf-Anfang) */
+const WARM_SLICE_MS = 3;
+/** So lange (s der Logik-Uhr) nach Lauf- bzw. Weltbeginn wird die aktuelle Welt im laufenden Lauf noch aufgewärmt */
+const WARM_RUN_S = 20;
+/** Der Countdown hält höchstens so lange (s) bei „1“, bis das Dekodier-Warmup der Sprites durch ist */
+const WARM_WAIT_S = 1.5;
+/** Lädt eine Welt länger (ms) nicht fertig (hängendes Bild), startet sie mit dem Basis-Renderer; das echte Laden läuft weiter */
+const WORLD_LOAD_TIMEOUT_MS = 15_000;
+/** Spätestens nach so vielen ms erscheint das Menü, auch wenn Manifest/Figur/Welt noch laden */
+const INIT_CAP_MS = 20_000;
+/** Skalenwechsel der Zeichenfläche werden so lange (ms) gesammelt, bevor die Welt-Renderer sie nachziehen */
+const WORLD_RESIZE_DEBOUNCE_MS = 120;
+/** Skalenunterschied, ab dem die Welt-Renderer ein resize() bekommen */
+const WORLD_SCALE_EPS = 0.02;
+/** Nach einem Zeichen-Anlass (Phasenwechsel, Resize …) zeichnet auch die gedrosselte Phase noch so lange (ms) jeden Frame: asynchron fertig werdende Welt-Caches sollen im Standbild ankommen */
+const DRAW_SETTLE_MS = 300;
+/** Nach einem Kontextwechsel (neue Szene, Welt geladen, Größenwechsel …) wertet der Governor so lange (ms) nichts: die ersten Frames hängen durch Bakes */
+const GOVERNOR_SETTLE_MS = 2000;
+/** Geladene Welt bzw. ihr Ladevorgang; die Identität des Eintrags erkennt verworfene (pruneWorlds) Ladevorgänge */
+interface WorldLoad {
+  promise: Promise<void>;
+}
+
+/** Erfüllt mit true, sobald p erfüllt ist, mit false bei Ablehnung oder wenn `ms` vorher ablaufen (der Timer wird immer aufgeräumt) */
+function settledWithin(p: Promise<void>, ms: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    p.then(
+      () => {
+        clearTimeout(timer);
+        resolve(true);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(false);
+      },
+    );
+  });
+}
+
+/** Gemerkte Qualitätsstufe vergessen (feste Qualität in den Einstellungen); Speicher gesperrt: egal */
+function forgetStoredQuality(): void {
+  try {
+    localStorage.removeItem(QUALITY_STORAGE_KEY);
+  } catch {
+    // gesperrt (Privatmodus): nichts zu vergessen
+  }
+}
 
 const TITLE_CASE: Record<WorldId, string> = { wien: "Wien", alpen: "Alpen", finanzamt: "Finanzamt", prater: "Prater", wachau: "Wachau", cyber: "Cyber-Wien", winter: "Christkindlmarkt", oper: "Opernball" };
 
@@ -129,7 +184,7 @@ export class FredRunGame {
   readonly assets: GameAssets = createAssetLoader();
   private renderer: Renderer | null = null;
   private readonly worldRenderers = new Map<WorldId, WorldRenderer>();
-  private readonly worldLoading = new Map<WorldId, Promise<void>>();
+  private readonly worldLoading = new Map<WorldId, WorldLoad>();
   private profile: Profile = defaultProfile();
   private sim: Sim | null = null;
   private bot: Bot | null = null;
@@ -178,10 +233,48 @@ export class FredRunGame {
   private fps = 60;
   private fpsAcc = 0;
   private fpsN = 0;
-  private slowFrames = 0;
-  private fastFrames = 0;
-  private quality: 0 | 1 | 2 = 2;
+  private quality: QualityLevel = 2;
   private autoQuality = true;
+  /** Adaptive Qualität (nur bei Einstellung "auto"); feed() je voll gezeichnetem Frame, Wechsel greifen am Anfang des nächsten Frames */
+  private governor: QualityGovernor | null = null;
+  private pendingQuality: QualityLevel | null = null;
+  /** Kontext des letzten Governor-Frames (Phase, Szene, Welt, Verdeckung): ein Wechsel startet die Einschwingzeit ohne Wertung */
+  private feedPhase: GamePhase | null = null;
+  private feedSim: Sim | null = null;
+  private feedWorld: WorldId | null = null;
+  private feedCovered = false;
+  private settlePending = true;
+  private settleUntil = 0;
+  /** "auto" bzw. "manual" nach der letzten Einstellung (erkennt den Wechsel, der den Governor ein-/ausschaltet) */
+  private qualityMode: "auto" | "manual" | null = null;
+  /** zuletzt angewandte Größe der Zeichenfläche (CSS-Pixel, Bitmap-Pixeldichte): gleiche Werte lösen nichts aus */
+  private sizeW = -1;
+  private sizeH = -1;
+  private sizeDpr = -1;
+  /** Skala, die den Welt-Renderern zuletzt gemeldet wurde (0 = noch keine), und der Timer des gedrosselten Nachziehens */
+  private worldScale = 0;
+  private worldScaleTimer: ReturnType<typeof setTimeout> | null = null;
+  private dprQuery: MediaQueryList | null = null;
+  /** Zeichen-Drosselung (frame-policy.ts): etwas hat das Bild verändert oder die Zeichenfläche geleert */
+  private drawDirty = true;
+  private dirtyUntil = 0;
+  /** Phase des zuletzt gezeichneten Frames (ein Wechsel ist immer ein Zeichen-Anlass) und Zeitpunkt (rAF-Uhr) davon */
+  private drawnPhase: DrawPhase | null = null;
+  private lastDrawAt = Number.NEGATIVE_INFINITY;
+  /** Zeit (s) übersprungener Frames, die der nächste gezeichnete Frame nachholt (nur gedrosselte Phasen) */
+  private skipDt = 0;
+  /** Aufwärmen: Welt-Renderer, deren warm() fertig meldete; Logik-Zeit, bis zu der die aktuelle Welt im Lauf noch gewärmt wird */
+  private readonly warmedWorlds = new WeakSet<WorldRenderer>();
+  private warmUntil = 0;
+  /** Dekodier-Warmup der Sprites vor dem Start (assets.warmed): Token gegen veraltete Antworten, Fertig-Flag, Wartezeit am Countdown-Ende (s) */
+  private warmToken = 0;
+  private warmDone = true;
+  private warmWaitT = 0;
+  /** Ein Laufstart läuft schon (Welt/Figur laden): weitere startRun() werden ignoriert; neueste Weltwahl im Menü */
+  private starting = false;
+  private selectTicket = 0;
+  /** Held, dessen vollständiger Satz Animationen geladen ist (ein später eintreffender Kern-Satz darf ihn nicht ersetzen) */
+  private fullCharacter: CharacterId | null = null;
   private destroyed = false;
   private audioUnlocked = false;
   private error: string | null = null;
@@ -202,11 +295,11 @@ export class FredRunGame {
   private touchMode = false;
   /** Profil ließ sich zuletzt speichern (false: localStorage gesperrt/voll) */
   private storageOk = true;
-  /** Welt, die den Spieler gerade aufhält (Platzhalter: füllt pkg-hub-perf) */
+  /** Welt, die den Spieler gerade aufhält (Menü-Weltwahl, Laufstart, Rückkehr ins Menü); null = keine */
   private loadingWorld: WorldId | null = null;
   /** Hochformat-Hinweis der UI liegt über dem Spiel */
   private portraitBlocked = false;
-  /** Menü liegt unter einer Vollbild-Ebene (Einstellungen o. Ä.); die Wirkung folgt mit pkg-hub-perf */
+  /** Menü liegt unter einer Vollbild-Ebene (Einstellungen o. Ä.): Demo und Zeichnen sparen (siehe frame-policy.ts) */
   private menuCovered = false;
   /** Fenster hat Fokus / Seite ist sichtbar – nur aus focus/blur/visibilitychange gepflegt (kein document.hasFocus()-Polling) */
   private winFocused = true;
@@ -274,17 +367,29 @@ export class FredRunGame {
         this.emitChange();
       };
       this.setProgress(0.05);
-      await this.assets.props.ensureManifest();
-      this.setProgress(0.15);
-      await this.ensureCharacter(this.profile.character);
-      this.setProgress(0.5);
       this.demoWorld = this.profile.world;
-      await this.ensureWorld(this.demoWorld);
-      this.setProgress(0.9);
+      // Manifest, Kern der Figur und Demo-Welt starten gleichzeitig (die Requests überlappen statt sich zu staffeln); der Balken
+      // wächst mit jedem fertigen Teil, gewichtet nach Dateizahl und Bytes: Manifest ~1 Datei, Figur-Kern 5 Dateien (0,5 MB),
+      // Welt-Props ~28 Dateien (2,6 MB)
+      const part = (p: Promise<unknown>, weight: number): Promise<void> =>
+        p.then(() => {
+          if (this.phase === "loading") this.setProgress(Math.min(0.95, this.loadProgress + weight));
+        });
+      const parts = Promise.all([
+        part(this.assets.props.ensureManifest(), 0.08),
+        part(this.ensureCharacter(this.profile.character, true), 0.3),
+        part(this.ensureWorld(this.demoWorld), 0.55),
+      ]);
+      // Hängt eine Anfrage (Funknetz), kommt das Menü trotzdem: Demo startet, sobald die Welt da ist (installWorld)
+      let capTimer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([parts, new Promise<void>((resolve) => (capTimer = setTimeout(resolve, INIT_CAP_MS)))]).finally(() => clearTimeout(capTimer));
       this.startDemo();
       this.phase = "menu";
+      this.drawDirty = true;
       this.setProgress(1);
       this.prefetchAudio(["menu", WORLDS[this.profile.world].music], true);
+      // Übrige Animationen (slide, dash, stomp, …) laden jetzt im Hintergrund; vor dem Countdown-Ende wartet startRun auf das Warmup
+      void this.ensureCharacter(this.profile.character);
     } catch (err) {
       this.error = err instanceof Error ? err.message : String(err);
       this.phase = "menu";
@@ -296,6 +401,7 @@ export class FredRunGame {
     document.addEventListener("fullscreenchange", this.onFullscreenChange);
     window.addEventListener("blur", this.onBlur);
     window.addEventListener("focus", this.onFocus);
+    this.canvas.addEventListener("contextrestored", this.markDirty);
     this.emitChange();
   }
 
@@ -304,10 +410,15 @@ export class FredRunGame {
     cancelAnimationFrame(this.raf);
     this.input.detach();
     this.ro?.disconnect();
+    this.dprQuery?.removeEventListener?.("change", this.onDprChange);
+    this.dprQuery = null;
+    if (this.worldScaleTimer !== null) clearTimeout(this.worldScaleTimer);
+    this.worldScaleTimer = null;
     document.removeEventListener("visibilitychange", this.onVisibility);
     document.removeEventListener("fullscreenchange", this.onFullscreenChange);
     window.removeEventListener("blur", this.onBlur);
     window.removeEventListener("focus", this.onFocus);
+    this.canvas.removeEventListener("contextrestored", this.markDirty);
     this.audio.music.stop(0.2);
     for (const l of this.activeLoops) this.audio.loop(l, false);
     this.audio.dispose();
@@ -335,6 +446,7 @@ export class FredRunGame {
     } else {
       this.audio.resume();
       this.last = performance.now();
+      this.markDirty(); // der Browser darf die Zeichenfläche im Hintergrund verworfen haben
     }
   };
 
@@ -343,19 +455,98 @@ export class FredRunGame {
     if (document.fullscreenElement === null && this.phase === "running") this.pause();
   };
 
+  /**
+   * Zeichenfläche an Bühne, Geräte-Pixeldichte und Qualitätsstufe anpassen. Die Bitmap ist 1280·s × 720·s groß (s aus
+   * pickRenderScale: Q0 exakt 1, Q1 bis 1,25, Q2 bis 2, nie über 3,7 MP), nicht mehr cssBreite·dpr – so bleibt der 1:1-Schnellpfad der
+   * Welt-Caches auf den meisten Geräten erreichbar und die Stufe hat einen echten Auflösungshebel.
+   * `sync`: aus dem ResizeObserver (läuft NACH den rAF-Callbacks, die geleerte Zeichenfläche würde ein leeres Bild zeigen) sofort neu zeichnen.
+   */
   private observeSize(): void {
-    const apply = (): void => {
+    const apply = (sync: boolean): void => {
+      const r = this.renderer;
+      if (!r) return;
       const box = this.container.getBoundingClientRect();
-      const dprCap = this.quality === 0 ? 1 : this.quality === 1 ? 1.5 : 2;
-      const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
-      this.renderer?.resize(box.width, box.height, dpr);
+      const s = pickRenderScale(box.width, box.height, window.devicePixelRatio || 1, this.quality);
+      const eff = effectiveDpr(box.width, s);
+      if (box.width === this.sizeW && box.height === this.sizeH && eff === this.sizeDpr) return; // nichts geändert: kein Neuaufbau von Vignette/Schnellpfaden
+      this.sizeW = box.width;
+      this.sizeH = box.height;
+      this.sizeDpr = eff;
+      r.resize(box.width, box.height, eff);
+      this.drawDirty = true; // canvas.width zu setzen löscht den Inhalt
+      this.settlePending = true;
+      this.syncWorldScale(box.width >= 64 && box.height >= 36);
+      if (sync) this.drawNow();
     };
-    apply();
-    this.ro = new ResizeObserver(apply);
+    apply(false);
+    this.ro = new ResizeObserver(() => apply(true));
     this.ro.observe(this.container);
-    this.applySize = apply;
+    this.applySize = () => apply(false);
+    this.watchDpr();
   }
   private applySize: () => void = () => {};
+
+  /** Geräte-Pixeldichte ändert sich ohne Größenänderung (Fenster auf anderen Monitor, Browser-Zoom): matchMedia meldet es, der ResizeObserver nicht */
+  private watchDpr(): void {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    this.dprQuery?.removeEventListener?.("change", this.onDprChange);
+    try {
+      const mq = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      mq.addEventListener?.("change", this.onDprChange); // Safari < 14 kennt nur addListener: dort bleibt es beim ResizeObserver
+      this.dprQuery = mq;
+    } catch {
+      this.dprQuery = null;
+    }
+  }
+
+  private onDprChange = (): void => {
+    if (this.destroyed) return;
+    this.applySize();
+    this.watchDpr(); // die Abfrage gilt nur für die bisherige Dichte: neu auf die aktuelle ansetzen
+  };
+
+  /**
+   * Meldet eine geänderte Skala den geladenen Welt-Renderern (deren Sprites/Caches hängen an der Pixeldichte). Gedrosselt: während
+   * eines Fenster-Zugs kommen viele kleine Änderungen, die Welten bekommen nur die letzte. Gültige Boxen nur (nicht im ausgeblendeten Zustand).
+   */
+  private syncWorldScale(valid: boolean): void {
+    const r = this.renderer;
+    if (!valid || !r) return;
+    const s = r.pixelScale;
+    if (this.worldScale === 0) {
+      this.worldScale = s; // erste Messung: Welten werden beim Erzeugen (ensureWorld) mit dieser Skala angelegt
+      return;
+    }
+    if (Math.abs(s - this.worldScale) < WORLD_SCALE_EPS) return;
+    if (this.worldScaleTimer !== null) clearTimeout(this.worldScaleTimer);
+    this.worldScaleTimer = setTimeout(() => {
+      this.worldScaleTimer = null;
+      const ps = this.renderer?.pixelScale ?? 0;
+      if (this.destroyed || !(ps > 0)) return;
+      this.worldScale = ps;
+      for (const [id, w] of this.worldRenderers) {
+        try {
+          w.resize?.(ps);
+        } catch (err) {
+          this.renderFailed(id, err);
+        }
+        this.warmedWorlds.delete(w); // der Neuaufbau nach einem Skalenwechsel reiht neue Backschritte in warm() ein
+      }
+      this.warmUntil = Math.max(this.warmUntil, this.time + WARM_RUN_S);
+      this.drawDirty = true;
+    }, WORLD_RESIZE_DEBOUNCE_MS);
+  }
+
+  /** Das Bild hat sich (womöglich) verändert oder wurde geleert: der nächste Frame zeichnet auch in gedrosselten Phasen */
+  private markDirty = (): void => {
+    this.drawDirty = true;
+  };
+
+  /** Sofort zeichnen (nach Resize: die geleerte Zeichenfläche darf nie als leeres Bild sichtbar werden). QA-Modus zeichnet nur auf Befehl. */
+  private drawNow(): void {
+    if (this.manual || this.destroyed || this.phase === "loading") return;
+    this.frame(0.0001);
+  }
 
   // ------------------------------------------------------------------------------------------
   // Assets
@@ -373,24 +564,80 @@ export class FredRunGame {
     }
   }
 
-  private async ensureCharacter(id: CharacterId): Promise<void> {
-    const sprites = await loadCharacter(id);
-    if (this.profile.character === id) this.renderer?.setCharacter(sprites);
+  /**
+   * Lädt den gespielten bzw. gewählten Helden und fordert das Dekodier-Warmup an (assets.ts: nur dieser Held, nie die Menü-Vorschauen).
+   * `core`: nur Kern-Animationen (run/jump/fall/idle) für Menü und erste Sekunden – der vollständige Satz folgt mit einem zweiten Aufruf.
+   */
+  private async ensureCharacter(id: CharacterId, core = false): Promise<void> {
+    const sprites = await loadCharacter(id, core ? CORE_ANIMS : undefined, { warm: true });
+    if (!core) this.fullCharacter = id;
+    else if (this.fullCharacter === id) return; // der vollständige Satz war schneller: nicht durch den Kern ersetzen
+    if (this.profile.character === id) {
+      this.renderer?.setCharacter(sprites);
+      this.markDirty();
+    }
   }
 
+  /**
+   * Lädt eine Welt (idempotent). Nach dem Laden gibt yieldToMain() den Hauptthread frei, bevor die Welt im Frame zum ersten Mal
+   * aktualisiert wird (Bakes). Hängt das Laden (Funkloch, hängendes Bild) über WORLD_LOAD_TIMEOUT_MS, ist die Zusage trotzdem erfüllt:
+   * die Welt startet mit dem Basis-Renderer und wird durch den echten ersetzt, sobald er fertig ist.
+   */
   private ensureWorld(id: WorldId): Promise<void> {
-    let p = this.worldLoading.get(id);
-    if (!p) {
-      p = (async () => {
-        const def = WORLDS[id];
-        const r = def.createRenderer();
-        if (this.renderer) r.resize?.(this.renderer.pixelScale);
-        await Promise.all([r.load(this.assets).catch(() => undefined), this.assets.props.preload(def.propIds ?? [])]);
-        this.worldRenderers.set(id, r);
-      })();
-      this.worldLoading.set(id, p);
+    const known = this.worldLoading.get(id);
+    if (known) return known.promise;
+    const entry: WorldLoad = { promise: Promise.resolve() };
+    this.worldLoading.set(id, entry);
+    entry.promise = this.loadWorld(id, entry);
+    return entry.promise;
+  }
+
+  private async loadWorld(id: WorldId, entry: WorldLoad): Promise<void> {
+    const def = WORLDS[id];
+    const r = def.createRenderer();
+    const usedScale = this.renderer?.pixelScale ?? 0;
+    if (usedScale > 0) r.resize?.(usedScale);
+    const real = (async () => {
+      await Promise.all([r.load(this.assets).catch(() => undefined), this.assets.props.preload(def.propIds ?? [])]);
+      await yieldToMain();
+      this.installWorld(id, entry, r, usedScale);
+    })();
+    if (await settledWithin(real, WORLD_LOAD_TIMEOUT_MS)) return;
+    // Zu langsam: sofort mit dem Basis-Renderer weiter (Menü-Demo, Laufstart); `real` ersetzt ihn später
+    if (this.worldLoading.get(id) === entry && !this.worldRenderers.has(id)) {
+      this.worldRenderers.set(id, new BasicRenderer(220));
+      this.markDirty();
     }
-    return p;
+  }
+
+  /** Fertig geladene Welt einsetzen – außer sie wurde inzwischen verworfen (pruneWorlds) */
+  private installWorld(id: WorldId, entry: WorldLoad, r: WorldRenderer, usedScale: number): void {
+    if (this.destroyed || this.worldLoading.get(id) !== entry) return;
+    const ps = this.renderer?.pixelScale ?? 0;
+    if (ps > 0 && Math.abs(ps - usedScale) >= WORLD_SCALE_EPS) r.resize?.(ps); // die Skala hat sich während des Ladens geändert
+    this.worldRenderers.set(id, r);
+    this.markDirty();
+    this.settlePending = true;
+    // Menü ohne Demo (Welt kam erst nach der Wartegrenze): jetzt starten
+    if (this.phase === "menu" && !this.sim && this.demoWorld === id) this.startDemo();
+  }
+
+  /**
+   * Wartet auf eine Welt, die den Spieler aufhält (Menü-Weltwahl, Laufstart, Rückkehr ins Menü); solange läuft `loadingWorld`,
+   * damit die UI "Welt wird geladen" zeigt statt stumm zu hängen. Bereits geladene Welten setzen nichts (kein Flackern).
+   */
+  private async awaitWorld(id: WorldId): Promise<void> {
+    if (this.worldRenderers.has(id)) return;
+    this.loadingWorld = id;
+    this.emitChange();
+    try {
+      await this.ensureWorld(id);
+    } finally {
+      if (this.loadingWorld === id) {
+        this.loadingWorld = null;
+        this.emitChange();
+      }
+    }
   }
 
   // ------------------------------------------------------------------------------------------
@@ -528,9 +775,14 @@ export class FredRunGame {
     if (blocked && this.phase === "running") this.pause();
   }
 
-  /** Menü liegt verdeckt (Einstellungen, Heldenauswahl …): die Demo dahinter darf sparen. Hier nur gespeichert, die Wirkung folgt in pkg-hub-perf. */
+  /**
+   * Menü liegt verdeckt (Einstellungen, Heldenauswahl …): die Demo dahinter rechnet und zeichnet nur noch ca. 8 Bilder pro Sekunde
+   * (frame-policy.ts). Beim Verlassen wird sofort neu gezeichnet (kein Stehenbleiben auf einem alten Bild). Idempotent.
+   */
   setMenuCovered(covered: boolean): void {
+    if (covered === this.menuCovered) return;
     this.menuCovered = covered;
+    this.markDirty();
   }
 
   get isMenuCovered(): boolean {
@@ -564,18 +816,55 @@ export class FredRunGame {
       s.reducedMotion || (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true);
     if (this.renderer) this.renderer.reducedMotion = this.reducedMotion;
     this.input.setJumpAssist(s.jumpAssist);
-    this.autoQuality = s.quality === "auto";
-    if (!this.autoQuality) this.setQuality(s.quality === "low" ? 0 : s.quality === "medium" ? 1 : 2);
+    this.syncQualityMode();
+    this.markDirty(); // Weniger Bewegung, Blitze, Wackeln o. Ä. ändern das Bild auch in der Pause
   }
 
-  private setQuality(q: 0 | 1 | 2): void {
+  /**
+   * Qualität nach Einstellung. "auto": der QualityGovernor entscheidet (Startstufe: gemerkte bzw. aus Geräte-Hinweisen);
+   * feste Stufe ("low"/"medium"/"high"): kein Governor, und die gemerkte Stufe wird vergessen, damit ein späteres "auto" neu beginnt.
+   * Mehrfach aufrufbar (jede Einstellungsänderung): nur ein Wechsel des Modus baut den Governor um.
+   */
+  private syncQualityMode(): void {
+    const q = this.profile.settings.quality;
+    const mode = q === "auto" ? "auto" : "manual";
+    if (mode === "auto") {
+      if (mode !== this.qualityMode || !this.governor) {
+        this.governor = new QualityGovernor({ initial: QualityGovernor.initialLevel(this.deviceHints()) });
+        this.pendingQuality = null;
+        this.setQuality(this.governor.level);
+      }
+    } else {
+      if (mode !== this.qualityMode) forgetStoredQuality();
+      this.governor = null;
+      this.pendingQuality = null;
+      this.setQuality(q === "low" ? 0 : q === "medium" ? 1 : 2);
+    }
+    this.qualityMode = mode;
+    this.autoQuality = mode === "auto";
+  }
+
+  /** Geräte-Hinweise für die Startstufe (fehlende Werte, etwa deviceMemory in Safari/Firefox, zählen nicht als schwach) */
+  private deviceHints(): DeviceHints {
+    if (typeof navigator === "undefined" || typeof window === "undefined") return {};
+    const nav = navigator as Navigator & { deviceMemory?: number };
+    return {
+      deviceMemory: nav.deviceMemory,
+      hardwareConcurrency: nav.hardwareConcurrency,
+      coarse: window.matchMedia?.("(pointer: coarse)").matches === true,
+      dpr: window.devicePixelRatio || 1,
+    };
+  }
+
+  private setQuality(q: QualityLevel): void {
     if (q === this.quality) return;
     this.quality = q;
     if (this.renderer) {
       this.renderer.quality = q;
       this.renderer.particles.budget = q === 0 ? 0.35 : q === 1 ? 0.7 : 1;
     }
-    this.applySize();
+    this.applySize(); // die Stufe bestimmt die Auflösung (pickRenderScale)
+    this.markDirty();
     this.emitChange();
   }
 
@@ -602,7 +891,10 @@ export class FredRunGame {
   async selectWorld(id: WorldId, mode: RunMode = this.profile.mode): Promise<void> {
     this.commitProfile({ ...this.profile, world: id, mode });
     this.prefetchAudio([WORLDS[id].music]);
-    await this.ensureWorld(id);
+    // Mehrfaches Antippen: die neueste Auswahl gewinnt; eine ältere, später fertige Welt ersetzt die Demo nicht mehr
+    const ticket = ++this.selectTicket;
+    await this.awaitWorld(id);
+    if (ticket !== this.selectTicket) return;
     if (this.phase === "menu") this.pruneWorlds([id]);
     if (this.phase === "menu") {
       this.demoWorld = id;
@@ -622,7 +914,17 @@ export class FredRunGame {
    * ohne Angabe entscheidet quickStartWanted() (Einstellung, Lauf-Zähler, gleiche Welt/Modus/Held wie zuletzt).
    */
   async startRun(over: Partial<RunConfig> = {}, opts: { quick?: boolean } = {}): Promise<void> {
-    if (this.phase === "loading") return;
+    // Reentrancy-Sperre: solange Welt/Figur laden, löst ein zweiter Aufruf (Doppeltipp, Enter + Klick) nichts mehr aus
+    if (this.phase === "loading" || this.starting) return;
+    this.starting = true;
+    try {
+      await this.beginRun(over, opts);
+    } finally {
+      this.starting = false;
+    }
+  }
+
+  private async beginRun(over: Partial<RunConfig>, opts: { quick?: boolean }): Promise<void> {
     this.unlockAudio();
     const p = this.profile;
     const mode = over.mode ?? p.mode;
@@ -635,9 +937,9 @@ export class FredRunGame {
     // Vor dem Laden entscheiden: danach hat sich die Phase (Menü/Game-Over) womöglich schon geändert
     const quick = opts.quick ?? this.quickStartWanted(cfg);
     // Nur die Startwelt laden – in der Weltreise wird die nächste Welt rechtzeitig vor dem Tor nachgeladen.
-    await Promise.all([this.ensureCharacter(cfg.character), this.ensureWorld(world)]);
+    await Promise.all([this.ensureCharacter(cfg.character), this.awaitWorld(world)]);
     this.pruneWorlds([world]);
-    const sprites = await loadCharacter(cfg.character);
+    const sprites = await loadCharacter(cfg.character, undefined, { warm: true });
     this.renderer?.setCharacter(sprites);
     this.sim = new Sim(cfg, WORLDS);
     this.capturePrev(this.sim);
@@ -667,6 +969,8 @@ export class FredRunGame {
     this.shownCount = this.countdownShown();
     this.input.enabled = true;
     this.input.releaseAll();
+    this.beginWarmWait();
+    this.warmUntil = Number.POSITIVE_INFINITY; // Countdown und Lauf-Anfang: aktuelle Welt aufwärmen (Zeitfenster startet mit "Los")
     // Ein noch laufender Game-Over-/Highscore-Jingle darf nicht in den neuen Lauf hineinklingen (und die Musik nicht geduckt bleiben)
     this.audio.stopStingers?.(0.3);
     this.audio.music.play(WORLDS[TOUR_ORDER.includes(this.sim.world.id) ? this.sim.world.id : world].music, { crossfadeSec: 0.6, intensity: 0.15 });
@@ -833,7 +1137,7 @@ export class FredRunGame {
     this.audio.music.play("menu", { crossfadeSec: 0.8 });
     this.releaseMuffle();
     this.demoWorld = this.profile.world;
-    void this.ensureWorld(this.demoWorld).then(() => {
+    void this.awaitWorld(this.demoWorld).then(() => {
       if (this.phase === "menu") {
         this.pruneWorlds([this.demoWorld]);
         this.startDemo();
@@ -858,6 +1162,7 @@ export class FredRunGame {
     this.demo = true;
     this.acc = 0;
     this.renderer?.particles.clear();
+    this.markDirty();
   }
 
   // ------------------------------------------------------------------------------------------
@@ -867,19 +1172,88 @@ export class FredRunGame {
     if (this.destroyed) return;
     this.raf = requestAnimationFrame(this.tick);
     if (this.manual) return;
+    // Ein Qualitätswechsel des Governors greift am Anfang des nächsten Frames: die neu angelegte Zeichenfläche wird im selben Frame gefüllt
+    if (this.pendingQuality !== null) {
+      const q = this.pendingQuality;
+      this.pendingQuality = null;
+      if (this.autoQuality) this.setQuality(q);
+    }
     const rawDt = Math.max(0.0001, (now - this.last) / 1000);
     this.last = now;
     const dt = Math.min(0.1, rawDt);
     this.time += dt;
-    this.trackPerformance(rawDt);
-    this.frame(dt);
+    this.trackFps(rawDt);
+    const t0 = performance.now();
+    const fullRate = this.frame(dt, now);
+    // Nur Frames mit voller Rate sagen etwas über das Gerät: Pause, Game-Over-Karte, verdecktes Menü und Countdown (Dekodier-Warmup
+    // belegt dort absichtlich den Hauptthread) werden nicht gewertet. busy = Arbeitszeit des Frames (ohne Wartezeit auf die Anzeige).
+    if (fullRate && this.governor !== null && this.autoQuality && this.feedsGovernor() && this.settled(now)) {
+      const next = this.governor.feed(rawDt * 1000, performance.now() - t0, now);
+      if (next !== null) this.pendingQuality = next;
+    }
   };
 
-  private frame(dt: number): void {
+  /**
+   * false in der Einschwingzeit nach einem Kontextwechsel: die ersten Frames einer neuen Szene/Welt/Größe hängen durch Bakes,
+   * Dekodieren und Canvas-Neuanlage und sagen nichts über den Dauerbetrieb (sie würden den Governor fälschlich senken lassen).
+   */
+  private settled(now: number): boolean {
+    const sim = this.sim;
+    const wid = sim ? sim.world.id : null;
+    if (this.phase !== this.feedPhase || sim !== this.feedSim || wid !== this.feedWorld || this.menuCovered !== this.feedCovered) {
+      this.feedPhase = this.phase;
+      this.feedSim = sim;
+      this.feedWorld = wid;
+      this.feedCovered = this.menuCovered;
+      this.settlePending = true;
+    }
+    if (this.settlePending) {
+      this.settlePending = false;
+      this.settleUntil = now + GOVERNOR_SETTLE_MS;
+    }
+    return now >= this.settleUntil;
+  }
+
+  /** Wertet die aktuelle Lage für den Governor? Lauf und sichtbares Menü ja; Laden einer Welt (Hänger durch Bakes) und eingefrorene Szene nein */
+  private feedsGovernor(): boolean {
+    if (this.frozen || this.loadingWorld !== null) return false;
+    return this.phase === "running" || (this.phase === "menu" && !this.menuCovered);
+  }
+
+  /** Phase für die Zeichen-Entscheidung: das eingefrorene Ergebnis nach „Lauf beenden“ steht wie die Pause */
+  private drawPhase(): DrawPhase {
+    return this.frozen && this.phase === "gameover" ? "paused" : this.phase;
+  }
+
+  /**
+   * Ein Frame. `liveNow` (rAF-Zeitstempel) nur aus der Live-Schleife: dort kann die Zeichen-Drosselung (frame-policy.ts) den Frame
+   * nach input.poll() überspringen. Ohne `liveNow` (debugAdvance/debugRender/debugSettle, Größenwechsel) wird immer gezeichnet.
+   * Rückgabe: true = voll gezeichneter Frame (zählt für den Governor), false = übersprungen oder gedrosselt gezeichnet.
+   */
+  private frame(dt: number, liveNow?: number): boolean {
     const sim = this.sim;
     const r = this.renderer;
-    if (!sim || !r) return;
+    if (!sim || !r) return false;
     this.input.poll();
+
+    // Zeichen-Drosselung: Pause steht, Game-Over-Karte ca. 30 fps, verdecktes Menü ca. 8 fps
+    const live = liveNow !== undefined;
+    let fullRate = true;
+    if (live) {
+      const pp = this.drawPhase();
+      if (pp !== this.drawnPhase) this.drawDirty = true;
+      if (this.drawDirty) this.dirtyUntil = liveNow + DRAW_SETTLE_MS;
+      if (!shouldDraw(pp, liveNow < this.dirtyUntil, this.menuCovered, this.victory, liveNow - this.lastDrawAt)) {
+        this.skipDt = Math.min(0.5, this.skipDt + dt);
+        return false;
+      }
+      fullRate = isFullRate(pp, this.menuCovered, this.victory);
+      // Gedrosselte Phasen holen die übersprungene Zeit nach (Wolken, Partikel, Demo-Sim laufen in Echtzeit); volle Rate nie
+      dt = fullRate ? dt : Math.min(0.1, dt + this.skipDt);
+      this.skipDt = 0;
+      this.drawnPhase = pp;
+      this.lastDrawAt = liveNow;
+    }
 
     // Countdown
     if (this.phase === "countdown") {
@@ -899,7 +1273,12 @@ export class FredRunGame {
           this.shownCount = count;
           this.emitChange();
         }
-        if (this.countdownT <= 0) {
+        if (this.countdownT <= 0 && !this.resumeCountdown && !this.warmDone && this.warmWaitT < WARM_WAIT_S) {
+          // Dekodier-Warmup der Sprites noch nicht durch: „1“ bleibt kurz stehen (höchstens WARM_WAIT_S) statt mit dem ersten
+          // Rutschen/Dash/Stampfer zu ruckeln
+          this.warmWaitT += dt;
+          this.countdownT = 0.02;
+        } else if (this.countdownT <= 0) {
           this.phase = "running";
           this.input.discardEdges();
           this.audio.sfx("go");
@@ -910,6 +1289,7 @@ export class FredRunGame {
           } else {
             sim.begin();
             this.runStartMs = performance.now();
+            this.warmUntil = this.time + WARM_RUN_S;
             this.showToast(sim.world.name, sim.world.tagline, sim.world.accent);
           }
           this.emitChange();
@@ -969,6 +1349,12 @@ export class FredRunGame {
     }
     const gate = sim.nextGate;
     const nxt = gate ? this.worldRenderers.get(gate.to) ?? null : null;
+    // Vorwärmen in 3-ms-Scheiben (WorldRenderer.warm): aktuelle Welt im Countdown, in der Menü-Demo und in den ersten 20 s des Laufs,
+    // die Zielwelt eines Tores, sobald sie geladen ist. Nur in der Live-Schleife (QA-Aufnahmen backen wie bisher lazy).
+    if (live && !still) {
+      if (this.phase !== "running" || this.time < this.warmUntil) this.warmSlice(sim.world.id, cur);
+      if (nxt && gate) this.warmSlice(gate.to, nxt);
+    }
     const nextView: ViewState = { ...rawView, stage: 0, stageBlend: 0, worldMeters: 0 };
     if (!still) {
       this.guard(sim.world.id, () => cur?.update(fxDt, view));
@@ -1009,6 +1395,38 @@ export class FredRunGame {
     } catch (err) {
       this.renderFailed(sim.world.id, err);
     }
+    // Pause/Ergebnis stehen erst, wenn Wackeln und Blitz ausgelaufen sind; bis dahin zeichnet auch die gedrosselte Phase weiter
+    this.drawDirty = this.shake > 0 || this.flashV > 0;
+    return fullRate;
+  }
+
+  /** Ruft warm() eines Welt-Renderers auf, bis er „fertig“ meldet (danach nie wieder); ein Fehler beendet das Aufwärmen dieser Welt */
+  private warmSlice(id: WorldId, w: WorldRenderer): void {
+    if (!w.warm || this.warmedWorlds.has(w)) return;
+    try {
+      if (w.warm(WARM_SLICE_MS)) this.warmedWorlds.add(w);
+    } catch (err) {
+      this.warmedWorlds.add(w);
+      this.renderFailed(id, err);
+    }
+  }
+
+  /**
+   * Beginnt das Warten auf das Dekodier-Warmup der Sprites (assets.warmed): „dringend“, weil Ladebildschirm/Countdown ein Ruckeln
+   * vertragen; der Countdown hält höchstens WARM_WAIT_S bei „1“, bis es fertig ist.
+   */
+  private beginWarmWait(): void {
+    const token = ++this.warmToken;
+    this.warmDone = false;
+    this.warmWaitT = 0;
+    void this.assets.warmed(true).then(
+      () => {
+        if (token === this.warmToken) this.warmDone = true;
+      },
+      () => {
+        if (token === this.warmToken) this.warmDone = true;
+      },
+    );
   }
 
   /** Wirksames Wackeln 0..1 (Regler „Wackeln“; „Weniger Bewegung“ schaltet es ab) */
@@ -1083,6 +1501,7 @@ export class FredRunGame {
           this.flashColor = "#c4b5fd";
           break;
         case "world-transition":
+          this.warmUntil = this.time + WARM_RUN_S; // neue aktuelle Welt: noch einmal 20 s aufwärmen
           this.flashV = 0.7;
           this.flashColor = "#c4b5fd";
           this.pruneAt = this.time + 3;
@@ -1315,7 +1734,8 @@ export class FredRunGame {
     this.showResult(toRunResult(summary, rec, newRunId()), false);
   }
 
-  private trackPerformance(rawDt: number): void {
+  /** Bildrate fürs UI (rAF-Takt, auch wenn ein Frame wegen der Zeichen-Drosselung nicht gezeichnet wird) */
+  private trackFps(rawDt: number): void {
     this.fpsAcc += rawDt;
     this.fpsN += 1;
     if (this.fpsAcc >= 0.5) {
@@ -1323,21 +1743,6 @@ export class FredRunGame {
       this.fpsAcc = 0;
       this.fpsN = 0;
       this.emitChange();
-    }
-    if (!this.autoQuality || this.phase === "loading") return;
-    if (rawDt > 0.026) {
-      this.slowFrames += 1;
-      this.fastFrames = 0;
-    } else if (rawDt < 0.019) {
-      this.fastFrames += 1;
-      this.slowFrames = Math.max(0, this.slowFrames - 0.5);
-    }
-    if (this.slowFrames > 50 && this.quality > 0) {
-      this.slowFrames = 0;
-      this.setQuality((this.quality - 1) as 0 | 1 | 2);
-    } else if (this.fastFrames > 1500 && this.quality < 2) {
-      this.fastFrames = 0;
-      this.setQuality((this.quality + 1) as 0 | 1 | 2);
     }
   }
 
@@ -1349,6 +1754,8 @@ export class FredRunGame {
     this.manual = v;
     this.last = performance.now();
     this.acc = 0;
+    this.skipDt = 0;
+    this.markDirty();
   }
 
   async debugRun(cfg: Partial<RunConfig> & { bot?: boolean; hearts?: number; live?: boolean; hints?: boolean }): Promise<void> {
@@ -1376,6 +1783,8 @@ export class FredRunGame {
     this.hintsAllowed = cfg.hints === true;
     this.renderer?.particles.clear();
     this.input.enabled = true;
+    this.warmUntil = this.time + WARM_RUN_S;
+    this.markDirty();
   }
 
   /** Simuliert `seconds` deterministisch (mit Bot) und zeichnet einen Frame. */

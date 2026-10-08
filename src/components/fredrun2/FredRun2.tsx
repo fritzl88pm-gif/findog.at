@@ -6,7 +6,6 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExtern
 import { withRev } from "@/game/fredrun2/asset-rev";
 import { createAudio } from "@/game/fredrun2/audio";
 import { CHARACTERS } from "@/game/fredrun2/characters";
-import { deathLabel } from "@/game/fredrun2/death-names";
 import { FredRunGame, type GameSnapshot } from "@/game/fredrun2/game";
 import { boardKey, defaultProfile, type Profile } from "@/game/fredrun2/profile";
 import { dateKey } from "@/game/fredrun2/rng";
@@ -17,8 +16,12 @@ import { WORLDS } from "@/game/fredrun2/worlds";
 
 import CharacterSelect from "./CharacterSelect";
 import styles from "./fredrun2.module.css";
+import GameOverCard, { PadHint } from "./GameOverCard";
 import { useAccessToken, useGlobalBoard, useRunSubmission } from "./globalBoard";
+import PauseDialog from "./PauseDialog";
+import PortraitOverlay from "./PortraitOverlay";
 import SettingsForm, { StorageNotice } from "./SettingsForm";
+import { useGamepadNav } from "./useGamepadNav";
 
 type Tab = "play" | "worlds" | "characters" | "board" | "settings" | "help";
 
@@ -71,6 +74,45 @@ function subscribeReducedMotion(onChange: () => void): () => void {
 }
 const getSystemReducedMotion = (): boolean => reducedMotionQuery()?.matches === true;
 const getSystemReducedMotionServer = (): boolean => false;
+
+/** Hochformat (Breite <= Höhe): dann liegt der Dreh-Hinweis über dem Spiel */
+const PORTRAIT_QUERY = "(max-aspect-ratio: 1/1)";
+function subscribePortrait(onChange: () => void): () => void {
+  const mq = window.matchMedia?.(PORTRAIT_QUERY);
+  mq?.addEventListener("change", onChange);
+  return () => mq?.removeEventListener("change", onChange);
+}
+const getPortrait = (): boolean => window.matchMedia?.(PORTRAIT_QUERY).matches === true;
+
+type FullscreenDoc = Document & { webkitFullscreenElement?: Element | null; webkitFullscreenEnabled?: boolean };
+type FullscreenEl = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };
+
+/** Vollbild-Zustand des Dokuments (auch mit WebKit-Präfix) als externer Speicher */
+function subscribeFullscreen(onChange: () => void): () => void {
+  document.addEventListener("fullscreenchange", onChange);
+  document.addEventListener("webkitfullscreenchange", onChange);
+  return () => {
+    document.removeEventListener("fullscreenchange", onChange);
+    document.removeEventListener("webkitfullscreenchange", onChange);
+  };
+}
+const getFullscreen = (): boolean => (document.fullscreenElement ?? (document as FullscreenDoc).webkitFullscreenElement ?? null) !== null;
+
+/** Gibt es ein Vollbild? Sonst (iPhone-Safari, eingebettete Frames ohne Erlaubnis) gibt es keinen Vollbild-Knopf, nur den Link „Eigenständig öffnen“. */
+const noopSubscribe = (): (() => void) => () => undefined;
+function getFullscreenSupport(): boolean {
+  const doc = document as FullscreenDoc;
+  const el = document.documentElement as FullscreenEl;
+  const enabled = document.fullscreenEnabled === true || doc.webkitFullscreenEnabled === true;
+  return enabled && (typeof el.requestFullscreen === "function" || typeof el.webkitRequestFullscreen === "function");
+}
+const getFalse = (): boolean => false;
+
+/** Querformat sperren (wo erlaubt, z. B. Android-Chrome im Vollbild); Fehler (iOS, kein Vollbild) bleiben still */
+function lockLandscape(): void {
+  const orientation = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
+  void orientation?.lock?.("landscape").catch(() => undefined);
+}
 
 interface TabStripProps<T extends string> {
   /** `group`: Zwischenüberschrift; aufeinanderfolgende Reiter mit gleichem Wert stehen in einer Gruppe (nur optisch, die Leiste bleibt ein tablist). */
@@ -258,10 +300,16 @@ export interface FredRun2Props {
   embedded?: boolean;
   /** Supabase-Sitzung der App: Spielername aus dem Original-Fredrun-Profil und globale Bestenliste (ohne Angabe: Sitzung des Browsers). */
   accessToken?: string;
+  /** Eingebettet ohne Vollbild-Schnittstelle: Ziel des Links „Eigenständig öffnen“ (Vorgabe: die eigenständige Seite /fredrun2) */
+  standaloneHref?: string;
 }
 
-export default function FredRun2({ embedded = false, accessToken: accessTokenProp = "" }: FredRun2Props = {}): React.ReactElement {
+/** Eingebettet gilt eine Spielfläche unter dieser Breite (px) als Handy: dort kommt zuerst die Karte „Zum Spielen Vollbild öffnen“ */
+const EMBED_PHONE_WIDTH = 600;
+
+export default function FredRun2({ embedded = false, accessToken: accessTokenProp = "", standaloneHref = "/fredrun2" }: FredRun2Props = {}): React.ReactElement {
   const { game, snap, canvasRef, stageRef } = useGame();
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const accessToken = useAccessToken(accessTokenProp);
   const uid = useId();
   const [tab, setTab] = useState<Tab>("play");
@@ -272,7 +320,10 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
   const [ignoreRotate, setIgnoreRotate] = useState(false);
   const [namePrompt, setNamePrompt] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
-  const [isTouch, setIsTouch] = useState(false);
+  const [embedNarrow, setEmbedNarrow] = useState(false);
+  const [embedDismissed, setEmbedDismissed] = useState(false);
+  // Touch-Steuerung: eine Quelle, der Hub (Startwert grober Zeiger/ontouchstart, danach die zuletzt benutzte Zeigerart)
+  const isTouch = snap.touch === true;
   const profile = snap.profile;
   const phase = snap.phase;
   // „Weniger Bewegung“ gilt als Einstellung ODER Systemvorgabe; das Wurzelelement trägt es als data-reduced (CSS), die Heldenauswahl bekommt es als Prop
@@ -280,12 +331,36 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
   const reduced = profile.settings.reducedMotion || systemReduced;
 
   useEffect(() => {
-    const id = requestAnimationFrame(() => {
-      setTipIdx(Math.floor(Math.random() * TIPS.length));
-      setIsTouch(window.matchMedia?.("(pointer: coarse)").matches === true || "ontouchstart" in window);
-    });
+    const id = requestAnimationFrame(() => setTipIdx(Math.floor(Math.random() * TIPS.length)));
     return () => cancelAnimationFrame(id);
   }, []);
+
+  // Hochformat-Hinweis: Vollbild/Hochformat als externe Speicher; „Trotzdem spielen“ gilt nur für diese Hochformat-Phase
+  const portrait = useSyncExternalStore(subscribePortrait, getPortrait, getFalse);
+  const fullscreen = useSyncExternalStore(subscribeFullscreen, getFullscreen, getFalse);
+  const canFullscreen = useSyncExternalStore(noopSubscribe, getFullscreenSupport, getFalse);
+  const [wasPortrait, setWasPortrait] = useState(portrait);
+  if (portrait !== wasPortrait) {
+    setWasPortrait(portrait);
+    if (!portrait) setIgnoreRotate(false);
+  }
+  // Eingebettet gibt es den Hinweis nur im Vollbild (sonst steht die App-Ansicht zum Ausweichen bereit)
+  const rotateVisible = portrait && (!embedded || fullscreen) && !ignoreRotate;
+  // Eingebettet auf dem Handy (Touch und Spielfläche unter 600 px): sie ist winzig – vor dem Menü die Karte „Zum Spielen Vollbild öffnen“
+  const embedCard = embedded && embedNarrow && isTouch && !fullscreen && !embedDismissed && phase === "menu";
+  const overlayUp = rotateVisible || embedCard;
+  // Der Hub pausiert einen laufenden Lauf, solange der Hinweis über dem Spiel liegt („Trotzdem spielen“ meldet false)
+  useEffect(() => {
+    game?.setPortraitBlocked(rotateVisible);
+  }, [game, rotateVisible]);
+  useEffect(() => {
+    if (!embedded) return;
+    const root = rootRef.current;
+    if (!root) return;
+    const ro = new ResizeObserver(() => setEmbedNarrow(root.getBoundingClientRect().width < EMBED_PHONE_WIDTH));
+    ro.observe(root);
+    return () => ro.disconnect();
+  }, [embedded]);
 
   // Fokus von verschwundenen Menü-/Pause-Tasten lösen, damit Leertaste im Spiel nie eine Schaltfläche auslöst
   useEffect(() => {
@@ -318,31 +393,31 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
     [game, startRun],
   );
 
-  // Tastatur-Kurzbefehle
+  /** Gehört diese Taste dem Spiel? Nie in Eingabefeldern; eingebettet gehören Tasten der App (Seitenleiste, Links …) nur im Spielbereich oder ohne Fokus dazu. */
+  const acceptsKey = useCallback(
+    (e: KeyboardEvent): boolean => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return false;
+      return !(embedded && target && target !== document.body && !stageRef.current?.parentElement?.contains(target));
+    },
+    [embedded, stageRef],
+  );
+
+  // Tastatur im Menü: Enter/Leertaste starten (Pause und Ergebnis haben ihre Tasten in PauseDialog/GameOverCard, samt Eingabesperre)
   useEffect(() => {
     if (!game) return;
     const onKey = (e: KeyboardEvent): void => {
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
-      // Eingebettet gehören Tasten der App (Seitenleiste, Links …): nur im Spielbereich oder ohne Fokus auswerten
-      if (embedded && target && target !== document.body && !stageRef.current?.parentElement?.contains(target)) return;
-      if (phase === "menu" && !namePrompt && (e.code === "Enter" || (e.code === "Space" && tag !== "BUTTON")) && tag !== "BUTTON") {
+      if (phase !== "menu" || namePrompt || overlayUp || e.repeat || !acceptsKey(e)) return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if ((e.code === "Enter" || e.code === "Space") && tag !== "BUTTON") {
         e.preventDefault();
         startRun();
-      } else if (phase === "gameover") {
-        if (e.code === "Enter" || (e.code === "Space" && tag !== "BUTTON")) {
-          e.preventDefault();
-          game.restart();
-        } else if (e.code === "Escape") game.toMenu();
-      } else if (phase === "paused" && (e.code === "Enter" || (e.code === "Space" && tag !== "BUTTON"))) {
-        e.preventDefault();
-        game.resume();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [game, phase, namePrompt, startRun, embedded, stageRef]);
+  }, [game, phase, namePrompt, overlayUp, startRun, acceptsKey]);
 
   // Spielername aus dem Original-Fredrun-Profil übernehmen (nur wenn hier noch keiner gesetzt ist)
   useEffect(() => {
@@ -376,19 +451,15 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
   );
 
   const toggleFullscreen = useCallback(() => {
-    const el = stageRef.current?.parentElement;
+    const el = stageRef.current?.parentElement as FullscreenEl | null | undefined;
     if (!el) return;
-    if (document.fullscreenElement) {
-      void document.exitFullscreen();
-    } else {
-      void el
-        .requestFullscreen?.({ navigationUI: "hide" })
-        .then(() => {
-          const orientation = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
-          void orientation?.lock?.("landscape").catch(() => undefined);
-        })
-        .catch(() => undefined);
+    if (getFullscreen()) {
+      void document.exitFullscreen?.();
+      return;
     }
+    // Vollbild, danach Querformat sperren – so dreht sich der Bildschirm von selbst
+    if (el.requestFullscreen) void el.requestFullscreen({ navigationUI: "hide" }).then(lockLandscape).catch(() => undefined);
+    else void Promise.resolve(el.webkitRequestFullscreen?.()).then(lockLandscape).catch(() => undefined);
   }, [stageRef]);
 
   const onFullscreen = useCallback(() => {
@@ -396,6 +467,25 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
     game?.audio.sfx("ui-click");
     toggleFullscreen();
   }, [game, toggleFullscreen]);
+
+  /** „Vollbild & Querformat“ im Hochformat-Hinweis: ins Vollbild, sonst (schon im Vollbild) nur Querformat sperren – nie wieder verlassen */
+  const onRotateFullscreen = useCallback(() => {
+    game?.unlockAudio();
+    game?.audio.sfx("ui-click");
+    if (getFullscreen()) lockLandscape();
+    else toggleFullscreen();
+  }, [game, toggleFullscreen]);
+
+  // Gamepad: Fokus im aktiven Overlay bewegen; B ohne eigenes Ziel (data-nav-back): Reiter „Spielen“ bzw. Namensabfrage schließen
+  const onPadBack = useCallback(() => {
+    if (namePrompt) setNamePrompt(false);
+    else if (phase === "menu" && tab !== "play") {
+      game?.audio.sfx("ui-back");
+      setTabByKeyboard(false);
+      setTab("play");
+    }
+  }, [game, namePrompt, phase, tab]);
+  const padConnected = useGamepadNav(game, { rootRef, onBack: onPadBack });
 
   const activeBoard = boardKeyState ?? boardKey(profile.mode, profile.world, dateKey());
 
@@ -418,6 +508,15 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
     [accessToken, result, profile.name],
   );
   const submitState = useRunSubmission(accessToken, submission);
+  /** Zeile der Ergebnis-Karte zur weltweiten Bestenliste (nur mit Anmeldung und Punkten) */
+  const boardLine =
+    accessToken && result && result.score > 0
+      ? submitState?.status === "done" && submitState.rank
+        ? `Weltweit Platz ${submitState.rank}${submitState.score !== null ? ` · dein Bestwert ${formatNumber(submitState.score)}` : ""}`
+        : submitState?.status === "failed"
+          ? "Weltweite Bestenliste gerade nicht erreichbar."
+          : "Weltweite Bestenliste wird aktualisiert …"
+      : null;
 
   // Bestenlisten-Chips in zwei Gruppen: die acht Welten und die beiden Modi
   const boardItems = useMemo(() => {
@@ -456,8 +555,9 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
   useEffect(() => () => game?.setMenuCovered(false), [game]);
 
   return (
-    <div className={`${styles.root} ${embedded ? styles.embedded : ""}`} data-phase={phase} data-reduced={reduced ? "true" : undefined}>
-      <div className={styles.stage} ref={stageRef}>
+    <div ref={rootRef} className={`${styles.root} ${embedded ? styles.embedded : ""}`} data-phase={phase} data-reduced={reduced ? "true" : undefined}>
+      {/* inert: solange ein Hinweis über dem Spiel liegt, erreicht weder Tastatur noch Pad etwas dahinter */}
+      <div className={styles.stage} ref={stageRef} inert={overlayUp}>
         <canvas ref={canvasRef} className={styles.canvas} aria-label="Fredrun 2.0 Spielfläche" role="img" />
 
         {profile.settings.showFps ? <div className={styles.fps}>{snap.fps} fps · Q{snap.quality}</div> : null}
@@ -475,7 +575,7 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
 
         {/* Menü */}
         {showMenu ? (
-          <div className={`${styles.overlay} ${tab === "play" ? styles.veilCenter : styles.veil} ${styles.menu}`}>
+          <div className={`${styles.overlay} ${tab === "play" ? styles.veilCenter : styles.veil} ${styles.menu}`} data-nav-scope="menu">
             <div className={styles.menuTop}>
               <TabStrip
                 items={TABS}
@@ -505,6 +605,7 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
 
             {/* Speichern geht nicht (Privatmodus, Speicher voll): auf jedem Reiter sichtbar, damit Käufe und Rekorde nicht still verloren gehen */}
             <StorageNotice ok={snap.storageOk} className={styles.noticeSlot} />
+            {padConnected ? <PadHint /> : null}
 
             <div className={styles.body} role="tabpanel" id={panelId} aria-labelledby={`${uid}-tab-${tab}`}>
               {tab === "play" ? (
@@ -520,6 +621,7 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
                       aria-disabled={loadingWorld ? true : undefined}
                       aria-busy={loadingWorld ? true : undefined}
                       autoFocus={!tabByKeyboard}
+                      data-nav-default
                     >
                       {loadingWorld ? "Welt wird geladen …" : "Los geht’s!"}
                     </button>
@@ -613,7 +715,12 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
                   onPointerCancel={() => game?.input.setUiSlide(false)}
                   onPointerLeave={() => game?.input.setUiSlide(false)}
                 >
-                  ↓
+                  <span className={styles.touchGlyph} aria-hidden="true">
+                    ↓
+                  </span>
+                  <span className={styles.touchLabel} aria-hidden="true">
+                    Rutschen
+                  </span>
                 </button>
                 <button
                   data-fr2-ui
@@ -624,97 +731,39 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
                     game?.input.pressDash();
                   }}
                 >
-                  ⚡
+                  <span className={styles.touchGlyph} aria-hidden="true">
+                    ⚡
+                  </span>
+                  <span className={styles.touchLabel} aria-hidden="true">
+                    Dash
+                  </span>
                 </button>
               </>
             ) : null}
           </>
         ) : null}
 
-        {/* Pause */}
+        {/* Pause (die ersten 250 ms ohne Eingabe) */}
         {phase === "paused" ? (
-          <div className={`${styles.overlay} ${styles.veilFull} ${styles.modal}`}>
-            <div className={styles.modalCard} role="dialog" aria-label="Pause">
-              <h2 className={styles.modalTitle}>Pause</h2>
-              <button className={styles.playBtn} onClick={click(() => game?.resume())} autoFocus style={{ fontSize: undefined }}>
-                Weiter
-              </button>
-              <div className={styles.row} style={{ justifyContent: "center" }}>
-                <button className={styles.btn} onClick={click(() => game?.restart())}>
-                  Neustart
-                </button>
-                <button className={styles.btn} onClick={click(() => game?.toMenu())}>
-                  Hauptmenü
-                </button>
-                <button className={styles.btn} onClick={click(() => game?.setSettings({ muted: !profile.settings.muted }))}>
-                  {profile.settings.muted ? "🔇 Ton an" : "🔊 Ton aus"}
-                </button>
-              </div>
-            </div>
-          </div>
+          <PauseDialog
+            game={game}
+            live={snap.live}
+            muted={profile.settings.muted}
+            padHint={padConnected}
+            acceptsKey={acceptsKey}
+            click={click}
+            onToggleMute={() => game?.setSettings({ muted: !profile.settings.muted })}
+          />
         ) : null}
 
-        {/* Game Over */}
+        {/* Game Over bzw. „Lauf beenden“ (die ersten 450 ms ohne Eingabe) */}
         {phase === "gameover" && snap.result ? (
-          <div className={`${styles.overlay} ${styles.veilFull} ${styles.modal}`}>
-            <div className={styles.modalCard} role="dialog" aria-label="Ergebnis">
-              <h2 className={styles.modalTitle}>{snap.result.isNewBest ? "Neuer Rekord!" : "Geschafft!"}</h2>
-              {snap.result.isNewBest ? <div className={styles.newBest}>Persönliche Bestleistung</div> : null}
-              <div className={styles.bigScore}>{formatNumber(snap.result.score)}</div>
-              <div className={styles.muted} style={{ textAlign: "center", marginTop: -8 }}>
-                {snap.result.mode === "tour" ? "Weltreise" : snap.result.mode === "daily" ? "Tageslauf" : WORLDS[snap.result.world].name}
-                {deathLabel(snap.result.deathCause) ? ` · gestoppt von: ${deathLabel(snap.result.deathCause)}` : ""}
-              </div>
-              {accessToken && snap.result.score > 0 ? (
-                <div className={styles.muted} style={{ textAlign: "center", marginTop: 4 }} aria-live="polite">
-                  {submitState?.status === "done" && submitState.rank
-                    ? `Weltweit Platz ${submitState.rank}${submitState.score !== null ? ` · dein Bestwert ${formatNumber(submitState.score)}` : ""}`
-                    : submitState?.status === "failed"
-                      ? "Weltweite Bestenliste gerade nicht erreichbar."
-                      : "Weltweite Bestenliste wird aktualisiert …"}
-                </div>
-              ) : null}
-              <div className={styles.stats}>
-                <div className={styles.stat}>
-                  <b>{formatNumber(snap.result.meters)} m</b>
-                  <span>Strecke</span>
-                </div>
-                <div className={styles.stat}>
-                  <b>+{formatNumber(snap.result.coins)}</b>
-                  <span>Münzen</span>
-                </div>
-                <div className={styles.stat}>
-                  <b>×{snap.result.maxCombo}</b>
-                  <span>Kombo</span>
-                </div>
-                <div className={styles.stat}>
-                  <b>{formatNumber(snap.result.stomps)}</b>
-                  <span>Stampfer</span>
-                </div>
-                <div className={styles.stat}>
-                  <b>{formatNumber(snap.result.nearMisses)}</b>
-                  <span>Knapp</span>
-                </div>
-                <div className={styles.stat}>
-                  <b>{Math.floor(snap.result.seconds / 60)}:{String(Math.floor(snap.result.seconds % 60)).padStart(2, "0")}</b>
-                  <span>Zeit</span>
-                </div>
-              </div>
-              <div className={styles.row} style={{ justifyContent: "center" }}>
-                <button className={`${styles.btn} ${styles.btnPrimary}`} onClick={click(() => game?.restart())} autoFocus>
-                  Nochmal
-                </button>
-                <button className={styles.btn} onClick={click(() => game?.toMenu())}>
-                  Menü
-                </button>
-              </div>
-            </div>
-          </div>
+          <GameOverCard game={game} result={snap.result} profile={profile} boardLine={boardLine} reduced={reduced} padHint={padConnected} acceptsKey={acceptsKey} click={click} />
         ) : null}
 
         {/* Name */}
         {namePrompt ? (
-          <div className={`${styles.overlay} ${styles.veilFull} ${styles.modal}`} style={{ zIndex: 35 }}>
+          <div className={`${styles.overlay} ${styles.veilFull} ${styles.modal}`} style={{ zIndex: 35 }} data-nav-scope="name">
             <form
               className={styles.modalCard}
               onSubmit={(e) => {
@@ -749,22 +798,22 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
             </form>
           </div>
         ) : null}
-
-        {/* Querformat-Hinweis */}
-        {!ignoreRotate ? (
-          <div className={styles.rotate} role="alert">
-            <div>
-              <div style={{ fontSize: "3em" }}>⟲</div>
-              Bitte das Gerät ins Querformat drehen.
-              <div style={{ marginTop: 20 }}>
-                <button className={styles.btn} onClick={() => setIgnoreRotate(true)}>
-                  Trotzdem spielen
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
       </div>
+
+      {/* Hochformat-Hinweis bzw. Vollbild-Karte: Geschwister der Bühne (die Bühne ist ein Container und kann kein position: fixed tragen) */}
+      {rotateVisible ? <PortraitOverlay variant="rotate" canFullscreen={canFullscreen} standaloneHref={embedded ? standaloneHref : null} onFullscreen={onRotateFullscreen} onDismiss={() => setIgnoreRotate(true)} /> : null}
+      {embedCard ? (
+        <PortraitOverlay
+          variant="embed"
+          canFullscreen={canFullscreen}
+          standaloneHref={standaloneHref}
+          onFullscreen={() => {
+            onFullscreen();
+            setEmbedDismissed(true);
+          }}
+          onDismiss={() => setEmbedDismissed(true)}
+        />
+      ) : null}
     </div>
   );
 }

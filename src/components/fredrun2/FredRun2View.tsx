@@ -20,10 +20,10 @@ export default function FredRun2View({ accessToken }: { accessToken: string }): 
             <span>
               <kbd>Leertaste</kbd> oder <kbd>↑</kbd> springen · <kbd>↓</kbd> rutschen
             </span>
-            <small>Shift = Dash · Esc = Pause · Spielfeld antippen geht auch</small>
+            <small>Shift = Dash · Esc = Pause · Spielfeld antippen geht auch · Gamepad wird unterstützt</small>
           </div>
         </header>
-        <FredRun2 embedded accessToken={accessToken} />
+        <FredRun2 embedded accessToken={accessToken} standaloneHref="/fredrun2" />
       </div>
     </section>
   );
