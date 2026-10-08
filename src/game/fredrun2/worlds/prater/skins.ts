@@ -253,9 +253,11 @@ function seatSprite(A: PraterSkinAssets, r: number): { b: Baked; w: number; h: n
 
 /**
  * Maße der Hindernisse mit FESTEM Maß (px): Reifen (Hitbox w×h) und Radius des Kettenkarussell-Sitzes. Buden, Kisten,
- * Behänge und Tore nehmen ihre Maße vom Tempo (35–75 verschiedene Größen je Art in echten Läufen) – sie lassen sich nicht
- * sinnvoll vorbacken (jede Größe wäre ein eigenes Sprite im Speicher) und entstehen weiter beim ersten Zeichnen
- * (klein, ca. 3–4 ms). Der Test in prater.test.ts prüft die Liste gegen alle Muster.
+ * Behänge und Tore nehmen ihre Maße vom Tempo (9–28 verschiedene Größen je Art in echten Läufen) – Vorbacken aller wäre
+ * ein Vielfaches des Speichers (bei Pixelfaktor 2 rund 20 MB, nur für Läufe, die sie nie alle sehen). Sie entstehen
+ * stattdessen, wenn die Entität in den 260 px vor dem Bildrand erscheint: `PropBank.early` bestellt das Sprite vor,
+ * `PropBank.pump` (aus `update`) backt es in kleinen Schritten – nie im Zeichenpfad einer sichtbaren Entität. Der Test in
+ * prater.test.ts prüft die Liste gegen alle Muster.
  */
 export const PRATER_PROP_SIZES = {
   tires: [[88, 70], [88, 96]],

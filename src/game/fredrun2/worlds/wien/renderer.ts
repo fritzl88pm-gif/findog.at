@@ -160,8 +160,13 @@ export class WienRenderer implements WorldRenderer {
   private reflOn = true;
   private roofSlots: Array<[number, number, number]> = [];
   private roofSlotsBuilt = false;
-  /** verworfene Roh-Fassaden zur Wiederverwendung (statt Neuanlage der 2,6-MB-Fläche) */
+  /**
+   * verworfene Roh-Fassaden/-Dächer zur Wiederverwendung (statt Neuanlage der 2,6-/1,6-MB-Flächen mitten im Lauf): höchstens
+   * eine je Art. Eine Rohvariante wird freigegeben, sobald alle Stufen-Bakes, die sie brauchen, fertig sind (`dropRaw`) –
+   * schon die erste Folgevariante (bei ca. 336 m) malt dann in die Fläche der Variante 0, ohne dass eine neue entsteht.
+   */
   private facadeSpares: HTMLCanvasElement[] = [];
+  private roofSpares: HTMLCanvasElement[] = [];
   private lastStage = 0;
   private tilesBuilt = false;
   private tiles2Built = false;
@@ -529,11 +534,60 @@ export class WienRenderer implements WorldRenderer {
   private roofVariant(i: number): Tile {
     let t = this.roofVar.get(i);
     if (!t) {
-      t = paintRooftops(ROOF_W, ROOF_H, ROOF_VARIANTS[i]);
+      t = paintRooftops(ROOF_W, ROOF_H, ROOF_VARIANTS[i], this.roofSpares.pop());
       touchCanvas(t.canvas);
       this.roofVar.set(i, t);
     }
     return t;
+  }
+
+  /** Fläche einer verworfenen Roh-Fassade für die nächste Variante aufheben (höchstens eine: mehr wäre toter Speicher) */
+  private spareFacade(c: HTMLCanvasElement): void {
+    if (this.facadeSpares.length < 1) this.facadeSpares.push(c);
+  }
+
+  private spareRoof(c: HTMLCanvasElement): void {
+    if (this.roofSpares.length < 1) this.roofSpares.push(c);
+  }
+
+  /**
+   * Roh-Fassaden/-Dächer freigeben, sobald sie niemand mehr braucht, also alle Bakes der aktuellen und der Folgestufe, die
+   * sie speisen, fertig sind. Die Fläche dient der nächsten Rohvariante (Stufe 2 bei ca. 336 m: Fassade 2,6 MB, Dach 1,6 MB)
+   * als Malfläche – dort entstand sonst mitten im Lauf eine neue (Neuanlage + Rasterkosten im Zeichenframe). Läuft pro
+   * Frame: im Normalfall nur Größenprüfungen, keine Allokation.
+   */
+  private dropRaw(st: number, nxt: number): void {
+    if (this.facadeVar.size > 0) {
+      const a = FACADE_OF_STAGE[st];
+      const b = FACADE_OF_STAGE[nxt];
+      this.dropRawFacade(a, st, nxt);
+      if (b !== a) this.dropRawFacade(b, st, nxt);
+    }
+    if (this.roofVar.size > 0) {
+      const a = ROOF_OF_STAGE[st];
+      const b = ROOF_OF_STAGE[nxt];
+      this.dropRawRoof(a, st, nxt);
+      if (b !== a) this.dropRawRoof(b, st, nxt);
+    }
+  }
+
+  /** Stufe `s` braucht die Roh-Fassade `i` noch (ihr Fassaden-Bake oder, wenn gezeichnet, ihre Spiegelung fehlt)? */
+  private facadeNeededBy(s: number, i: number): boolean {
+    return FACADE_OF_STAGE[s] === i && (!this.facades.has(s) || (this.reflOn && !this.reflections.has(s)));
+  }
+
+  private dropRawFacade(i: number, st: number, nxt: number): void {
+    const t = this.facadeVar.get(i);
+    if (!t || this.facadeNeededBy(st, i) || this.facadeNeededBy(nxt, i)) return;
+    this.facadeVar.delete(i);
+    this.spareFacade(t.canvas);
+  }
+
+  private dropRawRoof(i: number, st: number, nxt: number): void {
+    const t = this.roofVar.get(i);
+    if (!t || (ROOF_OF_STAGE[st] === i && !this.roofs.has(st)) || (ROOF_OF_STAGE[nxt] === i && !this.roofs.has(nxt))) return;
+    this.roofVar.delete(i);
+    this.spareRoof(t.canvas);
   }
 
   /** Fassaden einer Stufe mit eingerechnetem Dunst (nach unten dichter). */
@@ -671,7 +725,7 @@ export class WienRenderer implements WorldRenderer {
         for (const [key, t] of this.facadeVar) {
           if (key === a || key === b) continue;
           this.facadeVar.delete(key);
-          this.facadeSpares.push(t.canvas);
+          this.spareFacade(t.canvas);
         }
       }
       // ein angefangener Bau einer Variante, die nicht mehr gebraucht wird (Stufe übersprungen): Fläche zurücklegen
@@ -679,10 +733,11 @@ export class WienRenderer implements WorldRenderer {
         for (const [key, fb] of this.facadeBuild) {
           if (key === a || key === b) continue;
           this.facadeBuild.delete(key);
-          this.facadeSpares.push(fb.tile.canvas);
+          this.spareFacade(fb.tile.canvas);
         }
       }
     }
+    this.dropRaw(st, Math.min(LAST, st + 1));
     // große Rauchgrößen: erst, wenn die Rauchsäulen bald gezeichnet werden (Stufe 0 ab der Hälfte; SMOKE > 0,02 ab der
     // Überblendung in Stufe 1), dann einer je ~100 ms – gerastert beim Backen, nicht im ersten Frame mit dem Rauch
     if (this.puffsLate && this.puffs && (st > 0 || progress > 0.5)) {

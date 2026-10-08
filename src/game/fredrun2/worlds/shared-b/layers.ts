@@ -4,7 +4,7 @@
  * plus optionale additive Leuchtkacheln. Varianten werden lazy erzeugt; `StagePrep` verteilt das Backen der Folgestufe
  * auf wenige, zeitlich gedrosselte Schritte (kein Stau am Stufenwechsel), `WarmQueue` (warm.ts) nutzt Leerlaufzeit.
  */
-import { blitTiled, paint, touchCanvas, type Ctx2D } from "./canvas";
+import { blitTiled, ctxOf, paint, touchCanvas, type Ctx2D } from "./canvas";
 
 export interface StageTint {
   /** Flache Einfärbung (z.B. Nacht-Silhouette) */
@@ -30,16 +30,17 @@ export interface StageCacheOpts {
   /**
    * Vorarbeit für einen Bake (z.B. ein gemeinsames Rohbild malen), damit ein Schritt klein bleibt. Rückgabe true =
    * es wurde jetzt Arbeit geleistet (der eigentliche Bake folgt im nächsten Schritt), false = nichts (mehr) vorzubereiten.
+   * Der zweite Parameter ist der Cache selbst (z.B. für `takeSpare`), ebenso beim Bake (`make`) und in `onKeep`/`onClear`.
    */
-  prep?: (stage: number) => boolean;
+  prep?: (stage: number, cache: StageCache) => boolean;
   /**
    * Hält die Vorarbeit eigenen Zustand je Stufe (z.B. ein unfertiges Rohbild), muss er mit den Stufen des Caches
    * verschwinden: wird bei jedem `keep(a, b)` aufgerufen (auch bei leerem Cache, vor dem Verwerfen) und soll allen Zustand
    * für andere Stufen als a und b verwerfen. Läuft pro Frame – ohne Allokation, im Normalfall nur eine Längenprüfung.
    */
-  onKeep?: (a: number, b: number) => void;
+  onKeep?: (a: number, b: number, cache: StageCache) => void;
   /** Wie `onKeep`, für `clear()`: allen Zustand der Vorarbeit verwerfen (er gehört zur alten Skala/Größe) */
-  onClear?: () => void;
+  onClear?: (cache: StageCache) => void;
 }
 
 /** Lazy erzeugte Zeichenflächen pro Stufe (z.B. Himmel), mit Verwerfen alter Stufen. */
@@ -47,16 +48,16 @@ export class StageCache {
   private cache = new Map<number, HTMLCanvasElement>();
   private spare: HTMLCanvasElement | null = null;
   private readonly recycle: boolean;
-  private readonly prep: ((stage: number) => boolean) | undefined;
-  private readonly onKeep: ((a: number, b: number) => void) | undefined;
-  private readonly onClear: (() => void) | undefined;
+  private readonly prep: ((stage: number, cache: StageCache) => boolean) | undefined;
+  private readonly onKeep: ((a: number, b: number, cache: StageCache) => void) | undefined;
+  private readonly onClear: ((cache: StageCache) => void) | undefined;
   /** Anzahl tatsächlich gebackener Varianten seit Erzeugung (Diagnose, Tests) */
   baked = 0;
   /** gleitender Mittelwert der Bake-Dauer in ms (Schätzung für Zeitbudgets) */
   costMs = 4;
 
   constructor(
-    private readonly make: (stage: number, reuse: HTMLCanvasElement | null) => HTMLCanvasElement,
+    private readonly make: (stage: number, reuse: HTMLCanvasElement | null, cache: StageCache) => HTMLCanvasElement,
     opts: StageCacheOpts = {},
   ) {
     this.recycle = !!opts.recycle;
@@ -75,7 +76,7 @@ export class StageCache {
       const t0 = nowMs();
       const offer = this.spare;
       this.spare = null;
-      c = this.make(stage, offer);
+      c = this.make(stage, offer, this);
       // Rasterkosten in diesen (gedrosselten) Schritt ziehen statt in den ersten Frame, der die Fläche zeichnet
       touchCanvas(c);
       this.baked += 1;
@@ -91,14 +92,14 @@ export class StageCache {
    */
   step(stage: number): boolean {
     if (this.cache.has(stage)) return false;
-    if (this.prep?.(stage)) return true;
+    if (this.prep?.(stage, this)) return true;
     this.get(stage);
     return true;
   }
 
   /** Nur die Stufen a und b im Cache behalten (Normalfall ohne Iteration und Allokation) */
   keep(a: number, b: number): void {
-    this.onKeep?.(a, b); // Zustand der Vorarbeit für andere Stufen mit verwerfen (auch bei leerem Cache)
+    this.onKeep?.(a, b, this); // Zustand der Vorarbeit für andere Stufen mit verwerfen (auch bei leerem Cache)
     const n = this.cache.size;
     if (n === 0) return;
     let own = 0;
@@ -114,7 +115,7 @@ export class StageCache {
 
   /** Alles verwerfen (z.B. bei Skalenwechsel), die Flächen bleiben zur Wiederverwendung erhalten */
   clear(): void {
-    this.onClear?.();
+    this.onClear?.(this);
     for (const [, c] of this.cache) if (this.recycle) this.spare = c;
     this.cache.clear();
   }
@@ -207,42 +208,110 @@ export function gradedCache(
   return cache;
 }
 
-/** Quelle + lazy erzeugte, pro Stufe eingefärbte Varianten (`recycle`: verworfene Stufen für den nächsten Bake wiederverwenden) */
+/**
+ * Quelle + lazy erzeugte, pro Stufe eingefärbte Varianten (`recycle`: verworfene Stufen für den nächsten Bake wiederverwenden).
+ * Enthält die Färbung Dunst oder Bodenschatten, entsteht eine Variante in zwei kleinen Schritten statt eines großen:
+ * (1) Kopie der Quelle + Nacht-Silhouette (Vorarbeit, sofort gerastert), (2) Dunst + Schatten (der Bake). Jeder Schritt
+ * füllt/rastert die große Fläche nur einmal (bei 4x gedrosselter CPU hielte der gemeinsame Block sonst über 100 ms den
+ * Hauptthread). Das Ergebnis ist dasselbe Bild wie `tinted` am Stück (Direktweg, wenn die Stufe sofort gebraucht wird).
+ */
 export class Staged extends StageCache {
+  readonly src: HTMLCanvasElement;
+
   constructor(
-    readonly src: HTMLCanvasElement,
+    src: HTMLCanvasElement,
     tint: (stage: number) => StageTint,
     recycle = false,
   ) {
-    super((stage, reuse) => tinted(src, tint(stage), reuse), { recycle });
+    // halb gefärbte Flächen je Stufe (Ergebnis der Vorarbeit)
+    const half = new Map<number, HTMLCanvasElement>();
+    super(
+      (stage, reuse, cache) => {
+        const c = half.get(stage);
+        if (!c) return tinted(src, tint(stage), reuse);
+        half.delete(stage);
+        if (reuse) cache.offerSpare(reuse); // das Angebot dieses Bakes bleibt für den nächsten erhalten
+        paintVeil(ctxOf(c), tint(stage), c.width, c.height);
+        return c;
+      },
+      {
+        recycle,
+        prep: (stage, cache) => {
+          if (half.has(stage)) return false;
+          const t = tint(stage);
+          if (!hasVeil(t)) return false; // nur Nacht (oder gar nichts): ein Schritt genügt
+          const c = paint(src.width, src.height, (g, w, h) => paintBase(g, src, t, w, h), cache.takeSpare());
+          touchCanvas(c);
+          half.set(stage, c);
+          return true;
+        },
+        // halb gefärbte Flächen gehören zu ihrer Stufe (keep) bzw. Größe (clear) – danach als Ersatzfläche zurücklegen
+        onKeep: (a, b, cache) => {
+          if (half.size === 0) return;
+          for (const [k, c] of half) {
+            if (k === a || k === b) continue;
+            half.delete(k);
+            cache.offerSpare(c);
+          }
+        },
+        onClear: (cache) => {
+          for (const [, c] of half) cache.offerSpare(c);
+          half.clear();
+        },
+      },
+    );
+    this.src = src;
   }
 }
 
+/** Dunst oder Bodenschatten vorhanden (zweiter Schritt der Färbung nötig)? */
+function hasVeil(t: StageTint): boolean {
+  return !!((t.haze && (t.haze.aTop > 0.001 || t.haze.aBottom > 0.001)) || (t.shade && t.shade.a > 0.001));
+}
+
+/** Schritt 1 der Färbung: Kopie der Quelle + Nacht-Silhouette (nur wo die Quelle deckt) */
+function paintBase(g: Ctx2D, src: HTMLCanvasElement, t: StageTint, w: number, h: number): void {
+  g.drawImage(src, 0, 0);
+  g.globalCompositeOperation = "source-atop";
+  if (t.night && t.night.a > 0.001) {
+    g.globalAlpha = Math.min(1, t.night.a);
+    g.fillStyle = t.night.color;
+    g.fillRect(0, 0, w, h);
+    g.globalAlpha = 1;
+  }
+}
+
+/** Schritt 2 der Färbung: Dunst-Verlauf und Bodenschatten (nur wo die Fläche deckt) */
+function paintVeil(g: Ctx2D, t: StageTint, w: number, h: number): void {
+  g.globalCompositeOperation = "source-atop";
+  g.globalAlpha = 1;
+  if (t.haze && (t.haze.aTop > 0.001 || t.haze.aBottom > 0.001)) {
+    const grd = g.createLinearGradient(0, 0, 0, h);
+    grd.addColorStop(0, rgbaOf(t.haze.color, t.haze.aTop));
+    grd.addColorStop(1, rgbaOf(t.haze.color, t.haze.aBottom));
+    g.fillStyle = grd;
+    g.fillRect(0, 0, w, h);
+  }
+  if (t.shade && t.shade.a > 0.001) {
+    const grd = g.createLinearGradient(0, h * t.shade.from, 0, h);
+    grd.addColorStop(0, rgbaOf(t.shade.color, 0));
+    grd.addColorStop(1, rgbaOf(t.shade.color, t.shade.a));
+    g.fillStyle = grd;
+    g.fillRect(0, h * t.shade.from, w, h * (1 - t.shade.from));
+  }
+}
+
+/** Gefärbte Kopie am Stück (Direktweg von `Staged`, wenn die Stufe sofort gebraucht wird) */
 export function tinted(src: HTMLCanvasElement, t: StageTint, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
-  return paint(src.width, src.height, (g, w, h) => {
-    g.drawImage(src, 0, 0);
-    g.globalCompositeOperation = "source-atop";
-    if (t.night && t.night.a > 0.001) {
-      g.globalAlpha = Math.min(1, t.night.a);
-      g.fillStyle = t.night.color;
-      g.fillRect(0, 0, w, h);
-      g.globalAlpha = 1;
-    }
-    if (t.haze && (t.haze.aTop > 0.001 || t.haze.aBottom > 0.001)) {
-      const grd = g.createLinearGradient(0, 0, 0, h);
-      grd.addColorStop(0, rgbaOf(t.haze.color, t.haze.aTop));
-      grd.addColorStop(1, rgbaOf(t.haze.color, t.haze.aBottom));
-      g.fillStyle = grd;
-      g.fillRect(0, 0, w, h);
-    }
-    if (t.shade && t.shade.a > 0.001) {
-      const grd = g.createLinearGradient(0, h * t.shade.from, 0, h);
-      grd.addColorStop(0, rgbaOf(t.shade.color, 0));
-      grd.addColorStop(1, rgbaOf(t.shade.color, t.shade.a));
-      g.fillStyle = grd;
-      g.fillRect(0, h * t.shade.from, w, h * (1 - t.shade.from));
-    }
-  }, reuse);
+  return paint(
+    src.width,
+    src.height,
+    (g, w, h) => {
+      paintBase(g, src, t, w, h);
+      paintVeil(g, t, w, h);
+    },
+    reuse,
+  );
 }
 
 export interface StagedLayer {

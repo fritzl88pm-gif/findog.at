@@ -168,6 +168,8 @@ interface WienInternals {
   facadeVar: Map<number, unknown>;
   facadeBuild: Map<number, unknown>;
   facadeSpares: unknown[];
+  roofVar: Map<number, unknown>;
+  roofSpares: unknown[];
 }
 
 const inner = (r: WienRenderer): WienInternals => r as unknown as WienInternals;
@@ -466,13 +468,13 @@ describe("Wien – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () => {
     }
     // ohne `warm` backt der Lauf auch die Rauchgrößen (je eine pro ~100 ms, sobald Rauchsäulen bald erscheinen)
     expect(i.puffs.baked).toBe(i.puffs.count);
-    // Rohvarianten: Fassade 1 und Dächer 1–2 gibt es je einmal neu; alle späteren Fassaden nutzen die verworfenen Flächen
+    // Rohvarianten: schon die ersten Folgevarianten (Fassade 1, Dächer 1–2) malen in die freigegebenen Flächen der Variante 0
     // (ohne Wiederverwendung wären es > 25)
-    expect(stub.created - base - i.puffs.baked).toBeLessThanOrEqual(4);
+    expect(stub.created - base - i.puffs.baked).toBeLessThanOrEqual(1);
     for (const c of [i.backdrop.cache, i.facades, i.roofs]) expect(c.has(7)).toBe(true);
   });
 
-  it("nach dem Aufwärmen legt ein ganzer Lauf durch alle 8 Stufen nur die erstmaligen Roh-Varianten und die großen Rauchgrößen an", async () => {
+  it("nach dem Aufwärmen legt ein ganzer Lauf durch alle 8 Stufen nur die großen Rauchgrößen an (keine Roh-Variante)", async () => {
     const { r, stub } = await loaded();
     const i = inner(r);
     let clock = 0;
@@ -489,10 +491,10 @@ describe("Wien – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () => {
         r.update(1 / 60, stubView({ stage: st, stageBlend: p > 0.75 ? (p - 0.75) * 4 : 0, worldMeters: st * WIEN_STAGE_METERS + p * WIEN_STAGE_METERS }));
       }
     }
-    // erstmals im Lauf: Roh-Fassade 1 sowie Roh-Dächer 1 und 2 (Fassaden 2–5 nutzen die verworfenen Flächen) …
-    // … und die vier größten Rauchgrößen, die `warm` bewusst auslässt (Speicher)
+    // die vier größten Rauchgrößen, die `warm` bewusst auslässt (Speicher) …
     expect(i.puffs.baked - warmed).toBe(4);
-    expect(stub.created - base - (i.puffs.baked - warmed)).toBeLessThanOrEqual(3);
+    // … sonst nichts: Roh-Fassaden und -Dächer malen in freigegebene Flächen
+    expect(stub.created - base - (i.puffs.baked - warmed)).toBe(0);
   });
 
   it("die großen Rauchgrößen werden erst kurz vor den ersten Rauchsäulen gebacken, einzeln und gedrosselt", async () => {
@@ -518,26 +520,73 @@ describe("Wien – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () => {
     expect(i.puffs.baked).toBe(i.puffs.count);
   });
 
-  it("nicht mehr benötigte Roh-Fassaden werden schon beim Stufenwechsel freigegeben und stehen als Spare bereit", async () => {
+  it("Roh-Fassaden und -Dächer werden freigegeben, sobald ihre Bakes fertig sind, und stehen als Spare bereit (höchstens eine je Art)", async () => {
     const { r } = await loaded();
     const i = inner(r);
     let clock = 0;
     vi.spyOn(performance, "now").mockImplementation(() => clock);
-    // Stufe 0: Rohvariante 0 (Stufen 0 und 1 teilen sie)
-    r.update(1 / 60, stubView({ stage: 0, worldMeters: 10 }));
+    // load hat die Stufen 0 und 1 aller Caches gebacken (die Rohvariante 0 wird von beiden Stufen geteilt)
     expect([...i.facadeVar.keys()]).toEqual([0]);
-    // Stufe 1 ab 28 %: Vorarbeit der Fassade für Stufe 2 → Rohvariante 1 (neu)
-    for (let k = 0; k < 6; k += 1) {
+    r.update(1 / 60, stubView({ stage: 0, worldMeters: 10 }));
+    expect([...i.facadeVar.keys()]).toEqual([]);
+    expect(i.facadeSpares).toHaveLength(1);
+    expect(i.roofVar.size).toBe(0);
+    expect(i.roofSpares).toHaveLength(1);
+    // Stufe 1 ab 28 %: Vorarbeit der Fassade/des Dachs für Stufe 2 malt in die Spare-Flächen
+    for (let k = 0; k < 12; k += 1) {
       clock += 120;
       r.update(1 / 60, stubView({ stage: 1, worldMeters: WIEN_STAGE_METERS * 1.4 }));
     }
-    expect([...i.facadeVar.keys()].sort()).toEqual([0, 1]);
-    expect(i.facadeSpares).toHaveLength(0);
-    // Stufenwechsel auf 2: Variante 0 ist nicht mehr nötig (a = 1, b = 2) – sofort freigeben, nicht erst mit der dritten
-    clock += 120;
-    r.update(1 / 60, stubView({ stage: 2, worldMeters: WIEN_STAGE_METERS * 2 + 1 }));
-    expect([...i.facadeVar.keys()]).toEqual([1]);
+    // Rohvarianten 1 liegen vor, ihre Bakes (Stufe 2) auch – und sind damit schon wieder frei
+    expect(i.facades.has(2)).toBe(true);
+    expect(i.roofs.has(2)).toBe(true);
+    expect(i.facadeVar.size).toBe(0);
+    expect(i.roofVar.size).toBe(0);
     expect(i.facadeSpares).toHaveLength(1);
+    expect(i.roofSpares).toHaveLength(1);
+  });
+
+  it("die erste Folgevariante (Stufe 2, bei ca. 336 m) legt keine neue Fläche an: Fassade und Dach malen in die Flächen der Variante 0", async () => {
+    const { r, stub } = await loaded();
+    const i = inner(r);
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    r.update(1 / 60, stubView());
+    while (!r.warm(50)) {
+      /* aufwärmen (Hub: Countdown/Menü-Demo) */
+    }
+    const base = stub.created;
+    const puffsBase = i.puffs.baked;
+    for (let st = 0; st <= 7; st += 1) {
+      for (let p = 0; p < 1; p += 0.05) {
+        clock += 120;
+        r.update(1 / 60, stubView({ stage: st, stageBlend: p > 0.75 ? (p - 0.75) * 4 : 0, worldMeters: st * WIEN_STAGE_METERS + p * WIEN_STAGE_METERS }));
+        // nach dem Aufwärmen entsteht in keinem Frame eines ganzen Laufs eine Fläche außer den vier großen Rauchgrößen
+        expect(stub.created - base - (i.puffs.baked - puffsBase)).toBe(0);
+      }
+    }
+    for (const c of [i.backdrop.cache, i.facades, i.roofs, i.reflections]) expect(c.has(7)).toBe(true);
+  });
+
+  it("eine noch gebrauchte Rohvariante bleibt: fehlt eine Spiegelung (Q1+), wird die Fassade erst nach deren Bake freigegeben; Q0 braucht keine", async () => {
+    const { r } = await loaded();
+    const i = inner(r);
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    // Q0: Spiegelungen entfallen (Cache leer) → die Rohfassade 0 wird nicht mehr gebraucht
+    r.update(1 / 60, stubView({ stage: 0, worldMeters: 100, quality: 0 }));
+    expect(i.facadeVar.size).toBe(0);
+    // zurück auf Q2: die Spiegelung der aktuellen Stufe wird sofort gebacken (dafür entsteht die Rohfassade neu), die der
+    // Folgestufe erst gedrosselt – bis dahin bleibt die Rohfassade stehen
+    clock += 120;
+    r.update(1 / 60, stubView({ stage: 0, worldMeters: 10, quality: 2 })); // Stufenanfang: die Folgestufe wird noch nicht gebacken
+    expect(i.reflections.has(0)).toBe(true);
+    expect(i.reflections.has(1)).toBe(false);
+    expect(i.facadeVar.has(0)).toBe(true);
+    clock += 120;
+    r.update(1 / 60, stubView({ stage: 0, worldMeters: 100, quality: 2 })); // ab 28 %: Spiegelung der Folgestufe
+    expect(i.reflections.has(1)).toBe(true);
+    expect(i.facadeVar.size).toBe(0); // alle Bakes fertig → wieder frei
   });
 
   it("die Stufen-Flächen und gemalten Roh-/Sprite-Flächen werden beim Backen gleich gerastert (touchCanvas)", async () => {

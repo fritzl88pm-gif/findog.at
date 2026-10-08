@@ -5,8 +5,11 @@ import { Sim } from "../sim";
 import { WORLD_ALPEN } from "./alpen";
 import { AlpBackdrop } from "./alpen/backdrop";
 import { ALPEN_STAGE_METERS, AlpenRenderer } from "./alpen/renderer";
-import { PropBank } from "./alpen/skins";
+import { blendMasked } from "./alpen/scenery";
+import { PropBank, drawLedge, type SkinAssets, type SkinCtx } from "./alpen/skins";
 import { AVALANCHE_MIN_DIFF, AVALANCHE_MIN_STAGE, AlpenSystem } from "./alpen/system";
+import { paint } from "./shared-b/canvas";
+import type { Ent } from "../types";
 import { WORLDS } from "./index";
 import { auditPatterns, botRuns } from "./shared-b/audit";
 import type { StageCache } from "./shared-b/layers";
@@ -202,7 +205,7 @@ describe("Alpen – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () => 
     expect(next()).toBeGreaterThan(before);
   });
 
-  it("ein ganzer Lauf durch alle 5 Stufen: Stufenflächen werden wiederverwendet (nur die Farbmasken der Einfärbung legen Zwischenflächen an)", async () => {
+  it("ein ganzer Lauf durch alle 5 Stufen: Stufenflächen werden wiederverwendet, es entsteht keine neue Fläche", async () => {
     const { r, stub } = await loaded();
     let clock = 0;
     vi.spyOn(performance, "now").mockImplementation(() => clock);
@@ -218,8 +221,9 @@ describe("Alpen – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () => 
         r.update(1 / 60, stubView({ stage: st, stageBlend: p > 0.75 ? (p - 0.75) * 4 : 0, worldMeters: st * ALPEN_STAGE_METERS + p * ALPEN_STAGE_METERS }));
       }
     }
-    // Ohne Wiederverwendung wären es ≥ 13 Caches × 3 Stufen; übrig bleiben die Maskier-Zwischenflächen (Stufe 3: 1, Stufe 4: 2 je Ebene)
-    expect(stub.created - base).toBeLessThanOrEqual(12);
+    // Ohne Wiederverwendung wären es ≥ 13 Caches × 3 Stufen; auch die Mischmodi-Durchgänge (Stufe 0, 3, 4) arbeiten in Streifen
+    // auf einer einzigen, wiederverwendeten Arbeitsfläche – nach dem Aufwärmen entsteht in einem ganzen Lauf keine Fläche mehr
+    expect(stub.created - base).toBe(0);
     expect(inner(r).staged.every((c) => c.has(4))).toBe(true);
   });
 
@@ -283,6 +287,20 @@ describe("Alpen – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () => 
     expect(spy.mock.calls).toEqual([[1], [2]]);
     at(4, 0.9);
     expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("load dekodiert die Kulissenbilder der Stufen 0 und 1 je in einem eigenen Schritt VOR ihrem ersten Bake", async () => {
+    installCanvasStub();
+    const r = new AlpenRenderer();
+    const seen: string[] = [];
+    vi.spyOn(AlpBackdrop.prototype, "predecode").mockImplementation((stage: number) => {
+      const bs = inner(r).backdrop.stages;
+      seen.push(`predecode${stage}: Stufe 0 ${bs?.has(0) ? "da" : "fehlt"}, Stufe 1 ${bs?.has(1) ? "da" : "fehlt"}`);
+      return undefined;
+    });
+    await r.load(assetsOf(manifestProps(), FAKE_IMAGE));
+    expect(seen).toEqual(["predecode0: Stufe 0 fehlt, Stufe 1 fehlt", "predecode1: Stufe 0 da, Stufe 1 fehlt"]);
+    expect(inner(r).backdrop.stages?.has(1)).toBe(true);
   });
 
   it("Mittelhügel: ein angefangenes Rohbild wird bei clear() verworfen und die Stufe danach neu und vollständig aufgebaut", async () => {
@@ -395,5 +413,228 @@ describe("Alpen – PropBank (Cache ohne String-Schlüssel)", () => {
     for (let i = 1; i <= 85; i += 1) bank.get("alpen-trunk", 0.1 + i * 0.001);
     expect(bank.size).toBeLessThanOrEqual(80);
     expect(bank.get("alpen-logs", 0.1)).not.toBe(first); // war verdrängt → neu gebacken
+  });
+});
+
+describe("Alpen – PropBank: Vorbestellung (early) für Entitäten vor dem Bildrand", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("bei early wird Fehlendes nicht gebacken, sondern vorbestellt (einmal je Sprite); die Warteschlange backt es, danach Treffer", () => {
+    const stub = installCanvasStub();
+    const bank = new PropBank(manifestProps());
+    bank.early = true;
+    const n = stub.created;
+    const snow = { y0: 5, y1: 90, a0: 0.8 };
+    expect(bank.get("alpen-logs", 0.2, { snow })).toBeNull();
+    expect(bank.get("alpen-logs", 0.2, { snow: { ...snow } })).toBeNull(); // dieselbe Bestellung (neues Objekt) zählt einmal
+    expect(bank.get("alpen-trunk", 0.2)).toBeNull();
+    expect(bank.queued).toBe(2);
+    expect(bank.ahead.pending).toBe(2);
+    expect(stub.created).toBe(n); // im Zeichenpfad entsteht nichts
+    expect(bank.size).toBe(0);
+    while (!bank.ahead.run(100)) {
+      /* abarbeiten */
+    }
+    expect(bank.queued).toBe(0);
+    expect(bank.size).toBe(2);
+    // sichtbar: Treffer ohne Neubacken (auch mit neuem Optionsobjekt)
+    bank.early = false;
+    const made = stub.created;
+    expect(bank.get("alpen-logs", 0.2, { snow: { ...snow } })).not.toBeNull();
+    expect(bank.get("alpen-trunk", 0.2)).not.toBeNull();
+    expect(stub.created).toBe(made);
+  });
+
+  it("ohne early backt get am Stück (sichtbare Entität); Props ohne Bild werden auch bei early nicht bestellt", () => {
+    const stub = installCanvasStub();
+    const bank = new PropBank(manifestProps());
+    const n = stub.created;
+    expect(bank.get("alpen-cairn", 0.2)).not.toBeNull();
+    expect(stub.created).toBeGreaterThan(n);
+    bank.early = true;
+    expect(bank.get("gibt-es-nicht", 0.2)).toBeNull();
+    expect(bank.queued).toBe(0);
+  });
+
+  it("jedes frisch gebackene Sprite (auch die Schnee-Variante) wird gleich gerastert (touchCanvas)", () => {
+    installCanvasStub();
+    const rec = installTouchStub();
+    const bank = new PropBank(manifestProps());
+    const b = bank.get("alpen-logs", 0.2, { snow: { y0: 5, y1: 90, a0: 0.8 } });
+    expect(rec.touched).toEqual([b?.c, b?.snowC]);
+    bank.get("alpen-logs", 0.2, { snow: { y0: 5, y1: 90, a0: 0.8 } });
+    expect(rec.touched).toHaveLength(2);
+  });
+});
+
+describe("Alpen – Felsdach (drawLedge) in Teilschritten", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const ledge = (id: number): Ent => ({ id, kind: "overhead", skin: "ledge", x: 0, y: -30, w: 180, h: 420, hb: [0, 0, 180, 420], p: {}, fx: {} }) as unknown as Ent;
+  const ctx = (snow = 0): SkinCtx => ({ s: 0, snow, glow: 0, time: 0, reduced: true, quality: 0, groundY: 590 });
+  const assets = (): SkinAssets => ({ bank: new PropBank(manifestProps()) }) as unknown as SkinAssets;
+
+  it("fern (early): nichts wird gezeichnet oder angelegt; die Warteschlange baut es in vier Teilschritten, dann liegt es vor", () => {
+    const rec = installRecordingStub();
+    const A = assets();
+    const g = paint(1280, 720, () => undefined).getContext("2d") as CanvasRenderingContext2D;
+    const gl = (rec.canvases[0] as RecordingCanvas).log;
+    const e = ledge(11);
+    A.bank.early = true;
+    const n = rec.canvases.length;
+    drawLedge(g, A, e, 1400, -30, ctx());
+    drawLedge(g, A, e, 1390, -30, ctx()); // nochmal: keine zweite Bestellung
+    expect(rec.canvases.length).toBe(n);
+    expect(A.bank.ahead.pending).toBe(1);
+    expect(gl.filter((l) => l.startsWith("drawImage"))).toHaveLength(0);
+    let steps = 0;
+    while (!A.bank.ahead.run(0.01)) steps += 1; // Budget 0: genau ein Schritt je Aufruf
+    steps += 1;
+    expect(steps).toBe(4);
+    expect(rec.canvases.length).toBe(n + 1); // eine Fläche, vom ersten Teilschritt angelegt
+    // jetzt (auch sichtbar) nur Treffer: gezeichnet wird das fertige Sprite
+    A.bank.early = false;
+    drawLedge(g, A, e, 600, -30, ctx());
+    expect(rec.canvases.length).toBe(n + 1);
+    expect(gl.filter((l) => l.startsWith("drawImage"))).toHaveLength(1);
+  });
+
+  it("sichtbar ohne Sprite: wird sofort am Stück gebaut und gezeichnet", () => {
+    const rec = installRecordingStub();
+    const A = assets();
+    const g = paint(1280, 720, () => undefined).getContext("2d") as CanvasRenderingContext2D;
+    const gl = (rec.canvases[0] as RecordingCanvas).log;
+    const n = rec.canvases.length;
+    drawLedge(g, A, ledge(12), 600, -30, ctx());
+    expect(rec.canvases.length).toBe(n + 1);
+    expect(gl.filter((l) => l.startsWith("drawImage"))).toHaveLength(1);
+    expect(A.bank.ahead.pending).toBe(0);
+  });
+
+  it("Teilschritte und Stück ergeben dieselben Zeichenbefehle (gleiche Zufallsfolge)", () => {
+    const rec = installRecordingStub();
+    const g = paint(1280, 720, () => undefined).getContext("2d") as CanvasRenderingContext2D;
+    const A1 = assets();
+    A1.bank.early = true;
+    const e1 = ledge(13);
+    drawLedge(g, A1, e1, 1400, -30, ctx());
+    while (!A1.bank.ahead.run(0.01)) {
+      /* Schritte */
+    }
+    const A2 = assets();
+    drawLedge(g, A2, ledge(13), 600, -30, ctx());
+    const [, stepped, whole] = rec.canvases as RecordingCanvas[];
+    expect(stepped.log.length).toBeGreaterThan(100);
+    expect(stepped.log).toEqual(whole.log);
+  });
+
+  it("Eis-Wechsel: das alte Sprite bleibt sichtbar, bis das neue in Teilschritten fertig ist (nie ein Neubau im Zeichenpfad)", () => {
+    const rec = installRecordingStub();
+    const A = assets();
+    const g = paint(1280, 720, () => undefined).getContext("2d") as CanvasRenderingContext2D;
+    const gl = (rec.canvases[0] as RecordingCanvas).log;
+    const e = ledge(14);
+    drawLedge(g, A, e, 600, -30, ctx(0)); // Fels, sofort
+    const n = rec.canvases.length;
+    const drawn = (): number => gl.filter((l) => l.startsWith("drawImage")).length;
+    expect(drawn()).toBe(1);
+    drawLedge(g, A, e, 600, -30, ctx(1)); // Eis: neu bestellen, das alte Sprite zeichnen
+    expect(drawn()).toBe(2);
+    expect(A.bank.ahead.pending).toBe(1);
+    expect(rec.canvases.length).toBe(n); // noch nichts angelegt
+    drawLedge(g, A, e, 600, -30, ctx(1)); // keine zweite Bestellung
+    expect(A.bank.ahead.pending).toBe(1);
+    while (!A.bank.ahead.run(0.01)) {
+      /* Schritte */
+    }
+    expect(rec.canvases.length).toBe(n + 1);
+    drawLedge(g, A, e, 600, -30, ctx(1));
+    expect(rec.canvases.length).toBe(n + 1);
+    expect(A.bank.ahead.pending).toBe(0);
+    // zurück zu Fels (Schneeschmelze/neuer Lauf): wieder in Teilschritten
+    drawLedge(g, A, e, 600, -30, ctx(0));
+    expect(A.bank.ahead.pending).toBe(1);
+  });
+
+  it("Renderer: ein Felsdach kurz vor dem Bildrand bestellt nur vor, `update` baut es, danach nur Treffer", async () => {
+    const { r, stub } = await loaded();
+    r.update(1 / 60, stubView());
+    while (!r.warm(50)) {
+      /* aufwärmen */
+    }
+    const g = document.createElement("canvas").getContext("2d") as CanvasRenderingContext2D;
+    const v = stubView();
+    const e = ledge(15);
+    const n = stub.created;
+    expect(r.drawEntity(g, e, v.w + 120, -30, v)).toBe(true);
+    expect(stub.created).toBe(n);
+    for (let k = 0; k < 8; k += 1) r.update(1 / 60, stubView());
+    expect(stub.created).toBe(n + 1);
+    expect(r.drawEntity(g, e, 900, -30, v)).toBe(true);
+    expect(stub.created).toBe(n + 1);
+  });
+});
+
+describe("Alpen – ferne Entitäten (early) und Zeichenzustand", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("eine ferne Entität zeichnet ihren Ersatz in save/restore (kein Zustand bleibt für die nächste Entität zurück); eine sichtbare nicht gekapselt", async () => {
+    const rec = installRecordingStub();
+    const r = new AlpenRenderer();
+    await r.load(assetsOf(manifestProps(), FAKE_IMAGE));
+    const g = document.createElement("canvas").getContext("2d") as CanvasRenderingContext2D;
+    const log = (g.canvas as unknown as RecordingCanvas).log;
+    const v = stubView();
+    const logs = { id: 21, kind: "block", skin: "logs", x: 0, y: 0, w: 120, h: 90, hb: [0, 0, 120, 90], p: {}, fx: {}, vx: 0 } as unknown as Ent;
+    r.update(1 / 60, stubView());
+    log.length = 0;
+    r.drawEntity(g, logs, v.w + 100, 500, v); // fern: das Sprite fehlt noch (vorbestellt), der Ersatz wird außerhalb gezeichnet
+    expect(log[0]).toBe("save()");
+    expect(log[log.length - 1]).toBe("restore()");
+    expect(log.filter((l) => l === "save()").length).toBe(log.filter((l) => l === "restore()").length);
+    log.length = 0;
+    r.drawEntity(g, logs, 600, 500, v); // sichtbar: keine zusätzliche Klammer
+    expect(log[0]).not.toBe("save()");
+    void rec;
+  });
+});
+
+describe("Alpen – blendMasked in Streifen", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("die Streifen decken die ganze Kachel ab; jeder ist maskiert kopiert; wiederholte Aufrufe legen keine Fläche an", () => {
+    const rec = installRecordingStub();
+    const tile = paint(2048, 150, () => undefined);
+    const g = tile.getContext("2d") as CanvasRenderingContext2D;
+    blendMasked(g, 2048, 150, "multiply", "#a99ccf", 1); // legt die Arbeitsfläche an (falls noch keine da ist)
+    const n = rec.canvases.length;
+    const log = (tile as unknown as RecordingCanvas).log;
+    log.length = 0;
+    blendMasked(g, 2048, 150, "soft-light", "#ff9a70", 0.35);
+    blendMasked(g, 2048, 250, "saturation", "#808080", 0.3);
+    blendMasked(g, 2048, 360, "multiply", "#a99ccf", 1);
+    expect(rec.canvases.length).toBe(n);
+    // 150 px = Streifen 0–64, 64–128, 128–150
+    const clips = log.filter((l) => l.startsWith("rect(0,"));
+    expect(clips.slice(0, 3)).toEqual(["rect(0,0,2048,64)", "rect(0,64,2048,64)", "rect(0,128,2048,22)"]);
+    // jeder Streifen kopiert genau seinen Ausschnitt an dieselbe Stelle zurück
+    expect(log.filter((l) => l.startsWith("drawImage")).slice(0, 3)).toEqual([
+      "drawImage(<canvas 2048x64>,0,0,2048,64,0,0,2048,64)",
+      "drawImage(<canvas 2048x64>,0,0,2048,64,0,64,2048,64)",
+      "drawImage(<canvas 2048x64>,0,0,2048,22,0,128,2048,22)",
+    ]);
+    // 150 + 250 + 360 px = 3 + 4 + 6 Streifen
+    expect(clips).toHaveLength(13);
   });
 });

@@ -47,12 +47,13 @@ export class AlpBackdrop {
   }
 
   /**
-   * Kulissenbild der Stufe vordekodieren (der Browser dekodiert ein Bild erst beim ersten Zeichnen: 5-15 ms, die sonst
-   * zusammen mit dem Skalieren im ersten Bake-Schritt anfielen). Aufruf kurz vor dem Vorbacken der Folgestufe (`StagePrep.onApproach`).
+   * Kulissenbild der Stufe vordekodieren: der Browser dekodiert ein <img> erst beim ersten Zeichnen im Hauptthread (5-45 ms
+   * je Bild), das fiele sonst zusammen mit dem Skalieren in den ersten Bake-Schritt. Ein 1×1-Warm-Draw (`warmImage`) holt das
+   * in einen eigenen Frame davor. Aufruf kurz vor dem Vorbacken der Folgestufe (`StagePrep.onApproach`).
    */
-  predecode(stage: number): void {
+  predecode(stage: number): Promise<void> | undefined {
     const img = this.imageOf(stage);
-    if (img) void warmImage(img);
+    return img ? warmImage(img) : undefined;
   }
 
   /** Kulissenbild auf Kachelgröße skalieren (`grade` = Färbung gleich mit anwenden) */

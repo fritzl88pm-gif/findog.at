@@ -93,6 +93,9 @@ interface Rocket {
   spr: HTMLCanvasElement;
 }
 
+/** Entitäten, die weiter als so viele px hinter dem rechten Bildrand liegen, bestellen ihr Sprite nur vor (siehe `drawEntity`) */
+const AHEAD_PX = 40;
+
 const FW_COLORS = ["#ffd24a", "#ff4fa3", "#5ef2ff", "#9dff6a", "#b98cff", "#ff8a5c", "#fff6e0"];
 
 /** Einfärbung pro Stufe: Nacht-Silhouette (Farbe/Stärke) + Dunst (Stufen-Dunstfarbe) */
@@ -225,6 +228,7 @@ export class PraterRenderer implements WorldRenderer {
   private readonly parts: Array<() => void> = [
     () => this.buildSky(),
     () => this.buildLayers1(),
+    () => this.buildLayers1b(),
     () => this.buildLayers2(),
     () => this.buildLayers3(),
     () => this.buildLayers4(),
@@ -293,6 +297,9 @@ export class PraterRenderer implements WorldRenderer {
   private buildLayers1(): void {
     const far = farSkyline(2048, 280);
     this.far = stagedLayer(far.day, 310, 0.035, tintFor("#1b1740", 0.86, 0.34, 0.62), { lights: far.lights, recycle: true });
+  }
+
+  private buildLayers1b(): void {
     const co = coasterTiles(2048, 340);
     this.coaster = stagedLayer(co.day, 250, 0.13, tintFor("#1d1336", 0.84, 0.16, 0.34), { lights: co.lights, lights2: co.lights2, recycle: true });
   }
@@ -434,6 +441,7 @@ export class PraterRenderer implements WorldRenderer {
     this.lastStage = stage;
     this.prep.setLow(v.quality === 0); // Qualität 0: Folgestufe später (ab ~60 %) und nicht im Leerlauf vorbacken (Speicher)
     this.prep.step(stage, stageProgress(v.worldMeters, PRATER_STAGE_METERS), v.stageBlend);
+    this.A.bank.pump(); // vorbestellte Hindernis-Sprites (höchstens ein Schritt je Frame)
     const s = Math.min(MAX_STAGE, v.stage + v.stageBlend);
     // Feuerwerk
     const fw = stageVal(FIREWORKS, s) * (v.quality === 0 ? 0.4 : 1);
@@ -1000,6 +1008,22 @@ export class PraterRenderer implements WorldRenderer {
 
   drawEntity(g: Ctx2D, e: Ent, sx: number, sy: number, v: ViewState): boolean {
     this.build();
+    // Entitäten kurz vor dem Bildrand (die Engine zeichnet sie ab 260 px davor): fehlende Sprites werden nicht im Zeichenpfad
+    // gebacken, sondern vorbestellt (`update` backt sie in kleinen Schritten) – sichtbare bekommen ihres immer sofort
+    const bank = this.A.bank;
+    const early = sx > v.w + AHEAD_PX;
+    bank.early = early;
+    // fern: ein noch fehlendes Sprite liefert den prozeduralen Ersatz (außerhalb des Bildes) – der Zeichenzustand bleibt davon unberührt
+    if (early) g.save();
+    try {
+      return this.drawEnt(g, e, sx, sy, v);
+    } finally {
+      if (early) g.restore();
+      bank.early = false; // nie hängen lassen: Aufwärm-Aufträge und andere Aufrufer wollen sofort backen
+    }
+  }
+
+  private drawEnt(g: Ctx2D, e: Ent, sx: number, sy: number, v: ViewState): boolean {
     const s = Math.min(MAX_STAGE, v.stage + v.stageBlend);
     const k: SkinCtx = { night: stageVal(NIGHT, s), time: v.time, quality: v.quality, reduced: v.reducedMotion };
     const A = this.A;

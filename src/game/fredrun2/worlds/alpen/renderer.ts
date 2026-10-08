@@ -148,6 +148,9 @@ interface Butterfly {
   s: number;
 }
 
+/** Entitäten, die weiter als so viele px hinter dem rechten Bildrand liegen, bestellen ihr Sprite nur vor (siehe `drawEntity`) */
+const AHEAD_PX = 40;
+
 const BF_COLORS = ["#ffd23f", "#ff8c42", "#7ec8ff", "#ffffff", "#c79bff"];
 
 export class AlpenRenderer implements WorldRenderer {
@@ -163,7 +166,7 @@ export class AlpenRenderer implements WorldRenderer {
   private ground!: StageCache;
   /** alle Stufen-Caches (Liste gehört dem StagePrep) */
   private staged: StageCache[] = [];
-  private prep = new StagePrep(this.staged, MAX_STAGE, { onApproach: (next) => this.backdrop.predecode(next) });
+  private prep = new StagePrep(this.staged, MAX_STAGE, { onApproach: (next) => void this.backdrop.predecode(next) });
   private warmQ = new WarmQueue();
   private warmInit = false;
   private loaded = false;
@@ -211,6 +214,10 @@ export class AlpenRenderer implements WorldRenderer {
     await Promise.all([assets.props.preload(ALPEN_PROPS).catch(() => undefined), this.backdrop.load(assets).catch(() => undefined)]);
     // Statisches in Schritten bauen und dazwischen den Hauptthread freigeben (kein Long Task)
     await this.buildAsync();
+    // Kulissenbild der Stufe 0 in einem eigenen Schritt dekodieren (der Browser dekodiert erst beim ersten Zeichnen, 25-30 ms
+    // am Stück und nicht teilbar): sonst fiele es mit dem Skalieren des ersten Bake-Schritts in einen Block
+    await yieldToMain();
+    await this.backdrop.predecode(0);
     // Stufe 0 (und die Landmarken) vorbacken, damit der erste Frame ruckelfrei ist
     for (const s of this.staged) {
       while (!s.has(0)) {
@@ -220,6 +227,8 @@ export class AlpenRenderer implements WorldRenderer {
     }
     const bs = this.backdrop.stages;
     if (bs) {
+      await yieldToMain();
+      await this.backdrop.predecode(1);
       while (!bs.has(1)) {
         await yieldToMain();
         bs.step(1);
@@ -425,6 +434,7 @@ export class AlpenRenderer implements WorldRenderer {
     this.lastStage = v.stage;
     this.prep.setLow(v.quality === 0); // Qualität 0: Folgestufe später (ab ~60 %) und nicht im Leerlauf vorbacken (Speicher)
     this.prep.step(v.stage, stageProgress(v.worldMeters, ALPEN_STAGE_METERS), v.stageBlend);
+    this.A.bank.ahead.run(2.5); // vorbestellte Hindernis-Sprites und Felsdächer (ein kleiner Schritt je Frame)
     const s = v.stage + v.stageBlend;
     const q = v.quality === 0 ? 0.35 : v.quality === 1 ? 0.7 : 1;
     const wind = stageVal(WIND, s);
@@ -1037,6 +1047,22 @@ export class AlpenRenderer implements WorldRenderer {
 
   drawEntity(g: Ctx2D, e: Ent, sx: number, sy: number, v: ViewState): boolean {
     if (!this.ready) return false;
+    // Entitäten kurz vor dem Bildrand (die Engine zeichnet sie ab 260 px davor): fehlende Sprites werden nicht im Zeichenpfad
+    // gebacken, sondern vorbestellt (`update` arbeitet sie in kleinen Schritten ab) – sichtbare bekommen ihres immer sofort
+    const bank = this.A.bank;
+    const early = sx > v.w + AHEAD_PX;
+    bank.early = early;
+    // fern: ein noch fehlendes Sprite liefert den prozeduralen Ersatz (außerhalb des Bildes) – der Zeichenzustand bleibt davon unberührt
+    if (early) g.save();
+    try {
+      return this.drawEnt(g, e, sx, sy, v);
+    } finally {
+      if (early) g.restore();
+      bank.early = false; // nie hängen lassen: Aufwärm-Aufträge und andere Aufrufer wollen sofort backen
+    }
+  }
+
+  private drawEnt(g: Ctx2D, e: Ent, sx: number, sy: number, v: ViewState): boolean {
     const k = this.skin;
     const A = this.A;
     if (e.kind === "pickup") {
@@ -1069,7 +1095,7 @@ export class AlpenRenderer implements WorldRenderer {
         drawCairn(g, A, e, sx, k);
         return true;
       case "ledge":
-        drawLedge(g, e, sx, sy, k);
+        drawLedge(g, A, e, sx, sy, k);
         return true;
       case "cargo":
         drawCargo(g, A, e, sx, sy, k);

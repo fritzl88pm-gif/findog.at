@@ -198,8 +198,9 @@ export class MirrorBackdrop {
   }
 
   /**
-   * Kulissenbild der Stufe vordekodieren (der Browser dekodiert ein Bild erst beim ersten Zeichnen: 5-15 ms, die sonst
-   * zusammen mit dem Malen im ersten Bake-Schritt anfielen). Aufruf kurz vor dem Vorbacken der Folgestufe (`StagePrep.onApproach`).
+   * Kulissenbild der Stufe `i` vordekodieren: der Browser dekodiert ein <img> erst beim ersten Zeichnen im Hauptthread (5-45 ms
+   * je Bild), das fiele sonst zusammen mit dem Malen in den ersten Bake-Schritt. Ein 1×1-Warm-Draw (`warmImage`) holt das in einen
+   * eigenen Frame davor. Aufruf kurz vor dem Vorbacken der Folgestufe (`StagePrep.onApproach`).
    */
   predecode(i: number): void {
     const img = this.imageOf(i);

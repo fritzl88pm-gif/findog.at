@@ -3,7 +3,7 @@
  * Himmel, ferne Hügel, Almhänge mit Wäldern, nahe Tannen, Boden (Almrasen → Fels → Gletscher), Schluchtwand,
  * Wolken, Nebelschwaden, Tannen-Sprites. Alle Kacheln sind horizontal periodisch (nahtlos).
  */
-import { paint, type Ctx2D } from "../shared-b/canvas";
+import { ctxOf, paint, type Ctx2D } from "../shared-b/canvas";
 import type { GradeStep } from "../shared-b/layers";
 import { hexRgb, mixRgb, css, h1, mulberry, type RGB } from "../shared-b/color";
 import { STAGE_PAL, SNOWCOVER, STARS } from "./stages";
@@ -20,27 +20,44 @@ function shadeRgb(c: RGB, k: number): string {
   return css([Math.min(255, c[0] * k), Math.min(255, c[1] * k), Math.min(255, c[2] * k)]);
 }
 
+/** Höhe eines Streifens in `blendMasked` (px): die Arbeitsfläche ist 2048 × 64 statt einer Kopie der ganzen Kachel */
+const BLEND_BAND = 64;
+/** wiederverwendete Arbeitsfläche für `blendMasked` (eine für alle Kacheln und Stufen; entsteht beim ersten Gebrauch im Weltladen) */
+let blendScratch: HTMLCanvasElement | null = null;
+
 /**
  * Mischmodus (multiply, soft-light, saturation …) nur dort anwenden, wo die Kachel bereits deckt – Canvas-Mischmodi
- * würden sonst auch transparente Bereiche einfärben.
+ * würden sonst auch transparente Bereiche einfärben. Die Kachel wird in Streifen bearbeitet (Mischmodi arbeiten pro Pixel,
+ * das Ergebnis ist dasselbe wie bei einer Kopie der ganzen Kachel) und braucht dafür nur eine kleine, wiederverwendete
+ * Arbeitsfläche: keine neue 2048 × 230–360 große Fläche bei jedem Stufen-Bake mitten im Lauf.
  */
 export function blendMasked(g: Ctx2D, w: number, h: number, mode: GlobalCompositeOperation, color: string, alpha: number): void {
   const src = g.canvas;
-  const tmp = paint(w, h, (t) => {
-    t.drawImage(src, 0, 0, w, h);
+  const bw = Math.max(1, Math.round(w));
+  const tmp = blendScratch !== null && blendScratch.width >= bw ? blendScratch : (blendScratch = paint(bw, BLEND_BAND, () => undefined));
+  const t = ctxOf(tmp);
+  for (let y = 0; y < h; y += BLEND_BAND) {
+    const bh = Math.min(BLEND_BAND, h - y);
+    t.setTransform(1, 0, 0, 1, 0, 0);
+    t.globalCompositeOperation = "copy";
+    t.globalAlpha = 1;
+    t.drawImage(src, 0, y, w, bh, 0, 0, w, bh);
     t.globalCompositeOperation = mode;
     t.globalAlpha = alpha;
     t.fillStyle = color;
-    t.fillRect(0, 0, w, h);
+    t.fillRect(0, 0, w, bh);
     t.globalAlpha = 1;
     t.globalCompositeOperation = "destination-in";
-    t.drawImage(src, 0, 0, w, h);
-  });
-  g.save();
-  g.setTransform(1, 0, 0, 1, 0, 0);
-  g.globalCompositeOperation = "copy";
-  g.drawImage(tmp, 0, 0);
-  g.restore();
+    t.drawImage(src, 0, y, w, bh, 0, 0, w, bh);
+    g.save();
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.beginPath();
+    g.rect(0, y, w, bh);
+    g.clip();
+    g.globalCompositeOperation = "copy";
+    g.drawImage(tmp, 0, 0, w, bh, 0, y, w, bh);
+    g.restore();
+  }
 }
 
 /**

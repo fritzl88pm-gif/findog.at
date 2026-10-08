@@ -12,7 +12,8 @@ export interface RoofOpts {
   ruin: number;
 }
 
-export function paintRooftops(W: number, H: number, o: RoofOpts): Tile {
+/** Dachlandschaft malen; mit `reuse` (gleiche Größe) wird eine verworfene Fläche neu bemalt statt eine neue anzulegen */
+export function paintRooftops(W: number, H: number, o: RoofOpts, reuse?: HTMLCanvasElement | null): Tile {
   return renderTile(W, H, 1, (g) => {
     let x = 0;
     let i = 0;
@@ -106,7 +107,7 @@ export function paintRooftops(W: number, H: number, o: RoofOpts): Tile {
       x += w;
       i += 1;
     }
-  });
+  }, reuse);
 }
 
 // ---------------------------------------------------------------------------------------------------

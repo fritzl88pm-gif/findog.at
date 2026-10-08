@@ -5,8 +5,9 @@
  * prozedurale Varianten. Gefahren bekommen dunkle Kontur + helle Kante, damit sie sich immer vom Hintergrund abheben.
  */
 import type { Ent, PropLibrary, ViewState } from "../../types";
-import { paint, rr, type Ctx2D } from "../shared-b/canvas";
+import { ctxOf, paint, rr, touchCanvas, type Ctx2D } from "../shared-b/canvas";
 import { h1, mulberry } from "../shared-b/color";
+import { WarmQueue } from "../shared-b/warm";
 import { CABLE_SLOPE } from "./patterns";
 
 const TAU = Math.PI * 2;
@@ -76,6 +77,16 @@ function sameSnow(a: SnowSpec | undefined, b: SnowSpec | undefined): boolean {
   return !!a && !!b && a.y0 === b.y0 && a.y1 === b.y1 && a.a0 === b.a0;
 }
 
+/** Gleiche Backangaben (Spiegelung, Ausschnitt, Rechtecke, Kreis, Schnee) – Cache-Treffer ohne String-Schlüssel */
+function sameOpts(a: BakeOpts, b: BakeOpts): boolean {
+  return !!a.flip === !!b.flip && sameNums(a.crop, b.crop) && sameRects(a.clip, b.clip) && sameNums(a.circle, b.circle) && sameSnow(a.snow, b.snow);
+}
+
+/** Eigene Kopie der Backangaben (Aufrufer legen sie oft pro Aufruf neu an) */
+function copyOpts(o: BakeOpts): BakeOpts {
+  return { crop: o.crop && [...o.crop], clip: o.clip?.map((r) => [...r] as [number, number, number, number]), circle: o.circle && [...o.circle], flip: o.flip, snow: o.snow && { ...o.snow } };
+}
+
 interface BankEntry {
   b: Baked;
   o: BakeOpts;
@@ -89,12 +100,30 @@ export class PropBank {
   private readonly cache = new Map<string, Map<number, BankEntry[]>>();
   /** Einfügereihenfolge (Verdrängung) */
   private readonly order: Array<{ id: string; s: number; e: BankEntry }> = [];
+  /**
+   * Vorbestellungen aus dem Zeichenpfad (siehe `early`) und Hindernis-Sprites, die erst bei Bedarf entstehen (Felsdächer): der
+   * Renderer arbeitet die Warteschlange in `update` ab, höchstens ein kleiner Schritt je Frame.
+   */
+  readonly ahead = new WarmQueue();
+  /** noch nicht gebackene Vorbestellungen (nur zur Doppelungs-Prüfung, kurz) */
+  private readonly ordered: Array<{ id: string; s: number; o: BakeOpts }> = [];
+  /**
+   * Der Renderer zeichnet gerade eine Entität, die noch außerhalb des Bildes liegt: ein fehlendes Sprite wird dann NICHT im
+   * Zeichenpfad gebacken, sondern vorbestellt (`get` liefert null, der Aufrufer zeichnet seinen Ersatz außerhalb des Bildes).
+   * Sichtbare Entitäten bekommen ihr Sprite immer sofort (Rückfall: Backen am Stück wie früher).
+   */
+  early = false;
 
   constructor(private readonly props: PropLibrary | null) {}
 
   /** Anzahl gebackener Sprites */
   get size(): number {
     return this.order.length;
+  }
+
+  /** Anzahl vorbestellter, noch nicht gebackener Sprites */
+  get queued(): number {
+    return this.ordered.length;
   }
 
   has(id: string): boolean {
@@ -124,27 +153,41 @@ export class PropBank {
     return Math.round(Math.min(need, cap) * 200) / 200;
   }
 
+  /** Cache-Treffer für (id, Skala, Optionen) oder null */
+  private find(id: string, sq: number, o: BakeOpts): Baked | null {
+    const list = this.cache.get(id)?.get(sq);
+    if (list) {
+      for (let i = 0; i < list.length; i += 1) {
+        const e = list[i];
+        if (sameOpts(e.o, o)) return e.b;
+      }
+    }
+    return null;
+  }
+
+  /** Sprite; null, wenn das Prop nicht geladen ist – oder bei `early` noch nicht gebacken wurde (dann ist es vorbestellt) */
   get(id: string, s: number, o: BakeOpts = {}): Baked | null {
     const props = this.props;
     if (!props?.has(id)) return null;
     const sq = Math.round(s * 1000) / 1000;
-    const byId = this.cache.get(id);
-    const list = byId?.get(sq);
-    if (list) {
-      for (let i = 0; i < list.length; i += 1) {
-        const e = list[i];
-        if (!!e.o.flip === !!o.flip && sameNums(e.o.crop, o.crop) && sameRects(e.o.clip, o.clip) && sameNums(e.o.circle, o.circle) && sameSnow(e.o.snow, o.snow)) return e.b;
-      }
+    const hit = this.find(id, sq, o);
+    if (hit) return hit;
+    if (this.early) {
+      this.order1(id, sq, o);
+      return null;
     }
-    const cell = props.cell(id);
-    if (!cell) return null;
+    return this.bakeNow(id, sq, o);
+  }
+
+  /** Backen und einlegen (der Aufrufer hat den Cache schon geprüft) */
+  private bakeNow(id: string, sq: number, o: BakeOpts): Baked | null {
+    const props = this.props;
+    const cell = props?.cell(id);
+    if (!props || !cell) return null;
     const b = this.bake(props, id, cell.w, cell.h, sq, o);
     // eigene Kopie der Angaben (Aufrufer legen sie oft pro Aufruf neu an)
-    const entry: BankEntry = {
-      b,
-      o: { crop: o.crop && [...o.crop], clip: o.clip?.map((r) => [...r] as [number, number, number, number]), circle: o.circle && [...o.circle], flip: o.flip, snow: o.snow && { ...o.snow } },
-    };
-    let m = byId;
+    const entry: BankEntry = { b, o: copyOpts(o) };
+    let m = this.cache.get(id);
     if (!m) {
       m = new Map();
       this.cache.set(id, m);
@@ -155,6 +198,22 @@ export class PropBank {
     this.order.push({ id, s: sq, e: entry });
     if (this.order.length > BANK_MAX) this.evictOldest();
     return b;
+  }
+
+  /** Vorbestellung: einmal je Sprite in die Warteschlange (ohne Allokation, wenn schon bestellt) */
+  private order1(id: string, sq: number, o: BakeOpts): void {
+    for (let i = 0; i < this.ordered.length; i += 1) {
+      const j = this.ordered[i];
+      if (j.id === id && j.s === sq && sameOpts(j.o, o)) return;
+    }
+    const job = { id, s: sq, o: copyOpts(o) };
+    this.ordered.push(job);
+    this.ahead.add(() => {
+      if (!this.find(job.id, job.s, job.o)) this.bakeNow(job.id, job.s, job.o);
+      const i = this.ordered.indexOf(job);
+      if (i >= 0) this.ordered.splice(i, 1);
+      return true;
+    }, 3);
   }
 
   private evictOldest(): void {
@@ -226,6 +285,9 @@ export class PropBank {
         g.fillRect(0, 0, W, H);
       });
     }
+    // Rasterkosten jetzt zahlen (beim Backen, nicht im Frame, in dem das Hindernis zuerst gezeichnet wird)
+    touchCanvas(c);
+    if (snowC) touchCanvas(snowC);
     return { c, snowC, s, x0, y0, w: W / BAKE_K, h: H / BAKE_K, cw, ch };
   }
 }
@@ -953,11 +1015,35 @@ export function drawCairn(g: Ctx2D, A: SkinAssets, e: Ent, sx: number, k: SkinCt
 
 // --- Überhänge ------------------------------------------------------------------------------------------
 
-const ledgeCache = new WeakMap<Ent, { c: HTMLCanvasElement; ice: boolean; top: number; ox: number }>();
+/** Felsdach-Sprite einer Entität: das zeichenbereite Bild (kann veraltet sein) und ein evtl. laufender Neubau */
+interface LedgeSprite {
+  /** zeichenbereites Sprite; null, solange das erste noch entsteht */
+  c: HTMLCanvasElement | null;
+  /** Zustand von `c` */
+  ice: boolean;
+  top: number;
+  ox: number;
+  /** laufender Bau in Teilschritten (Eis-Wechsel, erstes Sprite) */
+  build: LedgeBuild | null;
+}
+
+interface LedgeBuild {
+  ice: boolean;
+  top: number;
+  steps: Generator<void, HTMLCanvasElement, void>;
+  /** schon in der Warteschlange (`PropBank.ahead`) */
+  queued: boolean;
+}
+
+const ledgeCache = new WeakMap<Ent, LedgeSprite>();
 const LEDGE_PAD = 44;
 
-/** Felsdach-Sprite einmal pro Entität backen (Form, Facetten, Schichtung, Moos/Eis). */
-function bakeLedge(e: Ent, top: number, bottom: number, ice: boolean): HTMLCanvasElement {
+/**
+ * Felsdach-Sprite einmal pro Entität backen (Form, Facetten, Schichtung, Moos/Eis) – in vier Teilschritten (je ca. 5 ms
+ * statt eines 20-40-ms-Blocks): jeder `next()` malt einen Teil und rastert ihn sofort, das Ergebnis ist die fertige Fläche.
+ * Die Zeichenbefehle und ihre Reihenfolge (auch die der Zufallszahlen) sind dieselben wie am Stück.
+ */
+function* ledgeSteps(e: Ent, top: number, bottom: number, ice: boolean): Generator<void, HTMLCanvasElement, void> {
   const lip = bottom - top;
   // Felszunge hängt von einer mächtigen Felsdecke herab (oben im Bild, breit auslaufend); darunter leicht verjüngt
   const flare = Math.min(360, lip * 0.8);
@@ -971,140 +1057,185 @@ function bakeLedge(e: Ent, top: number, bottom: number, ice: boolean): HTMLCanva
   const out = (y: number): number => flare * Math.pow(Math.max(0, 1 - y / ceil), 2) + 26 * Math.max(0, 1 - y / lip);
   const leftX = (y: number): number => pad - 16 - out(y) + 12 * Math.sin(y * 0.02 + ph1) + 7 * Math.sin(y * 0.05 + ph2);
   const rightX = (y: number): number => pad + e.w + 16 + out(y) - 12 * Math.sin(y * 0.023 + ph2) - 7 * Math.sin(y * 0.047 + ph1);
-  return paint(W, H, (g) => {
-    const pts: Array<[number, number]> = [];
-    for (let y = 0; y <= lip - 26; y += y < ceil ? 12 : 24) pts.push([leftX(y), y]);
-    pts.push([pad + 2, lip - 10]);
-    const nB = Math.max(4, Math.round(e.w / 34));
-    for (let i = 0; i <= nB; i += 1) {
-      const u = i / nB;
-      pts.push([pad + 6 + u * (e.w - 12), lip + (i === 0 || i === nB ? -2 : r() * 7)]);
-    }
-    pts.push([pad + e.w - 2, lip - 10]);
-    const ys: number[] = [];
-    for (let y = 0; y <= lip - 26; y += y < ceil ? 12 : 24) ys.push(y);
-    for (let i = ys.length - 1; i >= 0; i -= 1) pts.push([rightX(ys[i]), ys[i]]);
-    const path = (): void => {
-      g.beginPath();
-      pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
-      g.closePath();
-    };
-    path();
-    const grd = g.createLinearGradient(0, 0, 0, lip);
-    if (ice) {
-      grd.addColorStop(0, "#6f8fb8");
-      grd.addColorStop(0.6, "#a8c6e6");
-      grd.addColorStop(1, "#5b7fb0");
-    } else {
-      grd.addColorStop(0, "#4d4843");
-      grd.addColorStop(0.55, "#8a8279");
-      grd.addColorStop(1, "#5a524b");
-    }
-    g.fillStyle = grd;
+  const c = paint(W, H, () => undefined);
+  const g = ctxOf(c);
+  const pts: Array<[number, number]> = [];
+  for (let y = 0; y <= lip - 26; y += y < ceil ? 12 : 24) pts.push([leftX(y), y]);
+  pts.push([pad + 2, lip - 10]);
+  const nB = Math.max(4, Math.round(e.w / 34));
+  for (let i = 0; i <= nB; i += 1) {
+    const u = i / nB;
+    pts.push([pad + 6 + u * (e.w - 12), lip + (i === 0 || i === nB ? -2 : r() * 7)]);
+  }
+  pts.push([pad + e.w - 2, lip - 10]);
+  const ys: number[] = [];
+  for (let y = 0; y <= lip - 26; y += y < ceil ? 12 : 24) ys.push(y);
+  for (let i = ys.length - 1; i >= 0; i -= 1) pts.push([rightX(ys[i]), ys[i]]);
+  const path = (): void => {
+    g.beginPath();
+    pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+    g.closePath();
+  };
+  // Teil 1: Körper
+  path();
+  const grd = g.createLinearGradient(0, 0, 0, lip);
+  if (ice) {
+    grd.addColorStop(0, "#6f8fb8");
+    grd.addColorStop(0.6, "#a8c6e6");
+    grd.addColorStop(1, "#5b7fb0");
+  } else {
+    grd.addColorStop(0, "#4d4843");
+    grd.addColorStop(0.55, "#8a8279");
+    grd.addColorStop(1, "#5a524b");
+  }
+  g.fillStyle = grd;
+  g.fill();
+  touchCanvas(c);
+  yield;
+  // Teil 2: Facetten (Licht von rechts oben), auf den Körper beschnitten
+  g.save();
+  path();
+  g.clip();
+  for (let i = 0; i < 34; i += 1) {
+    const y = r() * lip;
+    const x = leftX(y) + r() * (rightX(y) - leftX(y));
+    const s = 18 + r() * 40;
+    g.fillStyle = r() < 0.55 ? (ice ? "rgba(235,248,255,0.22)" : "rgba(255,240,220,0.13)") : "rgba(10,10,20,0.16)";
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(x + s, y + s * 0.3);
+    g.lineTo(x + s * 0.6, y + s * 0.9);
+    g.lineTo(x - s * 0.2, y + s * 0.6);
+    g.closePath();
     g.fill();
-    g.save();
-    path();
-    g.clip();
-    // Facetten (Licht von rechts oben)
-    for (let i = 0; i < 34; i += 1) {
-      const y = r() * lip;
-      const x = leftX(y) + r() * (rightX(y) - leftX(y));
-      const s = 18 + r() * 40;
-      g.fillStyle = r() < 0.55 ? (ice ? "rgba(235,248,255,0.22)" : "rgba(255,240,220,0.13)") : "rgba(10,10,20,0.16)";
+  }
+  touchCanvas(c);
+  yield;
+  // Teil 3: Schichtung (leicht schräg), Lichtkante rechts, Schatten links, dunkle Unterseite, oben im Dunkel verlieren
+  g.strokeStyle = ice ? "rgba(240,250,255,0.35)" : "rgba(30,24,20,0.35)";
+  g.lineWidth = 2;
+  for (let y = lip - 34; y > -40; y -= 30 + r() * 16) {
+    g.beginPath();
+    g.moveTo(0, y + 12);
+    for (let x = 0; x <= W; x += 30) g.lineTo(x, y - x * 0.06 + (r() - 0.5) * 6);
+    g.stroke();
+  }
+  const side = g.createLinearGradient(0, 0, W, 0);
+  side.addColorStop(0, "rgba(0,0,0,0.3)");
+  side.addColorStop(0.3, "rgba(0,0,0,0)");
+  side.addColorStop(0.85, "rgba(255,245,225,0)");
+  side.addColorStop(1, "rgba(255,245,225,0.22)");
+  g.fillStyle = side;
+  g.fillRect(0, 0, W, H);
+  const under = g.createLinearGradient(0, lip - 26, 0, lip + 8);
+  under.addColorStop(0, "rgba(15,12,10,0)");
+  under.addColorStop(1, "rgba(15,12,10,0.6)");
+  g.fillStyle = under;
+  g.fillRect(0, lip - 26, W, 40);
+  const fade = g.createLinearGradient(0, 0, 0, Math.min(160, lip * 0.5));
+  fade.addColorStop(0, "rgba(20,22,30,0.55)");
+  fade.addColorStop(1, "rgba(20,22,30,0)");
+  g.fillStyle = fade;
+  g.fillRect(0, 0, W, 160);
+  g.restore();
+  touchCanvas(c);
+  yield;
+  // Teil 4: Kontur, helle Unterkante (Lesbarkeit der Gefahr), Behang: Moos & Wurzeln bzw. Eiszapfen
+  path();
+  g.lineWidth = 3.5;
+  g.strokeStyle = "#17130f";
+  g.stroke();
+  g.strokeStyle = ice ? "rgba(235,250,255,0.95)" : "rgba(255,226,170,0.7)";
+  g.lineWidth = 2.5;
+  g.beginPath();
+  g.moveTo(pad + 8, lip - 4);
+  for (let i = 1; i < nB; i += 1) g.lineTo(pad + 6 + (i / nB) * (e.w - 12), lip - 3);
+  g.lineTo(pad + e.w - 8, lip - 4);
+  g.stroke();
+  for (let i = 0; i < nB + 2; i += 1) {
+    const x = pad + 10 + ((i + 0.5) * (e.w - 20)) / (nB + 2);
+    const y = lip - 2;
+    const L = 8 + r() * 16;
+    if (ice) {
+      g.fillStyle = "rgba(225,244,255,0.95)";
+      g.strokeStyle = "rgba(60,100,160,0.85)";
+      g.lineWidth = 1.2;
       g.beginPath();
-      g.moveTo(x, y);
-      g.lineTo(x + s, y + s * 0.3);
-      g.lineTo(x + s * 0.6, y + s * 0.9);
-      g.lineTo(x - s * 0.2, y + s * 0.6);
+      g.moveTo(x - 4, y);
+      g.lineTo(x + 4, y);
+      g.lineTo(x + 0.5, y + L + 6);
       g.closePath();
       g.fill();
-    }
-    // Schichtung (leicht schräg)
-    g.strokeStyle = ice ? "rgba(240,250,255,0.35)" : "rgba(30,24,20,0.35)";
-    g.lineWidth = 2;
-    for (let y = lip - 34; y > -40; y -= 30 + r() * 16) {
+      g.stroke();
+    } else {
+      g.fillStyle = "#5f9a3a";
       g.beginPath();
-      g.moveTo(0, y + 12);
-      for (let x = 0; x <= W; x += 30) g.lineTo(x, y - x * 0.06 + (r() - 0.5) * 6);
+      g.ellipse(x, y + 2, 8 + r() * 6, 4, 0, 0, TAU);
+      g.fill();
+      g.strokeStyle = r() < 0.5 ? "#4f8a2e" : "#6b4a2a";
+      g.lineWidth = 1.8;
+      g.beginPath();
+      g.moveTo(x, y + 3);
+      g.quadraticCurveTo(x + 3, y + L * 0.6, x - 1, y + L);
       g.stroke();
     }
-    // Lichtkante rechts, Schatten links
-    const side = g.createLinearGradient(0, 0, W, 0);
-    side.addColorStop(0, "rgba(0,0,0,0.3)");
-    side.addColorStop(0.3, "rgba(0,0,0,0)");
-    side.addColorStop(0.85, "rgba(255,245,225,0)");
-    side.addColorStop(1, "rgba(255,245,225,0.22)");
-    g.fillStyle = side;
-    g.fillRect(0, 0, W, H);
-    // dunkle Unterseite
-    const under = g.createLinearGradient(0, lip - 26, 0, lip + 8);
-    under.addColorStop(0, "rgba(15,12,10,0)");
-    under.addColorStop(1, "rgba(15,12,10,0.6)");
-    g.fillStyle = under;
-    g.fillRect(0, lip - 26, W, 40);
-    // oben im Dunkel verlieren
-    const fade = g.createLinearGradient(0, 0, 0, Math.min(160, lip * 0.5));
-    fade.addColorStop(0, "rgba(20,22,30,0.55)");
-    fade.addColorStop(1, "rgba(20,22,30,0)");
-    g.fillStyle = fade;
-    g.fillRect(0, 0, W, 160);
-    g.restore();
-    // Kontur
-    path();
-    g.lineWidth = 3.5;
-    g.strokeStyle = "#17130f";
-    g.stroke();
-    // helle Unterkante (Lesbarkeit der Gefahr)
-    g.strokeStyle = ice ? "rgba(235,250,255,0.95)" : "rgba(255,226,170,0.7)";
-    g.lineWidth = 2.5;
-    g.beginPath();
-    g.moveTo(pad + 8, lip - 4);
-    for (let i = 1; i < nB; i += 1) g.lineTo(pad + 6 + (i / nB) * (e.w - 12), lip - 3);
-    g.lineTo(pad + e.w - 8, lip - 4);
-    g.stroke();
-    // Behang: Moos & Wurzeln bzw. Eiszapfen
-    for (let i = 0; i < nB + 2; i += 1) {
-      const x = pad + 10 + ((i + 0.5) * (e.w - 20)) / (nB + 2);
-      const y = lip - 2;
-      const L = 8 + r() * 16;
-      if (ice) {
-        g.fillStyle = "rgba(225,244,255,0.95)";
-        g.strokeStyle = "rgba(60,100,160,0.85)";
-        g.lineWidth = 1.2;
-        g.beginPath();
-        g.moveTo(x - 4, y);
-        g.lineTo(x + 4, y);
-        g.lineTo(x + 0.5, y + L + 6);
-        g.closePath();
-        g.fill();
-        g.stroke();
-      } else {
-        g.fillStyle = "#5f9a3a";
-        g.beginPath();
-        g.ellipse(x, y + 2, 8 + r() * 6, 4, 0, 0, TAU);
-        g.fill();
-        g.strokeStyle = r() < 0.5 ? "#4f8a2e" : "#6b4a2a";
-        g.lineWidth = 1.8;
-        g.beginPath();
-        g.moveTo(x, y + 3);
-        g.quadraticCurveTo(x + 3, y + L * 0.6, x - 1, y + L);
-        g.stroke();
-      }
-    }
-  });
+  }
+  touchCanvas(c);
+  return c;
 }
 
-/** Felsdach von oben (Unterkante = e.y + e.h): drunter durchrutschen. Stufe 4: Eis mit Eiszapfen. */
-export function drawLedge(g: Ctx2D, e: Ent, sx: number, sy: number, k: SkinCtx): void {
+/** Neuen Bau für den Zustand (ice, top) beginnen (noch ohne Fläche: die entsteht im ersten Teilschritt) */
+function startLedge(e: Ent, top: number, bottom: number, ice: boolean): LedgeBuild {
+  return { ice, top, steps: ledgeSteps(e, top, bottom, ice), queued: false };
+}
+
+/** Ein Teilschritt des Baus; true = fertig (das Sprite ist eingesetzt). Ein überholter Bau (Zustand hat sich geändert) endet ohne Wirkung. */
+function stepLedge(hit: LedgeSprite, e: Ent, b: LedgeBuild): boolean {
+  if (hit.build !== b) return true;
+  const r = b.steps.next();
+  if (!r.done) return false;
+  hit.c = r.value;
+  hit.ice = b.ice;
+  hit.top = b.top;
+  hit.ox = (r.value.width - e.w) / 2;
+  hit.build = null;
+  return true;
+}
+
+/**
+ * Felsdach von oben (Unterkante = e.y + e.h): drunter durchrutschen. Stufe 4: Eis mit Eiszapfen. Das Sprite entsteht in
+ * Teilschritten: eine noch ferne Entität (`A.bank.early`) bestellt es nur vor (`PropBank.ahead`, ein Teilschritt je Frame)
+ * und wird erst gezeichnet, wenn es fertig ist; ein veraltetes (Eis-Wechsel) bleibt bis zum Ersatz sichtbar. Eine sichtbare
+ * Entität ohne Sprite baut es sofort am Stück.
+ */
+export function drawLedge(g: Ctx2D, A: SkinAssets, e: Ent, sx: number, sy: number, k: SkinCtx): void {
   const bottom = sy + e.h;
   const top = Math.max(-30, sy);
   const ice = k.snow > 0.9;
   let hit = ledgeCache.get(e);
-  if (!hit || hit.ice !== ice || hit.top !== top) {
-    const c = bakeLedge(e, top, bottom, ice);
-    hit = { c, ice, top, ox: (c.width - e.w) / 2 };
+  if (!hit) {
+    hit = { c: null, ice, top, ox: 0, build: null };
     ledgeCache.set(e, hit);
   }
+  if (!hit.c || hit.ice !== ice || hit.top !== top) {
+    let b = hit.build;
+    if (!b || b.ice !== ice || b.top !== top) {
+      b = startLedge(e, top, bottom, ice);
+      hit.build = b;
+    }
+    if (!hit.c && !A.bank.early) {
+      // sichtbar und noch kein Sprite: am Stück bauen
+      while (!stepLedge(hit, e, b)) {
+        // Rest am Stück
+      }
+    } else if (!b.queued) {
+      b.queued = true;
+      const build = b;
+      const h = hit;
+      A.bank.ahead.add(() => stepLedge(h, e, build), 6);
+    }
+  }
+  if (!hit.c) return; // noch fern und noch nicht gebacken: nichts zu zeichnen
   // Schatten am Boden
   g.fillStyle = "rgba(10,20,30,0.3)";
   g.beginPath();

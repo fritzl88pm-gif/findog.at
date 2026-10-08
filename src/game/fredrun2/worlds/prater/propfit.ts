@@ -58,6 +58,16 @@ interface BankEntry {
   size: number;
 }
 
+/** Ein vorbestelltes Sprite (Maße in logischen px; die Zielgröße in Pixeln ergibt sich erst beim Backen aus der dann gültigen Skala) */
+interface PropJob {
+  id: string;
+  w: number;
+  h: number;
+  crop: PropCrop | undefined;
+  /** Zwischenstand: das auf die doppelte Zielgröße verkleinerte Bild (erster Schritt bei starker Verkleinerung) */
+  mid: HTMLCanvasElement | null;
+}
+
 export class PropBank {
   private props: PropLibrary | null = null;
   private k = 1;
@@ -66,6 +76,17 @@ export class PropBank {
   private entries: BankEntry[] = [];
   private tick = 0;
   private bytes = 0;
+  /**
+   * Vorbestellte Sprites (siehe `early`), in Reihenfolge. `pump` backt sie in kleinen Schritten außerhalb des Zeichnens.
+   */
+  private jobs: PropJob[] = [];
+  /**
+   * Der Aufrufer zeichnet gerade eine Entität, die noch außerhalb des Bildes liegt (der Renderer setzt es um jeden
+   * Zeichenaufruf): ein fehlendes Sprite wird dann NICHT im Zeichenpfad gebacken, sondern vorbestellt (`get` liefert null,
+   * der Aufrufer zeichnet seinen Ersatz außerhalb des Bildes) – `pump` backt es in den nächsten Frames. Sichtbare Entitäten
+   * bekommen ihr Sprite immer sofort (Rückfall: Backen am Stück wie früher).
+   */
+  early = false;
 
   setProps(p: PropLibrary | null): void {
     this.props = p;
@@ -76,11 +97,17 @@ export class PropBank {
     this.cache.clear();
     this.entries.length = 0;
     this.bytes = 0;
+    this.jobs.length = 0; // Aufträge der alten Skala/Bibliothek sind hinfällig; sichtbare Entitäten holen sich ihr Sprite selbst
   }
 
   /** Anzahl gebackener Sprites */
   get size(): number {
     return this.entries.length;
+  }
+
+  /** Anzahl vorbestellter, noch nicht gebackener Sprites */
+  get queued(): number {
+    return this.jobs.length;
   }
 
   /** Pixelfaktor der Zeichenfläche (1 … 2); bei Änderung (> 0,2) werden die Sprites neu gebacken. */
@@ -110,16 +137,9 @@ export class PropBank {
     return (sh * (c[3] - c[1])) / (sw * (c[2] - c[0]));
   }
 
-  /** Silhouette (bzw. Ausschnitt) in w×h logischen Pixeln; null, wenn das Prop nicht geladen ist. */
-  get(id: string, w: number, h: number, crop?: PropCrop): Baked | null {
-    const props = this.props;
-    if (!props || !props.has(id)) return null;
-    const k = this.k;
-    const tw = Math.max(2, Math.round(w * k));
-    const th = Math.max(2, Math.round(h * k));
-    const size = tw * 16384 + th;
-    const byId = this.cache.get(id);
-    const list = byId?.get(size);
+  /** Cache-Treffer für (id, Zielgröße, Ausschnitt) oder null; vermerkt die Nutzung (LRU) */
+  private lookup(id: string, size: number, crop: PropCrop | undefined): Baked | null {
+    const list = this.cache.get(id)?.get(size);
     if (list) {
       for (let i = 0; i < list.length; i += 1) {
         const e = list[i];
@@ -129,42 +149,103 @@ export class PropBank {
         }
       }
     }
-    const cell = props.cell(id);
-    if (!cell) return null;
-    const c = crop ?? [0, 0, 1, 1];
+    return null;
+  }
+
+  /**
+   * Silhouette (bzw. Ausschnitt) in w×h logischen Pixeln; null, wenn das Prop nicht geladen ist – oder, bei `early`, noch
+   * nicht gebacken wurde (dann ist es vorbestellt).
+   */
+  get(id: string, w: number, h: number, crop?: PropCrop): Baked | null {
+    const props = this.props;
+    if (!props || !props.has(id)) return null;
+    const k = this.k;
+    const tw = Math.max(2, Math.round(w * k));
+    const th = Math.max(2, Math.round(h * k));
+    const hit = this.lookup(id, tw * 16384 + th, crop);
+    if (hit) return hit;
+    if (this.early) {
+      this.order(id, w, h, crop);
+      return null;
+    }
+    const job: PropJob = { id, w, h, crop, mid: null };
+    while (!this.stepJob(job)) {
+      // Rest am Stück (das Sprite wird jetzt gezeichnet)
+    }
+    return this.lookup(id, tw * 16384 + th, crop);
+  }
+
+  /** Sprite für eine spätere Verwendung bestellen (einmal je Größe/Ausschnitt; ohne Allokation, wenn schon bestellt) */
+  private order(id: string, w: number, h: number, crop: PropCrop | undefined): void {
+    for (let i = 0; i < this.jobs.length; i += 1) {
+      const j = this.jobs[i];
+      if (j.id === id && j.w === w && j.h === h && sameCrop(j.crop, crop)) return;
+    }
+    this.jobs.push({ id, w, h, crop: crop ? [crop[0], crop[1], crop[2], crop[3]] : undefined, mid: null });
+  }
+
+  /**
+   * Pro Frame aus update(): backt höchstens einen Schritt (das verkleinerte Zwischenbild oder das fertige Sprite, je ca.
+   * 1–5 ms) des ältesten vorbestellten Sprites. true = nichts mehr offen.
+   */
+  pump(): boolean {
+    const job = this.jobs[0];
+    if (!job) return true;
+    if (this.stepJob(job)) this.jobs.shift();
+    return this.jobs.length === 0;
+  }
+
+  /**
+   * Ein Backschritt eines Auftrags; true = Sprite liegt im Cache (oder ist nicht backbar). Zweistufig verkleinern (bessere
+   * Kanten bei starker Verkleinerung): Schritt 1 malt das Zwischenbild in doppelter Zielgröße, Schritt 2 das Sprite.
+   */
+  private stepJob(job: PropJob): boolean {
+    const props = this.props;
+    if (!props || !props.has(job.id)) return true;
+    const k = this.k;
+    const tw = Math.max(2, Math.round(job.w * k));
+    const th = Math.max(2, Math.round(job.h * k));
+    const size = tw * 16384 + th;
+    if (this.lookup(job.id, size, job.crop)) {
+      job.mid = null; // inzwischen anderweitig gebacken (z.B. von einer sichtbar gewordenen Entität)
+      return true;
+    }
+    const cell = props.cell(job.id);
+    if (!cell) return true;
+    const c = job.crop ?? [0, 0, 1, 1];
     const sw = cell.w - PROP_PAD * 2;
     const sh = cell.h - PROP_PAD * 2;
     const rx = PROP_PAD + c[0] * sw;
     const ry = PROP_PAD + c[1] * sh;
     const rw = (c[2] - c[0]) * sw;
     const rh = (c[3] - c[1]) * sh;
-    // Zweistufig verkleinern (bessere Kanten bei starker Verkleinerung)
-    const ratio = Math.max(rw / tw, rh / th);
-    let src: HTMLCanvasElement | null = null;
-    if (ratio > 2.2) {
+    if (!job.mid && Math.max(rw / tw, rh / th) > 2.2) {
       const mw = Math.round(tw * 2);
       const mh = Math.round(th * 2);
       const mid = makeCanvas(mw, mh);
       const mg = mid.getContext("2d");
-      if (!mg) return null;
+      if (!mg) return true;
       mg.imageSmoothingQuality = "high";
-      paintRegion(mg, props, id, rx, ry, rw, rh, mw, mh);
-      src = mid;
+      paintRegion(mg, props, job.id, rx, ry, rw, rh, mw, mh);
+      touchCanvas(mid); // Rasterkosten jetzt zahlen (eigener Schritt), nicht zusammen mit dem Sprite
+      job.mid = mid;
+      return false;
     }
     const out = makeCanvas(tw, th);
     const og = out.getContext("2d");
-    if (!og) return null;
+    if (!og) return true;
     og.imageSmoothingQuality = "high";
-    if (src) og.drawImage(src, 0, 0, tw, th);
-    else paintRegion(og, props, id, rx, ry, rw, rh, tw, th);
-    // Rasterkosten jetzt zahlen (beim Vorbacken im Leerlauf), nicht im Frame, in dem das Hindernis zuerst erscheint
+    if (job.mid) og.drawImage(job.mid, 0, 0, tw, th);
+    else paintRegion(og, props, job.id, rx, ry, rw, rh, tw, th);
+    job.mid = null;
+    // Rasterkosten jetzt zahlen (beim Vorbacken, nicht im Frame, in dem das Hindernis zuerst erscheint)
     touchCanvas(out);
     const b: Baked = { c: out, w: tw / k, h: th / k };
-    const entry: BankEntry = { b, crop: crop ? [crop[0], crop[1], crop[2], crop[3]] : undefined, use: ++this.tick, bytes: tw * th * 4, id, size };
-    let m = byId;
+    const entry: BankEntry = { b, crop: job.crop ? [job.crop[0], job.crop[1], job.crop[2], job.crop[3]] : undefined, use: ++this.tick, bytes: tw * th * 4, id: job.id, size };
+    let m = this.cache.get(job.id);
     if (!m) {
       m = new Map();
-      this.cache.set(id, m);
+      this.cache.set(job.id, m);
     }
     const l = m.get(size);
     if (l) l.push(entry);
@@ -173,7 +254,7 @@ export class PropBank {
     this.bytes += entry.bytes;
     // LRU über das Speicherbudget: am längsten ungenutzte zuerst; das eben gebackene Sprite bleibt immer
     while (this.bytes > MAX_BYTES && this.entries.length > 1) this.evictLeastUsed(entry);
-    return b;
+    return true;
   }
 
   private evictLeastUsed(keep: BankEntry): void {

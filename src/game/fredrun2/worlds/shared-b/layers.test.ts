@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { installCanvasStub, installTouchStub } from "./test-kit";
+import { installCanvasStub, installRecordingStub, installTouchStub, type RecordingCanvas } from "./test-kit";
 import { paint, recycled } from "./canvas";
-import { StageCache, StagePrep, Staged, gradedCache, prepareStaged, stageProgress, tinted } from "./layers";
+import { StageCache, StagePrep, Staged, gradedCache, prepareStaged, stageProgress, tinted, type StageTint } from "./layers";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -609,5 +609,110 @@ describe("gradedCache", () => {
     expect(seen[0]).toBeNull();
     expect(seen[1]).toBe(made[0]);
     expect(made[1]).toBe(made[0]);
+  });
+});
+
+describe("Staged – Färbung in zwei Schritten", () => {
+  const veil: StageTint = { night: { color: "#101030", a: 0.5 }, haze: { color: "#123456", aTop: 0.1, aBottom: 0.3 }, shade: { color: "#000000", a: 0.4, from: 0.5 } };
+
+  /** Zeichenbefehle der Färbung ohne Zustandszuweisungen, die ein zweiter Schritt wiederholt (Composite-Modus, Alpha) */
+  function drawing(log: string[]): string[] {
+    return log.filter((l) => !l.startsWith("globalCompositeOperation=") && !l.startsWith("globalAlpha="));
+  }
+
+  it("zwei Schritte (Kopie + Nacht | Dunst + Schatten) ergeben dieselben Zeichenbefehle wie `tinted` am Stück", () => {
+    const rec = installRecordingStub();
+    const src = paint(32, 16, () => undefined);
+    const staged = new Staged(src, () => veil);
+    expect(staged.step(1)).toBe(true);
+    expect(staged.has(1)).toBe(false); // erst die Vorarbeit
+    expect(staged.step(1)).toBe(true);
+    expect(staged.has(1)).toBe(true);
+    expect(staged.step(1)).toBe(false);
+    const stepped = rec.canvases[rec.canvases.length - 1];
+    const direct = tinted(src, veil);
+    expect(rec.canvases.length).toBe(3); // Quelle, Stufenfläche, Direktweg
+    expect(drawing(stepped.log)).toEqual(drawing((direct as unknown as RecordingCanvas).log));
+    expect(drawing(stepped.log).length).toBeGreaterThan(8);
+  });
+
+  it("nur Nacht (ohne Dunst und Schatten): ein Schritt genügt; ein direkter get malt alles am Stück", () => {
+    installCanvasStub();
+    const src = paint(32, 16, () => undefined);
+    const nightOnly = new Staged(src, () => ({ night: { color: "#000", a: 0.4 } }));
+    nightOnly.step(0);
+    expect(nightOnly.has(0)).toBe(true);
+    const direct = new Staged(src, () => veil);
+    const c = direct.get(2); // kein Vorlauf → Direktweg
+    expect(direct.has(2)).toBe(true);
+    expect(c.width).toBe(32);
+  });
+
+  it("jeder der zwei Schritte rastert die Fläche gleich (touchCanvas)", () => {
+    installCanvasStub();
+    const rec = installTouchStub();
+    const src = paint(32, 16, () => undefined);
+    const staged = new Staged(src, () => veil);
+    staged.step(0);
+    expect(rec.touched).toHaveLength(1); // Vorarbeit
+    staged.step(0);
+    expect(rec.touched).toHaveLength(2); // Bake
+    expect(rec.touched[1]).toBe(rec.touched[0]); // dieselbe Fläche, nicht zwei
+  });
+
+  it("recycle: Vorarbeit und Bake nutzen die verworfene Stufenfläche; keep verwirft halb gefärbte anderer Stufen als Ersatz", () => {
+    const stub = installCanvasStub();
+    const src = paint(32, 16, () => undefined);
+    const staged = new Staged(src, () => veil, true);
+    staged.step(0);
+    staged.step(0);
+    staged.step(1);
+    staged.step(1);
+    const n = stub.created; // Quelle + Stufen 0 und 1
+    staged.keep(1, 2); // Stufe 0 fliegt raus → Ersatzfläche
+    staged.step(2); // Vorarbeit malt in die Ersatzfläche
+    staged.step(2);
+    expect(stub.created).toBe(n);
+    // halb gefärbte Stufe 3 (die Ersatzfläche ist verbraucht: eine neue Fläche), dann springt die Stufe auf 5: die halbe Fläche
+    // wird zur Ersatzfläche, die Stufe 5 braucht keine weitere
+    staged.step(3);
+    expect(stub.created).toBe(n + 1);
+    staged.keep(5, 6);
+    expect(staged.has(3)).toBe(false);
+    staged.step(5);
+    staged.step(5);
+    expect(staged.has(5)).toBe(true);
+    expect(stub.created).toBe(n + 1);
+  });
+
+  it("clear verwirft halb gefärbte Flächen (Skalenwechsel): die Stufe beginnt von vorn", () => {
+    const stub = installCanvasStub();
+    const src = paint(32, 16, () => undefined);
+    const staged = new Staged(src, () => veil, true);
+    staged.step(4); // nur Vorarbeit
+    staged.clear();
+    const n = stub.created;
+    expect(staged.step(4)).toBe(true);
+    expect(staged.has(4)).toBe(false); // wieder erst die Vorarbeit
+    expect(stub.created).toBe(n); // auf der zurückgelegten Fläche
+    staged.step(4);
+    expect(staged.has(4)).toBe(true);
+  });
+
+  it("StagePrep: eine gefärbte Stufe kostet zwei Schritte (Lücke je Schritt), die Überblendung holt beide sofort nach", () => {
+    installCanvasStub();
+    const src = paint(32, 16, () => undefined);
+    const staged = new Staged(src, () => veil);
+    const clock = { t: 1000 };
+    const prep = new StagePrep([staged], 3, { now: () => clock.t });
+    prep.step(0, 0, 0);
+    expect(staged.has(0)).toBe(true); // aktuelle Stufe: sofort, ganz
+    prep.step(0, 0.3, 0); // Vorarbeit der Folgestufe
+    expect(staged.has(1)).toBe(false);
+    clock.t += 150;
+    prep.step(0, 0.3, 0); // Bake
+    expect(staged.has(1)).toBe(true);
+    prep.step(2, 0, 0.5); // Überblendung in Stufe 3, Stufe 3 fehlt noch
+    expect(staged.has(3)).toBe(true);
   });
 });

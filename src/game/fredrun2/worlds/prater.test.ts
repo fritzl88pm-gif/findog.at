@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPatternCtx } from "../patterns";
 import { Rng } from "../rng";
-import type { EntSpec } from "../types";
+import type { Ent, EntSpec } from "../types";
 import { WORLDS } from "./index";
 import { WORLD_PRATER } from "./prater";
 import { PropBank } from "./prater/propfit";
@@ -9,7 +9,7 @@ import { PRATER_STAGE_METERS, PraterRenderer } from "./prater/renderer";
 import { PRATER_PROP_SIZES, praterPropJobs } from "./prater/skins";
 import { auditPatterns, botRuns } from "./shared-b/audit";
 import type { StageCache } from "./shared-b/layers";
-import { assetsOf, installCanvasStub, installTouchStub, manifestProps, stubView } from "./shared-b/test-kit";
+import { assetsOf, installCanvasStub, installRecordingStub, installTouchStub, manifestProps, stubView, type RecordingCanvas } from "./shared-b/test-kit";
 
 describe("Welt Prater", () => {
   it("Metadaten vollständig", () => {
@@ -132,11 +132,80 @@ describe("Prater – Stufenlänge, Hindernis-Maße, PropBank", () => {
     bank.setProps(manifestProps());
     const a = bank.get("prater-booth", 140, 70);
     expect(a).not.toBeNull();
-    expect(rec.touched).toEqual([a?.c]);
+    expect(rec.touched).toHaveLength(2); // starke Verkleinerung: Zwischenfläche (eigener Schritt) und fertiges Sprite
+    expect(rec.touched[1]).toBe(a?.c);
     bank.get("prater-booth", 140, 70);
-    expect(rec.touched).toHaveLength(1);
-    bank.get("prater-valance", 400, 100); // große Verkleinerung: Zwischenfläche, berührt wird nur das fertige Sprite
     expect(rec.touched).toHaveLength(2);
+    const v = bank.get("prater-valance", 400, 100);
+    expect(rec.touched).toHaveLength(4);
+    expect(rec.touched[3]).toBe(v?.c);
+    bank.get("prater-booth", 300, 170); // schwache Verkleinerung: kein Zwischenbild
+    expect(rec.touched).toHaveLength(5);
+  });
+
+  it("PropBank early: Fehlendes wird vorbestellt (null, nichts gebacken), pump backt es in Schritten; danach nur Treffer", () => {
+    const stub = installCanvasStub();
+    const bank = new PropBank();
+    bank.setProps(manifestProps());
+    bank.early = true;
+    const n = stub.created;
+    expect(bank.get("prater-valance", 400, 100)).toBeNull();
+    expect(bank.get("prater-valance", 400, 100)).toBeNull(); // dieselbe Bestellung zählt einmal
+    expect(bank.get("prater-booth", 300, 170)).toBeNull();
+    expect(bank.queued).toBe(2);
+    expect(stub.created).toBe(n); // im Zeichenpfad entsteht nichts
+    // starke Verkleinerung: zwei Schritte (Zwischenbild, fertiges Sprite), danach das nächste
+    expect(bank.pump()).toBe(false);
+    expect(stub.created).toBe(n + 1);
+    expect(bank.size).toBe(0);
+    expect(bank.pump()).toBe(false); // Sprite fertig, die Bestellung ist abgearbeitet, eine bleibt
+    expect(bank.size).toBe(1);
+    expect(bank.queued).toBe(1);
+    expect(bank.pump()).toBe(true); // 300×170 aus ~500 px: schwache Verkleinerung, ein Schritt
+    expect(bank.size).toBe(2);
+    expect(bank.pump()).toBe(true); // nichts mehr offen
+    // sichtbare Entität: liefert Treffer ohne Neubacken
+    bank.early = false;
+    const made = stub.created;
+    expect(bank.get("prater-valance", 400, 100)).not.toBeNull();
+    expect(bank.get("prater-booth", 300, 170)).not.toBeNull();
+    expect(stub.created).toBe(made);
+  });
+
+  it("PropBank: ohne early bäckt get weiter am Stück (sichtbare Entität), Props ohne Bild liefern auch bei early null ohne Bestellung", () => {
+    const stub = installCanvasStub();
+    const bank = new PropBank();
+    bank.setProps(manifestProps());
+    const n = stub.created;
+    expect(bank.get("prater-booth", 140, 70)).not.toBeNull();
+    expect(stub.created).toBeGreaterThan(n);
+    expect(bank.queued).toBe(0);
+    bank.early = true;
+    expect(bank.get("gibt-es-nicht", 10, 10)).toBeNull();
+    expect(bank.queued).toBe(0);
+  });
+
+  it("PropBank: Skalenwechsel verwirft Bestellungen (sie gehören zur alten Skala); sichtbare Entitäten bestellen neu", () => {
+    installCanvasStub();
+    const bank = new PropBank();
+    bank.setProps(manifestProps());
+    bank.early = true;
+    bank.get("prater-booth", 140, 70);
+    expect(bank.queued).toBe(1);
+    bank.setScale(1.1); // innerhalb der Hysterese: nichts
+    expect(bank.queued).toBe(1);
+    bank.setScale(2);
+    expect(bank.queued).toBe(0);
+    expect(bank.pump()).toBe(true);
+    bank.get("prater-booth", 140, 70);
+    expect(bank.queued).toBe(1);
+    // Backen am Stück bei Skala 2: Zielgröße in Pixeln
+    bank.pump();
+    bank.pump();
+    bank.early = false;
+    const b = bank.get("prater-booth", 140, 70);
+    expect(b?.c.width).toBe(280);
+    expect(b?.w).toBe(140);
   });
 
   it("praterPropJobs backt jedes bekannte Sprite genau einmal vor; zweiter Durchlauf erzeugt nichts Neues", () => {
@@ -185,9 +254,10 @@ describe("Prater – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () =>
     expect(list.filter((c) => c.has(2)).length).toBe(1);
     at(0.31);
     expect(list.filter((c) => c.has(2)).length).toBe(1); // Lücke
-    for (let k = 0; k < list.length + 2; k += 1) {
+    // gefärbte Ebenen (Staged) brauchen zwei Schritte (Vorarbeit, Bake): zwei Lücken je Cache
+    for (let k = 0; k < list.length * 2 + 2; k += 1) {
       clock += 120;
-      at(0.35 + k * 0.01);
+      at(0.35 + k * 0.005);
     }
     expect(list.every((c) => c.has(2))).toBe(true);
   });
@@ -237,6 +307,71 @@ describe("Prater – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () =>
     const done = stub.created;
     expect(r.warm(3)).toBe(true);
     expect(stub.created).toBe(done);
+  });
+
+  it("Entitäten kurz vor dem Bildrand bestellen ihr Sprite nur vor: im Zeichenpfad entsteht keine Fläche, `update` backt es, sichtbar gibt es nur Treffer", async () => {
+    const { r, stub } = await loaded();
+    const i = inner(r);
+    r.update(1 / 60, stubView());
+    while (!r.warm(50)) {
+      /* aufwärmen */
+    }
+    const bank = i.A.bank;
+    const ent = (skin: string, kind: string, w: number, h: number): Ent => ({ id: 3, kind, skin, x: 0, y: 0, w, h, hb: [0, 0, w, h], p: {}, fx: {} }) as unknown as Ent;
+    const g = document.createElement("canvas").getContext("2d") as CanvasRenderingContext2D;
+    const v = stubView();
+    const booth = ent("booth", "block", 124, 70);
+    const valance = ent("valance", "overhead", 232, 300);
+    const before = stub.created;
+    // 100 px hinter dem rechten Bildrand: vorbestellen, nicht backen
+    expect(r.drawEntity(g, booth, v.w + 100, 520, v)).toBe(true);
+    expect(r.drawEntity(g, valance, v.w + 100, 100, v)).toBe(true);
+    expect(r.drawEntity(g, booth, v.w + 90, 520, v)).toBe(true); // dasselbe Sprite: keine zweite Bestellung
+    expect(stub.created).toBe(before);
+    expect(bank.queued).toBe(2);
+    expect(bank.early).toBe(false); // nur um den Zeichenaufruf gesetzt
+    // update backt höchstens einen Schritt je Frame (Zwischenbild und Sprite sind getrennte Schritte)
+    r.update(1 / 60, stubView());
+    expect(bank.queued).toBeGreaterThanOrEqual(1);
+    for (let k = 0; k < 6; k += 1) r.update(1 / 60, stubView());
+    expect(bank.queued).toBe(0);
+    // jetzt sichtbar: nur Treffer, keine neue Fläche
+    const baked = stub.created;
+    expect(r.drawEntity(g, booth, 900, 520, v)).toBe(true);
+    expect(r.drawEntity(g, valance, 900, 100, v)).toBe(true);
+    expect(stub.created).toBe(baked);
+  });
+
+  it("eine ferne Entität zeichnet ihren Ersatz in save/restore (kein Zeichenzustand bleibt zurück)", async () => {
+    const rec = installRecordingStub();
+    const r = new PraterRenderer();
+    await r.load(assetsOf(manifestProps()));
+    const g = document.createElement("canvas").getContext("2d") as CanvasRenderingContext2D;
+    const log = (g.canvas as unknown as RecordingCanvas).log;
+    const v = stubView();
+    const booth = { id: 5, kind: "block", skin: "booth", x: 0, y: 0, w: 120, h: 66, hb: [0, 0, 120, 66], p: {}, fx: {} } as unknown as Ent;
+    r.update(1 / 60, stubView());
+    log.length = 0;
+    r.drawEntity(g, booth, v.w + 100, 520, v);
+    expect(log[0]).toBe("save()");
+    expect(log[log.length - 1]).toBe("restore()");
+    log.length = 0;
+    r.drawEntity(g, booth, 600, 520, v); // sichtbar: keine zusätzliche Klammer
+    expect(log[0]).not.toBe("save()");
+    void rec;
+  });
+
+  it("eine sichtbare Entität ohne Sprite bekommt es sofort (Rückfall), auch wenn die Bestellung noch aussteht", async () => {
+    const { r } = await loaded();
+    const bank = inner(r).A.bank;
+    const g = document.createElement("canvas").getContext("2d") as CanvasRenderingContext2D;
+    const v = stubView();
+    const booth = { id: 4, kind: "block", skin: "booth", x: 0, y: 0, w: 128, h: 66, hb: [0, 0, 128, 66], p: {}, fx: {} } as unknown as Ent;
+    r.drawEntity(g, booth, v.w + 100, 520, v);
+    expect(bank.queued).toBe(1);
+    const n = bank.size;
+    r.drawEntity(g, booth, 600, 520, v);
+    expect(bank.size).toBe(n + 1);
   });
 
   it("warm vor dem Laden hat nichts zu tun", () => {
