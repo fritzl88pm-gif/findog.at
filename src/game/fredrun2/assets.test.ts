@@ -776,9 +776,12 @@ describe.each([
   it("warmCharacter ohne DOM (SSR) wirft nicht und reiht nichts ein", async () => {
     vi.useFakeTimers();
     installHeroFetch();
-    const { loadCharacter, warmCharacter } = await freshAssets(); // Image-Ersatz, aber kein document
+    const { loadCharacter, warmCharacter, warmed } = await freshAssets(); // Image-Ersatz, aber kein document
     const sprites = await loadCharacter("fred");
     await expect(warmCharacter(sprites)).resolves.toBeUndefined();
+    const warm = await loadCharacter("fred", ["run"], { warm: true }); // ohne DOM: lädt, wärmt nichts, hängt nicht
+    expect(warm.anims.size).toBe(1);
+    await expect(warmed(true)).resolves.toBeUndefined();
   });
 
   it("Menü-Vorschau: loadCharacter wärmt NICHTS – kein Warm-Draw, kein Idle-Slot, warmed() sofort erfüllt", async () => {
@@ -884,6 +887,116 @@ describe.each([
     await warmed();
     expect(draws).toHaveLength(ANIMS.length);
     expect(new Set(draws).size).toBe(ANIMS.length);
+  });
+
+  // --- Hub-Vertrag: loadCharacter(id, only, { warm: true }) + warmed(true) -----------------------------------------------
+  // (Befund der Prüfung: loadCharacter + warmed() allein wärmte nichts → Erst-Draw-Summe 215 ms wie ohne Warmup.)
+
+  const MOTION = ["run", "jump", "fall", "slide", "dash", "stomp", "doublejump", "hurt", "idle", "victory"] as const;
+
+  it("Hub-Ablauf Ende-zu-Ende: Kern mit warm laden, Rest im Hintergrund, warmed(true) vor dem Countdown – nur dieser Held, jedes Sheet einmal", async () => {
+    vi.useFakeTimers();
+    const { draws } = fakeDoc();
+    installHeroFetch();
+    const { loadCharacter, createAssetLoader } = await freshAssets();
+    const assets = createAssetLoader();
+    const preview = await loadCharacter("frida", ["idle"]); // Menü-Vorschau eines anderen Helden: ohne warm
+    const core = await loadCharacter("fred", ["run", "jump", "fall", "idle"], { warm: true });
+    expect(core.anims.size).toBe(4);
+    const fullP = loadCharacter("fred", undefined, { warm: true }); // Hintergrund: neues Objekt mit allen Sheets
+    let done = false;
+    void assets.warmed(true).then(() => (done = true)); // vor dem Countdown-Ende
+    expect(done).toBe(false); // der Hintergrundladevorgang ist noch offen → nicht "sofort erfüllt"
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(done).toBe(true);
+    const full = await fullP;
+    expect(full.anims.size).toBe(ANIMS.length);
+    expect(draws).toHaveLength(ANIMS.length); // jedes Bild genau einmal (Kern-Sheets kommen im Vollständigen aus dem Cache)
+    expect(new Set(draws).size).toBe(ANIMS.length);
+    expect(draws.slice(0, 3)).toEqual(imagesOf(full, ["run", "jump", "fall"])); // Bewegungen zuerst
+    expect(new Set(draws)).toEqual(new Set(imagesOf(full, MOTION)));
+    for (const img of imagesOf(preview, ["idle"])) expect(draws).not.toContain(img);
+  });
+
+  it("warmed(true) wartet auf einen noch laufenden warm-Ladevorgang (hängendes Sheet bis zum 20-s-Timeout) und danach auf dessen Warmup", async () => {
+    vi.useFakeTimers();
+    const { draws } = fakeDoc();
+    installHeroFetch();
+    FakeImage.behavior = (url) => (url.includes("chars/fred/slide.webp") ? "hang" : "ok");
+    const { loadCharacter, warmed } = await freshAssets();
+    void loadCharacter("fred", undefined, { warm: true }); // wie der Hub: nicht abgewartet
+    let done = false;
+    void warmed(true).then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(IMAGE_TIMEOUT_MS - 100);
+    expect(done).toBe(false); // das Laden läuft noch, obwohl keine Warteschlange existiert
+    expect(draws).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(5000); // Timeout → Figur ohne slide wird eingereiht und gewärmt
+    expect(done).toBe(true);
+    expect(draws).toHaveLength(ANIMS.length - 1);
+  });
+
+  it("warm für eine bereits gecachte Figur (vorher in der Menü-Vorschau geladen) fordert trotzdem an", async () => {
+    vi.useFakeTimers();
+    const { draws } = fakeDoc();
+    installHeroFetch();
+    const { loadCharacter, warmed } = await freshAssets();
+    const seen = await loadCharacter("fred"); // Menü-Vorschau: wärmt nichts
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(draws).toHaveLength(0);
+    const played = await loadCharacter("fred", undefined, { warm: true }); // gleiches Objekt aus dem Cache
+    expect(played).toBe(seen);
+    void warmed(true);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(draws).toEqual(imagesOf(played, MOTION));
+  });
+
+  it("zählt die Anforderungs-, nicht die Eintreffreihenfolge: trifft der Atlas des früheren Helden später ein, verdrängt er den aktuellen nicht", async () => {
+    vi.useFakeTimers();
+    const { draws } = fakeDoc();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const atlas = atlasFor(ANIMS);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("chars/fred/")) await gate; // langsames Netz nur für Held A
+        return { ok: url.includes("atlas.json"), json: async () => atlas };
+      }),
+    );
+    const { loadCharacter, warmed } = await freshAssets();
+    const pA = loadCharacter("fred", undefined, { warm: true }); // Held A gewählt ...
+    const frida = await loadCharacter("frida", undefined, { warm: true }); // ... und sofort B, der zuerst fertig wird
+    release();
+    const fred = await pA; // A's Atlas kommt als Nachzügler
+    expect(fred.anims.size).toBe(ANIMS.length); // geladen wird er trotzdem
+    void warmed(true);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(draws).toEqual(imagesOf(frida, MOTION)); // gewärmt wird nur B
+    for (const img of imagesOf(fred, ANIMS)) expect(draws).not.toContain(img);
+  });
+
+  it("direkter warmCharacter-Aufruf ist ebenfalls ein Wunsch: ein später eintreffender warm-Ladevorgang eines anderen Helden verdrängt ihn nicht", async () => {
+    vi.useFakeTimers();
+    const { draws } = fakeDoc();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const atlas = atlasFor(ANIMS);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("chars/fred/")) await gate;
+        return { ok: url.includes("atlas.json"), json: async () => atlas };
+      }),
+    );
+    const { loadCharacter, warmCharacter, warmed } = await freshAssets();
+    const pA = loadCharacter("fred", undefined, { warm: true });
+    const frida = await loadCharacter("frida"); // schon vorhanden (Vorschau) ...
+    void warmCharacter(frida); // ... und jetzt gewählt
+    release();
+    await pA;
+    await vi.advanceTimersByTimeAsync(5000);
+    await warmed();
+    expect(draws).toEqual(imagesOf(frida, MOTION));
   });
 
   it("scheitert ein Sheet, wird es nicht dauerhaft gemerkt: der nächste loadCharacter fragt es neu an", async () => {

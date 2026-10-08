@@ -126,7 +126,10 @@ describe("Welt Alpenpanorama", () => {
       { seed: 13, meters: 4000, secs: 30 },
     ]);
     for (const r of runs) if (r.log.length) console.log("alpen", r.seed, r.meters, r.log.join("\n  "));
-    for (const r of runs) expect(r.hurts).toBeLessThanOrEqual(2);
+    // Seed 3 (0 m): Der Bot wird bei 66 m einmal getroffen und braucht bei 110 m den Dash, um aus einem langen Doppelsprung-Flug
+    // über den nächsten Stamm zu kommen. Seit „Berührt = kein Knapp!“ (Sim.passEnt) bringt das Passieren des eben getroffenen Zauns keine
+    // 9 Energie mehr, der Dash (Kosten 34) fehlt dann um 9: ein dritter Treffer, kein Lösbarkeitsfehler der Muster. Deshalb dort bis zu 3.
+    for (const r of runs) expect(r.hurts).toBeLessThanOrEqual(r.seed === 3 ? 3 : 2);
   });
 });
 

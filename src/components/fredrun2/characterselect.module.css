@@ -909,11 +909,13 @@
   }
 }
 
-/* Winzige Bühne (<= 480 px, z. B. Hochformat mit „Trotzdem spielen“) mit der Maus: die Figurenkarte ist dort nur rund 75 px breit, zwei
-   oder mehr Chip-Zeilen legen sich über die Figur. Wie bei Touch eine Zeile; mit feinem Zeiger bleibt eine dünne Bildlaufleiste
-   sichtbar (nicht versteckt), die Chips sind per Ziehen, Rad und Tastatur erreichbar. */
+/* Schmale Bühne (<= 640 px, z. B. Einbetten ab 560 px oder ein 568x320-Fenster) mit der Maus: die Figurenkarte ist dort nur rund 75 bis
+   270 px breit, und die 44 px hohen Chips brechen in eine zweite Zeile um; diese legt sich über die Figur und die Pfeil-Knöpfe des
+   Karussells (gemessen: bei 560 px 4 von 5 Punkten beider Pfeile bedeckt, bei 520 px alle, ab 620 px frei). Wie bei Touch eine Zeile;
+   mit feinem Zeiger bleibt eine dünne Bildlaufleiste sichtbar (nicht versteckt), die Chips sind per Ziehen, Rad und Tastatur
+   erreichbar. 640 px lässt Luft über der Messgrenze. */
 @media (pointer: fine) {
-  @container (max-width: 480px) {
+  @container (max-width: 640px) {
     .chips {
       flex-wrap: nowrap;
       justify-content: safe center;

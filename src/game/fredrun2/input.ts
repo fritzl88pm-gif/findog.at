@@ -1,10 +1,19 @@
 /** Eingabe: Tastatur, Zeiger/Touch (Tippen = springen, nach unten wischen = rutschen), Gamepad (Spiel und Menü-Navigation), Bildschirm-Tasten. */
 import type { SimInput } from "./sim";
 
-/** Entscheidungsfenster für Touch in der linken Zone: Wisch nach unten (nur Rutschen) oder Tippen (Sprung). Danach springt die Figur. */
+/** Entscheidungsfenster für Touch in der linken Zone: Wisch nach unten (nur Rutschen) oder Tippen (Sprung). Danach springt die Figur (außer bei Drift nach unten, siehe SWIPE_EXTEND_MS). */
 export const SWIPE_DECIDE_MS = 28;
 /** Mindestweg nach unten (px) innerhalb des Fensters, ab dem eine Touch-Bewegung als Wisch gilt. */
 export const SWIPE_MIN_DY = 10;
+/**
+ * Ein Wisch beschleunigt aus dem Stand: in den ersten 28 bis 45 ms sind es oft nur 2 bis 8 px. Zieht der Finger schon
+ * erkennbar nach unten (siehe SWIPE_DRIFT_DY), verlängert sich das Entscheidungsfenster bis zu dieser Zeit (ms ab Berührung).
+ * Tippende ohne Drift zahlen nichts; Tippende mit Drift warten höchstens SWIPE_EXTEND_MS - SWIPE_DECIDE_MS (32 ms) länger,
+ * beim Loslassen springt es ohnehin sofort.
+ */
+export const SWIPE_EXTEND_MS = 60;
+/** Weg nach unten (px), ab dem das Entscheidungsfenster bis SWIPE_EXTEND_MS offen bleibt (dy muss dx dabei verdoppeln). */
+export const SWIPE_DRIFT_DY = 2;
 /** Linker Anteil der angehängten Fläche, in dem Touch-Sprünge um das Entscheidungsfenster verzögert werden. */
 export const LEFT_ZONE = 0.45;
 /** Sprung-Assistent: so lange (Sekunden) gilt „Sprung gehalten“ nach einer verbrauchten Sprung-Flanke. */
@@ -61,6 +70,9 @@ type PtrStart = {
   pending: boolean;
   /** durch das Warten verlorene Haltezeit (s), wird beim Loslassen ausgeglichen */
   delay: number;
+  /** letzter bekannter Weg (px) seit der Berührung, nach unten und seitlich (nur im Wartezustand gepflegt) */
+  lastDy: number;
+  lastDx: number;
 };
 
 export class InputManager {
@@ -187,7 +199,7 @@ export class InputManager {
     if (pending) this.pendingN += 1;
     else this.edgeJump = true; // jeder neue Zeiger ist eine Flanke (zweiter Finger = Doppelsprung)
     this.ptrJump.add(e.pointerId);
-    this.starts.set(e.pointerId, { x: e.clientX, y: e.clientY, t: this.clock(), slid: false, pending, delay: 0 });
+    this.starts.set(e.pointerId, { x: e.clientX, y: e.clientY, t: this.clock(), slid: false, pending, delay: 0, lastDy: 0, lastDx: 0 });
     this.listener.onAnyInput?.();
     try {
       this.el?.setPointerCapture(e.pointerId);
@@ -202,6 +214,8 @@ export class InputManager {
     const dy = e.clientY - s.y;
     const dx = Math.abs(e.clientX - s.x);
     if (s.pending) {
+      s.lastDy = dy;
+      s.lastDx = dx;
       if (dy >= SWIPE_MIN_DY && dy > dx * SWIPE_RATIO) {
         // Wisch nach unten: nur Rutschen, kein Sprung (und damit kein Doppelsprung-Verbrauch)
         s.pending = false;
@@ -233,7 +247,12 @@ export class InputManager {
   }
 
   private expirePending = (s: PtrStart): void => {
-    if (s.pending && this.tmpMs - s.t >= SWIPE_DECIDE_MS) this.commitPending(s, this.tmpMs);
+    if (!s.pending) return;
+    const age = this.tmpMs - s.t;
+    if (age < SWIPE_DECIDE_MS) return;
+    // Wisch aus dem Stand: zieht der Finger schon erkennbar nach unten, noch bis SWIPE_EXTEND_MS auf die 10 px warten
+    if (age < SWIPE_EXTEND_MS && s.lastDy >= SWIPE_DRIFT_DY && s.lastDy > s.lastDx * 2) return;
+    this.commitPending(s, this.tmpMs);
   };
 
   private clearPending = (s: PtrStart): void => {

@@ -7,6 +7,8 @@ import {
   LEFT_ZONE,
   NAV_REPEAT_MS,
   SWIPE_DECIDE_MS,
+  SWIPE_DRIFT_DY,
+  SWIPE_EXTEND_MS,
   SWIPE_MIN_DY,
   type NavDir,
   type PointerKind,
@@ -310,6 +312,213 @@ describe("Touch-Wisch links (feel-core-02)", () => {
     fire("pointerdown", { id: 2, x: 120, y: 200 });
     t = 40;
     fire("pointermove", { id: 2, x: 121, y: 218 });
+    const o = step();
+    expect(o.slidePressed).toBe(true);
+    expect(o.jumpPressed).toBe(false);
+  });
+});
+
+/** Min-Jerk-Profil (Wisch aus dem Stand): Weg in px nach `ms` bei Gesamtweg `dist` und Dauer `dur`. */
+const minJerk =
+  (dist: number, dur: number) =>
+  (ms: number): number => {
+    const u = Math.min(1, Math.max(0, ms / dur));
+    return dist * (10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5);
+  };
+
+/**
+ * Berührung im Frame-Takt wie im Browser: Zeiger-Ereignisse zwischen den Frames zum eigenen Zeitpunkt, die Bewegung gebündelt
+ * zu Frame-Beginn, danach die 120-Hz-Sim-Schritte des Frames. `phase` verschiebt die Berührung gegen den Frame-Takt.
+ */
+function touchRun(hz: number, phase: number, dyAt: (ms: number) => number, upAfter: number): { jumps: number; slides: number } {
+  const period = 1000 / hz;
+  const steps = Math.max(1, Math.round(period / (1000 / 120)));
+  const down = 10 * period + phase;
+  const up = down + upAfter;
+  let isDown = false;
+  let isUp = false;
+  let lastY = 0;
+  let jumps = 0;
+  let slides = 0;
+  for (let k = 0; k < 160; k += 1) {
+    const frame = k * period;
+    if (!isDown && down <= frame) {
+      t = down;
+      fire("pointerdown", { x: 200, y: 200 });
+      isDown = true;
+    }
+    if (isDown && !isUp && up <= frame) {
+      t = up;
+      fire("pointerup", { x: 200, y: 200 + lastY });
+      isUp = true;
+    }
+    t = frame;
+    if (isDown && !isUp) {
+      const dy = dyAt(frame - down);
+      if (dy > 0 && dy !== lastY) {
+        fire("pointermove", { x: 200, y: 200 + dy });
+        lastY = dy;
+      }
+    }
+    mgr.poll();
+    for (let i = 0; i < steps; i += 1) {
+      const o = step();
+      if (o.jumpPressed) jumps += 1;
+      if (o.slidePressed) slides += 1;
+    }
+  }
+  return { jumps, slides };
+}
+
+describe("Wisch aus dem Stand und Tippen mit Drift (Fix-Runde 1)", () => {
+  it("Konstanten der Verlängerung", () => {
+    expect(SWIPE_EXTEND_MS).toBe(60);
+    expect(SWIPE_DRIFT_DY).toBe(2);
+    expect(SWIPE_EXTEND_MS).toBeGreaterThan(SWIPE_DECIDE_MS);
+  });
+
+  it("beschleunigender Wisch (1 px bei 8 ms, 4 px bei 16 ms, 9 px bei 24 ms, 18 px bei 40 ms): nur Rutschen, kein Sprung", () => {
+    fire("pointerdown", { x: 200, y: 200 });
+    const seq: string[] = [];
+    const frame = (ms: number, dy?: number): void => {
+      t = ms;
+      if (dy !== undefined) fire("pointermove", { x: 200, y: 200 + dy });
+      const o = step();
+      seq.push(o.jumpPressed ? "J" : o.slidePressed ? "S" : "-");
+    };
+    frame(8, 1);
+    frame(16, 4);
+    frame(24, 9);
+    frame(32); // das 28-ms-Fenster ist um, der Finger zieht aber sichtbar nach unten: weiter warten
+    frame(40, 18);
+    frame(48);
+    frame(60);
+    frame(80);
+    expect(seq.join("")).toBe("----S---");
+    fire("pointerup", { x: 200, y: 218 });
+    t = 200;
+    expect(step().jumpPressed).toBe(false);
+  });
+
+  const profiles: Array<[number, number]> = [
+    [100, 140],
+    [120, 200],
+    [150, 150],
+    [200, 200],
+  ];
+  for (const hz of [60, 120]) {
+    it(`Min-Jerk-Wische (100 px/140 ms bis 200 px/200 ms) bei ${hz} Hz: je genau ein Rutschen, nie ein Sprung`, () => {
+      for (const [dist, dur] of profiles) {
+        for (let i = 0; i < 12; i += 1) {
+          mgr.releaseAll();
+          const r = touchRun(hz, (i / 12) * (1000 / hz), minJerk(dist, dur), dur + 40);
+          expect({ dist, dur, phase: i, ...r }).toEqual({ dist, dur, phase: i, jumps: 0, slides: 1 });
+        }
+      }
+    });
+  }
+
+  it("Tippen mit 4 px Drift nach unten: Sprung nach spätestens SWIPE_EXTEND_MS (nicht schon nach 28 ms)", () => {
+    fire("pointerdown", { x: 200, y: 200 });
+    t = 10;
+    fire("pointermove", { x: 200, y: 204 });
+    t = SWIPE_DECIDE_MS + 4;
+    expect(step().jumpPressed).toBe(false);
+    t = SWIPE_EXTEND_MS - 1;
+    expect(step().jumpPressed).toBe(false);
+    t = SWIPE_EXTEND_MS;
+    const o = step();
+    expect(o.jumpPressed).toBe(true);
+    expect(o.jump).toBe(true);
+    t = SWIPE_EXTEND_MS + 8;
+    expect(step().jumpPressed).toBe(false);
+  });
+
+  it("Tippen mit Drift und Loslassen im verlängerten Fenster: Sprung sofort beim pointerup", () => {
+    fire("pointerdown", { x: 200, y: 200 });
+    t = 12;
+    fire("pointermove", { x: 200, y: 205 });
+    t = 40;
+    expect(step().jumpPressed).toBe(false);
+    fire("pointerup", { x: 200, y: 205 });
+    const o = step();
+    expect(o.jumpPressed).toBe(true);
+    // die Wartezeit wird weiter als Haltezeit gutgeschrieben (Sprunghöhe des Tippens bleibt)
+    expect(o.jump).toBe(true);
+  });
+
+  it("ohne erkennbaren Drift nach unten bleibt die Latenz bei SWIPE_DECIDE_MS", () => {
+    // 1 px (unter SWIPE_DRIFT_DY), seitlich, schräg, nach oben, nach unten und wieder zurück
+    const cases: Array<[string, number, number, Array<[number, number]>]> = [
+      ["1 px nach unten", 200, 201, []],
+      ["5 px seitlich", 205, 200, []],
+      ["3 px nach unten, 2 px seitlich (dy nicht doppelt so groß)", 202, 203, []],
+      ["4 px nach oben", 200, 196, []],
+      ["4 px nach unten und zurück", 200, 200, [[200, 204]]],
+    ];
+    cases.forEach(([name, x, y, via], i) => {
+      mgr.releaseAll();
+      t = 1000 * (i + 1);
+      const base = t;
+      fire("pointerdown", { id: 10 + i, x: 200, y: 200 });
+      t = base + 5;
+      for (const [vx, vy] of via) fire("pointermove", { id: 10 + i, x: vx, y: vy });
+      fire("pointermove", { id: 10 + i, x, y });
+      t = base + SWIPE_DECIDE_MS - 1;
+      expect(step().jumpPressed, name).toBe(false);
+      t = base + SWIPE_DECIDE_MS;
+      expect(step().jumpPressed, name).toBe(true);
+    });
+  });
+
+  it("Wisch, der erst nach dem verlängerten Fenster einsetzt: Sprung war schon ausgelöst, Rutschen erst über die 46-px-Regel", () => {
+    fire("pointerdown", { x: 200, y: 200 });
+    t = 10;
+    fire("pointermove", { x: 200, y: 203 });
+    t = SWIPE_EXTEND_MS;
+    expect(step().jumpPressed).toBe(true);
+    t = SWIPE_EXTEND_MS + 10;
+    fire("pointermove", { x: 200, y: 216 });
+    expect(step().slidePressed).toBe(false);
+    t = SWIPE_EXTEND_MS + 40;
+    fire("pointermove", { x: 200, y: 250 });
+    expect(step().slidePressed).toBe(true);
+  });
+
+  it("zwei Finger: nur der Finger mit Drift wartet länger, jeder löst genau eine Sprung-Flanke aus", () => {
+    fire("pointerdown", { id: 1, x: 100, y: 200 });
+    fire("pointerdown", { id: 2, x: 140, y: 200 });
+    t = 8;
+    fire("pointermove", { id: 1, x: 100, y: 205 });
+    t = SWIPE_DECIDE_MS;
+    expect(step().jumpPressed).toBe(true); // Finger 2: Tippen ohne Drift
+    t = SWIPE_DECIDE_MS + 10;
+    expect(step().jumpPressed).toBe(false); // Finger 1 wartet noch
+    t = SWIPE_EXTEND_MS;
+    expect(step().jumpPressed).toBe(true);
+    t = SWIPE_EXTEND_MS + 20;
+    expect(step().jumpPressed).toBe(false);
+  });
+
+  it("pointercancel im verlängerten Fenster räumt den Sprung (und die Zählung für spätere Berührungen)", () => {
+    fire("pointerdown", { x: 200, y: 200 });
+    t = 10;
+    fire("pointermove", { x: 200, y: 205 });
+    t = 40;
+    fire("pointercancel", { x: 200, y: 205 });
+    t = 100;
+    expect(step().jumpPressed).toBe(false);
+    fire("pointerdown", { id: 2, x: 200, y: 200 });
+    t = 100 + SWIPE_DECIDE_MS;
+    expect(step().jumpPressed).toBe(true);
+  });
+
+  it("Drift ohne Folgebewegung nach unten: ein Wisch im verlängerten Fenster bleibt ein Wisch, auch wenn er erst zwischen zwei consume() eintrifft", () => {
+    fire("pointerdown", { x: 200, y: 200 });
+    t = 10;
+    fire("pointermove", { x: 200, y: 203 });
+    t = 50;
+    fire("pointermove", { x: 201, y: 215 });
     const o = step();
     expect(o.slidePressed).toBe(true);
     expect(o.jumpPressed).toBe(false);

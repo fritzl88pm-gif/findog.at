@@ -1341,8 +1341,10 @@ label.field {
   }
 }
 
-/* Sehr schmale Bühne: der Zurück-Link würde die Karten der Startseite berühren – nur der Pfeil bleibt (aria-label trägt den Namen) */
-@container (max-width: 620px) {
+/* Sehr schmale Bühne: der Zurück-Link würde die Karten der Startseite berühren – nur der Pfeil bleibt (aria-label trägt den Namen).
+   Gemessen (Ersatzschrift DejaVu Sans, die breiter ist als die Gerätefonts): die Pille ragt bis ca. 656 px Bühnenbreite in die
+   Heldenkarte, 680 px lässt Luft. */
+@container (max-width: 680px) {
   .backLink {
     left: max(10px, calc(var(--px) * 24));
     min-width: var(--tap-min);

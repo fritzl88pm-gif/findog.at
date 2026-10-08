@@ -72,9 +72,16 @@ export function loadImage(url: string): Promise<HTMLImageElement | null> {
 // 10 Fred-Sheets 223–255 ms mit und ohne altes Warmup, 1 ms mit Warm-Draw im GPU-Backend). Deshalb: Warm-Canvas ohne
 // willReadFrequently, Flush per createImageBitmap (kein Rücklesen – Chrome schaltet eine GPU-Canvas nach zwei Rücklesungen auf
 // Software um); getImageData nur als Rückfall in Browsern ohne createImageBitmap.
-// Das Warmup ist ausdrücklich ANGEFORDERT (warmCharacter für den gespielten/gewählten Helden, PropLib.preload für die Welt-Props),
-// nie ein Nebeneffekt von loadCharacter: Menü-Vorschauen laden alle Helden, und deren ~10 Sheets (je Held 50–60 MB dekodiert)
-// dürfen nicht dauerhaft Speicher und Hauptthread-Zeit belegen, nur weil ein Held angezeigt wurde.
+// Das Warmup ist ausdrücklich ANGEFORDERT, nie ein Nebeneffekt eines bloßen loadCharacter(id): Menü-Vorschauen laden alle Helden,
+// und deren ~10 Sheets (je Held 50–60 MB dekodiert) dürfen nicht dauerhaft Speicher und Hauptthread-Zeit belegen, nur weil ein
+// Held angezeigt wurde. Vertrag für den Spiel-Hub (game.ts):
+//   const core = await loadCharacter(id, ["run", "jump", "fall", "idle"], { warm: true }); // gespielter/gewählter Held, Kern zuerst
+//   void loadCharacter(id, undefined, { warm: true });                                    // Rest im Hintergrund (neues Objekt!)
+//   ...                                                                                   // Weltstart, Menü, Countdown
+//   await assets.warmed(true);                                                            // vor dem Countdown-Ende: alles dekodiert
+// { warm: true } fordert das Warmup nach dem Laden an UND lässt warmed() auf diesen Ladevorgang warten (kein "sofort erfüllt",
+// solange die Sheets noch unterwegs sind). Menü-Vorschauen (characterStage, CharacterSelect) rufen loadCharacter OHNE warm auf.
+// Wer die Sprites schon hat, fordert mit warmCharacter(sprites) an. PropLib.preload() wärmt die Welt-Props selbst.
 
 /** Zeitbudget je Slot (ein Sheet kostet 13–52 ms, danach wird der Slot beendet). */
 const WARM_BUDGET_MS = 24;
@@ -351,9 +358,9 @@ function queueWarm(img: HTMLImageElement | null | undefined, prio: number, group
 }
 
 /**
- * Erfüllt, sobald alle bisher gestarteten Prop-Ladevorgänge beendet und alle eingereihten Sheets (Props, per warmCharacter
- * angeforderte Figuren) dekodiert sind (auch ohne Bilder oder bei fehlgeschlagenen Bildern; Ladefehler sind durch das
- * 20-s-Timeout begrenzt). Figuren-Sheets kommen NUR über warmCharacter in die Warteschlange, loadCharacter allein wärmt nichts.
+ * Erfüllt, sobald alle laufenden Ladevorgänge mit Warmup-Anforderung (loadCharacter mit { warm: true }, PropLib.preload) beendet
+ * und alle eingereihten Sheets (Figuren, Props) dekodiert sind (auch ohne Bilder oder bei fehlgeschlagenen Bildern; Ladefehler
+ * sind durch das 20-s-Timeout begrenzt). Ein loadCharacter OHNE warm (Menü-Vorschau) zählt nicht und reiht nichts ein.
  * urgent = true: sofort Slot an Slot abarbeiten (Ladebildschirm/Countdown) statt nur im Leerlauf – im laufenden Spiel
  * kommt das Warmup sonst nur etwa im Sekundentakt voran, weil dort kaum Leerlauf bleibt.
  */
@@ -362,16 +369,31 @@ export function warmed(urgent = false): Promise<void> {
 }
 
 /**
- * Fordert das Dekodier-Warmup für die Figur an, die gespielt wird bzw. gerade gewählt ist (nie für Menü-Vorschauen: dort würde
- * jeder angezeigte Held ~10 Sheets dauerhaft dekodiert halten). Reihenfolge: Bewegungen (run, jump, fall, slide, dash, stomp,
- * doublejump, hurt), dann Welt-Props, idle/victory (je ca. 8 MB) zuletzt. Wartende Jobs eines früheren Helden werden verworfen
- * (Heldenwechsel), bereits gewärmte Bilder nie doppelt gewärmt. Aufruf nach loadCharacter(), auch mit nur teilweise geladener
- * Figur und mehrfach (z. B. nochmals mit der vollständigen). Rückgabe wie warmed(urgent): erfüllt, wenn alles gewärmt ist.
+ * Held des jüngsten Warmup-Wunsches (loadCharacter mit warm, warmCharacter). Ladevorgänge enden in beliebiger Reihenfolge: wer
+ * erst Held A und gleich darauf Held B anfordert, soll B gewärmt bekommen, auch wenn A's Atlas später eintrifft – sonst
+ * verdrängte der Nachzügler A die Sheets des Helden, der tatsächlich gespielt wird.
+ */
+let warmTarget: CharacterId | null = null;
+
+/** Reiht die Sheets der Figur ein (synchron, kein Warten); verdrängt wartende Jobs eines früheren Helden. */
+function enqueueCharacter(sprites: CharacterSprites): void {
+  if (typeof document === "undefined") return;
+  warmQueue.supersede(sprites.id);
+  for (const [name, a] of sprites.anims) warmQueue.add(a.img, ANIM_WARM_PRIO[name] ?? OTHER_WARM_PRIO, sprites.id);
+}
+
+/**
+ * Fordert das Dekodier-Warmup für bereits geladene Sprites an (der gespielte bzw. gerade gewählte Held; für Menü-Vorschauen
+ * nie: dort würde jeder angezeigte Held ~10 Sheets dauerhaft dekodiert halten). Wer erst lädt, nimmt stattdessen
+ * loadCharacter(id, only, { warm: true }). Reihenfolge: Bewegungen (run, jump, fall, slide, dash, stomp, doublejump, hurt),
+ * dann Welt-Props, idle/victory (je ca. 8 MB) zuletzt. Wartende Jobs eines früheren Helden werden verworfen (Heldenwechsel),
+ * bereits gewärmte Bilder nie doppelt gewärmt. Auch mit nur teilweise geladener Figur und mehrfach aufrufbar (z. B. nochmals mit
+ * der vollständigen). Rückgabe wie warmed(urgent): erfüllt, wenn alles gewärmt ist.
  */
 export function warmCharacter(sprites: CharacterSprites | null | undefined, urgent = false): Promise<void> {
-  if (sprites && typeof document !== "undefined") {
-    warmQueue.supersede(sprites.id);
-    for (const [name, a] of sprites.anims) warmQueue.add(a.img, ANIM_WARM_PRIO[name] ?? OTHER_WARM_PRIO, sprites.id);
+  if (sprites) {
+    warmTarget = sprites.id;
+    enqueueCharacter(sprites);
   }
   return warmQueue.whenIdle(urgent);
 }
@@ -514,11 +536,34 @@ async function fetchJson<T>(url: string, cache: RequestCache = "force-cache"): P
   }
 }
 
+export interface LoadCharacterOpts {
+  /**
+   * true für den gespielten bzw. gerade gewählten Helden: nach dem Laden das Dekodier-Warmup anfordern (warmCharacter) und
+   * warmed() auf diesen Ladevorgang warten lassen. Fehlt es (Menü-Vorschau), wird nichts gewärmt.
+   */
+  warm?: boolean;
+}
+
 /**
- * Lädt die Atlanten einer Figur (mit only nur die genannten Animationen; ohne only gecached). Wärmt NICHTS: Menü-Vorschauen
- * laden jeden angezeigten Helden, der gespielte/gewählte Held wird danach mit warmCharacter() angefordert.
+ * Lädt die Atlanten einer Figur (mit only nur die genannten Animationen; ohne only gecached). Ohne opts.warm wird NICHTS
+ * gewärmt: Menü-Vorschauen laden jeden angezeigten Helden. Der Spiel-Hub lädt mit { warm: true } (Vertrag im Kopfblock des
+ * Warmups) und wartet vor dem Countdown auf warmed(true). Ist zwischenzeitlich ein anderer Held angefordert worden (später
+ * gestartetes warm-Laden oder warmCharacter), entfällt die Anforderung für diesen Nachzügler; er wird trotzdem geladen.
  */
-export function loadCharacter(id: CharacterId, only?: AnimName[]): Promise<CharacterSprites> {
+export function loadCharacter(id: CharacterId, only?: AnimName[], opts?: LoadCharacterOpts): Promise<CharacterSprites> {
+  const p = loadSprites(id, only);
+  if (!opts?.warm) return p;
+  warmTarget = id; // beim Anfordern festhalten, nicht erst beim Eintreffen (Ladereihenfolge ≠ Anforderungsreihenfolge)
+  // track: warmed() wartet auf Laden UND Einreihen (done läuft erst nach dem then, wenn die Jobs schon in der Warteschlange stehen)
+  return warmQueue.track(
+    p.then((sprites) => {
+      if (warmTarget === id) enqueueCharacter(sprites);
+      return sprites;
+    }),
+  );
+}
+
+function loadSprites(id: CharacterId, only?: AnimName[]): Promise<CharacterSprites> {
   const key = id;
   const cached = charCache.get(key);
   if (cached && !only) return cached;
