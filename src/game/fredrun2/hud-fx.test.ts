@@ -721,6 +721,22 @@ describe("drawHud", () => {
     expect(n).toBeLessThan(1400);
   });
 
+  it("HudFx ohne update (oder nach reset) zeigt den echten Score statt 0", () => {
+    const fx = new HudFx();
+    expect(fx.started).toBe(false);
+    const h = baseState({ score: 2750 });
+    const first = fakeCtx();
+    drawHud(first.g, h, { fx });
+    expect(first.texts.map((t) => t.s)).toContain(formatNumber(2750));
+    fx.update(h, 0.016);
+    expect(fx.started).toBe(true);
+    fx.reset();
+    expect(fx.started).toBe(false);
+    const again = fakeCtx();
+    drawHud(again.g, h, { fx });
+    expect(again.texts.map((t) => t.s)).toContain(formatNumber(2750));
+  });
+
   it("Rekordjagd: Text gold ab 90 %, nach Überholen zeigt er den eigenen Score, ohne Rekord keine Zeile", () => {
     const record = (st: Partial<HudState>): { s: string; fill: unknown } | undefined => {
       const { g, texts } = fakeCtx();

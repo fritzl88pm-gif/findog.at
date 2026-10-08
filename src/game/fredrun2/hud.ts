@@ -234,6 +234,11 @@ export class HudFx {
     this.ready = false;
   }
 
+  /** true, sobald update() seit Erzeugung bzw. reset() gelaufen ist; vorher gilt der echte Score (displayScore wäre noch 0) */
+  get started(): boolean {
+    return this.ready;
+  }
+
   update(h: HudState, dt: number): void {
     const step = dt > 0 && Number.isFinite(dt) ? Math.min(dt, 0.25) : 0;
     this.clock += step;
@@ -858,7 +863,7 @@ export function drawHud(g: CanvasRenderingContext2D, h: HudState, ctx?: HudDrawC
   const uTL = Math.min(u, UI_SCALE_TOP_LEFT_MAX);
   const reduced = h.reduced === true;
   const ps = pixelScale(g);
-  const score = fx ? Math.round(fx.displayScore) : h.score;
+  const score = fx && fx.started ? Math.round(fx.displayScore) : h.score;
   g.save();
 
   // --- Herzen + Punktestand + Rekordbalken (oben links), Münzen + Rekord (oben rechts) ---
