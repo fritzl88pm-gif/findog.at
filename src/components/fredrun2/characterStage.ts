@@ -3,7 +3,7 @@
  *
  * Framework-freie Canvas-Szene (Lichtkegel, Podest, Funken, animierte Figur mit Bewegungs-Vorschau) und ein
  * statischer Portrait-Zeichner für die Roster-Kacheln. Genau eine rAF-Schleife pro Bühne; sie läuft nur, solange
- * die Seite sichtbar ist, und wird mit `destroy()` vollständig abgebaut.
+ * die Seite sichtbar, die Leinwand im Sichtbereich und die Bühne aktiv (`setActive`) ist, und wird mit `destroy()` vollständig abgebaut.
  */
 import { loadCharacter, type AnimName, type CharacterSprites } from "@/game/fredrun2/assets";
 import type { CharacterPerks } from "@/game/fredrun2/characters";
@@ -181,6 +181,11 @@ export class CharacterStage {
   private podRx = 0;
   private podRy = 0;
   private raf = 0;
+  /** Eigentümer (Charakter-Reiter) hat die Bühne an/aus geschaltet */
+  private active = true;
+  /** Leinwand liegt im Sichtbereich (IntersectionObserver; ohne Beobachter immer wahr) */
+  private onScreen = true;
+  private readonly io: IntersectionObserver | null;
   private lastMs = 0;
   private t = 0;
   private dead = false;
@@ -219,6 +224,17 @@ export class CharacterStage {
     this.reducedOs = osPrefersReducedMotion();
     this.mq?.addEventListener?.("change", this.onMq);
     document.addEventListener("visibilitychange", this.onVisibility);
+    // Außerhalb des Sichtbereichs (eingebettet weggescrollt, Reiter per CSS verborgen) steht die Schleife
+    this.io =
+      typeof IntersectionObserver === "undefined"
+        ? null
+        : new IntersectionObserver((entries) => {
+            const e = entries[entries.length - 1];
+            if (!e || e.isIntersecting === this.onScreen) return;
+            this.onScreen = e.isIntersecting;
+            this.sync();
+          });
+    this.io?.observe(canvas);
     this.ro = new ResizeObserver((entries) => {
       const r = entries[entries.length - 1]?.contentRect;
       if (!r) return;
@@ -239,10 +255,30 @@ export class CharacterStage {
     this.reducedProp = v;
   }
 
+  /** Bühne an/aus (Charakter-Reiter aktiv?): aus = keine rAF-Aufrufe, an = sofort wieder, ohne Zeitsprung. */
+  setActive(v: boolean): void {
+    this.active = v;
+    this.sync();
+  }
+
   start(): void {
-    if (this.dead || this.raf || document.visibilityState === "hidden") return;
+    if (this.dead || this.raf || !this.shouldRun()) return;
     this.lastMs = performance.now();
     this.raf = requestAnimationFrame(this.tick);
+  }
+
+  private shouldRun(): boolean {
+    return this.active && this.onScreen && document.visibilityState !== "hidden";
+  }
+
+  private halt(): void {
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.raf = 0;
+  }
+
+  private sync(): void {
+    if (this.shouldRun()) this.start();
+    else this.halt();
   }
 
   destroy(): void {
@@ -250,6 +286,7 @@ export class CharacterStage {
     if (this.raf) cancelAnimationFrame(this.raf);
     this.raf = 0;
     this.ro.disconnect();
+    this.io?.disconnect();
     this.mq?.removeEventListener?.("change", this.onMq);
     document.removeEventListener("visibilitychange", this.onVisibility);
     this.parts = [];
@@ -363,12 +400,7 @@ export class CharacterStage {
   };
 
   private onVisibility = (): void => {
-    if (document.visibilityState === "hidden") {
-      if (this.raf) cancelAnimationFrame(this.raf);
-      this.raf = 0;
-    } else {
-      this.start();
-    }
+    this.sync();
   };
 
   private applySize(): void {

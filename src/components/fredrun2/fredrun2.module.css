@@ -478,6 +478,23 @@
   box-shadow: 0 calc(var(--px) * 3) 0 #0b6a30;
 }
 
+/* Die gewählte Welt lädt noch: Knopf bleibt fokussierbar (aria-disabled), reagiert aber nicht und glänzt nicht mehr */
+.playBtn[aria-disabled="true"],
+.playBtn[aria-disabled="true"]:hover,
+.playBtn[aria-disabled="true"]:active {
+  animation: none;
+  cursor: progress;
+  filter: saturate(0.55) brightness(0.9);
+  transform: none;
+  box-shadow: 0 calc(var(--px) * 8) 0 #0b6a30;
+}
+
+.heroCenter .playBtn[aria-disabled="true"] {
+  font-size: calc(var(--px) * 25);
+  white-space: nowrap;
+  padding-inline: calc(var(--px) * 16);
+}
+
 .playBtn:focus-visible,
 .btn:focus-visible,
 .card:focus-visible {
@@ -569,6 +586,24 @@
   opacity: 0.75;
 }
 
+/* Lange Namen („Tageslauf · Christkindlmarkt“) kürzen mit „…“ statt die Karte zweizeilig und höher als die Nachbarkarte zu machen */
+.summaryCard {
+  min-width: 0;
+}
+
+.summaryText {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.summaryText strong,
+.summaryText span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .swatch {
   width: calc(var(--px) * 22);
   height: calc(var(--px) * 22);
@@ -613,6 +648,79 @@
 
 .card:active {
   transform: scale(0.97);
+}
+
+/* Weltreise-Route: Karten ohne Auswahl (keine Knöpfe) */
+.cardStatic {
+  cursor: default;
+}
+
+/* Tageslauf: nur die Tages-Welt ist wählbar, die übrigen sind gedimmt und gesperrt */
+.cardDim {
+  opacity: 0.42;
+  filter: saturate(0.5);
+  cursor: default;
+}
+
+@media (hover: hover) {
+  .cardDim:hover,
+  .cardStatic:hover {
+    transform: none;
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+}
+
+.cardDim:active {
+  transform: none;
+}
+
+.cardNum {
+  position: absolute;
+  top: calc(var(--px) * 12);
+  left: calc(var(--px) * 12);
+  display: grid;
+  place-items: center;
+  min-width: max(20px, calc(var(--px) * 30));
+  height: max(20px, calc(var(--px) * 30));
+  padding: 0 calc(var(--px) * 4);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  font-weight: 1000;
+  font-size: max(11px, calc(var(--px) * 18));
+  line-height: 1;
+}
+
+.badge.badgeToday {
+  background: linear-gradient(90deg, #ffd23f, #ff9f1c);
+  color: #2b1300;
+  border-color: rgba(255, 255, 255, 0.55);
+}
+
+/* Beschreibung des Modus und – bei Weltreise/Tageslauf – dessen Rekord in einer Zeile (bricht bei Platzmangel um) */
+.modeLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px calc(var(--px) * 16);
+  margin: 0 0 calc(var(--px) * 12);
+}
+
+.modeLine > p {
+  margin: 0;
+}
+
+.recordPill {
+  display: inline-block;
+  padding: calc(var(--px) * 4) calc(var(--px) * 14);
+  border-radius: 999px;
+  background: rgba(255, 210, 63, 0.16);
+  border: 1px solid rgba(255, 210, 63, 0.45);
+  color: #ffe39a;
+  font-weight: 900;
+  font-size: max(11px, calc(var(--px) * 19));
+  white-space: nowrap;
 }
 
 .cardSelected {
@@ -677,6 +785,66 @@
   gap: calc(var(--px) * 8);
   flex-wrap: wrap;
   margin-bottom: calc(var(--px) * 14);
+}
+
+/* Bestenlisten-Chips in Gruppen (Welten / Modi): Überschrift links, Chips daneben (bricht um); schmal: Überschrift darüber */
+.boardTabs {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: calc(var(--px) * 6);
+}
+
+.tabGroup {
+  display: grid;
+  /* feste Spalte für die Überschrift, damit die Chips beider Gruppen bündig beginnen */
+  grid-template-columns: max(60px, calc(var(--px) * 88)) minmax(0, 1fr);
+  align-items: start;
+  gap: calc(var(--px) * 12);
+}
+
+.tabGroupLabel {
+  min-height: var(--tap-min);
+  display: inline-flex;
+  align-items: center;
+  font-size: max(11px, calc(var(--px) * 16));
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.tabGroupChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--px) * 8);
+  min-width: 0;
+}
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--px) * 12);
+  padding: calc(var(--px) * 20) 0 calc(var(--px) * 8);
+  text-align: center;
+}
+
+.emptyState > p {
+  margin: 0;
+}
+
+.meTag {
+  margin-left: calc(var(--px) * 10);
+  padding: calc(var(--px) * 2) calc(var(--px) * 10);
+  border-radius: 999px;
+  background: rgba(255, 210, 63, 0.22);
+  border: 1px solid rgba(255, 210, 63, 0.5);
+  color: #ffe39a;
+  font-size: max(11px, calc(var(--px) * 15));
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
 .table {
@@ -803,6 +971,185 @@ label.field {
 
 .toggleOn::after {
   left: calc(100% - var(--px) * 30);
+}
+
+.toggle:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Hinweiszeile „Fortschritt kann nicht gespeichert werden“: dezent, ohne Platz zu belegen, solange alles in Ordnung ist */
+.storageNote {
+  margin: 0 0 calc(var(--px) * 8);
+  padding: calc(var(--px) * 6) calc(var(--px) * 14);
+  border-radius: calc(var(--px) * 12);
+  background: rgba(255, 190, 70, 0.12);
+  border: 1px solid rgba(255, 190, 70, 0.4);
+  color: #ffe2a8;
+  font-size: max(11px, calc(var(--px) * 16));
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.noticeSlot {
+  flex: 0 0 auto;
+}
+
+/* Leer (Normalfall): bleibt als Live-Region im Baum, belegt aber weder Höhe noch einen Zwischenraum der Spalte */
+.noticeSlot:empty {
+  position: absolute;
+}
+
+.noticeSlot > .storageNote {
+  max-width: calc(var(--px) * 940);
+}
+
+/* Einstellungen: das Panel selbst scrollt nie, nur der Gruppenbereich (Titel und Speicher-Hinweis bleiben stehen) */
+.panelSettings {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panelSettings > .panelTitle {
+  flex: 0 0 auto;
+  margin-bottom: calc(var(--px) * 6);
+}
+
+.setScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  /* Platz für die Bildlaufleiste immer vorhalten (kein Springen) und für Fokusringe an den Rändern */
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+  overscroll-behavior: contain;
+  touch-action: manipulation;
+  padding: 3px 6px;
+  margin: -3px -6px;
+}
+
+/* Verlauf an der Kante, hinter der noch Inhalt liegt (data-top/-bottom setzt SettingsForm nach dem Vermessen) */
+.setScroll[data-top="true"],
+.setScroll[data-bottom="true"] {
+  --fade-t: 0px;
+  --fade-b: 0px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-t), #000 calc(100% - var(--fade-b)), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-t), #000 calc(100% - var(--fade-b)), transparent 100%);
+}
+
+.setScroll[data-top="true"] {
+  --fade-t: 22px;
+}
+
+.setScroll[data-bottom="true"] {
+  --fade-b: 22px;
+}
+
+.setCols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 calc(var(--px) * 44);
+  align-items: start;
+}
+
+/* Ab ca. 900 px Bühnenbreite zwei Spalten (die Gegenstücke stehen im Block „Kleine Bühne“ unten: dort gilt max-width: 900px) */
+@container (width > 900px) {
+  .setCols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.setCol {
+  min-width: 0;
+}
+
+.setGroup {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.setGroup + .setGroup {
+  margin-top: calc(var(--px) * 12);
+}
+
+.setGroupTitle {
+  margin: calc(var(--px) * 6) 0 calc(var(--px) * 2);
+  font-size: max(11px, calc(var(--px) * 16));
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+/* Zeilen in den Gruppen: kompakter als früher (an der Tippfläche min. --tap-min gemessen), Hinweis hinter der Beschriftung */
+.setGroup .field {
+  gap: calc(var(--px) * 14);
+  padding: calc(var(--px) * 5) 0;
+  font-size: max(12px, calc(var(--px) * 22));
+}
+
+.setGroup .field > label,
+.fieldText {
+  min-width: 0;
+}
+
+.fieldText {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: calc(var(--px) * 10);
+}
+
+.fieldHint {
+  font-size: max(11px, calc(var(--px) * 15));
+  font-weight: 700;
+  opacity: 0.62;
+}
+
+/* Regler-Zeile: Beschriftung | Regler | Prozentwert */
+.setGroup .fieldRange {
+  display: grid;
+  grid-template-columns: 5.6em minmax(0, 1fr) 3.6em;
+  align-items: center;
+}
+
+.setGroup .fieldRange input[type="range"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.fieldValue {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: max(11px, calc(var(--px) * 20));
+  font-weight: 800;
+  opacity: 0.9;
+  white-space: nowrap;
+}
+
+/* Wert wird von „Weniger Bewegung“ überstimmt („aus“, „max. 30 %“) */
+.fieldValueCapped {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.setGroup .field > label {
+  flex: 0 0 auto;
+}
+
+.setGroup .field select {
+  flex: 0 1 calc(var(--px) * 300);
+  min-width: 0;
+}
+
+.setGroup .field input[type="text"] {
+  flex: 1 1 calc(var(--px) * 160);
+  min-width: 0;
 }
 
 /* --- Anleitung ------------------------------------------------------------------------------------ */

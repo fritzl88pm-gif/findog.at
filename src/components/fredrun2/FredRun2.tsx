@@ -8,15 +8,17 @@ import { createAudio } from "@/game/fredrun2/audio";
 import { CHARACTERS } from "@/game/fredrun2/characters";
 import { deathLabel } from "@/game/fredrun2/death-names";
 import { FredRunGame, type GameSnapshot } from "@/game/fredrun2/game";
-import { boardKey, defaultProfile } from "@/game/fredrun2/profile";
+import { boardKey, defaultProfile, type Profile } from "@/game/fredrun2/profile";
 import { dateKey } from "@/game/fredrun2/rng";
 import { TOUR_ORDER, dailyWorld } from "@/game/fredrun2/sim";
 import { WORLD_IDS, type RunMode, type WorldId } from "@/game/fredrun2/types";
+import { formatNumber } from "@/game/fredrun2/ui-logic";
 import { WORLDS } from "@/game/fredrun2/worlds";
 
 import CharacterSelect from "./CharacterSelect";
 import styles from "./fredrun2.module.css";
 import { useAccessToken, useGlobalBoard, useRunSubmission } from "./globalBoard";
+import SettingsForm, { StorageNotice } from "./SettingsForm";
 
 type Tab = "play" | "worlds" | "characters" | "board" | "settings" | "help";
 
@@ -44,17 +46,16 @@ const LOADING: GameSnapshot = {
   countdown: 0,
   profile: defaultProfile(),
   result: null,
-  live: { dashReady: false, hearts: 0, score: 0 },
+  live: { dashReady: false, hearts: 0, score: 0, coins: 0 },
   fps: 60,
   quality: 2,
   audioUnlocked: false,
   demoWorld: "wien",
   error: null,
+  touch: false,
+  storageOk: true,
+  loadingWorld: null,
 };
-
-function fmt(n: number): string {
-  return Math.floor(n).toLocaleString("de-AT");
-}
 
 /** Systemvorgabe „Bewegung reduzieren“ als externer Speicher: serverseitig false, im Browser live (inkl. change-Ereignis). */
 const REDUCED_QUERY = "(prefers-reduced-motion: reduce)";
@@ -72,7 +73,8 @@ const getSystemReducedMotion = (): boolean => reducedMotionQuery()?.matches === 
 const getSystemReducedMotionServer = (): boolean => false;
 
 interface TabStripProps<T extends string> {
-  items: ReadonlyArray<{ id: T; label: string }>;
+  /** `group`: Zwischenüberschrift; aufeinanderfolgende Reiter mit gleichem Wert stehen in einer Gruppe (nur optisch, die Leiste bleibt ein tablist). */
+  items: ReadonlyArray<{ id: T; label: string; group?: string }>;
   value: T | null;
   /** `byKeyboard`: Auswahl per Pfeiltaste/Pos1/Ende (der Fokus bleibt dann in der Leiste). */
   onSelect: (id: T, byKeyboard: boolean) => void;
@@ -107,29 +109,49 @@ function TabStrip<T extends string>({ items, value, onSelect, label, className, 
     onSelect(items[next].id, true);
     refs.current[next]?.focus();
   };
+  const renderTab = (t: { id: T; label: string }, i: number): React.ReactElement => {
+    const on = i === activeIdx;
+    return (
+      <button
+        key={t.id}
+        ref={(el) => {
+          refs.current[i] = el;
+        }}
+        id={idBase ? `${idBase}-tab-${t.id}` : undefined}
+        type="button"
+        role="tab"
+        aria-selected={on}
+        aria-controls={on ? panelId : undefined}
+        tabIndex={i === tabbable ? 0 : -1}
+        className={`${styles.tab} ${on ? styles.tabActive : ""}`}
+        onClick={() => onSelect(t.id, false)}
+      >
+        {t.label}
+      </button>
+    );
+  };
+  // Gruppen: je zusammenhängender Lauf gleicher `group`-Werte ein Block mit Überschrift (aria-hidden: die Reiter tragen ihre Namen selbst)
+  const blocks: React.ReactNode[] = [];
+  if (items.some((t) => t.group)) {
+    for (let from = 0; from < items.length; ) {
+      let to = from + 1;
+      while (to < items.length && items[to].group === items[from].group) to += 1;
+      blocks.push(
+        <div key={`${items[from].group ?? ""}-${from}`} className={styles.tabGroup}>
+          {items[from].group ? (
+            <span className={styles.tabGroupLabel} aria-hidden="true">
+              {items[from].group}
+            </span>
+          ) : null}
+          <div className={styles.tabGroupChips}>{items.slice(from, to).map((t, k) => renderTab(t, from + k))}</div>
+        </div>,
+      );
+      from = to;
+    }
+  }
   return (
     <div className={className ?? styles.tabs} style={style} role="tablist" aria-label={label} onKeyDown={onKeyDown}>
-      {items.map((t, i) => {
-        const on = i === activeIdx;
-        return (
-          <button
-            key={t.id}
-            ref={(el) => {
-              refs.current[i] = el;
-            }}
-            id={idBase ? `${idBase}-tab-${t.id}` : undefined}
-            type="button"
-            role="tab"
-            aria-selected={on}
-            aria-controls={on ? panelId : undefined}
-            tabIndex={i === tabbable ? 0 : -1}
-            className={`${styles.tab} ${on ? styles.tabActive : ""}`}
-            onClick={() => onSelect(t.id, false)}
-          >
-            {t.label}
-          </button>
-        );
-      })}
+      {blocks.length ? blocks : items.map(renderTab)}
     </div>
   );
 }
@@ -270,14 +292,31 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
     if (phase === "running" || phase === "countdown") (document.activeElement as HTMLElement | null)?.blur?.();
   }, [phase]);
 
+  const loadingWorld = snap.loadingWorld ?? null;
   const startRun = useCallback(() => {
-    if (!game) return;
+    // Während eine Welt lädt, ist „Los geht’s!“ gesperrt (auch per Enter/Leertaste): kein mehrfaches Starten
+    if (!game || loadingWorld) return;
     if (!profile.name && !profile.seenIntro) {
       setNamePrompt(true);
       return;
     }
     void game.startRun();
-  }, [game, profile.name, profile.seenIntro]);
+  }, [game, loadingWorld, profile.name, profile.seenIntro]);
+
+  /** „Jetzt laufen“ in der leeren Bestenliste: Welt/Modus der angezeigten Liste wählen und starten (Namensfrage wie beim Spielen-Knopf). */
+  const playBoard = useCallback(
+    (key: string) => {
+      if (!game) return;
+      game.unlockAudio();
+      game.audio.sfx("ui-click");
+      if (key.startsWith("world:")) {
+        const id = key.slice("world:".length);
+        if ((WORLD_IDS as readonly string[]).includes(id)) void game.selectWorld(id as WorldId, "world");
+      } else game.setMode(key === "tour" ? "tour" : "daily");
+      startRun();
+    },
+    [game, startRun],
+  );
 
   // Tastatur-Kurzbefehle
   useEffect(() => {
@@ -360,7 +399,10 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
 
   const activeBoard = boardKeyState ?? boardKey(profile.mode, profile.world, dateKey());
 
-  const world = WORLDS[profile.world];
+  // Startseite: Im Tageslauf zählt die Tages-Welt (nicht die zuletzt gewählte), in der Weltreise der Routentext
+  const runWorld = WORLDS[profile.mode === "daily" ? dailyWorld() : profile.world];
+  const runTagline = profile.mode === "tour" ? "Weltreise: alle Welten in einem Lauf." : runWorld.tagline;
+  const runTitle = profile.mode === "tour" ? "Weltreise" : profile.mode === "daily" ? `Tageslauf · ${runWorld.name}` : runWorld.name;
   const character = CHARACTERS[profile.character];
   const bestKey = boardKey(profile.mode, profile.world, dateKey());
   const best = profile.best[bestKey] ?? 0;
@@ -377,15 +419,14 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
   );
   const submitState = useRunSubmission(accessToken, submission);
 
-  const boards = useMemo(() => {
-    const list: Array<{ key: string; label: string }> = [];
-    for (const id of WORLD_IDS) list.push({ key: `world:${id}`, label: WORLDS[id].name });
-    list.push({ key: "tour", label: "Weltreise" });
-    list.push({ key: boardKey("daily", "wien", dateKey()), label: "Tageslauf" });
+  // Bestenlisten-Chips in zwei Gruppen: die acht Welten und die beiden Modi
+  const boardItems = useMemo(() => {
+    const list: Array<{ id: string; label: string; group: string }> = [];
+    for (const id of WORLD_IDS) list.push({ id: `world:${id}`, label: WORLDS[id].name, group: "Welten" });
+    list.push({ id: "tour", label: "Weltreise", group: "Modi" });
+    list.push({ id: boardKey("daily", "wien", dateKey()), label: "Tageslauf", group: "Modi" });
     return list;
   }, []);
-
-  const boardItems = useMemo(() => boards.map((b) => ({ id: b.key, label: b.label })), [boards]);
   const modeItems = useMemo(() => (["world", "tour", "daily"] as RunMode[]).map((m) => ({ id: m, label: MODE_LABEL[m] })), []);
 
   const showMenu = phase === "menu";
@@ -405,6 +446,14 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
       game.audio.music.play(selecting ? "select" : "menu", { crossfadeSec: 0.9 });
     }
   }, [game, phase, tab]);
+
+  // Deckt ein Reiter die Bühne ab (Charaktere, Bestenliste, Einstellungen, Anleitung), darf die Demo dahinter sparen (Hub: setMenuCovered).
+  // Spielen und Welten zeigen die Demo-Welt, sie bleibt voll animiert; außerhalb des Menüs ist nichts verdeckt.
+  const menuCovered = showMenu && (tab === "characters" || tab === "board" || tab === "settings" || tab === "help");
+  useEffect(() => {
+    game?.setMenuCovered(menuCovered); // idempotent: bei jedem Reiterwechsel (tab) erneut gemeldet, nicht nur bei Wertwechsel
+  }, [game, menuCovered, tab]);
+  useEffect(() => () => game?.setMenuCovered(false), [game]);
 
   return (
     <div className={`${styles.root} ${embedded ? styles.embedded : ""}`} data-phase={phase} data-reduced={reduced ? "true" : undefined}>
@@ -443,7 +492,7 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
               />
               <div className={styles.chips}>
                 <span className={styles.chip} title="Münzen">
-                  <i className={styles.coinDot} /> {fmt(profile.coins)}
+                  <i className={styles.coinDot} /> {formatNumber(profile.coins)}
                 </span>
                 <button className={styles.iconBtn} aria-label={profile.settings.muted ? "Ton einschalten" : "Ton ausschalten"} onClick={click(() => game?.setSettings({ muted: !profile.settings.muted }))}>
                   {profile.settings.muted ? "🔇" : "🔊"}
@@ -454,32 +503,39 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
               </div>
             </div>
 
+            {/* Speichern geht nicht (Privatmodus, Speicher voll): auf jedem Reiter sichtbar, damit Käufe und Rekorde nicht still verloren gehen */}
+            <StorageNotice ok={snap.storageOk} className={styles.noticeSlot} />
+
             <div className={styles.body} role="tabpanel" id={panelId} aria-labelledby={`${uid}-tab-${tab}`}>
               {tab === "play" ? (
                 <>
                   <div className={`${styles.hero} ${styles.heroCenter}`}>
                     <LogoImage className={styles.logoHero} />
                     <p className={`${styles.muted} ${styles.heroTagline}`}>
-                      <strong style={{ color: profile.mode === "tour" ? "#ddd6fe" : "#e8edff" }}>
-                        {profile.mode === "tour" ? "Weltreise: alle Welten in einem Lauf." : world.tagline}
-                      </strong>
+                      <strong style={{ color: profile.mode === "tour" ? "#ddd6fe" : "#e8edff" }}>{runTagline}</strong>
                     </p>
-                    <button className={styles.playBtn} onClick={click(startRun)} autoFocus={!tabByKeyboard}>
-                      Los geht’s!
+                    <button
+                      className={styles.playBtn}
+                      onClick={loadingWorld ? undefined : click(startRun)}
+                      aria-disabled={loadingWorld ? true : undefined}
+                      aria-busy={loadingWorld ? true : undefined}
+                      autoFocus={!tabByKeyboard}
+                    >
+                      {loadingWorld ? "Welt wird geladen …" : "Los geht’s!"}
                     </button>
                     <div className={styles.row}>
-                      <button className={styles.summaryCard} onClick={click(() => setTab("characters"))} style={{ flex: 1 }}>
+                      <button className={styles.summaryCard} onClick={click(() => setTab("characters"))} style={{ flex: "1 1 0" }}>
                         <i className={styles.swatch} style={{ background: character.color }} />
-                        <div>
+                        <div className={styles.summaryText}>
                           <strong>{character.name}</strong>
                           <span>{character.abilityName}</span>
                         </div>
                       </button>
-                      <button className={styles.summaryCard} onClick={click(() => setTab("worlds"))} style={{ flex: 1 }}>
-                        <i className={styles.swatch} style={{ background: profile.mode === "tour" ? "#c4b5fd" : world.accent }} />
-                        <div>
-                          <strong>{profile.mode === "tour" ? "Weltreise" : profile.mode === "daily" ? `Tageslauf: ${WORLDS[dailyWorld()].name}` : world.name}</strong>
-                          <span>{`Rekord ${fmt(best)}`}</span>
+                      <button className={styles.summaryCard} onClick={click(() => setTab("worlds"))} style={{ flex: "1.35 1 0" }} title={profile.mode === "daily" ? runTitle : undefined}>
+                        <i className={styles.swatch} style={{ background: profile.mode === "tour" ? "#c4b5fd" : runWorld.accent }} />
+                        <div className={styles.summaryText}>
+                          <strong>{runTitle}</strong>
+                          <span>{loadingWorld ? "wird geladen …" : `Rekord ${formatNumber(best)}`}</span>
                         </div>
                       </button>
                     </div>
@@ -488,43 +544,9 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
                 </>
               ) : null}
 
-              {tab === "worlds" ? (
-                <div className={styles.panel}>
-                  <TabStrip items={modeItems} value={profile.mode} label="Modus" style={{ marginBottom: 8 }} onSelect={(m) => click(() => game?.setMode(m))()} />
-                  <p className={styles.muted} style={{ margin: "0 0 12px" }}>
-                    {MODE_DESC[profile.mode]}
-                  </p>
-                  <div className={styles.grid}>
-                    {WORLD_IDS.map((id) => {
-                      const w = WORLDS[id];
-                      const selected = profile.world === id && profile.mode !== "tour";
-                      const b = profile.best[boardKey("world", id)] ?? 0;
-                      return (
-                        <button
-                          key={id}
-                          className={`${styles.card} ${selected ? styles.cardSelected : ""}`}
-                          style={{ ["--c1" as string]: w.accent, ["--c2" as string]: w.accentDark }}
-                          onClick={click(() => void game?.selectWorld(id, profile.mode === "tour" ? "tour" : profile.mode))}
-                          aria-pressed={selected}
-                        >
-                          <WorldArt id={id} />
-                          <span className={styles.cardTitle} title={w.tagline}>{w.name}</span>
-                          <span className={styles.tagRow}>
-                            {w.mechanics.slice(0, 1).map((m) => (
-                              <span key={m} className={styles.tag}>
-                                {m}
-                              </span>
-                            ))}
-                          </span>
-                          <span className={styles.badge}>{b > 0 ? `Rekord ${fmt(b)}` : "Neu"}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
+              {tab === "worlds" ? <WorldsPanel profile={profile} game={game} modeItems={modeItems} click={click} loadingWorld={loadingWorld} /> : null}
 
-              {tab === "characters" ? <CharacterSelect profile={profile} game={game} reducedMotion={reduced} /> : null}
+              {tab === "characters" ? <CharacterSelect profile={profile} game={game} reducedMotion={reduced} active={showMenu && tab === "characters"} /> : null}
 
               {tab === "board" ? (
                 <div className={styles.panel}>
@@ -534,24 +556,17 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
                   </p>
                   <TabStrip className={styles.boardTabs} items={boardItems} value={activeBoard} label="Bestenliste wählen" onSelect={(key) => click(() => setBoardKeyState(key))()} />
                   {accessToken ? (
-                    <GlobalBoard state={board.state} onRetry={board.retry} />
+                    <GlobalBoard state={board.state} onRetry={board.retry} onPlay={() => playBoard(activeBoard)} />
                   ) : (
-                    <BoardTable
-                      rows={(profile.top[activeBoard] ?? []).map((e, i) => ({ rank: i + 1, name: e.name, character: e.character, meters: e.meters, score: e.score, me: false }))}
-                    />
+                    <BoardTable rows={localRows(profile.top[activeBoard] ?? [], profile.best[activeBoard] ?? 0)} onPlay={() => playBoard(activeBoard)} />
                   )}
                   <p className={styles.muted} style={{ marginTop: 12 }}>
-                    Lebenslang: {fmt(profile.lifetime.runs)} Läufe · {fmt(profile.lifetime.meters)} m · {fmt(profile.lifetime.coins)} Münzen · {fmt(profile.lifetime.stomps)} Stampfer · {fmt(profile.lifetime.nearMisses)} knappe Rettungen
+                    Lebenslang: {formatNumber(profile.lifetime.runs)} Läufe · {formatNumber(profile.lifetime.meters)} m · {formatNumber(profile.lifetime.coins)} Münzen · {formatNumber(profile.lifetime.stomps)} Stampfer · {formatNumber(profile.lifetime.nearMisses)} knappe Rettungen
                   </p>
                 </div>
               ) : null}
 
-              {tab === "settings" ? (
-                <div className={styles.panel}>
-                  <h2 className={styles.panelTitle}>Einstellungen</h2>
-                  <SettingsForm game={game} snap={snap} />
-                </div>
-              ) : null}
+              {tab === "settings" ? <SettingsForm game={game} snap={snap} systemReduced={systemReduced} /> : null}
 
               {tab === "help" ? (
                 <div className={styles.panel}>
@@ -645,7 +660,7 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
             <div className={styles.modalCard} role="dialog" aria-label="Ergebnis">
               <h2 className={styles.modalTitle}>{snap.result.isNewBest ? "Neuer Rekord!" : "Geschafft!"}</h2>
               {snap.result.isNewBest ? <div className={styles.newBest}>Persönliche Bestleistung</div> : null}
-              <div className={styles.bigScore}>{fmt(snap.result.score)}</div>
+              <div className={styles.bigScore}>{formatNumber(snap.result.score)}</div>
               <div className={styles.muted} style={{ textAlign: "center", marginTop: -8 }}>
                 {snap.result.mode === "tour" ? "Weltreise" : snap.result.mode === "daily" ? "Tageslauf" : WORLDS[snap.result.world].name}
                 {deathLabel(snap.result.deathCause) ? ` · gestoppt von: ${deathLabel(snap.result.deathCause)}` : ""}
@@ -653,7 +668,7 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
               {accessToken && snap.result.score > 0 ? (
                 <div className={styles.muted} style={{ textAlign: "center", marginTop: 4 }} aria-live="polite">
                   {submitState?.status === "done" && submitState.rank
-                    ? `Weltweit Platz ${submitState.rank}${submitState.score !== null ? ` · dein Bestwert ${fmt(submitState.score)}` : ""}`
+                    ? `Weltweit Platz ${submitState.rank}${submitState.score !== null ? ` · dein Bestwert ${formatNumber(submitState.score)}` : ""}`
                     : submitState?.status === "failed"
                       ? "Weltweite Bestenliste gerade nicht erreichbar."
                       : "Weltweite Bestenliste wird aktualisiert …"}
@@ -661,11 +676,11 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
               ) : null}
               <div className={styles.stats}>
                 <div className={styles.stat}>
-                  <b>{fmt(snap.result.meters)} m</b>
+                  <b>{formatNumber(snap.result.meters)} m</b>
                   <span>Strecke</span>
                 </div>
                 <div className={styles.stat}>
-                  <b>+{fmt(snap.result.coins)}</b>
+                  <b>+{formatNumber(snap.result.coins)}</b>
                   <span>Münzen</span>
                 </div>
                 <div className={styles.stat}>
@@ -673,11 +688,11 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
                   <span>Kombo</span>
                 </div>
                 <div className={styles.stat}>
-                  <b>{fmt(snap.result.stomps)}</b>
+                  <b>{formatNumber(snap.result.stomps)}</b>
                   <span>Stampfer</span>
                 </div>
                 <div className={styles.stat}>
-                  <b>{fmt(snap.result.nearMisses)}</b>
+                  <b>{formatNumber(snap.result.nearMisses)}</b>
                   <span>Knapp</span>
                 </div>
                 <div className={styles.stat}>
@@ -754,17 +769,129 @@ export default function FredRun2({ embedded = false, accessToken: accessTokenPro
   );
 }
 
+interface WorldsPanelProps {
+  profile: Profile;
+  game: FredRunGame | null;
+  modeItems: ReadonlyArray<{ id: RunMode; label: string }>;
+  /** Handler mit Klickton und Audio-Entsperrung (aus der Hauptkomponente) */
+  click: (fn: () => void) => () => void;
+  /** Welt, die gerade lädt (Hub); null = keine */
+  loadingWorld: WorldId | null;
+}
+
+/**
+ * Welten-Reiter, je Modus mit passenden Daten: Welt-Lauf wählt die Welt (je Welt eigener Rekord), Weltreise zeigt die Route
+ * (Karten in TOUR_ORDER mit Nummern, Weltreise-Rekord, keine Auswahl), Tageslauf hebt nur die Tages-Welt hervor (übrige gedimmt, Tagesrekord).
+ */
+function WorldsPanel({ profile, game, modeItems, click, loadingWorld }: WorldsPanelProps): React.ReactElement {
+  const mode = profile.mode;
+  const todayWorld = dailyWorld();
+  const order = mode === "tour" ? TOUR_ORDER : WORLD_IDS;
+  const modeBest = profile.best[boardKey(mode, profile.world, dateKey())] ?? 0;
+  return (
+    <div className={styles.panel}>
+      <TabStrip items={modeItems} value={mode} label="Modus" style={{ marginBottom: 8 }} onSelect={(m) => click(() => game?.setMode(m))()} />
+      <div className={styles.modeLine}>
+        <p className={styles.muted}>{MODE_DESC[mode]}</p>
+        {mode !== "world" ? (
+          <span className={styles.recordPill}>
+            {mode === "tour" ? "Weltreise-Rekord" : "Tagesrekord"} {modeBest > 0 ? formatNumber(modeBest) : "–"}
+          </span>
+        ) : null}
+      </div>
+      <div className={styles.grid} role={mode === "tour" ? "list" : undefined} aria-label={mode === "tour" ? "Route der Weltreise" : undefined}>
+        {order.map((id, i) => {
+          const w = WORLDS[id];
+          const vars = { ["--c1" as string]: w.accent, ["--c2" as string]: w.accentDark };
+          const art = <WorldArt id={id} />;
+          const title = (
+            <span className={styles.cardTitle} title={w.tagline}>
+              {w.name}
+            </span>
+          );
+          const tags = (
+            <span className={styles.tagRow}>
+              {w.mechanics.slice(0, 1).map((m) => (
+                <span key={m} className={styles.tag}>
+                  {m}
+                </span>
+              ))}
+            </span>
+          );
+          if (mode === "tour") {
+            // Route: keine Auswahl, nur Reihenfolge – deshalb kein Knopf
+            return (
+              <div key={id} role="listitem" className={`${styles.card} ${styles.cardStatic}`} style={vars}>
+                {art}
+                <span className={styles.cardNum} role="img" aria-label={`Station ${i + 1}`}>
+                  {i + 1}
+                </span>
+                {title}
+                {tags}
+              </div>
+            );
+          }
+          const today = mode === "daily" && id === todayWorld;
+          const selected = mode === "world" ? profile.world === id : today;
+          const best = profile.best[boardKey("world", id)] ?? 0;
+          const badge = loadingWorld === id ? "Lädt …" : today ? "Heute" : best > 0 ? `Rekord ${formatNumber(best)}` : "Neu";
+          const dimmed = mode === "daily" && !today;
+          return (
+            <button
+              key={id}
+              className={`${styles.card} ${selected ? styles.cardSelected : ""} ${dimmed ? styles.cardDim : ""}`}
+              style={vars}
+              onClick={dimmed ? undefined : click(() => void game?.selectWorld(id, mode))}
+              aria-pressed={dimmed ? undefined : selected}
+              disabled={dimmed}
+              title={dimmed ? "Heute läuft nur der Tageslauf-Kurs" : undefined}
+            >
+              {art}
+              {title}
+              {tags}
+              {dimmed ? null : <span className={`${styles.badge} ${today ? styles.badgeToday : ""}`}>{badge}</span>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 interface BoardRow {
   rank: number;
   name: string;
   character: string;
   meters: number;
   score: number;
+  /** eigener Eintrag (weltweit: vom Server markiert; lokal: der Bestwert dieser Liste) */
   me: boolean;
+  /** Zusatz hinter dem Namen: weltweit „(du)“, lokal „Rekord“ */
+  tag?: string;
 }
 
-function BoardTable({ rows }: { rows: BoardRow[] }): React.ReactElement {
-  if (!rows.length) return <p className={styles.muted}>Noch keine Einträge – lauf los!</p>;
+/** Zeilen der lokalen Liste (alles eigene Läufe): der Bestwert der Liste ist hervorgehoben. */
+function localRows(entries: ReadonlyArray<{ name: string; character: string; meters: number; score: number }>, best: number): BoardRow[] {
+  let marked = false;
+  return entries.map((e, i) => {
+    const me = !marked && best > 0 && e.score === best;
+    if (me) marked = true;
+    return { rank: i + 1, name: e.name, character: e.character, meters: e.meters, score: e.score, me, tag: me ? "Rekord" : undefined };
+  });
+}
+
+/** Leere Liste: statt nur eines Satzes ein Knopf, der einen Lauf in der Welt bzw. dem Modus der angezeigten Bestenliste startet. */
+function BoardTable({ rows, onPlay }: { rows: BoardRow[]; onPlay: () => void }): React.ReactElement {
+  if (!rows.length) {
+    return (
+      <div className={styles.emptyState}>
+        <p className={styles.muted}>Noch keine Einträge – lauf los!</p>
+        <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} onClick={onPlay}>
+          Jetzt laufen
+        </button>
+      </div>
+    );
+  }
   return (
     <table className={styles.table}>
       <thead>
@@ -782,11 +909,11 @@ function BoardTable({ rows }: { rows: BoardRow[] }): React.ReactElement {
             <td className={e.rank === 1 ? styles.rankGold : e.rank === 2 ? styles.rankSilver : e.rank === 3 ? styles.rankBronze : undefined}>{e.rank}</td>
             <td>
               {e.name}
-              {e.me ? " (du)" : ""}
+              {e.me && e.tag ? <span className={styles.meTag}>{e.tag}</span> : null}
             </td>
             <td>{CHARACTERS[e.character as keyof typeof CHARACTERS]?.name ?? e.character}</td>
-            <td style={{ textAlign: "right" }}>{fmt(e.meters)}</td>
-            <td style={{ textAlign: "right" }}>{fmt(e.score)}</td>
+            <td style={{ textAlign: "right" }}>{formatNumber(e.meters)}</td>
+            <td style={{ textAlign: "right" }}>{formatNumber(e.score)}</td>
           </tr>
         ))}
       </tbody>
@@ -794,7 +921,7 @@ function BoardTable({ rows }: { rows: BoardRow[] }): React.ReactElement {
   );
 }
 
-function GlobalBoard({ state, onRetry }: { state: ReturnType<typeof useGlobalBoard>["state"]; onRetry: () => void }): React.ReactElement {
+function GlobalBoard({ state, onRetry, onPlay }: { state: ReturnType<typeof useGlobalBoard>["state"]; onRetry: () => void; onPlay: () => void }): React.ReactElement {
   if (state.status === "error") {
     return (
       <div>
@@ -810,66 +937,12 @@ function GlobalBoard({ state, onRetry }: { state: ReturnType<typeof useGlobalBoa
   const inTop = entries.some((e) => e.me);
   return (
     <div>
-      <BoardTable rows={entries} />
+      <BoardTable rows={entries.map((e) => ({ ...e, tag: "(du)" }))} onPlay={onPlay} />
       {me && !inTop ? (
         <p className={styles.muted} style={{ marginTop: 10 }}>
-          Dein Platz: <b>{fmt(me.rank)}</b> · {fmt(me.score)} Punkte
+          Dein Platz: <b>{formatNumber(me.rank)}</b> · {formatNumber(me.score)} Punkte
         </p>
       ) : null}
-    </div>
-  );
-}
-
-function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }): React.ReactElement {
-  return <button className={`${styles.toggle} ${on ? styles.toggleOn : ""}`} role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)} />;
-}
-
-function SettingsForm({ game, snap }: { game: FredRunGame | null; snap: GameSnapshot }): React.ReactElement {
-  const s = snap.profile.settings;
-  const [name, setName] = useState(snap.profile.name);
-  return (
-    <div>
-      <div className={styles.field}>
-        <label htmlFor="fr2-name">Name (Bestenliste)</label>
-        <input id="fr2-name" type="text" value={name} maxLength={16} placeholder="Fred" onChange={(e) => setName(e.target.value)} onBlur={() => game?.setName(name.trim().slice(0, 16))} />
-      </div>
-      <div className={styles.field}>
-        <label htmlFor="fr2-master">Gesamtlautstärke</label>
-        <input id="fr2-master" type="range" min={0} max={1} step={0.05} value={s.master} onChange={(e) => game?.setSettings({ master: Number(e.target.value) })} />
-      </div>
-      <div className={styles.field}>
-        <label htmlFor="fr2-music">Musik</label>
-        <input id="fr2-music" type="range" min={0} max={1} step={0.05} value={s.music} onChange={(e) => game?.setSettings({ music: Number(e.target.value) })} />
-      </div>
-      <div className={styles.field}>
-        <label htmlFor="fr2-sfx">Effekte</label>
-        <input id="fr2-sfx" type="range" min={0} max={1} step={0.05} value={s.sfx} onChange={(e) => game?.setSettings({ sfx: Number(e.target.value) })} />
-      </div>
-      <label className={styles.field}>
-        <span>Ton aus</span>
-        <Toggle on={s.muted} onChange={(v) => game?.setSettings({ muted: v })} label="Ton aus" />
-      </label>
-      <div className={styles.field}>
-        <label htmlFor="fr2-quality">Grafikqualität</label>
-        <select id="fr2-quality" value={s.quality} onChange={(e) => game?.setSettings({ quality: e.target.value as typeof s.quality })}>
-          <option value="auto">Automatisch</option>
-          <option value="high">Hoch</option>
-          <option value="medium">Mittel</option>
-          <option value="low">Niedrig (Akku schonen)</option>
-        </select>
-      </div>
-      <label className={styles.field}>
-        <span>Weniger Bewegung (kein Wackeln/Blitzen)</span>
-        <Toggle on={s.reducedMotion} onChange={(v) => game?.setSettings({ reducedMotion: v })} label="Weniger Bewegung" />
-      </label>
-      <label className={styles.field}>
-        <span>Einsteiger-Hinweise im Spiel</span>
-        <Toggle on={s.hints} onChange={(v) => game?.setSettings({ hints: v })} label="Hinweise" />
-      </label>
-      <label className={styles.field}>
-        <span>FPS-Anzeige</span>
-        <Toggle on={s.showFps} onChange={(v) => game?.setSettings({ showFps: v })} label="FPS-Anzeige" />
-      </label>
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { MAGNET_RADIUS } from "@/game/fredrun2/constants";
 import type { FredRunGame } from "@/game/fredrun2/game";
 import type { Profile } from "@/game/fredrun2/profile";
 import { CHARACTER_IDS, type CharacterId } from "@/game/fredrun2/types";
+import { formatNumber } from "@/game/fredrun2/ui-logic";
 
 import { ACTION_LABEL, ACTION_ORDER, CharacterStage, drawPortrait, type ActionId } from "./characterStage";
 import styles from "./characterselect.module.css";
@@ -17,12 +18,14 @@ export interface CharacterSelectProps {
   game: FredRunGame | null;
   /** Einstellung „Weniger Bewegung“ aus dem Profil (die System-Einstellung wird zusätzlich beachtet). */
   reducedMotion?: boolean;
+  /** Reiter ist sichtbar: nur dann läuft die Bühnen-Schleife (sonst steht sie, ohne Hauptthread-Last). Standard: ja. */
+  active?: boolean;
 }
 
 // --- Werte ------------------------------------------------------------------------------------------
 
+/** Dezimalwerte (×1,5 · 2,5 s): nie über 999, daher ohne Tausendertrenner; ganze Zahlen laufen über formatNumber (wie das HUD). */
 const nf = new Intl.NumberFormat("de-AT", { maximumFractionDigits: 1 });
-const fmt = (n: number): string => Math.floor(n).toLocaleString("de-AT");
 
 function modeOf(values: number[]): number {
   const counts = new Map<number, number>();
@@ -100,7 +103,7 @@ function statsOf(p: CharacterPerks): StatRow[] {
       key: "magnet",
       label: "Münz-Sog",
       fill: Math.min(1, p.passiveMagnet / MAGNET_RADIUS),
-      value: p.passiveMagnet > 0 ? `${fmt(p.passiveMagnet)} px` : "–",
+      value: p.passiveMagnet > 0 ? `${formatNumber(p.passiveMagnet)} px` : "–",
       boosted: p.passiveMagnet > 0,
       tick: false,
     },
@@ -218,7 +221,7 @@ interface TileProps {
 
 function RosterTile({ id, viewed, current, owned, radioRef, onView, onPrimary }: TileProps): React.ReactElement {
   const c = CHARACTERS[id];
-  const status = current ? "aktueller Held" : owned ? "freigeschaltet" : `gesperrt, ${fmt(c.price)} Münzen`;
+  const status = current ? "aktueller Held" : owned ? "freigeschaltet" : `gesperrt, ${formatNumber(c.price)} Münzen`;
   return (
     <button
       ref={radioRef}
@@ -256,7 +259,7 @@ function RosterTile({ id, viewed, current, owned, radioRef, onView, onPrimary }:
           ) : (
             <>
               <i className={styles.coin} aria-hidden="true" />
-              {fmt(c.price)}
+              {formatNumber(c.price)}
             </>
           )}
         </span>
@@ -276,7 +279,7 @@ function RosterTile({ id, viewed, current, owned, radioRef, onView, onPrimary }:
 
 // --- Hauptkomponente --------------------------------------------------------------------------------
 
-export default function CharacterSelect({ profile, game, reducedMotion = false }: CharacterSelectProps): React.ReactElement {
+export default function CharacterSelect({ profile, game, reducedMotion = false, active = true }: CharacterSelectProps): React.ReactElement {
   const [view, setView] = useState<CharacterId>(profile.character);
   const [avail, setAvail] = useState<Partial<Record<CharacterId, ActionId[]>>>({});
   const [playing, setPlaying] = useState<ActionId | null>(null);
@@ -324,6 +327,11 @@ export default function CharacterSelect({ profile, game, reducedMotion = false }
   useEffect(() => {
     stageRef.current?.setReducedMotion(reducedMotion);
   }, [reducedMotion]);
+
+  // Reiter nicht aktiv: Schleife der Bühne anhalten, beim Zurückkehren sofort wieder starten
+  useEffect(() => {
+    stageRef.current?.setActive(active);
+  }, [active]);
 
   // Bühne mit der angezeigten Figur abgleichen
   useEffect(() => {
@@ -549,15 +557,15 @@ export default function CharacterSelect({ profile, game, reducedMotion = false }
               aria-describedby={subId}
               onClick={() => primary(view)}
             >
-              Kaufen – {fmt(def.price)} <i className={styles.coin} aria-hidden="true" />
+              Kaufen – {formatNumber(def.price)} <i className={styles.coin} aria-hidden="true" />
               <span className={styles.srOnly}>Münzen</span>
             </button>
           )}
           <p id={subId} className={`${styles.ctaSub} ${!owned && !canAfford ? styles.ctaSubPoor : ""} ${shaking ? styles.shake : ""}`}>
             {!owned
               ? canAfford
-                ? `Du hast ${fmt(profile.coins)} Münzen.`
-                : `Dir fehl${missing === 1 ? "t" : "en"} noch ${fmt(missing)} ${missing === 1 ? "Münze" : "Münzen"}.`
+                ? `Du hast ${formatNumber(profile.coins)} Münzen.`
+                : `Dir fehl${missing === 1 ? "t" : "en"} noch ${formatNumber(missing)} ${missing === 1 ? "Münze" : "Münzen"}.`
               : current
                 ? "Dein Held im nächsten Lauf."
                 : "Wechselt deinen Helden."}

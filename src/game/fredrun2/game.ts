@@ -6,7 +6,10 @@
 import { createAssetLoader, loadCharacter, type GameAssets } from "./assets";
 import { Bot } from "./bot";
 import { CHARACTERS } from "./characters";
-import { FIXED_DT, MAGNET_TIME, PLAYER_SX, SHIELD_TIME, SLOWMO_TIME, TURBO_TIME, VIEW_H, VIEW_W } from "./constants";
+import { FIXED_DT, MAGNET_TIME, PLAYER_SX, SHIELD_TIME, SLOWMO_FACTOR, SLOWMO_TIME, TURBO_TIME, VIEW_H, VIEW_W } from "./constants";
+import { createGameAudio, type GameAudio } from "./game-audio";
+import { haptic, type HapticOpts } from "./haptics";
+import { HINT_MAX_RUNS, HintScheduler, type HintContext } from "./hints";
 import { InputManager } from "./input";
 import { boardKey, defaultProfile, loadProfile, purchaseCharacter, saveProfile, type Profile, type PurchaseStatus, type RecordResult, type Settings } from "./profile";
 import { Renderer, type FrameData } from "./render";
@@ -15,18 +18,27 @@ import { bankRun, countdownDisplay, isBankable, newRunId, QUICK_COUNTDOWN_S, sum
 import { NO_INPUT, Sim, TOUR_METERS, TOUR_ORDER, dailyWorld, type SimInput } from "./sim";
 import type { HudState, HudToast } from "./hud";
 import type { CharacterId, Ent, RunConfig, RunMode, SimEvent, ViewState, WorldDef, WorldId, WorldRenderer } from "./types";
+import { formatNumber } from "./ui-logic";
 import { WORLDS } from "./worlds";
 import { BasicRenderer } from "./worlds/basic";
 
 /** Strukturelle Schnittstelle des Audio-Moduls (siehe ./audio). */
 export interface AudioLike {
   unlock(): Promise<void>;
+  /** Kontext lief einmal (FredAudio); fehlt bei Attrappen: dann gilt der erste unlock() als erledigt */
+  readonly unlocked?: boolean;
   sfx(name: string, opts?: { pitch?: number; volume?: number; pan?: number }): void;
+  /** Blendet laufende Jingles (Game Over, Highscore, Weltwechsel) aus und hebt die Musik-Absenkung auf; optional wie die übrigen Neuerungen */
+  stopStingers?(fadeSec?: number): void;
+  /** Lädt Audiodateien vor (HTTP-Cache), ohne zu dekodieren */
+  prefetch?(opts: { music?: string[] }): void;
   loop(name: string, on: boolean, level?: number): void;
   music: {
     play(id: string, opts?: { crossfadeSec?: number; intensity?: number }): void;
     setIntensity(v: number, rampSec?: number): void;
     stop(fadeSec?: number): void;
+    /** Dämpft die Musik (Pause, Zeitlupe): 0..1 */
+    setMuffle?(amount: number, rampSec?: number): void;
   };
   setMasterVolume(v: number): void;
   setMusicVolume(v: number): void;
@@ -69,23 +81,33 @@ export interface GameSnapshot {
   loadingWorld?: WorldId | null;
 }
 
-const HINTS: Array<{ at: number; text: string }> = [
-  { at: 0.2, text: "Springen: Leertaste / Tippen · halten = höher · nochmal = Doppelsprung" },
-  { at: 6.5, text: "Rutschen: ↓ / nach unten wischen · in der Luft: Stampfen" },
-  { at: 13, text: "Dash: Shift / ⚡-Taste – unverwundbar, wenn der Energiering voll genug ist" },
-];
-
-const ZONE_SFX: Array<[RegExp, { warn?: string; active?: string }]> = [
-  [/bolt|lightning|blitz/, { warn: "lightning-warn", active: "thunder" }],
-  [/stamp|stempel/, { warn: "paper-flutter", active: "stamp-thud" }],
-  [/laser|beam/, { warn: "laser-zap", active: "laser-zap" }],
-  [/rock|stein/, { warn: "rockfall", active: "rockfall" }],
-];
+/** Zeitlupen-Rampe der visuellen Zeit (Welt, Partikel, Geister, Lauf-Phase): Sekunden von 1 bis SLOWMO_FACTOR und zurück */
+const SLOW_RAMP_S = 0.2;
+const SLOW_RAMP_RATE = (1 - SLOWMO_FACTOR) / SLOW_RAMP_S;
+/** Musikdämpfung: Pause/Wiederaufnahme 1, Zeitlupe 0,6 (siehe syncMuffle) */
+const MUFFLE_PAUSE = 1;
+const MUFFLE_SLOW = 0.6;
+/** Entsperr-Versuche (unlockAudio) frühestens in diesem Abstand */
+const UNLOCK_RETRY_MS = 300;
+/** Ein abgelehnter Dash meldet dem Ton höchstens in diesem Abstand (die Sim sendet ohnehin höchstens alle 0,4 s) */
+const DASH_DENIED_GAP_S = 0.3;
+/** Blitz-Stärke des Grubensturzes (vor dem Regler "Blitze") und des Rekord-Moments */
+const PIT_FLASH = 0.35;
+const RECORD_FLASH = 0.25;
+const RECORD_COLOR = "#ffd23f";
+/** Controller-Rumble (stark 0..1, ms) bei Treffer und Tod */
+const RUMBLE_HURT: readonly [number, number] = [0.6, 150];
+const RUMBLE_DEATH: readonly [number, number] = [1, 320];
 
 const TITLE_CASE: Record<WorldId, string> = { wien: "Wien", alpen: "Alpen", finanzamt: "Finanzamt", prater: "Prater", wachau: "Wachau", cyber: "Cyber-Wien", winter: "Christkindlmarkt", oper: "Opernball" };
 
 /** Wie ein Lauf endet, den der Spieler abbricht (siehe quitRun) */
 export type QuitMode = "result" | "menu" | "restart";
+
+/** Regler-Wert auf 0..1 begrenzen (fehlender oder kaputter Wert = 1, also die bisherige Wirkung) */
+function unit(v: number): number {
+  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1;
+}
 
 /** Schlüssel „Welt/Modus/Held“ eines Laufs: gleicher Schlüssel = Wiederholung */
 function runKey(cfg: Pick<RunConfig, "mode" | "world" | "character">): string {
@@ -120,18 +142,39 @@ export class FredRunGame {
   private raf = 0;
   private last = 0;
   private acc = 0;
+  /** Logik-Uhr (läuft immer; pruneAt u. Ä.) */
   private time = 0;
-  private prev = { dist: 0, hgt: 0 };
+  /** Visuelle Uhr: steht in Pause und Wiederaufnahme-Countdown (Figur, Münzen, Herzschlag frieren mit der Welt ein); Menü, Start-Countdown und Demo laufen weiter */
+  private visTime = 0;
+  /** Zeitlupen-Faktor der visuellen Zeit (1 normal, SLOWMO_FACTOR in der Zeitlupe, weiche Rampe); nie 0 */
+  private slowK = 1;
+  /** Zustand vor dem letzten Sim-Schritt für die Interpolation (wird in capturePrev überschrieben, kein Objekt je Schritt) */
+  private readonly prev: { dist: number; hgt: number; gravDir: 1 | -1 } = { dist: 0, hgt: 0, gravDir: 1 };
   private hitstop = 0;
   private shake = 0;
   private shakeSeed = 0;
   private flashV = 0;
   private flashColor = "#ffffff";
   private toast: { title: string; sub?: string; color: string; t: number; dur: number } | null = null;
-  private hintIdx = 0;
-  private hintT = 0;
-  private hintShow = 0;
+  private readonly hints = new HintScheduler();
+  /** wiederverwendeter Kontext für den Hinweis-Planer (kein Objekt je Frame) */
+  private readonly hintCtx: HintContext = { time: 0, touch: false, runs: 0, hintsEnabled: true, overheadDist: null, pitDist: null, stompDist: null, energyReady: false };
   private hintText: string | null = null;
+  /** Echte Läufe zeigen Einsteiger-Hinweise; Debug-Läufe (debugRun) nur auf Wunsch, sonst läge die Pille in jedem QA-Bild frischer Profile */
+  private hintsAllowed = true;
+  /** Rekord in diesem Lauf schon überholt (Toast/Ton/Blitz einmal je Lauf) */
+  private recordPassed = false;
+  /** Bestenlisten-Schlüssel des laufenden Laufs (einmal je Lauf gebildet, nicht je Frame) */
+  private runBoardKey = "";
+  /** visTime des letzten abgelehnten Dashs (HUD-Wackeln/Rückmeldung) und des letzten dafür gespielten Tons */
+  private dashDeniedAt = Number.NEGATIVE_INFINITY;
+  private dashDeniedSfxAt = Number.NEGATIVE_INFINITY;
+  private readonly gameAudio: GameAudio;
+  private readonly hapOpts: HapticOpts = { enabled: true, demo: false };
+  /** zuletzt an die Musik gesendete Dämpfung (-1 = unbekannt, erzwingt das nächste Senden) und Zeitlupen-Dämpfung aktiv */
+  private muffleSent = 0;
+  private slowMuffle = false;
+  private lastUnlockTry = Number.NEGATIVE_INFINITY;
   private fps = 60;
   private fpsAcc = 0;
   private fpsN = 0;
@@ -184,6 +227,7 @@ export class FredRunGame {
     this.container = opts.container;
     this.audio = opts.audio;
     this.onChange = opts.onChange;
+    this.gameAudio = createGameAudio(opts.audio, { cuesEnabled: () => this.profile.settings.cues });
   }
 
   // ------------------------------------------------------------------------------------------
@@ -210,7 +254,12 @@ export class FredRunGame {
       this.input.attach(this.container.parentElement ?? this.container);
       this.input.listener = {
         onPause: () => this.togglePause(),
-        onMute: () => this.setSettings({ muted: !this.profile.settings.muted }),
+        onMute: () => {
+          const muted = !this.profile.settings.muted;
+          this.setSettings({ muted });
+          // Im Lauf gibt es sonst keine Rückmeldung (die Menü-Oberfläche zeigt den Schalter selbst)
+          if (this.phase === "running" && !this.demo) this.showToast(muted ? "Ton aus" : "Ton an", undefined, "#b8c1ff");
+        },
         onAnyInput: () => {
           this.unlockAudio();
           // Eingabe im Spiel beweist, dass das Fenster aktiv ist: heilt ein verpasstes focus-Ereignis (sonst bliebe der Countdown stehen)
@@ -235,6 +284,7 @@ export class FredRunGame {
       this.startDemo();
       this.phase = "menu";
       this.setProgress(1);
+      this.prefetchAudio(["menu", WORLDS[this.profile.world].music], true);
     } catch (err) {
       this.error = err instanceof Error ? err.message : String(err);
       this.phase = "menu";
@@ -346,19 +396,62 @@ export class FredRunGame {
   // ------------------------------------------------------------------------------------------
   // Öffentliche Steuerung
 
+  /**
+   * Entsperrt den Ton (aus einer Nutzergeste). Der erste Versuch gilt fürs UI als erledigt; meldet die Engine danach weiter
+   * `unlocked === false` (Kontext lief nicht an, z. B. iOS verlangt eine weitere Geste), versucht es jede Geste erneut, höchstens alle 300 ms.
+   */
   unlockAudio(): void {
-    if (this.audioUnlocked) return;
+    const a = this.audio;
+    if (this.audioUnlocked && a.unlocked !== false) return;
+    const now = performance.now();
+    if (now - this.lastUnlockTry < UNLOCK_RETRY_MS) return;
+    this.lastUnlockTry = now;
+    const first = !this.audioUnlocked;
     this.audioUnlocked = true;
-    void this.audio
+    void a
       .unlock()
       .then(() => {
         this.applySettings();
-        if (this.phase === "menu") this.audio.music.play("menu", { crossfadeSec: 0.5 });
+        // Menümusik nur beim ersten Mal anfordern: die Engine startet wartende Musik selbst, sobald der Kontext läuft
+        if (first && this.phase === "menu") a.music.play("menu", { crossfadeSec: 0.5 });
         this.emitChange();
       })
       .catch(() => {
-        this.audioUnlocked = false;
+        if (first) this.audioUnlocked = false;
       });
+  }
+
+  /** Lädt Musik vorab in den HTTP-Cache (Engine ohne prefetch: nichts); `idle` wartet auf Leerlauf, damit es das Laden nicht stört. */
+  private prefetchAudio(music: string[], idle = false): void {
+    const run = (): void => {
+      if (this.destroyed) return;
+      try {
+        this.audio.prefetch?.({ music });
+      } catch {
+        /* Vorladen ist nur ein Hinweis an den Browser */
+      }
+    };
+    if (!idle || typeof window === "undefined") run();
+    else if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(run, { timeout: 4000 });
+    else window.setTimeout(run, 1500);
+  }
+
+  /**
+   * Musik-Dämpfung nach Lage: Pause und Wiederaufnahme-Countdown voll, Zeitlupe leicht, sonst 0. Sendet nur bei Änderung;
+   * `muffleSent = -1` erzwingt das Senden (play()/stop() setzen die Dämpfung in der Engine selbst auf 0 zurück).
+   */
+  private syncMuffle(rampSec: number): void {
+    const want = this.phase === "paused" || this.resumeCountdown > 0 ? MUFFLE_PAUSE : this.slowMuffle ? MUFFLE_SLOW : 0;
+    if (want === this.muffleSent) return;
+    this.muffleSent = want;
+    this.audio.music.setMuffle?.(want, rampSec);
+  }
+
+  /** Lauf-/Menüwechsel: Dämpfung und Zeitlupen-Zustand zurücksetzen und die Aufhebung immer senden */
+  private releaseMuffle(): void {
+    this.slowMuffle = false;
+    this.muffleSent = -1;
+    this.syncMuffle(0.3);
   }
 
   getSnapshot(): GameSnapshot {
@@ -508,6 +601,7 @@ export class FredRunGame {
 
   async selectWorld(id: WorldId, mode: RunMode = this.profile.mode): Promise<void> {
     this.commitProfile({ ...this.profile, world: id, mode });
+    this.prefetchAudio([WORLDS[id].music]);
     await this.ensureWorld(id);
     if (this.phase === "menu") this.pruneWorlds([id]);
     if (this.phase === "menu") {
@@ -546,7 +640,7 @@ export class FredRunGame {
     const sprites = await loadCharacter(cfg.character);
     this.renderer?.setCharacter(sprites);
     this.sim = new Sim(cfg, WORLDS);
-    this.prev = { dist: this.sim.dist, hgt: 0 };
+    this.capturePrev(this.sim);
     this.bot = null;
     this.demo = false;
     this.result = null;
@@ -560,10 +654,8 @@ export class FredRunGame {
     this.shake = 0;
     this.flashV = 0;
     this.renderer?.particles.clear();
-    this.hintIdx = 0;
-    this.hintT = 0;
-    this.hintText = null;
-    this.hintShow = 0;
+    this.resetRunFeedback(cfg, dailyKey);
+    this.hintsAllowed = true;
     this.toast = null;
     this.stageToastShown = false;
     // Kurzer Countdown: eine Sekunde, ein Zähl-Ton („1“) und „Los“; der Schwarz-Blitz ist nur halb so lang
@@ -575,8 +667,30 @@ export class FredRunGame {
     this.shownCount = this.countdownShown();
     this.input.enabled = true;
     this.input.releaseAll();
+    // Ein noch laufender Game-Over-/Highscore-Jingle darf nicht in den neuen Lauf hineinklingen (und die Musik nicht geduckt bleiben)
+    this.audio.stopStingers?.(0.3);
     this.audio.music.play(WORLDS[TOUR_ORDER.includes(this.sim.world.id) ? this.sim.world.id : world].music, { crossfadeSec: 0.6, intensity: 0.15 });
+    this.releaseMuffle();
     this.emitChange();
+  }
+
+  /** Zustand der Rückmeldungen eines neuen Laufs: Hinweise, Rekordjagd, Zeitlupe, Dash-Rückmeldung */
+  private resetRunFeedback(cfg: RunConfig, dailyKey: string): void {
+    this.hints.reset();
+    this.hintText = null;
+    this.recordPassed = false;
+    this.runBoardKey = boardKey(cfg.mode, cfg.world, dailyKey);
+    this.slowK = 1;
+    this.dashDeniedAt = Number.NEGATIVE_INFINITY;
+    this.dashDeniedSfxAt = Number.NEGATIVE_INFINITY;
+  }
+
+  /** Merkt Distanz, Höhe und Schwerkraftrichtung vor einem Sim-Schritt (Grundlage der Darstellungs-Interpolation, siehe Sim.view) */
+  private capturePrev(sim: Sim): void {
+    const pv = this.prev;
+    pv.dist = sim.dist;
+    pv.hgt = sim.player.hgt;
+    pv.gravDir = sim.player.gravDir;
   }
 
   /** Kurzer Countdown für diesen Start? (Regel in wantsQuickCountdown; „zuletzt“ = zuletzt gestarteter Lauf dieser Sitzung) */
@@ -656,6 +770,7 @@ export class FredRunGame {
     if (result.isNewBest) this.audio.sfx("highscore");
     else if (!quit) this.audio.sfx("gameover");
     this.audio.music.stop(1.4);
+    this.releaseMuffle();
     this.emitChange();
   }
 
@@ -679,6 +794,7 @@ export class FredRunGame {
     this.input.enabled = false;
     this.input.releaseAll();
     this.audio.duck(0.6, 0.2);
+    this.syncMuffle(0.12);
     this.stopLoops();
     this.audio.sfx("ui-back");
     this.emitChange();
@@ -713,7 +829,9 @@ export class FredRunGame {
     this.frozen = false;
     this.resumeCountdown = 0;
     this.stopLoops();
+    this.audio.stopStingers?.(0.3);
     this.audio.music.play("menu", { crossfadeSec: 0.8 });
+    this.releaseMuffle();
     this.demoWorld = this.profile.world;
     void this.ensureWorld(this.demoWorld).then(() => {
       if (this.phase === "menu") {
@@ -735,7 +853,8 @@ export class FredRunGame {
     sim.begin();
     this.sim = sim;
     this.bot = new Bot({ horizon: 1.25, decisionHz: 7 });
-    this.prev = { dist: sim.dist, hgt: 0 };
+    this.capturePrev(sim);
+    this.slowK = 1;
     this.demo = true;
     this.acc = 0;
     this.renderer?.particles.clear();
@@ -786,6 +905,8 @@ export class FredRunGame {
           this.audio.sfx("go");
           if (this.resumeCountdown) {
             this.resumeCountdown = 0;
+            // Ende der Wiederaufnahme: Musik wieder voll (während des Countdowns blieb sie gedämpft wie in der Pause)
+            this.syncMuffle(0.3);
           } else {
             sim.begin();
             this.runStartMs = performance.now();
@@ -796,9 +917,14 @@ export class FredRunGame {
       }
     }
 
+    // Visuelle Zeit: steht in Pause, nach „Lauf beenden“ und im Wiederaufnahme-Countdown (die Szene ist dann eingefroren);
+    // Menü, Start-Countdown (Idle-Pose atmet) und Demo laufen weiter. this.time bleibt die Logik-Uhr.
+    const still = this.phase === "paused" || this.frozen || (this.phase === "countdown" && this.resumeCountdown > 0);
+    const visDt = still ? 0 : dt;
+    this.visTime += visDt;
+
     const active = this.phase === "running" || this.demo;
     const simRunning = active && (sim.phase === "running" || sim.phase === "dying");
-    let stepped = false;
     if (simRunning) {
       if (this.hitstop > 0) {
         this.hitstop -= dt;
@@ -806,19 +932,17 @@ export class FredRunGame {
         this.acc += dt;
         let n = 0;
         while (this.acc >= FIXED_DT && n < 16) {
-          this.prev = { dist: sim.dist, hgt: sim.player.hgt };
+          this.capturePrev(sim);
           const input: SimInput = this.demo && this.bot ? this.bot.input(sim, FIXED_DT) : this.input.consume(FIXED_DT);
           sim.step(FIXED_DT, input);
           this.acc -= FIXED_DT;
           n += 1;
-          stepped = true;
           if (sim.events.length) this.consumeEvents(sim, r);
           if (sim.phase === "over") break;
         }
         if (n >= 16) this.acc = 0;
       }
     }
-    void stepped;
 
     if (sim.phase === "over" && !this.demo && this.phase === "running") this.finishRun(sim);
     if (sim.phase === "over" && this.demo) this.startDemo();
@@ -826,10 +950,14 @@ export class FredRunGame {
     // Weltsteuerung (Stimmung, Musik, Loops, Toasts)
     if (active && sim.phase === "running") this.worldTick(sim, dt);
 
-    // Visuelle Zeit
-    const still = this.phase === "paused" || this.frozen;
-    const visDt = still ? 0 : dt;
-    const rawView = sim.view(this.hitstop > 0 || !simRunning ? 1 : Math.min(1, this.acc / FIXED_DT), this.prev, this.reducedMotion, this.quality, visDt);
+    // Zeitlupe: weiche Rampe (0,2 s) der visuellen Zeit; die Sim bremst nur die Weltbewegung, hart
+    const slowNow = sim.phase === "running" && sim.player.slowmo > 0;
+    const slowStep = visDt * SLOW_RAMP_RATE;
+    this.slowK = slowNow ? Math.max(SLOWMO_FACTOR, this.slowK - slowStep) : Math.min(1, this.slowK + slowStep);
+    // Welt, Partikel, Geister und Lauf-Phase laufen mit fxDt: in der Zeitlupe nicht schneller als der Boden
+    const fxDt = visDt * this.slowK;
+    const effFlashes = this.effFlashes();
+    const rawView = sim.view(this.hitstop > 0 || !simRunning ? 1 : Math.min(1, this.acc / FIXED_DT), this.prev, this.reducedMotion, this.quality, fxDt, effFlashes);
     // Jede Welt bekommt nur Stufen im eigenen Bereich; die Zielwelt eines Tores beginnt bei Stufe 0.
     const view: ViewState = { ...rawView, stage: Math.min(rawView.stage, sim.world.stageCount - 1) };
     let cur = this.worldRenderers.get(sim.world.id) ?? null;
@@ -843,17 +971,20 @@ export class FredRunGame {
     const nxt = gate ? this.worldRenderers.get(gate.to) ?? null : null;
     const nextView: ViewState = { ...rawView, stage: 0, stageBlend: 0, worldMeters: 0 };
     if (!still) {
-      this.guard(sim.world.id, () => cur?.update(visDt, view));
-      if (nxt && gate && sim.gateBlend > 0.001) this.guard(gate.to, () => nxt.update(visDt, nextView));
-      r.update(visDt, sim, sim.phase === "running" ? sim.speed : 0);
+      this.guard(sim.world.id, () => cur?.update(fxDt, view));
+      if (nxt && gate && sim.gateBlend > 0.001) this.guard(gate.to, () => nxt.update(fxDt, nextView));
+      // Boden-Geschwindigkeit in Partikelzeit: weltfester Staub bewegt sich um scroll * fxDt = Boden-Weg des Frames (Sim-Zeitskala 0,62
+      // in der Zeitlupe, bei harter Sim-Stufe und weicher fxDt-Rampe); im Hitstop steht der Boden (0)
+      const ground = sim.phase === "running" && this.hitstop <= 0 ? sim.speed * (slowNow ? SLOWMO_FACTOR : 1) / this.slowK : 0;
+      r.update(fxDt, sim, ground);
     }
 
     // Shake / Flash
     this.shake = Math.max(0, this.shake - dt * 2.8);
     this.flashV = Math.max(0, this.flashV - dt * 3.2);
     this.shakeSeed += dt * 60;
-    const sh = this.reducedMotion ? 0 : this.shake * this.shake * 14;
-    const flashTotal = Math.max(this.flashV, sim.flash) * (this.reducedMotion ? 0.3 : 1);
+    const sh = this.shake * this.shake * 14 * this.effShake();
+    const flashTotal = Math.max(this.flashV, sim.flash) * effFlashes;
 
     const frame: FrameData = {
       sim,
@@ -868,7 +999,7 @@ export class FredRunGame {
       flash: flashTotal,
       flashColor: this.flashV > sim.flash ? this.flashColor : "#ffffff",
       demo: this.demo,
-      time: this.time,
+      time: this.visTime,
       showPlayer: true,
       idle: this.phase === "countdown" && !this.resumeCountdown && sim.phase === "ready",
       victory: this.victory,
@@ -878,6 +1009,17 @@ export class FredRunGame {
     } catch (err) {
       this.renderFailed(sim.world.id, err);
     }
+  }
+
+  /** Wirksames Wackeln 0..1 (Regler „Wackeln“; „Weniger Bewegung“ schaltet es ab) */
+  private effShake(): number {
+    return this.reducedMotion ? 0 : unit(this.profile.settings.shake);
+  }
+
+  /** Wirksame Blitz-Stärke 0..1 (Regler „Blitze“; „Weniger Bewegung“ begrenzt auf 0,3) */
+  private effFlashes(): number {
+    const f = unit(this.profile.settings.flashes);
+    return this.reducedMotion ? Math.min(f, 0.3) : f;
   }
 
   private renderErrors = new Map<WorldId, number>();
@@ -902,18 +1044,24 @@ export class FredRunGame {
   }
 
   private consumeEvents(sim: Sim, r: Renderer): void {
-    const audio = this.audio;
+    const live = !this.demo;
+    const hap = this.hapOpts;
+    hap.enabled = this.profile.settings.haptics;
+    hap.demo = this.demo;
     for (const ev of sim.events) {
-      r.handleEvent(ev, sim, this.time);
-      if (!this.demo) this.audioFor(ev, sim);
+      r.handleEvent(ev, sim, this.visTime);
+      if (live) this.feedbackFor(ev, sim);
       switch (ev.type) {
         case "hurt":
           this.hitstop = Math.max(this.hitstop, 0.07);
           this.shake = Math.max(this.shake, 1);
+          // Ein tödlicher Treffer vibriert nur als Tod (kein doppelter Impuls); reducedMotion beeinflusst die Haptik nicht
+          if ((ev.value ?? 1) > 0) this.vibrate("hurt", RUMBLE_HURT);
           break;
         case "stomp-land":
           this.shake = Math.max(this.shake, 0.55);
           this.hitstop = Math.max(this.hitstop, 0.035);
+          haptic("stomp", hap);
           break;
         case "bounce":
         case "enemy-defeat":
@@ -928,6 +1076,7 @@ export class FredRunGame {
           this.hitstop = 0.12;
           this.flashV = 0.6;
           this.flashColor = "#ff4d4d";
+          this.vibrate("death", RUMBLE_DEATH);
           break;
         case "portal":
           this.flashV = Math.max(this.flashV, 0.22);
@@ -937,10 +1086,25 @@ export class FredRunGame {
           this.flashV = 0.7;
           this.flashColor = "#c4b5fd";
           this.pruneAt = this.time + 3;
+          // music.play() der Audio-Zuordnung setzt die Engine-Dämpfung auf 0: eine laufende Zeitlupen-Dämpfung neu senden
+          if (this.slowMuffle) {
+            this.muffleSent = -1;
+            this.syncMuffle(0.3);
+          }
           break;
         case "pit-fall":
-          this.flashV = 0.6;
+          this.flashV = PIT_FLASH;
           this.flashColor = "#ffffff";
+          haptic("pit", hap);
+          break;
+        case "dash":
+          haptic("dash", hap);
+          break;
+        case "powerup":
+          haptic("powerup", hap);
+          break;
+        case "dash-denied":
+          this.dashDeniedAt = this.visTime;
           break;
         case "custom":
           if (ev.tag === "stage" && !this.demo) {
@@ -952,116 +1116,47 @@ export class FredRunGame {
           break;
       }
     }
-    void audio;
     sim.events.length = 0;
   }
 
-  private audioFor(ev: SimEvent, sim: Sim): void {
-    const a = this.audio;
-    const pan = Math.max(-1, Math.min(1, (ev.x - VIEW_W / 2) / (VIEW_W / 2))) * 0.6;
+  /** Vibration (Handy) und Controller-Rumble; nur mit Einstellung „Vibration“ und nie in der Demo. Wirft nie. */
+  private vibrate(kind: "hurt" | "death", rumble: readonly [number, number]): void {
+    if (!this.hapOpts.enabled || this.hapOpts.demo) return;
+    haptic(kind, this.hapOpts);
+    this.input.rumble(rumble[0], rumble[1]);
+  }
+
+  /** Alles, was ein Sim-Ereignis außerhalb der Demo auslöst, ohne die Szene zu ändern: Ton, Hinweis-Planer (benutzte Mechaniken). */
+  private feedbackFor(ev: SimEvent, sim: Sim): void {
     switch (ev.type) {
       case "jump":
-        a.sfx("jump");
+        this.hints.markUsed("jump");
         break;
       case "doublejump":
-        a.sfx("doublejump");
-        break;
-      case "land":
-        a.sfx("land", { volume: Math.min(1, (ev.value ?? 400) / 1000) });
+        this.hints.markUsed("jump");
+        this.hints.markUsed("doublejump");
         break;
       case "slide":
-        a.sfx("slide");
+        this.hints.markUsed("slide");
         break;
       case "dash":
-        a.sfx("dash");
+        this.hints.markUsed("dash");
         break;
+      case "stomp-start":
       case "stomp-land":
-        a.sfx("stomp");
-        break;
       case "bounce":
-        a.sfx("stomp-chain", { pitch: 1 + Math.min(6, ev.value ?? 1) * 0.06 });
-        break;
-      case "spring":
-        a.sfx("spring", { pan });
-        break;
-      case "portal":
-        a.sfx("portal");
-        break;
-      case "coin":
-        a.sfx("coin", { pitch: 1 + Math.min(12, ev.value ?? 0) * 0.045, pan });
-        break;
-      case "gem":
-        a.sfx("gem", { pan });
-        break;
-      case "heart":
-        a.sfx("heart");
-        break;
-      case "powerup":
-        a.sfx("powerup");
-        if (ev.tag === "slowmo") a.sfx("slowmo-on");
-        if (ev.tag === "magnet") a.sfx("magnet-on");
-        break;
-      case "shield-on":
-        a.sfx("shield-on");
-        break;
-      case "shield-hit":
-        a.sfx("shield-hit");
-        break;
-      case "hurt":
-        a.sfx("hurt");
-        a.duck(0.5, 0.25);
-        break;
-      case "death":
-        a.sfx("death");
-        a.duck(0.9, 1.2);
-        break;
-      case "near-miss":
-        a.sfx("near-miss");
-        break;
-      case "combo-up":
-        a.sfx("combo-up", { pitch: 1 + (ev.value ?? 2) * 0.05 });
-        break;
-      case "combo-break":
-        a.sfx("combo-break");
-        break;
       case "enemy-defeat":
-        a.sfx("enemy-defeat", { pan });
+        this.hints.markUsed("stomp");
         break;
-      case "wallbreak":
-        a.sfx("wallbreak", { pan });
+      case "dash-denied":
+        // Die Sim begrenzt auf alle 0,4 s; hier zusätzlich, falls Ereignisse gebündelt eintreffen (Ton nur einmal)
+        if (this.visTime - this.dashDeniedSfxAt < DASH_DENIED_GAP_S) return;
+        this.dashDeniedSfxAt = this.visTime;
         break;
-      case "pit-fall":
-        a.sfx("splash");
-        break;
-      case "world-transition":
-        a.sfx("world-transition");
-        a.music.play(sim.world.music, { crossfadeSec: 2 });
-        break;
-      case "milestone":
-        a.sfx("checkpoint");
-        break;
-      case "custom": {
-        const tag = ev.tag ?? "";
-        if (tag.startsWith("sfx:")) {
-          a.sfx(tag.slice(4), { pan });
-        } else if (tag.startsWith("zone-")) {
-          const active = tag.startsWith("zone-active:");
-          const skin = (ev.skin ?? tag.split(":")[1] ?? "").toLowerCase();
-          for (const [re, s] of ZONE_SFX) {
-            if (re.test(skin)) {
-              const name = active ? s.active : s.warn;
-              if (name) a.sfx(name, { pan });
-              break;
-            }
-          }
-        } else if (tag === "crumble") {
-          a.sfx("crumble", { pan });
-        }
-        break;
-      }
       default:
         break;
     }
+    this.gameAudio.onEvent(ev, sim);
   }
 
   private worldTick(sim: Sim, dt: number): void {
@@ -1069,13 +1164,24 @@ export class FredRunGame {
     if (sim.cfg.mode === "tour") {
       const idx = TOUR_ORDER.indexOf(sim.world.id);
       const next = TOUR_ORDER[(idx + 1) % TOUR_ORDER.length];
-      if (sim.worldMeters >= TOUR_METERS - 500 && !this.worldRenderers.has(next) && !this.worldLoading.has(next)) void this.ensureWorld(next);
+      if (sim.worldMeters >= TOUR_METERS - 500 && !this.worldRenderers.has(next) && !this.worldLoading.has(next)) {
+        void this.ensureWorld(next);
+        this.prefetchAudio([WORLDS[next].music]);
+      }
       if (this.pruneAt > 0 && this.time > this.pruneAt) {
         this.pruneAt = 0;
         this.pruneWorlds([sim.world.id, ...(sim.nextGate ? [sim.nextGate.to] : []), ...(this.worldLoading.has(next) && sim.worldMeters >= TOUR_METERS - 500 ? [next] : [])]);
       }
     }
     if (!this.demo) {
+      // Zustands-Hinweise (Dash bereit, letztes Herz, Ende der Zeitlupe) und Zonen-Sperren laufen auf der Frame-Zeit
+      this.gameAudio.tick(dt, sim, false);
+      // Zeitlupe dämpft die Musik leicht
+      const slow = sim.player.slowmo > 0;
+      if (slow !== this.slowMuffle) {
+        this.slowMuffle = slow;
+        this.syncMuffle(0.2);
+      }
       // Musik-Intensität & Tempo
       this.lastMusicUpdate += dt;
       if (this.lastMusicUpdate > 0.5) {
@@ -1101,20 +1207,9 @@ export class FredRunGame {
         a.loop(l, true, lvl);
         this.activeLoops.add(l);
       }
-    }
-    // Hinweise (nur erste Läufe)
-    if (!this.demo && this.profile.settings.hints && this.profile.lifetime.runs < 3) {
-      this.hintT += dt;
-      const h = HINTS[this.hintIdx];
-      if (h && this.hintT >= h.at) {
-        this.hintText = h.text;
-        this.hintShow = 5;
-        this.hintIdx += 1;
-      }
-      if (this.hintShow > 0) {
-        this.hintShow -= dt;
-        if (this.hintShow <= 0) this.hintText = null;
-      }
+      // Einsteiger-Hinweise und Rekordjagd (nur echte Läufe)
+      this.updateHints(sim, dt);
+      if (!this.recordPassed) this.checkRecord(sim);
     }
     if (this.toast) {
       this.toast.t += dt;
@@ -1126,15 +1221,68 @@ export class FredRunGame {
     this.toast = { title, sub, color, t: 0, dur: 3 };
   }
 
+  /**
+   * Einsteiger-Hinweise (erste Läufe, Einstellung „Hinweise“): der Planer wählt nach Lage statt nach Uhrzeit – sobald das erste passende
+   * Element (Überhang, Gegner, Grube) weniger als HINT_LOOKAHEAD_PX vor der Figur steht und die Mechanik in diesem Lauf noch nicht benutzt wurde.
+   */
+  private updateHints(sim: Sim, dt: number): void {
+    const s = this.profile.settings;
+    const runs = this.profile.lifetime.runs;
+    if (this.demo || !this.hintsAllowed || !s.hints || runs >= HINT_MAX_RUNS) {
+      this.hintText = null;
+      return;
+    }
+    const ctx = this.hintCtx;
+    const px = sim.playerWorldX;
+    let over = Number.POSITIVE_INFINITY;
+    let pit = Number.POSITIVE_INFINITY;
+    let stomp = Number.POSITIVE_INFINITY;
+    const ents = sim.ents;
+    for (let i = 0; i < ents.length; i += 1) {
+      const e = ents[i];
+      const dx = e.x - px;
+      if (e.dead || dx < 0) continue;
+      if (e.kind === "overhead") {
+        if (dx < over) over = dx;
+      } else if (e.kind === "pit") {
+        if (dx < pit) pit = dx;
+      } else if ((e.kind === "walker" || e.kind === "flyer") && e.stompable) {
+        if (dx < stomp) stomp = dx;
+      }
+    }
+    const p = sim.player;
+    ctx.time = sim.time;
+    ctx.touch = this.touchMode;
+    ctx.runs = runs;
+    ctx.hintsEnabled = true;
+    ctx.overheadDist = over;
+    ctx.pitDist = pit;
+    ctx.stompDist = stomp;
+    ctx.energyReady = p.energy >= sim.perks.dashCost && p.dashCd <= 0;
+    const h = this.hints.update(dt, ctx);
+    this.hintText = h ? h.text : null;
+  }
+
+  /** Rekordjagd: einmal je Lauf, sobald der Score den bisherigen Rekord dieser Bestenliste übersteigt (nie bei Rekord 0 und nie in der Demo). */
+  private checkRecord(sim: Sim): void {
+    const best = this.profile.best[this.runBoardKey] ?? 0;
+    if (!(best > 0) || sim.score <= best) return;
+    this.recordPassed = true;
+    this.showToast("Neuer Rekord!", `${formatNumber(best)} geknackt`, RECORD_COLOR);
+    this.audio.sfx("checkpoint");
+    this.flashV = Math.max(this.flashV, RECORD_FLASH);
+    this.flashColor = RECORD_COLOR;
+  }
+
   private buildHud(sim: Sim): HudState {
     const p = sim.player;
     const powerups = [] as HudState["powerups"];
-    if (p.magnet > 0) powerups.push({ kind: "magnet", frac: p.magnet / MAGNET_TIME });
-    if (p.shield > 0) powerups.push({ kind: "shield", frac: p.shield / SHIELD_TIME });
-    if (p.slowmo > 0) powerups.push({ kind: "slowmo", frac: p.slowmo / SLOWMO_TIME });
-    if (p.turbo > 0) powerups.push({ kind: "turbo", frac: p.turbo / TURBO_TIME });
+    // left = Restzeit in Sekunden (die Ringe blinken unter 2 s)
+    if (p.magnet > 0) powerups.push({ kind: "magnet", frac: p.magnet / MAGNET_TIME, left: p.magnet });
+    if (p.shield > 0) powerups.push({ kind: "shield", frac: p.shield / SHIELD_TIME, left: p.shield });
+    if (p.slowmo > 0) powerups.push({ kind: "slowmo", frac: p.slowmo / SLOWMO_TIME, left: p.slowmo });
+    if (p.turbo > 0) powerups.push({ kind: "turbo", frac: p.turbo / TURBO_TIME, left: p.turbo });
     const toast: HudToast | null = this.toast ? { title: this.toast.title, sub: this.toast.sub, color: this.toast.color, u: this.toast.t / this.toast.dur } : null;
-    const key = boardKey(sim.cfg.mode, sim.cfg.world, this.dailyKey);
     return {
       score: sim.score,
       meters: sim.meters,
@@ -1148,12 +1296,15 @@ export class FredRunGame {
       toast,
       worldName: sim.world.name,
       accent: sim.world.accent,
-      best: this.profile.best[key] ?? 0,
+      best: this.profile.best[this.runBoardKey] ?? 0,
       hint: this.hintText,
       tourFrac: sim.cfg.mode === "tour" ? Math.min(1, sim.worldMeters / TOUR_METERS) : null,
-      time: this.time,
+      time: this.visTime,
       chaseWarn: sim.vars.chaseWarn ?? 0,
       touch: this.touchMode,
+      reduced: this.reducedMotion,
+      dashDeniedT: Math.min(99, this.visTime - this.dashDeniedAt),
+      recordPassed: this.recordPassed,
     };
   }
 
@@ -1200,7 +1351,7 @@ export class FredRunGame {
     this.acc = 0;
   }
 
-  async debugRun(cfg: Partial<RunConfig> & { bot?: boolean; hearts?: number; live?: boolean }): Promise<void> {
+  async debugRun(cfg: Partial<RunConfig> & { bot?: boolean; hearts?: number; live?: boolean; hints?: boolean }): Promise<void> {
     const world = cfg.world ?? "wien";
     await this.ensureCharacter(cfg.character ?? this.profile.character);
     if (cfg.mode === "tour") await Promise.all(TOUR_ORDER.map((w) => this.ensureWorld(w)));
@@ -1219,7 +1370,10 @@ export class FredRunGame {
     this.frozen = false;
     this.resumeCountdown = 0;
     this.result = null;
-    this.prev = { dist: sim.dist, hgt: 0 };
+    this.capturePrev(sim);
+    this.dailyKey = sim.cfg.mode === "daily" ? dateKey() : "";
+    this.resetRunFeedback(sim.cfg, this.dailyKey);
+    this.hintsAllowed = cfg.hints === true;
     this.renderer?.particles.clear();
     this.input.enabled = true;
   }
@@ -1231,12 +1385,12 @@ export class FredRunGame {
     if (!sim || !r) throw new Error("kein Lauf");
     const steps = Math.round(seconds / FIXED_DT);
     for (let i = 0; i < steps; i += 1) {
-      this.prev = { dist: sim.dist, hgt: sim.player.hgt };
+      this.capturePrev(sim);
       const input = opts.input ?? (this.bot && !opts.botOff ? this.bot.input(sim, FIXED_DT) : NO_INPUT);
       sim.step(FIXED_DT, input);
       if (sim.events.length) this.consumeEvents(sim, r);
       if (sim.phase === "running" && i % 6 === 0) {
-        const raw = sim.view(1, this.prev, this.reducedMotion, this.quality, FIXED_DT * 6);
+        const raw = sim.view(1, this.prev, this.reducedMotion, this.quality, FIXED_DT * 6, this.effFlashes());
         const view: ViewState = { ...raw, stage: Math.min(raw.stage, sim.world.stageCount - 1) };
         this.guard(sim.world.id, () => this.worldRenderers.get(sim.world.id)?.update(FIXED_DT * 6, view));
         const gate = sim.nextGate;
@@ -1244,6 +1398,7 @@ export class FredRunGame {
         r.update(FIXED_DT * 6, sim, sim.speed);
       }
       this.time += FIXED_DT;
+      this.visTime += FIXED_DT;
       if (sim.phase === "over") break;
     }
     this.hitstop = 0;
