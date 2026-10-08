@@ -24,8 +24,11 @@ export const NAV_REPEAT_MS = 350;
 const NAV_DEADZONE = 0.5;
 /** Wisch-Verhältnis im Entscheidungsfenster (dy muss dx deutlich überwiegen) */
 const SWIPE_RATIO = 1.4;
-/** Obergrenze (s) für den Halte-Ausgleich verzögerter Touch-Sprünge */
-const MAX_HOLD_COMP_S = 0.05;
+/**
+ * Obergrenze (s) für den Halte-Ausgleich verzögerter Touch-Sprünge. Muss die verlängerte Wartezeit (SWIPE_EXTEND_MS plus ein
+ * Frame von 30 Hz) abdecken, sonst springt ein Tippen mit Drift nach unten niedriger als eines ohne (8 bis 10 px Scheitelhöhe).
+ */
+const MAX_HOLD_COMP_S = 0.1;
 
 const JUMP_KEYS = new Set(["Space", "ArrowUp", "KeyW"]);
 const SLIDE_KEYS = new Set(["ArrowDown", "KeyS"]);

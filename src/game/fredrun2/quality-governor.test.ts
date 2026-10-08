@@ -116,7 +116,7 @@ describe("QualityGovernor – Abstieg", () => {
     }
   });
 
-  it("Frames > 250 ms (Tab-Rückkehr, Laden) werden ignoriert", () => {
+  it("isolierte Frames > 250 ms (Tab-Rückkehr, Laden) werden ignoriert", () => {
     const gov = new QualityGovernor({ storage: null, initial: 2 });
     let t = 0;
     for (let i = 0; i < 600; i++) {
@@ -124,6 +124,98 @@ describe("QualityGovernor – Abstieg", () => {
       t += dt;
       expect(gov.feed(dt, 5, t)).toBeNull();
     }
+    expect(gov.level).toBe(2);
+  });
+
+  it("auch zwei lange Frames in Folge (Rückkehr + Nachlade-Hänger) werden ignoriert, jeder normale Frame setzt den Zähler zurück", () => {
+    for (const long of [260, 400, 2000, 30_000]) {
+      const gov = new QualityGovernor({ storage: null, initial: 2 });
+      let t = 0;
+      for (let i = 0; i < 3000; i++) {
+        const dt = i % 50 === 10 || i % 50 === 11 ? long : 16.7;
+        t += dt;
+        expect(gov.feed(dt, 5, t), `${long} ms`).toBeNull();
+      }
+      expect(gov.level).toBe(2);
+    }
+  });
+
+  it("drei Frames in Folge über 250 ms sind Dauerlast und senken; ein normaler Frame dazwischen setzt den Zähler zurück", () => {
+    const gov = new QualityGovernor({ storage: null, initial: 2 });
+    expect(gov.feed(2000, 40, 2000)).toBeNull();
+    expect(gov.feed(2000, 40, 4000)).toBeNull();
+    expect(gov.feed(2000, 40, 6000)).toBe(1);
+
+    const gov2 = new QualityGovernor({ storage: null, initial: 2 });
+    expect(gov2.feed(2000, 40, 2000)).toBeNull();
+    expect(gov2.feed(2000, 40, 4000)).toBeNull();
+    expect(gov2.feed(16.7, 5, 4016.7)).toBeNull(); // wieder normal: Zähler zurück auf 0
+    expect(gov2.feed(2000, 40, 6016.7)).toBeNull();
+    expect(gov2.feed(2000, 40, 8016.7)).toBeNull();
+    expect(gov2.level).toBe(2);
+    expect(gov2.feed(2000, 40, 10_016.7)).toBe(1);
+  });
+
+  it("ungültige Frames dazwischen (NaN, < 2 ms) verändern den Zähler der langen Frames nicht", () => {
+    const gov = new QualityGovernor({ storage: null, initial: 2 });
+    expect(gov.feed(2000, 40, 2000)).toBeNull();
+    expect(gov.feed(NaN, 40, 2001)).toBeNull();
+    expect(gov.feed(2000, 40, 4001)).toBeNull();
+    expect(gov.feed(0, 40, 4002)).toBeNull();
+    expect(gov.feed(2000, 40, 6002)).toBe(1);
+  });
+
+  it("reset() setzt den Zähler der langen Frames zurück", () => {
+    const gov = new QualityGovernor({ storage: null, initial: 2 });
+    expect(gov.feed(2000, 40, 2000)).toBeNull();
+    expect(gov.feed(2000, 40, 4000)).toBeNull();
+    gov.reset(2);
+    expect(gov.feed(2000, 40, 6000)).toBeNull(); // wäre sonst der dritte in Folge
+    expect(gov.level).toBe(2);
+  });
+
+  it("Dauerlast über 250 ms senkt ohne Klippe an der Schwelle (200 bis 1000 ms: Q0 binnen 4 s)", () => {
+    for (const dt of [200, 249, 250, 251, 260, 300, 500, 1000]) {
+      for (const busy of [0.9 * dt, 10]) {
+        const gov = new QualityGovernor({ storage: null, initial: 2 });
+        const { changes } = constant(gov, dt, busy, 120);
+        expect(gov.level, `${dt} ms, busy ${busy}`).toBe(0);
+        expect(changes.at(-1)?.level, `${dt} ms, busy ${busy}`).toBe(0);
+        expect(changes.at(-1)?.t, `${dt} ms, busy ${busy}`).toBeLessThanOrEqual(4000);
+        expect(changes.length, `${dt} ms, busy ${busy}`).toBeLessThanOrEqual(2);
+      }
+    }
+  });
+
+  it("Dauerlast knapp über der Schwelle (251 ms) senkt nach etwa 2 s auf Q0, nicht nie", () => {
+    const gov = new QualityGovernor({ storage: null, initial: 2 });
+    const { changes } = constant(gov, 251, 230, 30);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ level: 0 });
+    expect(changes[0].t).toBeLessThanOrEqual(2100);
+  });
+
+  it("Software-Rasterung (Q2 300 ms, Q1 150 ms, Q0 40 ms) endet auf Q0 statt auf der Startstufe", () => {
+    const gov = new QualityGovernor({ storage: null, initial: 2 });
+    const changes = simulate(gov, [40, 150, 300], 60, 120);
+    expect(gov.level).toBe(0);
+    expect(changes.map((c) => c.level)).toEqual([1, 0]);
+    expect(changes[1].t).toBeLessThanOrEqual(4000);
+  });
+
+  it("noch langsameres Gerät (Q2 600 ms, Q1 300 ms, Q0 100 ms): höchstens 3 Wechsel, endet auf Q0", () => {
+    const gov = new QualityGovernor({ storage: null, initial: 2 });
+    const changes = simulate(gov, [100, 300, 600], 60, 300);
+    expect(changes.length).toBeLessThanOrEqual(3);
+    expect(gov.level).toBe(0);
+  });
+
+  it("nicht endliche Intervalle (Infinity) zählen nie, auch nicht als Dauerlast, und vergiften das Fenster nicht", () => {
+    const gov = new QualityGovernor({ storage: null, initial: 2 });
+    for (let i = 0; i < 6; i++) expect(gov.feed(Infinity, 5, 100 + i)).toBeNull();
+    expect(gov.level).toBe(2);
+    const { changes } = constant(gov, 16.7, 5, 30, 1000);
+    expect(changes).toEqual([]);
     expect(gov.level).toBe(2);
   });
 

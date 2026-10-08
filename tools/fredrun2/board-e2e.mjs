@@ -136,7 +136,7 @@ const browser = await chromium.launch({ headless: true, args: ["--autoplay-polic
   await page.waitForFunction(() => /\(du\)/.test(document.body.innerText), null, { timeout: 10000 }).catch(() => undefined);
   text = await page.locator("body").innerText();
   check("Bestenliste markiert den eigenen Eintrag", /\(du\)/.test(text));
-  await page.getByRole("button", { name: "Weltreise" }).first().click().catch(() => undefined);
+  await page.getByRole("tab", { name: "Weltreise" }).first().click().catch(() => undefined);
   await page.waitForTimeout(500);
   check("Board-Wechsel lädt die Weltreise-Liste", gets.includes("tour"), gets.join(","));
   if (shots) await page.screenshot({ path: path.join(shots, "board-global-me.png") });

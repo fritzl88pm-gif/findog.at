@@ -330,7 +330,13 @@ const minJerk =
  * Berührung im Frame-Takt wie im Browser: Zeiger-Ereignisse zwischen den Frames zum eigenen Zeitpunkt, die Bewegung gebündelt
  * zu Frame-Beginn, danach die 120-Hz-Sim-Schritte des Frames. `phase` verschiebt die Berührung gegen den Frame-Takt.
  */
-function touchRun(hz: number, phase: number, dyAt: (ms: number) => number, upAfter: number): { jumps: number; slides: number } {
+function touchRun(
+  hz: number,
+  phase: number,
+  dyAt: (ms: number) => number,
+  upAfter: number,
+  onInput?: (o: SimInput) => void,
+): { jumps: number; slides: number } {
   const period = 1000 / hz;
   const steps = Math.max(1, Math.round(period / (1000 / 120)));
   const down = 10 * period + phase;
@@ -363,6 +369,7 @@ function touchRun(hz: number, phase: number, dyAt: (ms: number) => number, upAft
     mgr.poll();
     for (let i = 0; i < steps; i += 1) {
       const o = step();
+      onInput?.(o);
       if (o.jumpPressed) jumps += 1;
       if (o.slidePressed) slides += 1;
     }
@@ -445,6 +452,40 @@ describe("Wisch aus dem Stand und Tippen mit Drift (Fix-Runde 1)", () => {
     expect(o.jumpPressed).toBe(true);
     // die Wartezeit wird weiter als Haltezeit gutgeschrieben (Sprunghöhe des Tippens bleibt)
     expect(o.jump).toBe(true);
+  });
+
+  it("Sprunghöhe eines Tippens mit Drift nach unten = die eines Tippens ohne Drift (Halte-Ausgleich deckt das verlängerte Fenster)", () => {
+    /** Scheitelhöhe (px) eines Touch-Tippens links in einer echten Sim im Frame-Takt von `hz`. */
+    const tapApex = (hz: number, drift: number, holdMs: number, phase: number): number => {
+      mgr.releaseAll();
+      t = 0;
+      const s = new Sim({ mode: "world", world: "wien", character: "fred", seed: 1234 }, WORLDS);
+      s.begin();
+      s.noSpawn = true;
+      s.ents = [];
+      for (let i = 0; i < 60; i += 1) s.step(FIXED_DT, mgr.consume(FIXED_DT));
+      let max = 0;
+      touchRun(hz, phase, (ms) => (ms >= 10 ? drift : 0), holdMs, (o) => {
+        s.step(FIXED_DT, o);
+        s.ents = [];
+        max = Math.max(max, s.player.hgt);
+      });
+      return max;
+    };
+    for (const hz of [60, 120]) {
+      for (const holdMs of [80, 120, 160]) {
+        let diff = 0;
+        const n = 12;
+        for (let i = 0; i < n; i += 1) {
+          const phase = (i / n) * (1000 / hz);
+          const plain = tapApex(hz, 0, holdMs, phase);
+          expect(plain).toBeGreaterThan(80); // der Tipp springt überhaupt
+          diff += tapApex(hz, 3, holdMs, phase) - plain;
+        }
+        // Mittel über die Phasen: mit zu kleiner Obergrenze des Ausgleichs fehlen 7 bis 9 px
+        expect(Math.abs(diff / n), `${hz} Hz, ${holdMs} ms`).toBeLessThan(2);
+      }
+    }
   });
 
   it("ohne erkennbaren Drift nach unten bleibt die Latenz bei SWIPE_DECIDE_MS", () => {

@@ -9,7 +9,9 @@
  *    ausgelastet (busy ≥ 70 % des Intervalls), bestimmt nicht die Anzeige, sondern das Gerät das Tempo → Ziel 16,7 ms.
  *  - Abstieg je 1,5-s-Fenster bei ≥ 25 % Frames > 1,35 · Ziel oder Mittel > 1,25 · Ziel (Mittel ohne Hänger > 3 · Ziel);
  *    nach einem Aufstieg frühestens nach 3 s. Dauerhaft > 60 ms über 0,8 s → sofort auf Q0 (zwei Stufen).
- *    Frames > 250 ms (Tab-Rückkehr, Laden) zählen nicht.
+ *    Einzelne Frames > 250 ms (Tab-Rückkehr, Laden, höchstens zwei in Folge) zählen nicht; hält das Tempo an (ab dem dritten Frame
+ *    in Folge über 250 ms), ist es Dauerlast und wird wie jeder andere Frame gewertet – sonst bliebe das schwächste Gerät
+ *    (Software-Rasterung, < 4 fps) für immer auf der Startstufe, obwohl 249 ms Dauerlast schon nach 1,5 s auf Q0 führen.
  *  - 30-Hz-Anzeige (≥ 90 % der Intervalle in 28–38 ms, busy < 40 % des Intervalls, höchstens 5 % Frames > 50 ms, also kein
  *    Dauerruckeln): Ziel 33,3 ms – die Stufe wird gehalten (iOS-Stromsparmodus), nicht gesenkt.
  *  - Aufstieg nur nach ≥ 20 s mit ≤ 2 % schlechten Frames und busy < 0,5 · Ziel. Wird ein Aufstieg binnen 10 s zurückgenommen,
@@ -31,6 +33,8 @@ const SEVERE_MS = 800;
 const SEVERE_DT_MS = 60;
 const SEVERE_MIN_FRAMES = 6;
 const OUTLIER_MS = 250;
+/** Ab so vielen Frames > OUTLIER_MS in Folge ist es kein Ausreißer mehr, sondern Dauerlast. */
+const OUTLIER_RUN_MIN = 3;
 const MIN_DWELL_AFTER_UP_MS = 3000;
 const BAD_FACTOR = 1.35;
 const MEAN_FACTOR = 1.25;
@@ -108,6 +112,8 @@ export class QualityGovernor {
   private stableBusy = 0;
   private levelSpan = 0;
   private target = MIN_TARGET_MS;
+  /** Frames > OUTLIER_MS in Folge (jeder normale Frame setzt auf 0) */
+  private outlierRun = 0;
 
   // Aufstieg/Backoff
   private lastUpAt = Number.NEGATIVE_INFINITY;
@@ -153,6 +159,7 @@ export class QualityGovernor {
     this.clearStable();
     this.levelSpan = 0;
     this.target = MIN_TARGET_MS;
+    this.outlierRun = 0;
     this.lastUpAt = Number.NEGATIVE_INFINITY;
     this.failCount = 0;
     this.capLevel = 2;
@@ -162,9 +169,15 @@ export class QualityGovernor {
   /**
    * Einen Frame melden. rawDtMs = Zeit seit dem letzten rAF (ungeklemmt), busyMs = CPU-Zeit dieses Frames (negativ/NaN = unbekannt),
    * nowMs = laufende Uhr (performance.now()). Rückgabe: neue Stufe, wenn gewechselt werden soll, sonst null.
+   * Isolierte Frames > 250 ms (Tab-Rückkehr, Laden) werden nicht gewertet, anhaltend lange Frames (ab dem dritten in Folge) schon.
    */
   feed(rawDtMs: number, busyMs: number, nowMs: number): QualityLevel | null {
-    if (!(rawDtMs >= 2) || rawDtMs > OUTLIER_MS) return null; // ungültig bzw. Tab-Rückkehr/Laden: nicht werten
+    if (!(rawDtMs >= 2) || !Number.isFinite(rawDtMs)) return null; // ungültig: nicht werten
+    if (rawDtMs > OUTLIER_MS) {
+      if (++this.outlierRun < OUTLIER_RUN_MIN) return null; // Tab-Rückkehr/Laden: nicht werten
+    } else {
+      this.outlierRun = 0;
+    }
     const busy = busyMs >= 0 && busyMs < 1e6 ? busyMs : rawDtMs; // unbekannt → als ausgelastet annehmen
     this.ring[this.ringPos] = rawDtMs;
     this.ringPos = (this.ringPos + 1) % RING;
