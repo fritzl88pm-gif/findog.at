@@ -12,7 +12,7 @@ export const SWIPE_MIN_DY = 10;
  * beim Loslassen springt es ohnehin sofort.
  */
 export const SWIPE_EXTEND_MS = 60;
-/** Weg nach unten (px), ab dem das Entscheidungsfenster bis SWIPE_EXTEND_MS offen bleibt (dy muss dx dabei verdoppeln). */
+/** Weg nach unten (px), ab dem das Entscheidungsfenster bis SWIPE_EXTEND_MS offen bleibt (dy muss dx dabei um SWIPE_RATIO überwiegen, wie beim Wisch). */
 export const SWIPE_DRIFT_DY = 2;
 /** Linker Anteil der angehängten Fläche, in dem Touch-Sprünge um das Entscheidungsfenster verzögert werden. */
 export const LEFT_ZONE = 0.45;
@@ -22,7 +22,7 @@ export const JUMP_ASSIST_S = 0.38;
 export const NAV_REPEAT_MS = 350;
 
 const NAV_DEADZONE = 0.5;
-/** Wisch-Verhältnis im Entscheidungsfenster (dy muss dx deutlich überwiegen) */
+/** Wisch-Verhältnis im Entscheidungsfenster (dy muss dx deutlich überwiegen, Kegel von ca. 35° um die Senkrechte); gilt auch für Wisch-Kandidaten und die Fensterverlängerung */
 const SWIPE_RATIO = 1.4;
 /**
  * Obergrenze (s) für den Halte-Ausgleich verzögerter Touch-Sprünge. Muss die verlängerte Wartezeit (SWIPE_EXTEND_MS plus ein
@@ -227,8 +227,10 @@ export class InputManager {
         this.edgeSlide = true;
         this.swipeSlideUntil = this.now + 0.6;
         this.ptrJump.delete(e.pointerId);
-      } else if (dy * dy + dx * dx >= SWIPE_MIN_DY * SWIPE_MIN_DY) {
-        // Bewegung in eine andere Richtung: kein Wisch nach unten, also springen
+      } else if (dy * dy + dx * dx >= SWIPE_MIN_DY * SWIPE_MIN_DY && dy <= dx * SWIPE_RATIO) {
+        // Bewegung in eine andere Richtung: kein Wisch nach unten mehr möglich, also springen. Zieht der Finger noch klar
+        // nach unten (dy > 1,4 dx, aber erst unter 10 px), bleibt es ein Wisch-Kandidat: der Weg ist durch dx schon ≥ 10 px,
+        // das Fenster (expirePending) entscheidet dann spätestens bei SWIPE_EXTEND_MS.
         this.commitPending(s, this.clock());
       }
       return;
@@ -253,8 +255,9 @@ export class InputManager {
     if (!s.pending) return;
     const age = this.tmpMs - s.t;
     if (age < SWIPE_DECIDE_MS) return;
-    // Wisch aus dem Stand: zieht der Finger schon erkennbar nach unten, noch bis SWIPE_EXTEND_MS auf die 10 px warten
-    if (age < SWIPE_EXTEND_MS && s.lastDy >= SWIPE_DRIFT_DY && s.lastDy > s.lastDx * 2) return;
+    // Wisch aus dem Stand: zieht der Finger schon erkennbar nach unten (im selben Kegel wie der Wisch selbst),
+    // noch bis SWIPE_EXTEND_MS auf die 10 px warten
+    if (age < SWIPE_EXTEND_MS && s.lastDy >= SWIPE_DRIFT_DY && s.lastDy > s.lastDx * SWIPE_RATIO) return;
     this.commitPending(s, this.tmpMs);
   };
 

@@ -329,6 +329,7 @@ const minJerk =
 /**
  * Berührung im Frame-Takt wie im Browser: Zeiger-Ereignisse zwischen den Frames zum eigenen Zeitpunkt, die Bewegung gebündelt
  * zu Frame-Beginn, danach die 120-Hz-Sim-Schritte des Frames. `phase` verschiebt die Berührung gegen den Frame-Takt.
+ * `dxAt` ist der seitliche Weg (px) für schräge Wische; ohne Angabe bleibt der Finger senkrecht.
  */
 function touchRun(
   hz: number,
@@ -336,6 +337,7 @@ function touchRun(
   dyAt: (ms: number) => number,
   upAfter: number,
   onInput?: (o: SimInput) => void,
+  dxAt?: (ms: number) => number,
 ): { jumps: number; slides: number } {
   const period = 1000 / hz;
   const steps = Math.max(1, Math.round(period / (1000 / 120)));
@@ -344,6 +346,7 @@ function touchRun(
   let isDown = false;
   let isUp = false;
   let lastY = 0;
+  let lastX = 0;
   let jumps = 0;
   let slides = 0;
   for (let k = 0; k < 160; k += 1) {
@@ -355,15 +358,17 @@ function touchRun(
     }
     if (isDown && !isUp && up <= frame) {
       t = up;
-      fire("pointerup", { x: 200, y: 200 + lastY });
+      fire("pointerup", { x: 200 + lastX, y: 200 + lastY });
       isUp = true;
     }
     t = frame;
     if (isDown && !isUp) {
       const dy = dyAt(frame - down);
-      if (dy > 0 && dy !== lastY) {
-        fire("pointermove", { x: 200, y: 200 + dy });
+      const dx = dxAt ? dxAt(frame - down) : 0;
+      if ((dy > 0 || dx > 0) && (dy !== lastY || dx !== lastX)) {
+        fire("pointermove", { x: 200 + dx, y: 200 + dy });
         lastY = dy;
+        lastX = dx;
       }
     }
     mgr.poll();
@@ -493,7 +498,7 @@ describe("Wisch aus dem Stand und Tippen mit Drift (Fix-Runde 1)", () => {
     const cases: Array<[string, number, number, Array<[number, number]>]> = [
       ["1 px nach unten", 200, 201, []],
       ["5 px seitlich", 205, 200, []],
-      ["3 px nach unten, 2 px seitlich (dy nicht doppelt so groß)", 202, 203, []],
+      ["3 px nach unten, 3 px seitlich (dy nicht größer als 1,4 dx: außerhalb des Wisch-Kegels)", 203, 203, []],
       ["4 px nach oben", 200, 196, []],
       ["4 px nach unten und zurück", 200, 200, [[200, 204]]],
     ];
@@ -564,6 +569,110 @@ describe("Wisch aus dem Stand und Tippen mit Drift (Fix-Runde 1)", () => {
     expect(o.slidePressed).toBe(true);
     expect(o.jumpPressed).toBe(false);
   });
+});
+
+describe("Schräge Wische (Fix-Runde 2)", () => {
+  it("Grenzfall: erste Bewegung klar nach unten, aber noch unter 10 px (dx 4, dy 9,5): kein Sprung, danach Rutschen", () => {
+    fire("pointerdown", { x: 200, y: 200 });
+    t = 10;
+    fire("pointermove", { x: 204, y: 209.5 }); // Weg 10,3 px, dy überwiegt dx aber um mehr als 1,4: noch ein Wisch-Kandidat
+    expect(step().jumpPressed).toBe(false);
+    t = 20;
+    fire("pointermove", { x: 206, y: 230 });
+    const o = step();
+    expect(o.slidePressed).toBe(true);
+    expect(o.jumpPressed).toBe(false);
+    t = 200;
+    expect(step().jumpPressed).toBe(false);
+    fire("pointerup", { x: 206, y: 230 });
+    expect(step().jumpPressed).toBe(false);
+  });
+
+  it("Wisch-Kegel ab 10 px Weg: dy > 1,4 dx wartet weiter, dy <= 1,4 dx springt sofort", () => {
+    const cases: Array<[string, number, number, boolean]> = [
+      ["dx 4, dy 9,5 (Weg 10,3)", 4, 9.5, false],
+      ["dx 7, dy 9,9: knapp im Kegel (9,9 > 9,8)", 7, 9.9, false],
+      ["dx 7,2, dy 9,9: knapp außerhalb (9,9 <= 10,08)", 7.2, 9.9, true],
+      ["dx 10, dy 0 (rein seitlich)", 10, 0, true],
+      ["dx 0, dy -10 (nach oben)", 0, -10, true],
+    ];
+    cases.forEach(([name, dx, dy, jumps], i) => {
+      mgr.releaseAll();
+      t = 1000 * (i + 1);
+      const base = t;
+      fire("pointerdown", { id: 20 + i, x: 200, y: 200 });
+      t = base + 6;
+      fire("pointermove", { id: 20 + i, x: 200 + dx, y: 200 + dy });
+      expect(step().jumpPressed, name).toBe(jumps);
+    });
+  });
+
+  it("erst Wisch-Kandidat, dann zur Seite abgebogen: Sprung sofort, nicht erst nach dem Fenster", () => {
+    fire("pointerdown", { x: 200, y: 200 });
+    t = 8;
+    fire("pointermove", { x: 204, y: 209.5 });
+    expect(step().jumpPressed).toBe(false);
+    t = 14;
+    fire("pointermove", { x: 215, y: 210 }); // dx 15, dy 10: kein Wisch mehr
+    const o = step();
+    expect(o.jumpPressed).toBe(true);
+    expect(o.slidePressed).toBe(false);
+  });
+
+  it("Tippen mit Drift im Wisch-Kegel (3 px nach unten, 2 px seitlich) wartet bis SWIPE_EXTEND_MS", () => {
+    fire("pointerdown", { x: 200, y: 200 });
+    t = 8;
+    fire("pointermove", { x: 202, y: 203 });
+    t = SWIPE_DECIDE_MS + 4;
+    expect(step().jumpPressed).toBe(false);
+    t = SWIPE_EXTEND_MS - 1;
+    expect(step().jumpPressed).toBe(false);
+    t = SWIPE_EXTEND_MS;
+    expect(step().jumpPressed).toBe(true);
+  });
+
+  it("schräger Wisch aus dem Stand mit langsamem Start (dx 2/dy 3 bei 10 ms, dx 3/dy 5 bei 24 ms, dx 8/dy 30 bei 40 ms): nur Rutschen", () => {
+    fire("pointerdown", { x: 200, y: 200 });
+    const seq: string[] = [];
+    const frame = (ms: number, dx?: number, dy?: number): void => {
+      t = ms;
+      if (dx !== undefined && dy !== undefined) fire("pointermove", { x: 200 + dx, y: 200 + dy });
+      const o = step();
+      seq.push(o.jumpPressed ? "J" : o.slidePressed ? "S" : "-");
+    };
+    // dy 3 bei dx 2: im Kegel (3 > 2,8), das Fenster bleibt über die 28 ms hinaus offen
+    frame(10, 2, 3);
+    frame(24, 3, 5);
+    frame(32);
+    frame(40, 8, 30);
+    frame(60);
+    expect(seq.join("")).toBe("---S-");
+  });
+
+  // Schräge Min-Jerk-Wische: dx/dy 0,25 (14°), 0,45 (24°), 0,6 (31°, nahe am Rand des 35,5°-Kegels von SWIPE_RATIO = 1,4)
+  const profiles: Array<[number, number]> = [
+    [100, 140],
+    [120, 200],
+    [150, 150],
+    [200, 200],
+  ];
+  for (const hz of [60, 120]) {
+    for (const ratio of [0.25, 0.45, 0.6]) {
+      it(`schräge Min-Jerk-Wische (dx/dy ${ratio}) bei ${hz} Hz: je genau ein Rutschen, nie ein Sprung (stufenlos und auf 0,5 px gerastert)`, () => {
+        for (const grid of [0, 2]) {
+          const q = (v: number): number => (grid ? Math.round(v * grid) / grid : v);
+          for (const [dist, dur] of profiles) {
+            for (let i = 0; i < 12; i += 1) {
+              mgr.releaseAll();
+              const path = minJerk(dist, dur);
+              const r = touchRun(hz, (i / 12) * (1000 / hz), (ms) => q(path(ms)), dur + 40, undefined, (ms) => q(path(ms) * ratio));
+              expect({ grid, dist, dur, phase: i, ...r }).toEqual({ grid, dist, dur, phase: i, jumps: 0, slides: 1 });
+            }
+          }
+        }
+      });
+    }
+  }
 });
 
 describe("Wurzelfläche (mobile-robust-02)", () => {
