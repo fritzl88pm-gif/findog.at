@@ -13,6 +13,7 @@ import { yieldToMain } from "../../yield";
 import { Motes } from "../shared-a/fx";
 import { blitTiled, blitTiledRange, glowAt, paint, solidSegments, type Ctx2D } from "../shared-b/canvas";
 import { h1, mod, stageVal } from "../shared-b/color";
+import { flashFactor } from "../shared-b/flash";
 import { nowMs, stageProgress } from "../shared-b/layers";
 import {
   BACK_FLOOR_Y,
@@ -155,6 +156,7 @@ export class FinanzamtRenderer implements WorldRenderer {
     this.props = assets.props;
     await Promise.all([this.backdrop.load(assets.image), assets.props.preload(FA_PROPS).catch(() => undefined)]);
     // Statisches in Schritten bauen und dazwischen den Hauptthread freigeben (kein Long Task, Eingaben laufen weiter)
+    await yieldToMain(); // nicht im selben Task wie das Ende des Ladens von Kulisse und Props
     while (this.stepBuild()) await yieldToMain();
     this.A.props = assets.props;
     for (const stage of [0, 1]) {
@@ -1117,12 +1119,14 @@ export class FinanzamtRenderer implements WorldRenderer {
       }
       g.globalAlpha = 1;
     }
-    // Stufe 5: pulsierendes Alarmlicht am Rand
+    // Stufe 5: pulsierendes Alarmlicht am Rand; die Stärke folgt dem „Blitze“-Regler (flashScale, ohne Regler 1 = wie bisher).
+    // „Weniger Bewegung“ zeigt es ohnehin nur als ruhiges Dauerlicht (kein Pulsieren) – das bleibt unverändert.
     const alarm = v.vars.alarm ?? stageVal(EMERGENCY, s);
-    if (alarm > 0.9 && v.stage >= 4) {
+    const flash = v.reducedMotion ? 1 : flashFactor(v);
+    if (alarm > 0.9 && v.stage >= 4 && flash > 0) {
       const p = v.reducedMotion ? 0.4 : 0.5 + 0.5 * Math.sin(v.time * 3.2);
       g.globalCompositeOperation = "lighter";
-      g.globalAlpha = p * keep;
+      g.globalAlpha = p * keep * flash;
       g.drawImage(this.alarmWash, 0, 0);
       g.globalAlpha = 1;
       g.globalCompositeOperation = "source-over";

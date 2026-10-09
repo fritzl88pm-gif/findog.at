@@ -11,9 +11,9 @@ import { clamp } from "../../draw-utils";
 import type { AssetLoader, Ent, ViewState, WorldRenderer } from "../../types";
 import { yieldToMain } from "../../yield";
 import { Motes } from "../shared-a/fx";
-import { blitCentered, blitTiled, blitTiledRange, bigGlow, glowAt, glowSprite, paint, softSprite, solidSegments, wrapDraw, type Ctx2D } from "../shared-b/canvas";
+import { blitCentered, blitTiled, blitTiledRange, bigGlow, glowAt, glowSprite, paint, softSprite, solidSegments, touchCanvas, wrapDraw, type Ctx2D } from "../shared-b/canvas";
 import { h1, mod, mulberry, stageVal } from "../shared-b/color";
-import { StageCache, StagePrep, stageProgress } from "../shared-b/layers";
+import { StageCache, StagePrep, gradedCache, stageProgress } from "../shared-b/layers";
 import { WarmQueue } from "../shared-b/warm";
 import { LANDMARK_IDS, buildLandmark, steamshipLights, type Landmark, type LandmarkSpec } from "./landmarks";
 import {
@@ -23,6 +23,7 @@ import {
   LEAVES,
   LIGHTS,
   MAX_STAGE,
+  MILKY,
   MOON,
   NIGHT,
   PAL,
@@ -35,7 +36,12 @@ import {
   WATER_DY,
   layerTint,
   tintCanvas,
+  tintMask,
+  tintMul,
+  tintVeil,
+  type Tint,
 } from "./palette";
+import { primeProp, type PrimeSink } from "./propfit";
 import {
   BANK_SPOTS,
   CLOUD_H,
@@ -55,7 +61,10 @@ import {
   raysSprite,
   reflectionTile,
   riverShimmer,
+  skyBase,
   skyCanvas,
+  skyMilky,
+  skyStars,
   vineRowTile,
 } from "./scenery";
 import { WachauSkins, type SkinCtx } from "./skins";
@@ -125,10 +134,86 @@ function cropRows(c: HTMLCanvasElement): { canvas: HTMLCanvasElement; dy: number
   return { canvas: out, dy: y0 };
 }
 
-function layer(src: HTMLCanvasElement, y: number, factor: number, tint: (s: number) => Parameters<typeof tintCanvas>[1], lights: HTMLCanvasElement | null = null): Layer {
+/** Ab so vielen Pixeln einer Ebene entsteht eine Stufen-Variante in kleinen Schritten statt eines großen (Höhenzug 480 k, Bank 830 k, Spiegelung 360 k, Nahes Ufer 850 k, Weinzeilen 330 k Pixel; die übrigen Ebenen sind kleiner) */
+export const SPLIT_PX = 300_000;
+
+/**
+ * Stufen-Cache einer getönten Ebene. Große Ebenen entstehen in drei Schritten (Multiplizieren · Alpha der Quelle auflegen ·
+ * Dunst/Schatten), jeder wird sofort gerastert (`gradedCache`): ein Bake belegt so nicht einen Frame am Stück, sondern drei
+ * (StagePrep: höchstens einen Schritt je ~100 ms). Das Bild ist dasselbe wie `tintCanvas` am Stück (Direktweg, wenn die Stufe
+ * sofort gebraucht wird). Verworfene Stufenflächen werden für den nächsten Bake wiederverwendet.
+ */
+export function tintedCache(src: HTMLCanvasElement, tint: (s: number) => Tint): StageCache {
+  if (src.width * src.height < SPLIT_PX) return new StageCache((s, reuse) => tintCanvas(src, tint(s), false, reuse), { recycle: true });
+  return gradedCache(
+    (s, reuse, grade) => {
+      const t = tint(s);
+      const c = tintMul(src, t, false, reuse);
+      if (grade) {
+        tintMask(c, src, t);
+        tintVeil(c, t);
+      }
+      return c;
+    },
+    [(c, s) => tintMask(c, src, tint(s)), (c, s) => tintVeil(c, tint(s))],
+  );
+}
+
+/**
+ * Stufen-Cache des Himmels. Die Nacht-Stufen (Milchstraße: 60 Farbverläufe und 900 Punkte, Sterne: 340 Kreise) kosten am Stück
+ * ca. 10 ms, bei 4× CPU 40 ms: Verlauf, Milchstraße und Sterne entstehen darum in drei Schritten, jeder sofort gerastert
+ * (der letzte ist der eigentliche Bake). Tag-Stufen ohne Milchstraße und Sterne bleiben bei einem Schritt. Das Bild ist
+ * dasselbe wie `skyCanvas` (Direktweg, wenn die Stufe sofort gebraucht wird). Ein unfertiger Himmel lebt nur so lange wie
+ * seine Stufe (`keep`/`clear` verwerfen ihn, die Fläche geht als Ersatz an den Cache) – wie bei `gradedCache`.
+ */
+export function skyCache(): StageCache {
+  const pending = new Map<number, { c: HTMLCanvasElement; milky: boolean }>();
+  const cache: StageCache = new StageCache(
+    (s, reuse) => {
+      const p = pending.get(s);
+      if (!p) return skyCanvas(s, 1280, SKY_H, reuse);
+      pending.delete(s);
+      if (!p.milky) skyMilky(p.c, s);
+      skyStars(p.c, s);
+      return p.c;
+    },
+    {
+      recycle: true,
+      prep: (s) => {
+        if (!(MILKY[s] > 0.01 || STARS[s] > 0.01)) return false;
+        const p = pending.get(s);
+        if (!p) {
+          const c = skyBase(s, 1280, SKY_H, cache.takeSpare());
+          touchCanvas(c); // Verlauf jetzt rastern; die Schritte danach rastern nur noch ihren Anteil
+          pending.set(s, { c, milky: false });
+          return true;
+        }
+        if (p.milky) return false;
+        p.milky = true;
+        if (!skyMilky(p.c, s)) return false;
+        touchCanvas(p.c);
+        return true;
+      },
+      onKeep: (a, b) => {
+        if (pending.size === 0) return; // Normalfall (läuft pro Frame): keine Iteration, keine Allokation
+        for (const [k, p] of pending) {
+          if (k === a || k === b) continue;
+          pending.delete(k);
+          cache.offerSpare(p.c);
+        }
+      },
+      onClear: () => {
+        for (const [, p] of pending) cache.offerSpare(p.c);
+        pending.clear();
+      },
+    },
+  );
+  return cache;
+}
+
+function layer(src: HTMLCanvasElement, y: number, factor: number, tint: (s: number) => Tint, lights: HTMLCanvasElement | null = null): Layer {
   const cropped = lights ? cropRows(lights) : null;
-  // verworfene Stufenflächen werden für den nächsten Bake wiederverwendet (keine Neuanlage großer Bitmaps)
-  return { staged: new StageCache((s, reuse) => tintCanvas(src, tint(s), false, reuse), { recycle: true }), lights: cropped?.canvas ?? null, lightsDy: cropped?.dy ?? 0, w: src.width, h: src.height, y, factor };
+  return { staged: tintedCache(src, tint), lights: cropped?.canvas ?? null, lightsDy: cropped?.dy ?? 0, w: src.width, h: src.height, y, factor };
 }
 
 // Geometrie (logische Pixel)
@@ -235,14 +320,15 @@ export class WachauRenderer implements WorldRenderer {
     this.staged.length = 0;
     this.warmQ.clear();
     this.warmInit = false;
+    await yieldToMain(); // nicht im selben Task wie das Ende des Prop-Ladens
     while (this.stepBuild()) await yieldToMain();
     this.ready = true;
-    // erste beiden Stufen vorbacken (jeder Bake ein eigener Schritt, dazwischen Pausen)
+    // erste beiden Stufen vorbacken (jeder Teilschritt eines Bakes ein eigener Schritt, dazwischen Pausen)
     for (const stage of [0, 1]) {
       for (const c of this.staged) {
         while (!c.has(stage)) {
           await yieldToMain();
-          c.get(stage);
+          c.step(stage);
         }
       }
     }
@@ -346,7 +432,7 @@ export class WachauRenderer implements WorldRenderer {
   }
 
   private *buildSky(): Generator<void, void, void> {
-    this.sky = this.addStaged(new StageCache((s, reuse) => skyCanvas(s, 1280, SKY_H, reuse), { recycle: true }));
+    this.sky = this.addStaged(skyCache());
     this.clouds = this.addStaged(new StageCache((s, reuse) => cloudAtlas(s, reuse), { recycle: true }));
     const fogW = fogTile(1024, 150, 11);
     this.fogs = this.addStaged(new StageCache((s, reuse) => colorize(fogW, STAGES[s].fog, reuse), { recycle: true }));
@@ -392,10 +478,17 @@ export class WachauRenderer implements WorldRenderer {
 
   private *buildLandmarks(): Generator<void, void, void> {
     this.landmarks = [];
+    // Das erste Zeichnen eines Wahrzeichen-Bildes dekodiert es (ca. 15 ms, bei 4× CPU 50 bis 100 ms) und rastert danach die Fläche
+    // im selben Task: die Erstkosten stehen in einem eigenen Schritt (`primeProp`), dann folgt das Malen
+    let sink: PrimeSink | null = null;
     for (const d of LANDMARKS) {
+      sink = primeProp(this.props, d.spec.id, sink);
+      yield;
       this.landmarks.push({ lm: buildLandmark(d.spec, this.props), x: d.x, up: d.up });
       yield;
     }
+    sink = primeProp(this.props, "landmark-steamship", sink);
+    yield;
     this.ship = buildLandmark({ id: "landmark-steamship", h: 62, fade: 0, haze: 0.22, flood: 0.4 }, this.props);
     this.shipLights = steamshipLights(this.ship.w, this.ship.h);
     for (const l of this.landmarks) {

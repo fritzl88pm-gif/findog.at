@@ -279,64 +279,99 @@ export function stoneWall(g: Ctx2D, x: number, y: number, w: number, h: number, 
 // ------------------------------------------------------------------------------------------------
 // Himmel
 
-export function skyCanvas(stage: number, W: number, Hc: number, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
+/** Höhe des Himmelsverlaufs (px): bis hierhin reicht der Verlauf, daran orientieren sich Glühen, Milchstraße und Sterne */
+const SKY_GRAD_H = 600;
+
+/**
+ * Himmel einer Stufe, Teil 1: Verlauf und Horizontglühen (billig). Teil 2 und 3 (`skyMilky`, `skyStars`) legen Milchstraße und
+ * Sterne darauf; `skyCanvas` malt alle drei am Stück. Die Nacht-Stufen kosten zusammen ca. 10 ms (Milchstraße: 60 Farbverläufe
+ * und 900 Strichpunkte, Sterne: 340 Kreise), bei 4× CPU das Vierfache: der Stufen-Cache backt sie darum in drei Schritten.
+ */
+export function skyBase(stage: number, W: number, Hc: number, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
   const S = STAGES[stage];
-  const H = 600;
-  return paint(W, Hc, (g) => {
-    const grd = g.createLinearGradient(0, 0, 0, H);
-    grd.addColorStop(0, S.skyTop);
-    grd.addColorStop(0.58, S.skyMid);
-    grd.addColorStop(1, S.skyLow);
-    g.fillStyle = grd;
-    g.fillRect(0, 0, W, H);
-    // Horizontglühen
-    if (stage === 2 || stage === 3 || stage === 0) {
-      const hg = g.createRadialGradient(W * 0.7, H, 20, W * 0.7, H, W * 0.75);
-      hg.addColorStop(0, withA(stage === 3 ? "#ff9fb8" : stage === 0 ? "#ffe0c8" : "#ffc070", stage === 3 ? 0.35 : 0.45));
-      hg.addColorStop(1, withA(S.skyMid, 0));
-      g.fillStyle = hg;
+  const H = SKY_GRAD_H;
+  return paint(
+    W,
+    Hc,
+    (g) => {
+      const grd = g.createLinearGradient(0, 0, 0, H);
+      grd.addColorStop(0, S.skyTop);
+      grd.addColorStop(0.58, S.skyMid);
+      grd.addColorStop(1, S.skyLow);
+      g.fillStyle = grd;
       g.fillRect(0, 0, W, H);
-    }
-    // Milchstraße
-    const mk = MILKY[stage];
-    if (mk > 0.01) {
-      const r = mulberry(91);
-      g.save();
-      g.translate(W * 0.55, H * 0.1);
-      g.rotate(0.42);
-      for (let i = 0; i < 60; i += 1) {
-        const px = (r() - 0.5) * W * 1.3;
-        const py = (r() - 0.5) * 90 * (1 + Math.cos((px / W) * 3) * 0.4);
-        const rad = 30 + r() * 60;
-        const mg = g.createRadialGradient(px, py, 0, px, py, rad);
-        mg.addColorStop(0, `rgba(190,200,255,${(0.05 * mk).toFixed(3)})`);
-        mg.addColorStop(1, "rgba(190,200,255,0)");
-        g.fillStyle = mg;
-        g.fillRect(px - rad, py - rad, rad * 2, rad * 2);
+      // Horizontglühen
+      if (stage === 2 || stage === 3 || stage === 0) {
+        const hg = g.createRadialGradient(W * 0.7, H, 20, W * 0.7, H, W * 0.75);
+        hg.addColorStop(0, withA(stage === 3 ? "#ff9fb8" : stage === 0 ? "#ffe0c8" : "#ffc070", stage === 3 ? 0.35 : 0.45));
+        hg.addColorStop(1, withA(S.skyMid, 0));
+        g.fillStyle = hg;
+        g.fillRect(0, 0, W, H);
       }
-      for (let i = 0; i < 900; i += 1) {
-        const px = (r() - 0.5) * W * 1.3;
-        const py = (r() + r() + r() - 1.5) * 60;
-        g.fillStyle = `rgba(230,236,255,${(mk * (0.25 + r() * 0.5)).toFixed(3)})`;
-        g.fillRect(px, py, r() < 0.9 ? 1 : 1.6, 1);
-      }
-      g.restore();
-    }
-    // Sterne
-    const st = STARS[stage];
-    if (st > 0.01) {
-      const r = mulberry(5);
-      for (let i = 0; i < 340; i += 1) {
-        const x = r() * W;
-        const y = r() * H * 0.78;
-        const big = r() > 0.93;
-        g.fillStyle = r() < 0.75 ? `rgba(255,255,255,${(st * (0.45 + r() * 0.5)).toFixed(3)})` : `rgba(255,226,190,${(st * 0.7).toFixed(3)})`;
-        g.beginPath();
-        g.arc(x, y, big ? 1.5 + r() * 0.6 : 0.6 + r() * 0.7, 0, TAU);
-        g.fill();
-      }
-    }
-  }, reuse);
+    },
+    reuse,
+  );
+}
+
+/** Himmel, Teil 2: Milchstraße auf die Fläche von `skyBase`. false = diese Stufe hat keine (nichts getan). */
+export function skyMilky(c: HTMLCanvasElement, stage: number): boolean {
+  const mk = MILKY[stage];
+  if (!(mk > 0.01)) return false;
+  const g = c.getContext("2d");
+  if (!g) return false;
+  const W = c.width;
+  const H = SKY_GRAD_H;
+  const r = mulberry(91);
+  g.save();
+  g.translate(W * 0.55, H * 0.1);
+  g.rotate(0.42);
+  for (let i = 0; i < 60; i += 1) {
+    const px = (r() - 0.5) * W * 1.3;
+    const py = (r() - 0.5) * 90 * (1 + Math.cos((px / W) * 3) * 0.4);
+    const rad = 30 + r() * 60;
+    const mg = g.createRadialGradient(px, py, 0, px, py, rad);
+    mg.addColorStop(0, `rgba(190,200,255,${(0.05 * mk).toFixed(3)})`);
+    mg.addColorStop(1, "rgba(190,200,255,0)");
+    g.fillStyle = mg;
+    g.fillRect(px - rad, py - rad, rad * 2, rad * 2);
+  }
+  for (let i = 0; i < 900; i += 1) {
+    const px = (r() - 0.5) * W * 1.3;
+    const py = (r() + r() + r() - 1.5) * 60;
+    g.fillStyle = `rgba(230,236,255,${(mk * (0.25 + r() * 0.5)).toFixed(3)})`;
+    g.fillRect(px, py, r() < 0.9 ? 1 : 1.6, 1);
+  }
+  g.restore();
+  return true;
+}
+
+/** Himmel, Teil 3: Sterne auf die Fläche von `skyBase`. false = diese Stufe hat keine (nichts getan). */
+export function skyStars(c: HTMLCanvasElement, stage: number): boolean {
+  const st = STARS[stage];
+  if (!(st > 0.01)) return false;
+  const g = c.getContext("2d");
+  if (!g) return false;
+  const W = c.width;
+  const H = SKY_GRAD_H;
+  const r = mulberry(5);
+  for (let i = 0; i < 340; i += 1) {
+    const x = r() * W;
+    const y = r() * H * 0.78;
+    const big = r() > 0.93;
+    g.fillStyle = r() < 0.75 ? `rgba(255,255,255,${(st * (0.45 + r() * 0.5)).toFixed(3)})` : `rgba(255,226,190,${(st * 0.7).toFixed(3)})`;
+    g.beginPath();
+    g.arc(x, y, big ? 1.5 + r() * 0.6 : 0.6 + r() * 0.7, 0, TAU);
+    g.fill();
+  }
+  return true;
+}
+
+/** Himmel einer Stufe am Stück (Direktweg; der Stufen-Cache des Renderers nimmt dieselben drei Teile einzeln) */
+export function skyCanvas(stage: number, W: number, Hc: number, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
+  const c = skyBase(stage, W, Hc, reuse);
+  skyMilky(c, stage);
+  skyStars(c, stage);
+  return c;
 }
 
 /** Wolken-Atlas pro Stufe (4 Wolken übereinander, je 420×120) */

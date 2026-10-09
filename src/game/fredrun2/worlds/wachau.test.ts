@@ -1,19 +1,24 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FIXED_DT, METERS_PER_DIFFICULTY, PLAYER_SX } from "../constants";
 import { Bot } from "../bot";
 import { createPatternCtx } from "../patterns";
 import { Rng } from "../rng";
 import { Sim } from "../sim";
-import type { EntSpec, PatternDef } from "../types";
+import type { EntSpec, PatternDef, PropLibrary, SpriteOpts } from "../types";
 import { WORLDS } from "./index";
 import { auditPatterns, botRuns } from "./shared-b/audit";
 import { WORLD_WACHAU } from "./wachau";
-import { buildLandmark, type LandmarkSpec } from "./wachau/landmarks";
+import { LANDMARK_IDS, buildLandmark, type LandmarkSpec } from "./wachau/landmarks";
 import { landT } from "./wachau/patterns";
-import { WACHAU_STAGE_METERS, WachauRenderer } from "./wachau/renderer";
-import { WACHAU_BARREL_SIZES } from "./wachau/skins";
+import { SPLIT_PX, WACHAU_PROPS, WACHAU_STAGE_METERS, WachauRenderer, skyCache, tintedCache } from "./wachau/renderer";
+import { MILKY, STARS, layerTint, tintCanvas, tintMask, tintMul, tintVeil, type Tint } from "./wachau/palette";
+import { skyBase, skyCanvas, skyMilky, skyStars } from "./wachau/scenery";
+import { primeProp } from "./wachau/propfit";
+import { WACHAU_BARREL_SIZES, WACHAU_PRIME_PROPS } from "./wachau/skins";
 import type { StageCache } from "./shared-b/layers";
-import { assetsOf, installCanvasStub, manifestProps, stubView } from "./shared-b/test-kit";
+import { paint } from "./shared-b/canvas";
+import { assetsOf, installCanvasStub, installRecordingStub, manifestProps, stubView, type RecordingCanvas } from "./shared-b/test-kit";
 
 /** Ein Muster isoliert (ohne Nachbarmuster) vom Bot spielen lassen; Rückgabe = Treffer. */
 function playPattern(p: PatternDef, diff: number, seed: number): number {
@@ -184,9 +189,10 @@ describe("Wachau – Weltladen, Stufen-Backen, Aufwärmen, Skalenwechsel", () =>
     expect(list.filter((c) => c.has(2)).length).toBe(1);
     at(0.31);
     expect(list.filter((c) => c.has(2)).length).toBe(1); // Lücke
-    for (let k = 0; k < list.length + 2; k += 1) {
+    // große Ebenen backen in mehreren Schritten (je ein Schritt je Runde): höchstens 3 Runden je Cache
+    for (let k = 0; k < list.length * 3 + 2; k += 1) {
       clock += 120;
-      at(0.35 + k * 0.01);
+      at(Math.min(0.99, 0.35 + k * 0.01));
     }
     expect(list.every((c) => c.has(2))).toBe(true);
   });
@@ -416,5 +422,403 @@ describe("Wachau – Wahrzeichen-Bakes ohne Zwischenflächen", () => {
     const lo = await spied(0);
     expect(lo.warms).toEqual([0, 0, 0, 0, 0]);
     expect(lo.drops.every((n) => n >= 1)).toBe(true);
+  });
+});
+
+// --- Tönung großer Ebenen in Schritten ------------------------------------------------------------------------------------
+
+/** Die bisherige Tönung in einem Zug (Vorlage, gegen die `tintCanvas` und die Teilschritte dieselben Zeichenbefehle ergeben müssen) */
+function referenceTint(src: HTMLCanvasElement, t: Tint, flipY: boolean, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
+  const wa = (hex: string, a: number): string => {
+    const n = parseInt(hex.replace("#", ""), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${Math.max(0, Math.min(1, a)).toFixed(3)})`;
+  };
+  return paint(
+    src.width,
+    src.height,
+    (g, w, h) => {
+      if (flipY) {
+        g.translate(0, h);
+        g.scale(1, -1);
+      }
+      g.drawImage(src, 0, 0);
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      if (t.mul && t.mul.toLowerCase() !== "#ffffff") {
+        g.globalCompositeOperation = "multiply";
+        g.fillStyle = t.mul;
+        g.fillRect(0, 0, w, h);
+        g.globalCompositeOperation = "destination-in";
+        if (flipY) {
+          g.translate(0, h);
+          g.scale(1, -1);
+        }
+        g.drawImage(src, 0, 0);
+        g.setTransform(1, 0, 0, 1, 0, 0);
+      }
+      g.globalCompositeOperation = "source-atop";
+      if (t.flat && t.flat.a > 0.001) {
+        g.globalAlpha = Math.min(1, t.flat.a);
+        g.fillStyle = t.flat.color;
+        g.fillRect(0, 0, w, h);
+        g.globalAlpha = 1;
+      }
+      if (t.haze && (t.haze.aTop > 0.001 || t.haze.aBottom > 0.001)) {
+        const grd = g.createLinearGradient(0, 0, 0, h);
+        grd.addColorStop(0, wa(t.haze.color, t.haze.aTop));
+        grd.addColorStop(1, wa(t.haze.color, t.haze.aBottom));
+        g.fillStyle = grd;
+        g.fillRect(0, 0, w, h);
+      }
+      if (t.shade && t.shade.a > 0.001) {
+        const y0 = h * t.shade.from;
+        const grd = g.createLinearGradient(0, y0, 0, h);
+        grd.addColorStop(0, wa(t.shade.color, 0));
+        grd.addColorStop(1, wa(t.shade.color, t.shade.a));
+        g.fillStyle = grd;
+        g.fillRect(0, y0, w, h - y0);
+      }
+    },
+    reuse,
+  );
+}
+
+const logOf = (c: HTMLCanvasElement): string[] => (c as unknown as RecordingCanvas).log;
+
+describe("Wachau – Tönung in Teilschritten (tintMul · tintMask · tintVeil)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const tints: Array<[string, Tint]> = [
+    ["Licht + Dunst + Schatten", layerTint(2, 0.36, 0.5, 0.2)],
+    ["Licht + flache Farbe (Spiegelung)", { mul: "#e0c8a0", flat: { color: "#406080", a: 0.25 } }],
+    ["nur Dunst (Licht weiß)", { mul: "#ffffff", haze: { color: "#aabbcc", aTop: 0.1, aBottom: 0.4 } }],
+    ["nur Licht", { mul: "#c0d0ff" }],
+    ["leer", {}],
+  ];
+
+  for (const flipY of [false, true]) {
+    for (const [name, t] of tints) {
+      it(`${name}${flipY ? " (gespiegelt)" : ""}: tintCanvas und die drei Teilschritte malen dieselben Befehle wie die bisherige Tönung am Stück`, () => {
+        const rec = installRecordingStub();
+        const src = paint(40, 24, () => undefined);
+        const ref = referenceTint(src, t, flipY);
+        const whole = tintCanvas(src, t, flipY);
+        const parts = tintMul(src, t, flipY);
+        tintMask(parts, src, t, flipY);
+        tintVeil(parts, t);
+        expect(rec.canvases).toHaveLength(4);
+        expect(logOf(whole)).toEqual(logOf(ref));
+        expect(logOf(parts)).toEqual(logOf(ref));
+      });
+    }
+  }
+
+  it("tintMask und tintVeil melden, ob sie etwas getan haben (sonst bräuchte der Schritt kein Zeitfenster)", () => {
+    installRecordingStub();
+    const src = paint(8, 8, () => undefined);
+    const c = tintMul(src, {});
+    expect(tintMask(c, src, {})).toBe(false);
+    expect(tintMask(c, src, { mul: "#ffffff" })).toBe(false);
+    expect(tintMask(c, src, { mul: "#ffeedd" })).toBe(true);
+    expect(tintVeil(c, {})).toBe(false);
+    expect(tintVeil(c, { flat: { color: "#000", a: 0 } })).toBe(false);
+    expect(tintVeil(c, { shade: { color: "#000", a: 0.3, from: 0.5 } })).toBe(true);
+  });
+});
+
+describe("Wachau – Stufen-Cache großer Ebenen (tintedCache)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const tint = (s: number): Tint => layerTint(s, 0.36, 0.5, 0.2);
+
+  it("eine große Ebene entsteht in drei Schritten und ergibt dieselben Befehle wie der Direktweg", () => {
+    const rec = installRecordingStub();
+    const src = paint(1000, Math.ceil(SPLIT_PX / 1000), () => undefined);
+    const cache = tintedCache(src, tint);
+    let steps = 0;
+    while (!cache.has(2)) {
+      expect(cache.step(2)).toBe(true);
+      steps += 1;
+      expect(steps).toBeLessThan(10);
+    }
+    expect(steps).toBe(3);
+    expect(cache.step(2)).toBe(false);
+    const stepped = rec.canvases[1];
+    const direct = tintedCache(src, tint).get(2);
+    expect(logOf(stepped as unknown as HTMLCanvasElement)).toEqual(logOf(direct));
+    expect(logOf(direct).length).toBeGreaterThan(10);
+  });
+
+  it("Stufen ohne Lichtfarbe (weiß) lassen den Alpha-Schritt aus: zwei statt drei Schritte, gleiches Bild", () => {
+    const rec = installRecordingStub();
+    const src = paint(1000, Math.ceil(SPLIT_PX / 1000), () => undefined);
+    const plain = (): Tint => ({ mul: "#ffffff", haze: { color: "#223344", aTop: 0.1, aBottom: 0.3 } });
+    const cache = tintedCache(src, plain);
+    let steps = 0;
+    while (!cache.has(0)) {
+      cache.step(0);
+      steps += 1;
+    }
+    expect(steps).toBe(2);
+    expect(logOf(rec.canvases[1] as unknown as HTMLCanvasElement)).toEqual(logOf(tintedCache(src, plain).get(0)));
+  });
+
+  it("eine kleine Ebene bleibt bei einem Schritt", () => {
+    installRecordingStub();
+    const src = paint(400, 100, () => undefined);
+    expect(400 * 100).toBeLessThan(SPLIT_PX);
+    const cache = tintedCache(src, tint);
+    expect(cache.step(1)).toBe(true);
+    expect(cache.has(1)).toBe(true);
+    expect(cache.step(1)).toBe(false);
+  });
+
+  it("jeder Schritt rastert die Fläche (touchCanvas), und die Ersatzfläche der verworfenen Stufe wird wiederverwendet", () => {
+    const stub = installCanvasStub();
+    const src = paint(1000, Math.ceil(SPLIT_PX / 1000), () => undefined);
+    const cache = tintedCache(src, tint);
+    while (!cache.has(0)) cache.step(0);
+    while (!cache.has(1)) cache.step(1);
+    cache.keep(1, 2); // Stufe 0 fällt weg → Ersatzfläche
+    const n = stub.created;
+    while (!cache.has(2)) cache.step(2);
+    expect(stub.created).toBe(n); // keine neue Fläche
+  });
+
+  it("im Renderer backen Höhenzug, Bank und Nahes Ufer in mehreren Schritten, die kleinen Ebenen in einem", async () => {
+    const { r } = await loaded();
+    const i = r as unknown as Record<string, { staged: StageCache } | undefined>;
+    const stepsFor = (L: { staged: StageCache } | undefined, stage: number): number => {
+      let n = 0;
+      while (L && !L.staged.has(stage) && n < 10) {
+        L.staged.step(stage);
+        n += 1;
+      }
+      return n;
+    };
+    for (const big of ["ridge", "bank", "near"]) expect(stepsFor(i[big], 2), big).toBeGreaterThanOrEqual(2);
+    for (const small of ["ground", "garland", "grass"]) expect(stepsFor(i[small], 2), small).toBe(1);
+  });
+});
+
+describe("Wachau – Himmel in Teilschritten (skyBase · skyMilky · skyStars)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const count = (c: HTMLCanvasElement, name: string): number => logOf(c).filter((l) => l.startsWith(name + "(")).length;
+
+  it("skyMilky und skyStars melden, ob die Stufe sie hat (nur die Nacht-Stufen); sonst bleibt die Fläche unberührt", () => {
+    installRecordingStub();
+    for (let stage = 0; stage < MILKY.length; stage += 1) {
+      const c = skyBase(stage, 1280, 452);
+      const before = logOf(c).length;
+      expect(skyMilky(c, stage), `Milchstraße Stufe ${stage}`).toBe(MILKY[stage] > 0.01);
+      expect(skyStars(c, stage), `Sterne Stufe ${stage}`).toBe(STARS[stage] > 0.01);
+      if (MILKY[stage] <= 0.01 && STARS[stage] <= 0.01) expect(logOf(c)).toHaveLength(before);
+    }
+  });
+
+  it("die drei Teile malen dieselben Befehle wie der Himmel am Stück, in jeder Stufe", () => {
+    for (let stage = 0; stage < MILKY.length; stage += 1) {
+      const rec = installRecordingStub();
+      const whole = skyCanvas(stage, 1280, 452);
+      const parts = skyBase(stage, 1280, 452);
+      skyMilky(parts, stage);
+      skyStars(parts, stage);
+      expect(rec.canvases).toHaveLength(2);
+      expect(logOf(parts), `Stufe ${stage}`).toEqual(logOf(whole));
+      expect(logOf(whole).length).toBeGreaterThan(5);
+    }
+  });
+
+  it("der Stufen-Cache backt Nacht-Stufen in drei Schritten (Verlauf · Milchstraße · Sterne), Tag-Stufen in einem, mit demselben Bild wie der Direktweg", () => {
+    for (let stage = 0; stage < MILKY.length; stage += 1) {
+      const rec = installRecordingStub();
+      const cache = skyCache();
+      const night = MILKY[stage] > 0.01 && STARS[stage] > 0.01;
+      const snaps: Array<{ radial: number; arcs: number; rects: number }> = [];
+      let steps = 0;
+      while (!cache.has(stage)) {
+        expect(cache.step(stage)).toBe(true);
+        steps += 1;
+        const c = rec.canvases[0] as unknown as HTMLCanvasElement;
+        snaps.push({ radial: count(c, "createRadialGradient"), arcs: count(c, "arc"), rects: count(c, "fillRect") });
+        expect(steps).toBeLessThan(6);
+      }
+      expect(steps, `Stufe ${stage}`).toBe(night ? 3 : 1);
+      expect(cache.step(stage)).toBe(false);
+      if (night) {
+        // Schritt 1: nur Verlauf und Glühen · Schritt 2: Milchstraße (viele Füllungen, noch keine Kreise) · Schritt 3: Sterne
+        expect(snaps[0].rects).toBeLessThan(10);
+        expect(snaps[0].arcs).toBe(0);
+        expect(snaps[1].rects).toBeGreaterThan(900);
+        expect(snaps[1].arcs).toBe(0);
+        expect(snaps[2].arcs).toBe(340);
+      }
+      const stepped = rec.canvases[0] as unknown as HTMLCanvasElement;
+      const direct = skyCache().get(stage);
+      expect(logOf(stepped), `Stufe ${stage}`).toEqual(logOf(direct));
+    }
+  });
+
+  it("ein unfertiger Himmel lebt nur so lange wie seine Stufe: keep und clear verwerfen ihn, seine Fläche dient dem nächsten Bake als Ersatz", () => {
+    const stub = installCanvasStub();
+    const cache = skyCache();
+    cache.step(4); // Verlauf der Stufe 4 steht, Milchstraße und Sterne fehlen noch
+    expect(cache.has(4)).toBe(false);
+    const n = stub.created;
+    cache.keep(2, 3); // Stufe 4 gehört nicht mehr dazu
+    while (!cache.has(3)) cache.step(3);
+    expect(stub.created).toBe(n); // kein Rohbild in falscher Stufe fortgesetzt, keine neue Fläche
+    cache.step(4);
+    cache.clear(); // z. B. Skalenwechsel: auch der unfertige Himmel gehört zur alten Größe
+    expect(cache.has(3)).toBe(false);
+    const m = stub.created;
+    while (!cache.has(4)) cache.step(4);
+    expect(stub.created).toBe(m);
+  });
+
+  it("im Renderer backt der Himmel die Nacht-Stufe in mehreren Schritten", async () => {
+    const { r } = await loaded();
+    const sky = (r as unknown as { sky: StageCache }).sky;
+    let n = 0;
+    while (!sky.has(3) && n < 10) {
+      sky.step(3);
+      n += 1;
+    }
+    expect(n).toBe(3);
+  });
+});
+
+// --- Erstkosten der Prop-Bilder (Dekodieren, Mip-Kette) im Leerlauf bzw. in eigenen Ladeschritten ------------------------------
+
+interface DrawCall {
+  id: string;
+  o: SpriteOpts | undefined;
+  /** Stand des Zählers `stamp` beim Aufruf (hier: Anzahl der Bauschritte) */
+  at: number;
+}
+
+/** Prop-Bibliothek nach Manifest, die jeden `draw`-Aufruf mit Prop-ID, Optionen und Zählerstand merkt */
+function spyProps(stamp: () => number = () => 0): { props: PropLibrary; calls: DrawCall[] } {
+  const calls: DrawCall[] = [];
+  const base = manifestProps();
+  return {
+    props: {
+      ...base,
+      draw: (_g, id, _x, _y, o) => {
+        calls.push({ id, o, at: stamp() });
+        return true;
+      },
+    },
+    calls,
+  };
+}
+
+/** Kantenlänge des winzigen Aufwärm-Draws (`primeProp`) */
+const isPrime = (c: DrawCall): boolean => c.o?.w === 8;
+
+describe("Wachau – Erstkosten der Prop-Bilder", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("WACHAU_PRIME_PROPS nennt genau die Props, die die Skins verkleinert backen (Fass, Kisten, Mauer, Fass-/Kistenstapel, Ast, Ranken)", () => {
+    const src = readFileSync("src/game/fredrun2/worlds/wachau/skins.ts", "utf8");
+    // Streifen (Marille, Traube) und der Schwarm werden beim Aufwärmen bzw. direkt gezeichnet, das Floß steht in der Uferkachel
+    const elsewhere = new Set(["raft", "bee-swarm", "apricot", "grape-bunch"]);
+    const landmarks = new Set<string>(LANDMARK_IDS);
+    const used = WACHAU_PROPS.filter((id) => !landmarks.has(id) && !elsewhere.has(id) && src.includes(`"${id}"`));
+    expect([...WACHAU_PRIME_PROPS].sort()).toEqual([...used].sort());
+  });
+
+  it("warm zahlt die Erstkosten jedes dieser Props genau einmal (winziger Draw), auch nach einem Skalenwechsel nicht erneut", async () => {
+    installCanvasStub();
+    const { props, calls } = spyProps();
+    const r = new WachauRenderer();
+    await r.load(assetsOf(props));
+    calls.length = 0;
+    let rounds = 0;
+    while (!r.warm(50) && rounds < 500) rounds += 1;
+    expect(rounds).toBeLessThan(500);
+    const primes = calls.filter(isPrime);
+    expect(primes.map((c) => c.id).sort()).toEqual([...WACHAU_PRIME_PROPS].sort());
+    r.resize(1.5); // Sprites verworfen und neu bestellt – die Bilder bleiben aufgewärmt
+    rounds = 0;
+    while (!r.warm(50) && rounds < 500) rounds += 1;
+    expect(calls.filter(isPrime).length).toBe(WACHAU_PRIME_PROPS.length);
+  });
+
+  it("warm zahlt die Erstkosten vor dem ersten Bake dieser Props (Fass-Bakes ziehen das Prop wine-barrel erst danach)", async () => {
+    installCanvasStub();
+    const { props, calls } = spyProps();
+    const r = new WachauRenderer();
+    await r.load(assetsOf(props));
+    calls.length = 0;
+    let rounds = 0;
+    while (!r.warm(50) && rounds < 500) rounds += 1;
+    const first = (id: string, pred: (c: DrawCall) => boolean): number => calls.findIndex((c) => c.id === id && pred(c));
+    const prime = first("wine-barrel", isPrime);
+    expect(prime).toBeGreaterThanOrEqual(0);
+    const real = first("wine-barrel", (c) => !isPrime(c));
+    if (real >= 0) expect(prime).toBeLessThan(real);
+  });
+
+  it("primeProp ist reine Optimierung: nicht zeichenbare Bilder werfen nicht, unbekannte Props und fehlende Bibliothek tun nichts", () => {
+    installCanvasStub();
+    const bad: PropLibrary = {
+      ...manifestProps(),
+      draw: () => {
+        throw new Error("kaputtes Bild");
+      },
+    };
+    expect(() => primeProp(bad, "wachau-wall")).not.toThrow();
+    const sink = primeProp(bad, "wachau-wall");
+    expect(sink).not.toBeNull();
+    expect(primeProp(bad, "gibt-es-nicht", sink)).toBe(sink); // Prop unbekannt: Fläche unverändert zurück
+    expect(primeProp(null, "wachau-wall")).toBeNull();
+    const ok = spyProps();
+    const again = primeProp(ok.props, "wachau-wall", sink);
+    expect(again).toBe(sink); // Aufwärmfläche wird wiederverwendet
+    expect(ok.calls.map((c) => c.id)).toEqual(["wachau-wall"]);
+  });
+
+  it("ohne Prop-Bilder (Rückfall) passiert beim Aufwärmen nichts Zusätzliches", async () => {
+    installCanvasStub();
+    const r = new WachauRenderer();
+    const draw = vi.fn(() => false);
+    await r.load(assetsOf({ has: () => false, preload: async () => undefined, draw, cell: () => null }));
+    let rounds = 0;
+    while (!r.warm(50) && rounds < 500) rounds += 1;
+    expect(rounds).toBeLessThan(500);
+    expect(draw).not.toHaveBeenCalled();
+  });
+
+  it("load: jedes Wahrzeichen-Bild wird in einem eigenen, früheren Bauschritt aufgewärmt als sein Bake (Dekodieren und Malen nicht im selben Task)", async () => {
+    installCanvasStub();
+    let steps = 0;
+    const { props, calls } = spyProps(() => steps);
+    const r = new WachauRenderer();
+    const holder = r as unknown as { stepBuild: () => boolean };
+    const orig = holder.stepBuild.bind(r);
+    holder.stepBuild = () => {
+      steps += 1;
+      return orig();
+    };
+    await r.load(assetsOf(props));
+    for (const id of LANDMARK_IDS) {
+      const mine = calls.filter((c) => c.id === id);
+      const prime = mine.find(isPrime);
+      const full = mine.find((c) => c.o?.h !== undefined);
+      expect(prime, `${id}: Aufwärm-Draw`).toBeDefined();
+      expect(full, `${id}: Bake`).toBeDefined();
+      expect(prime?.at, id).toBeLessThan(full?.at ?? 0);
+    }
   });
 });

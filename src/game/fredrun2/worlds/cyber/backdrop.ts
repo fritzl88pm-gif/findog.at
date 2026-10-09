@@ -4,7 +4,7 @@
  */
 import type { PropLibrary } from "../../types";
 import { makeCanvas } from "../../draw-utils";
-import { colorWithAlpha, ctxOf, paint, recycled, rr, wrapDraw, type Ctx2D } from "../shared-b/canvas";
+import { colorWithAlpha, ctxOf, paint, recycled, rr, touchCanvas, wrapDraw, type Ctx2D } from "../shared-b/canvas";
 import { hexRgb, mulberry, type RGB } from "../shared-b/color";
 import { CYAN, MAGENTA, MINT, TAU, VIOLET } from "./palette";
 
@@ -703,6 +703,34 @@ export function holoFromSource(src: HTMLCanvasElement, edge: string, bodyCol: st
     const r = it.next();
     if (r.done) return r.value;
   }
+}
+
+/** Kantenlänge der Aufwärmfläche von `primeProp` (px) */
+const PRIME_PX = 8;
+
+/** Aufwärmfläche von `primeProp`: eine OffscreenCanvas (kein DOM-Element, in keiner Canvas-Zählung), sonst eine winzige Canvas */
+export type PrimeSink = OffscreenCanvas | HTMLCanvasElement;
+
+/**
+ * Erstkosten eines Prop-Bildes jetzt zahlen: winzige Verkleinerung und sofort rastern (`touchCanvas`). Der erste Draw eines
+ * Bildes dekodiert es (bei 1× 5 bis 25 ms, bei 4× CPU 50 bis 100 ms) und rastert die Fläche im selben Task; mit der Aufwärm-
+ * Fläche stehen die Erstkosten in einem eigenen, kurzen Schritt, der echte Draw kostet danach nur noch das Malen.
+ * `sink` = Aufwärmfläche eines früheren Aufrufs (wiederverwendet); Rückgabe = die benutzte Fläche. Ohne Prop passiert nichts.
+ */
+export function primeProp(props: PropLibrary | null, id: string, sink: PrimeSink | null = null): PrimeSink | null {
+  if (!props || !props.has(id)) return sink;
+  const c: PrimeSink = sink ?? (typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(PRIME_PX, PRIME_PX) : makeCanvas(PRIME_PX, PRIME_PX));
+  try {
+    const g = c.getContext("2d") as CanvasRenderingContext2D | null;
+    if (!g) return c;
+    g.clearRect(0, 0, PRIME_PX, PRIME_PX);
+    g.imageSmoothingQuality = "high";
+    props.draw(g, id, 0, 0, { w: PRIME_PX, ax: 0, ay: 0 });
+    touchCanvas(c as HTMLCanvasElement); // liest die Fläche nur als Bildquelle (1×1-Ausschnitt), OffscreenCanvas ist dafür gültig
+  } catch {
+    // reine Optimierung: ein nicht zeichenbares Bild fällt später beim echten Draw (mit dessen Fehlerbehandlung) auf
+  }
+  return c;
 }
 
 /** Stephansdom-Quelle: gemaltes Landmark (falls geladen) oder prozedurale Silhouette. */

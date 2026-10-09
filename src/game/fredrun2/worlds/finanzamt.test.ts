@@ -335,3 +335,58 @@ describe("Finanzamt – Sprite-Bake außerhalb des Bildes", () => {
     expect(OFFSCREEN_X).toBeLessThan(1280 + 260);
   });
 });
+
+describe("Finanzamt – Alarmlicht und Blitz-Regler (flashScale)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** Deckkraft, mit der drawOverlay das Alarmlicht zeichnet (null = nicht gezeichnet) */
+  async function alarmAlpha(over: Parameters<typeof stubView>[0]): Promise<number | null> {
+    const { r } = await loaded();
+    const wash = (r as unknown as { alarmWash: unknown }).alarmWash;
+    let cur = 1;
+    let hit: number | null = null;
+    const g = new Proxy(
+      {},
+      {
+        get(_t, p: string) {
+          if (p === "globalAlpha") return cur;
+          if (p === "drawImage") {
+            return (img: unknown): void => {
+              if (img === wash) hit = cur;
+            };
+          }
+          return (): undefined => undefined;
+        },
+        set(_t, p: string, v: unknown) {
+          if (p === "globalAlpha") cur = v as number;
+          return true;
+        },
+      },
+    ) as unknown as CanvasRenderingContext2D;
+    // sin(time · 3,2) = 1 → volle Pulsstärke
+    r.drawOverlay(g, stubView({ stage: 4, vars: { alarm: 1 }, time: Math.PI / 2 / 3.2, ...over }));
+    return hit;
+  }
+
+  it("ohne Feld und mit flashScale 1: das Alarmlicht wie bisher (volle Pulsstärke)", async () => {
+    expect(await alarmAlpha({})).toBeCloseTo(1, 9);
+    expect(await alarmAlpha({ flashScale: 1 })).toBeCloseTo(1, 9);
+  });
+
+  it("flashScale 0,3 dämpft das Pulsieren auf 30 %, flashScale 0 schaltet es ab", async () => {
+    expect(await alarmAlpha({ flashScale: 0.3 })).toBeCloseTo(0.3, 9);
+    expect(await alarmAlpha({ flashScale: 0 })).toBeNull();
+  });
+
+  it("„Weniger Bewegung“: ruhiges Dauerlicht (0,4) wie bisher, unabhängig vom Regler", async () => {
+    expect(await alarmAlpha({ reducedMotion: true })).toBeCloseTo(0.4, 9);
+    expect(await alarmAlpha({ reducedMotion: true, flashScale: 0.3 })).toBeCloseTo(0.4, 9);
+  });
+
+  it("vor Stufe 5 gibt es kein Alarmlicht", async () => {
+    expect(await alarmAlpha({ stage: 3 })).toBeNull();
+  });
+});

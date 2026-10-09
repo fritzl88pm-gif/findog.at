@@ -5,7 +5,8 @@
  * pro Zielgröße (zweistufig, „high“-Glättung) auf ein Offscreen-Canvas gebacken; das Ergebnis läuft anschließend durch den
  * Sprite-Cache der Skins (Stufen-Tönung, Rimlight). Pro Frame kostet das Zeichnen nur `drawImage`.
  */
-import { paint } from "../shared-b/canvas";
+import { makeCanvas } from "../../draw-utils";
+import { paint, touchCanvas } from "../shared-b/canvas";
 import type { PropLibrary } from "../../types";
 
 /** Transparenter Rand um die Silhouette im Quellbild (px) */
@@ -42,6 +43,35 @@ export function fitBox(aspect: number, w: number, h: number, rmin: number, rmax:
 /** Auf ein Vielfaches von q aufrunden (weniger verschiedene Sprite-Größen im Cache, Bild nie kleiner als die Hitbox) */
 export function quant(v: number, q = 4): number {
   return Math.ceil(v / q - 0.001) * q;
+}
+
+/** Kantenlänge der Aufwärmfläche von `primeProp` (px): winzig, die Mip-Kette des Bildes entsteht trotzdem vollständig */
+const PRIME_PX = 8;
+
+/** Aufwärmfläche von `primeProp`: eine OffscreenCanvas (kein DOM-Element, in keiner Canvas-Zählung), sonst eine winzige Canvas */
+export type PrimeSink = OffscreenCanvas | HTMLCanvasElement;
+
+/**
+ * Erstkosten eines Prop-Bildes jetzt zahlen: winzige „high“-Verkleinerung und sofort rastern (`touchCanvas`; dort fallen das
+ * lazy Dekodieren und die Mip-Kette an: 3 bis 16 ms bei 1×, 50 bis 100 ms bei 4× CPU). Danach kostet jeder echte Draw dieses Bildes,
+ * in jeder Größe, nur noch das Malen – und die Erstkosten stehen in einem eigenen, kurzen Schritt statt zusammen mit dem Bake
+ * im selben Task. `sink` = Aufwärmfläche eines früheren Aufrufs (wiederverwendet); Rückgabe = die benutzte Fläche.
+ * Ohne Bibliothek oder fehlendes Prop passiert nichts.
+ */
+export function primeProp(props: PropLibrary | null, id: string, sink: PrimeSink | null = null): PrimeSink | null {
+  if (!props || !props.has(id)) return sink;
+  const c: PrimeSink = sink ?? (typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(PRIME_PX, PRIME_PX) : makeCanvas(PRIME_PX, PRIME_PX));
+  try {
+    const g = c.getContext("2d") as CanvasRenderingContext2D | null;
+    if (!g) return c;
+    g.clearRect(0, 0, PRIME_PX, PRIME_PX);
+    g.imageSmoothingQuality = "high";
+    props.draw(g, id, 0, 0, { w: PRIME_PX, ax: 0, ay: 0 });
+    touchCanvas(c as HTMLCanvasElement); // liest die Fläche nur als Bildquelle (1×1-Ausschnitt), OffscreenCanvas ist dafür gültig
+  } catch {
+    // reine Optimierung: ein nicht zeichenbares Bild fällt später beim echten Draw (mit dessen Fehlerbehandlung) auf
+  }
+  return c;
 }
 
 /** Quell-Rechteck (rx, ry, rw, rh in Zellpixeln) auf (0, 0, dw, dh) zeichnen */

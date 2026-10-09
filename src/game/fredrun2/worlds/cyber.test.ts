@@ -5,14 +5,15 @@ import { FIXED_DT, PLAYER_H } from "../constants";
 import { createPatternCtx } from "../patterns";
 import { Rng } from "../rng";
 import { NO_INPUT, Sim } from "../sim";
-import type { Ent, EntSpec } from "../types";
+import type { Ent, EntSpec, PropLibrary, SpriteOpts } from "../types";
 import { WORLD_CYBER } from "./cyber";
-import { holoFromSource } from "./cyber/backdrop";
+import { holoFromSource, primeProp } from "./cyber/backdrop";
 import { FLIGHT } from "./cyber/patterns";
-import { CYBER_STAGE_METERS, CyberRenderer } from "./cyber/renderer";
-import { drawHover, makeSkinAssets, type SkinCtx } from "./cyber/skins";
+import { CYBER_RUN_PROPS, CYBER_STAGE_METERS, CyberRenderer, SPLIT_STRIPS, bakedLayer } from "./cyber/renderer";
+import { drawHover, makeSkinAssets, makeSkinAssetsSteps, type SkinCtx } from "./cyber/skins";
 import { WORLDS } from "./index";
 import { auditPatterns, botRuns } from "./shared-b/audit";
+import { paint } from "./shared-b/canvas";
 import type { StageCache } from "./shared-b/layers";
 import { assetsOf, installCanvasStub, installRecordingStub, manifestProps, stubView, type RecordingCanvas } from "./shared-b/test-kit";
 
@@ -156,9 +157,13 @@ interface CyberInternals {
   ensureSplit(st: number): boolean;
   skin: { glitch: number };
   splitDone: number;
+  splitBuilt: boolean;
+  splitStage: number;
   splitR: unknown;
   splitC: unknown;
+  splitReady(v: ReturnType<typeof stubView>, st: number): boolean;
   mid: { cache: StageCache };
+  rain: HTMLCanvasElement[][];
 }
 
 const inner = (r: CyberRenderer): CyberInternals => r as unknown as CyberInternals;
@@ -241,9 +246,10 @@ describe("Cyber – Stufenlänge, Weltladen, Stufen-Backen, Aufwärmen", () => {
     expect(list.filter((c) => c.has(2)).length).toBe(1);
     at(0.31);
     expect(list.filter((c) => c.has(2)).length).toBe(1); // Lücke
-    for (let k = 0; k < list.length + 2; k += 1) {
+    // große Ebenen backen in mehreren Schritten (je ein Schritt je Runde): höchstens 3 Runden je Cache
+    for (let k = 0; k < list.length * 3 + 2; k += 1) {
       clock += 120;
-      at(0.35 + k * 0.01);
+      at(Math.min(0.99, 0.35 + k * 0.01));
     }
     expect(list.every((c) => c.has(2))).toBe(true);
   });
@@ -320,25 +326,89 @@ describe("Cyber – Stufenlänge, Weltladen, Stufen-Backen, Aufwärmen", () => {
     expect(inner(r).staged.every((c) => c.has(4))).toBe(true);
   });
 
-  it("RGB-Split-Kopien: höchstens eine je Aufruf, für dieselbe Stufe nur einmal, über Stufenwechsel dieselben Flächen", async () => {
+  it("RGB-Split-Kopien: höchstens ein Streifen je Aufruf, für dieselbe Stufe nur einmal, über Stufenwechsel dieselben Flächen", async () => {
     const { r, stub } = await loaded();
     const i = inner(r);
+    const steps = SPLIT_STRIPS * 2;
     const n = stub.created;
-    expect(i.ensureSplit(0)).toBe(false);
-    expect(i.splitR).not.toBeNull();
-    expect(i.splitC).toBeNull();
-    expect(stub.created).toBeGreaterThan(n);
+    // erste Kopie (rot): SPLIT_STRIPS Schritte, die Fläche entsteht beim ersten
+    for (let k = 1; k <= SPLIT_STRIPS; k += 1) {
+      expect(i.ensureSplit(0)).toBe(false);
+      expect(i.splitDone).toBe(k);
+      expect(i.splitR).not.toBeNull();
+      expect(i.splitC).toBeNull();
+    }
+    expect(stub.created).toBe(n + 1);
+    // zweite Kopie (cyan)
+    for (let k = SPLIT_STRIPS + 1; k < steps; k += 1) expect(i.ensureSplit(0)).toBe(false);
+    expect(i.splitC).not.toBeNull();
     expect(i.ensureSplit(0)).toBe(true);
+    expect(i.splitBuilt).toBe(true);
     const m = stub.created;
+    expect(m).toBe(n + 2);
     const [rr, cc] = [i.splitR, i.splitC];
     expect(i.ensureSplit(0)).toBe(true);
     expect(stub.created).toBe(m);
-    // neue Stufe: wieder von vorn, eine Kopie je Aufruf – aber auf denselben Flächen (keine Neuanlage)
-    expect(i.ensureSplit(1)).toBe(false);
+    // neue Stufe: wieder von vorn, ein Streifen je Aufruf – aber auf denselben Flächen (keine Neuanlage)
+    for (let k = 1; k < steps; k += 1) expect(i.ensureSplit(1)).toBe(false);
     expect(i.ensureSplit(1)).toBe(true);
     expect(i.splitR).toBe(rr);
     expect(i.splitC).toBe(cc);
     expect(stub.created).toBe(m);
+  });
+
+  it("RGB-Split-Streifen decken die ganze Fläche genau einmal ab (Farbe, Quelle 1:1) – Ergebnis wie die Kopie am Stück", () => {
+    const stub = installRecordingStub();
+    const tile = document.createElement("canvas");
+    tile.width = 2048;
+    tile.height = 360;
+    const r = new CyberRenderer();
+    const i = inner(r);
+    i.mid = { cache: { get: () => tile } as unknown as StageCache }; // nur die Ebene, die der Split braucht
+    const before = stub.canvases.length;
+    for (let k = 0; k < SPLIT_STRIPS * 2; k += 1) i.ensureSplit(0);
+    const fresh = stub.canvases.slice(before);
+    expect(fresh.length).toBe(2);
+    for (const [c, color] of [
+      [fresh[0], "#ff2050"],
+      [fresh[1], "#20e8ff"],
+    ] as const) {
+      expect(c.width).toBe(tile.width);
+      expect(c.height).toBe(tile.height);
+      const fills = c.log.filter((l) => l.startsWith("fillRect("));
+      const copies = c.log.filter((l) => l.startsWith("drawImage("));
+      expect(fills.length).toBe(SPLIT_STRIPS);
+      expect(copies.length).toBe(SPLIT_STRIPS);
+      expect(c.log.filter((l) => l.startsWith("fillStyle=")).every((l) => l === `fillStyle=${color}`)).toBe(true);
+      // Streifen lückenlos von oben nach unten, volle Breite
+      let y = 0;
+      for (const f of fills) {
+        const [x0, y0, w, h] = f.slice("fillRect(".length, -1).split(",").map(Number);
+        expect([x0, y0, w]).toEqual([0, y, tile.width]);
+        y += h;
+      }
+      expect(y).toBe(tile.height);
+      // die Quelle wird 1:1 in denselben Streifen kopiert
+      for (const d of copies) {
+        const a = d.slice(d.indexOf(",") + 1, -1).split(",").map(Number);
+        expect(a.slice(0, 4)).toEqual(a.slice(4, 8));
+      }
+    }
+  });
+
+  it("RGB-Split: einmal gebaut, wird weitergezeichnet, während ein Stufenwechsel sie streifenweise auffrischt", async () => {
+    const { r } = await loaded();
+    const i = inner(r);
+    const v = stubView({ stage: 3, time: 5, worldMeters: 3 * CYBER_STAGE_METERS + 10 });
+    for (let k = 0; k < SPLIT_STRIPS * 2; k += 1) i.ensureSplit(3);
+    expect(i.splitBuilt).toBe(true);
+    expect(i.splitReady(v, 3)).toBe(true);
+    // Stufe 4 beginnt die Auffrischung: Schritt für Schritt, die Kopien bleiben zeichenbar (kein Aussetzen des Effekts)
+    expect(i.ensureSplit(4)).toBe(false);
+    expect(i.splitStage).toBe(4);
+    expect(i.splitDone).toBe(1);
+    expect(i.splitReady(v, 4)).toBe(true);
+    expect(i.splitDone).toBe(1); // das Zeichnen backt dann nichts nach
   });
 
   it("RGB-Split-Kopien werden vor dem ersten Glitch-Sturm vorbereitet (ab Glitch-Stärke 0,3 der Stufe), nicht auf Qualität 0", async () => {
@@ -352,15 +422,19 @@ describe("Cyber – Stufenlänge, Weltladen, Stufen-Backen, Aufwärmen", () => {
     expect(i.splitR).toBeNull(); // Stufe 2 beginnt mit Glitch-Stärke 0,08: noch zu früh
     at(2, 0.3, { stageBlend: 0.4 }); // 0,08 + 0,92 · 0,4 = 0,45
     expect(i.splitR).not.toBeNull();
-    expect(i.splitC).toBeNull(); // höchstens eine Kopie je Aufruf
+    expect(i.splitDone).toBe(1); // höchstens ein Streifen je Aufruf
     at(2, 0.35, { stageBlend: 0.4 });
-    expect(i.splitC).toBeNull(); // und höchstens eine je 0,1 s Spielzeit
+    expect(i.splitDone).toBe(1); // und höchstens einer je 0,1 s Spielzeit
     at(2, 0.41, { stageBlend: 0.4 });
+    expect(i.splitDone).toBe(2);
+    expect(i.splitC).toBeNull(); // die cyanfarbene Kopie beginnt erst nach der roten
+    for (let k = 0; k < SPLIT_STRIPS * 2; k += 1) at(2, 0.6 + k * 0.2, { stageBlend: 0.4 });
     expect(i.splitC).not.toBeNull();
+    expect(i.splitBuilt).toBe(true);
     expect(stub.created).toBeGreaterThan(n);
     // fertig: weitere Aufrufe legen nichts mehr an
     const m = stub.created;
-    for (let k = 0; k < 5; k += 1) at(2, 0.6 + k * 0.2, { stageBlend: 0.4 });
+    for (let k = 0; k < 5; k += 1) at(2, 3 + k * 0.2, { stageBlend: 0.4 });
     expect(stub.created).toBe(m);
     // Qualität 0: kein Split, nichts vorbereitet
     const { r: r0 } = await loaded();
@@ -368,18 +442,21 @@ describe("Cyber – Stufenlänge, Weltladen, Stufen-Backen, Aufwärmen", () => {
     expect(inner(r0).splitR).toBeNull();
   });
 
-  it("RGB-Split: Vorbereitung im Update und Rückfall im Zeichnen machen im selben Frame zusammen höchstens eine Kopie", async () => {
+  it("RGB-Split: Vorbereitung im Update und Rückfall im Zeichnen machen im selben Frame zusammen höchstens einen Streifen", async () => {
     const { r } = await loaded();
     const i = inner(r);
     const g = document.createElement("canvas").getContext("2d") as CanvasRenderingContext2D;
     const v = stubView({ stage: 3, time: 5, worldMeters: 3 * CYBER_STAGE_METERS + 10 });
-    r.update(1 / 60, v); // Vorbereitung: erste Kopie
+    r.update(1 / 60, v); // Vorbereitung: erster Streifen
     expect(i.splitDone).toBe(1);
     i.skin.glitch = 1; // Glitch-Sturm
-    r.drawOverlay(g, v); // gleicher Frame (gleiche Spielzeit): keine zweite Kopie
+    r.drawOverlay(g, v); // gleicher Frame (gleiche Spielzeit): kein zweiter Streifen
     expect(i.splitDone).toBe(1);
-    r.drawOverlay(g, stubView({ ...v, time: 5.02 })); // nächster Frame: der Rückfall im Zeichnen backt die zweite Kopie
+    r.drawOverlay(g, stubView({ ...v, time: 5.02 })); // nächster Frame: der Rückfall im Zeichnen backt den nächsten Streifen
     expect(i.splitDone).toBe(2);
+    expect(i.splitBuilt).toBe(false); // bis zur ersten vollständigen Kopie wird nichts gezeichnet
+    for (let k = 0; k < SPLIT_STRIPS * 2; k += 1) r.drawOverlay(g, stubView({ ...v, time: 5.1 + k * 0.02 }));
+    expect(i.splitBuilt).toBe(true);
     expect(i.splitC).not.toBeNull();
   });
 
@@ -479,5 +556,289 @@ describe("Cyber – Blitz-Regler (flashScale) im Glitch-Sturm", () => {
   it("flashScale 0: nichts gezeichnet", async () => {
     const z = await boltAlphas({ flashScale: 0 });
     expect(z.sky).toBe(0);
+  });
+});
+
+describe("Cyber – Glitch-Balken folgen dem Blitze-Regler (flashScale)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * Deckkraft der additiven Glitch-Balken (volle Breite) aus `drawForeground` (Farb-Balken) bzw. `drawOverlay` (RGB-Balken der
+   * Glitch-Schnitte); gesammelt über mehrere Zeitpunkte, weil die Balken mit 14-16 Hz neu gewürfelt werden.
+   */
+  async function barAlphas(which: "drawForeground" | "drawOverlay", over: Partial<ReturnType<typeof stubView>>): Promise<number[]> {
+    const { r } = await loaded();
+    inner(r).skin.glitch = 0.8;
+    installRecordingStub();
+    const c = document.createElement("canvas") as unknown as RecordingCanvas;
+    const g = c.getContext("2d") as unknown as CanvasRenderingContext2D;
+    const found: number[] = [];
+    for (let t = 0; t < 4 && found.length < 3; t += 0.13) {
+      c.log.length = 0;
+      r[which](g, stubView({ stage: 3, time: t, ...over }));
+      for (let k = 0; k < c.log.length; k += 1) {
+        if (!/^fillRect\(-?[\d.]+,[\d.]+,1280,/.test(c.log[k])) continue;
+        for (let j = k - 1; j >= 0; j -= 1) {
+          if (c.log[j].startsWith("globalAlpha=")) {
+            found.push(Number(c.log[j].slice("globalAlpha=".length)));
+            break;
+          }
+        }
+      }
+    }
+    return found;
+  }
+
+  for (const which of ["drawForeground", "drawOverlay"] as const) {
+    it(`${which}: ohne Feld und mit flashScale 1 die bisherigen Balken, mit 0,3 auf 30 %, mit 0 keine additiven Balken`, async () => {
+      const full = await barAlphas(which, {});
+      expect(full.length).toBeGreaterThan(0);
+      const base = which === "drawForeground" ? 0.18 * 0.8 : 0.16 * 0.8;
+      for (const a of full) expect(a).toBeCloseTo(base, 3);
+      expect(await barAlphas(which, { flashScale: 1 })).toEqual(full);
+      const dim = await barAlphas(which, { flashScale: 0.3 });
+      expect(dim.length).toBe(full.length);
+      for (const a of dim) expect(a).toBeCloseTo(base * 0.3, 3);
+      if (which === "drawForeground") expect(await barAlphas(which, { flashScale: 0 })).toEqual([]);
+      else for (const a of await barAlphas(which, { flashScale: 0 })) expect(a).toBe(0);
+    });
+
+    it(`${which}: „Weniger Bewegung“ zeichnet keine Balken (unverändert)`, async () => {
+      expect(await barAlphas(which, { reducedMotion: true })).toEqual([]);
+    });
+  }
+});
+
+// --- Weltladen und Stufen-Bakes in kleinen Schritten ---------------------------------------------------------------------
+
+describe("Cyber – Stufen-Ebenen in zwei Schritten (bakedLayer)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const logOf = (c: HTMLCanvasElement): string[] => (c as unknown as RecordingCanvas).log;
+  const tint = (): { night: { color: string; a: number }; haze: { color: string; aTop: number; aBottom: number }; shade: { color: string; a: number; from: number } } => ({
+    night: { color: "#101030", a: 0.5 },
+    haze: { color: "#123456", aTop: 0.1, aBottom: 0.3 },
+    shade: { color: "#000000", a: 0.4, from: 0.5 },
+  });
+
+  it("zwei Schritte (Körper + Tönung | Lichter + Zusatz) ergeben dieselben Zeichenbefehle wie der Direktweg", () => {
+    const rec = installRecordingStub();
+    const body = paint(64, 32, () => undefined);
+    const lights = paint(64, 32, () => undefined);
+    const extra = (g: CanvasRenderingContext2D, s: number, w: number, h: number): void => {
+      g.fillStyle = `#00000${s}`;
+      g.fillRect(0, 0, w, h);
+    };
+    const L = bakedLayer(body, lights, 0, 1, tint, (s) => 0.4 + s * 0.1, extra);
+    expect(L.cache.step(2)).toBe(true);
+    expect(L.cache.has(2)).toBe(false); // erst Körper und Tönung
+    expect(L.cache.step(2)).toBe(true);
+    expect(L.cache.has(2)).toBe(true);
+    expect(L.cache.step(2)).toBe(false);
+    const stepped = rec.canvases[2]; // Körper, Lichter, dann die Stufenfläche
+    const direct = bakedLayer(body, lights, 0, 1, tint, (s) => 0.4 + s * 0.1, extra).cache.get(2);
+    expect(logOf(direct)).toEqual(logOf(stepped as unknown as HTMLCanvasElement));
+    // Reihenfolge wie bisher: Körper, Tönung, Lichter (additiv, Alpha 0,6), Zusatz
+    const log = logOf(direct);
+    const iBody = log.findIndex((l) => l.startsWith("drawImage(<canvas 64x32>,0,0)"));
+    const iLit = log.indexOf("globalCompositeOperation=lighter");
+    const iLights = log.findIndex((l, i) => i > iLit && l.startsWith("drawImage("));
+    expect(iBody).toBe(0);
+    expect(iLit).toBeGreaterThan(iBody);
+    expect(iLights).toBeGreaterThan(iLit);
+    expect(log[log.indexOf("globalAlpha=0.6")]).toBe("globalAlpha=0.6");
+    expect(log[log.length - 1]).toBe("fillRect(0,0,64,32)");
+  });
+
+  it("die Ebenen der geladenen Welt backen jede Stufe in zwei Schritten und legen dabei keine neue Fläche an", async () => {
+    const { r, stub } = await loaded();
+    const i = inner(r);
+    const cache = i.mid.cache;
+    cache.keep(1, 2);
+    const n = stub.created;
+    let steps = 0;
+    while (!cache.has(2)) {
+      cache.step(2);
+      steps += 1;
+    }
+    expect(steps).toBe(2);
+    expect(stub.created).toBe(n); // Ersatzfläche der verworfenen Stufe 0
+  });
+});
+
+describe("Cyber – Weltladen in kleinen Schritten", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** Anzahl `yield` eines Generators bis zum Ende */
+  function yields<T>(it: Generator<void, T, void>): { n: number; value: T } {
+    let n = 0;
+    for (;;) {
+      const r = it.next();
+      if (r.done) return { n, value: r.value };
+      n += 1;
+    }
+  }
+
+  it("die prozeduralen Sprites entstehen in mindestens 6 Schritten und sind vollständig", () => {
+    installStub();
+    const { n, value } = yields(makeSkinAssetsSteps());
+    expect(n).toBeGreaterThanOrEqual(6);
+    const whole = makeSkinAssets();
+    expect(Object.keys(value).sort()).toEqual(Object.keys(whole).sort());
+    for (const k of ["chip", "coinStrip", "crystal", "portalUp", "portalDown", "colUp", "texCyan", "plasma", "hint", "corridor", "shaft", "cube", "cubeWire", "barrier"] as const) {
+      expect(value[k], k).toBeTruthy();
+      expect((value[k] as HTMLCanvasElement).width, k).toBe((whole[k] as HTMLCanvasElement).width);
+    }
+  });
+
+  it("der Datenregen entsteht je Farbe in einem eigenen Schritt (die Schrift laden kostet beim ersten Text viel)", () => {
+    installStub();
+    const r = new CyberRenderer();
+    const fx = (r as unknown as { buildFx(): Generator<void, void, void> }).buildFx();
+    const { n } = yields(fx);
+    expect(n).toBeGreaterThanOrEqual(6); // Werbe-Symbole + fünf Farben
+    expect(inner(r).rain).toHaveLength(5);
+    for (const strips of inner(r).rain) expect(strips).toHaveLength(5);
+  });
+
+  it("load trennt das Ende des Prop-Ladens vom ersten Bauschritt (eine Pause dazwischen) und backt am Ende beide Stufen", async () => {
+    installStub();
+    vi.stubGlobal("window", {}); // yieldToMain wartet dann wirklich (MessageChannel) statt sofort zu enden
+    const r = new CyberRenderer();
+    const i = r as unknown as { stepBuild(): boolean };
+    const orig = i.stepBuild.bind(r);
+    let builds = 0;
+    i.stepBuild = (): boolean => {
+      builds += 1;
+      return orig();
+    };
+    const assets = assetsOf(manifestProps());
+    vi.spyOn(assets.props, "preload").mockResolvedValue(undefined);
+    const p = r.load(assets);
+    for (let k = 0; k < 8; k += 1) await Promise.resolve(); // alle Mikroaufgaben nach dem Prop-Laden
+    expect(builds).toBe(0);
+    await p;
+    expect(builds).toBeGreaterThan(7);
+    for (const c of inner(r).staged) {
+      expect(c.has(0)).toBe(true);
+      expect(c.has(1)).toBe(true);
+    }
+  });
+});
+
+// --- Erstkosten der Prop-Bilder (Dekodieren) in eigenen Ladeschritten bzw. im Aufwärmen ------------------------------------------
+
+interface DrawCall {
+  id: string;
+  o: SpriteOpts | undefined;
+  /** Zählerstand (hier: Anzahl der Bauschritte) beim Aufruf */
+  at: number;
+}
+
+/** Prop-Bibliothek nach Manifest, die jeden `draw`-Aufruf mit Prop-ID, Optionen und Zählerstand merkt */
+function spyProps(stamp: () => number = () => 0): { props: PropLibrary; calls: DrawCall[] } {
+  const calls: DrawCall[] = [];
+  const base = manifestProps();
+  return {
+    props: {
+      ...base,
+      draw: (_g, id, _x, _y, o) => {
+        calls.push({ id, o, at: stamp() });
+        return true;
+      },
+    },
+    calls,
+  };
+}
+
+/** winziger Aufwärm-Draw von `primeProp` */
+const isPrime = (c: DrawCall): boolean => c.o?.w === 8;
+
+describe("Cyber – Erstkosten der Prop-Bilder", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** Renderer laden und dabei die Bauschritte zählen */
+  async function loadCounting(): Promise<{ r: CyberRenderer; calls: DrawCall[] }> {
+    installStub();
+    let steps = 0;
+    const { props, calls } = spyProps(() => steps);
+    const r = new CyberRenderer();
+    const holder = r as unknown as { stepBuild: () => boolean };
+    const orig = holder.stepBuild.bind(r);
+    holder.stepBuild = () => {
+      steps += 1;
+      return orig();
+    };
+    await r.load(assetsOf(props));
+    return { r, calls };
+  }
+
+  it("load: Stephansdom-Bild, Münzstreifen, Würfel und Rack werden in je einem eigenen, früheren Bauschritt aufgewärmt als ihr Bake", async () => {
+    const { calls } = await loadCounting();
+    for (const id of ["landmark-cathedral", "data-coin", "glitch-cube", "server-rack"]) {
+      const mine = calls.filter((c) => c.id === id);
+      const prime = mine.find(isPrime);
+      const real = mine.find((c) => !isPrime(c));
+      expect(prime, `${id}: Aufwärm-Draw`).toBeDefined();
+      expect(real, `${id}: Bake`).toBeDefined();
+      expect(prime?.at, id).toBeLessThan(real?.at ?? 0);
+    }
+    // jedes Bild nur einmal aufgewärmt, und die Aufwärm-Draws liegen in verschiedenen Schritten (nie zwei im selben Task)
+    const primes = calls.filter(isPrime);
+    expect(new Set(primes.map((c) => c.id)).size).toBe(primes.length);
+    expect(new Set(primes.map((c) => c.at)).size).toBe(primes.length);
+  });
+
+  it("warm zahlt die Erstkosten der erst im Lauf gezeichneten Props (Drohne, Schwebe-Plattform) einmal; ein zweites Aufwärmen nicht erneut", async () => {
+    const { r, calls } = await loadCounting();
+    expect(calls.filter(isPrime).some((c) => (CYBER_RUN_PROPS as readonly string[]).includes(c.id))).toBe(false); // nicht schon beim Laden
+    let rounds = 0;
+    while (!r.warm(50) && rounds < 500) rounds += 1;
+    expect(rounds).toBeLessThan(500);
+    const after = calls.filter(isPrime).filter((c) => (CYBER_RUN_PROPS as readonly string[]).includes(c.id));
+    expect(after.map((c) => c.id).sort()).toEqual([...CYBER_RUN_PROPS].sort());
+    const n = calls.filter(isPrime).length;
+    expect(r.warm(50)).toBe(true);
+    expect(calls.filter(isPrime).length).toBe(n);
+  });
+
+  it("primeProp ist reine Optimierung: nicht zeichenbare Bilder werfen nicht, unbekannte Props und fehlende Bibliothek tun nichts", () => {
+    installStub();
+    const bad: PropLibrary = {
+      ...manifestProps(),
+      draw: () => {
+        throw new Error("kaputtes Bild");
+      },
+    };
+    const sink = primeProp(bad, "landmark-cathedral");
+    expect(sink).not.toBeNull();
+    expect(primeProp(bad, "gibt-es-nicht", sink)).toBe(sink);
+    expect(primeProp(null, "landmark-cathedral")).toBeNull();
+    const ok = spyProps();
+    expect(primeProp(ok.props, "landmark-cathedral", sink)).toBe(sink);
+    expect(ok.calls.map((c) => c.id)).toEqual(["landmark-cathedral"]);
+  });
+
+  it("ohne Prop-Bilder (Rückfall) bleibt der Weltaufbau und das Aufwärmen ohne Draw-Aufrufe", async () => {
+    installStub();
+    const draw = vi.fn(() => false);
+    const r = new CyberRenderer();
+    await r.load(assetsOf({ has: () => false, preload: async () => undefined, draw, cell: () => null }));
+    let rounds = 0;
+    while (!r.warm(50) && rounds < 500) rounds += 1;
+    expect(rounds).toBeLessThan(500);
+    expect(draw).not.toHaveBeenCalled();
   });
 });

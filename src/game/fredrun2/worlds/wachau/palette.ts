@@ -138,50 +138,97 @@ export interface Tint {
   flat?: { color: string; a: number };
 }
 
-/** Getönte Kopie (Alpha bleibt erhalten): Multiplizieren → Dunst → Schatten. Mit `reuse` (gleiche Größe) wird diese Fläche neu bemalt. */
-export function tintCanvas(src: HTMLCanvasElement, t: Tint, flipY = false, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
-  return paint(src.width, src.height, (g, w, h) => {
-    if (flipY) {
-      g.translate(0, h);
-      g.scale(1, -1);
-    }
-    g.drawImage(src, 0, 0);
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    if (t.mul && t.mul.toLowerCase() !== "#ffffff") {
-      g.globalCompositeOperation = "multiply";
-      g.fillStyle = t.mul;
-      g.fillRect(0, 0, w, h);
-      g.globalCompositeOperation = "destination-in";
+/** Hat die Tönung einen Multiplikationsschritt (Lichtfarbe ≠ Weiß)? */
+function hasMul(t: Tint): t is Tint & { mul: string } {
+  return !!t.mul && t.mul.toLowerCase() !== "#ffffff";
+}
+
+/** Hat die Tönung einen Schleier (flache Farbe, Dunst oder Schatten)? */
+function hasVeil(t: Tint): boolean {
+  return !!((t.flat && t.flat.a > 0.001) || (t.haze && (t.haze.aTop > 0.001 || t.haze.aBottom > 0.001)) || (t.shade && t.shade.a > 0.001));
+}
+
+/**
+ * Teilschritt 1 der Tönung: Kopie der Quelle, mit der Lichtfarbe multipliziert (Alpha der Quelle geht dabei noch verloren,
+ * siehe `tintMask`). Mit `reuse` (gleiche Größe) wird diese Fläche neu bemalt.
+ */
+export function tintMul(src: HTMLCanvasElement, t: Tint, flipY = false, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
+  return paint(
+    src.width,
+    src.height,
+    (g, w, h) => {
       if (flipY) {
         g.translate(0, h);
         g.scale(1, -1);
       }
       g.drawImage(src, 0, 0);
       g.setTransform(1, 0, 0, 1, 0, 0);
-    }
-    g.globalCompositeOperation = "source-atop";
-    if (t.flat && t.flat.a > 0.001) {
-      g.globalAlpha = Math.min(1, t.flat.a);
-      g.fillStyle = t.flat.color;
-      g.fillRect(0, 0, w, h);
-      g.globalAlpha = 1;
-    }
-    if (t.haze && (t.haze.aTop > 0.001 || t.haze.aBottom > 0.001)) {
-      const grd = g.createLinearGradient(0, 0, 0, h);
-      grd.addColorStop(0, withA(t.haze.color, t.haze.aTop));
-      grd.addColorStop(1, withA(t.haze.color, t.haze.aBottom));
-      g.fillStyle = grd;
-      g.fillRect(0, 0, w, h);
-    }
-    if (t.shade && t.shade.a > 0.001) {
-      const y0 = h * t.shade.from;
-      const grd = g.createLinearGradient(0, y0, 0, h);
-      grd.addColorStop(0, withA(t.shade.color, 0));
-      grd.addColorStop(1, withA(t.shade.color, t.shade.a));
-      g.fillStyle = grd;
-      g.fillRect(0, y0, w, h - y0);
-    }
-  }, reuse);
+      if (hasMul(t)) {
+        g.globalCompositeOperation = "multiply";
+        g.fillStyle = t.mul;
+        g.fillRect(0, 0, w, h);
+      }
+    },
+    reuse,
+  );
+}
+
+/** Teilschritt 2: das Alpha der Quelle wieder auflegen (nur nach einem Multiplikationsschritt nötig). false = nichts getan. */
+export function tintMask(c: HTMLCanvasElement, src: HTMLCanvasElement, t: Tint, flipY = false): boolean {
+  if (!hasMul(t)) return false;
+  const g = c.getContext("2d");
+  if (!g) return false;
+  g.globalCompositeOperation = "destination-in";
+  if (flipY) {
+    g.translate(0, c.height);
+    g.scale(1, -1);
+  }
+  g.drawImage(src, 0, 0);
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  return true;
+}
+
+/** Teilschritt 3: flache Farbe, Dunst und Schatten (nur wo die Fläche deckt). false = nichts zu tun. */
+export function tintVeil(c: HTMLCanvasElement, t: Tint): boolean {
+  const g = c.getContext("2d");
+  if (!g) return false;
+  const w = c.width;
+  const h = c.height;
+  g.globalCompositeOperation = "source-atop";
+  if (t.flat && t.flat.a > 0.001) {
+    g.globalAlpha = Math.min(1, t.flat.a);
+    g.fillStyle = t.flat.color;
+    g.fillRect(0, 0, w, h);
+    g.globalAlpha = 1;
+  }
+  if (t.haze && (t.haze.aTop > 0.001 || t.haze.aBottom > 0.001)) {
+    const grd = g.createLinearGradient(0, 0, 0, h);
+    grd.addColorStop(0, withA(t.haze.color, t.haze.aTop));
+    grd.addColorStop(1, withA(t.haze.color, t.haze.aBottom));
+    g.fillStyle = grd;
+    g.fillRect(0, 0, w, h);
+  }
+  if (t.shade && t.shade.a > 0.001) {
+    const y0 = h * t.shade.from;
+    const grd = g.createLinearGradient(0, y0, 0, h);
+    grd.addColorStop(0, withA(t.shade.color, 0));
+    grd.addColorStop(1, withA(t.shade.color, t.shade.a));
+    g.fillStyle = grd;
+    g.fillRect(0, y0, w, h - y0);
+  }
+  return hasVeil(t);
+}
+
+/**
+ * Getönte Kopie (Alpha bleibt erhalten): Multiplizieren → Alpha → Dunst → Schatten, am Stück (`tintMul`, `tintMask`, `tintVeil`
+ * nacheinander auf derselben Fläche; große Ebenen nehmen die Teilschritte einzeln, siehe `tintedCache` im Renderer).
+ * Mit `reuse` (gleiche Größe) wird diese Fläche neu bemalt.
+ */
+export function tintCanvas(src: HTMLCanvasElement, t: Tint, flipY = false, reuse?: HTMLCanvasElement | null): HTMLCanvasElement {
+  const c = tintMul(src, t, flipY, reuse);
+  tintMask(c, src, t, flipY);
+  tintVeil(c, t);
+  return c;
 }
 
 export function withA(hex: string, a: number): string {

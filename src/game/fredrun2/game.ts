@@ -68,22 +68,18 @@ export interface GameSnapshot {
   profile: Profile;
   result: RunResult | null;
   /** Live-Werte fürs UI (Touch-Buttons etc.); `coins` = Münzen des laufenden Laufs */
-  live: { dashReady: boolean; hearts: number; score: number; coins?: number };
+  live: { dashReady: boolean; hearts: number; score: number; coins: number };
   fps: number;
   quality: 0 | 1 | 2;
   audioUnlocked: boolean;
   demoWorld: WorldId;
   error: string | null;
-  /**
-   * Es wird per Touch gespielt (Startwert: grober Zeiger oder ontouchstart, danach folgt es der zuletzt benutzten Zeigerart).
-   * `touch`, `storageOk`, `loadingWorld` und `live.coins` setzt getSnapshot() immer; optional typisiert, solange
-   * der feste Ladezustand (LOADING) in FredRun2.tsx sie noch nicht trägt.
-   */
-  touch?: boolean;
+  /** Es wird per Touch gespielt (Startwert: grober Zeiger oder ontouchstart, danach folgt es der zuletzt benutzten Zeigerart) */
+  touch: boolean;
   /** false, sobald das Profil nicht gespeichert werden konnte (Privatmodus, Speicher voll); nach erfolgreichem Schreiben wieder true */
-  storageOk?: boolean;
+  storageOk: boolean;
   /** Welt, die gerade (nach)geladen wird und deren Laden den Spieler aufhält (Menü-Weltwahl, Laufstart); null = keine */
-  loadingWorld?: WorldId | null;
+  loadingWorld: WorldId | null;
 }
 
 /** Zeitlupen-Rampe der visuellen Zeit (Welt, Partikel, Geister, Lauf-Phase): Sekunden von 1 bis SLOWMO_FACTOR und zurück */

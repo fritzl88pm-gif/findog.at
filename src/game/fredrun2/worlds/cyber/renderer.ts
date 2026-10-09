@@ -7,12 +7,13 @@
  * Performance: Ebenen sind pro Stufe vorgebacken (StageCache/Staged) und werden ganzzahlig geblittet; Leuchten nur über
  * vorgerenderte Glow-Sprites (additiv), kein shadowBlur im Frame.
  */
+import { makeCanvas } from "../../draw-utils";
 import type { AssetLoader, Ent, PropLibrary, ViewState, WorldRenderer } from "../../types";
 import { yieldToMain } from "../../yield";
-import { blitTiled, colorWithAlpha, glowAt, paint, touchCanvas, type Ctx2D } from "../shared-b/canvas";
+import { blitTiled, colorWithAlpha, ctxOf, glowAt, paint, touchCanvas, type Ctx2D } from "../shared-b/canvas";
 import { h1, mod, mulberry, stageVal } from "../shared-b/color";
 import { flashFactor } from "../shared-b/flash";
-import { StageCache, StagePrep, rgbaOf, stageProgress, type StageTint } from "../shared-b/layers";
+import { StageCache, StagePrep, gradedCache, rgbaOf, stageProgress, type StageTint } from "../shared-b/layers";
 import { WarmQueue } from "../shared-b/warm";
 import { GUEST_PROP_IDS } from "../shared-a/guests";
 import {
@@ -25,6 +26,7 @@ import {
   holoSteps,
   midCity,
   nearPylons,
+  primeProp,
   rainStrips,
   reflectionTile,
   serverMonoliths,
@@ -33,6 +35,7 @@ import {
   synthSun,
   paintOpaque,
   type Board,
+  type PrimeSink,
   type Pylon,
 } from "./backdrop";
 import {
@@ -72,7 +75,7 @@ import {
   drawPortal,
   drawRack,
   hoverDensity,
-  makeSkinAssets,
+  makeSkinAssetsSteps,
   HOVER_PROP,
   type CyberSkinAssets,
   type SkinCtx,
@@ -94,12 +97,18 @@ export const CYBER_PROPS = [
   ...GUEST_PROP_IDS,
 ];
 
+/** Props, die `bakePropSprites` schon beim Laden auf eigene Sprites malt (Reihenfolge wie dort) */
+const CYBER_BAKE_PROPS = ["data-coin", "glitch-cube", "server-rack"] as const;
+
+/** Props, die erst im Lauf zum ersten Mal gezeichnet werden (alle anderen entstehen schon beim Laden): Erstkosten im Aufwärmen */
+export const CYBER_RUN_PROPS = ["drone-hover", HOVER_PROP] as const;
+
 const GUESTS = new Set(["odo", "madinger", "jqa", "luki"]);
 const SING_X = 900;
 const SING_Y = 300;
 
 /** Parallax-Ebene, deren Stufen-Varianten Einfärbung, Lichter und Dunst bereits enthalten (1 Blit pro Frame). */
-interface BakedLayer {
+export interface BakedLayer {
   cache: StageCache;
   w: number;
   h: number;
@@ -107,7 +116,7 @@ interface BakedLayer {
   factor: number;
 }
 
-function bakedLayer(
+export function bakedLayer(
   body: HTMLCanvasElement,
   lights: HTMLCanvasElement,
   y: number,
@@ -119,25 +128,33 @@ function bakedLayer(
   const w = body.width;
   const h = body.height;
   // Einfärben direkt auf der Fläche (statt über eine Zwischenfläche) und verworfene Stufenflächen wiederverwenden: kein
-  // Neuanlegen großer Bitmaps je Bake; das Bild ist dasselbe wie „getönte Kopie + Lichter“
-  const cache = new StageCache(
-    (s, reuse) =>
-      paint(
+  // Neuanlegen großer Bitmaps je Bake; das Bild ist dasselbe wie „getönte Kopie + Lichter“. Die Variante entsteht in zwei
+  // Schritten (Körper + Tönung · Lichter + Zusatz), jeder wird sofort gerastert (`gradedCache`): kein Bake belegt einen Frame
+  // am Stück.
+  const lit = (c: HTMLCanvasElement, s: number): void => {
+    const g = ctxOf(c);
+    g.globalCompositeOperation = "lighter";
+    g.globalAlpha = Math.min(1, lightK(s));
+    g.drawImage(lights, 0, 0);
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = "source-over";
+    extra?.(g, s, w, h);
+  };
+  const cache = gradedCache(
+    (s, reuse, grade) => {
+      const c = paint(
         w,
         h,
         (g) => {
           g.drawImage(body, 0, 0);
           tintInPlace(g, w, h, tint(s));
-          g.globalCompositeOperation = "lighter";
-          g.globalAlpha = Math.min(1, lightK(s));
-          g.drawImage(lights, 0, 0);
-          g.globalAlpha = 1;
-          g.globalCompositeOperation = "source-over";
-          extra?.(g, s, w, h);
         },
         reuse,
-      ),
-    { recycle: true },
+      );
+      if (grade) lit(c, s);
+      return c;
+    },
+    lit,
   );
   return { cache, w, h, y, factor };
 }
@@ -145,19 +162,27 @@ function bakedLayer(
 /** Glitch-Stärke der Stufe (`GLITCH`), ab der die RGB-Split-Kopien vorbereitet werden (der Split zeichnet ab 0,45) */
 const SPLIT_FROM = 0.3;
 
-/** Wie `tintCopy` (Silhouette von `src` in Vollfarbe), aber auf einer wiederverwendeten Fläche gleicher Größe (`reuse`) */
-function tintInto(src: HTMLCanvasElement, color: string, reuse: HTMLCanvasElement | null): HTMLCanvasElement {
-  return paint(
-    src.width,
-    src.height,
-    (g, w, h) => {
-      g.drawImage(src, 0, 0);
-      g.globalCompositeOperation = "source-atop";
-      g.fillStyle = color;
-      g.fillRect(0, 0, w, h);
-    },
-    reuse,
-  );
+/** Streifen je RGB-Split-Kopie: jede Kopie entsteht in so vielen Schritten (je Schritt ein Viertel der Rasterkosten statt ca. 13 ms am Stück) */
+export const SPLIT_STRIPS = 4;
+/** Schritte, bis beide Kopien (rot, cyan) einer Stufe bemalt sind */
+const SPLIT_STEPS = SPLIT_STRIPS * 2;
+
+/**
+ * Waagerechter Streifen [y0, y1) von `dst`: Silhouette von `src` in Vollfarbe (Ergebnis wie `tintCopy`, aber in Teilen und auf
+ * einer bestehenden Fläche gleicher Größe). Der Rest der Fläche bleibt unberührt, sie ist also zu jedem Zeitpunkt zeichenbar
+ * (auch mitten in der Auffrischung nach einem Stufenwechsel).
+ */
+function tintStrip(dst: HTMLCanvasElement, src: HTMLCanvasElement, color: string, y0: number, y1: number): void {
+  const g = ctxOf(dst);
+  const w = dst.width;
+  const h = y1 - y0;
+  g.save();
+  g.clearRect(0, y0, w, h);
+  g.drawImage(src, 0, y0, w, h, 0, y0, w, h);
+  g.globalCompositeOperation = "source-atop";
+  g.fillStyle = color;
+  g.fillRect(0, y0, w, h);
+  g.restore();
 }
 
 /** Einfärbung wie `tinted` (shared-b/layers), aber auf den schon gemalten Inhalt der Fläche (nur wo Pixel sind: source-atop) */
@@ -225,14 +250,15 @@ export class CyberRenderer implements WorldRenderer {
   private servers!: BakedLayer;
   private near!: BakedLayer;
   private pylons: Pylon[] = [];
-  /** RGB-Split-Kopien der Stadt-Ebene (lazy, nur Glitch-Sturm) */
-  /** RGB-Split-Kopien der Stadt-Ebene (rot/cyan); die Flächen bleiben über Stufenwechsel erhalten und werden neu bemalt */
+  /** RGB-Split-Kopien der Stadt-Ebene (rot/cyan); die Flächen bleiben über Stufenwechsel erhalten und werden streifenweise neu bemalt */
   private splitR: HTMLCanvasElement | null = null;
   private splitC: HTMLCanvasElement | null = null;
   /** Stufe, für die die Kopien bemalt sind bzw. werden */
   private splitStage = -1;
-  /** wie viele der beiden Kopien für `splitStage` fertig sind (0 … 2) */
+  /** wie viele Streifen-Schritte (0 … SPLIT_STEPS: erst die rote, dann die cyanfarbene Kopie) für `splitStage` fertig sind */
   private splitDone = 0;
+  /** beide Kopien waren schon einmal vollständig bemalt: ab dann zeichenbar, auch während der Auffrischung nach einem Stufenwechsel */
+  private splitBuilt = false;
   /** Spielzeit (s) des letzten Vorbereitungsschritts der Kopien */
   private splitT = -1e9;
   private boards: Board[] = [];
@@ -241,6 +267,8 @@ export class CyberRenderer implements WorldRenderer {
   private prep = new StagePrep(this.staged, MAX_STAGE);
   private warmQ = new WarmQueue();
   private warmInit = false;
+  /** winzige Aufwärmfläche für `primeProp` (wiederverwendet) */
+  private primeSink: PrimeSink | null = null;
   private loaded = false;
   private lastStage = 0;
   /** Qualität 0 (schwache Geräte): Folgestufe erst spät und nicht im Leerlauf vorbacken – spart Speicher in der ersten Stufenhälfte */
@@ -279,14 +307,15 @@ export class CyberRenderer implements WorldRenderer {
     this.props = assets.props;
     await assets.props.preload(CYBER_PROPS);
     // Statisches in Schritten bauen und dazwischen den Hauptthread freigeben (kein Long Task, Eingaben laufen weiter)
+    await yieldToMain(); // nicht im selben Task wie das Ende des Prop-Ladens
     while (this.stepBuild()) await yieldToMain();
     this.ready = true;
-    // erste beiden Stufen vorbacken (jeder Bake ein eigener Schritt, dazwischen Pausen)
+    // erste beiden Stufen vorbacken (jeder Teilschritt eines Bakes ein eigener Schritt, dazwischen Pausen)
     for (const stage of [0, 1]) {
       for (const c of this.staged) {
         while (!c.has(stage)) {
           await yieldToMain();
-          c.get(stage);
+          c.step(stage);
         }
       }
     }
@@ -319,6 +348,13 @@ export class CyberRenderer implements WorldRenderer {
     if (!this.warmInit) {
       this.warmInit = true;
       this.warmQ.add(() => this.warmStages(), 6);
+      // Erstkosten der Prop-Bilder, die erst im Lauf gezeichnet werden (Drohne direkt, Schwebe-Plattform beim Bake): im Leerlauf
+      for (const id of CYBER_RUN_PROPS) {
+        this.warmQ.add(() => {
+          this.primeSink = primeProp(this.props, id, this.primeSink);
+          return true;
+        }, 4);
+      }
     }
     return this.warmQ.run(budgetMs);
   }
@@ -380,9 +416,15 @@ export class CyberRenderer implements WorldRenderer {
   }
 
   private *buildSky(): Generator<void, void, void> {
-    this.A = makeSkinAssets();
+    this.A = yield* makeSkinAssetsSteps();
     this.A.props = this.props;
     yield;
+    // Erstkosten der drei Prop-Bilder, die gleich auf Sprites gemalt werden (Münzstreifen, Würfel, Rack), je in einem eigenen
+    // Schritt: das Dekodieren (bei 4× CPU 15 bis 50 ms je Bild) steht sonst zusammen mit dem Malen im selben Task
+    for (const id of CYBER_BAKE_PROPS) {
+      this.primeSink = primeProp(this.props, id, this.primeSink);
+      yield;
+    }
     bakePropSprites(this.A);
     this.stars = starField(1280, 420);
     this.sun = synthSun(150);
@@ -534,7 +576,14 @@ export class CyberRenderer implements WorldRenderer {
   /** Hologramm-Stephansdom (gemaltes Landmark, sonst prozedural): zwei Hologramme, jeweils in Schritten */
   private *buildDome(): Generator<void, void, void> {
     const props = this.props && this.props.has("landmark-cathedral") ? this.props : null;
+    // Das Bild wird beim ersten Zeichnen dekodiert und die Quelle danach im selben Task gerastert (zusammen mit der Sobel-
+    // Vorbereitung bei 4× CPU weit über 100 ms): Dekodieren, Malen+Rastern und Auswerten sind je ein eigener Schritt
+    if (props) {
+      this.primeSink = primeProp(props, "landmark-cathedral", this.primeSink);
+      yield;
+    }
     const src = cathedralSource(props, 430);
+    touchCanvas(src);
     yield;
     this.dome = yield* holoSteps(src, CYAN, VIOLET, { scan: 3, fadeBottom: 0.22, gain: 2.6 });
     yield;
@@ -545,7 +594,13 @@ export class CyberRenderer implements WorldRenderer {
   private *buildFx(): Generator<void, void, void> {
     this.ads = adIcons(150);
     yield;
-    this.rain = [CYAN, CYAN, MINT, MAGENTA, VIOLET].map((c, i) => rainStrips(c, 5, 560, 40 + i));
+    // je Farbe ein Schritt (die Streifen zeichnen Zeichenketten: der erste Text lädt Schriften, bei 4× CPU ca. 200 ms am Stück)
+    const rainColors = [CYAN, CYAN, MINT, MAGENTA, VIOLET];
+    this.rain = [];
+    for (let i = 0; i < rainColors.length; i += 1) {
+      this.rain.push(rainStrips(rainColors[i], 5, 560, 40 + i));
+      yield;
+    }
     const r = mulberry(55);
     for (let i = 0; i < 18; i += 1) this.rainFar.push({ x: r() * 2048, speed: 60 + r() * 90, ph: r() * 900, strip: Math.floor(r() * 5), scale: 0.65 + r() * 0.25 });
     for (let i = 0; i < 7; i += 1) this.rainNear.push({ x: r() * 2048, speed: 150 + r() * 120, ph: r() * 900, strip: Math.floor(r() * 5), scale: 1 });
@@ -1164,14 +1219,15 @@ export class CyberRenderer implements WorldRenderer {
       }
       g.globalCompositeOperation = "lighter";
     }
-    // Glitch-Sturm: Farb-Balken
+    // Glitch-Sturm: Farb-Balken (additive Streifen, mit 14 Hz neu gewürfelt: Stärke folgt dem „Blitze“-Regler)
     const gl = this.skin.glitch;
-    if (gl > 0.15 && !v.reducedMotion && v.quality > 0) {
+    const fs = flashFactor(v);
+    if (gl > 0.15 && !v.reducedMotion && v.quality > 0 && fs > 0) {
       const seed = Math.floor(v.time * 14);
       for (let i = 0; i < 4; i += 1) {
         if (h1(seed + i * 3) > 0.55) continue;
         const y = 140 + h1(seed * 7 + i) * 460;
-        g.globalAlpha = 0.18 * gl;
+        g.globalAlpha = 0.18 * gl * fs;
         g.fillStyle = i % 2 ? CYAN : MAGENTA;
         g.fillRect(0, y, 1280, 2 + h1(seed + i) * 10);
       }
@@ -1181,36 +1237,44 @@ export class CyberRenderer implements WorldRenderer {
   }
 
   /**
-   * RGB-Split-Kopien der Stadt-Ebene für Stufe `st` (im Glitch-Sturm; nach einem Stufenwechsel neu): höchstens EINE Kopie je
-   * Aufruf (jede kostet ca. 13 ms inkl. Rastern), danach true. Die Flächen werden über Stufenwechsel hinweg wiederverwendet
-   * (nur beim ersten Mal entstehen sie). Bis beide fertig sind, entfällt der schwache Geister-Versatz – kein Doppel-Bake-Ruckler.
+   * RGB-Split-Kopien der Stadt-Ebene für Stufe `st` (im Glitch-Sturm; nach einem Stufenwechsel aufgefrischt): höchstens EIN
+   * Streifen-Schritt je Aufruf (die ganze Kopie kostet ca. 13 ms inkl. Rastern, ein Streifen ein Viertel davon), danach true.
+   * Die Flächen werden über Stufenwechsel hinweg wiederverwendet (nur beim ersten Mal entstehen sie) und streifenweise
+   * überschrieben. Bis beide zum ersten Mal vollständig sind, entfällt der schwache Geister-Versatz – kein Mehrfach-Bake-Ruckler.
    */
   private ensureSplit(st: number): boolean {
     if (this.splitStage !== st) {
       this.splitStage = st;
       this.splitDone = 0;
     }
-    if (this.splitDone >= 2) return true;
+    if (this.splitDone >= SPLIT_STEPS) return true;
     const tile = this.mid.cache.get(st);
-    if (this.splitDone === 0) {
-      this.splitR = tintInto(tile, "#ff2050", this.splitR);
-      touchCanvas(this.splitR);
-      this.splitDone = 1;
-      return false;
+    const second = this.splitDone >= SPLIT_STRIPS;
+    let dst = second ? this.splitC : this.splitR;
+    if (!dst || dst.width !== tile.width || dst.height !== tile.height) {
+      dst = makeCanvas(tile.width, tile.height); // erste Anlage (oder Ebene in anderer Größe neu gebaut)
+      if (second) this.splitC = dst;
+      else this.splitR = dst;
+      this.splitBuilt = false;
     }
-    this.splitC = tintInto(tile, "#20e8ff", this.splitC);
-    touchCanvas(this.splitC);
-    this.splitDone = 2;
+    const strip = this.splitDone % SPLIT_STRIPS;
+    const y0 = Math.floor((tile.height * strip) / SPLIT_STRIPS);
+    const y1 = Math.floor((tile.height * (strip + 1)) / SPLIT_STRIPS);
+    tintStrip(dst, tile, second ? "#20e8ff" : "#ff2050", y0, y1);
+    touchCanvas(dst);
+    this.splitDone += 1;
+    if (this.splitDone < SPLIT_STEPS) return false;
+    this.splitBuilt = true;
     return true;
   }
 
   /**
    * Die Kopien rechtzeitig (ab Glitch-Stärke `SPLIT_FROM`, also vor dem ersten Sturm) und nach jedem Stufenwechsel vorbereiten,
-   * höchstens eine Kopie je 0,1 s Spielzeit – nicht mitten im Sturm beim ersten Zeichnen.
+   * höchstens ein Streifen-Schritt je 0,1 s Spielzeit – nicht mitten im Sturm beim ersten Zeichnen.
    */
   private prepSplit(v: ViewState, st: number): void {
     if (v.quality === 0 || stageVal(GLITCH, stF(v)) < SPLIT_FROM) return;
-    if (this.splitStage === st && this.splitDone >= 2) return;
+    if (this.splitStage === st && this.splitDone >= SPLIT_STEPS) return;
     if (v.time < this.splitT) this.splitT = -1e9; // Spielzeit zurückgesetzt (neuer Lauf)
     if (v.time - this.splitT < 0.1) return;
     this.splitT = v.time;
@@ -1218,12 +1282,13 @@ export class CyberRenderer implements WorldRenderer {
   }
 
   /**
-   * Liegen die Kopien für Stufe `st` vor? Ist die Vorbereitung im Update ausgefallen (z.B. Qualität eben erst gestiegen,
-   * Lauf mitten in einer späten Stufe begonnen), backt das Zeichnen als Rückfall – aber nie zusätzlich zu einem Schritt, der in
-   * diesem Frame (gleiche Spielzeit) schon lief: höchstens eine Kopie je Frame.
+   * Liegen die Kopien vor? Einmal vollständig gebaut, werden sie immer gezeichnet (nach einem Stufenwechsel frischt das Update
+   * sie streifenweise auf; die Silhouette ändert sich dabei kaum). Ist die Vorbereitung im Update ausgefallen (z.B. Qualität
+   * eben erst gestiegen, Lauf mitten in einer späten Stufe begonnen), backt das Zeichnen als Rückfall – aber nie zusätzlich zu
+   * einem Schritt, der in diesem Frame (gleiche Spielzeit) schon lief: höchstens ein Streifen je Frame.
    */
   private splitReady(v: ViewState, st: number): boolean {
-    if (this.splitStage === st && this.splitDone >= 2) return true;
+    if (this.splitBuilt) return true;
     if (this.splitT === v.time) return false;
     this.splitT = v.time;
     return this.ensureSplit(st);
@@ -1259,7 +1324,7 @@ export class CyberRenderer implements WorldRenderer {
         g.globalAlpha = 0.85;
         blitStrip(g, tile, L.w, sy, h, off, L.y + dy);
         g.globalCompositeOperation = "lighter";
-        g.globalAlpha = 0.16 * gl;
+        g.globalAlpha = 0.16 * gl * flashFactor(v); // additive RGB-Balken: Stärke folgt dem „Blitze“-Regler
         g.fillStyle = i % 2 ? CYAN : MAGENTA;
         g.fillRect(0, y, v.w, h);
         g.fillRect(dx, y + h, v.w, 2);

@@ -10,7 +10,7 @@ import type { Ent, PropLibrary, ViewState } from "../../types";
 import { glowAt, glowSprite, paint, rr, softSprite, type Ctx2D } from "../shared-b/canvas";
 import { mulberry } from "../shared-b/color";
 import { MAX_STAGE, STAGES, SpriteCache, mixHex, silhouetteGlow, tintCanvas, withA } from "./palette";
-import { PROP_PAD, bakeProp, bakeStretch, fitBox, propAspect, propScale, quant } from "./propfit";
+import { PROP_PAD, bakeProp, bakeStretch, fitBox, primeProp, propAspect, propScale, quant, type PrimeSink } from "./propfit";
 import { grapeBunch, grapeLeaf, stoneWall } from "./scenery";
 
 const TAU = Math.PI * 2;
@@ -39,6 +39,14 @@ type Variants = Array<HTMLCanvasElement | undefined>;
 /** Durchmesser der rollenden Weinfässer (px, gerade): 66 … 76 in den Mustern (`barrel(c, D, vx, size)`); Test in wachau.test.ts */
 export const WACHAU_BARREL_SIZES = [66, 68, 70, 72, 74, 76] as const;
 
+/**
+ * Props, die erst im Lauf zum ersten Mal verkleinert gezeichnet werden (Fass, Kisten, Mauer, Fass- und Kistenstapel, Ast, Ranken).
+ * Die erste „high“-Verkleinerung eines Bildes kostet 3 bis 16 ms (Dekodieren und Mip-Kette; Software-Raster, auf Handys ein
+ * Mehrfaches), jede weitere Größe danach unter 2 ms. Das Aufwärmen zahlt diese Erstkosten im Leerlauf (`warmProp`), nicht
+ * mitten im Lauf beim ersten Hindernis der Art. Test in wachau.test.ts: jedes Prop, das die Skins verkleinert backen, steht hier.
+ */
+export const WACHAU_PRIME_PROPS = ["wine-barrel", "crate-wine", "wachau-wall", "wachau-cask", "wachau-crates", "wachau-branch", "wachau-vines"] as const;
+
 /** Stufen-Varianten eines Sprites: Entitäten bekommen ~55 % des Szenenlichts */
 function entTint(src: HTMLCanvasElement, stage: number): HTMLCanvasElement {
   const L = STAGES[stage].light;
@@ -61,6 +69,9 @@ export class WachauSkins {
   private grapeStrip: HTMLCanvasElement | null = null;
   private apricotFromProp = false;
   static readonly APRICOT = 48;
+  /** Aufwärmfläche für `primeProp` (eine winzige Fläche, wiederverwendet) und die Props, deren Erstkosten schon gezahlt sind */
+  private primeSink: PrimeSink | null = null;
+  private primed = new Set<string>();
   /** Pixelfaktor der Zeichenfläche (1 … 2): Hindernis-Sprites werden dafür vorgerendert */
   private pk = 1;
   /** Bakes im laufenden Frame (siehe `sprite`); `beginFrame` setzt zurück */
@@ -77,11 +88,13 @@ export class WachauSkins {
   }
 
   /**
-   * Sprite aus dem Cache oder frisch gebacken. Maße wie Kistengröße, Floßbreite oder Astlänge variieren mit dem Muster, die
-   * Sprites lassen sich daher nicht vorbacken und entstehen beim ersten Zeichnen. Steht die Entität dann noch ganz rechts
-   * außerhalb des Bildes (`x` ≥ VIEW_W; die Engine zeichnet sie schon 260 px davor), wird höchstens EIN Bake je Frame
-   * ausgeführt, die übrigen warten einen Frame (Rückgabe null, unsichtbar): so entsteht kein Mehrfach-Bake-Ruckler. Sichtbare
-   * Sprites werden immer sofort gebacken.
+   * Sprite aus dem Cache oder frisch gebacken. Maße wie Kistengröße, Floßbreite oder Astlänge variieren mit dem Muster (aus den
+   * Mustern gezählt: rund 140 Maße; alle mit Stufen-Variante und Rimlight vorgebacken wären grob 65 MB bei Pixelfaktor 1, allein
+   * die Blöcke 3 MB), die Sprites lassen sich daher nicht vorbacken und entstehen beim ersten Zeichnen. Steht die Entität
+   * dann noch ganz rechts außerhalb des Bildes (`x` ≥ VIEW_W; die Engine zeichnet sie schon 260 px davor), wird höchstens EIN
+   * Bake je Frame ausgeführt, die übrigen warten einen Frame (Rückgabe null, unsichtbar): so entsteht kein Mehrfach-Bake-
+   * Ruckler. Sichtbare Sprites werden immer sofort gebacken. Ein Bake kostet nur das Malen (unter 3 ms): die Erstkosten der
+   * Prop-Bilder (Dekodieren, Mip-Kette: 3 bis 16 ms) hat das Aufwärmen schon bezahlt (`warmJobs`, `WACHAU_PRIME_PROPS`).
    */
   private sprite(key: string, make: () => HTMLCanvasElement, x: number): HTMLCanvasElement | null {
     if (!this.cache.has(key)) {
@@ -93,6 +106,7 @@ export class WachauSkins {
 
   setProps(p: PropLibrary): void {
     this.props = p;
+    this.primed.clear();
     this.apricotStrip = null;
     this.grapeStrip = null;
     this.cache.clear();
@@ -184,18 +198,20 @@ export class WachauSkins {
   }
 
   /**
-   * Vorback-Aufträge (jeder klein, einzeln aufrufbar) für Sprites mit festen Maßen: Marillen-/Trauben-Streifen und die
-   * sechs Fassgrößen (Durchmesser 66 … 76, gerade; so groß sind alle Fässer der Muster). Zeichnen und Vorbacken teilen die
-   * Rechnung (`sprite`/`rimOf` mit denselben Schlüsseln) → derselbe Cache-Eintrag. Alles andere (Kisten, Mauern, Flöße,
-   * Äste …) nimmt seine Maße von Muster und Tempo und entsteht beim ersten Zeichnen (siehe `sprite`).
+   * Aufwärm-Aufträge (jeder klein, einzeln aufrufbar): zuerst die Erstkosten der Prop-Bilder, die im Lauf verkleinert gebacken
+   * werden (`WACHAU_PRIME_PROPS`), dann Sprites mit festen Maßen: Marillen-/Trauben-Streifen und die sechs Fassgrößen
+   * (Durchmesser 66 … 76, gerade; so groß sind alle Fässer der Muster). Zeichnen und Vorbacken teilen die Rechnung
+   * (`sprite`/`rimOf` mit denselben Schlüsseln) → derselbe Cache-Eintrag. Alles andere (Kisten, Mauern, Flöße, Äste …) nimmt
+   * seine Maße von Muster und Tempo und entsteht beim ersten Zeichnen (siehe `sprite`).
    */
   warmJobs(): Array<() => void> {
-    const jobs: Array<() => void> = [
-      () => {
-        this.apricotStrip ??= this.buildApricots();
-        this.grapeStrip ??= this.buildGrapes();
-      },
-    ];
+    const jobs: Array<() => void> = [];
+    // Erstkosten der Prop-Bilder zuerst (je Prop ein Auftrag), damit die Bakes danach – hier und im Lauf – nur noch das Malen kosten
+    for (const id of WACHAU_PRIME_PROPS) jobs.push(() => this.warmProp(id));
+    jobs.push(() => {
+      this.apricotStrip ??= this.buildApricots();
+      this.grapeStrip ??= this.buildGrapes();
+    });
     for (const d of WACHAU_BARREL_SIZES) {
       jobs.push(() => {
         const key = `barrel:${d}`;
@@ -206,6 +222,13 @@ export class WachauSkins {
       });
     }
     return jobs;
+  }
+
+  /** Erstkosten eines Prop-Bildes jetzt zahlen (siehe `primeProp` in propfit.ts); je Bild einmal */
+  private warmProp(id: string): void {
+    if (this.primed.has(id)) return;
+    this.primed.add(id);
+    this.primeSink = primeProp(this.props, id, this.primeSink);
   }
 
   // ---------------------------------------------------------------------------------------------

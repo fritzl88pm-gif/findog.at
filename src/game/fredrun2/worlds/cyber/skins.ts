@@ -51,7 +51,11 @@ export interface CyberSkinAssets {
 const CHIP = 64;
 const CRYSTAL = 80;
 
-export function makeSkinAssets(): CyberSkinAssets {
+/**
+ * Alle prozeduralen Sprites in Schritten: nach jedem Block `yield` (Welt-Laden ohne Long Task, siehe `CyberRenderer.load`).
+ * `makeSkinAssets` führt dasselbe am Stück aus.
+ */
+export function* makeSkinAssetsSteps(): Generator<void, CyberSkinAssets, void> {
   const chip = spriteStrip(12, CHIP, (g, f, s) => {
     const ang = (f / 12) * TAU;
     const sx = Math.max(0.1, Math.abs(Math.cos(ang)));
@@ -90,6 +94,7 @@ export function makeSkinAssets(): CyberSkinAssets {
     g.arc(0, 0, r * 0.18, 0, TAU);
     g.fill();
   });
+  yield;
   const crystal = spriteStrip(16, CRYSTAL, (g, f, s) => {
     const ang = (f / 16) * TAU;
     g.translate(s / 2, s / 2);
@@ -140,6 +145,7 @@ export function makeSkinAssets(): CyberSkinAssets {
     g.ellipse(-s * 0.06, -s * 0.2, s * 0.03, s * 0.09, 0.3, 0, TAU);
     g.fill();
   });
+  yield;
   const col = (c: string): HTMLCanvasElement =>
     paint(64, 460, (g) => {
       const grd = g.createLinearGradient(0, 0, 64, 0);
@@ -263,6 +269,7 @@ export function makeSkinAssets(): CyberSkinAssets {
     g.fillStyle = "rgba(0,0,0,0.35)";
     for (let y = 0; y < 110; y += 3) g.fillRect(0, y, 200, 1);
   });
+  yield;
   const corridor = paintOpaque(512, 460, (g) => {
     g.fillStyle = "#050c13";
     g.fillRect(0, 0, 512, 460);
@@ -331,6 +338,7 @@ export function makeSkinAssets(): CyberSkinAssets {
       g.fillRect(x, 449, 18, 3);
     }
   });
+  yield;
   const cubeWire = paint(120, 120, (g) => {
     g.strokeStyle = "rgba(255,255,255,0.9)";
     g.lineWidth = 2;
@@ -342,13 +350,19 @@ export function makeSkinAssets(): CyberSkinAssets {
     drawProcCube(g, 60, 64, 44);
   });
   const softC = softSprite("rgba(34,224,255,1)");
+  const coinStrip = coinStripOf(null, chip, softC);
+  yield;
+  const portalUp = portalSprite(col(CYAN), glowSprite(CYAN), softC, CYAN);
+  yield;
+  const portalDown = portalSprite(col(MAGENTA), glowSprite(MAGENTA), softSprite("rgba(255,62,200,1)"), MAGENTA);
+  yield;
   return {
     props: null,
     chip,
-    coinStrip: coinStripOf(null, chip, softC),
+    coinStrip,
     crystal,
-    portalUp: portalSprite(col(CYAN), glowSprite(CYAN), softC, CYAN),
-    portalDown: portalSprite(col(MAGENTA), glowSprite(MAGENTA), softSprite("rgba(255,62,200,1)"), MAGENTA),
+    portalUp,
+    portalDown,
     glowCyan: glowSprite(CYAN),
     glowMagenta: glowSprite(MAGENTA),
     glowRed: glowSprite("#ff3a3a"),
@@ -376,6 +390,15 @@ export function makeSkinAssets(): CyberSkinAssets {
     hover: new Map(),
     baked: 0,
   };
+}
+
+/** Alle prozeduralen Sprites am Stück (Tests, Fallback ohne `load`); dasselbe Ergebnis wie `makeSkinAssetsSteps` */
+export function makeSkinAssets(): CyberSkinAssets {
+  const it = makeSkinAssetsSteps();
+  for (;;) {
+    const r = it.next();
+    if (r.done) return r.value;
+  }
 }
 
 /** Nach dem Laden der Props: Würfel/Rack/Barriere als eigene Canvas vorrendern (für Glitch-Schnitte & Spiegelung). */

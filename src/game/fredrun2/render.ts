@@ -435,8 +435,15 @@ export class Renderer {
         this.particles.emit({ x: PLAYER_SX - 40, y: sim.feetY() - 40 * p.gravDir, vx: -400 - Math.random() * 300, vy: (Math.random() - 0.5) * 120, life: 0.35, size: 7, color: Math.random() < 0.5 ? "#ffb703" : "#ff5d3a", additive: true, drag: 1 });
       }
     }
-    for (const gh of this.ghosts) gh.life += dt;
-    this.ghosts = this.ghosts.filter((gh) => gh.life < 0.28);
+    // Altern und abgelaufene Geisterbilder an Ort und Stelle entfernen (kein neues Array/keine Closure pro Frame)
+    const gs = this.ghosts;
+    let keep = 0;
+    for (let i = 0; i < gs.length; i += 1) {
+      const gh = gs[i];
+      gh.life += dt;
+      if (gh.life < 0.28) gs[keep++] = gh;
+    }
+    gs.length = keep;
   }
 
   /** Wählt Animation und Zeit für diesen Frame; das Ergebnis liegt in `this.anim` (wiederverwendet). */
