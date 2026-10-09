@@ -378,10 +378,11 @@ export class Renderer {
       t.y = COIN_TARGET.y;
       return t;
     }
-    const w = clamp(77 + formatNumber(coins).length * 17.5, 100, 156);
+    // Spiegel von drawTopRight: Plattenbreite nach Ziffern (85 + 17,5 je Zeichen, 108..156), Skala höchstens so groß, dass die
+    // Pause-Taste frei bleibt (TR_ROOM 166); das Symbol sitzt 30 px rechts vom linken Rand der Platte, Anker ist die Ecke (1258, 18)
+    const w = clamp(85 + formatNumber(coins).length * 17.5, 108, 156);
     const k = Math.max(1, Math.min(u, 166 / w));
-    const left = VIEW_W - 22 - w;
-    t.x = VIEW_W - 22 + (left + 30 - (VIEW_W - 22)) * k;
+    t.x = VIEW_W - 22 + (30 - w) * k;
     t.y = 18 + (COIN_TARGET.y - 18) * k;
     return t;
   }
@@ -927,8 +928,10 @@ export class Renderer {
       o.once = anim.once;
       o.frame = anim.frame;
       drawn = spr.draw(g, anim.name, anim.t, fx, fy, o);
-      // Treffer-Flash (weiß, klingt in 0,15 s ab) und Nachglimmen während des Stuns, gleiche Transformation wie die Figur
-      const ov = lying ? pa.flash : Math.max(pa.flash, view.hurtGlow > 0.01 ? 0.35 * view.hurtGlow : 0);
+      // Treffer-Flash (weiß, klingt in 0,15 s ab; folgt dem Regler "Blitze") und Nachglimmen während des Stuns (langsam, kein
+      // Blitz), gleiche Transformation wie die Figur
+      const flash = pa.flash * viewFlash(view);
+      const ov = lying ? flash : Math.max(flash, view.hurtGlow > 0.01 ? 0.35 * view.hurtGlow : 0);
       if (drawn && ov > 0.01) {
         g.globalCompositeOperation = "lighter";
         g.globalAlpha = Math.min(1, ov);
@@ -1109,6 +1112,12 @@ const PICK = new Set(["pickup"]);
 export function viewAlpha(view: ViewState): number {
   const a = view.alpha;
   return a === undefined || !Number.isFinite(a) ? 1 : a < 0 ? 0 : a > 1 ? 1 : a;
+}
+
+/** Blitz-Stärke 0..1 der Sicht (Regler "Blitze", bei "Weniger Bewegung" höchstens 0,3); fehlt sie oder ist sie ungültig: 1. */
+export function viewFlash(view: ViewState): number {
+  const s = view.flashScale;
+  return s === undefined || !Number.isFinite(s) ? 1 : s < 0 ? 0 : s > 1 ? 1 : s;
 }
 
 /** Position zwischen der vorigen (`prev`, fehlt = keine Interpolation) und der aktuellen Schrittposition; an den Enden exakt. */

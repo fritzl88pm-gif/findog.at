@@ -9,12 +9,12 @@
  */
 import { drawPickup } from "../../pickups";
 import type { AssetLoader, Ent, PropLibrary, ViewState, WorldRenderer } from "../../types";
-import { yieldToMain } from "../../yield";
 import { Motes } from "../shared-a/fx";
 import { blitTiled, blitTiledRange, glowAt, paint, solidSegments, type Ctx2D } from "../shared-b/canvas";
 import { h1, mod, stageVal } from "../shared-b/color";
 import { flashFactor } from "../shared-b/flash";
 import { nowMs, stageProgress } from "../shared-b/layers";
+import { yieldBetweenBakes } from "../shared-b/yield";
 import {
   BACK_FLOOR_Y,
   BACK_H,
@@ -148,6 +148,8 @@ export class FinanzamtRenderer implements WorldRenderer {
   private pixelK = 1;
   /** Zeitpunkt (ms) des letzten Vorbereitungsschritts der Folgestufe */
   private prepAt = -1e9;
+  /** angefangene Vorbereitung des Mittelgrunds der Folgestufe (ein Schritt je ~100 ms, siehe `update`) */
+  private midPending: { stage: number; it: Generator<void, MidEntry, void> } | null = null;
   private time = 0;
   private burstSeen = 0;
   private sparkT = 0;
@@ -156,21 +158,24 @@ export class FinanzamtRenderer implements WorldRenderer {
     this.props = assets.props;
     await Promise.all([this.backdrop.load(assets.image), assets.props.preload(FA_PROPS).catch(() => undefined)]);
     // Statisches in Schritten bauen und dazwischen den Hauptthread freigeben (kein Long Task, Eingaben laufen weiter)
-    await yieldToMain(); // nicht im selben Task wie das Ende des Ladens von Kulisse und Props
-    while (this.stepBuild()) await yieldToMain();
+    await yieldBetweenBakes(); // nicht im selben Task wie das Ende des Ladens von Kulisse und Props
+    while (this.stepBuild()) await yieldBetweenBakes();
     this.A.props = assets.props;
     for (const stage of [0, 1]) {
       const it = this.midSteps(stage);
       for (;;) {
         const r = it.next();
         if (r.done) break;
-        await yieldToMain();
+        await yieldBetweenBakes();
       }
-      await yieldToMain();
+      await yieldBetweenBakes();
     }
-    this.backdrop.tile(0);
-    await yieldToMain();
-    this.backdrop.tile(1);
+    // Fernkulisse der Stufen 0 und 1: Bild in einem eigenen Schritt dekodieren, die Kachel in Teilschritten malen
+    for (const stage of [0, 1]) {
+      await this.backdrop.predecode(stage);
+      await yieldBetweenBakes();
+      while (!this.backdrop.stepTile(stage)) await yieldBetweenBakes();
+    }
   }
 
   /**
@@ -332,14 +337,26 @@ export class FinanzamtRenderer implements WorldRenderer {
     return m;
   }
 
+  /** Mittelgrund am Stück (Zeichenpfad, Überblendung): setzt eine angefangene Vorbereitung derselben Stufe fort */
   private mid(stage: number): MidEntry {
     const hit = this.mids.get(stage);
     if (hit) return hit;
-    const it = this.midSteps(stage);
+    const p = this.midPending;
+    const it = p && p.stage === stage ? p.it : this.midSteps(stage);
+    if (p && p.stage === stage) this.midPending = null;
     for (;;) {
       const r = it.next();
       if (r.done) return r.value;
     }
+  }
+
+  /** Ein Schritt der Mittelgrund-Vorbereitung (aus `update`, nie mehrere in einem Frame); true = Mittelgrund der Stufe liegt vor */
+  private stepMid(stage: number): boolean {
+    if (this.mids.has(stage)) return true;
+    if (!this.midPending || this.midPending.stage !== stage) this.midPending = { stage, it: this.midSteps(stage) };
+    if (!this.midPending.it.next().done) return false;
+    this.midPending = null;
+    return true;
   }
 
   update(dt: number, v: ViewState): void {
@@ -350,7 +367,7 @@ export class FinanzamtRenderer implements WorldRenderer {
     const st = v.stage;
     const s = st + v.stageBlend;
     // Folgestufe verteilt vorbereiten: nicht am Stufenanfang (dort drängt sich sonst alles auf den Übergang), sondern ab ~28 %
-    // der Stufe, ein Schritt (Mittelgrund bzw. Kulissenkachel) je ~100 ms; beginnt die Überblendung, wird nachgeholt
+    // der Stufe, ein Teilschritt (Mittelgrund, Bilddekodierung, Kulissenkachel) je ~100 ms; beginnt die Überblendung, wird nachgeholt
     this.lastStage = st;
     if (!this.mids.has(st)) this.mid(st);
     if (st < MAX_STAGE) {
@@ -360,10 +377,13 @@ export class FinanzamtRenderer implements WorldRenderer {
         if (t < this.prepAt) this.prepAt = t; // Uhr zurückgesetzt
         if (urgent || t - this.prepAt >= 100) {
           if (!this.mids.has(st + 1)) {
-            this.mid(st + 1);
+            if (urgent) this.mid(st + 1);
+            else this.stepMid(st + 1);
             this.prepAt = t;
           } else if (!this.backdrop.has(st + 1)) {
-            this.backdrop.tile(st + 1);
+            if (urgent) this.backdrop.tile(st + 1);
+            else if (!this.backdrop.isPredecoded(st + 1)) void this.backdrop.predecode(st + 1);
+            else this.backdrop.stepTile(st + 1);
             this.prepAt = t;
           }
         }

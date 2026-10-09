@@ -9,12 +9,12 @@
  */
 import { clamp } from "../../draw-utils";
 import type { AssetLoader, Ent, ViewState, WorldRenderer } from "../../types";
-import { yieldToMain } from "../../yield";
 import { Motes } from "../shared-a/fx";
 import { blitCentered, blitTiled, blitTiledRange, bigGlow, glowAt, glowSprite, paint, softSprite, solidSegments, touchCanvas, wrapDraw, type Ctx2D } from "../shared-b/canvas";
 import { h1, mod, mulberry, stageVal } from "../shared-b/color";
 import { StageCache, StagePrep, gradedCache, stageProgress } from "../shared-b/layers";
 import { WarmQueue } from "../shared-b/warm";
+import { yieldBetweenBakes } from "../shared-b/yield";
 import { LANDMARK_IDS, buildLandmark, steamshipLights, type Landmark, type LandmarkSpec } from "./landmarks";
 import {
   ENT_NIGHT,
@@ -320,14 +320,14 @@ export class WachauRenderer implements WorldRenderer {
     this.staged.length = 0;
     this.warmQ.clear();
     this.warmInit = false;
-    await yieldToMain(); // nicht im selben Task wie das Ende des Prop-Ladens
-    while (this.stepBuild()) await yieldToMain();
+    await yieldBetweenBakes(); // nicht im selben Task wie das Ende des Prop-Ladens
+    while (this.stepBuild()) await yieldBetweenBakes();
     this.ready = true;
     // erste beiden Stufen vorbacken (jeder Teilschritt eines Bakes ein eigener Schritt, dazwischen Pausen)
     for (const stage of [0, 1]) {
       for (const c of this.staged) {
         while (!c.has(stage)) {
-          await yieldToMain();
+          await yieldBetweenBakes();
           c.step(stage);
         }
       }

@@ -7,10 +7,12 @@
  * aktuelle und die nächste Stufe bleiben im Speicher). Bilder für spätere Stufen werden erst kurz vorher geladen; nicht mehr
  * benötigte Ebenen (Markt, Dämmerhimmel) werden freigegeben. Pro Frame: ganzzahlige 1:1-Blits + additive Leuchtpunkte.
  */
+import { warmImage } from "../../assets";
 import type { AssetLoader } from "../../types";
-import { blitTiled, blitTiledRange, glowSprite, paint, solidSegments, type Ctx2D } from "../shared-b/canvas";
+import { blitTiled, blitTiledRange, glowSprite, paint, solidSegments, touchCanvas, type Ctx2D } from "../shared-b/canvas";
 import { mod, stageVal } from "../shared-b/color";
 import { StageCache, Staged, nowMs, tinted, type StageTint } from "../shared-b/layers";
+import { yieldBetweenBakes } from "../shared-b/yield";
 import { glowAt, makeGlows, sat, TAU, type GlowSet } from "./gfx";
 import { LAYER_LIGHTS, SKY_STARS } from "./lights";
 import {
@@ -149,6 +151,11 @@ export class Backdrop {
     try {
       const img = await this.assets.image(BASE + IMG[name].file);
       if (!img) return;
+      // Dekodieren (der Browser tut es erst beim ersten Zeichnen, 25-60 ms je Bild und auf Handys ein Vielfaches) und Skalieren
+      // in getrennten Schritten mit Pause dazwischen: die sechs Grundbilder landen nicht in einem Long Task
+      await yieldBetweenBakes();
+      await warmImage(img);
+      await yieldBetweenBakes();
       const spec = IMG[name];
       const top = spec.cropTop ?? 0;
       const kY = spec.h / img.height;
@@ -158,6 +165,7 @@ export class Backdrop {
         const sh = spec.cropH ?? img.height - top;
         g.drawImage(img, 0, top, img.width, sh, 0, 0, w, h);
       });
+      touchCanvas(c); // das Skalieren jetzt rastern, nicht erst beim ersten Stufen-Bake im Lauf
       this.canv.set(name, c);
     } catch {
       // Ebene fehlt → Welt sieht ohne sie trotzdem gut aus

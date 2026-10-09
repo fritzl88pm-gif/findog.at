@@ -9,12 +9,12 @@
  */
 import { makeCanvas } from "../../draw-utils";
 import type { AssetLoader, Ent, PropLibrary, ViewState, WorldRenderer } from "../../types";
-import { yieldToMain } from "../../yield";
 import { blitTiled, colorWithAlpha, ctxOf, glowAt, paint, touchCanvas, type Ctx2D } from "../shared-b/canvas";
 import { h1, mod, mulberry, stageVal } from "../shared-b/color";
 import { flashFactor } from "../shared-b/flash";
 import { StageCache, StagePrep, gradedCache, rgbaOf, stageProgress, type StageTint } from "../shared-b/layers";
 import { WarmQueue } from "../shared-b/warm";
+import { yieldBetweenBakes } from "../shared-b/yield";
 import { GUEST_PROP_IDS } from "../shared-a/guests";
 import {
   adIcons,
@@ -307,14 +307,14 @@ export class CyberRenderer implements WorldRenderer {
     this.props = assets.props;
     await assets.props.preload(CYBER_PROPS);
     // Statisches in Schritten bauen und dazwischen den Hauptthread freigeben (kein Long Task, Eingaben laufen weiter)
-    await yieldToMain(); // nicht im selben Task wie das Ende des Prop-Ladens
-    while (this.stepBuild()) await yieldToMain();
+    await yieldBetweenBakes(); // nicht im selben Task wie das Ende des Prop-Ladens
+    while (this.stepBuild()) await yieldBetweenBakes();
     this.ready = true;
     // erste beiden Stufen vorbacken (jeder Teilschritt eines Bakes ein eigener Schritt, dazwischen Pausen)
     for (const stage of [0, 1]) {
       for (const c of this.staged) {
         while (!c.has(stage)) {
-          await yieldToMain();
+          await yieldBetweenBakes();
           c.step(stage);
         }
       }

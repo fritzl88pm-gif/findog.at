@@ -4,7 +4,8 @@
  * (Schreibtisch-Inseln, Regale, Glasbüros, Archiv, Serverschränke & Tresortür) samt Lichtkacheln, Säulen, Hängeleuchten,
  * Boden (Linoleum/Riffelblech), Vordergrund-Deckenträger und die Taschenlampen-Maske.
  */
-import { paint, rr, wrapDraw, type Ctx2D } from "../shared-b/canvas";
+import { warmImage } from "../../assets";
+import { paint, rr, touchCanvas, wrapDraw, type Ctx2D } from "../shared-b/canvas";
 import { mulberry } from "../shared-b/color";
 import { BACK_GRADE, PALETTE, TEXT_PATCHES } from "./stages";
 
@@ -18,19 +19,17 @@ export function rgbaHex(hex: string, a: number): string {
 // =================================================================================================
 // Gemalte Fernkulisse
 
-/** Deckende Offscreen-Fläche (alpha:false → schneller Kopier-Pfad beim Blitten) */
-function paintOpaque(w: number, h: number, draw: (g: Ctx2D) => void): HTMLCanvasElement {
+/** Offscreen-Fläche für eine deckende Kachel (ihr Kontext entsteht mit alpha:false → schneller Kopier-Pfad beim Blitten) */
+function makeOpaque(w: number, h: number): HTMLCanvasElement {
   const c = document.createElement("canvas");
   c.width = Math.max(1, Math.round(w));
   c.height = Math.max(1, Math.round(h));
-  const g = (c.getContext("2d", { alpha: false }) ?? c.getContext("2d")) as Ctx2D;
-  draw(g);
   return c;
 }
 
 export const BACK_SCALE = 0.76;
 /** Quellzeilen, die übernommen werden (Rest = dunkle Laufbahn des Originals) */
-const BACK_CROP = 560;
+export const BACK_CROP = 560;
 export const BACK_TILE_W = Math.round(2172 * BACK_SCALE);
 export const BACK_H = Math.round(BACK_CROP * BACK_SCALE);
 /** Bildschirm-y der Oberkante / der gemalten Bodenlinie */
@@ -41,6 +40,10 @@ export class FaBackdrop {
   private imgs = new Map<string, HTMLImageElement | null>();
   private cache = new Map<number, HTMLCanvasElement>();
   private order: number[] = [];
+  /** Bilder, die vordekodiert wurden (`predecode`) */
+  private decoded = new WeakSet<HTMLImageElement>();
+  /** angefangene Kachel (Bake in Schritten über mehrere Frames) */
+  private pending: { stage: number; it: Generator<void, HTMLCanvasElement | null, void> } | null = null;
 
   constructor(private readonly urls: readonly string[]) {}
 
@@ -66,7 +69,51 @@ export class FaBackdrop {
     return this.cache.has(stage);
   }
 
+  /**
+   * Bild der Stufe vordekodieren: der Browser dekodiert ein <img> erst beim ersten Zeichnen im Hauptthread (5-45 ms je Bild, auf
+   * Handys ein Vielfaches), das fiele sonst in den ersten Bake-Schritt der Kachel. Ein 1×1-Warm-Draw (`warmImage`) holt das in
+   * einen eigenen Schritt davor. Je Bild nur einmal; undefined = nichts (mehr) zu tun.
+   */
+  predecode(stage: number): Promise<void> | undefined {
+    const img = this.img(stage);
+    if (!img || this.decoded.has(img)) return undefined;
+    this.decoded.add(img);
+    return warmImage(img);
+  }
+
+  /** Ist das Bild der Stufe schon vordekodiert (oder gibt es keins)? */
+  isPredecoded(stage: number): boolean {
+    const img = this.img(stage);
+    return !img || this.decoded.has(img);
+  }
+
+  /** Kachel der Stufe am Stück (Zeichenpfad, Tests, Rückfall): setzt eine angefangene Kachel derselben Stufe fort */
   tile(stage: number): HTMLCanvasElement | null {
+    const hit = this.cache.get(stage);
+    if (hit) return hit;
+    const it = this.pending && this.pending.stage === stage ? this.pending.it : this.tileSteps(stage);
+    if (this.pending && this.pending.stage === stage) this.pending = null;
+    for (;;) {
+      const r = it.next();
+      if (r.done) return r.value;
+    }
+  }
+
+  /**
+   * Ein Bake-Schritt der Kachel (aus `update`, höchstens einer je ~100 ms): linke Hälfte · gespiegelte Hälfte samt Schrift ·
+   * Einfärbung. Jeder Schritt rastert seine Fläche gleich (`touchCanvas`), nicht erst der erste Frame mit der Kachel.
+   * true = die Kachel liegt vor (oder es gibt kein Bild).
+   */
+  stepTile(stage: number): boolean {
+    if (this.cache.has(stage)) return true;
+    if (!this.pending || this.pending.stage !== stage) this.pending = { stage, it: this.tileSteps(stage) };
+    if (!this.pending.it.next().done) return false;
+    this.pending = null;
+    return true;
+  }
+
+  /** Die Kachel in Schritten malen; das Ergebnis ist dasselbe wie bei einem Durchlauf am Stück. */
+  private *tileSteps(stage: number): Generator<void, HTMLCanvasElement | null, void> {
     const hit = this.cache.get(stage);
     if (hit) return hit;
     const img = this.img(stage);
@@ -75,42 +122,47 @@ export class FaBackdrop {
     const H = BACK_H;
     const sh = Math.min(img.height, Math.round((BACK_CROP / 665) * img.height));
     const k = W / img.width;
-    const c = paintOpaque(W * 2, H, (g) => {
-      g.imageSmoothingQuality = "high";
-      g.drawImage(img, 0, 0, img.width, sh, 0, 0, W, H);
-      g.save();
-      g.translate(W * 2, 0);
-      g.scale(-1, 1);
-      g.drawImage(img, 0, 0, img.width, sh, 0, 0, W, H);
-      g.restore();
-      // Schrift (Schild, „BAO“, „31.12.“, „§“) in der gespiegelten Hälfte lesbar nachzeichnen
-      const sx = img.width / 2172;
-      for (const [L, T, PW, PH] of TEXT_PATCHES) {
-        const dx = W * 2 - (L + PW) * k * sx;
-        g.drawImage(img, L * sx, T * sx, PW * sx, PH * sx, dx, T * k * sx, PW * k * sx, PH * k * sx);
-      }
-      // Stufen-Einfärbung (atmosphärische Tiefe)
-      const gr = BACK_GRADE[stage];
-      g.globalCompositeOperation = "source-atop";
-      g.fillStyle = rgbaHex(gr.tint, gr.a);
+    const c = makeOpaque(W * 2, H);
+    const g = (c.getContext("2d", { alpha: false }) ?? c.getContext("2d")) as Ctx2D;
+    g.imageSmoothingQuality = "high";
+    g.drawImage(img, 0, 0, img.width, sh, 0, 0, W, H);
+    touchCanvas(c);
+    yield;
+    g.save();
+    g.translate(W * 2, 0);
+    g.scale(-1, 1);
+    g.drawImage(img, 0, 0, img.width, sh, 0, 0, W, H);
+    g.restore();
+    // Schrift (Schild, „BAO“, „31.12.“, „§“) in der gespiegelten Hälfte lesbar nachzeichnen
+    const sx = img.width / 2172;
+    for (const [L, T, PW, PH] of TEXT_PATCHES) {
+      const dx = W * 2 - (L + PW) * k * sx;
+      g.drawImage(img, L * sx, T * sx, PW * sx, PH * sx, dx, T * k * sx, PW * k * sx, PH * k * sx);
+    }
+    touchCanvas(c);
+    yield;
+    // Stufen-Einfärbung (atmosphärische Tiefe)
+    const gr = BACK_GRADE[stage];
+    g.globalCompositeOperation = "source-atop";
+    g.fillStyle = rgbaHex(gr.tint, gr.a);
+    g.fillRect(0, 0, W * 2, H);
+    const hz = g.createLinearGradient(0, H * 0.35, 0, H);
+    hz.addColorStop(0, rgbaHex(gr.haze, 0));
+    hz.addColorStop(1, rgbaHex(gr.haze, gr.hazeA));
+    g.fillStyle = hz;
+    g.fillRect(0, 0, W * 2, H);
+    if (stage === 4) {
+      // Serverkeller: kalt-grünlich, schwere Schatten oben
+      g.fillStyle = "rgba(0,40,36,0.28)";
       g.fillRect(0, 0, W * 2, H);
-      const hz = g.createLinearGradient(0, H * 0.35, 0, H);
-      hz.addColorStop(0, rgbaHex(gr.haze, 0));
-      hz.addColorStop(1, rgbaHex(gr.haze, gr.hazeA));
-      g.fillStyle = hz;
-      g.fillRect(0, 0, W * 2, H);
-      if (stage === 4) {
-        // Serverkeller: kalt-grünlich, schwere Schatten oben
-        g.fillStyle = "rgba(0,40,36,0.28)";
-        g.fillRect(0, 0, W * 2, H);
-        const top = g.createLinearGradient(0, 0, 0, H * 0.5);
-        top.addColorStop(0, "rgba(0,6,8,0.55)");
-        top.addColorStop(1, "rgba(0,6,8,0)");
-        g.fillStyle = top;
-        g.fillRect(0, 0, W * 2, H * 0.5);
-      }
-      g.globalCompositeOperation = "source-over";
-    });
+      const top = g.createLinearGradient(0, 0, 0, H * 0.5);
+      top.addColorStop(0, "rgba(0,6,8,0.55)");
+      top.addColorStop(1, "rgba(0,6,8,0)");
+      g.fillStyle = top;
+      g.fillRect(0, 0, W * 2, H * 0.5);
+    }
+    g.globalCompositeOperation = "source-over";
+    touchCanvas(c);
     this.cache.set(stage, c);
     this.order.push(stage);
     while (this.order.length > 3) {

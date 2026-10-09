@@ -5,12 +5,14 @@ import { createPatternCtx } from "../patterns";
 import { Rng } from "../rng";
 import type { EntSpec } from "../types";
 import { WORLD_FINANZAMT } from "./finanzamt";
+import { BACK_CROP, BACK_H, BACK_TILE_W, FaBackdrop, rgbaHex } from "./finanzamt/backdrop";
 import { Chunked } from "./finanzamt/chunked";
 import { FA_STAGE_METERS, FinanzamtRenderer } from "./finanzamt/renderer";
 import { GlowCache, OFFSCREEN_X, SpriteCache, type BakeBudget } from "./finanzamt/skins";
+import { BACK_GRADE, FA_BACKDROPS, TEXT_PATCHES } from "./finanzamt/stages";
 import { WORLDS } from "./index";
 import { auditPatterns, botRuns } from "./shared-b/audit";
-import { FAKE_IMAGE, assetsOf, installCanvasStub, manifestProps, stubView } from "./shared-b/test-kit";
+import { FAKE_IMAGE, assetsOf, installCanvasStub, installRecordingStub, manifestProps, stubView } from "./shared-b/test-kit";
 
 function build(id: string, diff: number, seed = 1): EntSpec[] {
   const p = WORLD_FINANZAMT.patterns.find((x) => x.id === id);
@@ -130,7 +132,8 @@ describe("Welt Finanzamt bei Nacht", () => {
 interface FaInternals {
   A: { cache: { k: number; clear(): void }; pcache: { k: number }; coin: { height: number } };
   mids: Map<number, unknown>;
-  backdrop: { has(stage: number): boolean };
+  midPending: { stage: number } | null;
+  backdrop: { has(stage: number): boolean; isPredecoded(stage: number): boolean };
   built: boolean;
   pixelK: number;
 }
@@ -223,7 +226,16 @@ describe("Finanzamt – Stufenlänge, Weltladen, Folgestufe, Skalenwechsel", () 
     expect(steps).toBeGreaterThanOrEqual(3); // Auslesen + ca. 2048/640 Zerlegungsschritte
   });
 
-  it("die Folgestufe wird erst ab ~28 % der Stufe und höchstens ein Schritt je ~100 ms vorbereitet", async () => {
+  it("load legt auch die Fernkulisse der Stufen 0 und 1 an (Kachel in Teilschritten), die der Folgestufen nicht", async () => {
+    const { r } = await loaded();
+    const i = inner(r);
+    expect(i.backdrop.has(0)).toBe(true);
+    expect(i.backdrop.has(1)).toBe(true);
+    expect(i.backdrop.has(2)).toBe(false);
+    expect(i.backdrop.isPredecoded(0)).toBe(true);
+  });
+
+  it("die Folgestufe wird erst ab ~28 % der Stufe, in Teilschritten und höchstens ein Teilschritt je ~100 ms vorbereitet", async () => {
     const { r } = await loaded();
     const i = inner(r);
     let clock = 5000;
@@ -232,13 +244,64 @@ describe("Finanzamt – Stufenlänge, Weltladen, Folgestufe, Skalenwechsel", () 
     at(0.02);
     at(0.25);
     expect(i.mids.has(2)).toBe(false);
-    at(0.3);
+    expect(i.midPending).toBeNull();
+    at(0.3); // erster Teilschritt: angefangen, aber nicht fertig
+    expect(i.mids.has(2)).toBe(false);
+    expect(i.midPending?.stage).toBe(2);
+    const started = i.midPending;
+    at(0.31); // Lücke < 100 ms: kein weiterer Schritt
+    expect(i.midPending).toBe(started);
+    // Mittelgrund: mehrere Teilschritte (Kacheln malen, Lichtkacheln zerlegen), nie alles in einem Update
+    let ticks = 0;
+    while (!i.mids.has(2) && ticks < 30) {
+      clock += 120;
+      at(0.35);
+      ticks += 1;
+    }
     expect(i.mids.has(2)).toBe(true);
-    at(0.31); // Lücke < 100 ms
+    expect(ticks).toBeGreaterThanOrEqual(2);
+    expect(i.midPending).toBeNull();
     expect(i.backdrop.has(2)).toBe(false);
-    clock += 120;
-    at(0.35);
+    // Fernkulisse: erst Bild dekodieren (eigener Schritt), dann die Kachel in drei Teilschritten
+    expect(i.backdrop.isPredecoded(2)).toBe(true); // FAKE_IMAGE ist dasselbe Bild wie in load: schon vordekodiert
+    let tiles = 0;
+    while (!i.backdrop.has(2) && tiles < 10) {
+      clock += 120;
+      at(0.36);
+      tiles += 1;
+    }
     expect(i.backdrop.has(2)).toBe(true);
+    expect(tiles).toBe(3);
+  });
+
+  it("Bild der Folgestufe: erst ein eigener Dekodier-Schritt, dann die drei Teilschritte der Kachel", async () => {
+    installStub();
+    const r = new FinanzamtRenderer();
+    // je Adresse ein eigenes Bild (die Kulisse nutzt für Stufe 3 und 4 dasselbe, für 0 bis 2 verschiedene)
+    await r.load({ image: async (u) => ({ width: 2172, height: 665, u }) as unknown as HTMLImageElement, props: manifestProps() });
+    const i = inner(r);
+    let clock = 5000;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const at = (progress: number): void => r.update(1 / 60, stubView({ stage: 1, worldMeters: FA_STAGE_METERS + progress * FA_STAGE_METERS }));
+    at(0.02);
+    expect(i.backdrop.isPredecoded(2)).toBe(false);
+    for (let n = 0; n < 30 && !i.mids.has(2); n += 1) {
+      clock += 120;
+      at(0.35);
+    }
+    expect(i.mids.has(2)).toBe(true);
+    expect(i.backdrop.isPredecoded(2)).toBe(false); // Mittelgrund war ein eigener Schritt
+    clock += 120;
+    at(0.36);
+    expect(i.backdrop.isPredecoded(2)).toBe(true);
+    expect(i.backdrop.has(2)).toBe(false); // das Dekodieren war ein Schritt für sich
+    let tiles = 0;
+    while (!i.backdrop.has(2) && tiles < 10) {
+      clock += 120;
+      at(0.36);
+      tiles += 1;
+    }
+    expect(tiles).toBe(3);
   });
 
   it("beginnt die Überblendung, obwohl die Folgestufe fehlt, wird sie sofort nachgeholt", async () => {
@@ -278,6 +341,116 @@ describe("Finanzamt – Stufenlänge, Weltladen, Folgestufe, Skalenwechsel", () 
     expect(i.A.cache.k).toBe(2);
     expect(i.A.pcache.k).toBe(2);
     expect(i.A.coin.height).toBe(Math.round(41 * 2));
+  });
+});
+
+/** Die Kachel der Fernkulisse wie bisher am Stück gemalt (Referenz für die Teilschritte) */
+function referenceTile(stage: number): HTMLCanvasElement {
+  const img = FAKE_IMAGE;
+  const W = BACK_TILE_W;
+  const H = BACK_H;
+  const sh = Math.min(img.height, Math.round((BACK_CROP / 665) * img.height));
+  const k = W / img.width;
+  const c = document.createElement("canvas");
+  c.width = W * 2;
+  c.height = H;
+  const g = c.getContext("2d", { alpha: false }) as CanvasRenderingContext2D;
+  g.imageSmoothingQuality = "high";
+  g.drawImage(img, 0, 0, img.width, sh, 0, 0, W, H);
+  g.save();
+  g.translate(W * 2, 0);
+  g.scale(-1, 1);
+  g.drawImage(img, 0, 0, img.width, sh, 0, 0, W, H);
+  g.restore();
+  const sx = img.width / 2172;
+  for (const [L, T, PW, PH] of TEXT_PATCHES) {
+    const dx = W * 2 - (L + PW) * k * sx;
+    g.drawImage(img, L * sx, T * sx, PW * sx, PH * sx, dx, T * k * sx, PW * k * sx, PH * k * sx);
+  }
+  const gr = BACK_GRADE[stage];
+  g.globalCompositeOperation = "source-atop";
+  g.fillStyle = rgbaHex(gr.tint, gr.a);
+  g.fillRect(0, 0, W * 2, H);
+  const hz = g.createLinearGradient(0, H * 0.35, 0, H);
+  hz.addColorStop(0, rgbaHex(gr.haze, 0));
+  hz.addColorStop(1, rgbaHex(gr.haze, gr.hazeA));
+  g.fillStyle = hz;
+  g.fillRect(0, 0, W * 2, H);
+  if (stage === 4) {
+    g.fillStyle = "rgba(0,40,36,0.28)";
+    g.fillRect(0, 0, W * 2, H);
+    const top = g.createLinearGradient(0, 0, 0, H * 0.5);
+    top.addColorStop(0, "rgba(0,6,8,0.55)");
+    top.addColorStop(1, "rgba(0,6,8,0)");
+    g.fillStyle = top;
+    g.fillRect(0, 0, W * 2, H * 0.5);
+  }
+  g.globalCompositeOperation = "source-over";
+  return c;
+}
+
+describe("Finanzamt – Fernkulisse in Teilschritten (FaBackdrop)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const logOf = (c: HTMLCanvasElement): string[] => (c as unknown as { log: string[] }).log;
+
+  async function backdrop(): Promise<FaBackdrop> {
+    const b = new FaBackdrop(FA_BACKDROPS);
+    await b.load(async () => FAKE_IMAGE);
+    return b;
+  }
+
+  for (let stage = 0; stage < FA_BACKDROPS.length; stage += 1) {
+    it(`Stufe ${stage}: stepTile braucht drei Schritte und malt dieselben Zeichenbefehle wie die Kachel am Stück`, async () => {
+      const rec = installRecordingStub();
+      const ref = referenceTile(stage);
+      const b = await backdrop();
+      expect(b.stepTile(stage)).toBe(false);
+      expect(b.has(stage)).toBe(false);
+      expect(b.stepTile(stage)).toBe(false);
+      expect(b.stepTile(stage)).toBe(true);
+      expect(b.has(stage)).toBe(true);
+      const tile = b.tile(stage) as HTMLCanvasElement;
+      expect(rec.canvases).toHaveLength(2); // Referenz + eine Kachel (kein zweiter Bake durch tile())
+      expect(tile.width).toBe(BACK_TILE_W * 2);
+      expect(tile.height).toBe(BACK_H);
+      expect(logOf(tile)).toEqual(logOf(ref));
+      expect(b.stepTile(stage)).toBe(true); // fertig: nichts mehr zu tun
+    });
+  }
+
+  it("tile() am Stück setzt eine angefangene Kachel fort (keine zweite Fläche, gleiche Befehle)", async () => {
+    const rec = installRecordingStub();
+    const ref = referenceTile(2);
+    const b = await backdrop();
+    expect(b.stepTile(2)).toBe(false);
+    const t = b.tile(2) as HTMLCanvasElement;
+    expect(rec.canvases).toHaveLength(2);
+    expect(logOf(t)).toEqual(logOf(ref));
+    expect(b.tile(2)).toBe(t);
+  });
+
+  it("ohne Bild gibt es keine Kachel und nichts zu vordekodieren", () => {
+    installCanvasStub();
+    const b = new FaBackdrop(FA_BACKDROPS);
+    expect(b.tile(0)).toBeNull();
+    expect(b.stepTile(0)).toBe(true); // Generator endet sofort mit null
+    expect(b.has(0)).toBe(false);
+    expect(b.predecode(0)).toBeUndefined();
+    expect(b.isPredecoded(0)).toBe(true);
+  });
+
+  it("predecode: je Bild nur einmal (Stufen mit demselben Bild teilen den Schritt)", async () => {
+    installCanvasStub();
+    const b = await backdrop();
+    expect(b.isPredecoded(0)).toBe(false);
+    void b.predecode(0);
+    expect(b.isPredecoded(0)).toBe(true);
+    expect(b.isPredecoded(1)).toBe(true); // alle Stufen zeigen auf dieselbe Attrappe
+    expect(b.predecode(1)).toBeUndefined();
   });
 });
 

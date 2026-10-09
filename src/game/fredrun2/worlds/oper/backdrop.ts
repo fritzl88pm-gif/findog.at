@@ -8,8 +8,8 @@
  */
 import { withRev } from "../../asset-rev";
 import { makeCanvas } from "../../draw-utils";
-import { yieldToMain } from "../../yield";
 import { paint, touchCanvas, type Ctx2D } from "../shared-b/canvas";
+import { yieldBetweenBakes } from "../shared-b/yield";
 import { CHANDELIERS, FAR_H, FAR_W } from "./glints";
 import { coneSprite } from "./fx";
 import { COLORS, DARK, FAR_URLS, GROUND_KIND, GROUND_URLS, MAX_STAGE, MID_COLUMNS_URL, MID_TABLES_URL, NEAR_URL } from "./stages";
@@ -77,7 +77,7 @@ async function runSteps<T>(it: Generator<void, T, void>): Promise<T> {
   for (;;) {
     const r = it.next();
     if (r.done) return r.value;
-    await yieldToMain();
+    await yieldBetweenBakes();
   }
 }
 
@@ -394,7 +394,7 @@ export async function loadMids(): Promise<{ cols: MidLayer | null; tabs: MidLaye
   // jede Schicht in Schritten, dazwischen den Hauptthread freigeben (kein Long Task)
   const cols = ci ? await runSteps(bakeMidSteps(ci, COLUMNS_BOTTOM, "56,20,24", 0.34)) : null;
   release(ci);
-  await yieldToMain();
+  await yieldBetweenBakes();
   const tabs = ti ? await runSteps(bakeMidSteps(ti, TABLES_BOTTOM, "56,20,24", 0.3)) : null;
   release(ti);
   return { cols, tabs };
@@ -432,7 +432,7 @@ export async function loadNear(): Promise<NearLayer | null> {
     g.drawImage(img, 0, 0, img.width, srcH, 0, 0, ww, hh);
     g.restore();
     touchCanvas(c);
-    await yieldToMain();
+    await yieldBetweenBakes();
   }
   // unterer Rand blendet aus (Seitenvorhänge enden weich)
   g.globalCompositeOperation = "destination-out";
@@ -445,7 +445,7 @@ export async function loadNear(): Promise<NearLayer | null> {
   g.fillStyle = "rgba(40,6,10,0.16)";
   g.fillRect(0, 0, ww, hh);
   touchCanvas(c);
-  await yieldToMain();
+  await yieldBetweenBakes();
   const layer = { c, w: c.width, h: c.height, spans: occupancy(c).spans };
   release(img);
   return layer;
@@ -470,7 +470,7 @@ export async function loadGroundBase(): Promise<GroundBase> {
   };
   const carpet = crop(ci);
   release(ci);
-  await yieldToMain();
+  await yieldBetweenBakes();
   const parquet = crop(pi);
   release(pi);
   return { carpet, parquet };

@@ -9,10 +9,10 @@
 import { VIEW_W } from "../../constants";
 import { clamp } from "../../draw-utils";
 import type { AssetLoader, Ent, ViewState, WorldRenderer } from "../../types";
-import { yieldToMain } from "../../yield";
 import { bigGlow, blitTiled, colorWithAlpha, glowSprite, paint, solidSegments, type Ctx2D } from "../shared-b/canvas";
 import { h1, mod, stageVal } from "../shared-b/color";
 import { StageCache, StagePrep, stageProgress } from "../shared-b/layers";
+import { yieldBetweenBakes } from "../shared-b/yield";
 import {
   FarLayers,
   GROUND_TILE_H,
@@ -104,7 +104,7 @@ export class OperRenderer implements WorldRenderer {
     const [, mids, near, gb] = await Promise.all([assets.props.preload(OPER_PROPS).catch(() => undefined), loadMids(), loadNear(), loadGroundBase()]);
     // Fehlen Props (Netzfehler, Blocker, veralteter Cache): Ersatzbilder jetzt backen statt beim ersten Auftritt im Lauf
     if (OPER_PROPS.some((id) => !assets.props.has(id))) {
-      await yieldToMain();
+      await yieldBetweenBakes();
       try {
         this.skins.warm();
       } catch {
@@ -115,13 +115,13 @@ export class OperRenderer implements WorldRenderer {
     this.tabs = mids.tabs;
     this.near = near;
     this.groundBase = gb;
-    await yieldToMain();
+    await yieldBetweenBakes();
     this.makeGroundCache();
     this.floorLights = [];
     for (let s = 0; s <= 4; s += 1) this.floorLights.push(floorGlow(COLORS.css(s).floor));
-    await yieldToMain();
+    await yieldBetweenBakes();
     await this.far.ensure(0);
-    await yieldToMain();
+    await yieldBetweenBakes();
     await this.far.ensure(1);
     this.ready = true;
   }
