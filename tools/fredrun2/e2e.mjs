@@ -102,9 +102,13 @@ await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "runn
 check("Pause-Dialog: Weiter per Mausklick", true);
 await page.keyboard.press("Escape");
 await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "paused", null, { timeout: 4000 });
-await page.getByRole("button", { name: "Hauptmenü" }).click();
+// Pause-Dialog: „Lauf beenden“ (bucht den Lauf, zeigt die Ergebnis-Karte) -> „Menü“; die Schaltflächen sind kurz gesperrt (Eingabesperre) – Playwright wartet auf „enabled“
+await page.getByRole("button", { name: "Lauf beenden" }).click({ timeout: 15000 });
+await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "gameover", null, { timeout: 6000 });
+check("Pause-Dialog: Lauf beenden per Mausklick", true);
+await page.getByRole("button", { name: "Menü" }).click({ timeout: 15000 });
 await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "menu", null, { timeout: 4000 });
-check("Pause-Dialog: Hauptmenü per Mausklick", true);
+check("Ergebnis-Karte: Menü per Mausklick", true);
 await page.getByRole("tab", { name: "Spielen" }).first().click();
 await page.getByRole("button", { name: /Los geht/ }).click();
 await page.waitForFunction(() => window.__fr2.game.getSnapshot().phase === "running", null, { timeout: 12000 }).catch(async () => {
