@@ -9,13 +9,13 @@
  */
 import { clamp } from "../../draw-utils";
 import type { AssetLoader, Ent, PropLibrary, ViewState, WorldRenderer } from "../../types";
-import { yieldToMain } from "../../yield";
 import { Motes, Rain } from "../shared-a/fx";
 import { css, groundSegments, hash, lerpRgb, stageRgb, stageVal, type RGB, type Tile } from "../shared-a/gfx";
 import { touchCanvas } from "../shared-b/canvas";
 import { flashFactor } from "../shared-b/flash";
 import { StageCache, StagePrep, stageProgress } from "../shared-b/layers";
 import { WarmQueue } from "../shared-b/warm";
+import { yieldBetweenBakes } from "../shared-b/yield";
 import { MirrorBackdrop, SizedSprites, blitAt, blitRange, blitRow, blitSlice, canvas, ellipseGlow, mod, vGradient } from "./cache";
 import {
   MAST_AX,
@@ -232,42 +232,42 @@ export class WienRenderer implements WorldRenderer {
     await Promise.all([this.backdrop.load(assets.image), assets.props.preload(["pigeon-fly", ...WIEN_PROPS]).catch(() => undefined)]);
     this.skinCtx.sprites.setProps(assets.props);
     // Zwischen den Bake-Schritten den Hauptthread freigeben (Eingaben/Frames laufen weiter, kein Long Task)
-    await yieldToMain();
+    await yieldBetweenBakes();
     this.buildCloudsA();
-    await yieldToMain();
+    await yieldBetweenBakes();
     this.buildCloudsB();
-    await yieldToMain();
+    await yieldBetweenBakes();
     this.buildCloudsC();
-    await yieldToMain();
+    await yieldBetweenBakes();
     this.buildTiles();
-    await yieldToMain();
+    await yieldBetweenBakes();
     this.buildTiles2();
-    await yieldToMain();
+    await yieldBetweenBakes();
     this.buildFxA1();
-    await yieldToMain();
+    await yieldBetweenBakes();
     this.buildFxA();
-    await yieldToMain();
+    await yieldBetweenBakes();
     this.buildFxLamps();
-    await yieldToMain();
+    await yieldBetweenBakes();
     this.buildFx();
-    await yieldToMain();
+    await yieldBetweenBakes();
     // Rohfassade der Stufe 0 (liefert die Dachfenster-Plätze) in Teilschritten – der größte Einzelblock des Weltladens
     for (let guard = 0; !this.facadeVar.has(FACADE_OF_STAGE[0]) && guard < 8; guard += 1) {
       this.prepFacade(0);
-      await yieldToMain();
+      await yieldBetweenBakes();
     }
     this.buildRoofSlots();
-    await yieldToMain();
+    await yieldBetweenBakes();
     if (!(this.nearK === this.k && this.lamp)) {
       this.buildNearA();
-      await yieldToMain();
+      await yieldBetweenBakes();
       this.buildNearB();
     }
     // erste beiden Stufen vorbereiten (Vorarbeit und Bake je als eigener Schritt)
     for (const stage of [0, 1]) {
       for (const c of this.allStaged) {
         while (!c.has(stage)) {
-          await yieldToMain();
+          await yieldBetweenBakes();
           c.step(stage);
         }
       }

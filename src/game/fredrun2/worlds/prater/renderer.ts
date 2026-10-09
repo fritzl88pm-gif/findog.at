@@ -8,12 +8,12 @@
  * fertige 1:1-Flächen.
  */
 import type { AssetLoader, Ent, ViewState, WorldRenderer } from "../../types";
-import { yieldToMain } from "../../yield";
 import { bigGlow, blitCentered, blitTiled, blitTiledRange, ctxOf, glowAt, glowSprite, paint, softSprite, solidSegments, type Ctx2D } from "../shared-b/canvas";
 import { StagePalette, h1, mod, mulberry, stageVal } from "../shared-b/color";
 import { flashFactor } from "../shared-b/flash";
 import { StageCache, StagePrep, Staged, drawStaged, stageProgress, stagedLayer, type StageTint, type StagedLayer } from "../shared-b/layers";
 import { WarmQueue } from "../shared-b/warm";
+import { yieldBetweenBakes } from "../shared-b/yield";
 import {
   BULB_COLORS,
   boothTiles,
@@ -178,8 +178,8 @@ export class PraterRenderer implements WorldRenderer {
     await assets.props.preload(PRATER_PROPS);
     // Gemalte Fahrgeschäfte (Ringelspiel, Zirkuszelt) als eigene Tiefenebene zwischen Hochschaubahn und Buden
     const P = assets.props;
-    await yieldToMain();
-    const lm = await landmarkTilesAsync((id) => P.has(id), (g, id, x, y, o) => P.draw(g, id, x, y, o), 2600, 280, yieldToMain);
+    await yieldBetweenBakes();
+    const lm = await landmarkTilesAsync((id) => P.has(id), (g, id, x, y, o) => P.draw(g, id, x, y, o), 2600, 280, yieldBetweenBakes);
     if (lm) {
       this.rides = stagedLayer(lm.day, 266, 0.2, tintFor("#1b1238", 0.8, 0.26, 0.42), { lights: lm.lights, lights2: lm.lights2, recycle: true });
       this.staged.push(this.rides.staged);
@@ -188,7 +188,7 @@ export class PraterRenderer implements WorldRenderer {
     for (const stage of [0, 1]) {
       for (const c of this.staged) {
         while (!c.has(stage)) {
-          await yieldToMain();
+          await yieldBetweenBakes();
           c.step(stage);
         }
       }
@@ -252,7 +252,7 @@ export class PraterRenderer implements WorldRenderer {
       const i = this.nextPart;
       this.nextPart += 1;
       this.parts[i]();
-      await yieldToMain();
+      await yieldBetweenBakes();
     }
   }
 

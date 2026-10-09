@@ -64,11 +64,12 @@ export interface HudDrawCtx {
   cssScale?: number;
   /**
    * Gemessene Mitte von .touchDash (siehe domButtonCenter). Der Knopf wird im CSS um die Safe-Area-Abstände verschoben
-   * (--safe-b, --safe-r), die das Canvas nicht kennen kann; der Energiering folgt deshalb dieser Messung. Fehlt der Wert
-   * (oder liegt er außerhalb der Bühne), gilt TOUCH_DASH.
+   * (--safe-b, --safe-r), die das Canvas nicht kennen kann; der Energiering folgt deshalb der Messung. Ein hier gesetzter Wert
+   * hat Vorrang. Fehlt er (null/undefined), misst HudFx.probeButtons den Knopf selbst über g.canvas (nur mit ctx.fx und echtem
+   * DOM); ohne Messung (oder außerhalb der Bühne) gilt TOUCH_DASH.
    */
   dashCenter?: ButtonCenter | null;
-  /** Gemessene Mitte von .touchSlide (wie dashCenter, --safe-l und --safe-b): die Power-up-Reihe hält Abstand dazu. Fehlt: TOUCH_SLIDE. */
+  /** Gemessene Mitte von .touchSlide (wie dashCenter, --safe-l und --safe-b): die Power-up-Reihe hält Abstand dazu. Fehlt: Selbstmessung, sonst TOUCH_SLIDE. */
   slideCenter?: ButtonCenter | null;
 }
 
@@ -79,7 +80,8 @@ export interface HudDrawCtx {
  *
  * Achtung: Im CSS kommen zu right/bottom noch --safe-r und --safe-b hinzu (env(safe-area-inset-*) abzüglich Letterbox).
  * Auf einem Handy quer (höhenbegrenzte Bühne, Letterbox 0) sind das rund 21 CSS-px nach oben, bei Skala 0,54 also etwa 39
- * Logikeinheiten. Die Konstante ist daher nur der Rückfall; die tatsächliche Lage liefert HudDrawCtx.dashCenter.
+ * Logikeinheiten. Die Konstante ist daher nur der Rückfall; die tatsächliche Lage liefert HudDrawCtx.dashCenter bzw. die
+ * Selbstmessung von HudFx (probeButtons).
  */
 export const TOUCH_DASH = { cx: 1189, cy: 631, r: 65 } as const;
 /** Rutschen-Knopf (.touchSlide: 130*px, left 26*px, bottom 26*px) ohne Safe-Area-Abstände; Rückfall für HudDrawCtx.slideCenter */
@@ -92,18 +94,42 @@ interface DomRectLike {
   height: number;
 }
 
+/** Schreibt die Mitte in `out`; false (und `out` unverändert) bei unbrauchbaren Maßen. Allokationsfrei. */
+function centerInto(out: ButtonCenter, btn: DomRectLike, stage: DomRectLike): boolean {
+  const k = stage.width / VIEW_W;
+  if (!(k > 0) || !Number.isFinite(k) || !(btn.width > 0) || !(btn.height > 0)) return false;
+  const cx = (btn.left + btn.width / 2 - stage.left) / k;
+  const cy = (btn.top + btn.height / 2 - stage.top) / k;
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return false;
+  out.cx = cx;
+  out.cy = cy;
+  return true;
+}
+
 /**
  * Rechnet die Mitte eines DOM-Knopfs (getBoundingClientRect) in Logikeinheiten der Bühne um: (Mitte - Bühnen-Ecke) / (Bühnenbreite / 1280)
  * - gleichbedeutend mit Division durch --px. Liefert null bei unbrauchbaren Maßen (Knopf ausgeblendet, Bühne ohne Breite). Ruft man
  * bei Resize und Laufstart auf, nicht pro Frame (legt ein Objekt an).
  */
 export function domButtonCenter(btn: DomRectLike, stage: DomRectLike): ButtonCenter | null {
-  const k = stage.width / VIEW_W;
-  if (!(k > 0) || !Number.isFinite(k) || !(btn.width > 0) || !(btn.height > 0)) return null;
-  const cx = (btn.left + btn.width / 2 - stage.left) / k;
-  const cy = (btn.top + btn.height / 2 - stage.top) / k;
-  return Number.isFinite(cx) && Number.isFinite(cy) ? { cx, cy } : null;
+  const c: ButtonCenter = { cx: 0, cy: 0 };
+  return centerInto(c, btn, stage) ? c : null;
 }
+
+/**
+ * Selektoren der Touch-Knöpfe innerhalb der Bühne (aria-label aus FredRun2.tsx; die CSS-Modul-Klassen sind gehasht). Sie sind
+ * auch die Messpunkte der e2e-Prüfung "Ring konzentrisch zum Knopf".
+ */
+export const DASH_BUTTON_SELECTOR = '[aria-label="Dash"]';
+export const SLIDE_BUTTON_SELECTOR = '[aria-label="Rutschen"]';
+/** Selbstmessung der Knöpfe (HudFx.probeButtons): Netz-Abstand in Fx-Sekunden, solange beide Knöpfe gefunden sind */
+export const PROBE_EVERY = 0.5;
+/**
+ * Wiederholung bei fehlendem Knopf, in HUD-Frames statt Sekunden: Die Knöpfe fehlen in der Pause und erscheinen erst beim
+ * Fortsetzen wieder - genau dann steht die Fx-Uhr still (hudDt = 0 in Pause und Resume-Countdown). Eine Wiederholung nach Uhrzeit
+ * käme erst mit dem Laufstart und der Ring hinge den ganzen Countdown an TOUCH_DASH.
+ */
+export const PROBE_RETRY_FRAMES = 4;
 
 /** Gemessene Mitte, wenn sie endlich ist und auf der Bühne liegt, sonst der Rückfall (kein neues Objekt). */
 export function resolveButtonCenter(measured: ButtonCenter | null | undefined, fallback: ButtonCenter): ButtonCenter {
@@ -210,6 +236,9 @@ const NEVER = Number.NEGATIVE_INFINITY;
  * Instanz an drawHud. Ereignisse werden aus Wertwechseln erkannt (kein Signal vom Hub nötig): Münzen/Kombo steigen -> Bump,
  * Score springt um >= 8 -> Bump, Herzen sinken -> Verlust-Pop, steigen -> Pop-In. Ein neuer Lauf (Score oder Meter fallen) oder
  * der erste Aufruf setzt ohne Effekte zurück. Bei reduced entstehen keine Bumps/Pops. Allokationsfrei im Betrieb.
+ *
+ * Außerdem misst probeButtons (aus drawHud, nur im Touch-Modus und gedrosselt) die Mitte der DOM-Knöpfe .touchDash/.touchSlide,
+ * damit Ring und Power-up-Reihe der Safe-Area-Verschiebung folgen, ohne dass der Hub etwas liefern muss.
  */
 export class HudFx {
   /** Eigene Uhr (s): läuft nur mit dem übergebenen dt, steht also in der Pause still */
@@ -228,10 +257,70 @@ export class HudFx {
   private readonly heartT0: number[] = new Array<number>(MAX_HEARTS).fill(NEVER);
   /** 0 = nichts, 1 = Verlust, 2 = Gewinn */
   private readonly heartKind: number[] = new Array<number>(MAX_HEARTS).fill(0);
+  // HUD-Frames seit Erzeugung (update() zählt immer, auch bei dt = 0 in Pause und Resume-Countdown, wo die Uhr steht)
+  private frames = 0;
+  // Selbstmessung der Touch-Knöpfe (probeButtons): gemessene Mitten, ob sie gültig sind, Zeitpunkt (clock), Frame-Nummer sowie
+  // Bitmap-Größe und Bühnenskala der letzten Messung
+  private readonly dashBox: ButtonCenter = { cx: 0, cy: 0 };
+  private readonly slideBox: ButtonCenter = { cx: 0, cy: 0 };
+  private dashOk = false;
+  private slideOk = false;
+  private probeAt = NEVER;
+  private probeFrame = NEVER;
+  private probeW = -1;
+  private probeH = -1;
+  private probeCss = -1;
 
-  /** Verwirft alle Animationen und übernimmt die nächsten Werte ohne Effekt (z. B. bei Laufstart). */
+  /** Verwirft alle Animationen und übernimmt die nächsten Werte ohne Effekt (z. B. bei Laufstart); die Knöpfe werden neu gemessen. */
   reset(): void {
     this.ready = false;
+    this.probeAt = NEVER;
+    this.probeFrame = NEVER;
+  }
+
+  /** Gemessene Mitte von .touchDash (probeButtons), null ohne gültige Messung. Kein neues Objekt; Inhalt ändert sich bei der nächsten Messung. */
+  get dashCenter(): ButtonCenter | null {
+    return this.dashOk ? this.dashBox : null;
+  }
+
+  /** Gemessene Mitte von .touchSlide, null ohne gültige Messung (wie dashCenter). */
+  get slideCenter(): ButtonCenter | null {
+    return this.slideOk ? this.slideBox : null;
+  }
+
+  /**
+   * Misst die Mitten der Touch-Knöpfe im DOM der Bühne (Elternelement des Canvas) in Logikeinheiten. Der Knopf sitzt im CSS um
+   * --safe-b/--safe-l/--safe-r höher bzw. weiter innen, was das Canvas nicht kennt (Handy quer mit Kerbe/Home-Indikator).
+   * Gedrosselt, weil getBoundingClientRect Layout liest: neu bei geänderter Bitmap-Größe oder Bühnenskala `cssScale` (Resize, Drehen,
+   * Vollbild; die Bitmap ist in Stufen quantisiert und ändert sich nicht bei jedem Resize), nach einem Moduswechsel oder Laufstart
+   * (update/reset setzen zurück) und alle PROBE_EVERY Sekunden Fx-Zeit als Netz. Fehlt ein Knopf (Pause, vor dem Laufstart), wird
+   * alle PROBE_RETRY_FRAMES HUD-Frames erneut gesucht - nach Frames, nicht nach der Uhr, denn im Resume-Countdown steht die Uhr
+   * still, während die Knöpfe schon wieder im DOM sind. Ohne DOM (Node, OffscreenCanvas, Canvas ohne Eltern) ein No-Op.
+   */
+  probeButtons(canvas: HTMLCanvasElement | OffscreenCanvas | null | undefined, cssScale?: number): void {
+    if (!canvas || !("parentElement" in canvas)) return;
+    const css = cssScale !== undefined && Number.isFinite(cssScale) ? cssScale : 0;
+    if (canvas.width === this.probeW && canvas.height === this.probeH && css === this.probeCss) {
+      if (this.dashOk && this.slideOk) {
+        if (this.clock - this.probeAt < PROBE_EVERY) return;
+      } else if (this.frames - this.probeFrame < PROBE_RETRY_FRAMES) {
+        return;
+      }
+    }
+    this.probeW = canvas.width;
+    this.probeH = canvas.height;
+    this.probeCss = css;
+    this.probeAt = this.clock;
+    this.probeFrame = this.frames;
+    this.dashOk = false;
+    this.slideOk = false;
+    const stage = canvas.parentElement;
+    if (!stage) return;
+    const sr = canvas.getBoundingClientRect();
+    const dash = stage.querySelector(DASH_BUTTON_SELECTOR);
+    this.dashOk = dash !== null && centerInto(this.dashBox, dash.getBoundingClientRect(), sr);
+    const slide = stage.querySelector(SLIDE_BUTTON_SELECTOR);
+    this.slideOk = slide !== null && centerInto(this.slideBox, slide.getBoundingClientRect(), sr);
   }
 
   /** true, sobald update() seit Erzeugung bzw. reset() gelaufen ist; vorher gilt der echte Score (displayScore wäre noch 0) */
@@ -242,6 +331,12 @@ export class HudFx {
   update(h: HudState, dt: number): void {
     const step = dt > 0 && Number.isFinite(dt) ? Math.min(dt, 0.25) : 0;
     this.clock += step;
+    this.frames += 1;
+    // Ohne Touch-Modus sind die Knöpfe aus dem DOM: beim nächsten Touch-Frame sofort neu messen
+    if (!h.touch) {
+      this.probeAt = NEVER;
+      this.probeFrame = NEVER;
+    }
     const reduced = h.reduced === true;
     const hearts = clamp(Math.floor(Number.isFinite(h.hearts) ? h.hearts : 0), 0, MAX_HEARTS);
     if (!this.ready || h.score < this.lastScore || h.meters < this.lastMeters - 0.5) {
@@ -885,11 +980,19 @@ export function drawHud(g: CanvasRenderingContext2D, h: HudState, ctx?: HudDrawC
 
   // --- Energie / Dash und aktive Power-ups ---
   if (h.touch) {
-    // der Ring gehört zum Dash-Knopf (gemessene Lage, sonst TOUCH_DASH), die Power-ups wachsen unten links
-    drawEnergyRing(g, h, reduced, ctx?.dashCenter);
+    // der Ring gehört zum Dash-Knopf (gemessene Lage, sonst TOUCH_DASH), die Power-ups wachsen unten links.
+    // Eine vom Aufrufer gelieferte Mitte hat Vorrang; fehlt sie, misst HudFx die DOM-Knöpfe (gedrosselt, mit Safe-Area).
+    let dash = ctx?.dashCenter;
+    let slide = ctx?.slideCenter;
+    if (fx && (!dash || !slide)) {
+      fx.probeButtons(g.canvas, ctx?.cssScale);
+      dash = dash ?? fx.dashCenter;
+      slide = slide ?? fx.slideCenter;
+    }
+    drawEnergyRing(g, h, reduced, dash);
     g.save();
     if (u !== 1) anchor(g, BL_X, BL_Y, u);
-    drawPowerups(g, h, ps * u, reduced, powerupStartX(true, ctx?.slideCenter, u));
+    drawPowerups(g, h, ps * u, reduced, powerupStartX(true, slide, u));
     g.restore();
   } else {
     g.save();

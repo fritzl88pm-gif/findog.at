@@ -10,12 +10,12 @@
  */
 import { PLAYER_SX } from "../../constants";
 import type { AssetLoader, Ent, PropLibrary, ViewState, WorldRenderer } from "../../types";
-import { yieldToMain } from "../../yield";
 import { Motes } from "../shared-a/fx";
 import { bigGlow, blitCentered, blitTiled, blitTiledRange, ctxOf, glowAt, paint, softSprite, solidSegments, type Ctx2D } from "../shared-b/canvas";
 import { h1, mod, mulberry, stageVal } from "../shared-b/color";
 import { StageCache, StagePrep, gradedCache, stageProgress } from "../shared-b/layers";
 import { WarmQueue } from "../shared-b/warm";
+import { yieldBetweenBakes } from "../shared-b/yield";
 import { AlpBackdrop, BACKDROP_H, bakeLandmark, propSprite, type LandmarkSet } from "./backdrop";
 import { SnowField } from "./snow";
 import {
@@ -216,21 +216,21 @@ export class AlpenRenderer implements WorldRenderer {
     await this.buildAsync();
     // Kulissenbild der Stufe 0 in einem eigenen Schritt dekodieren (der Browser dekodiert erst beim ersten Zeichnen, 25-30 ms
     // am Stück und nicht teilbar): sonst fiele es mit dem Skalieren des ersten Bake-Schritts in einen Block
-    await yieldToMain();
+    await yieldBetweenBakes();
     await this.backdrop.predecode(0);
     // Stufe 0 (und die Landmarken) vorbacken, damit der erste Frame ruckelfrei ist
     for (const s of this.staged) {
       while (!s.has(0)) {
-        await yieldToMain();
+        await yieldBetweenBakes();
         s.step(0);
       }
     }
     const bs = this.backdrop.stages;
     if (bs) {
-      await yieldToMain();
+      await yieldBetweenBakes();
       await this.backdrop.predecode(1);
       while (!bs.has(1)) {
-        await yieldToMain();
+        await yieldBetweenBakes();
         bs.step(1);
       }
     }
@@ -264,7 +264,7 @@ export class AlpenRenderer implements WorldRenderer {
       const i = this.nextPart;
       this.nextPart += 1;
       this.parts[i]();
-      await yieldToMain();
+      await yieldBetweenBakes();
     }
   }
 

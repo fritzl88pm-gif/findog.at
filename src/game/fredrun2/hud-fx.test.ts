@@ -5,11 +5,15 @@ import {
   BLINK_MIN,
   BUMP_GAIN,
   BUMP_TIME,
+  DASH_BUTTON_SELECTOR,
   DASH_DENIED_TIME,
   HEART_GAIN_TIME,
   HEART_LOSS_TIME,
   HudFx,
+  PROBE_EVERY,
+  PROBE_RETRY_FRAMES,
   SCORE_SNAP,
+  SLIDE_BUTTON_SELECTOR,
   TOUCH_DASH,
   TOUCH_SLIDE,
   UI_SCALE_MAX,
@@ -66,11 +70,11 @@ interface FakeCall {
 }
 
 /** Aufzeichnender 2D-Kontext (ohne Pixel): zählt Aufrufe, merkt sich gesetzte Eigenschaften und den fillStyle beim Textzeichnen. */
-function fakeCtx(canvasWidth = 1280): { g: CanvasRenderingContext2D; calls: FakeCall[]; sets: Array<[string, unknown]>; texts: Array<{ s: string; fill: unknown }> } {
+function fakeCtx(canvasWidth = 1280, canvas?: unknown): { g: CanvasRenderingContext2D; calls: FakeCall[]; sets: Array<[string, unknown]>; texts: Array<{ s: string; fill: unknown }> } {
   const calls: FakeCall[] = [];
   const sets: Array<[string, unknown]> = [];
   const texts: Array<{ s: string; fill: unknown }> = [];
-  const state: Record<string, unknown> = { font: "700 20px sans-serif", fillStyle: "#000", globalAlpha: 1, canvas: { width: canvasWidth, height: (canvasWidth * 9) / 16 } };
+  const state: Record<string, unknown> = { font: "700 20px sans-serif", fillStyle: "#000", globalAlpha: 1, canvas: canvas ?? { width: canvasWidth, height: (canvasWidth * 9) / 16 } };
   const proxy: unknown = new Proxy(state, {
     get(target, prop: string) {
       if (prop in target) return target[prop];
@@ -1076,5 +1080,403 @@ describe("Touch-Knöpfe und Safe-Area (Befund: Ring konzentrisch zum DOM-Knopf)"
       expect(p.x).toBeGreaterThan(184);
       expect(Math.hypot(p.x - moved.cx, p.y - moved.cy)).toBeGreaterThan(TOUCH_SLIDE.r + 30);
     }
+  });
+});
+
+// --- Selbstmessung der Touch-Knöpfe (HudFx.probeButtons) --------------------------------------------------------------
+// Befund pkg-hud Fix-Runde 1: Niemand liefert hudDashCenter/hudSlideCenter; auf Geräten mit Safe-Area saß der DOM-Knopf höher
+// als der feste Ring. Ohne gelieferte Mitte misst HudFx den Knopf deshalb selbst (gedrosselt, über g.canvas.parentElement).
+
+interface FakeDom {
+  canvas: HTMLCanvasElement;
+  /** Zähler: getBoundingClientRect-Aufrufe (Bühne + Knöpfe) und querySelector-Aufrufe */
+  n: { rects: number; queries: number };
+  /** veränderbar: Lage der Elemente (null = Knopf nicht im DOM) und Bitmap-Größe */
+  set: { stage: Rect; dash: Rect | null; slide: Rect | null };
+}
+
+/** Canvas mit Eltern-Bühne wie im Browser: parentElement.querySelector findet die Knöpfe über ihr aria-label, das Canvas füllt die Bühne */
+function fakeDomCanvas(stage: Rect, dash: Rect | null, slide: Rect | null, w = 1280, h = 720): FakeDom {
+  const set = { stage, dash, slide };
+  const n = { rects: 0, queries: 0 };
+  const el = (r: Rect | null): { getBoundingClientRect: () => Rect } | null =>
+    r
+      ? {
+          getBoundingClientRect: () => {
+            n.rects += 1;
+            return r;
+          },
+        }
+      : null;
+  const parentElement = {
+    querySelector: (sel: string) => {
+      n.queries += 1;
+      if (sel === DASH_BUTTON_SELECTOR) return el(set.dash);
+      if (sel === SLIDE_BUTTON_SELECTOR) return el(set.slide);
+      return null;
+    },
+  };
+  const canvas = {
+    width: w,
+    height: h,
+    parentElement,
+    getBoundingClientRect: () => {
+      n.rects += 1;
+      return set.stage;
+    },
+  };
+  return { canvas: canvas as unknown as HTMLCanvasElement, n, set };
+}
+
+/** iPhone quer: Bühne 693 x 390 (höhenbegrenzt, Letterbox links/rechts), --safe-b 21 px; links/rechts deckt die Letterbox die Kerbe ab */
+function iphoneDom(safe: { l?: number; r?: number; b?: number } = { b: 21 }): FakeDom & { stage: Rect } {
+  const d = cssButtonRect("dash", 693.33, 75.3, 0, safe);
+  const s = cssButtonRect("slide", 693.33, 75.3, 0, safe);
+  const dom = fakeDomCanvas(d.stage, d.btn, s.btn);
+  return { ...dom, stage: d.stage };
+}
+
+/** Ein HUD-Frame wie im Renderer: update(dt), dann drawHud mit ctx { fx } (ohne gelieferte Knopf-Mitten) */
+function hudFrame(fx: HudFx, dom: FakeDom, h: HudState, dt = 1 / 60, cssScale = 693.33 / VIEW_W): ReturnType<typeof fakeCtx> {
+  const ctx = fakeCtx(1280, dom.canvas);
+  fx.update(h, dt);
+  drawHud(ctx.g, h, { fx, cssScale, dashCenter: null, slideCenter: null });
+  return ctx;
+}
+
+describe("HudFx.probeButtons: der Ring folgt dem DOM-Knopf ohne Hub-Verdrahtung", () => {
+  it("misst die Mitten beider Knöpfe in Logikeinheiten (Safe-Area unten verschiebt sie um rund 39)", () => {
+    const dom = iphoneDom({ b: 21 });
+    const fx = new HudFx();
+    expect(fx.dashCenter).toBeNull();
+    expect(fx.slideCenter).toBeNull();
+    fx.probeButtons(dom.canvas);
+    const shift = 21 / (693.33 / VIEW_W);
+    expect(fx.dashCenter).not.toBeNull();
+    expect(fx.slideCenter).not.toBeNull();
+    expect(Math.abs((fx.dashCenter?.cx ?? 0) - TOUCH_DASH.cx)).toBeLessThan(0.01);
+    expect(Math.abs((fx.dashCenter?.cy ?? 0) - (TOUCH_DASH.cy - shift))).toBeLessThan(0.01);
+    expect(Math.abs((fx.slideCenter?.cx ?? 0) - TOUCH_SLIDE.cx)).toBeLessThan(0.01);
+    expect(Math.abs((fx.slideCenter?.cy ?? 0) - (TOUCH_SLIDE.cy - shift))).toBeLessThan(0.01);
+  });
+
+  it("drawHud ohne gelieferte Mitte: Ring konzentrisch zum Knopf mit Safe-Area, nichts an der festen Lage (Befund)", () => {
+    const dom = iphoneDom({ b: 21 });
+    const measured = domButtonCenter(dom.set.dash as Rect, dom.set.stage);
+    expect(measured).not.toBeNull();
+    const fx = new HudFx();
+    const h = baseState({ touch: true, energy: 80, dashDeniedT: 0.1, reduced: true });
+    const { calls } = hudFrame(fx, dom, h);
+    const rings = arcs(calls).filter((c) => c.r === TOUCH_DASH.r + 9 || c.r === TOUCH_DASH.r + 9 + 7);
+    expect(rings.length).toBeGreaterThanOrEqual(5);
+    for (const c of rings) {
+      expect(Math.abs(c.x - (measured?.cx ?? 0))).toBeLessThan(0.01);
+      expect(Math.abs(c.y - (measured?.cy ?? 0))).toBeLessThan(0.01);
+    }
+    expect(arcs(calls).some((c) => c.x === TOUCH_DASH.cx && c.y === TOUCH_DASH.cy)).toBe(false);
+    // die Abweichung zur Konstante wäre der gemeldete Versatz (rund 39 Einheiten)
+    expect(Math.hypot(TOUCH_DASH.cx - (measured?.cx ?? 0), TOUCH_DASH.cy - (measured?.cy ?? 0))).toBeGreaterThan(38);
+  });
+
+  it("Safe-Area links verschiebt den Rutschen-Knopf: die Power-up-Reihe rückt mit", () => {
+    // Querformat ohne Letterbox-Rand (z. B. 19,5:9-Gerät, Bühne höhenbegrenzt aber breiter als der Rand): --safe-l = 47 px
+    const d = cssButtonRect("dash", 667, 0, 0, { l: 47, r: 47, b: 21 });
+    const s = cssButtonRect("slide", 667, 0, 0, { l: 47, r: 47, b: 21 });
+    const dom = fakeDomCanvas(d.stage, d.btn, s.btn);
+    const fx = new HudFx();
+    const h = baseState({ touch: true, powerups: [{ kind: "shield", frac: 0.5 }] });
+    const { calls } = hudFrame(fx, dom, h, 1 / 60, 667 / VIEW_W);
+    const slide = fx.slideCenter;
+    expect(slide).not.toBeNull();
+    expect((slide?.cx ?? 0) - TOUCH_SLIDE.cx).toBeGreaterThan(80);
+    // erster Power-up-Ring (Platte r 30 * u) liegt rechts vom Knopf und berührt ihn nicht (Skalierung um die Ecke BL_X/BL_Y)
+    const u = uiScaleFor(667 / VIEW_W);
+    const ring = arcs(calls).find((c) => c.y === 660 && c.r === 30);
+    expect(ring).toBeDefined();
+    if (ring && slide) {
+      const cx = 22 + (ring.x - 22) * u;
+      const cy = 698 + (ring.y - 698) * u;
+      expect(Math.hypot(cx - slide.cx, cy - slide.cy)).toBeGreaterThanOrEqual(TOUCH_SLIDE.r + 30 * u);
+    }
+  });
+
+  it("eine gelieferte Mitte hat Vorrang vor der Selbstmessung; sind beide geliefert, wird nichts gemessen", () => {
+    const dom = iphoneDom({ b: 21 });
+    const fx = new HudFx();
+    const given: ButtonCenter = { cx: 1100, cy: 590 };
+    const g1 = fakeCtx(1280, dom.canvas);
+    const h = baseState({ touch: true });
+    fx.update(h, 1 / 60);
+    drawHud(g1.g, h, { fx, dashCenter: given, slideCenter: { cx: 91, cy: 629 }, cssScale: 693.33 / VIEW_W });
+    expect(dom.n.queries).toBe(0);
+    expect(dom.n.rects).toBe(0);
+    expect(arcs(g1.calls).some((c) => c.x === given.cx && c.y === given.cy && c.r === TOUCH_DASH.r + 9)).toBe(true);
+    // nur dashCenter geliefert: der Rutschen-Knopf wird gemessen, der Ring bleibt bei der gelieferten Mitte
+    const g2 = fakeCtx(1280, dom.canvas);
+    drawHud(g2.g, h, { fx, dashCenter: given, cssScale: 693.33 / VIEW_W });
+    expect(dom.n.queries).toBeGreaterThan(0);
+    expect(arcs(g2.calls).some((c) => c.x === given.cx && c.y === given.cy && c.r === TOUCH_DASH.r + 9)).toBe(true);
+    expect(arcs(g2.calls).some((c) => c.x === TOUCH_DASH.cx && c.r === TOUCH_DASH.r + 9)).toBe(false);
+  });
+
+  it("Tastaturmodus und HUD ohne fx messen nie (kein Layout-Zugriff)", () => {
+    const dom = iphoneDom({ b: 21 });
+    const fx = new HudFx();
+    for (let i = 0; i < 30; i += 1) hudFrame(fx, dom, baseState({ touch: false }));
+    expect(dom.n.queries).toBe(0);
+    expect(dom.n.rects).toBe(0);
+    const g = fakeCtx(1280, dom.canvas);
+    drawHud(g.g, baseState({ touch: true }), { cssScale: 0.54 });
+    drawHud(g.g, baseState({ touch: true }));
+    expect(dom.n.queries).toBe(0);
+    expect(dom.n.rects).toBe(0);
+  });
+
+  it("drosselt: nach der ersten Messung höchstens alle PROBE_EVERY s, nie pro Frame", () => {
+    const dom = iphoneDom();
+    const fx = new HudFx();
+    const h = baseState({ touch: true });
+    hudFrame(fx, dom, h);
+    expect(dom.n.queries).toBe(2);
+    expect(dom.n.rects).toBe(3);
+    // 29 weitere Frames (0,48 s): keine weitere Messung
+    for (let i = 0; i < 29; i += 1) hudFrame(fx, dom, h);
+    expect(dom.n.queries).toBe(2);
+    // über 2 s Spielzeit: etwa alle 0,5 s einmal (Anzahl Messungen = queries / 2)
+    for (let i = 0; i < 90; i += 1) hudFrame(fx, dom, h);
+    const measures = dom.n.queries / 2;
+    expect(measures).toBeGreaterThanOrEqual(3);
+    expect(measures).toBeLessThanOrEqual(Math.ceil(2 / PROBE_EVERY) + 1);
+  });
+
+  it("misst sofort neu bei geänderter Bitmap-Größe (Drehen, Resize, Vollbild) und folgt der neuen Lage", () => {
+    const dom = iphoneDom({ b: 21 });
+    const fx = new HudFx();
+    const h = baseState({ touch: true });
+    hudFrame(fx, dom, h);
+    const before = fx.dashCenter?.cy ?? 0;
+    // neue Lage (z. B. ohne Safe-Area) bei gleichem Takt: ohne Größenwechsel noch die alte Messung
+    const d = cssButtonRect("dash", 693.33, 75.3, 0, {});
+    dom.set.dash = d.btn;
+    hudFrame(fx, dom, h);
+    expect(fx.dashCenter?.cy).toBe(before);
+    // Bitmap-Größe ändert sich (Resize): sofort die neue Lage
+    (dom.canvas as unknown as { width: number }).width = 1000;
+    hudFrame(fx, dom, h);
+    expect(Math.abs((fx.dashCenter?.cy ?? 0) - TOUCH_DASH.cy)).toBeLessThan(0.01);
+  });
+
+  it("fehlt ein Knopf (noch nicht eingeblendet): Rückfall auf TOUCH_DASH, Wiederholung nach PROBE_RETRY_FRAMES, dann folgt der Ring", () => {
+    const d = cssButtonRect("dash", 693.33, 75.3, 0, { b: 21 });
+    const dom = fakeDomCanvas(d.stage, null, null);
+    const fx = new HudFx();
+    const h = baseState({ touch: true });
+    const first = hudFrame(fx, dom, h);
+    expect(fx.dashCenter).toBeNull();
+    expect(arcs(first.calls).some((c) => c.x === TOUCH_DASH.cx && c.y === TOUCH_DASH.cy && c.r === TOUCH_DASH.r + 9)).toBe(true);
+    // innerhalb von PROBE_RETRY_FRAMES keine neue Suche
+    const q0 = dom.n.queries;
+    hudFrame(fx, dom, h);
+    expect(dom.n.queries).toBe(q0);
+    // Knopf erscheint; nach PROBE_RETRY_FRAMES Frames wird er gefunden
+    dom.set.dash = d.btn;
+    dom.set.slide = cssButtonRect("slide", 693.33, 75.3, 0, { b: 21 }).btn;
+    let last = first;
+    for (let i = 0; i < PROBE_RETRY_FRAMES; i += 1) last = hudFrame(fx, dom, h);
+    expect(fx.dashCenter).not.toBeNull();
+    const m = domButtonCenter(d.btn, d.stage);
+    expect(arcs(last.calls).some((c) => c.r === TOUCH_DASH.r + 9 && Math.abs(c.x - (m?.cx ?? 0)) < 0.01 && Math.abs(c.y - (m?.cy ?? 0)) < 0.01)).toBe(true);
+  });
+
+  it("nach Tastaturphase (Knöpfe weg) wird der Touch-Modus sofort neu gemessen; reset() erzwingt ebenfalls eine Messung", () => {
+    const dom = iphoneDom({ b: 21 });
+    const fx = new HudFx();
+    hudFrame(fx, dom, baseState({ touch: true }));
+    const q = dom.n.queries;
+    hudFrame(fx, dom, baseState({ touch: false }));
+    expect(dom.n.queries).toBe(q);
+    hudFrame(fx, dom, baseState({ touch: true }));
+    expect(dom.n.queries).toBe(q + 2);
+    // reset() (Laufstart)
+    fx.reset();
+    hudFrame(fx, dom, baseState({ touch: true }));
+    expect(dom.n.queries).toBe(q + 4);
+  });
+
+  it("reset() und Moduswechsel heben auch die Wartezeit einer fehlgeschlagenen Messung auf (sofort statt nach PROBE_RETRY_FRAMES)", () => {
+    const d = cssButtonRect("dash", 693.33, 75.3, 0, { b: 21 });
+    const s = cssButtonRect("slide", 693.33, 75.3, 0, { b: 21 });
+    const dom = fakeDomCanvas(d.stage, null, null);
+    const fx = new HudFx();
+    const touch = baseState({ touch: true });
+    hudFrame(fx, dom, touch); // Messung ohne Knöpfe schlägt fehl
+    expect(fx.dashCenter).toBeNull();
+    dom.set.dash = d.btn;
+    dom.set.slide = s.btn;
+    // Laufstart: der nächste HUD-Frame misst, ohne die Wartezeit abzuwarten
+    fx.reset();
+    hudFrame(fx, dom, touch);
+    expect(fx.dashCenter).not.toBeNull();
+    // Moduswechsel: Tastaturphase, Knöpfe wieder weg, dann Touch mit Knöpfen
+    const dom2 = fakeDomCanvas(d.stage, null, null);
+    const fx2 = new HudFx();
+    hudFrame(fx2, dom2, touch);
+    dom2.set.dash = d.btn;
+    dom2.set.slide = s.btn;
+    hudFrame(fx2, dom2, baseState({ touch: false }));
+    hudFrame(fx2, dom2, touch);
+    expect(fx2.dashCenter).not.toBeNull();
+  });
+
+  it("in der Pause (dt = 0) bleibt es bei der letzten Messung; ohne Eltern-Element oder DOM ist es ein No-Op (Rückfall TOUCH_DASH)", () => {
+    const dom = iphoneDom();
+    const fx = new HudFx();
+    const h = baseState({ touch: true });
+    hudFrame(fx, dom, h);
+    const q = dom.n.queries;
+    for (let i = 0; i < 100; i += 1) hudFrame(fx, dom, h, 0);
+    expect(dom.n.queries).toBe(q);
+    // Canvas ohne Eltern, OffscreenCanvas-artig (ohne parentElement), undefined: nichts passiert
+    const fx2 = new HudFx();
+    fx2.probeButtons({ width: 100, height: 50, parentElement: null, getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 50 }) } as unknown as HTMLCanvasElement);
+    fx2.probeButtons({ width: 100, height: 50 } as unknown as OffscreenCanvas);
+    fx2.probeButtons(undefined);
+    fx2.probeButtons(null);
+    expect(fx2.dashCenter).toBeNull();
+    const { g, calls } = fakeCtx();
+    fx2.update(h, 1 / 60);
+    drawHud(g, h, { fx: fx2 });
+    expect(arcs(calls).some((c) => c.x === TOUCH_DASH.cx && c.y === TOUCH_DASH.cy && c.r === TOUCH_DASH.r + 9)).toBe(true);
+  });
+
+  // Befund pkg-hud Fix-Runde 2: Resize in der Pause. Die Touch-Knöpfe sind in der Pause aus dem DOM, der Größenwechsel misst ohne
+  // Knopf (Rückfall TOUCH_DASH); beim Fortsetzen sind sie zurück, aber im Resume-Countdown steht die Fx-Uhr still (hudDt = 0).
+  // Die Wiederholung darf deshalb nicht an der Uhr hängen.
+  const ringOn = (calls: FakeCall[], c: ButtonCenter | null): boolean =>
+    calls.length > 0 && arcs(calls).some((a) => a.r === TOUCH_DASH.r + 9 && Math.abs(a.x - (c?.cx ?? NaN)) < 0.01 && Math.abs(a.y - (c?.cy ?? NaN)) < 0.01);
+
+  it("Resize in der Pause, Fortsetzen mit stehender Uhr (dt = 0): der Ring folgt dem Knopf nach höchstens PROBE_RETRY_FRAMES Frames (Befund)", () => {
+    const start = cssButtonRect("dash", 844, 0, 0, { b: 21, l: 47, r: 47 });
+    const startSlide = cssButtonRect("slide", 844, 0, 0, { b: 21, l: 47, r: 47 });
+    const dom = fakeDomCanvas(start.stage, start.btn, startSlide.btn, 1280, 720);
+    const fx = new HudFx();
+    const h = baseState({ touch: true });
+    const cs = 844 / VIEW_W;
+    // Lauf: gemessen
+    for (let i = 0; i < 10; i += 1) hudFrame(fx, dom, h, 1 / 60, cs);
+    expect(fx.dashCenter).not.toBeNull();
+    // Pause: Knöpfe aus dem DOM, Viewport wird kleiner (Safari-Leiste): andere Bühne, andere Bitmap-Größe
+    const small = cssButtonRect("dash", 667, 0, 0, { b: 21, l: 47, r: 47 });
+    const smallSlide = cssButtonRect("slide", 667, 0, 0, { b: 21, l: 47, r: 47 });
+    dom.set.dash = null;
+    dom.set.slide = null;
+    dom.set.stage = small.stage;
+    (dom.canvas as unknown as { width: number; height: number }).width = 1024;
+    (dom.canvas as unknown as { width: number; height: number }).height = 576;
+    for (let i = 0; i < 20; i += 1) hudFrame(fx, dom, h, 0, 667 / VIEW_W);
+    expect(fx.dashCenter).toBeNull();
+    const clock = fx.clock;
+    // Fortsetzen: Knöpfe wieder da, Resume-Countdown mit dt = 0 (Uhr steht)
+    dom.set.dash = small.btn;
+    dom.set.slide = smallSlide.btn;
+    const want = domButtonCenter(small.btn, small.stage);
+    expect(want).not.toBeNull();
+    let found = -1;
+    for (let i = 1; i <= 120; i += 1) {
+      const { calls } = hudFrame(fx, dom, h, 0, 667 / VIEW_W);
+      if (found < 0 && ringOn(calls, want)) found = i;
+      if (found > 0) expect(ringOn(calls, want)).toBe(true);
+    }
+    expect(fx.clock).toBe(clock);
+    expect(found).toBeGreaterThan(0);
+    expect(found).toBeLessThanOrEqual(PROBE_RETRY_FRAMES);
+    // die Mitte weicht deutlich von der Konstante ab (sonst bewiese der Test nichts)
+    expect(Math.hypot(TOUCH_DASH.cx - (want?.cx ?? 0), TOUCH_DASH.cy - (want?.cy ?? 0))).toBeGreaterThan(30);
+  });
+
+  it("Teilmessung (nur ein Knopf im DOM) bei stehender Uhr: die Wiederholung findet den fehlenden Knopf ohne Uhr", () => {
+    const a = cssButtonRect("dash", 640, 0, 0, { b: 21 });
+    const dom = fakeDomCanvas(a.stage, a.btn, null);
+    const fx = new HudFx();
+    const h = baseState({ touch: true });
+    for (let i = 0; i < 5; i += 1) hudFrame(fx, dom, h, 0);
+    // der Slide-Knopf fehlte von Anfang an: Messung unvollständig, Wiederholung nach Frames auch bei dt = 0
+    expect(fx.dashCenter).not.toBeNull();
+    expect(fx.slideCenter).toBeNull();
+    dom.set.slide = cssButtonRect("slide", 640, 0, 0, { b: 21 }).btn;
+    for (let i = 0; i < PROBE_RETRY_FRAMES; i += 1) hudFrame(fx, dom, h, 0);
+    expect(fx.slideCenter).not.toBeNull();
+    expect(fx.clock).toBe(0);
+  });
+
+  it("fehlende Knöpfe bei stehender Uhr: Wiederholung höchstens alle PROBE_RETRY_FRAMES Frames, nie pro Frame", () => {
+    const d = cssButtonRect("dash", 693.33, 75.3, 0, { b: 21 });
+    const dom = fakeDomCanvas(d.stage, null, null);
+    const fx = new HudFx();
+    const h = baseState({ touch: true });
+    const frames = 120;
+    for (let i = 0; i < frames; i += 1) hudFrame(fx, dom, h, 0);
+    const measures = dom.n.queries / 2;
+    expect(measures).toBeGreaterThanOrEqual(Math.floor(frames / PROBE_RETRY_FRAMES) - 1);
+    expect(measures).toBeLessThanOrEqual(Math.ceil(frames / PROBE_RETRY_FRAMES) + 1);
+  });
+
+  it("Bühnenskala ändert sich bei gleicher Bitmap-Größe (quantisierte Render-Skala): sofort neu messen, auch in der Pause", () => {
+    const a = cssButtonRect("dash", 693.33, 75.3, 0, { b: 21 });
+    const sa = cssButtonRect("slide", 693.33, 75.3, 0, { b: 21 });
+    const dom = fakeDomCanvas(a.stage, a.btn, sa.btn); // Bitmap bleibt 1280 x 720
+    const fx = new HudFx();
+    const h = baseState({ touch: true });
+    hudFrame(fx, dom, h, 1 / 60, 693.33 / VIEW_W);
+    const before = fx.dashCenter ? { ...fx.dashCenter } : null;
+    // Bühne wird kleiner, Knöpfe sind da (laufendes Spiel): ohne cssScale im Schlüssel bliebe die alte Mitte bis zum Netz stehen
+    const b = cssButtonRect("dash", 600, 0, 0, { b: 21 });
+    dom.set.stage = b.stage;
+    dom.set.dash = b.btn;
+    dom.set.slide = cssButtonRect("slide", 600, 0, 0, { b: 21 }).btn;
+    hudFrame(fx, dom, h, 0, 600 / VIEW_W);
+    const want = domButtonCenter(b.btn, b.stage);
+    expect(want).not.toBeNull();
+    expect(Math.abs((fx.dashCenter?.cy ?? 0) - (want?.cy ?? 0))).toBeLessThan(0.01);
+    expect(Math.abs((fx.dashCenter?.cy ?? 0) - (before?.cy ?? 0))).toBeGreaterThan(1);
+    // unverändert (Skala, Bitmap) und beide gefunden: bei stehender Uhr bleibt es bei dieser Messung
+    const q = dom.n.queries;
+    for (let i = 0; i < 100; i += 1) hudFrame(fx, dom, h, 0, 600 / VIEW_W);
+    expect(dom.n.queries).toBe(q);
+  });
+
+  it("Pause mit Größenwechsel ohne Bitmap-Änderung: Knöpfe weg, Messung fällt zurück, Fortsetzen findet sie nach höchstens PROBE_RETRY_FRAMES Frames", () => {
+    const a = cssButtonRect("dash", 693.33, 75.3, 0, { b: 21 });
+    const sa = cssButtonRect("slide", 693.33, 75.3, 0, { b: 21 });
+    const dom = fakeDomCanvas(a.stage, a.btn, sa.btn);
+    const fx = new HudFx();
+    const h = baseState({ touch: true });
+    hudFrame(fx, dom, h, 1 / 60, 693.33 / VIEW_W);
+    const b = cssButtonRect("dash", 600, 0, 0, { b: 21 });
+    dom.set.stage = b.stage;
+    dom.set.dash = null;
+    dom.set.slide = null;
+    for (let i = 0; i < 10; i += 1) hudFrame(fx, dom, h, 0, 600 / VIEW_W);
+    expect(fx.dashCenter).toBeNull();
+    dom.set.dash = b.btn;
+    dom.set.slide = cssButtonRect("slide", 600, 0, 0, { b: 21 }).btn;
+    for (let i = 0; i < PROBE_RETRY_FRAMES; i += 1) hudFrame(fx, dom, h, 0, 600 / VIEW_W);
+    const want = domButtonCenter(b.btn, b.stage);
+    expect(Math.abs((fx.dashCenter?.cx ?? 0) - (want?.cx ?? NaN))).toBeLessThan(0.01);
+    expect(Math.abs((fx.dashCenter?.cy ?? 0) - (want?.cy ?? NaN))).toBeLessThan(0.01);
+  });
+
+  it("unbrauchbare Maße (Knopf mit Breite 0, Bühne ohne Breite) ergeben keine Messung statt NaN", () => {
+    const zero: Rect = { left: 0, top: 0, width: 0, height: 0 };
+    const d = cssButtonRect("dash", 693.33, 75.3, 0, {});
+    const dom = fakeDomCanvas(d.stage, zero, zero);
+    const fx = new HudFx();
+    fx.probeButtons(dom.canvas);
+    expect(fx.dashCenter).toBeNull();
+    expect(fx.slideCenter).toBeNull();
+    const dom2 = fakeDomCanvas({ left: 0, top: 0, width: 0, height: 0 }, d.btn, d.btn);
+    const fx2 = new HudFx();
+    fx2.probeButtons(dom2.canvas);
+    expect(fx2.dashCenter).toBeNull();
   });
 });

@@ -310,6 +310,47 @@ describe("Sim: Darstellungs-Interpolation (px/py, view.alpha/time)", () => {
     const fresh = new Sim({ mode: "world", world: "wien", character: "fred", seed: 5 }, WORLDS);
     expect(fresh.view(0, { dist: fresh.dist, hgt: 0 }, false, 2, FIXED_DT).time).toBe(0);
   });
+
+  it("Akkumulator-Schleife (60/90/144 Hz mit Jitter): interpolierte Position liegt exakt auf der Sollbahn zu view.time, ohne px/py bis zu einem Schritt daneben", () => {
+    const VX = -480; // schneller Gegner: ein Schritt = 4 px
+    for (const [hz, jitter] of [[60, 0.3], [60, 0.05], [90, 0.3], [144, 0.3]] as Array<[number, number]>) {
+      const s = lab();
+      const x0 = s.playerWorldX + 6000; // weit weg: keine Berührung im Testzeitraum
+      const e = s.spawn({ kind: "projectile", skin: "ball", x: 0, y: s.groundY - 200, w: 30, h: 30, vx: VX, harmful: false }, x0);
+      let acc = 0;
+      let seed = 12345;
+      let maxErr = 0;
+      let maxRaw = 0;
+      let frames = 0;
+      for (let f = 0; f < hz * 3; f += 1) {
+        // deterministisches Rauschen (LCG) auf dem rAF-Intervall, in ms
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        const dtFrame = 1 / hz + ((seed / 0xffffffff) * 2 - 1) * (jitter / 1000);
+        acc += dtFrame;
+        const prev = { dist: s.dist, hgt: s.player.hgt };
+        while (acc >= FIXED_DT) {
+          prev.dist = s.dist;
+          prev.hgt = s.player.hgt;
+          s.step(FIXED_DT, NO_INPUT);
+          s.events.length = 0;
+          acc -= FIXED_DT;
+        }
+        if (s.time <= FIXED_DT) continue;
+        const alpha = acc / FIXED_DT;
+        const v = s.view(alpha, prev, false, 2, dtFrame);
+        const shown = (e.px as number) + (e.x - (e.px as number)) * alpha;
+        const ideal = x0 + VX * v.time; // lineare Bahn zur Darstellungszeit
+        maxErr = Math.max(maxErr, Math.abs(shown - ideal));
+        maxRaw = Math.max(maxRaw, Math.abs(e.x - ideal));
+        frames += 1;
+      }
+      expect(frames).toBeGreaterThan(hz * 2);
+      expect(maxErr).toBeLessThan(1e-6);
+      // Ohne Interpolation (Endzustand des letzten Schritts) liegt die Figur bis zu einen Schritt (4 px) neben der Sollbahn
+      expect(maxRaw).toBeGreaterThan(2);
+      expect(maxRaw).toBeLessThanOrEqual(Math.abs(VX) * FIXED_DT + 1e-6);
+    }
+  });
 });
 
 describe("Sim: Near-Miss nur ohne Berührung (feel-core-04)", () => {
