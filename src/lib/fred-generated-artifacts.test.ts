@@ -7,7 +7,7 @@ const upstreamFrame = {
     { index: 3, file_name: "notiz.txt", file_size: 12, file_type: ".txt", handle: "resource://notiz" },
     { index: 7, file_name: "bericht.pdf", file_size: 4, file_type: ".pdf", handle: "resource://bericht" },
     { index: 8, file_name: "fake.bin", file_size: 4, file_type: "application/octet-stream", handle: "resource://fake" },
-    { index: 9, file_name: "word.docx", file_size: 4, file_type: ".docx", url: "resource://word" },
+    { index: 9, file_name: "word.docx", file_size: 4, file_type: ".docx", handle: "resource://word" },
   ] },
 };
 const withoutSourceUri = (artifact: { sourceUri: string; id: string; fileName: string; fileSize: number; fileType: string; upstreamIndex: number }) => {
@@ -30,6 +30,12 @@ describe("generated artifact completion pipeline", () => {
     }));
     expect(final?.type === "final" && final.artifacts).toEqual(persisted.map(withoutSourceUri));
     expect(parseStoredFredArtifacts(persisted)).toEqual(persisted.map(withoutSourceUri));
+  });
+
+  it("ignores artifacts without a public handle", () => {
+    expect(parseGeneratedArtifacts({ data: { artifacts: [
+      { index: 0, file_name: "word.docx", file_size: 4, file_type: ".docx", url: "resource://word" },
+    ] } })).toEqual([]);
   });
 
   it("rejects invalid or duplicate supplied indexes without renumbering valid sparse entries", () => {

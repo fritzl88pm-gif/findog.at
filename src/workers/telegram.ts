@@ -25,20 +25,23 @@ import { describeImage } from "@/lib/attachments/gemini-image-context";
 import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-fallback";
 import { createConfiguredDocumentProvider } from "@/lib/attachments/document-pipeline";
 import {
-  mintFredEmbedSession,
   readFredEmbedServerConfig,
   readQuickFredEmbedServerConfig,
   FRED_EMBED_ORIGIN,
+  type FredEmbedSession,
 } from "@/lib/weknora/fred-embed";
 import {
   createFredUpstreamSession,
   deriveFredSessionSignature,
-  fetchFredUpstreamConfig,
   fredVisitorId,
   openFredUpstreamStream,
   stopFredUpstreamSession,
-  fetchFredCompletedEmbedArtifacts,
 } from "@/lib/weknora/fred-native";
+import {
+  getFredEmbedSession,
+  getFredUpstreamConfig,
+  withFredEmbedSession,
+} from "@/lib/weknora/fred-embed-cache";
 import { parseFredConversationSummary } from "@/lib/weknora/fred-history";
 import type { FredGeneratedArtifact } from "@/lib/fred-native-stream";
 import { FRED_CONTENT_TRANSFORMATION } from "@/lib/weknora/fred-research";
@@ -387,52 +390,46 @@ export function buildStorage(supabase: Supabase): WorkerStorage {
 }
 
 function buildTurnUpstream(fetchImpl: typeof fetch): TurnServiceUpstreamDeps {
+  const embedConfig = (params: { channelId: string; publishToken: string; exchangeOrigin: string }) => ({
+    channelId: params.channelId,
+    publishToken: params.publishToken,
+    exchangeOrigin: params.exchangeOrigin,
+  });
+  const embedSession = (params: { sessionToken: string; channelId: string }): FredEmbedSession => ({
+    token: params.sessionToken,
+    expiresIn: 0,
+    channelId: params.channelId,
+    embedOrigin: FRED_EMBED_ORIGIN,
+  });
+  // Session tokens come from the shared cache. A call WeKnora rejects with an
+  // expired or unknown token is retried once with a freshly minted one.
   return {
     async mintSession(params) {
-      const session = await mintFredEmbedSession({
-        config: {
-          channelId: params.channelId,
-          publishToken: params.publishToken,
-          exchangeOrigin: params.exchangeOrigin,
-        },
+      const session = await getFredEmbedSession({
+        config: embedConfig(params),
         signal: params.signal,
         fetchImpl,
       });
       return { token: session.token, expiresIn: session.expiresIn };
     },
     async fetchUpstreamConfig(params) {
-      return fetchFredUpstreamConfig({
-        session: {
-          token: params.sessionToken,
-          expiresIn: 0,
-          channelId: params.channelId,
-          embedOrigin: FRED_EMBED_ORIGIN,
-        },
-        config: {
-          channelId: params.channelId,
-          publishToken: params.publishToken,
-          exchangeOrigin: params.exchangeOrigin,
-        },
+      return getFredUpstreamConfig({
+        config: embedConfig(params),
         signal: params.signal,
         fetchImpl,
       });
     },
     async createSession(params) {
-      const session = await createFredUpstreamSession({
-        session: {
-          token: params.sessionToken,
-          expiresIn: 0,
-          channelId: params.channelId,
-          embedOrigin: FRED_EMBED_ORIGIN,
-        },
-        config: {
-          channelId: params.channelId,
-          publishToken: params.publishToken,
-          exchangeOrigin: params.exchangeOrigin,
-        },
-        signal: params.signal,
-        fetchImpl,
-      });
+      const config = embedConfig(params);
+      const session = await withFredEmbedSession(
+        { config, signal: params.signal, fetchImpl, session: embedSession(params) },
+        (activeSession) => createFredUpstreamSession({
+          session: activeSession,
+          config,
+          signal: params.signal,
+          fetchImpl,
+        }),
+      );
       return { id: session.id, signature: session.signature };
     },
     deriveSessionSignature(params) {
@@ -442,61 +439,37 @@ function buildTurnUpstream(fetchImpl: typeof fetch): TurnServiceUpstreamDeps {
       );
     },
     async openStream(params) {
-      const response = await openFredUpstreamStream({
-        session: {
-          token: params.sessionToken,
-          expiresIn: 0,
-          channelId: params.channelId,
-          embedOrigin: FRED_EMBED_ORIGIN,
-        },
-        config: {
-          channelId: params.channelId,
-          publishToken: params.publishToken,
-          exchangeOrigin: params.exchangeOrigin,
-        },
-        upstreamConfig: {
-          agentId: params.agentId,
-          knowledgeBaseIds: params.knowledgeBaseIds,
-          allowWebSearch: params.webSearchEnabled,
-          allowFileUpload: false,
-          allowImageUpload: false,
-        },
-        upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
-        visitorId: params.visitorId,
-        query: params.query,
-        webSearchEnabled: params.webSearchEnabled,
-        signal: params.signal,
-        fetchImpl,
-      });
+      const config = embedConfig(params);
+      const response = await withFredEmbedSession(
+        { config, signal: params.signal, fetchImpl, session: embedSession(params) },
+        (activeSession) => openFredUpstreamStream({
+          session: activeSession,
+          config,
+          upstreamConfig: {
+            agentId: params.agentId,
+            knowledgeBaseIds: params.knowledgeBaseIds,
+            allowWebSearch: params.webSearchEnabled,
+            allowFileUpload: false,
+            allowImageUpload: false,
+          },
+          upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
+          visitorId: params.visitorId,
+          query: params.query,
+          webSearchEnabled: params.webSearchEnabled,
+          signal: params.signal,
+          fetchImpl,
+        }),
+      );
       if (!response.body) throw dbError("FRED_UPSTREAM_BODY_MISSING");
       return response.body;
     },
     visitorId: (publishToken, userId) => fredVisitorId(publishToken, userId),
     async stopSession(params) {
       await stopFredUpstreamSession({
-        session: {
-          token: params.sessionToken,
-          expiresIn: 0,
-          channelId: params.channelId,
-          embedOrigin: FRED_EMBED_ORIGIN,
-        },
-        config: {
-          channelId: params.channelId,
-          publishToken: params.publishToken,
-          exchangeOrigin: params.exchangeOrigin,
-        },
+        session: embedSession(params),
+        config: embedConfig(params),
         upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
         messageId: params.messageId,
-        signal: params.signal,
-        fetchImpl,
-      });
-    },
-    async fetchCompletedArtifacts(params) {
-      return fetchFredCompletedEmbedArtifacts({
-        session: { token: params.sessionToken, expiresIn: 0, channelId: params.channelId, embedOrigin: FRED_EMBED_ORIGIN },
-        config: { channelId: params.channelId, publishToken: params.publishToken, exchangeOrigin: params.exchangeOrigin },
-        upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
-        assistantMessageId: params.assistantMessageId,
         signal: params.signal,
         fetchImpl,
       });

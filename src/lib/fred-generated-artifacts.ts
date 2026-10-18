@@ -21,12 +21,8 @@ export function parseGeneratedArtifacts(value: unknown): ParsedGeneratedArtifact
     const fileName = typeof item.file_name === "string" ? item.file_name.trim() : "";
     const fileType = typeof item.file_type === "string" ? item.file_type.trim().toLowerCase() : "";
     const fileSize = Number(item.file_size);
-    // Live agent completion uses `handle`; Embed history persists the same
-    // trusted resource identity as `url`. Callers must only pass the latter
-    // from the authenticated, exact-message metadata lookup.
-    const sourceUri = typeof item.handle === "string"
-      ? item.handle.trim()
-      : typeof item.url === "string" ? item.url.trim() : "";
+    // The completion event names each artifact by its public `handle`.
+    const sourceUri = typeof item.handle === "string" ? item.handle.trim() : "";
     const suppliedIndex = item.index;
     const upstreamIndex = suppliedIndex === undefined ? arrayIndex : Number(suppliedIndex);
     if (!fileName || fileName.length > 255 || /[\u0000-\u001f\u007f]/u.test(fileName)

@@ -66,10 +66,15 @@ import {
   FredEmbedConfigurationError,
   FredEmbedUpstreamError,
   FRED_EMBED_ORIGIN,
-  mintFredEmbedSession,
   readFredEmbedServerConfig,
   readQuickFredEmbedServerConfig,
+  type FredEmbedSession,
 } from "@/lib/weknora/fred-embed";
+import {
+  getFredEmbedSession,
+  getFredUpstreamConfig,
+  withFredEmbedSession,
+} from "@/lib/weknora/fred-embed-cache";
 import {
   fredAgentName,
   type FredAgentKey,
@@ -80,8 +85,6 @@ import {
   createFredUpstreamSession,
   deriveFredSessionSignature,
   fetchFredRecentEmbedImages,
-  fetchFredCompletedEmbedArtifacts,
-  fetchFredUpstreamConfig,
   fredVisitorId,
   openFredUpstreamStream,
   stopFredUpstreamSession,
@@ -498,16 +501,19 @@ async function resolveUpstreamSession(options: {
   conversation: FredConversationRow | null;
   channelId: string;
   publishToken: string;
-  session: Awaited<ReturnType<typeof mintFredEmbedSession>>;
+  session: FredEmbedSession;
   config: ReturnType<typeof readFredEmbedServerConfig>;
   signal: AbortSignal;
 }): Promise<FredUpstreamSession> {
   if (!options.conversation) {
-    return createFredUpstreamSession({
-      session: options.session,
-      config: options.config,
-      signal: options.signal,
-    });
+    return withFredEmbedSession(
+      { config: options.config, signal: options.signal, session: options.session },
+      (session) => createFredUpstreamSession({
+        session,
+        config: options.config,
+        signal: options.signal,
+      }),
+    );
   }
 
   const row = options.conversation;
@@ -583,37 +589,38 @@ function buildWebTurnUpstream(
     if (!value) throw new UserVisibleError("Fred ist nicht vollständig konfiguriert.", 503);
     return value;
   };
+  const embedSession = (params: { sessionToken: string; channelId: string }): FredEmbedSession => ({
+    token: params.sessionToken,
+    expiresIn: 0,
+    channelId: params.channelId,
+    embedOrigin: FRED_EMBED_ORIGIN,
+  });
+  // Session tokens come from the shared cache. A call WeKnora rejects with an
+  // expired or unknown token is retried once with a freshly minted one.
   return {
     async mintSession(params) {
-      const session = await mintFredEmbedSession({
+      const session = await getFredEmbedSession({
         config: serverConfig(params.channelId),
         signal: params.signal,
       });
       return { token: session.token, expiresIn: session.expiresIn };
     },
     async fetchUpstreamConfig(params) {
-      return fetchFredUpstreamConfig({
-        session: {
-          token: params.sessionToken,
-          expiresIn: 0,
-          channelId: params.channelId,
-          embedOrigin: FRED_EMBED_ORIGIN,
-        },
+      return getFredUpstreamConfig({
         config: serverConfig(params.channelId),
         signal: params.signal,
       });
     },
     async createSession(params) {
-      const session = await createFredUpstreamSession({
-        session: {
-          token: params.sessionToken,
-          expiresIn: 0,
-          channelId: params.channelId,
-          embedOrigin: FRED_EMBED_ORIGIN,
-        },
-        config: serverConfig(params.channelId),
-        signal: params.signal,
-      });
+      const config = serverConfig(params.channelId);
+      const session = await withFredEmbedSession(
+        { config, signal: params.signal, session: embedSession(params) },
+        (activeSession) => createFredUpstreamSession({
+          session: activeSession,
+          config,
+          signal: params.signal,
+        }),
+      );
       return { id: session.id, signature: session.signature };
     },
     deriveSessionSignature(params) {
@@ -623,27 +630,26 @@ function buildWebTurnUpstream(
       );
     },
     async openStream(params) {
-      const response = await openFredUpstreamStream({
-        session: {
-          token: params.sessionToken,
-          expiresIn: 0,
-          channelId: params.channelId,
-          embedOrigin: FRED_EMBED_ORIGIN,
-        },
-        config: serverConfig(params.channelId),
-        upstreamConfig: {
-          agentId: params.agentId,
-          knowledgeBaseIds: params.knowledgeBaseIds,
-          allowWebSearch: params.webSearchEnabled,
-          allowFileUpload: false,
-          allowImageUpload: false,
-        },
-        upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
-        visitorId: params.visitorId,
-        query: params.query,
-        webSearchEnabled: params.webSearchEnabled,
-        signal: params.signal,
-      });
+      const config = serverConfig(params.channelId);
+      const response = await withFredEmbedSession(
+        { config, signal: params.signal, session: embedSession(params) },
+        (activeSession) => openFredUpstreamStream({
+          session: activeSession,
+          config,
+          upstreamConfig: {
+            agentId: params.agentId,
+            knowledgeBaseIds: params.knowledgeBaseIds,
+            allowWebSearch: params.webSearchEnabled,
+            allowFileUpload: false,
+            allowImageUpload: false,
+          },
+          upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
+          visitorId: params.visitorId,
+          query: params.query,
+          webSearchEnabled: params.webSearchEnabled,
+          signal: params.signal,
+        }),
+      );
       if (!response.body) {
         throw new UserVisibleError("Fred hat keinen Antwortstream geliefert.", 502);
       }
@@ -652,29 +658,10 @@ function buildWebTurnUpstream(
     visitorId: (publishToken, userId) => fredVisitorId(publishToken, userId),
     async stopSession(params) {
       await stopFredUpstreamSession({
-        session: {
-          token: params.sessionToken,
-          expiresIn: 0,
-          channelId: params.channelId,
-          embedOrigin: FRED_EMBED_ORIGIN,
-        },
+        session: embedSession(params),
         config: serverConfig(params.channelId),
         upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
         messageId: params.messageId,
-        signal: params.signal,
-      });
-    },
-    async fetchCompletedArtifacts(params) {
-      return fetchFredCompletedEmbedArtifacts({
-        session: {
-          token: params.sessionToken,
-          expiresIn: 0,
-          channelId: params.channelId,
-          embedOrigin: FRED_EMBED_ORIGIN,
-        },
-        config: serverConfig(params.channelId),
-        upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
-        assistantMessageId: params.assistantMessageId,
         signal: params.signal,
       });
     },
@@ -1182,12 +1169,14 @@ export async function POST(request: Request) {
             await updateGenerationRun({ supabase, runId, status: "connecting" });
           }
 
-          const embedSession = await mintFredEmbedSession({
+          // Later calls of this turn (stop, image lookup) use the token that
+          // opened the stream, which may have replaced a rejected one.
+          let embedSession = await getFredEmbedSession({
             config,
             signal: deadline.signal,
           });
           const [upstreamConfig, upstreamSession] = await Promise.all([
-            fetchFredUpstreamConfig({ session: embedSession, config, signal: deadline.signal }),
+            getFredUpstreamConfig({ config, signal: deadline.signal }),
             resolveUpstreamSession({
               conversation: storedConversation,
               channelId: config.channelId,
@@ -1283,19 +1272,25 @@ export async function POST(request: Request) {
             requestId: requestReceipt.requestId,
             status: "generating",
           });
-          const upstream = await openFredUpstreamStream({
-            session: embedSession,
-            config,
-            upstreamConfig,
-            upstreamSession,
-            visitorId: fredVisitorId(config.publishToken, user.id),
-            query: upstreamQuery,
-            webSearchEnabled: body.webSearchEnabled,
-            signal: deadline.signal,
-            ...(fredAttachmentMode === "weknora_native"
-              ? { nativeAttachments: body.attachments satisfies readonly FredNativeAttachmentUpload[] }
-              : {}),
-          });
+          const upstream = await withFredEmbedSession(
+            { config, signal: deadline.signal, session: embedSession },
+            (session) => {
+              embedSession = session;
+              return openFredUpstreamStream({
+                session,
+                config,
+                upstreamConfig,
+                upstreamSession,
+                visitorId: fredVisitorId(config.publishToken, user.id),
+                query: upstreamQuery,
+                webSearchEnabled: body.webSearchEnabled,
+                signal: deadline.signal,
+                ...(fredAttachmentMode === "weknora_native"
+                  ? { nativeAttachments: body.attachments satisfies readonly FredNativeAttachmentUpload[] }
+                  : {}),
+              });
+            },
+          );
           const upstreamReader = upstream.body!.getReader();
           activeUpstreamReader = upstreamReader;
           streamStarted = true;
@@ -1453,40 +1448,18 @@ export async function POST(request: Request) {
             const frames = buffer.split(/\r?\n\r?\n/u);
             buffer = frames.pop() ?? "";
             for (const frame of frames) processFrame(frame);
-          }
-          buffer += decoder.decode();
-          if (buffer.trim()) processFrame(buffer);
-
-          // Embed completion frames can omit the artifact list even though
-          // the exact completed assistant message has persisted it. Read only
-          // that message through the authenticated embed history endpoint;
-          // failure deliberately leaves a text-only answer.
-          const artifactLifetimeSignal = lifetimeAbort?.signal;
-          if (sawCompleteEvent && generatedArtifacts.length === 0 && upstreamMsgId && artifactLifetimeSignal && !artifactLifetimeSignal.aborted) {
-            try {
-              const artifactAbort = new AbortController();
-              const timeoutHandle = setTimeout(() => artifactAbort.abort(), 5_000);
-              const onArtifactAbort = () => artifactAbort.abort(artifactLifetimeSignal.reason);
-              artifactLifetimeSignal.addEventListener("abort", onArtifactAbort, { once: true });
-              try {
-                const metadata = await fetchFredCompletedEmbedArtifacts({
-                  session: embedSession,
-                  config,
-                  upstreamSession,
-                  assistantMessageId: upstreamMsgId,
-                  signal: artifactAbort.signal,
-                });
-                const parsedArtifacts = parseGeneratedArtifacts({ data: { artifacts: metadata } });
-                if (parsedArtifacts.length > 0) {
-                  generatedArtifacts = parsedArtifacts.map((artifact) => ({ ...artifact, id: "" }));
-                }
-              } finally {
-                clearTimeout(timeoutHandle);
-                artifactLifetimeSignal.removeEventListener("abort", onArtifactAbort);
-              }
-            } catch {
-              // Artifact discovery is an enhancement; never lose the answer.
+            // `complete` is WeKnora's last meaningful event and already carries
+            // the persisted artifacts. On a session's first turn WeKnora keeps
+            // the stream open for up to 3 s to send a title Findog does not use.
+            if (sawCompleteEvent) {
+              upstreamCancelRequested = true;
+              void upstreamReader.cancel().catch(() => undefined);
+              break;
             }
+          }
+          if (!sawCompleteEvent) {
+            buffer += decoder.decode();
+            if (buffer.trim()) processFrame(buffer);
           }
 
           // EOF detection: stream ended without a complete/final answer

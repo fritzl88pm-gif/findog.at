@@ -318,7 +318,7 @@ describe("Fred native Findog UI", () => {
   });
 
   it("keeps WeKnora credentials server-side and tightens framing policy", () => {
-    expect(routeSource).toContain("mintFredEmbedSession");
+    expect(routeSource).toContain("getFredEmbedSession");
     expect(routeSource).toContain("openFredUpstreamStream");
     expect(viewSource).toContain('Authorization: `Bearer ${accessToken}`');
     expect(viewSource).not.toContain("WEKNORA_FRED_PUBLISH_TOKEN");

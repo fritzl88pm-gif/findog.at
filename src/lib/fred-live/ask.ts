@@ -15,18 +15,21 @@ import {
 import {
   createFredUpstreamSession,
   deriveFredSessionSignature,
-  fetchFredUpstreamConfig,
   fredVisitorId,
   openFredUpstreamStream,
   stopFredUpstreamSession,
 } from "@/lib/weknora/fred-native";
 import {
   FredEmbedConfigurationError,
-  mintFredEmbedSession,
   readQuickFredEmbedServerConfig,
   type FredEmbedServerConfig,
   type FredEmbedSession,
 } from "@/lib/weknora/fred-embed";
+import {
+  getFredEmbedSession,
+  getFredUpstreamConfig,
+  withFredEmbedSession,
+} from "@/lib/weknora/fred-embed-cache";
 
 export type FredLiveAskResult = {
   answer: string;
@@ -143,31 +146,44 @@ export async function askQuickFred(input: {
   let session: FredEmbedSession | undefined;
   let upstreamSession: { id: string; signature: string } | undefined;
   let assistantMessageId = "";
+  // Tokens come from the shared cache. A token WeKnora rejects is replaced
+  // once, and later calls of this question keep using the replacement.
+  const withSession = <T>(call: (active: FredEmbedSession) => Promise<T>) =>
+    withFredEmbedSession({ config, signal: input.signal, session }, (active) => {
+      session = active;
+      return call(active);
+    });
   try {
-    session = await mintFredEmbedSession({ config, signal: input.signal });
-    const upstreamConfig = await fetchFredUpstreamConfig({ session, config, signal: input.signal });
+    const [initialSession, upstreamConfig] = await Promise.all([
+      getFredEmbedSession({ config, signal: input.signal }),
+      getFredUpstreamConfig({ config, signal: input.signal }),
+    ]);
+    session = initialSession;
     if (upstreamConfig.agentId !== config.expectedAgentId) {
       throw new UserVisibleError("QuickFred hat eine ungültige Konfiguration geliefert.", 502);
     }
-    if (input.upstreamSessionId) {
-      upstreamSession = {
+    const activeUpstreamSession = input.upstreamSessionId
+      ? {
         id: input.upstreamSessionId,
         signature: deriveFredSessionSignature(config, input.upstreamSessionId),
-      };
-    } else {
-      upstreamSession = await createFredUpstreamSession({ session, config, signal: input.signal });
-    }
+      }
+      : await withSession((active) => createFredUpstreamSession({
+        session: active,
+        config,
+        signal: input.signal,
+      }));
+    upstreamSession = activeUpstreamSession;
 
-    const response = await openFredUpstreamStream({
-      session,
+    const response = await withSession((active) => openFredUpstreamStream({
+      session: active,
       config,
       upstreamConfig,
-      upstreamSession,
+      upstreamSession: activeUpstreamSession,
       visitorId: fredVisitorId(config.publishToken, "fred-live"),
       query: input.question,
       webSearchEnabled: false,
       signal: input.signal,
-    });
+    }));
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -202,9 +218,17 @@ export async function askQuickFred(input: {
         const frames = buffer.split(/\r?\n\r?\n/u);
         buffer = frames.pop() ?? "";
         frames.forEach(consume);
+        // WeKnora can hold the stream open after completion (session title on
+        // a first turn); the answer is final, so the rest is not awaited.
+        if (complete) {
+          void reader.cancel().catch(() => undefined);
+          break;
+        }
       }
-      buffer += decoder.decode();
-      if (buffer.trim()) consume(buffer);
+      if (!complete) {
+        buffer += decoder.decode();
+        if (buffer.trim()) consume(buffer);
+      }
     } finally {
       reader.releaseLock();
     }
@@ -214,7 +238,7 @@ export async function askQuickFred(input: {
     return {
       answer: assembleFredLiveAnswer(events),
       sources: projectFredLiveSources(references),
-      upstreamSessionId: upstreamSession.id,
+      upstreamSessionId: activeUpstreamSession.id,
       elapsedMs: Date.now() - startedAt,
     };
   } catch (error) {

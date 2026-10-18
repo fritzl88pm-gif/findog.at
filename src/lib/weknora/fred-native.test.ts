@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { UserVisibleError } from "../errors";
+import { FredEmbedSessionRejectedError, UserVisibleError } from "../errors";
 
 import {
   assertFredNativeAttachmentTotalSize,
@@ -10,7 +10,6 @@ import {
   deriveFredSessionSignature,
   fetchFredUpstreamConfig,
   fetchFredRecentEmbedImages,
-  fetchFredCompletedEmbedArtifacts,
   fredVisitorId,
   MAX_NATIVE_ATTACHMENT_TOTAL_BYTES,
   openFredUpstreamStream,
@@ -448,27 +447,31 @@ describe("Fred native WeKnora client", () => {
     });
   });
 
-  it("reads artifacts only from the exact completed assistant message in embed history", async () => {
-    const signature = deriveFredSessionSignature(config, "session-456");
-    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
-      expect(url).toBe("https://taxdog.cloud/api/v1/embed/fred-channel/messages/session-456/load?limit=2");
-      expect(init?.headers).toEqual({
-        Accept: "application/json",
-        Authorization: `Embed ${session.token}`,
-        Origin: config.exchangeOrigin,
-        "X-Embed-Session": signature,
-      });
-      return new Response(JSON.stringify({ success: true, data: [
-        { id: "other", role: "assistant", is_completed: true, artifacts: [{ url: "resource://wrong" }] },
-        { id: "answer-1", role: "assistant", is_completed: true, artifacts: [{
-          url: "resource://right", file_name: "report.docx", file_size: 12, file_type: ".docx",
-        }] },
-      ] }), { status: 200 });
-    });
+  it.each([401, 403])("reports a session token WeKnora rejects with %i as a rejected session", async (status) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response("Unauthorized", { status }));
 
-    await expect(fetchFredCompletedEmbedArtifacts({
-      session, config, upstreamSession: { id: "session-456", signature },
-      assistantMessageId: "answer-1", signal: new AbortController().signal, fetchImpl,
-    })).resolves.toEqual([{ url: "resource://right", file_name: "report.docx", file_size: 12, file_type: ".docx" }]);
+    await expect(createFredUpstreamSession({
+      session,
+      config,
+      signal: new AbortController().signal,
+      fetchImpl,
+    })).rejects.toBeInstanceOf(FredEmbedSessionRejectedError);
+    await expect(openFredUpstreamStream({
+      session,
+      config,
+      upstreamConfig: {
+        agentId: "agent-1",
+        knowledgeBaseIds: ["kb-1"],
+        allowWebSearch: false,
+        allowFileUpload: false,
+        allowImageUpload: false,
+      },
+      upstreamSession: { id: "session-456", signature: deriveFredSessionSignature(config, "session-456") },
+      visitorId: "visitor-123",
+      query: "Frage",
+      webSearchEnabled: false,
+      signal: new AbortController().signal,
+      fetchImpl,
+    })).rejects.toBeInstanceOf(FredEmbedSessionRejectedError);
   });
 });

@@ -110,17 +110,6 @@ export interface TurnServiceUpstreamDeps {
     messageId: string;
     signal: AbortSignal;
   }): Promise<void>;
-  /** Read artifacts from the exact completed assistant message in Embed history. */
-  fetchCompletedArtifacts?: (params: {
-    sessionToken: string;
-    channelId: string;
-    publishToken: string;
-    exchangeOrigin: string;
-    sessionId: string;
-    sessionSignature: string;
-    assistantMessageId: string;
-    signal: AbortSignal;
-  }) => Promise<unknown[]>;
 }
 
 export interface TurnServicePersistenceDeps {
@@ -189,7 +178,6 @@ export interface TurnServiceConfigDeps {
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_LIVE_BFG_CITATIONS = 20;
-const ARTIFACT_LOOKUP_TIMEOUT_MS = 5_000;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -616,6 +604,13 @@ export async function* executeFredTurn(
         }
         yieldedChunkCount = answerChunks.length;
       }
+      // `complete` is WeKnora's last meaningful event and already carries the
+      // persisted artifacts. On a session's first turn WeKnora keeps the
+      // stream open for up to 3 s to send a title Findog does not use.
+      if (sawUpstreamCompletion) {
+        void upstreamReader.cancel().catch(() => undefined);
+        break;
+      }
     }
 
     if (stoppedByCaller) {
@@ -639,8 +634,10 @@ export async function* executeFredTurn(
       };
     }
 
-    buffer += decoder.decode();
-    if (buffer.trim()) processFrame(buffer);
+    if (!sawUpstreamCompletion) {
+      buffer += decoder.decode();
+      if (buffer.trim()) processFrame(buffer);
+    }
 
     if (!sawUpstreamCompletion) {
       throw new UserVisibleError(EOF_WITHOUT_FINAL_CLIENT_MESSAGE, 502);
@@ -652,37 +649,6 @@ export async function* executeFredTurn(
     const plainFinalAnswer = rawAnswer.trim();
     if (!plainFinalAnswer) {
       throw new UserVisibleError(`${selectedAgentName} hat keine Antwort geliefert.`, 502);
-    }
-
-    // Embed completion frames may omit artifacts even though the exact
-    // completed assistant message persisted them. This lookup is optional,
-    // bounded, authenticated by the adapter, and fail-open for text answers.
-    if (
-      generatedArtifacts.length === 0
-      && upstreamMsgId
-      && upstream.fetchCompletedArtifacts
-      && persistence.persistGeneratedArtifacts
-      && !request.signal?.aborted
-    ) {
-      const artifactAbort = new AbortController();
-      const timeoutHandle = setTimeout(() => artifactAbort.abort(), ARTIFACT_LOOKUP_TIMEOUT_MS);
-      const onRequestAbort = () => artifactAbort.abort(request.signal?.reason);
-      request.signal?.addEventListener("abort", onRequestAbort, { once: true });
-      try {
-        const metadata = await upstream.fetchCompletedArtifacts({
-          ...sessionConfigCache!,
-          assistantMessageId: upstreamMsgId,
-          signal: artifactAbort.signal,
-        });
-        if (!artifactAbort.signal.aborted) {
-          generatedArtifacts = parseGeneratedArtifacts({ data: { artifacts: metadata } });
-        }
-      } catch {
-        // Artifact discovery is an enhancement; preserve the text-only answer.
-      } finally {
-        clearTimeout(timeoutHandle);
-        request.signal?.removeEventListener("abort", onRequestAbort);
-      }
     }
 
     // A final unterminated SSE frame may have added a research step after the

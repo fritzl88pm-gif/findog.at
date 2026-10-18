@@ -8,6 +8,17 @@ export class UserVisibleError extends Error {
   }
 }
 
+/**
+ * WeKnora rejected the embed session token (HTTP 401/403), for example after
+ * its token store was reset. Holders of a cached token mint a fresh one.
+ */
+export class FredEmbedSessionRejectedError extends UserVisibleError {
+  constructor() {
+    super("Die sichere Fred-Verbindung ist abgelaufen.", 502);
+    this.name = "FredEmbedSessionRejectedError";
+  }
+}
+
 export class MissingMcpBearerTokenError extends UserVisibleError {
   constructor() {
     super(

@@ -1,13 +1,10 @@
 import {
-  mintFredEmbedSession,
   readFredEmbedServerConfig,
   readQuickFredEmbedServerConfig,
   type FredEmbedServerConfig,
 } from "@/lib/weknora/fred-embed";
-import {
-  fetchFredUpstreamConfig,
-  type FredUpstreamConfig,
-} from "@/lib/weknora/fred-native";
+import { getFredUpstreamConfig } from "@/lib/weknora/fred-embed-cache";
+import type { FredUpstreamConfig } from "@/lib/weknora/fred-native";
 
 const CAPABILITIES_FRESH_TTL_MS = 60_000;
 const CAPABILITIES_STALE_WINDOW_MS = 600_000;
@@ -33,15 +30,7 @@ async function probeFredCapabilities(options: {
   config: FredEmbedServerConfig;
   signal: AbortSignal;
 }): Promise<FredUpstreamConfig> {
-  const session = await mintFredEmbedSession({
-    config: options.config,
-    signal: options.signal,
-  });
-  return fetchFredUpstreamConfig({
-    session,
-    config: options.config,
-    signal: options.signal,
-  });
+  return getFredUpstreamConfig({ config: options.config, signal: options.signal });
 }
 
 async function probeQuickFredCapabilities(options: {
@@ -54,12 +43,7 @@ async function probeQuickFredCapabilities(options: {
   try {
     const config = readQuickFredEmbedServerConfig();
     if (config.channelId === options.fredChannelId) return null;
-    const session = await mintFredEmbedSession({ config, signal: options.signal });
-    const upstreamConfig = await fetchFredUpstreamConfig({
-      session,
-      config,
-      signal: options.signal,
-    });
+    const upstreamConfig = await getFredUpstreamConfig({ config, signal: options.signal });
     return { config, upstreamConfig };
   } catch {
     return null;

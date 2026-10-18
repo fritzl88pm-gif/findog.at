@@ -18,11 +18,11 @@ import {
   createFredUpstreamSession,
   deriveFredSessionSignature,
   fetchFredRecentEmbedImages,
-  fetchFredCompletedEmbedArtifacts,
   fetchFredUpstreamConfig,
   openFredUpstreamStream,
   stopFredUpstreamSession,
 } from "@/lib/weknora/fred-native";
+import { resetFredEmbedCachesForTests } from "@/lib/weknora/fred-embed-cache";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getScanningSettings } from "@/lib/scanning/settings";
 import { parseFredNativeStreamLine } from "@/lib/fred-native-stream";
@@ -31,7 +31,7 @@ import {
   verifyBfgCitations,
 } from "@/lib/findok/bfg-citations";
 
-import { UserVisibleError } from "@/lib/errors";
+import { FredEmbedSessionRejectedError, UserVisibleError } from "@/lib/errors";
 import { POST } from "./route";
 
 const { recordAdminRequest: mockRecordAdminRequest } = vi.hoisted(() => ({
@@ -96,7 +96,6 @@ vi.mock("@/lib/weknora/fred-native", async (importOriginal) => {
     createFredUpstreamSession: vi.fn(),
     deriveFredSessionSignature: vi.fn(),
     fetchFredRecentEmbedImages: vi.fn(async () => []),
-    fetchFredCompletedEmbedArtifacts: vi.fn(async () => []),
     fetchFredUpstreamConfig: vi.fn(),
     fredVisitorId: vi.fn(() => "visitor-hash"),
     openFredUpstreamStream: vi.fn(),
@@ -216,6 +215,7 @@ function rpcForTurn() {
 describe("POST /api/fred/chat", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    resetFredEmbedCachesForTests();
     mockRecordAdminRequest.mockResolvedValue(undefined);
     mockCreateFredRequestReceipt.mockResolvedValue({
       requestId,
@@ -248,7 +248,6 @@ describe("POST /api/fred/chat", () => {
       id: "session-1",
       signature: "session-signature",
     });
-    vi.mocked(fetchFredCompletedEmbedArtifacts).mockResolvedValue([]);
     vi.mocked(openFredUpstreamStream).mockImplementation(async () => upstreamStream());
     vi.mocked(extractStreamStableBfgGzCandidates).mockImplementation((text, streamComplete) => {
       if (!streamComplete) return [];
@@ -332,7 +331,7 @@ describe("POST /api/fred/chat", () => {
     expect(stopFredUpstreamSession).not.toHaveBeenCalled();
   });
 
-  it("recovers Embed-persisted url artifacts from the exact completed message", async () => {
+  it("persists the artifacts published with the completion event", async () => {
     const artifact = {
       id: "artifact-1", fileName: "findog-release-stream-20260914.txt", fileSize: 30,
       fileType: ".txt", upstreamIndex: 0,
@@ -351,24 +350,21 @@ describe("POST /api/fred/chat", () => {
     const rpc = rpcForTurn();
     const from = vi.fn().mockReturnValue({ update: artifactUpdate });
     vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
-    vi.mocked(fetchFredCompletedEmbedArtifacts).mockResolvedValue([{
-      url: "resource://4P2-Gq_68QTMZ9MhZ7szVg",
-      file_name: "findog-release-stream-20260914.txt",
-      file_size: 30,
-      file_type: ".txt",
-    }]);
     vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response([
       'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
       'data: {"response_type":"answer","content":"[Datei](sandbox:/workspace/output/findog-release-stream-20260914.txt)","done":true}\n\n',
-      'data: {"response_type":"complete","id":"request-1","data":{}}\n\n',
+      `data: ${JSON.stringify({ response_type: "complete", id: "request-1", data: { artifacts: [{
+        index: 0,
+        handle: "resource://4P2-Gq_68QTMZ9MhZ7szVg",
+        file_name: "findog-release-stream-20260914.txt",
+        file_size: 30,
+        file_type: ".txt",
+      }] } })}\n\n`,
     ].join(""), { headers: { "Content-Type": "text/event-stream" } }));
 
     const response = await POST(request({ query: "Erzeuge die Datei" }));
     const events = (await response.text()).split("\n").filter(Boolean).map(parseFredNativeStreamLine);
     const finalEvent = events.find((event) => event?.type === "final");
-    expect(fetchFredCompletedEmbedArtifacts).toHaveBeenCalledWith(expect.objectContaining({
-      assistantMessageId: "answer-1",
-    }));
     expect(finalEvent).toEqual(expect.objectContaining({
       type: "final",
       answer: "Datei",
@@ -1693,6 +1689,97 @@ describe("POST /api/fred/chat", () => {
           content: "Der Beleg ist **gültig**.",
         }),
       });
+    });
+  });
+
+  describe("embed session reuse and stream end", () => {
+    async function streamEvents(response: Response) {
+      return (await response.text()).split("\n").map(parseFredNativeStreamLine).filter(Boolean);
+    }
+
+    it("reuses the embed session token and channel config across turns", async () => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "77777777-0000-4777-8777-000000000011" });
+      vi.mocked(getSupabaseServerClient)
+        .mockReturnValueOnce({ rpc: rpcForTurn() } as never)
+        .mockReturnValueOnce({ rpc: rpcForTurn() } as never);
+
+      for (const query of ["Erste Frage", "Zweite Frage"]) {
+        const events = await streamEvents(await POST(request({ query })));
+        expect(events.at(-1)).toMatchObject({ type: "final", answer: "Hallo Welt" });
+      }
+
+      expect(mintFredEmbedSession).toHaveBeenCalledOnce();
+      expect(fetchFredUpstreamConfig).toHaveBeenCalledOnce();
+      expect(createFredUpstreamSession).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(openFredUpstreamStream).mock.calls.map(([options]) => options.session.token)).toEqual([
+        "ems_session_token_fixture_123456",
+        "ems_session_token_fixture_123456",
+      ]);
+    });
+
+    it("retries an embed call once with a new token after WeKnora rejects the cached one", async () => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "77777777-0000-4777-8777-000000000012" });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc: rpcForTurn() } as never);
+      vi.mocked(mintFredEmbedSession)
+        .mockResolvedValueOnce({
+          token: "ems_rejected_token_fixture_123456",
+          expiresIn: 1800,
+          channelId: "fred-channel",
+          embedOrigin: "https://taxdog.cloud",
+        })
+        .mockResolvedValueOnce({
+          token: "ems_replacement_token_fixture_1234",
+          expiresIn: 1800,
+          channelId: "fred-channel",
+          embedOrigin: "https://taxdog.cloud",
+        });
+      vi.mocked(createFredUpstreamSession).mockRejectedValueOnce(new FredEmbedSessionRejectedError());
+
+      const events = await streamEvents(await POST(request({ query: "Abgelaufenes Token" })));
+
+      expect(events.at(-1)).toMatchObject({ type: "final", answer: "Hallo Welt" });
+      expect(mintFredEmbedSession).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(createFredUpstreamSession).mock.calls.map(([options]) => options.session.token)).toEqual([
+        "ems_rejected_token_fixture_123456",
+        "ems_replacement_token_fixture_1234",
+      ]);
+    });
+
+    it.each([
+      ["text", "77777777-0000-4777-8777-000000000013", () => request({ query: "Offener Stream" })],
+      ["attachment", "77777777-0000-4777-8777-000000000014", () => multipartRequest({
+        query: "Offener Stream",
+        attachment: pdfFile(),
+      })],
+    ])("finishes the %s turn at the completion event while WeKnora keeps the stream open", async (
+      _path,
+      turnUserId,
+      buildRequest,
+    ) => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: turnUserId });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc: rpcForTurn() } as never);
+      const cancel = vi.fn();
+      vi.mocked(openFredUpstreamStream).mockImplementation(async () => new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            // A first turn's session title would follow later; the stream stays open.
+            controller.enqueue(new TextEncoder().encode([
+              'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+              'data: {"response_type":"answer","content":"Fertig","done":true}\n\n',
+              'data: {"response_type":"complete","data":{}}\n\n',
+            ].join("")));
+          },
+          cancel,
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+      ));
+
+      const events = await streamEvents(await POST(buildRequest()));
+
+      expect(events.some((event) => event?.type === "error")).toBe(false);
+      expect(events.at(-1)).toMatchObject({ type: "final", answer: "Fertig" });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(stopFredUpstreamSession).not.toHaveBeenCalled();
     });
   });
 

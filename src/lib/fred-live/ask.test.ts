@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createFredUpstreamSession, fetchFredUpstreamConfig, openFredUpstreamStream, stopFredUpstreamSession } from "@/lib/weknora/fred-native";
 import { mintFredEmbedSession, readQuickFredEmbedServerConfig } from "@/lib/weknora/fred-embed";
+import { resetFredEmbedCachesForTests } from "@/lib/weknora/fred-embed-cache";
 import { askQuickFred, assembleFredLiveAnswer, projectFredLiveSources, toSpokenAnswer } from "./ask";
 
 vi.mock("server-only", () => ({}));
@@ -30,6 +31,7 @@ function stream(...events: unknown[]) {
 describe("askQuickFred", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    resetFredEmbedCachesForTests();
     vi.mocked(readQuickFredEmbedServerConfig).mockReturnValue(config);
     vi.mocked(mintFredEmbedSession).mockResolvedValue(session);
     vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({ agentId: config.expectedAgentId, knowledgeBaseIds: ["kb-1"], allowWebSearch: true, allowFileUpload: false, allowImageUpload: false });
@@ -77,6 +79,25 @@ describe("askQuickFred", () => {
     ])).toBe("Antwort bleibt");
   });
 
+  it("answers once QuickFred completes while the stream stays open", async () => {
+    const cancel = vi.fn();
+    vi.mocked(openFredUpstreamStream).mockResolvedValue(new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        // A first turn's session title would follow later; the stream stays open.
+        controller.enqueue(new TextEncoder().encode([
+          { response_type: "answer", content: "Fertig" },
+          { response_type: "complete" },
+        ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")));
+      },
+      cancel,
+    }), { headers: { "Content-Type": "text/event-stream" } }));
+
+    const result = await askQuickFred({ question: "Frage", signal: new AbortController().signal });
+
+    expect(result.answer).toBe("Fertig");
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("resumes with a server-derived signature", async () => {
     const result = await askQuickFred({ question: "Frage", upstreamSessionId: "old-session", signal: new AbortController().signal });
     expect(result.upstreamSessionId).toBe("old-session");
@@ -117,9 +138,9 @@ describe("askQuickFred", () => {
 
   it("maps abort to 504 and upstream errors to 502", async () => {
     const controller = new AbortController();
-    vi.mocked(openFredUpstreamStream).mockRejectedValueOnce(new DOMException("aborted", "AbortError"));
     controller.abort();
     await expect(askQuickFred({ question: "Frage", signal: controller.signal })).rejects.toMatchObject({ status: 504 });
+    expect(openFredUpstreamStream).not.toHaveBeenCalled();
     vi.mocked(openFredUpstreamStream).mockRejectedValueOnce(new Error("upstream"));
     await expect(askQuickFred({ question: "Frage", signal: new AbortController().signal })).rejects.toMatchObject({ status: 502 });
   });

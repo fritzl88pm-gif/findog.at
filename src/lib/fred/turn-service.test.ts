@@ -246,45 +246,9 @@ describe("executeFredTurn", () => {
     expect(result).toMatchObject({ answer: "Report", artifacts: [persistedArtifact] });
   });
 
-  it("recovers artifacts from trusted completed-message metadata", async () => {
-    const persistedArtifact = {
-      id: "artifact-2",
-      fileName: "report.docx",
-      fileSize: 20,
-      fileType: ".docx",
-      upstreamIndex: 0,
-    };
-    const fetchCompletedArtifacts = vi.fn().mockResolvedValue([{
-      url: "resource://report-docx",
-      file_name: "report.docx",
-      file_size: 20,
-      file_type: ".docx",
-    }]);
-    upstream = makeUpstreamDeps({
-      openStream: vi.fn().mockResolvedValue(artifactStream("[Report](sandbox:/workspace/output/report.docx)")),
-      fetchCompletedArtifacts,
-    });
-    persistence = makePersistenceDeps({
-      persistGeneratedArtifacts: vi.fn().mockResolvedValue([persistedArtifact]),
-    });
-
-    const { events } = await collectEvents(
-      executeFredTurn(baseRequest(), upstream, persistence, config),
-    );
-
-    expect(fetchCompletedArtifacts).toHaveBeenCalledWith(expect.objectContaining({
-      assistantMessageId: "answer-artifact",
-      sessionId: "session-1",
-      signal: expect.any(AbortSignal),
-    }));
-    expect(events.at(-1)).toMatchObject({ type: "final", answer: "Report", artifacts: [persistedArtifact] });
-  });
-
-  it("keeps a text-only answer when completed-message metadata lookup fails", async () => {
-    const fetchCompletedArtifacts = vi.fn().mockRejectedValue(new Error("metadata unavailable"));
+  it("keeps a text-only answer when the completion event carries no artifacts", async () => {
     upstream = makeUpstreamDeps({
       openStream: vi.fn().mockResolvedValue(artifactStream("[Report](sandbox:/workspace/output/report.txt)")),
-      fetchCompletedArtifacts,
     });
     persistence = makePersistenceDeps({
       persistGeneratedArtifacts: vi.fn(),
@@ -300,6 +264,32 @@ describe("executeFredTurn", () => {
     });
     expect(result.artifacts).toBeUndefined();
     expect(persistence.persistGeneratedArtifacts).not.toHaveBeenCalled();
+  });
+
+  it("finishes at the completion event while WeKnora keeps the stream open", async () => {
+    const cancel = vi.fn();
+    upstream = makeUpstreamDeps({
+      openStream: vi.fn().mockResolvedValue(new ReadableStream<Uint8Array>({
+        start(controller) {
+          // A first turn's session title would follow later; the stream stays open.
+          controller.enqueue(new TextEncoder().encode([
+            'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+            'data: {"response_type":"answer","content":"Fertig","done":true}\n\n',
+            'data: {"response_type":"complete","data":{}}\n\n',
+          ].join("")));
+        },
+        cancel,
+      })),
+    });
+
+    const { events, result } = await collectEvents(
+      executeFredTurn(baseRequest(), upstream, persistence, config),
+    );
+
+    expect(events.at(-1)).toMatchObject({ type: "final", answer: "Fertig" });
+    expect(result).toMatchObject({ answer: "Fertig", stopped: false });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(upstream.stopSession).not.toHaveBeenCalled();
   });
 
   it("advances the durable request receipt with exact persisted message IDs", async () => {

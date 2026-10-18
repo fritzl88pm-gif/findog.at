@@ -10,6 +10,7 @@ import {
   readFredEmbedServerConfig,
   readQuickFredEmbedServerConfig,
 } from "@/lib/weknora/fred-embed";
+import { resetFredEmbedCachesForTests } from "@/lib/weknora/fred-embed-cache";
 import { fetchFredUpstreamConfig } from "@/lib/weknora/fred-native";
 import { resetFredCapabilitiesCacheForTests } from "./cache";
 import { GET } from "./route";
@@ -71,6 +72,7 @@ describe("GET /api/fred/capabilities", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     resetFredCapabilitiesCacheForTests();
+    resetFredEmbedCachesForTests();
     vi.mocked(getSupabaseServerClient).mockReturnValue({ auth: {} } as never);
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "user-1" });
     vi.mocked(readFredEmbedServerConfig).mockReturnValue(fredConfig);
@@ -396,8 +398,8 @@ describe("GET /api/fred/capabilities", () => {
     vi.setSystemTime(new Date("2026-07-25T00:00:00.000Z"));
     await GET(capabilityRequest());
     vi.setSystemTime(new Date("2026-07-25T00:01:00.001Z"));
-    vi.mocked(mintFredEmbedSession).mockRejectedValue(
-      new FredEmbedUpstreamError("unavailable"),
+    vi.mocked(fetchFredUpstreamConfig).mockRejectedValue(
+      new UserVisibleError("Fred ist derzeit nicht erreichbar.", 502),
     );
 
     const response = await GET(capabilityRequest());
@@ -414,6 +416,19 @@ describe("GET /api/fred/capabilities", () => {
     vi.setSystemTime(new Date("2026-07-25T00:00:00.000Z"));
     await GET(capabilityRequest());
     vi.setSystemTime(new Date("2026-07-25T00:10:00.001Z"));
+    vi.mocked(fetchFredUpstreamConfig).mockRejectedValue(
+      new UserVisibleError("Fred ist derzeit nicht erreichbar.", 502),
+    );
+
+    const response = await GET(capabilityRequest());
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "Fred ist derzeit nicht erreichbar.",
+    });
+  });
+
+  it("reports Fred as unreachable when the first session exchange fails", async () => {
     vi.mocked(mintFredEmbedSession).mockRejectedValue(
       new FredEmbedUpstreamError("unavailable"),
     );
@@ -424,6 +439,7 @@ describe("GET /api/fred/capabilities", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Fred ist derzeit nicht erreichbar.",
     });
+    expect(fetchFredUpstreamConfig).not.toHaveBeenCalled();
   });
 
   it("authenticates every fresh-cache request before returning derived capabilities", async () => {
