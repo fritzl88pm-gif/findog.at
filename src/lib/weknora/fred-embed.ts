@@ -112,16 +112,6 @@ export function readQuickFredEmbedServerConfig(
   };
 }
 
-export function readFredProModelId(
-  environment: Environment = process.env,
-): string {
-  const raw = environment.WEKNORA_FRED_PRO_MODEL_ID?.trim() ?? "";
-  if (!UUID_PATTERN.test(raw)) {
-    throw new FredEmbedConfigurationError();
-  }
-  return raw;
-}
-
 function parsedSessionPayload(value: unknown): { token: string; expiresIn: number } | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const root = value as Record<string, unknown>;

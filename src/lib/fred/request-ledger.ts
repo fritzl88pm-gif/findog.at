@@ -39,7 +39,6 @@ export interface FredRequestResume {
   assistantMessageId?: number;
   answer?: string;
   webSearchEnabled: boolean;
-  proModeEnabled: boolean;
 }
 
 export type FredOptionalReceiptTransition =
@@ -88,10 +87,7 @@ function parseFredRequestResume(data: unknown): FredRequestResume | undefined {
   const assistantMessageId = optionalPositiveInteger(result.assistant_message_id);
   const answer = optionalString(result.answer);
 
-  if (
-    typeof result.web_search_enabled !== "boolean"
-    || typeof result.pro_mode_enabled !== "boolean"
-  ) {
+  if (typeof result.web_search_enabled !== "boolean") {
     return undefined;
   }
 
@@ -118,7 +114,6 @@ function parseFredRequestResume(data: unknown): FredRequestResume | undefined {
     ...(assistantMessageId === undefined ? {} : { assistantMessageId }),
     ...(answer ? { answer } : {}),
     webSearchEnabled: result.web_search_enabled,
-    proModeEnabled: result.pro_mode_enabled,
   };
 }
 
@@ -132,7 +127,6 @@ interface CreateFredRequestReceiptBaseOptions {
   assistantEventId?: string;
   conversationId?: string;
   webSearchEnabled?: boolean;
-  proModeEnabled?: boolean;
 }
 
 interface CreateFredWebRequestReceiptOptions extends CreateFredRequestReceiptBaseOptions {
@@ -170,7 +164,6 @@ export async function createFredRequestReceipt(
     user_event_id: userEventId,
     assistant_event_id: assistantEventId,
     web_search_enabled: options.webSearchEnabled === true,
-    pro_mode_enabled: options.proModeEnabled === true,
     ...(options.telegramUpdateId === undefined
       ? {}
       : { telegram_update_id: options.telegramUpdateId }),

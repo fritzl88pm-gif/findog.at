@@ -142,20 +142,14 @@ export async function updateGenerationRun(
 
 /**
  * Build the bounded model_route after upstream config is fetched.
- * Format: `weknora:<agentKey>:<agentId>` or
- * `weknora:<agentKey>:<agentId>:pro=<proModelId>` when pro is enabled.
+ * Format: `weknora:<agentKey>:<agentId>`.
  * Only includes fields actually returned by the upstream route.
  */
 export function formatExactModelRoute(params: {
   agentKey: string;
   agentId: string;
-  proModelId?: string;
 }): string {
-  const base = `weknora:${params.agentKey}:${params.agentId}`;
-  if (params.proModelId) {
-    return `${base}:pro=${params.proModelId}`;
-  }
-  return base;
+  return `weknora:${params.agentKey}:${params.agentId}`;
 }
 
 // ── EOF detection helper ────────────────────────────────────────────────────
@@ -191,6 +185,36 @@ export function isAnswerDelta(parsed: unknown): boolean {
     return typeof event.content === "string" && event.content.length > 0;
   }
   return false;
+}
+
+/**
+ * Returns true when the parsed upstream event is an agent tool call that ends
+ * the current round. WeKnora treats answer text streamed before such a call as
+ * a preamble and drops it from the persisted message, so callers retract it
+ * from the live answer. A `final_answer` tool call delivers the answer itself
+ * and retracts nothing (mirrors WeKnora's own chat UI).
+ */
+export function isPreambleRetractingToolCall(parsed: unknown): boolean {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  const event = parsed as Record<string, unknown>;
+  if (event.response_type !== "tool_call") return false;
+  const data = event.data && typeof event.data === "object" && !Array.isArray(event.data)
+    ? event.data as Record<string, unknown>
+    : {};
+  return (data.tool_name ?? event.tool_name) !== "final_answer";
+}
+
+/**
+ * Returns the authoritative answer that WeKnora persisted for the turn, carried
+ * as `data.final_content` on the agent-mode `complete` event. Empty when the
+ * event carries none (e.g. knowledge mode); callers then keep the streamed text.
+ */
+export function upstreamFinalContent(parsed: unknown): string {
+  if (!isUpstreamCompleteEvent(parsed)) return "";
+  const data = (parsed as Record<string, unknown>).data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return "";
+  const content = (data as Record<string, unknown>).final_content;
+  return typeof content === "string" && content.trim() ? content : "";
 }
 
 export function upstreamDelta(value: unknown): { content?: string } {

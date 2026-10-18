@@ -293,7 +293,6 @@ export async function openFredUpstreamStream(options: {
   visitorId: string;
   query: string;
   webSearchEnabled: boolean;
-  summaryModelId: string;
   nativeAttachments?: readonly FredNativeAttachmentUpload[];
   signal: AbortSignal;
   fetchImpl?: typeof fetch;
@@ -321,7 +320,6 @@ export async function openFredUpstreamStream(options: {
         knowledge_ids: [],
         agent_id: options.upstreamConfig.agentId,
         web_search_enabled: options.upstreamConfig.allowWebSearch && options.webSearchEnabled,
-        summary_model_id: options.summaryModelId,
         mcp_service_ids: [],
         mentioned_items: [],
         channel: "embed",

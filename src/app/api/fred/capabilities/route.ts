@@ -6,7 +6,6 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 import {
   FredEmbedConfigurationError,
   FredEmbedUpstreamError,
-  readFredProModelId,
 } from "@/lib/weknora/fred-embed";
 import { getScanningSettings } from "@/lib/scanning/settings";
 
@@ -28,15 +27,6 @@ function json(payload: unknown, status = 200): NextResponse {
 function findogFileUploadEnabled(): boolean {
   const openrouterKey = process.env.OPENROUTER_API_KEY?.trim() ?? "";
   return openrouterKey !== "";
-}
-
-function fredProModeEnabled(): boolean {
-  try {
-    readFredProModelId();
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export async function GET(request: Request) {
@@ -61,7 +51,6 @@ export async function GET(request: Request) {
       imageUpload: nativeUploadEnabled
         ? capabilities.imageUpload
         : findogUploadEnabled,
-      proMode: fredProModeEnabled(),
       quickFred: capabilities.quickFred,
     });
   } catch (error) {

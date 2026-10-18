@@ -54,8 +54,6 @@ export interface FredTurnRequest {
   agentKey: FredAgentKey;
   /** Whether web search should be enabled for this turn. */
   webSearchEnabled: boolean;
-  /** Whether Pro mode is active. */
-  proModeEnabled: boolean;
   /** Research display mode resolved by server from user preferences. */
   researchDisplayMode?: "simple" | "advanced";
   /** Attachment metadata for persistence. */
@@ -97,6 +95,8 @@ export interface FredTurnRequest {
 export type FredTurnEvent =
   | { type: "conversation"; conversation: FredNativeConversation }
   | { type: "delta"; content: string }
+  /** Replaces the streamed answer, e.g. to retract an agent preamble. */
+  | { type: "replace"; answer: string }
   | { type: "research"; step: FredResearchStep }
   | { type: "execution"; step: FredExecutionStep }
   | { type: "status"; label: string }

@@ -46,7 +46,6 @@ type FredMessageRow = {
   created_at: string;
   attachments: unknown;
   web_search_enabled: boolean;
-  pro_mode_enabled: boolean;
   artifacts: unknown;
 };
 
@@ -126,7 +125,7 @@ export async function GET(
     }
     const { data: messages, error: messagesError } = await supabase
       .from("fred_messages")
-      .select("id,role,content,display_content,research_trace,execution_trace,source_references,provider_created_at,created_at,attachments,web_search_enabled,pro_mode_enabled,artifacts")
+      .select("id,role,content,display_content,research_trace,execution_trace,source_references,provider_created_at,created_at,attachments,web_search_enabled,artifacts")
       .eq("conversation_id", conversationId)
       .eq("client_id", user.id)
       .order("provider_created_at", { ascending: true, nullsFirst: false })
@@ -185,7 +184,6 @@ export async function GET(
           agentKey: row.agent_key,
           attachments: attachmentMetadata(message.attachments),
           webSearchEnabled: message.web_search_enabled,
-          proModeEnabled: message.pro_mode_enabled,
           artifacts: parseStoredFredArtifacts(message.artifacts),
           researchTrace: parseStoredFredResearchTrace(message.research_trace),
           executionTrace: parseStoredFredExecutionTrace(message.execution_trace),

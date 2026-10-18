@@ -58,25 +58,7 @@ describe("Fred message actions", () => {
       .toBe("fallback.pdf");
   });
 
-  it("includes Pro-Modus: aktiviert in PDF metadata for Pro user turns", () => {
-    const proMessages: FredActionMessage[] = [
-      {
-        role: "user",
-        content: "Steuerfrage",
-        createdAt: "2026-07-21T12:30:00.000Z",
-        proModeEnabled: true,
-      },
-      {
-        role: "assistant",
-        content: "Antwort",
-        createdAt: "2026-07-21T12:31:00.000Z",
-      },
-    ];
-    const content = buildFredConversationPdfContent(proMessages);
-    expect(content).toContain("Pro-Modus: aktiviert");
-  });
-
-  it("does not include Pro-Modus metadata for non-Pro user turns", () => {
+  it("does not include the retired Pro-Modus metadata", () => {
     const content = buildFredConversationPdfContent(messages);
     expect(content).not.toContain("Pro-Modus");
   });
@@ -100,11 +82,11 @@ describe("Fred message actions", () => {
     expect(content).toContain("## QuickFred");
   });
 
-  it("precedingUserMessage returns proModeEnabled when set", () => {
+  it("precedingUserMessage returns the user turn with its web-search flag", () => {
     const msgs: FredActionMessage[] = [
-      { role: "user", content: "Pro Frage", createdAt: "", proModeEnabled: true },
+      { role: "user", content: "Web Frage", createdAt: "", webSearchEnabled: true },
       { role: "assistant", content: "Antwort", createdAt: "" },
     ];
-    expect(precedingUserMessage(msgs, 1)?.proModeEnabled).toBe(true);
+    expect(precedingUserMessage(msgs, 1)?.webSearchEnabled).toBe(true);
   });
 });

@@ -155,8 +155,9 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
         sha256: "0".repeat(64),
       }],
       webSearchEnabled: true,
-      proModeEnabled: true,
     });
+    // Historic Pro flags stay in the database but are no longer surfaced.
+    expect(payload.messages[0]).not.toHaveProperty("proModeEnabled");
     expect(payload.messages[1]).toMatchObject({
       agentKey: "fred",
       content: "Ergebnis",
@@ -172,7 +173,6 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
         chunkId: "chunk-1",
         knowledgeBaseId: "kb-1",
       }],
-      proModeEnabled: false,
     });
     expect(payload.messages[1].content).not.toContain("<kb");
   });

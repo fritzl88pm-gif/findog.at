@@ -72,7 +72,6 @@ export type FredNativeMessage = {
   agentKey: FredAgentKey;
   attachments?: FredNativeAttachment[];
   webSearchEnabled?: boolean;
-  proModeEnabled?: boolean;
   researchTrace?: FredResearchStep[];
   executionTrace?: FredExecutionStep[];
   sourceReferences?: FredSourceReference[];
@@ -90,7 +89,6 @@ type FredCapabilities = {
   webSearch: boolean;
   fileUpload: boolean;
   imageUpload: boolean;
-  proMode: boolean;
   quickFred: boolean;
 };
 
@@ -492,7 +490,6 @@ export default function FredNativeChatView({
     webSearch: false,
     fileUpload: false,
     imageUpload: false,
-    proMode: false,
     quickFred: false,
   });
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
@@ -689,7 +686,6 @@ export default function FredNativeChatView({
         webSearch: value.webSearch === true,
         fileUpload: value.fileUpload === true,
         imageUpload: value.imageUpload === true,
-        proMode: value.proMode === true,
         quickFred: value.quickFred === true,
       });
       if (value.webSearch !== true) setWebSearchEnabled(false);
@@ -738,7 +734,6 @@ export default function FredNativeChatView({
   async function submitQuery(options: {
     query: string;
     webSearchEnabled?: boolean;
-    proModeEnabled?: boolean;
     quickFredEnabled?: boolean;
     images: File[];
     files: File[];
@@ -783,8 +778,6 @@ export default function FredNativeChatView({
       })),
     ];
     userMessage.webSearchEnabled = options.webSearchEnabled;
-    const isProMode = options.proModeEnabled === true;
-    userMessage.proModeEnabled = isProMode;
     const baseMessages = [...(options.messagesBeforeQuery ?? messages), userMessage];
     setMessages(baseMessages);
     setActiveAssistant(assistantMessage);
@@ -808,7 +801,6 @@ export default function FredNativeChatView({
         query,
         conversationId: activeConversationIdRef.current || undefined,
         webSearchEnabled: options.webSearchEnabled,
-        proModeEnabled: isProMode,
         quickFredEnabled: agentKey === "quickfred",
       };
       const hasAttachments = attachedImages.length > 0 || attachedFiles.length > 0;
@@ -979,7 +971,6 @@ export default function FredNativeChatView({
     await submitQuery({
       query: composer,
       webSearchEnabled,
-      proModeEnabled: false,
       quickFredEnabled,
       images: selectedImages,
       files: selectedFiles,
@@ -1072,11 +1063,9 @@ export default function FredNativeChatView({
     const question = precedingUserMessage(messages, assistantIndex);
     const messagesBeforeQuery = messagesBeforeRegeneratedAnswer(messages, assistantIndex);
     if (!question || !messagesBeforeQuery || isSending) return;
-    const originalProMode = Boolean(question.proModeEnabled && capabilities.proMode);
     void submitQuery({
       query: question.content,
       webSearchEnabled: Boolean(question.webSearchEnabled && capabilities.webSearch),
-      proModeEnabled: originalProMode,
       quickFredEnabled: conversationAgentKey === "quickfred",
       images: [],
       files: [],
@@ -1802,14 +1791,10 @@ export default function FredNativeChatView({
                   message.agentKey === "quickfred"
                   || message.attachments?.length
                   || message.webSearchEnabled
-                  || message.proModeEnabled
                 ) ? (
                   <div className="fred-native-message-options">
                     {message.agentKey === "quickfred" ? (
                       <span className="fred-native-option-badge">QuickFred</span>
-                    ) : null}
-                    {message.proModeEnabled ? (
-                      <span className="fred-native-option-badge">Pro</span>
                     ) : null}
                     {message.webSearchEnabled ? (
                       <span className="fred-native-option-badge">Websuche</span>

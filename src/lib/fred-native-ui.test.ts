@@ -341,12 +341,12 @@ describe("Fred native Findog UI", () => {
 });
 
 describe("Fred composer routing UI", () => {
-  it("includes server capabilities for QuickFred and historical Pro support", () => {
+  it("includes server capabilities for QuickFred without the retired Pro mode", () => {
     expect(capabilitiesRouteSource).toContain("quickFred: capabilities.quickFred");
+    expect(capabilitiesRouteSource).not.toContain("proMode");
     expect(viewSource).toContain("quickFred: boolean");
     expect(viewSource).toContain("quickFred: value.quickFred === true");
-    expect(viewSource).toContain("proMode: boolean");
-    expect(viewSource).toContain("proMode: value.proMode === true");
+    expect(viewSource).not.toContain("proMode");
   });
 
   it("renders compact icon-only Quickmode and Websuche buttons in the requested order", () => {
@@ -421,18 +421,9 @@ describe("Fred composer routing UI", () => {
     expect(viewSource).not.toContain("setWebSearchEnabled(false);\n                      setQuickFredEnabled");
   });
 
-  it("keeps historical Pro metadata, edit defaults, regeneration and badges outside the composer", () => {
-    expect(viewSource).toContain("proModeEnabled?: boolean");
-    expect(viewSource).toContain("userMessage.proModeEnabled = isProMode;");
-    expect(viewSource).toContain("proModeEnabled: isProMode,");
-    expect(viewSource).toContain("const originalProMode = Boolean(question.proModeEnabled && capabilities.proMode);");
-    expect(viewSource).toContain("proModeEnabled: originalProMode,");
-    expect(viewSource).toContain("message.proModeEnabled ? (");
-    expect(viewSource).toContain('>Pro</span>');
-    const editBlock = /function editQuestion\([\s\S]*?function handleShareAnswer/u.exec(viewSource)?.[0] ?? "";
-    expect(editBlock).not.toContain("message.proModeEnabled");
-    const sendBlock = /async function sendMessage\([\s\S]*?function editQuestion/u.exec(viewSource)?.[0] ?? "";
-    expect(sendBlock).toContain('proModeEnabled: false');
+  it("no longer sends, regenerates or badges the retired Pro mode", () => {
+    expect(viewSource).not.toContain("proModeEnabled");
+    expect(viewSource).not.toContain('>Pro</span>');
   });
 
   it("keeps QuickFred conversation attribution and scoped badge rendering", () => {

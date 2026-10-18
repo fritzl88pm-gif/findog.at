@@ -33,7 +33,6 @@ describe("Fred request ledger client", () => {
       leaseId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       conversationId: "55555555-5555-4555-8555-555555555555",
       webSearchEnabled: true,
-      proModeEnabled: true,
     })).resolves.toEqual({
       requestId: receipt.request_id,
       userEventId: receipt.user_event_id,
@@ -52,7 +51,6 @@ describe("Fred request ledger client", () => {
         user_event_id: receipt.user_event_id,
         assistant_event_id: receipt.assistant_event_id,
         web_search_enabled: true,
-        pro_mode_enabled: true,
         telegram_update_id: 91,
         telegram_update_row_id: 91,
         telegram_lease_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -177,7 +175,6 @@ describe("Fred request ledger client", () => {
       assistantMessageId: 42,
       answer: "Bereits gespeichert",
       webSearchEnabled: true,
-      proModeEnabled: false,
     });
   });
 
@@ -209,7 +206,6 @@ describe("Fred request ledger client", () => {
       assistantMessageId: 42,
       answer: "Bereits gespeicherte Antwort",
       webSearchEnabled: true,
-      proModeEnabled: false,
     });
     expect(rpc).toHaveBeenCalledWith("resume_fred_request_receipt", {
       payload: {

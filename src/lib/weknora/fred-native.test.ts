@@ -162,7 +162,6 @@ describe("Fred native WeKnora client", () => {
       visitorId: "visitor-hash",
       query: "Meine Frage\n\n--- BEGINN DER ANHÄNGE ---\nExtracted content\n--- ENDE DER ANHÄNGE ---",
       webSearchEnabled: true,
-      summaryModelId: "",
       signal: new AbortController().signal,
       fetchImpl: streamFetch,
     });
@@ -180,9 +179,9 @@ describe("Fred native WeKnora client", () => {
       agent_id: "agent-123",
       knowledge_base_ids: ["kb-1"],
       web_search_enabled: true,
-      summary_model_id: "",
       channel: "embed",
     });
+    expect(body).not.toHaveProperty("summary_model_id");
     expect(body).not.toHaveProperty("images");
     expect(body).not.toHaveProperty("attachment_uploads");
   });
@@ -207,7 +206,6 @@ describe("Fred native WeKnora client", () => {
       visitorId: "visitor-hash",
       query: "Bitte prüfe die Anhänge",
       webSearchEnabled: false,
-      summaryModelId: "",
       signal: new AbortController().signal,
       fetchImpl: streamFetch,
       nativeAttachments: [
@@ -225,44 +223,6 @@ describe("Fred native WeKnora client", () => {
       file_name: "Beleg.pdf",
       file_size: fileBytes.byteLength,
     }]);
-  });
-
-  it("sends the resolved Pro model ID as summary_model_id when provided", async () => {
-    const configFetch = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
-      success: true,
-      data: {
-        agent_id: "agent-123",
-        knowledge_base_ids: ["kb-1"],
-        allow_web_search: true,
-        agent_web_search_enabled: true,
-        allow_file_upload: true,
-        agent_image_upload_enabled: true,
-      },
-    }), { status: 200 }));
-    const upstreamConfig = await fetchFredUpstreamConfig({
-      session,
-      config,
-      signal: new AbortController().signal,
-      fetchImpl: configFetch,
-    });
-    const streamFetch = vi.fn<typeof fetch>(async () => new Response("data: {}\n\n", { status: 200 }));
-    const signature = deriveFredSessionSignature(config, "session-123");
-
-    await openFredUpstreamStream({
-      session,
-      config,
-      upstreamConfig,
-      upstreamSession: { id: "session-123", signature },
-      visitorId: "visitor-hash",
-      query: "Pro question",
-      webSearchEnabled: true,
-      summaryModelId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
-      signal: new AbortController().signal,
-      fetchImpl: streamFetch,
-    });
-
-    const body = JSON.parse(String(streamFetch.mock.calls[0][1]?.body));
-    expect(body.summary_model_id).toBe("a1b2c3d4-e5f6-4789-abcd-ef0123456789");
   });
 
   it("derives channel file upload and agent image upload flags separately", async () => {

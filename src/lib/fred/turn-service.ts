@@ -14,8 +14,10 @@ import {
 } from "@/lib/findok/bfg-citations";
 import {
   EOF_WITHOUT_FINAL_CLIENT_MESSAGE,
+  isPreambleRetractingToolCall,
   isUpstreamCompleteEvent,
   upstreamDelta,
+  upstreamFinalContent,
 } from "@/lib/fred/run-diagnostics";
 import {
   fredAgentName,
@@ -93,7 +95,6 @@ export interface TurnServiceUpstreamDeps {
     agentId: string;
     knowledgeBaseIds: string[];
     webSearchEnabled: boolean;
-    summaryModelId: string;
     signal: AbortSignal;
   }): Promise<ReadableStream<Uint8Array>>;
   /** Compute the visitor HMAC for a user. */
@@ -146,7 +147,6 @@ export interface TurnServicePersistenceDeps {
     occurredAt: string;
     attachments: FredTurnAttachmentMeta[];
     webSearchEnabled: boolean;
-    proModeEnabled: boolean;
     agentKey: FredAgentKey;
     weknoraAgentId: string;
     displayContent?: string;
@@ -196,8 +196,6 @@ export interface TurnServiceConfigDeps {
     exchangeOrigin: string;
     expectedAgentId: string;
   } | null;
-  /** Read the Pro model ID. */
-  readProModelId(): string;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -223,6 +221,17 @@ function abortSignalPromise(signal: AbortSignal | undefined): Promise<void> {
     if (signal.aborted) { resolve(); return; }
     signal.addEventListener("abort", () => resolve(), { once: true });
   });
+}
+
+/**
+ * A request deadline aborts the turn signal with its 504 timeout error (see
+ * createDeadline). That is a failed turn, not a caller stop, and must be
+ * reported as such.
+ */
+function isDeadlineAbort(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true
+    && signal.reason instanceof UserVisibleError
+    && signal.reason.status === 504;
 }
 
 // ── Core turn execution ─────────────────────────────────────────────────────
@@ -298,10 +307,6 @@ export async function* executeFredTurn(
     } else {
       fredConfig = config.readFredConfig();
       quickFredConfig = null;
-    }
-
-    if (quickFredConfig && request.proModeEnabled) {
-      throw new UserVisibleError("Fred Pro ist in einer QuickFred-Unterhaltung nicht verfügbar.", 400);
     }
 
     // ── Load stored conversation if continuing ──────────────────────────────
@@ -391,8 +396,6 @@ export async function* executeFredTurn(
       weknoraAgentId: upstreamConfig.agentId,
     };
 
-    const summaryModelId = request.proModeEnabled ? config.readProModelId() : "";
-
     // ── Record user event ───────────────────────────────────────────────────
     const userOccurredAt = new Date().toISOString();
     const userEventId = request.userEventId ?? randomUUID();
@@ -406,7 +409,6 @@ export async function* executeFredTurn(
       occurredAt: userOccurredAt,
       attachments: request.attachments ?? [],
       webSearchEnabled: request.webSearchEnabled,
-      proModeEnabled: request.proModeEnabled,
       agentKey,
       weknoraAgentId: upstreamConfig.agentId,
     });
@@ -448,7 +450,6 @@ export async function* executeFredTurn(
       agentId: upstreamConfig.agentId,
       knowledgeBaseIds: upstreamConfig.knowledgeBaseIds,
       webSearchEnabled: request.webSearchEnabled,
-      summaryModelId,
       signal: request.signal ? request.signal : new AbortController().signal,
     });
 
@@ -459,6 +460,8 @@ export async function* executeFredTurn(
 
     let buffer = "";
     let sawUpstreamCompletion = false;
+    let finalContent = "";
+    let answerRetracted = false;
     const externalAbort = abortSignalPromise(request.signal);
     let stoppedByCaller = false;
     let generatedArtifacts: ParsedGeneratedArtifact[] = [];
@@ -559,6 +562,7 @@ export async function* executeFredTurn(
       }
       if (isUpstreamCompleteEvent(parsed)) {
         sawUpstreamCompletion = true;
+        finalContent = upstreamFinalContent(parsed) || finalContent;
         if (persistence.persistGeneratedArtifacts) {
           const parsedArtifacts = parseGeneratedArtifacts(parsed);
           if (parsedArtifacts.length > 0) generatedArtifacts = parsedArtifacts;
@@ -567,6 +571,10 @@ export async function* executeFredTurn(
           const envelopeId = (parsed as Record<string, unknown>).id;
           if (typeof envelopeId === "string" && envelopeId.trim()) upstreamMsgId = envelopeId.trim();
         }
+      }
+      if (isPreambleRetractingToolCall(parsed) && answerChunks.length > 0) {
+        answerChunks.length = 0;
+        answerRetracted = true;
       }
       const event = upstreamDelta(parsed);
       if (event.content) {
@@ -587,6 +595,9 @@ export async function* executeFredTurn(
           ])
         : { kind: "read" as const, result: await upstreamReader.read() };
       if (readResult.kind === "abort") {
+        // A deadline is a failure: the catch block stops upstream, records
+        // the timeout and reports it instead of ending the stream silently.
+        if (isDeadlineAbort(request.signal)) throw request.signal?.reason;
         stoppedByCaller = true;
         await requestStop();
         break;
@@ -613,6 +624,11 @@ export async function* executeFredTurn(
               yield { type: "execution", step };
             }
           }
+        }
+        if (answerRetracted) {
+          answerRetracted = false;
+          if (yieldedChunkCount > 0) yield { type: "replace", answer: "" };
+          yieldedChunkCount = 0;
         }
         // Yield any new content chunks from this frame
         for (const chunk of answerChunks.slice(yieldedChunkCount)) {
@@ -650,7 +666,9 @@ export async function* executeFredTurn(
       throw new UserVisibleError(EOF_WITHOUT_FINAL_CLIENT_MESSAGE, 502);
     }
 
-    const rawAnswer = answerChunks.join("");
+    // In agent mode the completion carries the answer WeKnora persisted, after
+    // preambles were dropped and artifact references reconciled.
+    const rawAnswer = finalContent || answerChunks.join("");
     const plainFinalAnswer = rawAnswer.trim();
     if (!plainFinalAnswer) {
       throw new UserVisibleError(`${selectedAgentName} hat keine Antwort geliefert.`, 502);
@@ -746,7 +764,6 @@ export async function* executeFredTurn(
       researchTrace,
       executionTrace: isAdvanced ? executionTrace : [],
       sourceReferences,
-      proModeEnabled: false,
       agentKey,
       weknoraAgentId: upstreamConfig.agentId,
     });
@@ -809,6 +826,8 @@ export async function* executeFredTurn(
     };
   } catch (error) {
     acceptingCitationUpdates = false;
+    const timedOut = isDeadlineAbort(request.signal);
+    const cancelled = request.signal?.aborted === true && !timedOut;
     if (
       !requestTerminal
       && request.onRequestTransition
@@ -816,9 +835,9 @@ export async function* executeFredTurn(
     ) {
       try {
         await request.onRequestTransition({
-          status: request.signal?.aborted ? "cancelled" : "failed",
+          status: cancelled ? "cancelled" : "failed",
           failurePhase: requestFailurePhase,
-          errorCode: request.signal?.aborted ? "request_cancelled" : "turn_failed",
+          errorCode: cancelled ? "request_cancelled" : timedOut ? "turn_timeout" : "turn_failed",
         });
         requestTerminal = true;
       } catch {
@@ -840,8 +859,9 @@ export async function* executeFredTurn(
     if (activeUpstreamReader) {
       try { await activeUpstreamReader.cancel(error); } catch { /* already closed */ }
     }
-    if (error instanceof UserVisibleError) {
-      yield { type: "error", error: error.message };
+    const visibleError = timedOut ? request.signal?.reason : error;
+    if (visibleError instanceof UserVisibleError) {
+      yield { type: "error", error: visibleError.message };
     } else {
       yield { type: "error", error: `${selectedAgentName} konnte die Anfrage nicht abschließen.` };
     }

@@ -1,4 +1,4 @@
-const KNOWN_COMMANDS = new Set(["start", "new", "stop", "status", "help", "settings", "pro", "web"]);
+const KNOWN_COMMANDS = new Set(["start", "new", "stop", "status", "help", "settings", "web"]);
 
 const COMMAND_RE = /^\/([a-z_][a-z0-9_]{0,31})(?:@([a-z][a-z0-9_]{0,31}))?(?:\s+(.+))?$/iu;
 const SLASH_SHAPED_RE = /^\/[a-z_][a-z0-9_]{0,31}(?:@[a-z][a-z0-9_]{0,31})?(?:\s.*)?$/iu;
@@ -6,7 +6,7 @@ const SLASH_SHAPED_RE = /^\/[a-z_][a-z0-9_]{0,31}(?:@[a-z][a-z0-9_]{0,31})?(?:\s
 export interface ParsedSlashCommand {
   command: string;
   botUsername?: string;
-  /** Normalized raw argument for pro/web commands (or undefined for bare command).
+  /** Normalized raw argument for the web command (or undefined for bare command).
    *  Semantic validation (on/off/status) belongs in the worker. */
   argument?: string;
 }
@@ -14,7 +14,7 @@ export interface ParsedSlashCommand {
 /**
  * Parse a possible slash command from a Telegram message text.
  * Returns null if the text is not a known command.
- * For /pro and /web, any following text is captured as a raw argument;
+ * For /web, any following text is captured as a raw argument;
  * semantic validation is deferred to the worker.
  */
 export function parseSlashCommand(text: string): ParsedSlashCommand | null {
@@ -26,10 +26,9 @@ export function parseSlashCommand(text: string): ParsedSlashCommand | null {
   if (!KNOWN_COMMANDS.has(command)) return null;
 
   const rawArgs = match[3]?.trim().toLowerCase();
-  const isProOrWeb = command === "pro" || command === "web";
 
-  if (isProOrWeb) {
-    // /pro or /web: capture any raw argument (on/off/status or otherwise);
+  if (command === "web") {
+    // /web: capture any raw argument (on/off/status or otherwise);
     // the worker is responsible for semantic validation.
     if (rawArgs !== undefined && rawArgs !== "") {
       return {

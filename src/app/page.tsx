@@ -121,7 +121,6 @@ type ChatMessage = {
   attachments?: FredNativeAttachment[];
   artifacts?: FredGeneratedArtifact[];
   webSearchEnabled?: boolean;
-  proModeEnabled?: boolean;
 };
 
 type ConversationSummary = {
@@ -335,9 +334,6 @@ function normalizeFredMessages(value: unknown): ChatMessage[] {
       ...(item.role === "assistant" ? { artifacts: parseStoredFredArtifacts(item.artifacts) } : {}),
       ...(item.role === "user" && item.webSearchEnabled === true
         ? { webSearchEnabled: true }
-        : {}),
-      ...(item.role === "user" && item.proModeEnabled === true
-        ? { proModeEnabled: true }
         : {}),
     }];
   });

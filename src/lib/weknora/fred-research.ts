@@ -381,6 +381,16 @@ function durationMs(value: unknown): number | undefined {
   return Math.min(Math.round(duration), 3_600_000);
 }
 
+// Events that pause a run until the user acts in WeKnora's own UI. Agent
+// prompts and suspended runs only exist after WeKnora v0.8.3; without this
+// guard a paused run would look like a finished empty or partial answer.
+const UNSUPPORTED_RESPONSE_TYPES = new Set([
+  "tool_approval_required",
+  "mcp_oauth_required",
+  "agent_prompt_required",
+  "run_suspended",
+]);
+
 export function parseWeKnoraResearchEvent(
   value: unknown,
   options?: ParseWeKnoraResearchEventOptions,
@@ -392,7 +402,7 @@ export function parseWeKnoraResearchEvent(
   const toolName = boundedText(data.tool_name ?? event.tool_name, 180);
   const sources = extractToolSources(toolName, data, event, options);
 
-  if (responseType === "tool_approval_required" || responseType === "mcp_oauth_required") {
+  if (UNSUPPORTED_RESPONSE_TYPES.has(responseType)) {
     return { sources, fatalError: false, unsupported: true };
   }
   if (responseType === "error" && !boundedText(data.tool_name ?? event.tool_name, 180)) {

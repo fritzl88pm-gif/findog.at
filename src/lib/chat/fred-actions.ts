@@ -12,7 +12,6 @@ export type FredActionMessage = {
   agentKey?: FredAgentKey;
   attachments?: ReadonlyArray<{ name: string }>;
   webSearchEnabled?: boolean;
-  proModeEnabled?: boolean;
 };
 
 function viennaTimestamp(value: string): string {
@@ -67,9 +66,6 @@ export function buildFredConversationPdfContent(
     }
     if (message.role === "user" && message.webSearchEnabled) {
       metadata.push("Websuche: aktiviert");
-    }
-    if (message.role === "user" && message.proModeEnabled) {
-      metadata.push("Pro-Modus: aktiviert");
     }
     const attachmentNames = message.attachments
       ?.map((attachment) => safeAttachmentName(attachment.name))

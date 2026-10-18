@@ -8,7 +8,6 @@ import {
   FredEmbedUpstreamError,
   mintFredEmbedSession,
   readFredEmbedServerConfig,
-  readFredProModelId,
   readQuickFredEmbedServerConfig,
 } from "@/lib/weknora/fred-embed";
 import { fetchFredUpstreamConfig } from "@/lib/weknora/fred-native";
@@ -21,7 +20,7 @@ vi.mock("@/lib/scanning/settings", () => ({ getScanningSettings: vi.fn() }));
 vi.mock("@/lib/weknora/fred-embed", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/weknora/fred-embed")>();
   return { ...original, mintFredEmbedSession: vi.fn(), readFredEmbedServerConfig: vi.fn(),
-    readFredProModelId: vi.fn(), readQuickFredEmbedServerConfig: vi.fn() };
+    readQuickFredEmbedServerConfig: vi.fn() };
 });
 vi.mock("@/lib/weknora/fred-native", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/weknora/fred-native")>();
@@ -114,7 +113,6 @@ describe("GET /api/fred/capabilities", () => {
       webSearch: true,
       fileUpload: true,
       imageUpload: true,
-      proMode: true,
       quickFred: false,
     });
     expect(authenticateSupabaseRequest).toHaveBeenCalledWith(request, expect.anything());
@@ -179,7 +177,6 @@ describe("GET /api/fred/capabilities", () => {
       webSearch: true,
       fileUpload: true,
       imageUpload: false,
-      proMode: true,
       quickFred: false,
     });
   });
@@ -208,7 +205,6 @@ describe("GET /api/fred/capabilities", () => {
       webSearch: true,
       fileUpload: false,
       imageUpload: false,
-      proMode: true,
       quickFred: false,
     });
   });
@@ -229,7 +225,6 @@ describe("GET /api/fred/capabilities", () => {
       webSearch: false,
       fileUpload: true,
       imageUpload: true,
-      proMode: true,
       quickFred: false,
     });
   });
@@ -242,30 +237,10 @@ describe("GET /api/fred/capabilities", () => {
     expect(mintFredEmbedSession).not.toHaveBeenCalled();
   });
 
-  it("returns proMode true when WEKNORA_FRED_PRO_MODEL_ID is set to a valid UUID", async () => {
-    vi.mocked(readFredProModelId).mockReturnValue("a1b2c3d4-e5f6-4789-abcd-ef0123456789");
-    const request = new Request("https://findog.at/api/fred/capabilities", {
-      headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
-    });
-    const response = await GET(request);
+  it("no longer advertises the retired Pro mode", async () => {
+    const response = await GET(capabilityRequest());
     const data = await response.json() as Record<string, unknown>;
-    expect(data.proMode).toBe(true);
-    expect(data.webSearch).toBe(true);
-    expect(data.fileUpload).toBe(true);
-  });
-
-  it("returns proMode false when readFredProModelId throws (missing/invalid config)", async () => {
-    vi.mocked(readFredProModelId).mockImplementation(() => {
-      throw new Error("not a FredEmbedConfigurationError but a throw");
-    });
-    const request = new Request("https://findog.at/api/fred/capabilities", {
-      headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
-    });
-    const response = await GET(request);
-    const data = await response.json() as Record<string, unknown>;
-    expect(data.proMode).toBe(false);
-    expect(data.webSearch).toBe(true);
-    expect(data.fileUpload).toBe(true);
+    expect(data).not.toHaveProperty("proMode");
   });
 
   it("returns quickFred true only for a distinct channel with the expected agent and matching web search", async () => {
@@ -387,9 +362,6 @@ describe("GET /api/fred/capabilities", () => {
       updatedAt: "2026-07-19T10:00:00.000Z",
       updatedBy: null,
     });
-    vi.mocked(readFredProModelId).mockImplementation(() => {
-      throw new Error("disabled");
-    });
 
     const response = await GET(capabilityRequest());
 
@@ -397,7 +369,6 @@ describe("GET /api/fred/capabilities", () => {
       webSearch: true,
       fileUpload: true,
       imageUpload: true,
-      proMode: false,
       quickFred: false,
     });
     expect(mintFredEmbedSession).not.toHaveBeenCalled();

@@ -47,7 +47,34 @@ describe("askQuickFred", () => {
     expect(result.answer).toBe("Hallo Welt");
     expect(result.upstreamSessionId).toBe("new-session");
     expect(createFredUpstreamSession).toHaveBeenCalled();
-    expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({ webSearchEnabled: false, summaryModelId: "" }));
+    expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({ webSearchEnabled: false }));
+    expect(vi.mocked(openFredUpstreamStream).mock.calls[0][0]).not.toHaveProperty("summaryModelId");
+  });
+
+  it("speaks the persisted final answer instead of an agent preamble", async () => {
+    vi.mocked(openFredUpstreamStream).mockResolvedValue(stream(
+      { response_type: "answer", content: "Ich suche kurz in der Wissensbasis. " },
+      { response_type: "tool_call", data: { tool_name: "knowledge_search" } },
+      { response_type: "tool_result", data: { tool_name: "knowledge_search", success: true } },
+      { response_type: "answer", content: "Die Pauschale beträgt 100 Euro." },
+      { response_type: "complete", data: { final_content: "Die **Pauschale** beträgt 100 Euro." } },
+    ));
+    const result = await askQuickFred({ question: "Frage", signal: new AbortController().signal });
+    expect(result.answer).toBe("Die Pauschale beträgt 100 Euro.");
+  });
+
+  it("drops text before the last round-ending tool call without final content", () => {
+    expect(assembleFredLiveAnswer([
+      { response_type: "answer", content: "Ich prüfe das. " },
+      { response_type: "tool_call", data: { tool_name: "web_search" } },
+      { response_type: "answer", content: "Antwort" },
+      { response_type: "complete" },
+    ])).toBe("Antwort");
+    expect(assembleFredLiveAnswer([
+      { response_type: "answer", content: "Antwort " },
+      { response_type: "tool_call", data: { tool_name: "final_answer" } },
+      { response_type: "answer", content: "bleibt" },
+    ])).toBe("Antwort bleibt");
   });
 
   it("resumes with a server-derived signature", async () => {

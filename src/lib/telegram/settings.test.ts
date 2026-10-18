@@ -741,7 +741,7 @@ describe("replaceTelegramBot", () => {
   });
 });
 
-describe("TELEGRAM_BOT_COMMANDS includes pro and web", () => {
+describe("TELEGRAM_BOT_COMMANDS includes web without the retired pro command", () => {
   function makeIntegrationRow() {
     const integrationId = randomUUID();
     const botUserId = 123456789;
@@ -765,7 +765,7 @@ describe("TELEGRAM_BOT_COMMANDS includes pro and web", () => {
     };
   }
 
-  it("registerTelegramIntegration calls setMyCommands with pro and web", async () => {
+  it("registerTelegramIntegration calls setMyCommands with web but not pro", async () => {
     process.env.TELEGRAM_CREDENTIALS_KEY = ENV_KEY;
     process.env.TELEGRAM_PUBLIC_ORIGIN = "https://findog.at";
 
@@ -783,10 +783,8 @@ describe("TELEGRAM_BOT_COMMANDS includes pro and web", () => {
     expect(setMyCommands).toHaveBeenCalledTimes(1);
     const cmds = setMyCommands.mock.calls[0][0] as Array<{ command: string; description: string }>;
     const cmdNames = cmds.map((c: { command: string }) => c.command);
-    expect(cmdNames).toContain("pro");
+    expect(cmdNames).not.toContain("pro");
     expect(cmdNames).toContain("web");
-    const proCmd = cmds.find((c: { command: string }) => c.command === "pro");
-    expect(proCmd?.description).toBe("Pro-Modus einstellen");
     const webCmd = cmds.find((c: { command: string }) => c.command === "web");
     expect(webCmd?.description).toBe("Websuche einstellen");
     // All original commands still present
@@ -798,7 +796,7 @@ describe("TELEGRAM_BOT_COMMANDS includes pro and web", () => {
     expect(cmdNames).toContain("settings");
   });
 
-  it("replaceTelegramBot sends both pro and web commands", async () => {
+  it("replaceTelegramBot sends the web command but not pro", async () => {
     process.env.TELEGRAM_CREDENTIALS_KEY = ENV_KEY;
     process.env.TELEGRAM_PUBLIC_ORIGIN = "https://findog.at";
 
@@ -832,7 +830,7 @@ describe("TELEGRAM_BOT_COMMANDS includes pro and web", () => {
     expect(setMyCommands).toHaveBeenCalledTimes(1);
     const cmds = setMyCommands.mock.calls[0][0] as Array<{ command: string; description: string }>;
     const cmdNames = cmds.map((c: { command: string }) => c.command);
-    expect(cmdNames).toContain("pro");
+    expect(cmdNames).not.toContain("pro");
     expect(cmdNames).toContain("web");
   });
 

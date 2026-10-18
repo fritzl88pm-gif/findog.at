@@ -1,7 +1,12 @@
 import "server-only";
 
 import { UserVisibleError } from "@/lib/errors";
-import { isUpstreamCompleteEvent, upstreamDelta } from "@/lib/fred/run-diagnostics";
+import {
+  isPreambleRetractingToolCall,
+  isUpstreamCompleteEvent,
+  upstreamDelta,
+  upstreamFinalContent,
+} from "@/lib/fred/run-diagnostics";
 import {
   mergeFredSources,
   parseWeKnoraResearchEvent,
@@ -63,7 +68,18 @@ export function toSpokenAnswer(markdown: string): string {
 }
 
 export function assembleFredLiveAnswer(events: readonly AnswerEvent[]): string {
-  const answer = toSpokenAnswer(events
+  // The agent-mode completion carries the persisted answer. Without it, text
+  // streamed before the last round-ending tool call was only a preamble.
+  const finalContent = events.reduce(
+    (current, event) => upstreamFinalContent(event) || current,
+    "",
+  );
+  let answerStart = 0;
+  events.forEach((event, index) => {
+    if (isPreambleRetractingToolCall(event)) answerStart = index + 1;
+  });
+  const answer = toSpokenAnswer(finalContent || events
+    .slice(answerStart)
     .map(upstreamDelta)
     .map((event) => event.content ?? "")
     .join(""));
@@ -150,7 +166,6 @@ export async function askQuickFred(input: {
       visitorId: fredVisitorId(config.publishToken, "fred-live"),
       query: input.question,
       webSearchEnabled: false,
-      summaryModelId: "",
       signal: input.signal,
     });
     const reader = response.body!.getReader();

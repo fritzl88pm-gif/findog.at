@@ -104,24 +104,7 @@ describe("looksLikeSlashCommand", () => {
   });
 });
 
-describe("parseSlashCommand: pro and web commands", () => {
-  it("parses /pro as known command with no argument", () => {
-    const result = parseSlashCommand("/pro");
-    expect(result).toEqual({ command: "pro", botUsername: undefined, argument: undefined });
-  });
-
-  it("parses /pro on", () => {
-    expect(parseSlashCommand("/pro on")).toEqual({ command: "pro", botUsername: undefined, argument: "on" });
-  });
-
-  it("parses /pro off", () => {
-    expect(parseSlashCommand("/pro off")).toEqual({ command: "pro", botUsername: undefined, argument: "off" });
-  });
-
-  it("parses /pro status", () => {
-    expect(parseSlashCommand("/pro status")).toEqual({ command: "pro", botUsername: undefined, argument: "status" });
-  });
-
+describe("parseSlashCommand: web command", () => {
   it("parses /web as known command", () => {
     expect(parseSlashCommand("/web")).toEqual({ command: "web", botUsername: undefined, argument: undefined });
   });
@@ -138,68 +121,47 @@ describe("parseSlashCommand: pro and web commands", () => {
     expect(parseSlashCommand("/web status")).toEqual({ command: "web", botUsername: undefined, argument: "status" });
   });
 
-  it("parses /pro with @mention", () => {
-    expect(parseSlashCommand("/pro@findog_bot on")).toEqual({ command: "pro", botUsername: "findog_bot", argument: "on" });
-  });
-
   it("parses /web@findog_bot off", () => {
     expect(parseSlashCommand("/web@findog_bot off")).toEqual({ command: "web", botUsername: "findog_bot", argument: "off" });
   });
 
-  it("parses /PRO ON (uppercase) as normalized lowercase", () => {
-    expect(parseSlashCommand("/PRO ON")).toEqual({ command: "pro", botUsername: undefined, argument: "on" });
+  it("parses /WEB ON (uppercase) as normalized lowercase", () => {
+    expect(parseSlashCommand("/WEB ON")).toEqual({ command: "web", botUsername: undefined, argument: "on" });
   });
 
   it("parses /WEB OFF with surrounding whitespace", () => {
     expect(parseSlashCommand("  /web off  ")).toEqual({ command: "web", botUsername: undefined, argument: "off" });
   });
 
-  it("parses /pro with @mention and extra whitespace", () => {
-    expect(parseSlashCommand("  /pro@Findog_Bot  on  ")).toEqual({ command: "pro", botUsername: "findog_bot", argument: "on" });
-  });
-
-  it("returns known command with raw argument for invalid /pro arguments (not on/off/status)", () => {
-    expect(parseSlashCommand("/pro toggle")).toEqual({ command: "pro", botUsername: undefined, argument: "toggle" });
+  it("parses /web with @mention and extra whitespace", () => {
+    expect(parseSlashCommand("  /web@Findog_Bot  on  ")).toEqual({ command: "web", botUsername: "findog_bot", argument: "on" });
   });
 
   it("returns known command with raw argument for /web with multiple arguments", () => {
     expect(parseSlashCommand("/web on please")).toEqual({ command: "web", botUsername: undefined, argument: "on please" });
   });
 
-  it("parses /pro with trailing whitespace as bare command", () => {
-    expect(parseSlashCommand("/pro  ")).toEqual({ command: "pro", botUsername: undefined, argument: undefined });
+  it("parses /web with trailing whitespace as bare command", () => {
+    expect(parseSlashCommand("/web  ")).toEqual({ command: "web", botUsername: undefined, argument: undefined });
   });
-  it("parses /pro nonsense as known command with raw argument", () => {
-    expect(parseSlashCommand("/pro nonsense")).toEqual({ command: "pro", botUsername: undefined, argument: "nonsense" });
-  });
-
-  it("parses /web on please as known command with raw argument", () => {
-    expect(parseSlashCommand("/web on please")).toEqual({ command: "web", botUsername: undefined, argument: "on please" });
-  });
-
 
   it("returns known command with raw argument for /web with unrecognized argument", () => {
     expect(parseSlashCommand("/web maybe")).toEqual({ command: "web", botUsername: undefined, argument: "maybe" });
   });
 });
 
-describe("isKnownSlashCommand: pro and web", () => {
-  it("returns true for /pro", () => {
-    expect(isKnownSlashCommand("/pro")).toBe(true);
-    expect(isKnownSlashCommand("/pro on")).toBe(true);
-    expect(isKnownSlashCommand("/pro off")).toBe(true);
-  });
-
+describe("isKnownSlashCommand: web", () => {
   it("returns true for /web", () => {
     expect(isKnownSlashCommand("/web")).toBe(true);
     expect(isKnownSlashCommand("/web status")).toBe(true);
   });
 });
 
-describe("looksLikeSlashCommand: regression", () => {
-  it("returns true for new commands", () => {
-    expect(looksLikeSlashCommand("/pro")).toBe(true);
+describe("retired /pro command", () => {
+  it("is no longer a known command but still routes to the unknown-command reply", () => {
+    expect(parseSlashCommand("/pro")).toBeNull();
+    expect(parseSlashCommand("/pro on")).toBeNull();
+    expect(isKnownSlashCommand("/pro")).toBe(false);
     expect(looksLikeSlashCommand("/pro on")).toBe(true);
-    expect(looksLikeSlashCommand("/web off")).toBe(true);
   });
 });

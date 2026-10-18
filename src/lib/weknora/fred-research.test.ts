@@ -954,3 +954,17 @@ describe("WeKnora research presentation", () => {
     });
   });
 });
+
+describe("unsupported WeKnora run interruptions", () => {
+  it.each([
+    "tool_approval_required",
+    "mcp_oauth_required",
+    "agent_prompt_required",
+    "run_suspended",
+  ])("flags %s as unsupported instead of a finished answer", (responseType) => {
+    expect(parseWeKnoraResearchEvent({ response_type: responseType, data: {} })).toMatchObject({
+      unsupported: true,
+      fatalError: false,
+    });
+  });
+});

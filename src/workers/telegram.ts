@@ -27,7 +27,6 @@ import { createConfiguredDocumentProvider } from "@/lib/attachments/document-pip
 import {
   mintFredEmbedSession,
   readFredEmbedServerConfig,
-  readFredProModelId,
   readQuickFredEmbedServerConfig,
   FRED_EMBED_ORIGIN,
 } from "@/lib/weknora/fred-embed";
@@ -71,7 +70,6 @@ interface IntegrationRow {
   status: string;
   paired_telegram_user_id: number | null;
   paired_telegram_chat_id: number | null;
-  pro_mode_enabled: boolean;
   web_search_enabled: boolean;
 }
 
@@ -221,7 +219,7 @@ export function buildStorage(supabase: Supabase): WorkerStorage {
     async loadIntegration(id): Promise<WorkerIntegration | null> {
       const { data, error } = await supabase
         .from("telegram_integrations")
-        .select("id,client_id,bot_user_id,encrypted_token,status,paired_telegram_user_id,paired_telegram_chat_id,pro_mode_enabled,web_search_enabled")
+        .select("id,client_id,bot_user_id,encrypted_token,status,paired_telegram_user_id,paired_telegram_chat_id,web_search_enabled")
         .eq("id", id)
         .maybeSingle();
       if (error) throw dbError("TELEGRAM_INTEGRATION_READ_FAILED");
@@ -235,7 +233,6 @@ export function buildStorage(supabase: Supabase): WorkerStorage {
         status: row.status,
         pairedTelegramUserId: row.paired_telegram_user_id,
         pairedTelegramChatId: row.paired_telegram_chat_id,
-        proModeEnabled: row.pro_mode_enabled,
         webSearchEnabled: row.web_search_enabled,
       };
     },
@@ -303,7 +300,6 @@ export function buildStorage(supabase: Supabase): WorkerStorage {
         leaseId: params.leaseId,
         conversationId: params.conversationId,
         webSearchEnabled: params.webSearchEnabled,
-        proModeEnabled: params.proModeEnabled,
       });
     },
 
@@ -370,23 +366,21 @@ export function buildStorage(supabase: Supabase): WorkerStorage {
       return parsePersistedGeneratedArtifacts((data as Record<string, unknown>).artifacts);
     },
 
-    async setMode(integrationId, mode, enabled) {
-      const column = mode === "pro" ? "pro_mode_enabled" : "web_search_enabled";
+    async setMode(integrationId, _mode, enabled) {
       const { error: updateError } = await supabase
         .from("telegram_integrations")
-        .update({ [column]: enabled })
+        .update({ web_search_enabled: enabled })
         .eq("id", integrationId);
       if (updateError) throw dbError("TELEGRAM_MODE_UPDATE_FAILED");
 
       const { data, error: readError } = await supabase
         .from("telegram_integrations")
-        .select("pro_mode_enabled,web_search_enabled")
+        .select("web_search_enabled")
         .eq("id", integrationId)
         .maybeSingle();
       if (readError || !data) throw dbError("TELEGRAM_MODE_READ_FAILED");
 
       return {
-        proModeEnabled: (data as Record<string, unknown>).pro_mode_enabled as boolean,
         webSearchEnabled: (data as Record<string, unknown>).web_search_enabled as boolean,
       };
     },
@@ -472,7 +466,6 @@ function buildTurnUpstream(fetchImpl: typeof fetch): TurnServiceUpstreamDeps {
         visitorId: params.visitorId,
         query: params.query,
         webSearchEnabled: params.webSearchEnabled,
-        summaryModelId: params.summaryModelId,
         signal: params.signal,
         fetchImpl,
       });
@@ -545,7 +538,6 @@ function buildTurnPersistence(supabase: Supabase): TurnServicePersistenceDeps {
         occurred_at: params.occurredAt,
         attachments: params.attachments,
         web_search_enabled: params.webSearchEnabled,
-        pro_mode_enabled: params.proModeEnabled,
         agent_key: params.agentKey,
         weknora_agent_id: params.weknoraAgentId,
         ...(params.displayContent === undefined
@@ -605,7 +597,6 @@ function buildTurnConfig(): TurnServiceConfigDeps {
         return null;
       }
     },
-    readProModelId: () => readFredProModelId(),
   };
 }
 

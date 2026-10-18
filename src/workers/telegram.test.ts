@@ -22,7 +22,7 @@ vi.mock("@/lib/scanning/settings", () => ({
 const integrationId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
 describe("buildStorage.loadIntegration", () => {
-  it("maps pro_mode_enabled and web_search_enabled from DB row", async () => {
+  it("maps web_search_enabled from DB row", async () => {
     const maybeSingle = vi.fn().mockResolvedValue({
       data: {
         id: integrationId,
@@ -32,7 +32,6 @@ describe("buildStorage.loadIntegration", () => {
         status: "active",
         paired_telegram_user_id: 456,
         paired_telegram_chat_id: 789,
-        pro_mode_enabled: true,
         web_search_enabled: false,
       },
       error: null,
@@ -46,11 +45,11 @@ describe("buildStorage.loadIntegration", () => {
     const integration = await storage.loadIntegration(integrationId);
 
     expect(integration).not.toBeNull();
-    expect(integration!.proModeEnabled).toBe(true);
     expect(integration!.webSearchEnabled).toBe(false);
+    expect(integration).not.toHaveProperty("proModeEnabled");
     // Ensure specific columns are selected (the exact list)
     expect(select).toHaveBeenCalledWith(
-      "id,client_id,bot_user_id,encrypted_token,status,paired_telegram_user_id,paired_telegram_chat_id,pro_mode_enabled,web_search_enabled",
+      "id,client_id,bot_user_id,encrypted_token,status,paired_telegram_user_id,paired_telegram_chat_id,web_search_enabled",
     );
   });
 
@@ -145,43 +144,12 @@ describe("buildStorage.loadGeneratedArtifacts", () => {
 });
 
 describe("buildStorage.setMode", () => {
-  it("updates pro_mode_enabled column and reads back both states", async () => {
+  it("updates web_search_enabled column and reads it back", async () => {
     const eqUpdate = vi.fn().mockResolvedValue({ error: null });
     const update = vi.fn().mockReturnValue({ eq: eqUpdate });
 
     const maybeSingle = vi.fn().mockResolvedValue({
-      data: { pro_mode_enabled: true, web_search_enabled: false },
-      error: null,
-    });
-    const eqSelect = vi.fn().mockReturnValue({ maybeSingle });
-    const select = vi.fn().mockReturnValue({ eq: eqSelect });
-
-    let tableName = "";
-    const from = vi.fn().mockImplementation((table: string) => {
-      tableName = table;
-      return { update, select };
-    });
-
-    const supabase = fakeSupabase({ from });
-    const storage = buildStorage(supabase as never);
-
-    const result = await storage.setMode(integrationId, "pro", true);
-
-    expect(result.proModeEnabled).toBe(true);
-    expect(result.webSearchEnabled).toBe(false);
-    // verify we used the correct column
-    expect(from).toHaveBeenCalledWith("telegram_integrations");
-    // update was called
-    expect(update).toHaveBeenCalledWith({ pro_mode_enabled: true });
-    expect(eqUpdate).toHaveBeenCalledWith("id", integrationId);
-  });
-
-  it("updates web_search_enabled column", async () => {
-    const eqUpdate = vi.fn().mockResolvedValue({ error: null });
-    const update = vi.fn().mockReturnValue({ eq: eqUpdate });
-
-    const maybeSingle = vi.fn().mockResolvedValue({
-      data: { pro_mode_enabled: false, web_search_enabled: true },
+      data: { web_search_enabled: true },
       error: null,
     });
     const eqSelect = vi.fn().mockReturnValue({ maybeSingle });
@@ -194,9 +162,11 @@ describe("buildStorage.setMode", () => {
 
     const result = await storage.setMode(integrationId, "web", true);
 
-    expect(result.webSearchEnabled).toBe(true);
-    expect(result.proModeEnabled).toBe(false);
+    expect(result).toEqual({ webSearchEnabled: true });
+    expect(from).toHaveBeenCalledWith("telegram_integrations");
     expect(update).toHaveBeenCalledWith({ web_search_enabled: true });
+    expect(eqUpdate).toHaveBeenCalledWith("id", integrationId);
+    expect(select).toHaveBeenCalledWith("web_search_enabled");
   });
 
   it("throws when update fails", async () => {
@@ -207,7 +177,7 @@ describe("buildStorage.setMode", () => {
     const supabase = fakeSupabase({ from });
     const storage = buildStorage(supabase as never);
 
-    await expect(storage.setMode(integrationId, "pro", true)).rejects.toThrow("TELEGRAM_MODE_UPDATE_FAILED");
+    await expect(storage.setMode(integrationId, "web", true)).rejects.toThrow("TELEGRAM_MODE_UPDATE_FAILED");
   });
 
   it("throws when read-back fails", async () => {
@@ -222,7 +192,7 @@ describe("buildStorage.setMode", () => {
     const supabase = fakeSupabase({ from });
     const storage = buildStorage(supabase as never);
 
-    await expect(storage.setMode(integrationId, "pro", true)).rejects.toThrow("TELEGRAM_MODE_READ_FAILED");
+    await expect(storage.setMode(integrationId, "web", true)).rejects.toThrow("TELEGRAM_MODE_READ_FAILED");
   });
 
 });

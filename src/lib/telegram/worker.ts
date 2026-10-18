@@ -49,7 +49,6 @@ export interface WorkerIntegration {
   status: string;
   pairedTelegramUserId: number | null;
   pairedTelegramChatId: number | null;
-  proModeEnabled: boolean;
   webSearchEnabled: boolean;
 }
 
@@ -70,7 +69,6 @@ export interface WorkerStorage {
     assistantEventId: string;
     conversationId?: string;
     webSearchEnabled: boolean;
-    proModeEnabled: boolean;
   }): Promise<FredRequestReceipt | false>;
   resumeRequestReceipt(params: {
     requestId: string;
@@ -109,7 +107,7 @@ export interface WorkerStorage {
     lastErrorCode?: string;
   }): Promise<boolean>;
   loadGeneratedArtifacts(params: { clientId: string; conversationId: string; messageId: number }): Promise<FredGeneratedArtifact[]>;
-  setMode(integrationId: string, mode: "pro" | "web", enabled: boolean): Promise<Pick<WorkerIntegration, "proModeEnabled" | "webSearchEnabled">>;
+  setMode(integrationId: string, mode: "web", enabled: boolean): Promise<Pick<WorkerIntegration, "webSearchEnabled">>;
 }
 
 export interface AttachmentPreprocessResult {
@@ -186,20 +184,13 @@ const RICH_MESSAGE_MAX_LENGTH = 32_768;
 const DOCUMENT_DELIVERY_INDEX_BASE = 1_000_000;
 
 const START_TEXT =
-  "Willkommen bei Findog! 🐕\n\nStelle deine Frage zum österreichischen Steuerrecht und Fred wird sie beantworten.\n\nBefehle:\n/help – Alle Befehle anzeigen\n/new – Neue Unterhaltung\n/stop – Aktuelle Antwort abbrechen\n/status – Verbindungsstatus\n/settings – Einstellungen\n/pro – Pro-Modus einstellen\n/web – Websuche einstellen";
+  "Willkommen bei Findog! 🐕\n\nStelle deine Frage zum österreichischen Steuerrecht und Fred wird sie beantworten.\n\nBefehle:\n/help – Alle Befehle anzeigen\n/new – Neue Unterhaltung\n/stop – Aktuelle Antwort abbrechen\n/status – Verbindungsstatus\n/settings – Einstellungen\n/web – Websuche einstellen";
 const HELP_TEXT =
-  "🐕 Findog – Dein Assistent für österreichisches Steuerrecht\n\nBefehle:\n/start – Bot starten\n/new – Neue Unterhaltung beginnen\n/stop – Aktuelle Antwort abbrechen\n/status – Verbindungsstatus prüfen\n/help – Diese Hilfe anzeigen\n/settings – Einstellungen\n/pro – Pro-Modus einstellen\n/web – Websuche einstellen\n\nStelle einfach deine Frage und Fred wird antworten!";
+  "🐕 Findog – Dein Assistent für österreichisches Steuerrecht\n\nBefehle:\n/start – Bot starten\n/new – Neue Unterhaltung beginnen\n/stop – Aktuelle Antwort abbrechen\n/status – Verbindungsstatus prüfen\n/help – Diese Hilfe anzeigen\n/settings – Einstellungen\n/web – Websuche einstellen\n\nStelle einfach deine Frage und Fred wird antworten!";
 const STATUS_TEXT = "✅ Findog ist verbunden und bereit.";
-function buildSettingsText(proEnabled: boolean, webEnabled: boolean): string {
-  const proStatus = proEnabled ? "aktiviert" : "deaktiviert";
+function buildSettingsText(webEnabled: boolean): string {
   const webStatus = webEnabled ? "aktiviert" : "deaktiviert";
-  return `Einstellungen\n• Pro-Modus: ${proStatus}\n• Websuche: ${webStatus}\n\nÄndern: /pro on|off · /web on|off`;
-}
-function buildProStatusText(enabled: boolean): string {
-  if (enabled) {
-    return "Pro-Modus: aktiviert.\nGilt für deine nächsten Fragen. Deaktivieren: /pro off";
-  }
-  return "Pro-Modus: deaktiviert.\nAktivieren: /pro on";
+  return `Einstellungen\n• Websuche: ${webStatus}\n\nÄndern: /web on|off`;
 }
 function buildWebStatusText(enabled: boolean): string {
   if (enabled) {
@@ -497,7 +488,7 @@ async function handleSlashCommand(
     case "settings": {
       await botApi.sendMessage({
         chat_id: chatId,
-        text: buildSettingsText(integration.proModeEnabled, integration.webSearchEnabled),
+        text: buildSettingsText(integration.webSearchEnabled),
       });
       break;
     }
@@ -514,19 +505,6 @@ async function handleSlashCommand(
         excludeRowId: update.id,
       });
       await botApi.sendMessage({ chat_id: chatId, text: stopped ? STOP_STOPPED_TEXT : STOP_NOTHING_TEXT });
-      break;
-    }
-
-    case "pro": {
-      if (argument === undefined || argument === "status") {
-        await botApi.sendMessage({ chat_id: chatId, text: buildProStatusText(integration.proModeEnabled) });
-      } else if (argument === "on" || argument === "off") {
-        const enable = argument === "on";
-        const updated = await storage.setMode(integration.id, "pro", enable);
-        await botApi.sendMessage({ chat_id: chatId, text: buildProStatusText(updated.proModeEnabled) });
-      } else {
-        await botApi.sendMessage({ chat_id: chatId, text: "Nutzung: /pro on|off|status" });
-      }
       break;
     }
 
@@ -1122,7 +1100,6 @@ async function handleFredTurn(
     requestId: receipt?.requestId,
     agentKey: "fred",
     webSearchEnabled: resume?.webSearchEnabled ?? integration.webSearchEnabled,
-    proModeEnabled: resume?.proModeEnabled ?? integration.proModeEnabled,
     userEventId: receipt?.userEventId ?? deriveEventId(`${integration.id}:${update.updateId}:user`),
     assistantEventId: receipt?.assistantEventId ?? deriveEventId(`${integration.id}:${update.updateId}:assistant`),
     ...(receipt ? {
@@ -1347,7 +1324,6 @@ async function createTelegramRequestReceipt(
     assistantEventId: deriveEventId(`${integration.id}:${update.updateId}:assistant`),
     ...(conversationId ? { conversationId } : {}),
     webSearchEnabled: integration.webSearchEnabled,
-    proModeEnabled: integration.proModeEnabled,
   });
   if (receipt === false) {
     throw new TelegramUpdateLeaseLostError("create request receipt");

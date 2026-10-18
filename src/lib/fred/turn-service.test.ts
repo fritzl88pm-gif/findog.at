@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { UserVisibleError } from "@/lib/errors";
 import { EOF_WITHOUT_FINAL_CLIENT_MESSAGE } from "./run-diagnostics";
 import type {
   FredTurnEvent,
@@ -103,7 +104,6 @@ function makeConfigDeps(overrides: Partial<TurnServiceConfigDeps> = {}): TurnSer
       exchangeOrigin: "https://findog.at",
     }),
     readQuickFredConfig: vi.fn().mockReturnValue(null),
-    readProModelId: vi.fn().mockReturnValue("a1b2c3d4-e5f6-4789-abcd-ef0123456789"),
     ...overrides,
   };
 }
@@ -115,7 +115,6 @@ function baseRequest(overrides: Partial<FredTurnRequest> = {}): FredTurnRequest 
     origin: "web",
     agentKey: "fred",
     webSearchEnabled: false,
-    proModeEnabled: false,
     ...overrides,
   };
 }
@@ -126,6 +125,17 @@ function artifactStream(answer: string, completeData: Record<string, unknown> = 
     { response_type: "answer", content: answer, done: true },
     { response_type: "complete", data: completeData },
   ];
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(
+        events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+      ));
+      controller.close();
+    },
+  });
+}
+
+function sseStream(events: unknown[]): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(new TextEncoder().encode(
@@ -594,6 +604,101 @@ describe("executeFredTurn", () => {
     expect(stopped.value).toMatchObject({ stopped: true, answer: "" });
     expect(upstream.stopSession).toHaveBeenCalledWith(expect.objectContaining({
       messageId: "answer-stop",
+    }));
+    expect(persistence.recordEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("retracts an agent preamble on a tool call and persists the completion's final content", async () => {
+    upstream.openStream = vi.fn().mockResolvedValue(sseStream([
+      { response_type: "agent_query", assistant_message_id: "answer-1" },
+      { response_type: "answer", content: "Ich suche in der Wissensbasis. " },
+      { response_type: "tool_call", id: "call-1", data: { tool_name: "knowledge_search" } },
+      { response_type: "tool_result", id: "call-1", data: { tool_name: "knowledge_search", success: true } },
+      { response_type: "answer", content: "Die Antwort " },
+      { response_type: "answer", content: "lautet 42." },
+      { response_type: "complete", data: { final_content: "Die Antwort lautet **42**." } },
+    ]));
+
+    const { events, result } = await collectEvents(
+      executeFredTurn(baseRequest(), upstream, persistence, config),
+    );
+
+    expect(events.filter((event) => event.type === "delta" || event.type === "replace")).toEqual([
+      { type: "delta", content: "Ich suche in der Wissensbasis. " },
+      { type: "replace", answer: "" },
+      { type: "delta", content: "Die Antwort " },
+      { type: "delta", content: "lautet 42." },
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "final", answer: "Die Antwort lautet **42**." });
+    expect(result.rawAnswer).toBe("Die Antwort lautet **42**.");
+    expect(persistence.recordEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      eventType: "message_received",
+      content: "Die Antwort lautet **42**.",
+    }));
+  });
+
+  it("keeps streamed text across a final_answer tool call and without final content", async () => {
+    upstream.openStream = vi.fn().mockResolvedValue(sseStream([
+      { response_type: "agent_query", assistant_message_id: "answer-1" },
+      { response_type: "answer", content: "Antwort " },
+      { response_type: "tool_call", id: "call-final", data: { tool_name: "final_answer" } },
+      { response_type: "answer", content: "bleibt" },
+      { response_type: "complete", data: {} },
+    ]));
+
+    const { events, result } = await collectEvents(
+      executeFredTurn(baseRequest(), upstream, persistence, config),
+    );
+
+    expect(events.some((event) => event.type === "replace")).toBe(false);
+    expect(result.rawAnswer).toBe("Antwort bleibt");
+  });
+
+  it.each([
+    ["the stream errors with the deadline reason", true],
+    ["only the abort signal fires", false],
+  ])("reports a deadline as a failed turn when %s", async (_label, streamErrorsOnAbort) => {
+    const abortController = new AbortController();
+    const onRequestTransition = vi.fn().mockResolvedValue(undefined);
+    persistence.recordEvent = vi.fn()
+      .mockResolvedValueOnce({ conversation: summaryConv(), messageId: 1 })
+      .mockResolvedValueOnce({ conversation: summaryConv(), messageId: 2 });
+    upstream.openStream = vi.fn().mockImplementation(async ({ signal }: { signal: AbortSignal }) => (
+      new ReadableStream<Uint8Array>({
+        start(ctrl) {
+          ctrl.enqueue(new TextEncoder().encode(
+            'data: {"response_type":"agent_query","assistant_message_id":"answer-timeout"}\n\n',
+          ));
+          if (streamErrorsOnAbort) {
+            signal.addEventListener("abort", () => ctrl.error(signal.reason), { once: true });
+          }
+        },
+      })
+    ));
+    const timeout = new UserVisibleError("Die Verarbeitung der Anfrage hat zu lange gedauert.", 504);
+
+    const gen = executeFredTurn(
+      baseRequest({ signal: abortController.signal, onRequestTransition }),
+      upstream,
+      persistence,
+      config,
+    );
+    const events: FredTurnEvent[] = [];
+    const drained = (async () => {
+      for await (const event of gen) events.push(event);
+    })();
+    await vi.waitFor(() => expect(upstream.openStream).toHaveBeenCalled());
+    abortController.abort(timeout);
+
+    await expect(drained).rejects.toBe(timeout);
+    expect(events.at(-1)).toEqual({ type: "error", error: timeout.message });
+    expect(onRequestTransition).toHaveBeenLastCalledWith({
+      status: "failed",
+      failurePhase: "streaming",
+      errorCode: "turn_timeout",
+    });
+    expect(upstream.stopSession).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: "answer-timeout",
     }));
     expect(persistence.recordEvent).toHaveBeenCalledTimes(1);
   });

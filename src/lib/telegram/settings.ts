@@ -112,7 +112,6 @@ const TELEGRAM_BOT_COMMANDS: TelegramBotCommand[] = [
   { command: "status", description: "Status der Verbindung anzeigen" },
   { command: "help", description: "Hilfe und Verfügbare Befehle" },
   { command: "settings", description: "Einstellungen anzeigen" },
-  { command: "pro", description: "Pro-Modus einstellen" },
   { command: "web", description: "Websuche einstellen" },
 ];
 

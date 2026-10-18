@@ -11,7 +11,6 @@ import { createConfiguredDocumentProvider } from "@/lib/attachments/document-pip
 import {
   mintFredEmbedSession,
   readFredEmbedServerConfig,
-  readFredProModelId,
   readQuickFredEmbedServerConfig,
 } from "@/lib/weknora/fred-embed";
 import {
@@ -87,7 +86,6 @@ vi.mock("@/lib/weknora/fred-embed", async (importOriginal) => {
     ...original,
     mintFredEmbedSession: vi.fn(),
     readFredEmbedServerConfig: vi.fn(),
-    readFredProModelId: vi.fn(),
     readQuickFredEmbedServerConfig: vi.fn(),
   };
 });
@@ -138,7 +136,6 @@ function request(body: Record<string, unknown>): Request {
 function multipartRequest(options: {
   query: string;
   webSearchEnabled?: boolean;
-  proModeEnabled?: boolean;
   image?: File;
   attachment?: File;
   signal?: AbortSignal;
@@ -148,7 +145,6 @@ function multipartRequest(options: {
   formData.append("payload", JSON.stringify({
     query: options.query,
     webSearchEnabled: options.webSearchEnabled ?? false,
-    ...(options.proModeEnabled !== undefined ? { proModeEnabled: options.proModeEnabled } : {}),
     ...(options.browserAttachmentMode !== undefined
       ? { fredAttachmentMode: options.browserAttachmentMode }
       : {}),
@@ -237,7 +233,6 @@ describe("POST /api/fred/chat", () => {
       publishToken: "em_publish_token_fixture_123456",
       exchangeOrigin: "https://findog.at",
     });
-    vi.mocked(readFredProModelId).mockReturnValue("a1b2c3d4-e5f6-4789-abcd-ef0123456789");
     vi.mocked(mintFredEmbedSession).mockResolvedValue({
       token: "ems_session_token_fixture_123456",
       expiresIn: 1800,
@@ -703,6 +698,11 @@ describe("POST /api/fred/chat", () => {
         messageId: "answer-timeout",
       }));
       expect(cancel).toHaveBeenCalledOnce();
+      expect(mockTransitionFredRequestReceipt).toHaveBeenCalledWith(expect.objectContaining({
+        status: "failed",
+        failurePhase: "streaming",
+        errorCode: "turn_timeout",
+      }));
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.clearAllTimers();
@@ -1424,7 +1424,7 @@ describe("POST /api/fred/chat", () => {
       });
     });
 
-    it("rejects malformed QuickFred flags and the QuickFred/Pro combination", async () => {
+    it("rejects malformed QuickFred flags", async () => {
       vi.mocked(authenticateSupabaseRequest).mockResolvedValue({
         id: "44444444-4444-4444-8444-444444444444",
       });
@@ -1432,12 +1432,6 @@ describe("POST /api/fred/chat", () => {
 
       const malformed = await POST(request({ query: "Test", quickFredEnabled: "yes" }));
       expect(malformed.status).toBe(400);
-      const combined = await POST(request({
-        query: "Test",
-        quickFredEnabled: true,
-        proModeEnabled: true,
-      }));
-      expect(combined.status).toBe(400);
       expect(mintFredEmbedSession).not.toHaveBeenCalled();
     });
 
@@ -1606,127 +1600,104 @@ describe("POST /api/fred/chat", () => {
     });
   });
 
-  describe("Pro Mode", () => {
-    it("treats omitted proModeEnabled as false and sends empty summaryModelId", async () => {
-      const rpc = rpcForTurn();
-      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
-
-      const response = await POST(request({ query: "Normal" }));
-      await response.text();
-
-      expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
-        summaryModelId: "",
-      }));
-      expect(readFredProModelId).not.toHaveBeenCalled();
-    });
-
-    it("treats explicit proModeEnabled false as false and sends empty summaryModelId", async () => {
-      const rpc = rpcForTurn();
-      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
-
-      const response = await POST(request({ query: "Normal", proModeEnabled: false }));
-      await response.text();
-
-      expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
-        summaryModelId: "",
-      }));
-      expect(readFredProModelId).not.toHaveBeenCalled();
-    });
-
-    it("resolves proModeEnabled true via readFredProModelId and sends the model ID upstream", async () => {
-      const rpc = rpcForTurn();
-      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
-
-      const response = await POST(request({ query: "Pro Frage", proModeEnabled: true }));
-      await response.text();
-
-      expect(readFredProModelId).toHaveBeenCalledOnce();
-      expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
-        summaryModelId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
-      }));
-    });
-
-    it("rejects non-boolean proModeEnabled with 400", async () => {
-      const rpc = vi.fn();
-      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
-
-      const response = await POST(request({ query: "Test", proModeEnabled: "yes" }));
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: expect.any(String) });
-      expect(openFredUpstreamStream).not.toHaveBeenCalled();
-      expect(rpc).not.toHaveBeenCalled();
-    });
-
-    it("rejects numeric proModeEnabled with 400", async () => {
-      const rpc = vi.fn();
-      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
-
-      const response = await POST(request({ query: "Test", proModeEnabled: 1 }));
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: expect.any(String) });
-      expect(openFredUpstreamStream).not.toHaveBeenCalled();
-      expect(rpc).not.toHaveBeenCalled();
-    });
-
-    it("ignores client-provided modelId or summaryModelId", async () => {
+  describe("retired Pro mode", () => {
+    it("ignores stale Pro and model flags from old clients", async () => {
       const rpc = rpcForTurn();
       vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
 
       const response = await POST(request({
-        query: "Hack",
-        modelId: "client-model",
+        query: "Alte Pro-Frage",
+        proModeEnabled: true,
         summaryModelId: "client-model",
       }));
+      expect(response.status).toBe(200);
       await response.text();
 
-      expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
-        summaryModelId: "",
-      }));
+      expect(openFredUpstreamStream).toHaveBeenCalledOnce();
+      expect(vi.mocked(openFredUpstreamStream).mock.calls[0][0]).not.toHaveProperty("summaryModelId");
+      for (const [, args] of rpc.mock.calls) {
+        expect((args as { payload: Record<string, unknown> }).payload).not.toHaveProperty("pro_mode_enabled");
+      }
+    });
+  });
+
+  describe("delivered answers and agent preambles", () => {
+    function failCompletedLedgerTransition(): void {
+      mockTransitionFredRequestReceipt.mockImplementation(async (options: { status: string }) => {
+        if (options.status === "completed") throw new UserVisibleError("Ledger nicht erreichbar.", 503);
+      });
+    }
+
+    async function streamEvents(response: Response) {
+      return (await response.text()).split("\n").map(parseFredNativeStreamLine).filter(Boolean);
+    }
+
+    it("still delivers the final text answer when the completed ledger transition fails", async () => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "77777777-0000-4777-8777-000000000001" });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc: rpcForTurn() } as never);
+      failCompletedLedgerTransition();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const events = await streamEvents(await POST(request({ query: "Ledger-Ausfall" })));
+
+        expect(events.some((event) => event?.type === "error")).toBe(false);
+        expect(events.at(-1)).toMatchObject({ type: "final", answer: "Hallo Welt" });
+        expect(warn).toHaveBeenCalledWith("fred_request_completion_transition_failed", { requestId });
+      } finally {
+        warn.mockRestore();
+      }
     });
 
-    it("allows webSearchEnabled and proModeEnabled simultaneously", async () => {
+    it("still delivers the final attachment answer when the completed ledger transition fails", async () => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "77777777-0000-4777-8777-000000000002" });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc: rpcForTurn() } as never);
+      failCompletedLedgerTransition();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const events = await streamEvents(await POST(multipartRequest({
+          query: "Ledger-Ausfall",
+          attachment: pdfFile(),
+        })));
+
+        expect(events.some((event) => event?.type === "error")).toBe(false);
+        expect(events.at(-1)).toMatchObject({ type: "final", answer: "Hallo Welt" });
+        expect(mockTransitionFredRequestReceipt).not.toHaveBeenCalledWith(
+          expect.objectContaining({ status: "failed" }),
+        );
+        expect(warn).toHaveBeenCalledWith("fred_request_completion_transition_failed", { requestId });
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("retracts an agent preamble and persists the final content on the attachment path", async () => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "77777777-0000-4777-8777-000000000003" });
       const rpc = rpcForTurn();
       vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
-      vi.mocked(fetchFredUpstreamConfig).mockResolvedValue({
-        agentId: "agent-1",
-        knowledgeBaseIds: ["kb-1"],
-        allowWebSearch: true,
-        allowFileUpload: true,
-        allowImageUpload: true,
-      });
+      vi.mocked(openFredUpstreamStream).mockImplementation(async () => new Response([
+        'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+        'data: {"response_type":"answer","content":"Ich lese die Datei. "}\n\n',
+        'data: {"response_type":"tool_call","id":"call-1","data":{"tool_name":"read_document"}}\n\n',
+        'data: {"response_type":"tool_result","id":"call-1","data":{"tool_name":"read_document","success":true}}\n\n',
+        'data: {"response_type":"answer","content":"Der Beleg ist gültig."}\n\n',
+        'data: {"response_type":"complete","data":{"final_content":"Der Beleg ist **gültig**."}}\n\n',
+      ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
 
-      const response = await POST(request({ query: "Pro Web", proModeEnabled: true, webSearchEnabled: true }));
-      await response.text();
+      const events = await streamEvents(await POST(multipartRequest({
+        query: "Prüfe den Beleg",
+        attachment: pdfFile(),
+      })));
 
-      expect(readFredProModelId).toHaveBeenCalledOnce();
-      expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
-        summaryModelId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
-        webSearchEnabled: true,
-      }));
-    });
-
-    it("records pro_mode_enabled on the user event but not on the assistant event", async () => {
-      const rpc = vi.fn()
-        .mockResolvedValueOnce({ data: summaryRow, error: null })
-        .mockResolvedValueOnce({
-          data: { ...summaryRow, updated_at: "2026-07-19T10:00:02.000Z", message_id: 2 },
-          error: null,
-        });
-      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
-
-      const response = await POST(request({ query: "Pro Frage", proModeEnabled: true }));
-      await response.text();
-
-      expect(rpc).toHaveBeenNthCalledWith(1, "record_fred_native_event", {
-        payload: expect.objectContaining({
-          pro_mode_enabled: true,
-          event_type: "message_sent",
-        }),
-      });
+      expect(events.filter((event) => event?.type === "delta" || event?.type === "replace")).toEqual([
+        { type: "delta", content: "Ich lese die Datei. " },
+        { type: "replace", answer: "" },
+        { type: "delta", content: "Der Beleg ist gültig." },
+      ]);
+      expect(events.at(-1)).toMatchObject({ type: "final", answer: "Der Beleg ist **gültig**." });
       expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
         payload: expect.objectContaining({
-          pro_mode_enabled: false,
           event_type: "message_received",
+          content: "Der Beleg ist **gültig**.",
         }),
       });
     });
@@ -2337,33 +2308,6 @@ describe("POST /api/fred/chat", () => {
       expect(routeUpdates.length).toBeGreaterThanOrEqual(1);
       const exactRoute = routeUpdates[0]?.model_route as string;
       expect(exactRoute).toMatch(/^weknora:fred:agent-1$/);
-    });
-
-    it('includes pro model id in exact route when pro mode is enabled', async () => {
-      const { from, insertChain, updateChain } = makeGenRunSupabase();
-      const rpc = rpcForTurn();
-      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc, from } as never);
-      vi.mocked(openFredUpstreamStream).mockImplementation(async () => upstreamStream());
-
-      const response = await POST(multipartRequest({
-        query: 'Pro Frage',
-        attachment: pdfFile(),
-        proModeEnabled: true,
-      }));
-      await response.text();
-
-      // Initial route is pending
-      const insertCalls = insertChain.mock.calls.map((call) => call[0] as Record<string, unknown>);
-      const insertCall = insertCalls.find((c) => c?.model_route !== undefined);
-      expect(insertCall?.model_route).toBe('weknora:pending');
-
-      // Exact route includes pro model id
-      const updateCalls = updateChain.mock.calls.map((call) => call[0] as Record<string, unknown>);
-      const routeUpdates = updateCalls.filter((c) => c?.model_route !== undefined && c?.model_route !== 'weknora:pending');
-      expect(routeUpdates.length).toBeGreaterThanOrEqual(1);
-      const exactRoute = routeUpdates[0]?.model_route as string;
-      // readFredProModelId returns "a1b2c3d4-e5f6-4789-abcd-ef0123456789" in the mock
-      expect(exactRoute).toContain(':pro=');
     });
 
     it('tracks failure phase as streaming for parser errors even without answer deltas', async () => {

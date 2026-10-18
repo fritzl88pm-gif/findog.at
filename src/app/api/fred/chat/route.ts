@@ -68,7 +68,6 @@ import {
   FRED_EMBED_ORIGIN,
   mintFredEmbedSession,
   readFredEmbedServerConfig,
-  readFredProModelId,
   readQuickFredEmbedServerConfig,
 } from "@/lib/weknora/fred-embed";
 import {
@@ -112,8 +111,10 @@ import {
   updateGenerationRun,
   formatExactModelRoute,
   EOF_WITHOUT_FINAL_CLIENT_MESSAGE,
+  isPreambleRetractingToolCall,
   isUpstreamCompleteEvent,
   isAnswerDelta,
+  upstreamFinalContent,
   ERROR_CODES,
 } from "@/lib/fred/run-diagnostics";
 
@@ -136,7 +137,6 @@ type ParsedFredChatRequest = {
   query: string;
   conversationId: string;
   webSearchEnabled: boolean;
-  proModeEnabled: boolean;
   quickFredEnabled: boolean | undefined;
   attachments: FindogAttachment[];
 };
@@ -206,18 +206,11 @@ function validatedRequestFields(value: unknown): Omit<ParsedFredChatRequest, "at
   if (body.webSearchEnabled !== undefined && typeof body.webSearchEnabled !== "boolean") {
     throw new UserVisibleError("Die Websuche-Einstellung ist ungültig.", 400);
   }
-  const proModeEnabled = body.proModeEnabled === true;
-  if (body.proModeEnabled !== undefined && typeof body.proModeEnabled !== "boolean") {
-    throw new UserVisibleError("Die Fred-Pro-Einstellung ist ungültig.", 400);
-  }
   const quickFredEnabled = body.quickFredEnabled === undefined
     ? undefined
     : body.quickFredEnabled === true;
   if (body.quickFredEnabled !== undefined && typeof body.quickFredEnabled !== "boolean") {
     throw new UserVisibleError("Die QuickFred-Einstellung ist ungültig.", 400);
-  }
-  if (quickFredEnabled === true && proModeEnabled) {
-    throw new UserVisibleError("QuickFred und Fred Pro können nicht gleichzeitig verwendet werden.", 400);
   }
   if (!query || query.length > MAX_QUERY_LENGTH) {
     throw new UserVisibleError("Bitte gib eine gültige Frage an Fred ein.", 400);
@@ -229,7 +222,6 @@ function validatedRequestFields(value: unknown): Omit<ParsedFredChatRequest, "at
     query,
     conversationId,
     webSearchEnabled,
-    proModeEnabled,
     quickFredEnabled,
   };
 }
@@ -437,7 +429,6 @@ async function recordEvent(options: {
   occurredAt: string;
   attachments?: FindogAttachment[];
   webSearchEnabled?: boolean;
-  proModeEnabled?: boolean;
   agentKey: FredAgentKey;
   weknoraAgentId: string;
   displayContent?: string;
@@ -455,7 +446,6 @@ async function recordEvent(options: {
     occurred_at: options.occurredAt,
     attachments: (options.attachments ?? []).map(buildAttachmentMeta),
     web_search_enabled: options.webSearchEnabled ?? false,
-    pro_mode_enabled: options.proModeEnabled ?? false,
     agent_key: options.agentKey,
     weknora_agent_id: options.weknoraAgentId,
     ...(options.displayContent !== undefined ? {
@@ -653,7 +643,6 @@ function buildWebTurnUpstream(
         visitorId: params.visitorId,
         query: params.query,
         webSearchEnabled: params.webSearchEnabled,
-        summaryModelId: params.summaryModelId,
         signal: params.signal,
       });
       if (!response.body) {
@@ -724,7 +713,6 @@ function buildWebTurnPersistence(
         occurredAt: params.occurredAt,
         attachments: [],
         webSearchEnabled: params.webSearchEnabled,
-        proModeEnabled: params.proModeEnabled,
         agentKey: params.agentKey,
         weknoraAgentId: params.weknoraAgentId,
         displayContent: params.displayContent,
@@ -771,7 +759,6 @@ function buildWebTurnConfig(
         return null;
       }
     },
-    readProModelId: () => readFredProModelId(),
   };
 }
 
@@ -834,16 +821,26 @@ function streamTextOnlyTurn(options: {
             requestId: options.receipt.requestId,
             agentKey: options.agentKey,
             webSearchEnabled: options.body.webSearchEnabled,
-            proModeEnabled: options.body.proModeEnabled,
             researchDisplayMode: options.researchDisplayMode,
             userEventId: options.receipt.userEventId,
             assistantEventId: options.receipt.assistantEventId,
-            onRequestTransition: (transition: FredRequestLifecycleTransition) =>
-              transitionFredRequestReceipt({
-                supabase: options.supabase,
-                requestId: options.receipt.requestId,
-                ...transition,
-              }),
+            onRequestTransition: async (transition: FredRequestLifecycleTransition) => {
+              try {
+                await transitionFredRequestReceipt({
+                  supabase: options.supabase,
+                  requestId: options.receipt.requestId,
+                  ...transition,
+                });
+              } catch (error) {
+                // The answer is already persisted when the turn completes. A
+                // stale receipt is surfaced by the completeness check; it must
+                // not turn a delivered answer into an error.
+                if (transition.status !== "completed") throw error;
+                console.warn("fred_request_completion_transition_failed", {
+                  requestId: options.receipt.requestId,
+                });
+              }
+            },
             signal: streamAbort.signal,
           },
           buildWebTurnUpstream(registeredConfigs),
@@ -976,12 +973,6 @@ export async function POST(request: Request) {
     }
     const agentKey = storedConversation?.agent_key ?? requestedAgentKey;
     const selectedAgentName = fredAgentName(agentKey);
-    if (agentKey === "quickfred" && body.proModeEnabled) {
-      throw new UserVisibleError(
-        "Fred Pro ist in einer QuickFred-Unterhaltung nicht verfügbar.",
-        400,
-      );
-    }
     pendingReceipt = createFredRequestReceipt({
       supabase,
       clientId: user.id,
@@ -990,7 +981,6 @@ export async function POST(request: Request) {
       content: body.query,
       conversationId: storedConversation?.id,
       webSearchEnabled: body.webSearchEnabled,
-      proModeEnabled: body.proModeEnabled,
     });
     const requestReceipt = await awaitWithIngressSignal(
       pendingReceipt,
@@ -1263,16 +1253,12 @@ export async function POST(request: Request) {
               400,
             );
           }
-          const summaryModelId = body.proModeEnabled
-            ? readFredProModelId()
-            : "";
 
           // Update model route to exact known route after upstream config is fetched
           if (runId) {
             const exactRoute = formatExactModelRoute({
               agentKey,
               agentId: upstreamConfig.agentId,
-              proModelId: body.proModeEnabled ? summaryModelId : undefined,
             });
             await updateGenerationRun({ supabase, runId, modelRoute: exactRoute });
           }
@@ -1289,7 +1275,6 @@ export async function POST(request: Request) {
             occurredAt: userOccurredAt,
             attachments: body.attachments,
             webSearchEnabled: body.webSearchEnabled,
-            proModeEnabled: body.proModeEnabled,
             agentKey,
             weknoraAgentId: upstreamConfig.agentId,
           });
@@ -1331,7 +1316,6 @@ export async function POST(request: Request) {
             query: upstreamQuery,
             webSearchEnabled: body.webSearchEnabled,
             signal: deadline.signal,
-            summaryModelId,
             ...(fredAttachmentMode === "weknora_native"
               ? { nativeAttachments: body.attachments satisfies readonly FredNativeAttachmentUpload[] }
               : {}),
@@ -1361,6 +1345,7 @@ export async function POST(request: Request) {
           let buffer = "";
           const isAdvanced = researchDisplayMode === "advanced";
           const answerChunks: string[] = [];
+          let finalContent = "";
           let researchTrace: FredResearchStep[] = [];
           let executionTrace: FredExecutionStep[] = [];
           let sourceReferences: FredSourceReference[] = [];
@@ -1453,6 +1438,7 @@ export async function POST(request: Request) {
             // Track upstream complete event for EOF detection
             if (isUpstreamCompleteEvent(parsed)) {
               sawCompleteEvent = true;
+              finalContent = upstreamFinalContent(parsed) || finalContent;
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
                 const envelopeId = (parsed as Record<string, unknown>).id;
                 // WeKnora's complete-event id is the request/stream id. The
@@ -1467,6 +1453,10 @@ export async function POST(request: Request) {
               if (parsedArtifacts.length > 0) generatedArtifacts = parsedArtifacts.map((artifact) => ({ ...artifact, id: "" }));
             }
 
+            if (isPreambleRetractingToolCall(parsed) && answerChunks.length > 0) {
+              answerChunks.length = 0;
+              send(controller, { type: "replace", answer: "" });
+            }
             const event = upstreamDelta(parsed);
             if (event.content) {
               if (isAnswerDelta(parsed)) clearAttachmentStatus();
@@ -1553,7 +1543,9 @@ export async function POST(request: Request) {
             return;
           }
 
-          const rawAnswer = answerChunks.join("");
+          // In agent mode the completion carries the answer WeKnora persisted,
+          // after preambles were dropped and artifact references reconciled.
+          const rawAnswer = finalContent || answerChunks.join("");
           const plainFinalAnswer = rawAnswer.trim();
           if (!plainFinalAnswer) {
             throw new UserVisibleError(
@@ -1621,7 +1613,6 @@ export async function POST(request: Request) {
             researchTrace,
             executionTrace: isAdvanced ? executionTrace : [],
             sourceReferences,
-            proModeEnabled: false,
             agentKey,
             weknoraAgentId: upstreamConfig.agentId,
           });
@@ -1634,12 +1625,20 @@ export async function POST(request: Request) {
               messageId: assistantMessageId, upstreamMessageId: upstreamMsgId, artifacts: generatedArtifacts,
             });
           }
-          await transitionFredRequestReceipt({
-            supabase,
-            requestId: requestReceipt.requestId,
-            status: "completed",
-            assistantMessageId,
-          });
+          try {
+            await transitionFredRequestReceipt({
+              supabase,
+              requestId: requestReceipt.requestId,
+              status: "completed",
+              assistantMessageId,
+            });
+          } catch {
+            // The answer is already persisted. A stale receipt is surfaced by
+            // the completeness check; it must not turn the answer into an error.
+            console.warn("fred_request_completion_transition_failed", {
+              requestId: requestReceipt.requestId,
+            });
+          }
           requestLedgerTerminal = true;
           // Mark run completed
           if (runId) {
@@ -1687,7 +1686,9 @@ export async function POST(request: Request) {
                 requestId: requestReceipt.requestId,
                 status: cancelled ? "cancelled" : "failed",
                 failurePhase: requestFailurePhase,
-                errorCode: cancelled ? "request_cancelled" : "turn_failed",
+                errorCode: cancelled
+                  ? "request_cancelled"
+                  : deadline.signal.aborted ? "turn_timeout" : "turn_failed",
               });
               requestLedgerTerminal = true;
             } catch {
