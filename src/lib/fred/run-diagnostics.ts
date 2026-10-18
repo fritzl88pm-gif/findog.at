@@ -87,6 +87,8 @@ export interface UpdateGenerationRunParams {
   firstDelta?: boolean;
   /** Set this to true to persist completed_at as now(). */
   completed?: boolean;
+  /** When the update happened, for first_delta_at and completed_at; defaults to now. */
+  occurredAt?: Date;
 }
 
 /**
@@ -120,11 +122,12 @@ export async function updateGenerationRun(
     if (params.modelRoute !== undefined) {
       updates.model_route = params.modelRoute;
     }
+    const occurredAt = (params.occurredAt ?? new Date()).toISOString();
     if (params.completed) {
-      updates.completed_at = new Date().toISOString();
+      updates.completed_at = occurredAt;
     }
     if (params.firstDelta) {
-      updates.first_delta_at = new Date().toISOString();
+      updates.first_delta_at = occurredAt;
     }
 
     if (Object.keys(updates).length === 0) return;

@@ -8,6 +8,7 @@ import {
 } from "@/lib/fred-generated-artifacts";
 import {
   extractStreamStableBfgGzCandidates,
+  FINAL_ANSWER_CITATION_WAIT_MS,
   linkVerifiedBfgCitations,
   verifyBfgCitations,
   type VerifiedBfgCitation,
@@ -446,6 +447,7 @@ export async function* executeFredTurn(
       if (candidates.length === 0) return;
       const verification = await verifyBfgCitations(candidates, fetch, {
         signal: request.signal,
+        maxWaitMs: FINAL_ANSWER_CITATION_WAIT_MS,
         onMetrics: (metrics) => console.info("findok citation verification", {
           path: "fred_turn_service",
           ...metrics,

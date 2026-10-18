@@ -176,16 +176,47 @@ describe("Findok BFG citation verification", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retain transient errors", async () => {
-    const cache = new BfgCitationCache();
+  it("retains transient errors only briefly", async () => {
+    let now = 3_000;
+    const cache = new BfgCitationCache({ now: () => now, negativeTtlMs: 1_000, errorTtlMs: 30 });
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
       .mockResolvedValueOnce(jsonResponse(validFindokBody));
 
     await expect(verifyBfgCitations(["RV/7103053/2014"], fetchImpl, { cache }))
       .resolves.toMatchObject({ rejected: [expect.objectContaining({ status: "error" })] });
+    now += 29;
+    await expect(verifyBfgCitations(["RV/7103053/2014"], fetchImpl, { cache }))
+      .resolves.toMatchObject({ rejected: [expect.objectContaining({ status: "error" })] });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    now += 2;
     await expect(verifyBfgCitations(["RV/7103053/2014"], fetchImpl, { cache }))
       .resolves.toMatchObject({ verified: [expect.objectContaining({ status: "verified" })] });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops waiting at maxWaitMs while slower lookups still fill the cache", async () => {
+    const cache = new BfgCitationCache();
+    let releaseSlow!: (response: Response) => void;
+    const fetchImpl = vi.fn<typeof fetch>((input) => (
+      String(input).includes(encodeURIComponent("RV/2/2024"))
+        ? new Promise<Response>((resolve) => { releaseSlow = resolve; })
+        : Promise.resolve(jsonResponse(validFindokBody))
+    ));
+
+    const verification = await verifyBfgCitations(["RV/1/2024", "RV/2/2024"], fetchImpl, {
+      cache,
+      maxWaitMs: 20,
+    });
+
+    expect(verification.verified.map((citation) => citation.gz)).toEqual(["RV/1/2024"]);
+    expect(verification.rejected).toEqual([expect.objectContaining({ gz: "RV/2/2024", status: "error" })]);
+    releaseSlow(jsonResponse(validFindokBody));
+    await vi.waitFor(async () => {
+      await expect(verifyBfgCitations(["RV/2/2024"], fetchImpl, { cache }))
+        .resolves.toMatchObject({ verified: [expect.objectContaining({ gz: "RV/2/2024" })] });
+    });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 

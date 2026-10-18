@@ -28,6 +28,7 @@ import { getScanningSettings } from "@/lib/scanning/settings";
 import { parseFredNativeStreamLine } from "@/lib/fred-native-stream";
 import {
   extractStreamStableBfgGzCandidates,
+  FINAL_ANSWER_CITATION_WAIT_MS,
   verifyBfgCitations,
 } from "@/lib/findok/bfg-citations";
 
@@ -511,7 +512,11 @@ describe("POST /api/fred/chat", () => {
     expect(verifyBfgCitations).toHaveBeenCalledWith(
       ["RV/1100290/2023", "RV/9999999/2023"],
       fetch,
-      expect.objectContaining({ signal: expect.any(AbortSignal), onMetrics: expect.any(Function) }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        maxWaitMs: FINAL_ANSWER_CITATION_WAIT_MS,
+        onMetrics: expect.any(Function),
+      }),
     );
     expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
       payload: expect.objectContaining({
@@ -1783,6 +1788,172 @@ describe("POST /api/fred/chat", () => {
     });
   });
 
+  describe("turn setup latency", () => {
+    const storedConversationRow = {
+      id: conversationId,
+      title: "Alt",
+      created_at: "2026-07-19T09:00:00.000Z",
+      updated_at: "2026-07-19T09:00:00.000Z",
+      weknora_channel_id: "fred-channel",
+      weknora_session_id: "session-existing",
+      agent_key: "fred",
+      weknora_agent_id: "agent-1",
+    };
+
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((resolvePromise) => {
+        resolve = resolvePromise;
+      });
+      return { promise, resolve };
+    }
+
+    async function streamEvents(response: Response | Promise<string>) {
+      const text = typeof (response as Response).text === "function"
+        ? await (response as Response).text()
+        : await (response as Promise<string>);
+      return text.split("\n").map(parseFredNativeStreamLine).filter(Boolean);
+    }
+
+    it("loads the preference and the conversation together, and the conversation only once", async () => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "77777777-0000-4777-8777-000000000021" });
+      vi.mocked(deriveFredSessionSignature).mockReturnValue("derived-signature");
+      const preference = deferred<{ data: null; error: null }>();
+      const tables: string[] = [];
+      const from = vi.fn((table: string) => {
+        tables.push(table);
+        const chain = {
+          select: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          maybeSingle: vi.fn(() => (table === "fred_user_preferences"
+            ? preference.promise
+            : Promise.resolve({ data: storedConversationRow, error: null }))),
+        };
+        return chain;
+      });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc: rpcForTurn(), from } as never);
+
+      const pendingResponse = POST(request({ query: "Anschlussfrage", conversationId }));
+      await vi.waitFor(() => expect(tables).toEqual(["fred_user_preferences", "fred_conversations"]));
+      preference.resolve({ data: null, error: null });
+      const events = await streamEvents(await pendingResponse);
+
+      expect(events.at(-1)).toMatchObject({ type: "final", answer: "Hallo Welt" });
+      expect(tables.filter((table) => table === "fred_conversations")).toHaveLength(1);
+      expect(openFredUpstreamStream).toHaveBeenCalledWith(expect.objectContaining({
+        upstreamSession: { id: "session-existing", signature: "derived-signature" },
+      }));
+    });
+
+    it.each([
+      ["text", "77777777-0000-4777-8777-000000000022", () => request({ query: "Ledger-Reihenfolge" })],
+      ["attachment", "77777777-0000-4777-8777-000000000023", () => multipartRequest({
+        query: "Ledger-Reihenfolge",
+        attachment: pdfFile(),
+      })],
+    ])("opens the %s stream before the generating mark is stored and keeps the ledger order", async (
+      _path,
+      turnUserId,
+      buildRequest,
+    ) => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: turnUserId });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc: rpcForTurn() } as never);
+      const generating = deferred<void>();
+      const ledger: string[] = [];
+      mockTransitionFredRequestReceipt.mockImplementation(async (options: { status: string }) => {
+        if (options.status === "generating") await generating.promise;
+        ledger.push(options.status);
+      });
+
+      const response = await POST(buildRequest());
+      const text = response.text();
+      await vi.waitFor(() => expect(openFredUpstreamStream).toHaveBeenCalledOnce());
+      expect(ledger).toEqual(["user_persisted"]);
+      generating.resolve();
+      const events = await streamEvents(text);
+
+      expect(events.at(-1)).toMatchObject({ type: "final", answer: "Hallo Welt" });
+      expect(ledger).toEqual(["user_persisted", "generating", "completed"]);
+    });
+
+    it("still answers when the generating mark cannot be stored", async () => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "77777777-0000-4777-8777-000000000024" });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc: rpcForTurn() } as never);
+      mockTransitionFredRequestReceipt.mockImplementation(async (options: { status: string }) => {
+        if (options.status === "generating") throw new UserVisibleError("Ledger nicht erreichbar.", 503);
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const events = await streamEvents(await POST(request({ query: "Ledger-Ausfall" })));
+
+        expect(events.some((event) => event?.type === "error")).toBe(false);
+        expect(events.at(-1)).toMatchObject({ type: "final", answer: "Hallo Welt" });
+        expect(warn).toHaveBeenCalledWith("fred_request_generating_transition_failed", { requestId });
+        expect(mockTransitionFredRequestReceipt).toHaveBeenCalledWith(
+          expect.objectContaining({ status: "completed" }),
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("opens the attachment stream while run diagnostics are still written in order", async () => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "77777777-0000-4777-8777-000000000025" });
+      const runInsert = deferred<{ data: { id: string }; error: null }>();
+      const runUpdates: Record<string, unknown>[] = [];
+      const from = vi.fn((table: string) => {
+        if (table === "fred_generation_runs") {
+          return {
+            insert: vi.fn(() => ({ select: vi.fn(() => ({ single: vi.fn(() => runInsert.promise) })) })),
+            update: vi.fn((update: Record<string, unknown>) => ({
+              eq: vi.fn(async () => {
+                runUpdates.push(update);
+                return { error: null };
+              }),
+            })),
+          };
+        }
+        const chain = {
+          select: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          maybeSingle: vi.fn(async () => ({ data: null, error: null })),
+        };
+        return chain;
+      });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc: rpcForTurn(), from } as never);
+
+      const response = await POST(multipartRequest({ query: "Diagnose", attachment: pdfFile() }));
+      const text = response.text();
+      await vi.waitFor(() => expect(openFredUpstreamStream).toHaveBeenCalledOnce());
+      expect(runUpdates).toEqual([]);
+      runInsert.resolve({ data: { id: "run-1" }, error: null });
+      const events = await streamEvents(text);
+
+      expect(events.at(-1)).toMatchObject({ type: "final", answer: "Hallo Welt" });
+      await vi.waitFor(() => expect(runUpdates.map((update) => update.status).filter(Boolean))
+        .toEqual(["connecting", "streaming", "completed"]));
+    });
+
+    it("gives the attachment path's final citation check the same time budget", async () => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "77777777-0000-4777-8777-000000000026" });
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc: rpcForTurn() } as never);
+      vi.mocked(verifyBfgCitations).mockResolvedValue({ verified: [], rejected: [] });
+      vi.mocked(openFredUpstreamStream).mockImplementation(async () => new Response([
+        'data: {"response_type":"answer","content":"Siehe RV/1100290/2023.","done":true}\n\n',
+        'data: {"response_type":"complete","data":{}}\n\n',
+      ].join(""), { headers: { "Content-Type": "text/event-stream" } }));
+
+      const events = await streamEvents(await POST(multipartRequest({ query: "Zitat", attachment: pdfFile() })));
+
+      expect(events.at(-1)).toMatchObject({ type: "final", answer: "Siehe RV/1100290/2023." });
+      expect(verifyBfgCitations).toHaveBeenCalledWith(
+        ["RV/1100290/2023"],
+        fetch,
+        expect.objectContaining({ maxWaitMs: FINAL_ANSWER_CITATION_WAIT_MS }),
+      );
+    });
+  });
+
   describe("admin request audit persistence", () => {
     beforeEach(() => {
       vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: auditUserId });
@@ -2158,6 +2329,17 @@ describe("POST /api/fred/chat", () => {
       return { from, insertSingle, insertChain, updateEq, updateChain, selectMaybeSingle };
     }
 
+    // Run diagnostics are written in order in the background, so the last
+    // updates can land after the response stream has already closed.
+    async function runUpdatesThrough(
+      updateChain: ReturnType<typeof makeGenRunSupabase>["updateChain"],
+      status: string,
+    ): Promise<Record<string, unknown>[]> {
+      const updates = () => updateChain.mock.calls.map((call: unknown[]) => call[0] as Record<string, unknown>);
+      await vi.waitFor(() => expect(updates().map((update) => update?.status)).toContain(status));
+      return updates();
+    }
+
     it("creates a run in preprocessing status before attachment preprocessing and advances to completed", async () => {
       const { from, insertSingle, updateChain } = makeGenRunSupabase();
       const rpc = rpcForTurn();
@@ -2173,8 +2355,8 @@ describe("POST /api/fred/chat", () => {
       // Run was created
       expect(insertSingle).toHaveBeenCalled();
       // Status advanced at least to completed
-      const updateCalls = updateChain.mock.calls.map((call: unknown[]) => (call[0] as Record<string, unknown>)?.status);
-      expect(updateCalls).toContain("completed");
+      const updateCalls = await runUpdatesThrough(updateChain, "completed");
+      expect(updateCalls.map((update) => update?.status)).toContain("completed");
     });
 
     it("marks the run failed when attachment preprocessing throws", async () => {
@@ -2239,7 +2421,7 @@ describe("POST /api/fred/chat", () => {
       });
 
       // Run was marked failed with streaming phase
-      const updateCalls = updateChain.mock.calls.map((call: unknown[]) => call[0] as Record<string, unknown>);
+      const updateCalls = await runUpdatesThrough(updateChain, "failed");
       const failedUpdate = updateCalls.find((c) => c?.status === "failed");
       expect(failedUpdate).toBeDefined();
       expect((failedUpdate as Record<string, unknown>)?.failure_phase).toBe("streaming");
@@ -2270,7 +2452,7 @@ describe("POST /api/fred/chat", () => {
       expect(events.some((e) => e?.type === "final")).toBe(true);
 
       // Run was marked completed
-      const updateCalls = updateChain.mock.calls.map((call: unknown[]) => call[0] as Record<string, unknown>);
+      const updateCalls = await runUpdatesThrough(updateChain, "completed");
       const completedUpdate = updateCalls.find((c) => c?.status === "completed");
       expect(completedUpdate).toBeDefined();
     });
@@ -2356,7 +2538,7 @@ describe("POST /api/fred/chat", () => {
       await response.text();
 
       // The run should have conversation_id set before completion
-      const updateCalls = updateChain.mock.calls.map((call) => call[0] as Record<string, unknown>);
+      const updateCalls = await runUpdatesThrough(updateChain, "completed");
       const convUpdates = updateCalls.filter((c) => c?.conversation_id !== undefined);
       expect(convUpdates.length).toBeGreaterThanOrEqual(1);
       // At least one conversation_id update should happen before the completed status

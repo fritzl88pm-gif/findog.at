@@ -6,8 +6,16 @@ const SUPPORTED_GZ_PREFIXES = ["RV", "RS", "RM", "AW", "VH"] as const;
 const MAX_CONCURRENT_FINDOK_REQUESTS = 4;
 const DEFAULT_VERIFIED_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_NEGATIVE_CACHE_TTL_MS = 5 * 60 * 1_000;
+// Failed lookups are cached briefly so an unreachable Findok does not delay
+// every answer that cites the same decision again.
+const DEFAULT_ERROR_CACHE_TTL_MS = 30 * 1_000;
 const DEFAULT_CITATION_CACHE_ENTRIES = 1_000;
 export const FINDOK_VERIFY_TIMEOUT_MS = 8_000;
+/**
+ * A finished answer waits at most this long for its citation checks. Slower
+ * lookups keep running and fill the cache; their citations stay unlinked.
+ */
+export const FINAL_ANSWER_CITATION_WAIT_MS = 3_000;
 
 export type BfgCitationStatus = "verified" | "not_found" | "not_bfg" | "missing_pdf" | "error";
 
@@ -47,6 +55,7 @@ type BfgCitationCacheOptions = {
   now?: () => number;
   verifiedTtlMs?: number;
   negativeTtlMs?: number;
+  errorTtlMs?: number;
   maxEntries?: number;
 };
 
@@ -104,12 +113,14 @@ export class BfgCitationCache {
   private readonly now: () => number;
   private readonly verifiedTtlMs: number;
   private readonly negativeTtlMs: number;
+  private readonly errorTtlMs: number;
   private readonly maxEntries: number;
 
   constructor(options: BfgCitationCacheOptions = {}) {
     this.now = options.now ?? Date.now;
     this.verifiedTtlMs = options.verifiedTtlMs ?? DEFAULT_VERIFIED_CACHE_TTL_MS;
     this.negativeTtlMs = options.negativeTtlMs ?? DEFAULT_NEGATIVE_CACHE_TTL_MS;
+    this.errorTtlMs = options.errorTtlMs ?? DEFAULT_ERROR_CACHE_TTL_MS;
     this.maxEntries = Math.max(1, options.maxEntries ?? DEFAULT_CITATION_CACHE_ENTRIES);
   }
 
@@ -154,13 +165,11 @@ export class BfgCitationCache {
     this.entries.set(gz, entry);
     void entry.promise.then((resolution) => {
       if (this.entries.get(gz) !== entry) return;
-      if (resolution.status === "error") {
-        this.entries.delete(gz);
-        return;
-      }
       entry.resolution = resolution;
       entry.expiresAt = this.now() + (
-        resolution.status === "verified" ? this.verifiedTtlMs : this.negativeTtlMs
+        resolution.status === "verified"
+          ? this.verifiedTtlMs
+          : resolution.status === "error" ? this.errorTtlMs : this.negativeTtlMs
       );
     });
 
@@ -378,6 +387,8 @@ export async function verifyBfgCitations(
   options: {
     deadline?: Deadline;
     signal?: AbortSignal;
+    /** Stops waiting after this long; lookups already running continue into the cache. */
+    maxWaitMs?: number;
     cache?: BfgCitationCache;
     metricsNow?: () => number;
     onMetrics?: (metrics: BfgCitationBatchMetrics) => void;
@@ -399,7 +410,11 @@ export async function verifyBfgCitations(
   const results: BfgCitationResolution[] = [];
   const cacheStatuses: BfgCitationCacheStatus[] = [];
   let cursor = 0;
-  const callerSignals = [options.deadline?.signal, options.signal].filter(
+  const callerSignals = [
+    options.deadline?.signal,
+    options.signal,
+    options.maxWaitMs === undefined ? undefined : AbortSignal.timeout(options.maxWaitMs),
+  ].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
   const callerSignal = callerSignals.length > 1

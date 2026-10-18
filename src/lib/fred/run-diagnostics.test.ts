@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { isPreambleRetractingToolCall, upstreamFinalContent } from "./run-diagnostics";
+import { isPreambleRetractingToolCall, updateGenerationRun, upstreamFinalContent } from "./run-diagnostics";
 
 describe("isPreambleRetractingToolCall", () => {
   it("retracts on agent tool calls but not on final_answer or other events", () => {
@@ -20,5 +20,29 @@ describe("upstreamFinalContent", () => {
     expect(upstreamFinalContent({ response_type: "complete", data: {} })).toBe("");
     expect(upstreamFinalContent({ response_type: "complete" })).toBe("");
     expect(upstreamFinalContent({ response_type: "answer", data: { final_content: "Antwort" } })).toBe("");
+  });
+});
+
+describe("updateGenerationRun", () => {
+  it("stamps first delta and completion with the time the event happened", async () => {
+    const eq = vi.fn().mockResolvedValue({ error: null });
+    const update = vi.fn().mockReturnValue({ eq });
+    const supabase = { from: vi.fn().mockReturnValue({ update }) };
+    const occurredAt = new Date("2026-10-19T08:00:00.000Z");
+
+    await updateGenerationRun({
+      supabase: supabase as never,
+      runId: "run-1",
+      firstDelta: true,
+      completed: true,
+      occurredAt,
+    });
+
+    expect(supabase.from).toHaveBeenCalledWith("fred_generation_runs");
+    expect(update).toHaveBeenCalledWith({
+      first_delta_at: "2026-10-19T08:00:00.000Z",
+      completed_at: "2026-10-19T08:00:00.000Z",
+    });
+    expect(eq).toHaveBeenCalledWith("id", "run-1");
   });
 });

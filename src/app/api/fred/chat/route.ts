@@ -39,6 +39,7 @@ import { normalizeGeneratedArtifactLinks, parseGeneratedArtifacts } from "@/lib/
 import { UserVisibleError } from "@/lib/errors";
 import {
   extractStreamStableBfgGzCandidates,
+  FINAL_ANSWER_CITATION_WAIT_MS,
   linkVerifiedBfgCitations,
   verifyBfgCitations,
   type VerifiedBfgCitation,
@@ -112,6 +113,7 @@ import {
   createGenerationRun,
   updateGenerationRun,
   formatExactModelRoute,
+  type UpdateGenerationRunParams,
   EOF_WITHOUT_FINAL_CLIENT_MESSAGE,
   isPreambleRetractingToolCall,
   isUpstreamCompleteEvent,
@@ -670,6 +672,7 @@ function buildWebTurnUpstream(
 
 function buildWebTurnPersistence(
   supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
+  preloadedConversation: FredConversationRow | null,
 ): TurnServicePersistenceDeps {
   return {
     async recordEvent(params) {
@@ -693,6 +696,8 @@ function buildWebTurnPersistence(
       });
     },
     async loadConversation(params) {
+      // The route has already loaded this user's conversation for the turn.
+      if (preloadedConversation?.id === params.conversationId) return preloadedConversation;
       return loadOwnedConversation({
         supabase,
         userId: params.clientId,
@@ -759,6 +764,7 @@ function streamTextOnlyTurn(options: {
   agentKey: FredAgentKey;
   researchDisplayMode: "simple" | "advanced";
   receipt: FredRequestReceipt;
+  storedConversation: FredConversationRow | null;
 }): Response {
   const encoder = new TextEncoder();
   const registeredConfigs = new Map<string, FredServerConfig>();
@@ -773,6 +779,9 @@ function streamTextOnlyTurn(options: {
   const deadline = createDeadline(TOTAL_TIMEOUT_MS, {
     timeoutMessage: "Die Verarbeitung der Anfrage hat zu lange gedauert.",
   });
+  // The generating mark is ledger bookkeeping, so the turn does not wait for
+  // it. Later transitions are written after it to keep the receipt in order.
+  let generatingTransition: Promise<void> = Promise.resolve();
   const onDeadlineAbort = () => {
     if (!streamAbort.signal.aborted) streamAbort.abort(deadline.signal.reason);
   };
@@ -796,6 +805,19 @@ function streamTextOnlyTurn(options: {
             userEventId: options.receipt.userEventId,
             assistantEventId: options.receipt.assistantEventId,
             onRequestTransition: async (transition: FredRequestLifecycleTransition) => {
+              if (transition.status === "generating") {
+                generatingTransition = transitionFredRequestReceipt({
+                  supabase: options.supabase,
+                  requestId: options.receipt.requestId,
+                  ...transition,
+                }).catch(() => {
+                  console.warn("fred_request_generating_transition_failed", {
+                    requestId: options.receipt.requestId,
+                  });
+                });
+                return;
+              }
+              await generatingTransition;
               try {
                 await transitionFredRequestReceipt({
                   supabase: options.supabase,
@@ -815,7 +837,7 @@ function streamTextOnlyTurn(options: {
             signal: streamAbort.signal,
           },
           buildWebTurnUpstream(registeredConfigs),
-          buildWebTurnPersistence(options.supabase),
+          buildWebTurnPersistence(options.supabase, options.storedConversation),
           buildWebTurnConfig(registeredConfigs),
         );
         while (true) {
@@ -915,17 +937,15 @@ export async function POST(request: Request) {
       releaseAdmission();
     }
     requireActiveRequest(request);
-    const researchDisplayMode = await awaitWithIngressSignal(
-      loadResearchDisplayMode(supabase, user.id),
-      ingressDeadline?.signal,
-    );
-    requireActiveRequest(request);
-    const storedConversation = await awaitWithIngressSignal(
-      loadOwnedConversation({
-        supabase,
-        userId: user.id,
-        conversationId: body.conversationId,
-      }),
+    const [researchDisplayMode, storedConversation] = await awaitWithIngressSignal(
+      Promise.all([
+        loadResearchDisplayMode(supabase, user.id),
+        loadOwnedConversation({
+          supabase,
+          userId: user.id,
+          conversationId: body.conversationId,
+        }),
+      ]),
       ingressDeadline?.signal,
     );
     requireActiveRequest(request);
@@ -977,6 +997,7 @@ export async function POST(request: Request) {
         agentKey,
         researchDisplayMode,
         receipt: requestReceipt,
+        storedConversation,
       });
     }
     if (!ingressScanningSettings) {
@@ -1016,7 +1037,19 @@ export async function POST(request: Request) {
     let requestUpstreamStop: (() => Promise<void>) | undefined;
     let upstreamCancelRequested = false;
     let cleanedUp = false;
-    let runId: string | null = null;
+    // Run diagnostics are best-effort. They are written in order in the
+    // background, so neither the stream nor its cancellation waits for them.
+    let runWrites: Promise<string | null> = Promise.resolve(null);
+    const recordRun = (update: Omit<UpdateGenerationRunParams, "supabase" | "runId">) => {
+      const occurredAt = new Date();
+      runWrites = runWrites.then(async (runId) => {
+        if (runId) await updateGenerationRun({ supabase, runId, occurredAt, ...update });
+        return runId;
+      });
+    };
+    // The generating mark is ledger bookkeeping, so the stream does not wait
+    // for it. Later transitions are written after it to keep the order.
+    let generatingTransition: Promise<void> = Promise.resolve();
     let streamStarted = false;
     let lastTerminalStatus: string | null = null;
     let requestLedgerTerminal = false;
@@ -1076,7 +1109,7 @@ export async function POST(request: Request) {
           // Create generation run before preprocessing
           const totalAttachmentBytes = body.attachments.reduce((sum, a) => sum + a.sizeBytes, 0);
           const modelRoute = "weknora:pending";
-          runId = await createGenerationRun({
+          runWrites = createGenerationRun({
             supabase,
             clientId: user.id,
             requestId: requestReceipt.requestId,
@@ -1128,16 +1161,12 @@ export async function POST(request: Request) {
               );
               upstreamQuery = combined;
             } catch (error) {
-              if (runId) {
-                lastTerminalStatus = "failed";
-                await updateGenerationRun({
-                  supabase,
-                  runId,
-                  status: "failed",
-                  failurePhase: "preprocessing",
-                  errorCode: ERROR_CODES.PREPROCESSING_FAILED,
-                });
-              }
+              lastTerminalStatus = "failed";
+              recordRun({
+                status: "failed",
+                failurePhase: "preprocessing",
+                errorCode: ERROR_CODES.PREPROCESSING_FAILED,
+              });
               await transitionFredRequestReceipt({
                 supabase,
                 requestId: requestReceipt.requestId,
@@ -1165,9 +1194,7 @@ export async function POST(request: Request) {
 
           // Transition to connecting before upstream setup
           requestFailurePhase = "connecting";
-          if (runId) {
-            await updateGenerationRun({ supabase, runId, status: "connecting" });
-          }
+          recordRun({ status: "connecting" });
 
           // Later calls of this turn (stop, image lookup) use the token that
           // opened the stream, which may have replaced a rejected one.
@@ -1228,13 +1255,9 @@ export async function POST(request: Request) {
           }
 
           // Update model route to exact known route after upstream config is fetched
-          if (runId) {
-            const exactRoute = formatExactModelRoute({
-              agentKey,
-              agentId: upstreamConfig.agentId,
-            });
-            await updateGenerationRun({ supabase, runId, modelRoute: exactRoute });
-          }
+          recordRun({
+            modelRoute: formatExactModelRoute({ agentKey, agentId: upstreamConfig.agentId }),
+          });
 
           const userOccurredAt = new Date().toISOString();
           const { conversation, messageId: userMessageId } = await recordEvent({
@@ -1262,15 +1285,16 @@ export async function POST(request: Request) {
             userMessageId,
           });
           send(controller, { type: "conversation", conversation });
-          // Best-effort update run with conversation_id immediately
-          if (runId && conversation?.id) {
-            await updateGenerationRun({ supabase, runId, conversationId: conversation.id });
-          }
+          if (conversation?.id) recordRun({ conversationId: conversation.id });
 
-          await transitionFredRequestReceipt({
+          generatingTransition = transitionFredRequestReceipt({
             supabase,
             requestId: requestReceipt.requestId,
             status: "generating",
+          }).catch(() => {
+            console.warn("fred_request_generating_transition_failed", {
+              requestId: requestReceipt.requestId,
+            });
           });
           const upstream = await withFredEmbedSession(
             { config, signal: deadline.signal, session: embedSession },
@@ -1295,9 +1319,7 @@ export async function POST(request: Request) {
           activeUpstreamReader = upstreamReader;
           streamStarted = true;
           requestFailurePhase = "streaming";
-          if (runId) {
-            await updateGenerationRun({ supabase, runId, status: "streaming" });
-          }
+          recordRun({ status: "streaming" });
           const decoder = new TextDecoder();
           let upstreamMsgId = "";
           let stopRequested = false;
@@ -1330,6 +1352,7 @@ export async function POST(request: Request) {
             if (candidates.length === 0) return;
             const verification = await verifyBfgCitations(candidates, fetch, {
               signal: deadline.signal,
+              maxWaitMs: FINAL_ANSWER_CITATION_WAIT_MS,
               onMetrics: (metrics) => console.info("findok citation verification", {
                 path: "fred_chat",
                 ...metrics,
@@ -1434,9 +1457,9 @@ export async function POST(request: Request) {
               answerChunks.push(event.content);
               send(controller, { type: "delta", content: event.content });
               // Record first real answer delta
-              if (!firstDeltaRecorded && isAnswerDelta(parsed) && runId) {
+              if (!firstDeltaRecorded && isAnswerDelta(parsed)) {
                 firstDeltaRecorded = true;
-                void updateGenerationRun({ supabase, runId, firstDelta: true });
+                recordRun({ firstDelta: true });
               }
             }
           };
@@ -1464,16 +1487,13 @@ export async function POST(request: Request) {
 
           // EOF detection: stream ended without a complete/final answer
           if (!sawCompleteEvent && !errorAlreadyEmitted) {
-            if (runId) {
-              lastTerminalStatus = "failed";
-              await updateGenerationRun({
-                supabase,
-                runId,
-                status: "failed",
-                failurePhase: "streaming",
-                errorCode: ERROR_CODES.UPSTREAM_EOF_WITHOUT_FINAL,
-              });
-            }
+            lastTerminalStatus = "failed";
+            recordRun({
+              status: "failed",
+              failurePhase: "streaming",
+              errorCode: ERROR_CODES.UPSTREAM_EOF_WITHOUT_FINAL,
+            });
+            await generatingTransition;
             await transitionFredRequestReceipt({
               supabase,
               requestId: requestReceipt.requestId,
@@ -1575,6 +1595,7 @@ export async function POST(request: Request) {
             });
           }
           try {
+            await generatingTransition;
             await transitionFredRequestReceipt({
               supabase,
               requestId: requestReceipt.requestId,
@@ -1590,17 +1611,12 @@ export async function POST(request: Request) {
           }
           requestLedgerTerminal = true;
           // Mark run completed
-          if (runId) {
-            lastTerminalStatus = "completed";
-            const convId = finalConversation?.id;
-            await updateGenerationRun({
-              supabase,
-              runId,
-              status: "completed",
-              completed: true,
-              ...(convId ? { conversationId: convId } : {}),
-            });
-          }
+          lastTerminalStatus = "completed";
+          recordRun({
+            status: "completed",
+            completed: true,
+            ...(finalConversation?.id ? { conversationId: finalConversation.id } : {}),
+          });
           const finalEvent: Parameters<typeof encodeFredNativeStreamEvent>[0] = {
             type: "final",
             answer: displayAnswer,
@@ -1622,6 +1638,7 @@ export async function POST(request: Request) {
           const cancelled = lifetimeAbort!.signal.aborted;
           if (!requestLedgerTerminal) {
             try {
+              await generatingTransition;
               await transitionFredRequestReceipt({
                 supabase,
                 requestId: requestReceipt.requestId,
@@ -1636,12 +1653,10 @@ export async function POST(request: Request) {
               // A stale receipt is surfaced by the daily completeness check.
             }
           }
-          if (runId && lastTerminalStatus === null) {
+          if (lastTerminalStatus === null) {
             lastTerminalStatus = cancelled ? "cancelled" : "failed";
             const isTimeout = deadline.signal.aborted;
-            await updateGenerationRun({
-              supabase,
-              runId,
+            recordRun({
               status: cancelled ? "cancelled" : "failed",
               ...(!cancelled ? {
                 failurePhase: streamStarted ? "streaming" : "connecting",
@@ -1675,15 +1690,12 @@ export async function POST(request: Request) {
         const upstreamCleanup = stopAndCancelUpstream(reason);
         cleanup();
         // Mark run cancelled — exactly one terminal state, no later failed
-        if (runId && lastTerminalStatus === null) {
+        if (lastTerminalStatus === null) {
           lastTerminalStatus = "cancelled";
-          await updateGenerationRun({
-            supabase,
-            runId,
-            status: "cancelled",
-          });
+          recordRun({ status: "cancelled" });
         }
         if (!requestLedgerTerminal) {
+          await generatingTransition;
           await transitionFredRequestReceipt({
             supabase,
             requestId: requestReceipt.requestId,
