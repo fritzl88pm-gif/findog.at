@@ -36,7 +36,6 @@ import {
   fetchFredUpstreamConfig,
   fredVisitorId,
   openFredUpstreamStream,
-  relayFredWebhookEvent,
   stopFredUpstreamSession,
   fetchFredCompletedEmbedArtifacts,
 } from "@/lib/weknora/fred-native";
@@ -473,26 +472,6 @@ function buildTurnUpstream(fetchImpl: typeof fetch): TurnServiceUpstreamDeps {
       return response.body;
     },
     visitorId: (publishToken, userId) => fredVisitorId(publishToken, userId),
-    async relayEvent(params) {
-      await relayFredWebhookEvent({
-        session: {
-          token: params.sessionToken,
-          expiresIn: 0,
-          channelId: params.channelId,
-          embedOrigin: FRED_EMBED_ORIGIN,
-        },
-        config: {
-          channelId: params.channelId,
-          publishToken: params.publishToken,
-          exchangeOrigin: params.exchangeOrigin,
-        },
-        upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
-        type: params.type,
-        content: params.content,
-        signal: params.signal,
-        fetchImpl,
-      });
-    },
     async stopSession(params) {
       await stopFredUpstreamSession({
         session: {

@@ -76,7 +76,6 @@ function makeUpstreamDeps(overrides: Partial<TurnServiceUpstreamDeps> = {}): Tur
       });
     }),
     visitorId: vi.fn().mockReturnValue("visitor-hash"),
-    relayEvent: vi.fn().mockResolvedValue(undefined),
     stopSession: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -504,7 +503,6 @@ describe("executeFredTurn", () => {
       [{ status: "generating" }],
       [{ status: "failed", failurePhase: "streaming", errorCode: "turn_failed" }],
     ]);
-    expect(upstream.relayEvent).toHaveBeenCalledTimes(1);
     expect(upstream.stopSession).toHaveBeenCalledWith(expect.objectContaining({
       messageId: "answer-truncated",
     }));
@@ -544,20 +542,6 @@ describe("executeFredTurn", () => {
 
     const gen = executeFredTurn(baseRequest(), upstream, persistence, config);
     await expect(collectEvents(gen)).rejects.toThrow("Bestätigung");
-  });
-
-  it("relays webhook events for message_sent and message_received", async () => {
-    const gen = executeFredTurn(baseRequest(), upstream, persistence, config);
-    await collectEvents(gen);
-
-    expect(upstream.relayEvent).toHaveBeenCalledTimes(2);
-    expect(upstream.relayEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      type: "message_sent",
-      content: "Wie ist die Rechtslage?",
-    }));
-    expect(upstream.relayEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      type: "message_received",
-    }));
   });
 
   it("uses the caller-provided assistant event id", async () => {
@@ -731,12 +715,6 @@ describe("upstreamQuery", () => {
       content: "Originale Frage",
       eventType: "message_sent",
     }));
-
-    // relayEvent (message_sent) should receive the original query
-    expect(upstream.relayEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      content: "Originale Frage",
-    }));
-
   });
 
   it("falls back to query when upstreamQuery is absent", async () => {

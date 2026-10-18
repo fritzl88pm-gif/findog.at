@@ -99,18 +99,6 @@ export interface TurnServiceUpstreamDeps {
   }): Promise<ReadableStream<Uint8Array>>;
   /** Compute the visitor HMAC for a user. */
   visitorId(publishToken: string, userId: string): string;
-  /** Relay a webhook event (best-effort, fire-and-forget). */
-  relayEvent(params: {
-    sessionToken: string;
-    channelId: string;
-    publishToken: string;
-    exchangeOrigin: string;
-    sessionId: string;
-    sessionSignature: string;
-    type: "message_sent" | "message_received";
-    content: string;
-    signal: AbortSignal;
-  }): Promise<void>;
   /** Stop the upstream session for a given message. */
   stopSession(params: {
     sessionToken: string;
@@ -426,14 +414,6 @@ export async function* executeFredTurn(
 
     yield { type: "conversation", conversation };
     await request.onConversationEvent?.(conversation);
-
-    // Relay webhook event (best-effort)
-    void upstream.relayEvent({
-      ...sessionConfigCache,
-      type: "message_sent",
-      content: request.query,
-      signal: request.signal ? request.signal : new AbortController().signal,
-    }).catch(() => undefined);
 
     // ── Open upstream stream ────────────────────────────────────────────────
     const visitorId = upstream.visitorId(fredConfig.publishToken, request.clientId);
@@ -794,13 +774,6 @@ export async function* executeFredTurn(
       });
       requestTerminal = true;
     }
-
-    void upstream.relayEvent({
-      ...sessionConfigCache,
-      type: "message_received",
-      content: rawAnswer,
-      signal: request.signal ? request.signal : new AbortController().signal,
-    }).catch(() => undefined);
 
     yield {
       type: "final",

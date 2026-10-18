@@ -21,7 +21,6 @@ import {
   fetchFredCompletedEmbedArtifacts,
   fetchFredUpstreamConfig,
   openFredUpstreamStream,
-  relayFredWebhookEvent,
   stopFredUpstreamSession,
 } from "@/lib/weknora/fred-native";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
@@ -101,7 +100,6 @@ vi.mock("@/lib/weknora/fred-native", async (importOriginal) => {
     fetchFredUpstreamConfig: vi.fn(),
     fredVisitorId: vi.fn(() => "visitor-hash"),
     openFredUpstreamStream: vi.fn(),
-    relayFredWebhookEvent: vi.fn(() => Promise.resolve()),
     stopFredUpstreamSession: vi.fn(() => Promise.resolve()),
   };
 });
@@ -331,7 +329,6 @@ describe("POST /api/fred/chat", () => {
         session_id: "session-1",
       }),
     });
-    expect(relayFredWebhookEvent).toHaveBeenCalledTimes(2);
     expect(stopFredUpstreamSession).not.toHaveBeenCalled();
   });
 
@@ -1029,7 +1026,6 @@ describe("POST /api/fred/chat", () => {
     expect(fetchFredUpstreamConfig).not.toHaveBeenCalled();
     expect(createFredUpstreamSession).not.toHaveBeenCalled();
     expect(openFredUpstreamStream).not.toHaveBeenCalled();
-    expect(relayFredWebhookEvent).not.toHaveBeenCalled();
     expect(stopFredUpstreamSession).not.toHaveBeenCalled();
     expect(mockRecordAdminRequest).not.toHaveBeenCalled();
     expect(rpc).not.toHaveBeenCalled();
@@ -1211,7 +1207,6 @@ describe("POST /api/fred/chat", () => {
       error: "Bild-Upload ist für Fred derzeit nicht freigeschaltet.",
     });
     expect(openFredUpstreamStream).not.toHaveBeenCalled();
-    expect(relayFredWebhookEvent).not.toHaveBeenCalled();
     expect(rpc).not.toHaveBeenCalled();
   });
 
@@ -1282,7 +1277,6 @@ describe("POST /api/fred/chat", () => {
     });
     expect(fetchFredUpstreamConfig).toHaveBeenCalledTimes(1);
     expect(openFredUpstreamStream).not.toHaveBeenCalled();
-    expect(relayFredWebhookEvent).not.toHaveBeenCalled();
     expect(rpc).not.toHaveBeenCalled();
   });
 
@@ -1359,7 +1353,6 @@ describe("POST /api/fred/chat", () => {
     expect(createFredUpstreamSession).not.toHaveBeenCalled();
     expect(openFredUpstreamStream).not.toHaveBeenCalled();
     expect(stopFredUpstreamSession).not.toHaveBeenCalled();
-    expect(relayFredWebhookEvent).not.toHaveBeenCalled();
   });
 
 

@@ -84,7 +84,6 @@ import {
   fetchFredUpstreamConfig,
   fredVisitorId,
   openFredUpstreamStream,
-  relayFredWebhookEvent,
   stopFredUpstreamSession,
   type FredNativeAttachmentUpload,
   type FredUpstreamSession,
@@ -651,21 +650,6 @@ function buildWebTurnUpstream(
       return response.body;
     },
     visitorId: (publishToken, userId) => fredVisitorId(publishToken, userId),
-    async relayEvent(params) {
-      await relayFredWebhookEvent({
-        session: {
-          token: params.sessionToken,
-          expiresIn: 0,
-          channelId: params.channelId,
-          embedOrigin: FRED_EMBED_ORIGIN,
-        },
-        config: serverConfig(params.channelId),
-        upstreamSession: { id: params.sessionId, signature: params.sessionSignature },
-        type: params.type,
-        content: params.content,
-        signal: params.signal,
-      });
-    },
     async stopSession(params) {
       await stopFredUpstreamSession({
         session: {
@@ -1293,14 +1277,6 @@ export async function POST(request: Request) {
           if (runId && conversation?.id) {
             await updateGenerationRun({ supabase, runId, conversationId: conversation.id });
           }
-          void relayFredWebhookEvent({
-            session: embedSession,
-            config,
-            upstreamSession,
-            type: "message_sent",
-            content: body.query,
-            signal: deadline.signal,
-          });
 
           await transitionFredRequestReceipt({
             supabase,
@@ -1652,14 +1628,6 @@ export async function POST(request: Request) {
               ...(convId ? { conversationId: convId } : {}),
             });
           }
-          void relayFredWebhookEvent({
-            session: embedSession,
-            config,
-            upstreamSession,
-            type: "message_received",
-            content: rawAnswer,
-            signal: deadline.signal,
-          });
           const finalEvent: Parameters<typeof encodeFredNativeStreamEvent>[0] = {
             type: "final",
             answer: displayAnswer,

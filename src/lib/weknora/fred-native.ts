@@ -336,39 +336,6 @@ export async function openFredUpstreamStream(options: {
   return response;
 }
 
-export function relayFredWebhookEvent(options: {
-  session: FredEmbedSession;
-  config: FredEmbedServerConfig;
-  upstreamSession: FredUpstreamSession;
-  type: "message_sent" | "message_received";
-  content: string;
-  signal: AbortSignal;
-  fetchImpl?: typeof fetch;
-}): Promise<void> {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  return fetchImpl(
-    `${FRED_EMBED_ORIGIN}/api/v1/embed/${encodeURIComponent(options.config.channelId)}/sessions/${encodeURIComponent(options.upstreamSession.id)}/events`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Embed ${options.session.token}`,
-        "Content-Type": "application/json",
-        Origin: options.config.exchangeOrigin,
-        "X-Embed-Session": options.upstreamSession.signature,
-      },
-      body: JSON.stringify({
-        type: options.type,
-        session_id: options.upstreamSession.id,
-        ...(options.type === "message_sent"
-          ? { query: options.content }
-          : { content: options.content }),
-      }),
-      cache: "no-store",
-      signal: options.signal,
-    },
-  ).then(() => undefined).catch(() => undefined);
-}
-
 export function stopFredUpstreamSession(options: {
   session: FredEmbedSession;
   config: FredEmbedServerConfig;

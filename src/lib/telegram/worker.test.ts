@@ -2779,7 +2779,7 @@ describe("worker capacity and generation deadlines", () => {
       deriveSessionSignature: vi.fn().mockReturnValue("signature"),
       visitorId: vi.fn().mockReturnValue("visitor"),
       openStream: vi.fn().mockResolvedValue(stream),
-      relayEvent: vi.fn().mockResolvedValue(undefined), stopSession: vi.fn().mockResolvedValue(undefined),
+      stopSession: vi.fn().mockResolvedValue(undefined),
     };
     const persistence: TurnServicePersistenceDeps = {
       loadConversation: vi.fn().mockResolvedValue(null),
