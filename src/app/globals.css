@@ -1491,6 +1491,18 @@ textarea:focus {
   word-break: break-word;
 }
 
+.reasoning-placeholder {
+  padding: 0 0.15em;
+  border-radius: 3px;
+  background: rgba(255, 212, 0, 0.45);
+  color: inherit;
+}
+
+.reasoning-placeholder-optional {
+  background: rgba(40, 111, 156, 0.16);
+  font-style: italic;
+}
+
 .reasoning-card-footer {
   display: flex;
   align-items: center;

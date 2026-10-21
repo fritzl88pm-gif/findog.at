@@ -16,6 +16,7 @@ import {
   type ReasoningSortBy,
 } from "@/lib/reasonings-library";
 import CopyIconButton from "@/components/copy-icon-button";
+import { splitPlaceholders } from "@/lib/reasoning-placeholders";
 
 type ReasoningCategory = {
   id: string;
@@ -1023,7 +1024,20 @@ export default function ReasoningsView({ accessToken }: ReasoningsViewProps) {
                       hidden={!isExpanded}
                       className="reasoning-card-body"
                     >
-                      <p className="reasoning-card-content">{reasoning.content}</p>
+                      <p className="reasoning-card-content">
+                        {splitPlaceholders(reasoning.content).map((segment, index) =>
+                          segment.type === "placeholder" ? (
+                            <mark
+                              key={index}
+                              className={segment.optional ? "reasoning-placeholder reasoning-placeholder-optional" : "reasoning-placeholder"}
+                            >
+                              {segment.value}
+                            </mark>
+                          ) : (
+                            segment.value
+                          ),
+                        )}
+                      </p>
                       <div className="reasoning-card-footer">
                         <div className="reasoning-card-categories">
                           {reasoning.categoryIds.flatMap((categoryId) => {
