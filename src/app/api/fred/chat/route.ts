@@ -104,7 +104,9 @@ import {
   type FredResearchStep,
   type FredSourceReference,
 } from "@/lib/weknora/fred-research";
+import { stripSourceReferenceIds } from "@/lib/fred/execution-sanitize";
 import {
+  finalizeExecutionTrace,
   mergeFredExecutionStep,
   mergeFredExecutionUpdate,
   parseWeKnoraExecutionEvent,
@@ -1521,6 +1523,7 @@ export async function POST(request: Request) {
               502,
             );
           }
+          if (isAdvanced) executionTrace = finalizeExecutionTrace(executionTrace);
           await verifyFinalCitations(plainFinalAnswer);
           const finalAnswer = linkVerifiedBfgCitations(
             plainFinalAnswer,
@@ -1622,7 +1625,7 @@ export async function POST(request: Request) {
             conversation: finalConversation,
             researchTrace,
             executionTrace: isAdvanced ? executionTrace : undefined,
-            sourceReferences,
+            sourceReferences: isAdvanced ? stripSourceReferenceIds(sourceReferences) : sourceReferences,
             ...(persistedGeneratedArtifacts.length > 0 ? { artifacts: persistedGeneratedArtifacts } : {}),
           };
           if (assistantMessageId !== undefined) {

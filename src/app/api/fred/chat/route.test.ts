@@ -2178,9 +2178,10 @@ describe("POST /api/fred/chat", () => {
       expect(executionEvents[0]).toMatchObject({
         type: "execution",
         step: expect.objectContaining({
+          id: "analysis:phase",
           kind: "analysis",
-          label: "Anfrage an Fred übermittelt",
-          status: "completed",
+          label: "Analysiert die Anfrage",
+          status: "running",
         }),
       });
       expect(executionEvents).toContainEqual({

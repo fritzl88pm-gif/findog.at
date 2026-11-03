@@ -43,6 +43,7 @@ import {
   getWelcomeImage,
 } from "@/lib/chat/welcome";
 import FredArtifactCards from "@/components/fred-artifact-cards";
+import { ExecutionTimeline } from "@/components/fred-execution-view";
 import {
   MAX_REASONING_CATEGORY_NAME_CHARS,
   MAX_REASONING_CONTENT_CHARS,
@@ -245,92 +246,6 @@ export function resolveResearchTraceDisplay({
   return { shouldRender: false, isAdvanced: false, summary: "" };
 }
 
-function ExecutionPayload({ summary, text, className, open }: {
-  summary: string;
-  text: string;
-  className: string;
-  open?: boolean;
-}) {
-  return (
-    <details className="fred-execution-payload-fold" open={open ? true : undefined}>
-      <summary>{summary}</summary>
-      <pre className={className}>{text}</pre>
-    </details>
-  );
-}
-
-function ExecutionStepList({ steps }: { steps: FredExecutionStep[] }) {
-  const ids = new Set(steps.map((step) => step.id));
-  const childrenOf = new Map<string, FredExecutionStep[]>();
-  const topLevel: FredExecutionStep[] = [];
-  for (const step of steps) {
-    if (step.parentId && step.parentId !== step.id && ids.has(step.parentId)) {
-      childrenOf.set(step.parentId, [...(childrenOf.get(step.parentId) ?? []), step]);
-    } else {
-      topLevel.push(step);
-    }
-  }
-
-  const renderList = (list: FredExecutionStep[], nested: boolean): React.ReactElement => nested ? (
-    <ol className="fred-execution-steps fred-execution-children">{list.map(renderStep)}</ol>
-  ) : (
-    <ol className="fred-execution-steps">{list.map(renderStep)}</ol>
-  );
-
-  function renderStep(step: FredExecutionStep): React.ReactElement {
-    const children = childrenOf.get(step.id);
-    return (
-      <li className={`is-${step.status} kind-${step.kind}`} key={step.id}>
-        <span className="fred-execution-status" aria-hidden="true" />
-        <div className="fred-execution-body">
-          <div className="fred-execution-header">
-            <span className="fred-execution-label">{step.label}</span>
-            {step.toolName && step.toolName !== "thinking" ? (
-              <code className="fred-execution-tool-name">{step.toolName}</code>
-            ) : null}
-            {step.durationMs !== undefined ? (
-              <small className="fred-execution-duration">
-                {(step.durationMs / 1_000).toLocaleString("de-AT", { maximumFractionDigits: 1 })} s
-              </small>
-            ) : null}
-          </div>
-          {step.detail ? (
-            step.detail.length > 400 ? (
-              <details
-                className="fred-execution-detail-fold"
-                open={step.status === "running" ? true : undefined}
-              >
-                <summary>Details</summary>
-                <div className="fred-execution-detail">{step.detail}</div>
-              </details>
-            ) : (
-              <div className="fred-execution-detail">{step.detail}</div>
-            )
-          ) : null}
-          {step.arguments ? (
-            <ExecutionPayload summary="Parameter" text={step.arguments} className="fred-execution-payload" />
-          ) : null}
-          {step.result ? (
-            <ExecutionPayload summary="Ergebnis" text={step.result} className="fred-execution-payload" />
-          ) : null}
-          {step.command && !step.arguments ? <code className="fred-execution-command">{step.command}</code> : null}
-          {step.output ? (
-            <ExecutionPayload
-              summary="Ausgabe"
-              text={step.output}
-              className="fred-execution-terminal"
-              open={step.status === "running"}
-            />
-          ) : null}
-          {children ? renderList(children, true) : null}
-        </div>
-      </li>
-    );
-  }
-
-  return renderList(topLevel, false);
-}
-
 export function ResearchTrace({
   steps,
   sources,
@@ -358,13 +273,16 @@ export function ResearchTrace({
   if (!displayState.shouldRender) return null;
 
   return (
-    <details className="fred-research-trace" open={active}>
+    <details
+      className={displayState.isAdvanced ? "fred-research-trace is-advanced" : "fred-research-trace"}
+      open={active}
+    >
       <summary>
         <span className={active ? "fred-research-pulse" : "fred-research-check"} aria-hidden="true" />
         {displayState.summary}
       </summary>
       {displayState.isAdvanced && executionSteps ? (
-        <ExecutionStepList steps={executionSteps} />
+        <ExecutionTimeline steps={executionSteps} references={sources} />
       ) : (
         <ol className="fred-research-steps">
           {steps.map((step) => (
@@ -380,7 +298,7 @@ export function ResearchTrace({
           ))}
         </ol>
       )}
-      {sources.length > 0 ? (
+      {sources.length > 0 && !displayState.isAdvanced ? (
         <div className="fred-research-sources">
           <strong>Gefundene Quellen</strong>
           <div>
@@ -389,21 +307,8 @@ export function ResearchTrace({
                 {source.title || new URL(source.url).hostname}
               </a>
             ) : displayMode === "advanced" ? (
-              <span
-                className="fred-knowledge-source-advanced"
-                title={source.chunkId ? `Chunk: ${source.chunkId}` : undefined}
-                key={`kb-${source.knowledgeBaseId ?? ""}-${source.chunkId ?? ""}-${index}`}
-              >
-                <span className="fred-source-doc">{source.doc}</span>
-                {(source.knowledgeBaseId || source.chunkId) ? (
-                  <small className="fred-source-meta">
-                    {[
-                      source.knowledgeBaseId ? `KB ${source.knowledgeBaseId.slice(0, 8)}` : null,
-                      source.chunkId ? `Chunk ${source.chunkId.slice(0, 8)}` : null,
-                    ].filter(Boolean).join(" · ")}
-                  </small>
-                ) : null}
-              </span>
+              // Advanced mode never exposes internal knowledge-base / chunk ids.
+              <span key={`kb-${index}`}>{source.doc}</span>
             ) : (
               <span title={source.chunkId ? `Chunk: ${source.chunkId}` : undefined} key={`kb-${source.knowledgeBaseId ?? ""}-${source.chunkId ?? ""}-${index}`}>
                 {source.doc}

@@ -16,7 +16,8 @@ import {
   parseStoredFredSources,
   transformWeKnoraAnswer,
 } from "@/lib/weknora/fred-research";
-import { parseStoredFredExecutionTrace } from "@/lib/fred/execution-trace";
+import { stripSourceReferenceIds } from "@/lib/fred/execution-sanitize";
+import { sanitizeStoredExecutionTrace } from "@/lib/fred/execution-trace";
 import { parseStoredFredArtifacts } from "@/lib/fred-native-stream";
 
 export const runtime = "nodejs";
@@ -176,6 +177,14 @@ export async function GET(
               { target: "fullText" },
             )
           : message.displayTransformation.text;
+        // Stored traces may predate the redesign: strip reasoning text, internal ids and raw payloads on read.
+        const executionTrace = sanitizeStoredExecutionTrace(message.execution_trace, { finalize: true });
+        const sourceReferences = mergeFredSources(
+          parseStoredFredSources(message.source_references),
+          message.rawTransformation.sources,
+          message.displayTransformation.sources,
+          verifiedCitationSources(messageCitations),
+        );
         return {
           id: message.id,
           role: message.role,
@@ -186,13 +195,8 @@ export async function GET(
           webSearchEnabled: message.web_search_enabled,
           artifacts: parseStoredFredArtifacts(message.artifacts),
           researchTrace: parseStoredFredResearchTrace(message.research_trace),
-          executionTrace: parseStoredFredExecutionTrace(message.execution_trace),
-          sourceReferences: mergeFredSources(
-            parseStoredFredSources(message.source_references),
-            message.rawTransformation.sources,
-            message.displayTransformation.sources,
-            verifiedCitationSources(messageCitations),
-          ),
+          executionTrace,
+          sourceReferences: executionTrace.length > 0 ? stripSourceReferenceIds(sourceReferences) : sourceReferences,
         };
       }),
     });

@@ -11,6 +11,10 @@ const viewSource = readFileSync(
   fileURLToPath(new URL("../components/fred-native-chat-view.tsx", import.meta.url)),
   "utf8",
 );
+const timelineSource = readFileSync(
+  fileURLToPath(new URL("../components/fred-execution-view.tsx", import.meta.url)),
+  "utf8",
+);
 const richAnswerSource = readFileSync(
   fileURLToPath(new URL("../components/rich-answer.tsx", import.meta.url)),
   "utf8",
@@ -573,7 +577,7 @@ describe("Fred ResearchTrace rendering", () => {
   });
 
   it("keeps the active trace open and collapses the completed trace", () => {
-    expect(viewSource).toContain("<details className=\"fred-research-trace\" open={active}>");
+    expect(viewSource).toMatch(/<details\s+className=\{displayState\.isAdvanced \? "fred-research-trace is-advanced" : "fred-research-trace"\}\s+open=\{active\}/u);
     expect(viewSource).toMatch(/steps=\{message\.researchTrace \?\? \[\]\}[\s\S]*?active=\{false\}/u);
     expect(viewSource).toMatch(/steps=\{activeAssistant\.researchTrace \?\? \[\]\}[\s\S]*?\n\s+active\n/u);
   });
@@ -588,14 +592,17 @@ describe("Fred ResearchTrace rendering", () => {
     expect(viewSource).toMatch(/displayMode=\{researchDisplayMode\}/u);
   });
 
-  it("renders advanced execution steps when displayMode is advanced and executionSteps exist", () => {
-    expect(viewSource).toContain("className=\"fred-execution-steps\"");
-    expect(viewSource).toContain("className=\"fred-execution-status\"");
-    expect(viewSource).toContain("className=\"fred-execution-body\"");
-    expect(viewSource).toContain("className=\"fred-execution-header\"");
-    expect(viewSource).toContain("className=\"fred-execution-label\"");
-    expect(viewSource).toContain("className=\"fred-execution-duration\"");
-    expect(viewSource).toContain("className=\"fred-execution-detail\"");
+  it("renders advanced execution steps through the dedicated timeline component", () => {
+    expect(viewSource).toContain('import { ExecutionTimeline } from "@/components/fred-execution-view";');
+    expect(viewSource).toContain("<ExecutionTimeline steps={executionSteps} references={sources} />");
+    expect(timelineSource).toContain('"fred-exec-timeline fred-exec-children"');
+    expect(timelineSource).toContain('className="fred-exec-card"');
+    expect(timelineSource).toContain('className="fred-exec-label"');
+    expect(timelineSource).toContain("fred-exec-duration");
+    expect(timelineSource).toContain("fred-source-card");
+    // No raw payload blocks anymore.
+    expect(timelineSource).not.toContain("JSON.stringify");
+    expect(viewSource).not.toContain("ExecutionPayload");
   });
 
   it("retains an advanced trace when a turn fails before the first answer delta", () => {
@@ -604,14 +611,16 @@ describe("Fred ResearchTrace rendering", () => {
     expect(viewSource).toContain("content: answerChunks.join(\"\")");
   });
 
-  it("defines consistent CSS styles for execution steps in globals.css", () => {
-    expect(cssSource).toContain(".fred-execution-steps");
-    expect(cssSource).toContain(".fred-execution-status");
-    expect(cssSource).toContain(".fred-execution-body");
-    expect(cssSource).toContain(".fred-execution-header");
-    expect(cssSource).toContain(".fred-execution-label");
-    expect(cssSource).toContain(".fred-execution-duration");
-    expect(cssSource).toContain(".fred-execution-detail");
+  it("defines consistent CSS styles for the execution timeline in globals.css", () => {
+    for (const selector of [
+      ".fred-exec-timeline", ".fred-exec-step", ".fred-exec-marker", ".fred-exec-card", ".fred-exec-title",
+      ".fred-exec-duration", ".fred-exec-overview", ".fred-exec-terminal", ".fred-source-card", ".fred-source-meter",
+      ".fred-source-fulltext", ".fred-exec-chip",
+    ]) {
+      expect(cssSource).toContain(selector);
+    }
+    expect(cssSource).not.toContain(".fred-execution-payload");
+    expect(cssSource).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.fred-exec-step\.is-running \.fred-exec-marker/u);
   });
 
   it("strictly hides execution-only traces in simple mode while supporting advanced mode with simple fallbacks", () => {

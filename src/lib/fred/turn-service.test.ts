@@ -808,19 +808,23 @@ describe("researchDisplayMode", () => {
     expect(execEvents[0]).toMatchObject({
       type: "execution",
       step: {
+        id: "analysis:phase",
         kind: "analysis",
-        label: "Anfrage an Fred übermittelt",
-        status: "completed",
+        label: "Analysiert die Anfrage",
+        status: "running",
       },
     });
+    // The reasoning text of the thinking event never leaves the server.
+    expect(JSON.stringify(events)).not.toContain("secret reasoning");
     expect(execEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           type: "execution",
           step: expect.objectContaining({
-            id: expect.stringMatching(/^analysis:[a-z0-9]+$/u),
+            id: "analysis:phase",
             kind: "analysis",
-            label: "Anfrage wird analysiert",
+            status: "completed",
+            label: "Anfrage analysiert",
           }),
         }),
         expect.objectContaining({
@@ -838,7 +842,7 @@ describe("researchDisplayMode", () => {
     expect(finalEvent).toMatchObject({
       type: "final",
       executionTrace: expect.arrayContaining([
-        expect.objectContaining({ id: expect.stringMatching(/^analysis:/u), kind: "analysis" }),
+        expect.objectContaining({ id: "analysis:phase", kind: "analysis", status: "completed" }),
         expect.objectContaining({ id: expect.stringMatching(/^planning:/u), kind: "planning" }),
       ]),
     });
@@ -846,7 +850,7 @@ describe("researchDisplayMode", () => {
     expect(persistence.recordEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
       eventType: "message_received",
       executionTrace: expect.arrayContaining([
-        expect.objectContaining({ id: expect.stringMatching(/^analysis:/u), kind: "analysis" }),
+        expect.objectContaining({ id: "analysis:phase", kind: "analysis" }),
       ]),
     }));
   });
@@ -884,13 +888,17 @@ describe("researchDisplayMode", () => {
     const { events } = await collectEvents(gen);
 
     const finalEvent = events.find((e) => e.type === "final");
+    // Advanced mode never sends knowledge-base / chunk ids to the browser ...
     expect(finalEvent).toMatchObject({
       type: "final",
       sourceReferences: [
         { kind: "web", url: "https://www.bmf.gv.at/tax", title: "BMF Tax" },
-        { kind: "knowledge", doc: "EStG 2025", chunkId: "chk-1", knowledgeBaseId: "kb-at" },
+        { kind: "knowledge", doc: "EStG 2025" },
       ],
     });
+    expect(JSON.stringify(finalEvent)).not.toContain("chk-1");
+    expect(JSON.stringify(finalEvent)).not.toContain("kb-at");
+    // ... while the stored references keep them for server-side use.
 
     expect(persistence.recordEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
       eventType: "message_received",

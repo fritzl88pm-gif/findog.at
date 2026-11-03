@@ -2825,119 +2825,6 @@ textarea:focus {
   font-size: 0.72rem;
 }
 
-.fred-execution-steps {
-  display: grid;
-  gap: 10px;
-  margin: 0;
-  padding: 2px 12px 12px 30px;
-  list-style: none;
-}
-
-.fred-execution-steps li {
-  position: relative;
-  min-width: 0;
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  color: var(--ink);
-  font-size: 0.8rem;
-  line-height: 1.4;
-}
-
-.fred-execution-status {
-  flex: 0 0 8px;
-  width: 8px;
-  height: 8px;
-  margin-top: 5px;
-  border: 2px solid rgba(40, 111, 156, 0.4);
-  border-radius: 50%;
-}
-
-.fred-execution-steps li.is-running > .fred-execution-status {
-  border-color: var(--bmf-blue);
-  background: var(--bmf-blue);
-  animation: fredResearchPulse 1.2s ease-in-out infinite;
-}
-
-.fred-execution-steps li.is-completed > .fred-execution-status {
-  border-color: #25834a;
-  background: #25834a;
-}
-
-.fred-execution-steps li.is-failed > .fred-execution-status {
-  border-color: #b33a3a;
-  background: #b33a3a;
-}
-
-.fred-execution-body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  flex: 1;
-}
-
-.fred-execution-header {
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  flex-wrap: wrap;
-}
-
-.fred-execution-label {
-  font-weight: 550;
-  color: var(--ink);
-}
-
-.fred-execution-duration {
-  color: var(--muted);
-  font-size: 0.72rem;
-  white-space: nowrap;
-}
-
-.fred-execution-detail {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  font-size: 0.74rem;
-  color: var(--muted);
-  line-height: 1.35;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.fred-execution-detail-fold {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  margin-top: 4px;
-}
-
-.fred-execution-detail-fold > summary {
-  display: block;
-  width: 100%;
-  list-style: none;
-  cursor: pointer;
-  font-size: 0.72rem;
-  font-weight: 550;
-  color: var(--bmf-blue);
-  user-select: none;
-}
-
-.fred-execution-detail-fold > summary::-webkit-details-marker {
-  display: none;
-}
-
-.fred-execution-detail-fold > summary:hover {
-  text-decoration: underline;
-}
-
-.fred-execution-detail-fold[open] > summary {
-  margin-bottom: 4px;
-}
-
 .fred-research-sources {
   padding: 10px 12px 12px;
   border-top: 1px solid rgba(40, 111, 156, 0.12);
@@ -13345,90 +13232,719 @@ textarea:focus {
 }
 /* The podium is intentionally static, including under prefers-reduced-motion. */
 
-.fred-execution-payload-fold {
-  display: block;
-  width: 100%;
-  max-width: 100%;
+/* ───────────────────────────── Advanced execution view ───────────────────────────── */
+
+.fred-research-trace.is-advanced {
+  background: linear-gradient(160deg, rgba(40, 111, 156, 0.05), rgba(255, 255, 255, 0.9) 55%, rgba(255, 212, 0, 0.06));
+  box-shadow: var(--shadow-sm);
+}
+
+.fred-exec {
+  --exec-line: rgba(40, 111, 156, 0.22);
+  --exec-ok: #1f7a45;
+  --exec-fail: var(--danger);
+  display: grid;
   min-width: 0;
-  margin-top: 4px;
+  gap: 14px;
+  padding: 2px 12px 14px;
 }
 
-.fred-execution-payload-fold > summary {
-  display: block;
-  width: 100%;
+.fred-exec,
+.fred-exec * {
+  min-width: 0;
+}
+
+.fred-exec-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Overview chips */
+.fred-exec-overview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
   list-style: none;
-  cursor: pointer;
-  font-size: 0.72rem;
-  font-weight: 550;
-  color: var(--bmf-blue);
-  user-select: none;
 }
 
-.fred-execution-payload-fold > summary::-webkit-details-marker {
+.fred-exec-overview li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  border: 1px solid rgba(40, 111, 156, 0.18);
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.fred-exec-overview strong {
+  color: var(--bmf-blue-deep);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Timeline */
+.fred-exec-timeline {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fred-exec-timeline.fred-exec-children {
+  margin-top: 10px;
+  gap: 8px;
+}
+
+.fred-exec-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  column-gap: 10px;
+}
+
+/* connecting line between markers */
+.fred-exec-step::before {
+  position: absolute;
+  top: 30px;
+  bottom: -12px;
+  left: 13px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--exec-line);
+  content: "";
+}
+
+.fred-exec-step:last-child::before {
   display: none;
 }
 
-.fred-execution-payload-fold > summary:hover {
+.fred-exec-marker {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1.5px solid rgba(40, 111, 156, 0.35);
+  border-radius: 50%;
+  background: #fff;
+  color: var(--bmf-blue);
+}
+
+.fred-exec-icon {
+  display: block;
+}
+
+.fred-exec-marker-status {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--exec-ok);
+  color: #fff;
+}
+
+.fred-exec-status-icon {
+  display: block;
+  width: 9px;
+  height: 9px;
+}
+
+.fred-exec-step.is-running .fred-exec-marker {
+  border-color: var(--bmf-blue);
+  box-shadow: 0 0 0 0 rgba(40, 111, 156, 0.3);
+  animation: fredExecPulse 1.8s ease-out infinite;
+}
+
+.fred-exec-step.is-running .fred-exec-marker-status {
+  background: var(--accent-yellow);
+}
+
+.fred-exec-step.is-failed .fred-exec-marker {
+  border-color: rgba(179, 38, 30, 0.55);
+  color: var(--exec-fail);
+}
+
+.fred-exec-step.is-failed .fred-exec-marker-status {
+  background: var(--exec-fail);
+}
+
+.fred-exec-spinner {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border: 2px solid rgba(19, 53, 75, 0.25);
+  border-top-color: var(--bmf-blue-deep);
+  border-radius: 50%;
+  animation: fredExecSpin 0.8s linear infinite;
+}
+
+.fred-exec-card {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(40, 111, 156, 0.14);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  background: #fff;
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.fred-exec-card:hover {
+  border-color: rgba(40, 111, 156, 0.28);
+}
+
+.fred-exec-step.is-running > .fred-exec-card {
+  border-color: rgba(40, 111, 156, 0.4);
+  background-image: linear-gradient(100deg, transparent 20%, rgba(255, 212, 0, 0.14) 50%, transparent 80%);
+  background-size: 240% 100%;
+  animation: fredExecShimmer 2.4s ease-in-out infinite;
+}
+
+.fred-exec-step.is-failed > .fred-exec-card {
+  border-color: rgba(179, 38, 30, 0.35);
+  background: #fff8f7;
+}
+
+.fred-exec-fold > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.fred-exec-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fred-exec-fold > summary:focus-visible {
+  outline: 2px solid var(--bmf-blue);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.fred-exec-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.fred-exec-title {
+  flex: 1 1 10ch;
+  font-size: 0.84rem;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--bmf-blue-deep);
+  overflow-wrap: anywhere;
+}
+
+.fred-exec-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.fred-exec-meta,
+.fred-exec-duration {
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: rgba(40, 111, 156, 0.08);
+  color: var(--bmf-blue-dark);
+  font-size: 0.68rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fred-exec-duration {
+  background: transparent;
+  color: var(--muted);
+}
+
+.fred-exec-chevron {
+  width: 8px;
+  height: 8px;
+  margin-right: 2px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform 0.25s ease;
+}
+
+.fred-exec-fold[open] > summary .fred-exec-chevron {
+  transform: rotate(225deg);
+}
+
+.fred-exec-chips {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.fred-exec-chip {
+  max-width: 100%;
+  border: 1px solid rgba(40, 111, 156, 0.2);
+  border-radius: 999px;
+  padding: 2px 9px;
+  background: rgba(40, 111, 156, 0.06);
+  color: var(--bmf-blue-deep);
+  font-size: 0.72rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.fred-exec-task,
+.fred-exec-summary {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.fred-exec-error {
+  margin: 6px 0 0;
+  border-radius: 8px;
+  padding: 4px 9px;
+  background: rgba(179, 38, 30, 0.08);
+  color: #8f1d17;
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.fred-exec-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(40, 111, 156, 0.2);
+}
+
+.fred-exec-fold[open] > .fred-exec-body {
+  animation: fredExecReveal 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.fred-exec-children {
+  padding-left: 0;
+}
+
+/* Planning checklist */
+.fred-exec-checklist {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.78rem;
+}
+
+.fred-exec-checklist li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.fred-exec-check-box {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border: 1.5px solid rgba(40, 111, 156, 0.45);
+  border-radius: 4px;
+}
+
+.fred-exec-checklist li.is-done .fred-exec-check-box {
+  border-color: var(--exec-ok);
+  background: var(--exec-ok) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E") center / 11px no-repeat;
+}
+
+.fred-exec-checklist li.is-done > span:not(.fred-exec-check-box):not(.fred-exec-sr-only) {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: rgba(98, 114, 128, 0.5);
+}
+
+.fred-exec-checklist li.is-active .fred-exec-check-box {
+  border-color: var(--bmf-blue);
+  background: linear-gradient(90deg, var(--accent-yellow) 50%, transparent 50%);
+}
+
+/* Facts */
+.fred-exec-facts {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  font-size: 0.76rem;
+}
+
+.fred-exec-facts > div {
+  display: grid;
+  grid-template-columns: minmax(70px, 28%) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.fred-exec-facts dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.fred-exec-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Terminal */
+.fred-exec-terminal {
+  overflow: hidden;
+  border: 1px solid #1f2937;
+  border-radius: 10px;
+  background: #0f1722;
+}
+
+.fred-exec-terminal-bar {
+  display: flex;
+  gap: 5px;
+  padding: 6px 10px;
+  background: #18222f;
+}
+
+.fred-exec-terminal-bar i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b4a5c;
+}
+
+.fred-exec-terminal-bar i:first-child { background: #e0625a; }
+.fred-exec-terminal-bar i:nth-child(2) { background: var(--accent-yellow); }
+.fred-exec-terminal-bar i:nth-child(3) { background: #4fb477; }
+
+.fred-exec-terminal-body {
+  max-height: 16rem;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  color: #dbe5ee;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.fred-exec-prompt {
+  color: #8fd0ff;
+}
+
+/* Source cards */
+.fred-exec-sources {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(40, 111, 156, 0.14);
+}
+
+.fred-exec-section-title {
+  margin: 0;
+  color: var(--bmf-blue-deep);
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.fred-source-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  gap: 8px;
+}
+
+.fred-source-card {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  border: 1px solid rgba(40, 111, 156, 0.16);
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: linear-gradient(180deg, #fff, #f8fbfd);
+  overflow-wrap: anywhere;
+}
+
+.fred-source-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+
+.fred-source-card-title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--bmf-blue-deep);
+}
+
+.fred-source-card-title a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgba(40, 111, 156, 0.4);
+  text-underline-offset: 2px;
+}
+
+.fred-source-card-title a:hover {
+  color: var(--bmf-blue);
+}
+
+.fred-source-badge {
+  flex: 0 0 auto;
+  border-radius: 6px;
+  padding: 1px 7px;
+  background: rgba(40, 111, 156, 0.12);
+  color: var(--bmf-blue-dark);
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.fred-source-badge.kind-law { background: rgba(19, 53, 75, 0.12); color: var(--bmf-blue-deep); }
+.fred-source-badge.kind-guideline { background: rgba(31, 122, 69, 0.14); color: #165a33; }
+.fred-source-badge.kind-faq { background: rgba(255, 212, 0, 0.32); color: #5c4a00; }
+.fred-source-badge.kind-bfg { background: rgba(124, 58, 150, 0.13); color: #5a2a70; }
+.fred-source-badge.kind-web { background: rgba(0, 122, 163, 0.14); color: #02536e; }
+
+.fred-source-meta-line {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.fred-source-meter {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.fred-source-meter-track {
+  flex: 1;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(40, 111, 156, 0.12);
+}
+
+.fred-source-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--bmf-blue), #4aa3d4);
+}
+
+.fred-source-meter small {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.fred-source-snippet {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.fred-source-hit {
+  padding: 0;
+  border-radius: 2px;
+  background: rgba(255, 212, 0, 0.35);
+  color: var(--bmf-blue-deep);
+  font-weight: 800;
+}
+
+.fred-source-subtitle {
+  margin: -2px 0 0;
+  color: var(--muted);
+  font-size: 0.66rem;
+  line-height: 1.3;
+}
+
+.fred-source-faq {
+  display: grid;
+  gap: 4px;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.fred-source-faq p {
+  margin: 0;
+}
+
+.fred-source-faq-question {
+  font-weight: 700;
+}
+
+.fred-source-fulltext > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  color: var(--bmf-blue);
+  font-size: 0.72rem;
+  font-weight: 650;
+  list-style: none;
+}
+
+.fred-source-fulltext > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fred-source-fulltext > summary::before {
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  content: "";
+  transform: rotate(-45deg);
+  transition: transform 0.2s ease;
+}
+
+.fred-source-fulltext[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.fred-source-fulltext > summary .fred-source-fulltext-hide,
+.fred-source-fulltext[open] > summary .fred-source-fulltext-show {
+  display: none;
+}
+
+.fred-source-fulltext[open] > summary .fred-source-fulltext-hide {
+  display: inline;
+}
+
+.fred-source-fulltext > summary:hover {
   text-decoration: underline;
 }
 
-.fred-execution-payload-fold[open] > summary {
-  margin-bottom: 4px;
-}
-
-.fred-execution-payload,
-.fred-execution-terminal {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  max-height: 16rem;
-  margin: 0;
-  padding: 8px 10px;
-  overflow: auto;
-  border-radius: 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  font-size: 0.72rem;
-  line-height: 1.4;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.fred-execution-payload {
-  border: 1px solid rgba(40, 111, 156, 0.16);
-  background: rgba(40, 111, 156, 0.05);
-  color: var(--ink);
-}
-
-.fred-execution-terminal {
-  border: 1px solid #1f2937;
-  background: #111827;
-  color: #e5e7eb;
-}
-
-.fred-execution-command {
-  display: block;
-  max-width: 100%;
-  margin-top: 4px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  font-size: 0.72rem;
-  color: var(--ink);
-}
-
-.fred-execution-steps.fred-execution-children {
-  margin-top: 6px;
-  padding: 0 0 0 10px;
-  border-left: 2px solid rgba(40, 111, 156, 0.16);
-}
-
-.fred-execution-tool-name {
-  padding: 0 5px;
+.fred-source-fulltext > summary:focus-visible {
+  outline: 2px solid var(--bmf-blue);
+  outline-offset: 2px;
   border-radius: 4px;
-  background: rgba(40, 111, 156, 0.08);
-  color: var(--bmf-blue-dark);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  font-size: 0.68rem;
-  overflow-wrap: anywhere;
+}
+
+.fred-source-excerpt {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-left: 3px solid rgba(40, 111, 156, 0.3);
+  border-radius: 0 8px 8px 0;
+  background: rgba(40, 111, 156, 0.05);
+  font-size: 0.74rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.fred-source-fulltext[open] > .fred-source-excerpt {
+  animation: fredExecReveal 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fredExecPulse {
+  0% { box-shadow: 0 0 0 0 rgba(40, 111, 156, 0.35); }
+  70%, 100% { box-shadow: 0 0 0 8px rgba(40, 111, 156, 0); }
+}
+
+@keyframes fredExecSpin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fredExecShimmer {
+  0% { background-position: 120% 0; }
+  100% { background-position: -120% 0; }
+}
+
+@keyframes fredExecReveal {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (max-width: 480px) {
+  .fred-exec {
+    padding: 2px 8px 12px;
+  }
+
+  /* Title keeps its own row (only the chevron may sit beside it); badges / duration wrap below. */
+  .fred-exec-title {
+    flex: 1 0 calc(100% - 26px);
+  }
+
+  .fred-exec-badges:empty {
+    display: none;
+  }
+
+  .fred-exec-head {
+    row-gap: 3px;
+  }
+
+  .fred-exec-badges {
+    flex: 1 1 auto;
+  }
+
+  .fred-exec-chip {
+    border-radius: 10px;
+  }
+
+  .fred-exec-step {
+    grid-template-columns: 24px minmax(0, 1fr);
+    column-gap: 8px;
+  }
+
+  .fred-exec-marker {
+    width: 24px;
+    height: 24px;
+  }
+
+  .fred-exec-step::before {
+    left: 11px;
+  }
+
+  .fred-exec-facts > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fred-exec-step.is-running .fred-exec-marker,
+  .fred-exec-step.is-running > .fred-exec-card,
+  .fred-exec-spinner,
+  .fred-exec-fold[open] > .fred-exec-body,
+  .fred-source-fulltext[open] > .fred-source-excerpt {
+    animation: none;
+  }
+
+  .fred-exec-chevron,
+  .fred-source-fulltext > summary::before {
+    transition: none;
+  }
 }

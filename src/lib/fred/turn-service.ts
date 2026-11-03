@@ -31,7 +31,9 @@ import {
   type FredResearchStep,
   type FredSourceReference,
 } from "@/lib/weknora/fred-research";
+import { stripSourceReferenceIds } from "./execution-sanitize";
 import {
+  finalizeExecutionTrace,
   mergeFredExecutionStep,
   mergeFredExecutionUpdate,
   parseWeKnoraExecutionEvent,
@@ -667,6 +669,8 @@ export async function* executeFredTurn(
       }
     }
     if (isAdvanced) {
+      // The run is over: a text-free analysis marker that never saw a `done` event must not keep pulsing.
+      executionTrace = finalizeExecutionTrace(executionTrace);
       for (const step of executionTrace) {
         const signature = JSON.stringify(step);
         if (step.id && step.kind && yieldedExecutionSteps.get(step.id) !== signature) {
@@ -753,7 +757,7 @@ export async function* executeFredTurn(
       conversation: finalConversation,
       researchTrace,
       executionTrace: isAdvanced ? executionTrace : undefined,
-      sourceReferences,
+      sourceReferences: isAdvanced ? stripSourceReferenceIds(sourceReferences) : sourceReferences,
       ...(persistedArtifacts.length > 0 ? { artifacts: persistedArtifacts } : {}),
     };
 

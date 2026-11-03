@@ -6,10 +6,11 @@ import {
   parseStoredFredExecutionTrace,
   parseWeKnoraExecutionEvent,
   EXECUTION_CUT_MARKER,
-  MAX_EXECUTION_ARGUMENTS_CHARS,
   MAX_EXECUTION_COMMAND_CHARS,
   MAX_EXECUTION_OUTPUT_CHARS,
-  MAX_EXECUTION_RESULT_CHARS,
+  EXECUTION_PHASE_STEP_ID,
+  finalizeExecutionTrace,
+  sanitizeStoredExecutionTrace,
   type FredExecutionStep,
   type FredExecutionUpdate,
 } from "./execution-trace";
@@ -18,83 +19,12 @@ import {
 function withoutPayload(update: FredExecutionUpdate): FredExecutionUpdate {
   if (!update.step) return update;
   const step = { ...update.step };
-  for (const key of ["callId", "toolName", "arguments", "result", "output", "command"] as const) delete step[key];
+  for (const key of ["callId", "toolName", "queries", "sources", "facts", "refs", "output", "command"] as const) delete step[key];
   return { ...update, step };
 }
 
 describe("WeKnora execution trace projection and parser", () => {
-  it("shows bounded provider-exposed thinking text in advanced mode", () => {
-    const running = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      content: "Zuerst prüfe ich die einschlägige Bestimmung und danach die Rechtsprechung.",
-      reasoning_content: "Internal reasoning hidden from users",
-      data: {
-        event_id: "think-1",
-        content: "Raw reflection and thinking string",
-        thinking: { content: "Internal reasoning tree" },
-      },
-    });
 
-    expect(running.step).toEqual({
-      id: expect.stringMatching(/^analysis:[a-z0-9]+$/u),
-      kind: "analysis",
-      status: "running",
-      label: "Anfrage wird analysiert",
-      detail: "Zuerst prüfe ich die einschlägige Bestimmung und danach die Rechtsprechung.",
-    });
-    expect(JSON.stringify(running)).not.toContain("Internal reasoning");
-    expect(JSON.stringify(running)).not.toContain("Raw reflection");
-
-    const completed = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      data: {
-        event_id: "think-1",
-        done: true,
-      },
-    });
-
-    expect(completed.step).toEqual({
-      id: running.step?.id,
-      kind: "analysis",
-      status: "completed",
-      label: "Anfrage analysiert",
-    });
-  });
-
-  it("shows bounded provider-exposed reflection text in advanced mode", () => {
-    const running = parseWeKnoraExecutionEvent({
-      response_type: "reflection",
-      content: "Die Fundstellen stimmen überein; als Nächstes prüfe ich die Ausnahme.",
-      data: {
-        event_id: "refl-1",
-        reflection: "Secret model reflection text",
-      },
-    });
-
-    expect(running.step).toEqual({
-      id: expect.stringMatching(/^evaluation:[a-z0-9]+$/u),
-      kind: "evaluation",
-      status: "running",
-      label: "Rechercheergebnisse werden bewertet",
-      detail: "Die Fundstellen stimmen überein; als Nächstes prüfe ich die Ausnahme.",
-    });
-    expect(JSON.stringify(running)).not.toContain("Secret model");
-
-    const completed = parseWeKnoraExecutionEvent({
-      response_type: "reflection",
-      data: {
-        event_id: "refl-1",
-        done: true,
-      },
-    });
-
-    expect(completed.step).toEqual({
-      id: running.step?.id,
-      kind: "evaluation",
-      status: "completed",
-      label: "Rechercheergebnisse bewertet",
-    });
-  });
 
   it("shows the bounded todo_write plan together with structured counts", () => {
     const running = parseWeKnoraExecutionEvent({
@@ -183,8 +113,9 @@ describe("WeKnora execution trace projection and parser", () => {
       kind: "knowledge",
       status: "running",
       label: "Wissensbasis wird durchsucht",
-      detail: "Suche: Pendlerpauschale Voraussetzungen 2025",
+      queries: ["Pendlerpauschale Voraussetzungen 2025"],
     });
+    expect(kbCall.step?.detail).toBeUndefined();
     expect(JSON.stringify(kbCall)).not.toContain("secret");
     expect(JSON.stringify(kbCall)).not.toContain("sk-proj");
     expect(JSON.stringify(kbCall)).not.toContain("s3://");
@@ -251,8 +182,9 @@ describe("WeKnora execution trace projection and parser", () => {
       kind: "tool",
       status: "running",
       label: "Recherchewerkzeug wird ausgeführt",
-      detail: "Parameter: code: import os; print(os.environ)",
+      facts: [{ label: "Code", value: "import os; print(os.environ)" }],
     });
+    expect(unknownCall.step?.detail).toBeUndefined();
     expect(JSON.stringify(withoutPayload(unknownCall))).not.toContain("run_arbitrary_python_script");
 
     const unknownFail = parseWeKnoraExecutionEvent({
@@ -357,112 +289,8 @@ describe("WeKnora execution trace projection and parser", () => {
     });
   });
 
-  it("handles thinking fallbacks, incremental merge, truncation, and redaction", () => {
-    // Fallback from reasoning_content when content is absent
-    const fallbackEvent = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      reasoning_content: "Erster Schritt: Gesetzeslage prüfen.",
-      data: { event_id: "think-fallback-1" },
-    });
-    expect(fallbackEvent.step?.detail).toBe("Erster Schritt: Gesetzeslage prüfen.");
 
-    // Fallback from data.thinking.content
-    const nestedFallback = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      data: {
-        event_id: "think-nested-1",
-        thinking: { content: "Zweiter Schritt: Rechtsprechung analysieren." },
-      },
-    });
-    expect(nestedFallback.step?.detail).toBe("Zweiter Schritt: Rechtsprechung analysieren.");
 
-    // Incremental chunks accumulation
-    const chunk1 = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      content: "Teil 1 der Analyse. ",
-      data: { event_id: "think-stream-1" },
-    });
-    const chunk2 = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      content: "Teil 2 der Analyse.",
-      data: { event_id: "think-stream-1" },
-    });
-
-    let steps = mergeFredExecutionStep([], chunk1.step!);
-    expect(steps[0]?.detail).toBe("Teil 1 der Analyse. ");
-    steps = mergeFredExecutionStep(steps, chunk2.step!);
-    expect(steps[0]?.detail).toBe("Teil 1 der Analyse. Teil 2 der Analyse.");
-
-    // Completion preserves accumulated detail
-    const doneEvent = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      data: { event_id: "think-stream-1", done: true },
-    });
-    steps = mergeFredExecutionStep(steps, doneEvent.step!);
-    expect(steps[0]?.status).toBe("completed");
-    expect(steps[0]?.detail).toBe("Teil 1 der Analyse. Teil 2 der Analyse.");
-
-    // Redaction of credentials and URIs in thinking content
-    const sensitiveThinking = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      content: "Prüfe Token Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.t-ID und Pfad /var/log/app.log sowie s3://my-bucket/doc.pdf",
-      data: { event_id: "think-sens-1" },
-    });
-    expect(sensitiveThinking.step?.detail).not.toContain("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9");
-    expect(sensitiveThinking.step?.detail).not.toContain("/var/log/app.log");
-    expect(sensitiveThinking.step?.detail).not.toContain("s3://my-bucket");
-    expect(sensitiveThinking.step?.detail).toContain("Bearer [REDACTED]");
-    expect(sensitiveThinking.step?.detail).toContain("[REDACTED_PATH]");
-    expect(sensitiveThinking.step?.detail).toContain("[REDACTED_STORAGE_URI]");
-
-    // Truncation at MAX_EXECUTION_DETAIL_CHARS
-    const longContent = "A".repeat(3000);
-    const longThinking = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      content: longContent,
-      data: { event_id: "think-long-1" },
-    });
-    expect(longThinking.step?.detail?.length).toBe(2000 + "\n…[gekürzt]".length);
-    expect(longThinking.step?.detail?.endsWith("\n…[gekürzt]")).toBe(true);
-  });
-
-  it("redacts real GitHub and Google token formats from reasoning and search queries", () => {
-    const githubToken = "ghp_1234567890abcdefghijklmnopqrstuvwxyzAB";
-    const googleToken = "AIzaSyA1234567890abcdefghijklmnopqrstuv";
-    const thinking = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      content: `Prüfe ${githubToken} und ${googleToken}`,
-      data: { event_id: "think-token-formats" },
-    });
-
-    expect(thinking.step?.detail).not.toContain(githubToken);
-    expect(thinking.step?.detail).not.toContain(googleToken);
-    expect(thinking.step?.detail).toContain("[REDACTED_API_KEY]");
-
-    for (const query of [githubToken, googleToken]) {
-      const search = parseWeKnoraExecutionEvent({
-        response_type: "tool_call",
-        data: {
-          tool_call_id: `search-${query.slice(0, 5)}`,
-          tool_name: "web_search",
-          arguments: { query },
-        },
-      });
-      expect(search.step?.detail).toBeUndefined();
-    }
-  });
-
-  it("handles reflection fallback content and lifecycle", () => {
-    const fallbackReflection = parseWeKnoraExecutionEvent({
-      response_type: "reflection",
-      data: {
-        event_id: "refl-fallback",
-        reflection: { content: "Bewertung der Zwischenergebnisse abgeschlossen." },
-      },
-    });
-    expect(fallbackReflection.step?.detail).toBe("Bewertung der Zwischenergebnisse abgeschlossen.");
-    expect(fallbackReflection.step?.kind).toBe("evaluation");
-  });
 
   it("handles todo JSON strings, status formatting, caps, and item redaction", () => {
     const jsonStringPayload = parseWeKnoraExecutionEvent({
@@ -523,7 +351,8 @@ describe("WeKnora execution trace projection and parser", () => {
         arguments: { query: "Pendlerrechner BMF 2025" },
       },
     });
-    expect(webCall.step?.detail).toBe("Suche: Pendlerrechner BMF 2025");
+    expect(webCall.step?.queries).toEqual(["Pendlerrechner BMF 2025"]);
+    expect(webCall.step?.detail).toBeUndefined();
 
     // Web search result with result count
     const webResult = parseWeKnoraExecutionEvent({
@@ -707,54 +536,6 @@ describe("WeKnora execution trace projection and parser", () => {
     expect(merged[0]).toMatchObject(nativeResult.step!);
   });
 
-  it("parses native thinking tool as analysis with thought progress, redactions, and merge", () => {
-    const thinkCall = parseWeKnoraExecutionEvent({
-      response_type: "tool_call",
-      data: {
-        tool_call_id: "think-call-42",
-        tool_name: "thinking",
-        arguments: {
-          thought: "Analysiere Voraussetzungen nach EStG § 16",
-          thought_number: 1,
-          total_thoughts: 3,
-        },
-      },
-    });
-
-    expect(thinkCall.step).toMatchObject({
-      id: expect.stringMatching(/^analysis:[a-z0-9]+$/u),
-      kind: "analysis",
-      status: "running",
-      label: "Anfrage wird analysiert (1/3)",
-    });
-
-    const thinkResult = parseWeKnoraExecutionEvent({
-      response_type: "tool_result",
-      data: {
-        tool_call_id: "think-call-42",
-        tool_name: "thinking",
-        thought: "Analysiere Voraussetzungen nach EStG § 16. Keine Ausnahme ersichtlich.",
-        thought_number: 1,
-        total_thoughts: 3,
-        duration_ms: 320,
-        success: true,
-      },
-    });
-
-    expect(thinkResult.step).toMatchObject({
-      id: thinkCall.step?.id,
-      kind: "analysis",
-      status: "completed",
-      label: "Anfrage analysiert (1/3)",
-      detail: "Analysiere Voraussetzungen nach EStG § 16. Keine Ausnahme ersichtlich.",
-      durationMs: 320,
-    });
-
-    let merged = mergeFredExecutionStep([], thinkCall.step!);
-    merged = mergeFredExecutionStep(merged, thinkResult.step!);
-    expect(merged).toHaveLength(1);
-    expect(merged[0]).toMatchObject(thinkResult.step!);
-  });
 
   it("parses native direct result shapes for retrieval tools (data.results, data.chunk_results, data.total_matches, etc.)", () => {
     // 1. Direct data.results on knowledge_search
@@ -857,176 +638,8 @@ describe("WeKnora execution trace projection and parser", () => {
     expect(zeroResults.step?.detail).toBe("0 Treffer");
   });
 
-  it("preserves provider thinking and reflection lifecycle and parses completion duration_ms", () => {
-    // 1. Streaming thinking chunks
-    const chunk1 = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      content: "Erster Gedanke: ",
-      data: {
-        event_id: "think-lifecycle-1",
-      },
-    });
 
-    const chunk2 = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      content: "Zweiter Gedanke.",
-      data: {
-        event_id: "think-lifecycle-1",
-      },
-    });
 
-    let steps = mergeFredExecutionStep([], chunk1.step!);
-    steps = mergeFredExecutionStep(steps, chunk2.step!);
-    expect(steps[0]?.detail).toBe("Erster Gedanke: Zweiter Gedanke.");
-    expect(steps[0]?.status).toBe("running");
-
-    // Native completion event with duration_ms and no text content
-    const thinkDone = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      done: true,
-      data: {
-        event_id: "think-lifecycle-1",
-        done: true,
-        duration_ms: 1450,
-      },
-    });
-
-    expect(thinkDone.step).toEqual({
-      id: chunk1.step?.id,
-      kind: "analysis",
-      status: "completed",
-      label: "Anfrage analysiert",
-      durationMs: 1450,
-    });
-
-    steps = mergeFredExecutionStep(steps, thinkDone.step!);
-    expect(steps[0]).toEqual({
-      id: chunk1.step?.id,
-      kind: "analysis",
-      status: "completed",
-      label: "Anfrage analysiert",
-      detail: "Erster Gedanke: Zweiter Gedanke.",
-      durationMs: 1450,
-    });
-
-    // 2. Reflection completion with duration_ms
-    const reflectionDone = parseWeKnoraExecutionEvent({
-      response_type: "reflection",
-      data: {
-        event_id: "refl-lifecycle-1",
-        done: true,
-        duration_ms: 680,
-      },
-    });
-
-    expect(reflectionDone.step).toEqual({
-      id: expect.stringMatching(/^evaluation:[a-z0-9]+$/u),
-      kind: "evaluation",
-      status: "completed",
-      label: "Rechercheergebnisse bewertet",
-      durationMs: 680,
-    });
-  });
-
-  it("ensures secrets and raw payloads are absent from native thinking tool and direct result envelopes", () => {
-    const sensitiveThinkingTool = parseWeKnoraExecutionEvent({
-      response_type: "tool_result",
-      data: {
-        tool_call_id: "think-secret-1",
-        tool_name: "thinking",
-        thought: "Verwende sk_live_1234567890abcdef und internen Pfad /etc/secrets/key.pem",
-        duration_ms: 100,
-        success: true,
-      },
-    });
-
-    expect(sensitiveThinkingTool.step?.detail).not.toContain("sk_live_1234567890abcdef");
-    expect(sensitiveThinkingTool.step?.detail).not.toContain("/etc/secrets");
-    expect(sensitiveThinkingTool.step?.detail).toContain("[REDACTED_API_KEY]");
-    expect(sensitiveThinkingTool.step?.detail).toContain("[REDACTED_PATH]");
-
-    const sensitiveKbResult = parseWeKnoraExecutionEvent({
-      response_type: "tool_result",
-      data: {
-        tool_call_id: "kb-secret-1",
-        tool_name: "search_knowledge",
-        results: [
-          { secret_content: "super-secret", raw_tokens: [1, 2, 3] },
-        ],
-        success: true,
-      },
-    });
-
-    expect(sensitiveKbResult.step?.detail).toBe("1 Treffer");
-    expect(JSON.stringify(sensitiveKbResult)).not.toContain("super-secret");
-    expect(JSON.stringify(withoutPayload(sensitiveKbResult))).not.toContain("raw_tokens");
-  });
-
-  it("strictly restricts thinking-tool detail to data.thought or data.output and rejects reasoning, content, or nested results", () => {
-    // 1. data.reasoning must NOT be exposed
-    const reasoningEvent = parseWeKnoraExecutionEvent({
-      response_type: "tool_result",
-      data: {
-        tool_call_id: "think-reasoning-1",
-        tool_name: "thinking",
-        reasoning: "private reasoning not shown natively",
-        success: true,
-      },
-    });
-    expect(reasoningEvent.step?.detail).toBeUndefined();
-
-    // 2. nested result.content must NOT be exposed
-    const nestedContentEvent = parseWeKnoraExecutionEvent({
-      response_type: "tool_result",
-      data: {
-        tool_call_id: "think-nested-1",
-        tool_name: "thinking",
-        result: {
-          content: "nested arbitrary content not shown natively",
-        },
-        success: true,
-      },
-    });
-    expect(nestedContentEvent.step?.detail).toBeUndefined();
-
-    // 3. pending tool_call arguments must NOT be exposed as detail
-    const pendingCall = parseWeKnoraExecutionEvent({
-      response_type: "tool_call",
-      data: {
-        tool_call_id: "think-pending-1",
-        tool_name: "thinking",
-        arguments: {
-          thought: "pending argument thought should not be exposed",
-          reasoning: "pending argument reasoning",
-        },
-      },
-    });
-    expect(pendingCall.step?.detail).toBeUndefined();
-
-    // 4. direct data.thought IS exposed
-    const validThought = parseWeKnoraExecutionEvent({
-      response_type: "tool_result",
-      data: {
-        tool_call_id: "think-valid-1",
-        tool_name: "thinking",
-        thought: "Gültiger Analyseschritt für den Benutzer sichtbar",
-        success: true,
-      },
-    });
-    expect(validThought.step?.detail).toBe("Gültiger Analyseschritt für den Benutzer sichtbar");
-
-    // 5. direct data.output IS exposed
-    const validOutput = parseWeKnoraExecutionEvent({
-      response_type: "tool_result",
-      data: {
-        tool_call_id: "think-output-1",
-        tool_name: "thinking",
-        output: "Gültige Ausgabe des Analyse-Tools",
-        success: true,
-      },
-    });
-    expect(validOutput.step?.detail).toBe("Gültige Ausgabe des Analyse-Tools");
-  });
 
   it("prioritizes results array length over numeric count when both exist ({count:5, results:[2]} => 2 Treffer)", () => {
     const conflictResult = parseWeKnoraExecutionEvent({
@@ -1046,32 +659,6 @@ describe("WeKnora execution trace projection and parser", () => {
     expect(conflictResult.step?.detail).toBe("2 Treffer");
   });
 
-  it("rejects or clamps huge thought numbers and bounds generated labels to MAX_EXECUTION_LABEL_CHARS", () => {
-    const hugeNumberEvent = parseWeKnoraExecutionEvent({
-      response_type: "tool_call",
-      data: {
-        tool_call_id: "think-huge-1",
-        tool_name: "thinking",
-        thought_number: 999999999999999,
-        total_thoughts: 999999999999999,
-      },
-    });
-
-    expect(hugeNumberEvent.step?.label).toBe("Anfrage wird analysiert");
-    expect(hugeNumberEvent.step?.label.length).toBeLessThanOrEqual(200);
-
-    const normalProgress = parseWeKnoraExecutionEvent({
-      response_type: "tool_call",
-      data: {
-        tool_call_id: "think-progress-1",
-        tool_name: "thinking",
-        thought_number: 2,
-        total_thoughts: 5,
-      },
-    });
-
-    expect(normalProgress.step?.label).toBe("Anfrage wird analysiert (2/5)");
-  });
 
   it("formats list_knowledge_chunks summary with German chunk range and paging", () => {
     const listResultWithPaging = parseWeKnoraExecutionEvent({
@@ -1117,232 +704,9 @@ describe("WeKnora execution trace projection and parser", () => {
     expect(listResultFallback.step?.detail).toBe("2 Treffer");
   });
 
-  it("merges and deduplicates consecutive thinking and thinking-tool events", () => {
-    // 1. Equal / contained content deduplication
-    const sseThink = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      content: "Analyse der Rechtslage nach EStG § 16.",
-      done: true,
-      data: { event_id: "think-sse-1" },
-    });
 
-    const toolThinkSame = parseWeKnoraExecutionEvent({
-      response_type: "tool_result",
-      data: {
-        tool_call_id: "think-tool-call-1",
-        tool_name: "thinking",
-        thought: "Analyse der Rechtslage nach EStG § 16.",
-        success: true,
-      },
-    });
 
-    let steps: FredExecutionStep[] = [];
-    steps = mergeFredExecutionStep(steps, sseThink.step!);
-    expect(steps).toHaveLength(1);
 
-    // Consecutive tool thinking with same content merges into the single analysis step
-    steps = mergeFredExecutionStep(steps, toolThinkSame.step!);
-    expect(steps).toHaveLength(1);
-    expect(steps[0].detail).toBe("Analyse der Rechtslage nach EStG § 16.");
-
-    // 2. Contained content replacement
-    const toolThinkExpanded = parseWeKnoraExecutionEvent({
-      response_type: "tool_result",
-      data: {
-        tool_call_id: "think-tool-call-2",
-        tool_name: "thinking",
-        thought: "Analyse der Rechtslage nach EStG § 16. Ergänzung: Prüfung der Ausnahmetatbestände.",
-        success: true,
-      },
-    });
-
-    steps = mergeFredExecutionStep(steps, toolThinkExpanded.step!);
-    expect(steps).toHaveLength(1);
-    expect(steps[0].detail).toBe("Analyse der Rechtslage nach EStG § 16. Ergänzung: Prüfung der Ausnahmetatbestände.");
-
-    // 3. Non-overlapping content combining
-    const toolThinkAdditional = parseWeKnoraExecutionEvent({
-      response_type: "tool_result",
-      data: {
-        tool_call_id: "think-tool-call-3",
-        tool_name: "thinking",
-        thought: "Zusätzliche Betrachtung der Judikatur des VwGH.",
-        success: true,
-      },
-    });
-
-    steps = mergeFredExecutionStep(steps, toolThinkAdditional.step!);
-    expect(steps).toHaveLength(1);
-    expect(steps[0].detail).toBe("Analyse der Rechtslage nach EStG § 16. Ergänzung: Prüfung der Ausnahmetatbestände.\n\nZusätzliche Betrachtung der Judikatur des VwGH.");
-  });
-
-  it("does not merge thinking events across an intervening non-analysis step", () => {
-    const think1 = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      content: "Erster Analyseschritt",
-      done: true,
-      data: { event_id: "think-first" },
-    });
-
-    const planStep = parseWeKnoraExecutionEvent({
-      response_type: "tool_result",
-      data: {
-        tool_call_id: "plan-1",
-        tool_name: "todo_write",
-        task: "Hauptaufgabe",
-        steps: [{ task: "Schritt 1", status: "completed" }],
-        success: true,
-      },
-    });
-
-    const think2 = parseWeKnoraExecutionEvent({
-      response_type: "tool_result",
-      data: {
-        tool_call_id: "think-second",
-        tool_name: "thinking",
-        thought: "Zweiter Analyseschritt nach Planung",
-        success: true,
-      },
-    });
-
-    let steps: FredExecutionStep[] = [];
-    steps = mergeFredExecutionStep(steps, think1.step!);
-    expect(steps).toHaveLength(1);
-
-    steps = mergeFredExecutionStep(steps, planStep.step!);
-    expect(steps).toHaveLength(2);
-    expect(steps[1].kind).toBe("planning");
-
-    // think2 is separated from think1 by planStep, so it must NOT merge into think1
-    steps = mergeFredExecutionStep(steps, think2.step!);
-    expect(steps).toHaveLength(3);
-    expect(steps[0].kind).toBe("analysis");
-    expect(steps[0].detail).toBe("Erster Analyseschritt");
-    expect(steps[1].kind).toBe("planning");
-    expect(steps[2].kind).toBe("analysis");
-    expect(steps[2].detail).toBe("Zweiter Analyseschritt nach Planung");
-  });
-
-  it("handles adjacent analysis merge lifecycle: completed -> running -> completed and failed -> running -> completed", () => {
-    const think1Running = parseWeKnoraExecutionEvent({
-      response_type: "tool_call",
-      data: {
-        tool_call_id: "think-1",
-        tool_name: "thinking",
-      },
-    });
-    const think1Done = parseWeKnoraExecutionEvent({
-      response_type: "tool_result",
-      data: {
-        tool_call_id: "think-1",
-        tool_name: "thinking",
-        thought: "Erste Analyse abgeschlossen.",
-        success: true,
-      },
-    });
-
-    let steps = mergeFredExecutionStep([], think1Running.step!);
-    expect(steps).toHaveLength(1);
-    expect(steps[0].status).toBe("running");
-
-    steps = mergeFredExecutionStep(steps, think1Done.step!);
-    expect(steps).toHaveLength(1);
-    expect(steps[0].status).toBe("completed");
-    expect(steps[0].label).toBe("Anfrage analysiert");
-
-    // Second distinct analysis step immediately following completed first step
-    const think2Running = parseWeKnoraExecutionEvent({
-      response_type: "tool_call",
-      data: {
-        tool_call_id: "think-2",
-        tool_name: "thinking",
-      },
-    });
-    steps = mergeFredExecutionStep(steps, think2Running.step!);
-    expect(steps).toHaveLength(1);
-    expect(steps[0].status).toBe("running");
-    expect(steps[0].label).toBe("Anfrage wird analysiert");
-
-    // Second analysis step completes
-    const think2Done = parseWeKnoraExecutionEvent({
-      response_type: "tool_result",
-      data: {
-        tool_call_id: "think-2",
-        tool_name: "thinking",
-        thought: "Zweite Analyse abgeschlossen.",
-        success: true,
-      },
-    });
-    steps = mergeFredExecutionStep(steps, think2Done.step!);
-    expect(steps).toHaveLength(1);
-    expect(steps[0].status).toBe("completed");
-    expect(steps[0].label).toBe("Anfrage analysiert");
-
-    // Failed analysis followed by new running analysis
-    const think3Failed = parseWeKnoraExecutionEvent({
-      response_type: "error",
-      data: {
-        tool_call_id: "think-3",
-        tool_name: "thinking",
-        success: false,
-      },
-    });
-    let failedSteps = mergeFredExecutionStep([], think3Failed.step!);
-    expect(failedSteps[0].status).toBe("failed");
-
-    const think4Running = parseWeKnoraExecutionEvent({
-      response_type: "tool_call",
-      data: {
-        tool_call_id: "think-4",
-        tool_name: "thinking",
-      },
-    });
-    failedSteps = mergeFredExecutionStep(failedSteps, think4Running.step!);
-    expect(failedSteps).toHaveLength(1);
-    expect(failedSteps[0].status).toBe("running");
-  });
-
-  it("redacts IPv6, trailing-dot internal URLs, and sensitive query keys in provider thinking while preserving German text and safe public URLs", () => {
-    const rawThinking = [
-      "Prüfe IPv6-URL http://[::1]/internal und http://[fe80::1]/service für interne Konfiguration.",
-      "Prüfe trailing-dot URL http://localhost.:8080/admin sowie http://metadata.google.internal./computeMetadata.",
-      "Prüfe API-Zugriff über https://example.com/oauth?accessToken=secret_tok_123.",
-      "Prüfe Client-Secret über https://example.com/api?clientSecret=my_secret_key&page=1.",
-      "Prüfe Nested-Auth über https://example.com/auth?auth[token]=nested_val.",
-      "Sichere öffentliche Quelle: https://ris.bka.gv.at/Dokument.wxe?id=123.",
-      "Die Pendlerpauschale steht Arbeitnehmern unter den Voraussetzungen des § 16 EStG 1988 zu.",
-    ].join("\n");
-
-    const thinkingEvent = parseWeKnoraExecutionEvent({
-      response_type: "thinking",
-      content: rawThinking,
-      data: { event_id: "think-security-consolidated" },
-    });
-
-    const detail = thinkingEvent.step?.detail;
-    expect(detail).toBeDefined();
-
-    // Sensitive / internal URLs must be replaced with [REDACTED_URL]
-    expect(detail).not.toContain("http://[::1]");
-    expect(detail).not.toContain("http://[fe80::1]");
-    expect(detail).not.toContain("http://localhost.");
-    expect(detail).not.toContain("http://metadata.google.internal.");
-    expect(detail).not.toContain("accessToken=");
-    expect(detail).not.toContain("clientSecret=");
-    expect(detail).not.toContain("auth[token]=");
-    expect(detail).not.toContain("secret_tok_123");
-    expect(detail).not.toContain("my_secret_key");
-    expect(detail).not.toContain("nested_val");
-
-    // Redacted markers present
-    expect(detail).toContain("[REDACTED_URL]");
-
-    // Safe public URL preserved
-    expect(detail).toContain("https://ris.bka.gv.at/Dokument.wxe?id=123");
-
-    // German text preserved
-    expect(detail).toContain("Die Pendlerpauschale steht Arbeitnehmern unter den Voraussetzungen des § 16 EStG 1988 zu.");
-  });
 
   it("redacts / suppresses search query details containing IPv6, trailing-dot internal URLs, or sensitive query keys while preserving German query and safe public URL", () => {
     // 1. IPv6 localhost / private URLs in query
@@ -1354,7 +718,7 @@ describe("WeKnora execution trace projection and parser", () => {
         arguments: { query: "http://[::1]/api/v1" },
       },
     });
-    expect(ipv6Query.step?.detail).toBeUndefined();
+    expect(ipv6Query.step?.queries).toBeUndefined();
 
     // 2. Trailing-dot internal URL in query
     const trailingDotQuery = parseWeKnoraExecutionEvent({
@@ -1365,7 +729,7 @@ describe("WeKnora execution trace projection and parser", () => {
         arguments: { query: "http://service.local./search?q=test" },
       },
     });
-    expect(trailingDotQuery.step?.detail).toBeUndefined();
+    expect(trailingDotQuery.step?.queries).toBeUndefined();
 
     // 3. Sensitive query parameters in URL query
     for (const url of [
@@ -1381,7 +745,7 @@ describe("WeKnora execution trace projection and parser", () => {
           arguments: { query: url },
         },
       });
-      expect(sensitiveQuery.step?.detail).toBeUndefined();
+      expect(sensitiveQuery.step?.queries).toBeUndefined();
     }
 
     // 4. Safe German search query preserved
@@ -1393,7 +757,7 @@ describe("WeKnora execution trace projection and parser", () => {
         arguments: { query: "Pendlerpauschale Voraussetzungen 2025" },
       },
     });
-    expect(germanQuery.step?.detail).toBe("Suche: Pendlerpauschale Voraussetzungen 2025");
+    expect(germanQuery.step?.queries).toEqual(["Pendlerpauschale Voraussetzungen 2025"]);
 
     // 5. Safe public URL search query preserved
     const safeUrlQuery = parseWeKnoraExecutionEvent({
@@ -1404,7 +768,7 @@ describe("WeKnora execution trace projection and parser", () => {
         arguments: { query: "https://ris.bka.gv.at/Dokument.wxe?id=123" },
       },
     });
-    expect(safeUrlQuery.step?.detail).toBe("Suche: https://ris.bka.gv.at/Dokument.wxe?id=123");
+    expect(safeUrlQuery.step?.queries).toEqual(["https://ris.bka.gv.at/Dokument.wxe?id=123"]);
   });
 
   it("Task 1: surfaces agent_query as initial trace step only when assistant_message_id is present", () => {
@@ -1414,10 +778,10 @@ describe("WeKnora execution trace projection and parser", () => {
     });
 
     expect(withId.step).toEqual({
-      id: expect.stringMatching(/^analysis:[a-z0-9]+$/u),
+      id: EXECUTION_PHASE_STEP_ID,
       kind: "analysis",
-      status: "completed",
-      label: "Anfrage an Fred übermittelt",
+      status: "running",
+      label: "Analysiert die Anfrage",
     });
 
     const withoutId = parseWeKnoraExecutionEvent({
@@ -1436,94 +800,6 @@ describe("WeKnora execution trace projection and parser", () => {
       assistant_message_id: 12345,
     });
     expect(nonStringId.step).toBeUndefined();
-  });
-
-  describe("Task 2: formatSafeToolArguments for generic tools in tool_call", () => {
-    it("formats object arguments with scalar values and ellipsis for nested objects", () => {
-      const call = parseWeKnoraExecutionEvent({
-        response_type: "tool_call",
-        data: {
-          tool_call_id: "calc-1",
-          tool_name: "calculate_tax",
-          arguments: {
-            year: 2024,
-            category: "pendler",
-            include_details: true,
-            extra_options: { debug: false },
-            nested_list: [1, 2, 3],
-          },
-        },
-      });
-
-      expect(call.step).toMatchObject({
-        id: expect.stringMatching(/^tool:[a-z0-9]+$/u),
-        kind: "tool",
-        status: "running",
-        label: "Recherchewerkzeug wird ausgeführt",
-        detail: "Parameter: year: 2024; category: pendler; include_details: true; extra_options: …; nested_list: …",
-      });
-    });
-
-    it("formats JSON-string arguments safely", () => {
-      const call = parseWeKnoraExecutionEvent({
-        response_type: "tool_call",
-        data: {
-          tool_call_id: "custom-json-1",
-          tool_name: "custom_analyzer",
-          arguments: JSON.stringify({ section: "§ 16 EStG", active: true }),
-        },
-      });
-
-      expect(call.step?.detail).toBe("Parameter: section: § 16 EStG; active: true");
-    });
-
-    it("drops detail entirely when credentials / sensitive keys (e.g. api_key) are present", () => {
-      const callWithApiKey = parseWeKnoraExecutionEvent({
-        response_type: "tool_call",
-        data: {
-          tool_call_id: "sec-tool-1",
-          tool_name: "external_service",
-          arguments: {
-            api_key: "sk-proj-super-secret-12345678",
-            query: "tax info",
-          },
-        },
-      });
-
-      expect(callWithApiKey.step?.detail).toBeUndefined();
-
-      const callWithSecretAssignment = parseWeKnoraExecutionEvent({
-        response_type: "tool_call",
-        data: {
-          tool_call_id: "sec-tool-2",
-          tool_name: "external_service",
-          arguments: {
-            password: "supersecretpassword",
-            mode: "fast",
-          },
-        },
-      });
-
-      expect(callWithSecretAssignment.step?.detail).toBeUndefined();
-    });
-
-    it("truncates arguments detail longer than 300 chars", () => {
-      const longText = "A".repeat(500);
-      const call = parseWeKnoraExecutionEvent({
-        response_type: "tool_call",
-        data: {
-          tool_call_id: "long-args-1",
-          tool_name: "external_service",
-          arguments: {
-            description: longText,
-          },
-        },
-      });
-
-      expect(call.step?.detail).toBeDefined();
-      expect(call.step?.detail?.startsWith("Parameter: description: ")).toBe(true);
-      expect(call.step?.detail?.length).toBeLessThanOrEqual(315);
-    });
   });
 
   describe("Task 3: extractGenericResultSummary for generic tools in tool_result", () => {
@@ -1639,55 +915,122 @@ describe("WeKnora execution trace projection and parser", () => {
     });
   });
 
-  describe("Task 4: reference detail step on response_type references", () => {
-    it("formats mixed web and knowledge references into multiline detail with short kb ids", () => {
+
+  describe("Task 2: generic tools expose only harmless scalar arguments as facts", () => {
+    it("lists up to six scalar arguments with friendly labels and skips nested values", () => {
+      const call = parseWeKnoraExecutionEvent({
+        response_type: "tool_call",
+        data: {
+          tool_call_id: "calc-1",
+          tool_name: "calculate_tax",
+          arguments: {
+            year: 2024,
+            category: "pendler",
+            include_details: true,
+            extra_options: { debug: false },
+            nested_list: [1, 2, 3],
+            a: "1", b: "2", c: "3", d: "4",
+          },
+        },
+      });
+
+      expect(call.step).toMatchObject({ kind: "tool", status: "running", label: "Recherchewerkzeug wird ausgeführt" });
+      expect(call.step?.facts).toEqual([
+        { label: "Jahr", value: "2024" },
+        { label: "Category", value: "pendler" },
+        { label: "Include details", value: "Ja" },
+        { label: "A", value: "1" },
+        { label: "B", value: "2" },
+        { label: "C", value: "3" },
+      ]);
+      expect(call.step?.detail).toBeUndefined();
+      expect(JSON.stringify(call)).not.toContain("extra_options");
+    });
+
+    it("parses JSON-string arguments", () => {
+      const call = parseWeKnoraExecutionEvent({
+        response_type: "tool_call",
+        data: { tool_call_id: "custom-json-1", tool_name: "custom_analyzer", arguments: JSON.stringify({ section: "§ 16 EStG", active: true }) },
+      });
+      expect(call.step?.facts).toEqual([{ label: "Section", value: "§ 16 EStG" }, { label: "Active", value: "Ja" }]);
+    });
+
+    it("drops credentials, ids, hosts and model names instead of showing them", () => {
+      const call = parseWeKnoraExecutionEvent({
+        response_type: "tool_call",
+        data: {
+          tool_call_id: "sec-tool-1",
+          tool_name: "external_service",
+          arguments: {
+            api_key: "sk-proj-super-secret-12345678",
+            password: "supersecretpassword",
+            knowledge_base_id: "6f9619ff-8b86-d011-b42d-00c04fc964ff",
+            tenant_id: 42,
+            model: "gpt-4o",
+            endpoint: "http://app:8080/v1",
+            target: "http://app:8080/v1",
+            note: "Chunk 6f9619ff-8b86-d011-b42d-00c04fc964ff via claude-3-5-sonnet",
+            mode: "fast",
+          },
+        },
+      });
+      expect(call.step?.facts).toEqual([{ label: "Modus", value: "fast" }]);
+      const json = JSON.stringify(call);
+      for (const leaked of ["super-secret", "supersecret", "6f9619ff", "gpt-4o", "app:8080", "claude-3"]) {
+        expect(json).not.toContain(leaked);
+      }
+    });
+
+    it("truncates long values", () => {
+      const call = parseWeKnoraExecutionEvent({
+        response_type: "tool_call",
+        data: { tool_call_id: "long-args-1", tool_name: "external_service", arguments: { description: "Lorem ipsum ".repeat(60) } },
+      });
+      expect(call.step?.facts?.[0].value.length).toBeLessThanOrEqual(121);
+    });
+  });
+
+  describe("Task 4: references step carries structured sources, not id-laden detail lines", () => {
+    it("projects mixed web and knowledge references into sources without ids", () => {
       const refEvent = parseWeKnoraExecutionEvent({
         response_type: "references",
         data: {
           event_id: "ref-step-1",
           references: [
             { kind: "web", url: "https://ris.bka.gv.at/Dokument.wxe?id=123", title: "RIS Judikatur" },
-            { kind: "web", url: "https://findok.bmf.gv.at/findok" },
-            { kind: "knowledge", doc: "EStG § 16 Pendlerpauschale", knowledge_base_id: "kb-12345678-abcd" },
-            { kind: "knowledge", doc: "BFG Richtlinien" },
+            { kind: "knowledge", doc: "EStG § 16 Pendlerpauschale", knowledge_base_id: "6f9619ff-8b86-d011-b42d-00c04fc964ff" },
+            { knowledge_title: "LStR_2002_idF_2025-12-18_full_verified.md", content: "Rz 250 Pendlerpauschale", chunk_id: "6f9619ff-8b86-d011-b42d-00c04fc964aa", score: 0.8 },
           ],
         },
       });
 
-      expect(refEvent.step).toEqual({
+      expect(refEvent.step).toMatchObject({
         id: expect.stringMatching(/^sources:[a-z0-9]+$/u),
         kind: "sources",
         status: "completed",
-        label: "4 Quellen gefunden",
-        detail: "RIS Judikatur (ris.bka.gv.at)\nfindok.bmf.gv.at\nEStG § 16 Pendlerpauschale (kb-12345)\nBFG Richtlinien",
+        label: "3 Quellen gefunden",
       });
+      expect(refEvent.step?.detail).toBeUndefined();
+      expect(refEvent.step?.sources?.map((source) => [source.title, source.kind])).toEqual([
+        ["RIS Judikatur", "web"],
+        ["EStG § 16 Pendlerpauschale", "law"],
+        ["LStR_2002_idF_2025-12-18_full_verified.md", "guideline"],
+      ]);
+      expect(JSON.stringify(refEvent)).not.toContain("6f9619ff");
     });
 
-    it("caps references detail to at most 10 lines when 12 references are present", () => {
-      const twelveReferences = Array.from({ length: 12 }, (_, i) => ({
-        kind: "knowledge",
-        doc: `Dokument Nr. ${i + 1}`,
-        knowledge_base_id: `kb-base-${i + 1}`,
-      }));
-
+    it("caps the number of projected references per step", () => {
       const refEvent = parseWeKnoraExecutionEvent({
         response_type: "references",
-        data: {
-          event_id: "ref-step-12",
-          references: twelveReferences,
-        },
+        data: { references: Array.from({ length: 30 }, (_, i) => ({ kind: "knowledge", doc: `Dokument Nr. ${i + 1}` })) },
       });
-
-      expect(refEvent.step?.label).toBe("12 Quellen gefunden");
-      expect(refEvent.step?.detail).toBeDefined();
-      const lines = refEvent.step?.detail?.split("\n") ?? [];
-      expect(lines).toHaveLength(10);
-      expect(lines[0]).toBe("Dokument Nr. 1 (kb-base-)");
-      expect(lines[9]).toBe("Dokument Nr. 10 (kb-base-)");
+      expect(refEvent.step?.label).toBe("30 Quellen gefunden");
+      expect(refEvent.step?.sources).toHaveLength(12);
     });
   });
 });
-describe("Advanced execution trace: full WeKnora execution detail", () => {
+
+describe("Advanced execution trace: structured tool views", () => {
   const toolCall = (data: Record<string, unknown>) =>
     parseWeKnoraExecutionEvent({ response_type: "tool_call", data: { tool_call_id: "call-1", tool_name: "shell_exec", ...data } });
   const toolResult = (data: Record<string, unknown>) =>
@@ -1695,53 +1038,40 @@ describe("Advanced execution trace: full WeKnora execution detail", () => {
   const merge = (steps: FredExecutionStep[], update: ReturnType<typeof parseWeKnoraExecutionEvent>) =>
     mergeFredExecutionUpdate(steps, update).trace;
 
-  it("keeps full pretty-printed arguments including nested objects", () => {
-    const step = toolCall({ arguments: { query: "Pendlerpauschale", filter: { year: 2025, tags: ["a", "b"] } } }).step!;
-    expect(step.callId).toBe("call-1");
-    expect(step.toolName).toBe("shell_exec");
-    expect(step.arguments).toBe(JSON.stringify({ query: "Pendlerpauschale", filter: { year: 2025, tags: ["a", "b"] } }, null, 2));
-    // JSON string arguments are parsed and pretty-printed too; non-JSON strings stay raw.
-    expect(toolCall({ arguments: '{"a":{"b":1}}' }).step?.arguments).toBe('{\n  "a": {\n    "b": 1\n  }\n}');
-    expect(toolCall({ arguments: "ls -la" }).step?.arguments).toBe("ls -la");
-    expect(toolCall({ arguments: {} }).step?.arguments).toBeUndefined();
+  it("never stores the upstream tool_call_id, only an opaque hash", () => {
+    const step = toolCall({ arguments: { command: "ls" } }).step!;
+    expect(step.callId).toMatch(/^call:[0-9a-z]+$/u);
+    expect(JSON.stringify(step)).not.toContain("call-1");
+    // idempotent through the stored-trace sanitizer
+    expect(sanitizeStoredExecutionTrace([step])[0].callId).toBe(step.callId);
   });
 
-  it("redacts only sensitive substrings and never drops the whole block", () => {
-    const step = toolCall({
-      arguments: { query: "Familienbonus", api_key: "sk-abcdefghijklmnop", note: "token=abc123 und https://intern.local/x" },
+  it("shell tools keep command and output, mask paths and environment dumps, and never keep raw arguments/results", () => {
+    const call = toolCall({ arguments: { command: "python /workspace/analyse.py --in /etc/secret/data.csv" } }).step!;
+    expect(call).toMatchObject({ kind: "tool", label: "Sandbox-Befehl wird ausgeführt", command: "python ./analyse.py --in data.csv" });
+    expect(call).not.toHaveProperty("arguments");
+
+    const done = toolResult({
+      output: "HOME=/root\nPATH=/usr/bin\nOPENAI_API_KEY=abc\nergebnis: 42 in /home/sandbox/out/result.txt",
     }).step!;
-    expect(step.arguments).toContain('"query": "Familienbonus"');
-    expect(step.arguments).toContain('"api_key": "[REDACTED]"');
-    expect(step.arguments).not.toContain("sk-abcdefghijklmnop");
-    expect(step.arguments).not.toContain("intern.local");
-    expect(step.arguments).toContain("[REDACTED");
-    expect(toolCall({ arguments: "password=hunter2 ls" }).step?.arguments).not.toContain("hunter2");
-    expect(toolCall({ arguments: "password=hunter2 ls" }).step?.arguments).toContain("ls");
+    expect(done.label).toBe("Sandbox-Befehl ausgeführt");
+    expect(done.output).toContain("ergebnis: 42 in result.txt");
+    expect(done.output).toContain("[Umgebungsvariablen ausgeblendet]");
+    expect(done.output).not.toContain("OPENAI_API_KEY");
+    expect(done.output).not.toContain("/home/sandbox");
+    expect(done).not.toHaveProperty("result");
   });
 
-  it("builds the result from data.output or from the remaining data keys", () => {
-    expect(toolResult({ output: "hello world\n", duration_ms: 12 }).step?.result).toBe("hello world\n");
-    const fromKeys = toolResult({ duration_ms: 5, count: 2, results: [{ title: "A" }], arguments: { x: 1 } }).step!;
-    expect(fromKeys.result).toBe(JSON.stringify({ count: 2, results: [{ title: "A" }] }, null, 2));
-    expect(toolResult({}).step?.result).toBeUndefined();
-    const failed = toolResult({ success: false, error: "boom", output: "partial" }).step!;
-    expect(failed.status).toBe("failed");
-    expect(failed.result).toBe("Fehler: boom\n\npartial");
-    expect(toolResult({ output: "Authorization: Bearer abcdefghijklmnop done" }).step?.result).not.toContain("abcdefghijklmnop");
+  it("masks single secret-looking environment lines in output", () => {
+    const done = toolResult({ output: "DATABASE_URL=postgres://u:p@db/x\nFOO=bar" }).step!;
+    expect(done.output).not.toContain("postgres://");
+    expect(done.output).toContain("FOO=bar");
   });
 
-  it("caps payloads with a visible marker and keeps the end of command output", () => {
-    const args = toolCall({ arguments: "x".repeat(MAX_EXECUTION_ARGUMENTS_CHARS + 500) }).step!.arguments!;
-    expect(args.endsWith(`\n${EXECUTION_CUT_MARKER}`)).toBe(true);
-    expect(args.length).toBe(MAX_EXECUTION_ARGUMENTS_CHARS + EXECUTION_CUT_MARKER.length + 1);
-
-    const result = toolResult({ output: `HEAD${"y".repeat(MAX_EXECUTION_RESULT_CHARS)}` }).step!.result!;
-    expect(result.startsWith("HEAD")).toBe(true);
-    expect(result.endsWith(EXECUTION_CUT_MARKER)).toBe(true);
-
+  it("caps command and output with a visible marker and keeps the end of output", () => {
     const out = parseWeKnoraExecutionEvent({
       response_type: "command_output",
-      data: { tool_call_id: "call-1", command: "c".repeat(MAX_EXECUTION_COMMAND_CHARS + 50), output: `${"a".repeat(MAX_EXECUTION_OUTPUT_CHARS)}TAIL`, done: false },
+      data: { tool_call_id: "call-1", command: "z".repeat(MAX_EXECUTION_COMMAND_CHARS + 50), output: `${"y".repeat(MAX_EXECUTION_OUTPUT_CHARS)}TAIL`, done: false },
     }).step!;
     expect(out.output!.startsWith(`${EXECUTION_CUT_MARKER}\n`)).toBe(true);
     expect(out.output!.endsWith("TAIL")).toBe(true);
@@ -1755,29 +1085,28 @@ describe("Advanced execution trace: full WeKnora execution detail", () => {
       data: { tool_call_id: "call-1", command: "ls -la", started_at: "2026-01-01T00:00:00Z", output: text, done },
     });
 
-    // after tool_call
     let trace = merge([], toolCall({ arguments: { command: "ls -la" } }));
     trace = merge(trace, output("one\n"));
     trace = merge(trace, output("one\ntwo\n"));
     expect(trace).toHaveLength(1);
-    expect(trace[0]).toMatchObject({ kind: "tool", status: "running", label: "Recherchewerkzeug wird ausgeführt", command: "ls -la", output: "one\ntwo\n" });
-    expect(trace[0].arguments).toBeDefined();
+    expect(trace[0]).toMatchObject({ kind: "tool", status: "running", label: "Sandbox-Befehl wird ausgeführt", command: "ls -la", output: "one\ntwo\n" });
 
     // a finished tool step is never reverted to running, late output still lands
     trace = merge(trace, toolResult({ output: "final" }));
     trace = merge(trace, output("one\ntwo\nthree\n"));
     expect(trace).toHaveLength(1);
-    expect(trace[0]).toMatchObject({ status: "completed", label: "Recherchewerkzeug ausgeführt", output: "one\ntwo\nthree\n", result: "final" });
+    expect(trace[0]).toMatchObject({ status: "completed", label: "Sandbox-Befehl ausgeführt", output: "one\ntwo\nthree\n" });
 
     // output arrives before any tool_call: placeholder step, later upgraded by the real events
     let early = merge([], output("boot\n"));
     expect(early).toHaveLength(1);
-    expect(early[0]).toMatchObject({ kind: "tool", status: "running", label: "Befehl wird ausgeführt", output: "boot\n", callId: "call-1" });
+    expect(early[0]).toMatchObject({ kind: "tool", status: "running", label: "Befehl wird ausgeführt", output: "boot\n" });
+    expect(early[0].callId).toBe(trace[0].callId);
     early = merge(early, output("boot\ndone\n", true));
     expect(early[0]).toMatchObject({ status: "completed", output: "boot\ndone\n" });
     early = merge(early, toolResult({ output: "ok" }));
     expect(early).toHaveLength(1);
-    expect(early[0]).toMatchObject({ label: "Recherchewerkzeug ausgeführt", output: "boot\ndone\n", result: "ok" });
+    expect(early[0]).toMatchObject({ label: "Sandbox-Befehl ausgeführt", output: "ok" });
   });
 
   it("matches output to a step of another kind by callId", () => {
@@ -1797,7 +1126,7 @@ describe("Advanced execution trace: full WeKnora execution detail", () => {
         inner: { response_type: "command_output", data: { tool_call_id: "call-1", command: "sleep 1", output: "bg out", done: true } },
       },
     });
-    expect(update.step).toMatchObject({ callId: "call-1", command: "sleep 1", output: "bg out", status: "completed" });
+    expect(update.step).toMatchObject({ command: "sleep 1", output: "bg out", status: "completed" });
     const other = parseWeKnoraExecutionEvent({ response_type: "work_event", data: { work_id: "w1", inner: { response_type: "progress", data: {} } } });
     expect(other.step).toBeUndefined();
     expect(other.steps).toBeUndefined();
@@ -1812,8 +1141,10 @@ describe("Advanced execution trace: full WeKnora execution detail", () => {
       response_type: "tool_result",
       data: { tool_call_id: "sp-1", tool_name: "spawn_agent", success: true, member_id: "m-7", task_name: "Recherche BFG" },
     });
+    expect(spawn.step).toMatchObject({ label: "Hilfs-Agent wird gestartet", facts: [{ label: "Aufgabe", value: "Recherche BFG" }] });
     let trace = merge(merge([], spawn), spawned);
     const spawnId = trace[0].id;
+    expect(trace[0].refs).toContain("name:Recherche BFG");
 
     const status = (revision: number, state: string, extra: Record<string, unknown> = {}) => parseWeKnoraExecutionEvent({
       response_type: "collaboration_status",
@@ -1827,24 +1158,31 @@ describe("Advanced execution trace: full WeKnora execution detail", () => {
       },
     });
 
-    const first = status(2, "running", { latest_message: { content: "Suche läuft" }, progress: { iteration: 3, tool_name: "grep_chunks" } });
+    const first = status(2, "running", { latest_message: { content: "Ich denke nach über X" }, progress: { iteration: 3, tool_name: "grep_chunks" } });
     expect(first.steps).toHaveLength(2);
     trace = merge(trace, first);
-    const agent = trace.find((step) => step.kind === "agent" && step.callId === "m-7")!;
+    const agent = trace.find((step) => step.kind === "agent" && step.label.includes("Rechercheur"))!;
     expect(agent).toMatchObject({
       id: expect.stringMatching(/^agent:[a-z0-9]+$/u),
       status: "running",
       label: "Hilfs-Agent Rechercheur: Läuft",
-      detail: "Suche läuft\nSchritt 3: grep_chunks",
+      detail: "Schritt 3",
+      taskName: "Recherche BFG",
       parentId: spawnId,
     });
+    // helper-agent messages (possible reasoning) and raw ids never reach the step
+    const json = JSON.stringify(trace);
+    expect(json).not.toContain("denke nach");
+    expect(json).not.toContain("m-7");
+    expect(json).not.toContain('"g1"');
     expect(trace.find((step) => step.label === "Hilfs-Agent Zweiter: Wartet")?.parentId).toBeUndefined();
 
     // older revision is ignored, newer one wins
     expect(merge(trace, status(1, "failed"))).toBe(trace);
-    trace = merge(trace, status(3, "succeeded", { latest_message: "Fertig gestellt" }));
+    trace = merge(trace, status(3, "succeeded"));
     expect(trace.filter((step) => step.kind === "agent")).toHaveLength(2);
-    expect(trace.find((step) => step.id === agent.id)).toMatchObject({ status: "completed", label: "Hilfs-Agent Rechercheur: Fertig", detail: "Fertig gestellt", parentId: spawnId });
+    expect(trace.find((step) => step.id === agent.id)).toMatchObject({ status: "completed", label: "Hilfs-Agent Rechercheur: Fertig", parentId: spawnId });
+    expect(trace.find((step) => step.id === agent.id)?.detail).toBeUndefined();
     expect(trace.find((step) => step.id === agent.id)?.revision).toBe(3);
 
     const cancelling = merge([], status(1, "running", { cancel_requested: true }));
@@ -1852,17 +1190,14 @@ describe("Advanced execution trace: full WeKnora execution detail", () => {
     expect(merge([], status(1, "interrupted"))[0]).toMatchObject({ status: "failed", label: "Hilfs-Agent Rechercheur: Unterbrochen" });
   });
 
-  it("projects memory_recalled and context_compacted", () => {
+  it("projects memory_recalled and context_compacted as one compact line without their content", () => {
     const memory = parseWeKnoraExecutionEvent({
       response_type: "memory_recalled",
       data: { memories: [{ id: "1", kind: "fact", content: "Nutzer pendelt 30 km" }, { id: "2", kind: "fact", content: "Wohnt in Wien" }] },
     });
-    expect(memory.step).toMatchObject({
-      kind: "memory",
-      status: "completed",
-      label: "2 Erinnerungen abgerufen",
-      detail: "- Nutzer pendelt 30 km\n- Wohnt in Wien",
-    });
+    expect(memory.step).toMatchObject({ kind: "memory", status: "completed", label: "2 Erinnerungen abgerufen" });
+    expect(memory.step?.detail).toBeUndefined();
+    expect(JSON.stringify(memory)).not.toContain("pendelt");
     expect(parseWeKnoraExecutionEvent({ response_type: "memory_recalled", data: { memories: [{ id: "1", content: "x" }] } }).step?.label).toBe("1 Erinnerung abgerufen");
     expect(parseWeKnoraExecutionEvent({ response_type: "memory_recalled", data: { memories: [] } }).step).toBeUndefined();
 
@@ -1874,8 +1209,8 @@ describe("Advanced execution trace: full WeKnora execution detail", () => {
       kind: "context",
       status: "completed",
       label: "Gesprächsverlauf komprimiert (12.000 → 3.000 Tokens)",
-      detail: "Kurzfassung des Gesprächs",
     });
+    expect(compacted.step?.detail).toBeUndefined();
   });
 
   it("ignores non-step events", () => {
@@ -1891,38 +1226,405 @@ describe("Advanced execution trace: full WeKnora execution detail", () => {
     const b = merge(a, toolCall({ tool_call_id: "b", tool_name: "web_search" }));
     const merged = mergeFredExecutionUpdate(b, toolResult({ tool_call_id: "a", output: "ok" }));
     expect(merged.touched).toHaveLength(1);
-    expect(merged.touched[0]).toMatchObject({ callId: "a", status: "completed" });
+    expect(merged.touched[0]).toMatchObject({ status: "completed", label: "Sandbox-Befehl ausgeführt" });
     expect(mergeFredExecutionUpdate(b, { fatalError: false, unsupported: false }).touched).toEqual([]);
   });
 
-  it("round-trips the new fields through parseStoredFredExecutionTrace and re-caps them", () => {
-    const steps: FredExecutionStep[] = [
-      { id: "tool:1", kind: "tool", status: "completed", label: "Recherchewerkzeug ausgeführt", callId: "c", toolName: "spawn_agent", arguments: '{\n  "a": 1\n}', result: "r", output: "o", command: "ls" },
-      { id: "agent:1", kind: "agent", status: "running", label: "Hilfs-Agent X: Läuft", parentId: "tool:1", groupId: "g", revision: 4, taskName: "X", callId: "m" },
-      { id: "memory:1", kind: "memory", status: "completed", label: "1 Erinnerung abgerufen" },
-      { id: "context:1", kind: "context", status: "completed", label: "Gesprächsverlauf komprimiert" },
-    ];
-    expect(parseStoredFredExecutionTrace(JSON.parse(JSON.stringify(steps)))).toEqual(steps);
+  it("maps failures to a short German reason instead of the upstream error", () => {
+    const failed = toolResult({ success: false, error: "dial tcp app:8080: i/o timeout (token=abc123)", output: "partial" }).step!;
+    expect(failed.status).toBe("failed");
+    expect(failed.error).toBe("Zeitüberschreitung");
+    expect(JSON.stringify(failed)).not.toContain("app:8080");
+    expect(parseWeKnoraExecutionEvent({ response_type: "error", data: { tool_name: "web_search", error: "429 Too Many Requests" } }).step?.error).toBe("Anfragelimit erreicht");
+    expect(parseWeKnoraExecutionEvent({ response_type: "error", data: { tool_name: "web_search", error: "kaputt" } }).step?.error).toBe("Schritt fehlgeschlagen");
+  });
+});
 
-    const capped = parseStoredFredExecutionTrace([{
-      id: "t", kind: "tool", status: "running", label: "L",
-      arguments: "a".repeat(20_000), result: "r".repeat(50_000), output: "o".repeat(20_000), command: "c".repeat(5_000),
-      callId: "i".repeat(500), parentId: "p".repeat(500),
-    }])[0];
-    expect(capped.arguments!.length).toBeLessThanOrEqual(MAX_EXECUTION_ARGUMENTS_CHARS + EXECUTION_CUT_MARKER.length + 1);
-    expect(capped.result!.length).toBeLessThanOrEqual(MAX_EXECUTION_RESULT_CHARS + EXECUTION_CUT_MARKER.length + 1);
-    expect(capped.output!.startsWith(EXECUTION_CUT_MARKER)).toBe(true);
-    expect(capped.command!.endsWith(EXECUTION_CUT_MARKER)).toBe(true);
-    expect(capped.callId).toHaveLength(180);
-    expect(capped.parentId).toHaveLength(180);
-    // re-parsing already capped data does not add a second marker
-    expect(parseStoredFredExecutionTrace([capped])[0]).toEqual(capped);
-    // stored secrets are redacted again
-    expect(parseStoredFredExecutionTrace([{ id: "t", kind: "tool", status: "running", label: "L", result: "password=hunter2" }])[0].result).not.toContain("hunter2");
+describe("Advanced execution trace: thinking is never surfaced", () => {
+  const secretThought = "Ich überlege geheim: der Nutzer pendelt, also Pendlerpauschale prüfen";
+
+  it("turns thinking events of any shape into one text-free phase marker", () => {
+    const events: unknown[] = [
+      { response_type: "thinking", content: secretThought, data: { done: false } },
+      { response_type: "thinking", data: { content: secretThought, reasoning_content: secretThought, thought: secretThought, done: true, duration_ms: 1200 } },
+      { response_type: "thinking", reasoning_content: secretThought, thinking: { content: secretThought } },
+      { response_type: "tool_result", data: { tool_name: "thinking", success: true, thought: secretThought, output: secretThought, thought_number: 1, total_thoughts: 3 } },
+      { response_type: "tool_call", data: { tool_name: "thinking", arguments: { thought: secretThought, thought_number: 1 } } },
+      { response_type: "agent_query", assistant_message_id: "m1" },
+    ];
+    for (const event of events) {
+      const update = parseWeKnoraExecutionEvent(event);
+      expect(update.step).toMatchObject({ id: EXECUTION_PHASE_STEP_ID, kind: "analysis" });
+      expect(JSON.stringify(update)).not.toContain("geheim");
+      expect(update.step).not.toHaveProperty("detail");
+      expect(update.step).not.toHaveProperty("toolName");
+    }
+  });
+
+  it("drops reflection events entirely", () => {
+    const update = parseWeKnoraExecutionEvent({ response_type: "reflection", content: secretThought, data: { done: true } });
+    expect(update.step).toBeUndefined();
+    expect(JSON.stringify(update)).not.toContain("geheim");
+  });
+
+  it("coalesces every thinking event into a single marker that is closed by the next real step", () => {
+    const events = [
+      { response_type: "thinking", content: "a" },
+      { response_type: "thinking", content: "b" },
+      { response_type: "tool_call", data: { tool_call_id: "k1", tool_name: "knowledge_search", arguments: { query: "x y" } } },
+      { response_type: "thinking", content: "c" },
+      { response_type: "thinking", data: { done: true } },
+      { response_type: "reflection", content: "d" },
+    ];
+    let trace: FredExecutionStep[] = [];
+    for (const event of events) trace = mergeFredExecutionUpdate(trace, parseWeKnoraExecutionEvent(event)).trace;
+    expect(trace.map((step) => step.kind)).toEqual(["analysis", "knowledge"]);
+    expect(trace[0]).toMatchObject({ id: EXECUTION_PHASE_STEP_ID, status: "completed", label: "Anfrage analysiert" });
+    expect(JSON.stringify(trace)).not.toMatch(/"detail"/u);
+  });
+
+  it("finalizes a marker that never saw a done event", () => {
+    const trace = mergeFredExecutionUpdate([], parseWeKnoraExecutionEvent({ response_type: "thinking", content: "x" })).trace;
+    expect(trace[0].status).toBe("running");
+    expect(finalizeExecutionTrace(trace)[0].status).toBe("completed");
+  });
+
+  it("strips reasoning text from already stored analysis / evaluation steps and coalesces them", () => {
+    const legacy = [
+      { id: "analysis:1", kind: "analysis", status: "completed", label: "Anfrage analysiert", detail: secretThought, durationMs: 100 },
+      { id: "analysis:2", kind: "analysis", status: "completed", label: "Anfrage analysiert (2/3)", detail: secretThought },
+      { id: "evaluation:1", kind: "evaluation", status: "completed", label: "Rechercheergebnisse bewertet", detail: secretThought },
+      { id: "knowledge:1", kind: "knowledge", status: "completed", label: "Wissensbasis durchsucht" },
+      { id: "tool:thinking", kind: "analysis", status: "completed", label: "Anfrage analysiert", toolName: "thinking", detail: secretThought, arguments: JSON.stringify({ thought: secretThought }), result: secretThought },
+    ];
+    const clean = sanitizeStoredExecutionTrace(legacy);
+    expect(JSON.stringify(clean)).not.toContain("geheim");
+    // only the first text-free marker survives; later analysis / evaluation / thinking markers are dropped
+    expect(clean.map((step) => step.id)).toEqual(["analysis:1", "knowledge:1"]);
+    expect(clean.every((step) => step.detail === undefined)).toBe(true);
+  });
+
+  it("ignores reasoning fields smuggled into stored steps and closes running markers on read", () => {
+    const clean = sanitizeStoredExecutionTrace([{ id: "x", kind: "analysis", status: "running", label: "Analysiert", reasoning_content: secretThought, thought: secretThought }]);
+    expect(JSON.stringify(clean)).not.toContain("geheim");
+    expect(clean[0].status).toBe("running");
+    expect(sanitizeStoredExecutionTrace(clean, { finalize: true })[0].status).toBe("completed");
+  });
+});
+
+describe("Advanced execution trace: internal data never reaches the browser", () => {
+  const uuid = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
+
+  it("masks UUIDs, hosts, IPs, model names and paths in labels, details and free text", () => {
+    const dirty = [{
+      id: "tool:1",
+      kind: "tool",
+      status: "completed",
+      label: `Fehler bei ${uuid} auf app:8080`,
+      detail: "Antwort von mcp:8000 und fred.203.0.113.7.sslip.io, 10.0.0.12:5432, Modell gpt-4o-mini / claude-3-5-sonnet / text-embedding-3-large (OpenAI) in /var/lib/weknora/data/file.md",
+      toolName: "custom_tool",
+      callId: "upstream-call-id-123",
+      groupId: "grp-raw-1",
+    }];
+    const [step] = sanitizeStoredExecutionTrace(dirty);
+    const json = JSON.stringify(step);
+    for (const leaked of [uuid, "app:8080", "mcp:8000", "sslip.io", "10.0.0.12", "gpt-4o", "claude-3", "text-embedding", "OpenAI", "/var/lib", "upstream-call-id-123", "grp-raw-1"]) {
+      expect(json).not.toContain(leaked);
+    }
+    expect(step.detail).toContain("[intern]");
+    expect(step.detail).toContain("[Modell]");
+    expect(step.detail).toContain("file.md");
+    expect(step.label).toContain("[ID]");
+  });
+
+  it("is idempotent", () => {
+    const once = sanitizeStoredExecutionTrace([{ id: "t", kind: "tool", status: "completed", label: `x ${uuid}`, detail: "gpt-4o auf app:8080", command: "cat /etc/passwd", output: "FOO=1\nBAR=2\nBAZ=3\nhi /tmp/a/b.txt" }]);
+    expect(sanitizeStoredExecutionTrace(once)).toEqual(once);
+  });
+
+  it("does not mangle ordinary German legal text", () => {
+    const text = "Gemäß § 16 Abs 1 Z 6 EStG 1988 sind Aufwendungen von 1.234,56 Euro (Stand 12.07.2026) abzugsfähig; siehe Rz 250/2 und BGBl I Nr. 201/2024.";
+    const [step] = sanitizeStoredExecutionTrace([{ id: "t", kind: "tool", status: "completed", label: "L", detail: text }]);
+    expect(step.detail).toBe(text);
+  });
+});
+
+describe("Advanced execution trace: knowledge search → source cards", () => {
+  const searchRows = [
+    {
+      result_index: 1,
+      content: "Pendlerpauschale gilt bei einer Wegstrecke von mehr als 20 km. ".repeat(40),
+      chunk_type: "text",
+      knowledge_id: "6f9619ff-8b86-d011-b42d-00c04fc964ff",
+      knowledge_base_id: "7a9619ff-8b86-d011-b42d-00c04fc964ff",
+      knowledge_title: "EStG_1988_Einkommensteuergesetz_1988_RIS_Fassung_2026-07-12_verified.md",
+      knowledge_metadata: { tenant: 1 },
+      match_type: "vector",
+      match_snippet: "Das Pendlerpauschale steht zu, wenn ...",
+      score: 0.8734,
+      source_query: "Pendlerpauschale Voraussetzungen",
+      query_type: "vector",
+      knowledge_base_type: "document",
+    },
+    {
+      result_index: 2,
+      content: "Q: Wann steht das Pendlereuro zu? | A: Bei Anspruch auf Pendlerpauschale.",
+      chunk_type: "faq",
+      knowledge_id: "6f9619ff-8b86-d011-b42d-00c04fc964fe",
+      knowledge_base_id: "7a9619ff-8b86-d011-b42d-00c04fc964fe",
+      knowledge_title: "Pendler-FAQ",
+      match_type: "keyword",
+      match_snippet: "Q: Wann steht das Pendlereuro zu? | A: Bei Anspruch auf Pendlerpauschale.",
+      score: 0.6,
+      source_query: "Pendlereuro",
+      knowledge_base_type: "faq",
+      faq_id: "6f9619ff-8b86-d011-b42d-00c04fc964fd",
+    },
+    {
+      result_index: 3,
+      content: "Betrag 2025: 696 Euro",
+      knowledge_title: "Betragstabelle",
+      match_type: "vector",
+      match_snippet: "Betrag 2025: 696 Euro",
+      score: 87,
+      source_query: "Pendlerpauschale Voraussetzungen",
+    },
+  ];
+
+  const run = (result: Record<string, unknown>) => {
+    const call = parseWeKnoraExecutionEvent({
+      response_type: "tool_call",
+      data: { tool_call_id: "s1", tool_name: "search_knowledge", arguments: { queries: ["Pendlerpauschale Voraussetzungen", "Pendlereuro"], knowledge_base_ids: ["7a9619ff-8b86-d011-b42d-00c04fc964ff"] } },
+    });
+    const done = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: { tool_call_id: "s1", tool_name: "search_knowledge", success: true, duration_ms: 900, ...result },
+    });
+    return mergeFredExecutionUpdate(mergeFredExecutionUpdate([], call).trace, done).trace[0];
+  };
+
+  it("turns result rows into capped, scored, classified source cards without ids", () => {
+    const step = run({ result: searchRows });
+    expect(step).toMatchObject({ kind: "knowledge", status: "completed", label: "Wissensbasis durchsucht", detail: "3 Treffer", durationMs: 900 });
+    expect(step.queries).toEqual(["Pendlerpauschale Voraussetzungen", "Pendlereuro"]);
+    expect(step.sources).toHaveLength(3);
+    const [law, faq, table] = step.sources!;
+    expect(law).toMatchObject({
+      title: "EStG_1988_Einkommensteuergesetz_1988_RIS_Fassung_2026-07-12_verified.md",
+      kind: "law",
+      snippet: "Das Pendlerpauschale steht zu, wenn ...",
+      score: 0.873,
+      matchType: "vector",
+      query: "Pendlerpauschale Voraussetzungen",
+    });
+    expect(law.excerpt!.length).toBeLessThanOrEqual(1501);
+    expect(faq).toMatchObject({ kind: "faq", score: 0.6 });
+    expect(table).toMatchObject({ title: "Betragstabelle", kind: "document", score: 0.87 });
+    const json = JSON.stringify(step);
+    expect(json).not.toContain("6f9619ff");
+    expect(json).not.toContain("7a9619ff");
+    expect(json).not.toContain("knowledge_metadata");
+    expect(step).not.toHaveProperty("arguments");
+    expect(step).not.toHaveProperty("result");
+  });
+
+  it("accepts rows wrapped as { results: [...], display_type }", () => {
+    expect(run({ data: { display_type: "search_results", results: searchRows } }).sources).toHaveLength(3);
+    expect(run({ result: JSON.stringify({ results: searchRows, display_type: "search_results" }) }).sources).toHaveLength(3);
+    expect(run({ output: JSON.stringify({ results: searchRows }) }).sources).toHaveLength(3);
+  });
+
+  it("deduplicates identical hits inside one result and limits the number of cards", () => {
+    expect(run({ result: [...searchRows, ...searchRows] }).sources).toHaveLength(3);
+    const many = run({ result: Array.from({ length: 40 }, (_, index) => ({ knowledge_title: `Dok ${index}`, match_snippet: `Treffer ${index}`, score: 0.5 })) });
+    expect(many.sources).toHaveLength(12);
+  });
+
+  it("unions queries when a step is updated", () => {
+    const step = run({ result: searchRows });
+    const merged = mergeFredExecutionStep([step], { ...step, queries: ["Pendlereuro", "Neu"] });
+    expect(merged[0].queries).toEqual(["Pendlerpauschale Voraussetzungen", "Pendlereuro", "Neu"]);
+  });
+
+  it("document reads yield the title, position and excerpt", () => {
+    const call = parseWeKnoraExecutionEvent({ response_type: "tool_call", data: { tool_call_id: "r1", tool_name: "read_document", arguments: { knowledge_id: "6f9619ff-8b86-d011-b42d-00c04fc964ff" } } });
+    expect(call.step).toMatchObject({ kind: "knowledge", label: "Dokument wird gelesen" });
+    expect(call.step).not.toHaveProperty("facts");
+    const done = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: { tool_call_id: "r1", tool_name: "read_document", success: true, result: { knowledge_title: "LStR_2002_idF_2025-12-18_full_verified.md", chunk_index: 4, content: "Rz 250: Das Pendlerpauschale ..." } },
+    });
+    expect(done.step).toMatchObject({
+      label: "Dokument gelesen",
+      sources: [{ title: "LStR_2002_idF_2025-12-18_full_verified.md", kind: "guideline", snippet: "Rz 250: Das Pendlerpauschale ..." }],
+    });
+    // the internal chunk sequence is no section the reader could use
+    expect(done.step?.sources?.[0]).not.toHaveProperty("section");
+  });
+
+  it("web search yields query chips and result cards with public links only", () => {
+    const done = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: {
+        tool_call_id: "w1",
+        tool_name: "web_search",
+        success: true,
+        arguments: { query: "Pendlerrechner BMF" },
+        result: { results: [
+          { title: "BMF Pendlerrechner", url: "https://pendlerrechner.bmf.gv.at/x?a=1", snippet: "Berechnen Sie..." },
+          { title: "Intern", url: "http://app:8080/secret", snippet: "nicht zeigen" },
+        ] },
+      },
+    }).step!;
+    expect(done.queries).toEqual(["Pendlerrechner BMF"]);
+    expect(done.sources?.[0]).toMatchObject({ title: "BMF Pendlerrechner", kind: "web", url: "https://pendlerrechner.bmf.gv.at/x?a=1" });
+    expect(done.sources?.[1].url).toBeUndefined();
+    expect(JSON.stringify(done)).not.toContain("app:8080");
+  });
+});
+
+describe("Advanced execution trace: legacy stored steps", () => {
+  const rows = [{
+    result_index: 1,
+    content: "Langtext ".repeat(300),
+    knowledge_id: "6f9619ff-8b86-d011-b42d-00c04fc964ff",
+    knowledge_title: "UStG_1994_Umsatzsteuergesetz_1994_RIS_Fassung_2026-01-01_verified.md",
+    match_snippet: "Kleinunternehmer ...",
+    score: 0.7,
+    source_query: "Kleinunternehmer",
+  }];
+
+  it("derives queries and sources from raw arguments/result strings and drops the raw strings", () => {
+    const [step] = sanitizeStoredExecutionTrace([{
+      id: "knowledge:1",
+      kind: "knowledge",
+      status: "completed",
+      label: "Wissensbasis durchsucht",
+      callId: "raw-call-id",
+      toolName: "search_knowledge",
+      detail: "Suche: Kleinunternehmer",
+      arguments: JSON.stringify({ queries: ["Kleinunternehmer"], knowledge_base_ids: ["6f9619ff-8b86-d011-b42d-00c04fc964ff"] }, null, 2),
+      result: JSON.stringify({ results: rows, display_type: "search_results" }, null, 2),
+    }]);
+    expect(step).not.toHaveProperty("arguments");
+    expect(step).not.toHaveProperty("result");
+    expect(step.queries).toEqual(["Kleinunternehmer"]);
+    expect(step.sources?.[0]).toMatchObject({ kind: "law", score: 0.7 });
+    expect(step.detail).toBeUndefined();
+    expect(JSON.stringify(step)).not.toContain("6f9619ff");
+    expect(JSON.stringify(step)).not.toContain("raw-call-id");
+  });
+
+  it("salvages hits from results that were cut in the middle of the JSON", () => {
+    const full = JSON.stringify({ results: [...rows, { ...rows[0], knowledge_title: "Betragstabelle", match_snippet: "Zweiter Treffer" }] }, null, 2);
+    const [step] = sanitizeStoredExecutionTrace([{
+      id: "knowledge:2", kind: "knowledge", status: "completed", label: "Wissensbasis durchsucht", toolName: "search_knowledge",
+      result: `${full.slice(0, Math.floor(full.length * 0.8))}\n…[gekürzt]`,
+    }]);
+    expect(step.sources?.length).toBeGreaterThanOrEqual(1);
+    expect(step.sources?.[0].title).toContain("UStG_1994");
+    expect(JSON.stringify(step)).not.toContain("result_index");
+  });
+
+  it("summarises unparseable plain-text results briefly and never dumps raw JSON", () => {
+    const [text] = sanitizeStoredExecutionTrace([{
+      id: "tool:3", kind: "tool", status: "completed", label: "Recherchewerkzeug ausgeführt", toolName: "custom_tool",
+      result: `Alles erledigt. ${"x".repeat(2_000)}`, arguments: '{"limit": 5, "token": "abc"}',
+    }]);
+    expect(text.detail!.length).toBeLessThanOrEqual(281);
+    expect(text.facts).toEqual([{ label: "Limit", value: "5" }]);
+    expect(text).not.toHaveProperty("result");
+
+    const [cutJson] = sanitizeStoredExecutionTrace([{
+      id: "tool:4", kind: "tool", status: "completed", label: "Recherchewerkzeug ausgeführt", toolName: "custom_tool",
+      result: '{"alpha": {"beta": [1, 2, 3], "gamma": "abc',
+    }]);
+    expect(cutJson.detail).toBeUndefined();
+    expect(JSON.stringify(cutJson)).not.toContain("alpha");
+  });
+
+  it("keeps old shell steps usable: command and output, masked", () => {
+    const [step] = sanitizeStoredExecutionTrace([{
+      id: "tool:5", kind: "tool", status: "completed", label: "Recherchewerkzeug ausgeführt", toolName: "shell_exec",
+      arguments: JSON.stringify({ command: "ls /home/app/data" }), result: "a.txt\nHOME=/root\nPATH=/bin\nUSER=x", output: "a.txt",
+      command: "ls /home/app/data",
+    }]);
+    expect(step.command).toBe("ls data");
+    expect(step.output).toBe("a.txt");
+    expect(step).not.toHaveProperty("result");
   });
 
   it("parses old stored traces without the new fields unchanged", () => {
-    const old = [{ id: "analysis:1", kind: "analysis", status: "completed", label: "Anfrage analysiert", detail: "d", durationMs: 10 }];
-    expect(parseStoredFredExecutionTrace(old)).toEqual(old);
+    const old = [{ id: "knowledge:1", kind: "knowledge", status: "completed", label: "Wissensbasis durchsucht", detail: "3 Treffer", durationMs: 10 }];
+    expect(sanitizeStoredExecutionTrace(old)).toEqual(old);
+  });
+
+  it("filters malformed entries and enforces the step cap", () => {
+    expect(sanitizeStoredExecutionTrace("nope")).toEqual([]);
+    expect(sanitizeStoredExecutionTrace([null, 1, { id: "", kind: "tool", status: "running", label: "x" }, { id: "a", kind: "bogus", status: "running", label: "x" }])).toEqual([]);
+    const many = Array.from({ length: 300 }, (_, index) => ({ id: `t${index}`, kind: "tool", status: "completed", label: `L${index}` }));
+    expect(sanitizeStoredExecutionTrace(many)).toHaveLength(200);
+  });
+
+  it("round-trips new structured fields and re-caps them", () => {
+    const steps: FredExecutionStep[] = [
+      {
+        id: "knowledge:1", kind: "knowledge", status: "completed", label: "Wissensbasis durchsucht", toolName: "search_knowledge",
+        callId: "call:abc", queries: ["a", "b"], facts: [{ label: "Jahr", value: "2025" }], refs: ["name:X"],
+        sources: [{ title: "Betragstabelle", kind: "document", snippet: "s", excerpt: "z".repeat(1_400), score: 0.5, matchType: "vector", query: "a", section: "Seite 2" }],
+      },
+      { id: "agent:1", kind: "agent", status: "running", label: "Hilfs-Agent X: Läuft", parentId: "knowledge:1", groupId: "grp:abc", revision: 4, taskName: "X", callId: "call:def", detail: "Schritt 2" },
+    ];
+    expect(sanitizeStoredExecutionTrace(JSON.parse(JSON.stringify(steps)))).toEqual(steps);
+
+    const [capped] = sanitizeStoredExecutionTrace([{
+      id: "t", kind: "tool", status: "running", label: "L",
+      output: "o".repeat(20_000), command: "z".repeat(5_000),
+      sources: [{ title: "T", excerpt: "x".repeat(5_000), snippet: "y".repeat(5_000), score: 7 }],
+    }]);
+    expect(capped.output!.startsWith(EXECUTION_CUT_MARKER)).toBe(true);
+    expect(capped.command!.endsWith(EXECUTION_CUT_MARKER)).toBe(true);
+    expect(capped.sources![0].excerpt!.length).toBeLessThanOrEqual(1_501);
+    expect(capped.sources![0].snippet!.length).toBeLessThanOrEqual(401);
+    expect(capped.sources![0].score).toBeUndefined();
+    expect(sanitizeStoredExecutionTrace([capped])[0]).toEqual(capped);
+  });
+});
+
+describe("Stored legacy traces: analysis markers and tool labels", () => {
+  const legacy = [
+    { id: "analysis:1", kind: "analysis", status: "completed", label: "Anfrage wird analysiert" },
+    { id: "knowledge:1", kind: "knowledge", status: "completed", label: "Wissensbasis durchsucht", toolName: "search_knowledge" },
+    { id: "analysis:2", kind: "analysis", status: "completed", label: "Anfrage wird analysiert" },
+    { id: "knowledge:2", kind: "knowledge", status: "completed", label: "Wissensbasis durchsucht", toolName: "read_document" },
+    { id: "evaluation:1", kind: "evaluation", status: "running", label: "Rechercheergebnisse werden bewertet" },
+    { id: "analysis:3", kind: "analysis", status: "completed", label: "Anfrage analysiert" },
+  ];
+
+  it("keeps a single, completed 'Anfrage analysiert' marker (the first) in a finalized trace", () => {
+    const trace = sanitizeStoredExecutionTrace(legacy, { finalize: true });
+    expect(trace.map((step) => step.id)).toEqual(["analysis:1", "knowledge:1", "knowledge:2"]);
+    expect(trace[0]).toMatchObject({ kind: "analysis", status: "completed", label: "Anfrage analysiert" });
+    expect(trace.filter((step) => step.kind === "analysis" || step.kind === "evaluation")).toHaveLength(1);
+  });
+
+  it("closes a running first marker with the completed label, also without a later marker", () => {
+    const running = [{ id: "analysis:1", kind: "analysis", status: "running", label: "Analysiert die Anfrage" }];
+    expect(sanitizeStoredExecutionTrace(running)[0]).toMatchObject({ status: "running", label: "Analysiert die Anfrage" });
+    expect(sanitizeStoredExecutionTrace(running, { finalize: true })[0]).toMatchObject({ status: "completed", label: "Anfrage analysiert" });
+    expect(sanitizeStoredExecutionTrace(legacy.slice(0, 1))[0].label).toBe("Anfrage analysiert");
+  });
+
+  it("is idempotent", () => {
+    const once = sanitizeStoredExecutionTrace(legacy, { finalize: true });
+    expect(sanitizeStoredExecutionTrace(once, { finalize: true })).toEqual(once);
+  });
+
+  it("labels a legacy read_document step from its tool name", () => {
+    const trace = sanitizeStoredExecutionTrace(legacy, { finalize: true });
+    expect(trace.find((step) => step.id === "knowledge:2")).toMatchObject({ kind: "knowledge", label: "Dokument gelesen" });
+    expect(trace.find((step) => step.id === "knowledge:1")?.label).toBe("Wissensbasis durchsucht");
+    const failed = sanitizeStoredExecutionTrace([{ ...legacy[3], status: "failed" }]);
+    expect(failed[0].label).toBe("Dokument konnte nicht gelesen werden");
   });
 });

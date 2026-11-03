@@ -410,4 +410,82 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
       counts: { total: 3, completed: 3, inProgress: 0, open: 0 },
     }]);
   });
+
+  it("sanitizes legacy stored execution traces on read: no reasoning, no ids, no raw payloads", async () => {
+    const uuid = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
+    const conversationQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          id: "33333333-3333-4333-8333-333333333333",
+          title: "Altbestand",
+          created_at: "2026-07-18T07:00:00.000Z",
+          updated_at: "2026-07-18T07:01:00.000Z",
+          agent_key: "fred",
+          origin: "web",
+          telegram_integration_id: null,
+        },
+        error: null,
+      }),
+    };
+    const messageResult = {
+      data: [{
+        id: 2,
+        role: "assistant",
+        content: "Antwort",
+        display_content: null,
+        research_trace: [],
+        execution_trace: [
+          { id: "analysis:1", kind: "analysis", status: "running", label: "Anfrage wird analysiert", detail: "Ich überlege geheim" },
+          {
+            id: "knowledge:1", kind: "knowledge", status: "completed", label: "Wissensbasis durchsucht", toolName: "search_knowledge",
+            callId: "raw-call-id",
+            arguments: JSON.stringify({ queries: ["Pendlerpauschale"], knowledge_base_ids: [uuid] }),
+            result: JSON.stringify({ results: [{ knowledge_title: "LStR_2002_idF_2025-12-18_full_verified.md", knowledge_id: uuid, match_snippet: "Rz 250", score: 0.9 }] }),
+          },
+        ],
+        source_references: [
+          { kind: "knowledge", doc: "LStR 2002", chunkId: "chunk-secret", knowledgeBaseId: uuid },
+        ],
+        provider_created_at: "2026-07-18T07:00:02.000Z",
+        created_at: "2026-07-18T07:00:02.000Z",
+        attachments: [],
+        web_search_enabled: false,
+        pro_mode_enabled: false,
+      }],
+      error: null,
+    };
+    const messagesQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      then: (resolve: (value: typeof messageResult) => unknown) => resolve(messageResult),
+    };
+    vi.mocked(getSupabaseServerClient).mockReturnValue({
+      from: vi.fn((table: string) => (
+        table === "fred_conversations" ? conversationQuery : messagesQuery
+      )),
+    } as never);
+
+    const response = await GET(
+      new Request("https://findog.at/api/fred/conversations/33333333-3333-4333-8333-333333333333", {
+        headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
+      }),
+      { params: Promise.resolve({ conversationId: "33333333-3333-4333-8333-333333333333" }) },
+    );
+    const payload = await response.json();
+    const [message] = payload.messages;
+    expect(message.executionTrace).toHaveLength(2);
+    expect(message.executionTrace[0]).toMatchObject({ kind: "analysis", status: "completed" });
+    expect(message.executionTrace[1]).toMatchObject({
+      queries: ["Pendlerpauschale"],
+      sources: [{ title: "LStR_2002_idF_2025-12-18_full_verified.md", kind: "guideline", score: 0.9 }],
+    });
+    expect(message.sourceReferences).toEqual([{ kind: "knowledge", doc: "LStR 2002" }]);
+    const json = JSON.stringify(payload);
+    for (const leaked of ["geheim", uuid, "raw-call-id", "chunk-secret", "knowledge_base_ids"]) {
+      expect(json).not.toContain(leaked);
+    }
+  });
 });
