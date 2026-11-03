@@ -33,6 +33,7 @@ import {
 } from "@/lib/weknora/fred-research";
 import {
   mergeFredExecutionStep,
+  mergeFredExecutionUpdate,
   parseWeKnoraExecutionEvent,
   type FredExecutionStep,
 } from "./execution-trace";
@@ -439,6 +440,8 @@ export async function* executeFredTurn(
     const verifiedCitations = new Map<string, VerifiedBfgCitation>();
     const pendingCitationSteps: FredResearchStep[] = [];
     const pendingExecCitationSteps: FredExecutionStep[] = [];
+    // Steps changed by the frame being processed; only these are checked/yielded per frame.
+    const touchedExecutionSteps = new Map<string, FredExecutionStep>();
 
     const verifyFinalCitations = async (text: string) => {
       const candidates = [
@@ -524,11 +527,10 @@ export async function* executeFredTurn(
         // yield is handled by caller
       }
       if (isAdvanced) {
-        const exec = parseWeKnoraExecutionEvent(parsed);
-        if (exec.step) {
-          executionTrace = mergeFredExecutionStep(executionTrace, exec.step);
-          // yield is handled by caller
-        }
+        const merged = mergeFredExecutionUpdate(executionTrace, parseWeKnoraExecutionEvent(parsed));
+        executionTrace = merged.trace;
+        for (const step of merged.touched) touchedExecutionSteps.set(step.id, step);
+        // yield is handled by caller
       }
       if (isUpstreamCompleteEvent(parsed)) {
         sawUpstreamCompletion = true;
@@ -587,13 +589,14 @@ export async function* executeFredTurn(
           }
         }
         if (isAdvanced) {
-          for (const step of executionTrace) {
+          for (const step of touchedExecutionSteps.values()) {
             const signature = JSON.stringify(step);
             if (step.id && step.kind && yieldedExecutionSteps.get(step.id) !== signature) {
               yieldedExecutionSteps.set(step.id, signature);
               yield { type: "execution", step };
             }
           }
+          touchedExecutionSteps.clear();
         }
         if (answerRetracted) {
           answerRetracted = false;

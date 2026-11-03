@@ -171,3 +171,83 @@ describe("ResearchTrace advanced collapsible detail and sources display", () => 
     expect(htmlSimple).not.toContain("KB 12345678 · Chunk 87654321");
   });
 });
+
+describe("ResearchTrace advanced: full execution payloads", () => {
+  const render = (executionSteps: FredExecutionStep[], displayMode: "simple" | "advanced" = "advanced") =>
+    renderToStaticMarkup(
+      React.createElement(ResearchTrace, {
+        steps: [{ id: "r1", kind: "sources", status: "completed", label: "Einfache Ansicht" }],
+        sources: [],
+        active: false,
+        agentName: "Fred",
+        executionSteps,
+        displayMode,
+      }),
+    );
+
+  it("renders Parameter and Ergebnis as collapsed <details> with wrapping <pre>", () => {
+    const html = render([{
+      id: "tool:1",
+      kind: "tool",
+      status: "completed",
+      label: "Recherchewerkzeug ausgeführt",
+      arguments: '{\n  "query": "Pendlerpauschale"\n}',
+      result: "Ergebnis <b>roh</b>",
+    }]);
+
+    expect(html).toMatch(/<details class="fred-execution-payload-fold"><summary>Parameter<\/summary><pre class="fred-execution-payload">/);
+    expect(html).toContain("&quot;query&quot;: &quot;Pendlerpauschale&quot;");
+    expect(html).toMatch(/<summary>Ergebnis<\/summary><pre class="fred-execution-payload">Ergebnis &lt;b&gt;roh&lt;\/b&gt;<\/pre>/);
+    expect(html).not.toMatch(/<details class="fred-execution-payload-fold" open/);
+  });
+
+  it("renders command output in a terminal <pre>, open while running and collapsed when finished", () => {
+    const base: FredExecutionStep = {
+      id: "tool:2",
+      kind: "tool",
+      status: "running",
+      label: "Befehl wird ausgeführt",
+      command: "ls -la",
+      output: "total 0\nfile.txt",
+    };
+    const running = render([base]);
+    expect(running).toContain('<code class="fred-execution-command">ls -la</code>');
+    expect(running).toMatch(/<details class="fred-execution-payload-fold" open=""><summary>Ausgabe<\/summary><pre class="fred-execution-terminal">total 0\nfile.txt<\/pre>/);
+
+    const finished = render([{ ...base, status: "completed", label: "Recherchewerkzeug ausgeführt" }]);
+    expect(finished).toMatch(/<details class="fred-execution-payload-fold"><summary>Ausgabe<\/summary><pre class="fred-execution-terminal">/);
+    expect(finished).not.toContain('open=""><summary>Ausgabe');
+  });
+
+  it("nests steps below their parent in arrival order and keeps orphans at top level", () => {
+    const html = render([
+      { id: "tool:spawn", kind: "tool", status: "completed", label: "Spawn-Schritt" },
+      { id: "agent:a", kind: "agent", status: "running", label: "Hilfs-Agent A: Läuft", parentId: "tool:spawn" },
+      { id: "agent:b", kind: "agent", status: "completed", label: "Hilfs-Agent B: Fertig", parentId: "tool:spawn" },
+      { id: "agent:orphan", kind: "agent", status: "running", label: "Hilfs-Agent Waise: Läuft", parentId: "tool:missing" },
+    ]);
+
+    const spawnAt = html.indexOf("Spawn-Schritt");
+    const childList = html.indexOf('<ol class="fred-execution-steps fred-execution-children">');
+    expect(childList).toBeGreaterThan(spawnAt);
+    expect(html.indexOf("Hilfs-Agent A")).toBeGreaterThan(childList);
+    expect(html.indexOf("Hilfs-Agent B")).toBeGreaterThan(html.indexOf("Hilfs-Agent A"));
+    // the orphan is rendered after the nested list closed, not inside it
+    const childListEnd = html.indexOf("</ol>", childList);
+    expect(html.indexOf("Hilfs-Agent Waise")).toBeGreaterThan(childListEnd);
+    expect(html.match(/fred-execution-children/g)).toHaveLength(1);
+  });
+
+  it("does not render execution payloads in the simple view", () => {
+    const html = render([{
+      id: "tool:3",
+      kind: "tool",
+      status: "completed",
+      label: "Recherchewerkzeug ausgeführt",
+      arguments: "geheimer-parameter",
+      result: "geheimes-ergebnis",
+    }], "simple");
+    expect(html).not.toContain("geheimer-parameter");
+    expect(html).not.toContain("geheimes-ergebnis");
+  });
+});

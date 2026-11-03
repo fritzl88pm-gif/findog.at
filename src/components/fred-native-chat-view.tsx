@@ -245,6 +245,92 @@ export function resolveResearchTraceDisplay({
   return { shouldRender: false, isAdvanced: false, summary: "" };
 }
 
+function ExecutionPayload({ summary, text, className, open }: {
+  summary: string;
+  text: string;
+  className: string;
+  open?: boolean;
+}) {
+  return (
+    <details className="fred-execution-payload-fold" open={open ? true : undefined}>
+      <summary>{summary}</summary>
+      <pre className={className}>{text}</pre>
+    </details>
+  );
+}
+
+function ExecutionStepList({ steps }: { steps: FredExecutionStep[] }) {
+  const ids = new Set(steps.map((step) => step.id));
+  const childrenOf = new Map<string, FredExecutionStep[]>();
+  const topLevel: FredExecutionStep[] = [];
+  for (const step of steps) {
+    if (step.parentId && step.parentId !== step.id && ids.has(step.parentId)) {
+      childrenOf.set(step.parentId, [...(childrenOf.get(step.parentId) ?? []), step]);
+    } else {
+      topLevel.push(step);
+    }
+  }
+
+  const renderList = (list: FredExecutionStep[], nested: boolean): React.ReactElement => nested ? (
+    <ol className="fred-execution-steps fred-execution-children">{list.map(renderStep)}</ol>
+  ) : (
+    <ol className="fred-execution-steps">{list.map(renderStep)}</ol>
+  );
+
+  function renderStep(step: FredExecutionStep): React.ReactElement {
+    const children = childrenOf.get(step.id);
+    return (
+      <li className={`is-${step.status} kind-${step.kind}`} key={step.id}>
+        <span className="fred-execution-status" aria-hidden="true" />
+        <div className="fred-execution-body">
+          <div className="fred-execution-header">
+            <span className="fred-execution-label">{step.label}</span>
+            {step.toolName && step.toolName !== "thinking" ? (
+              <code className="fred-execution-tool-name">{step.toolName}</code>
+            ) : null}
+            {step.durationMs !== undefined ? (
+              <small className="fred-execution-duration">
+                {(step.durationMs / 1_000).toLocaleString("de-AT", { maximumFractionDigits: 1 })} s
+              </small>
+            ) : null}
+          </div>
+          {step.detail ? (
+            step.detail.length > 400 ? (
+              <details
+                className="fred-execution-detail-fold"
+                open={step.status === "running" ? true : undefined}
+              >
+                <summary>Details</summary>
+                <div className="fred-execution-detail">{step.detail}</div>
+              </details>
+            ) : (
+              <div className="fred-execution-detail">{step.detail}</div>
+            )
+          ) : null}
+          {step.arguments ? (
+            <ExecutionPayload summary="Parameter" text={step.arguments} className="fred-execution-payload" />
+          ) : null}
+          {step.result ? (
+            <ExecutionPayload summary="Ergebnis" text={step.result} className="fred-execution-payload" />
+          ) : null}
+          {step.command && !step.arguments ? <code className="fred-execution-command">{step.command}</code> : null}
+          {step.output ? (
+            <ExecutionPayload
+              summary="Ausgabe"
+              text={step.output}
+              className="fred-execution-terminal"
+              open={step.status === "running"}
+            />
+          ) : null}
+          {children ? renderList(children, true) : null}
+        </div>
+      </li>
+    );
+  }
+
+  return renderList(topLevel, false);
+}
+
 export function ResearchTrace({
   steps,
   sources,
@@ -278,36 +364,7 @@ export function ResearchTrace({
         {displayState.summary}
       </summary>
       {displayState.isAdvanced && executionSteps ? (
-        <ol className="fred-execution-steps">
-          {executionSteps.map((step) => (
-            <li className={`is-${step.status} kind-${step.kind}`} key={step.id}>
-              <span className="fred-execution-status" aria-hidden="true" />
-              <div className="fred-execution-body">
-                <div className="fred-execution-header">
-                  <span className="fred-execution-label">{step.label}</span>
-                  {step.durationMs !== undefined ? (
-                    <small className="fred-execution-duration">
-                      {(step.durationMs / 1_000).toLocaleString("de-AT", { maximumFractionDigits: 1 })} s
-                    </small>
-                  ) : null}
-                </div>
-                {step.detail ? (
-                  step.detail.length > 400 ? (
-                    <details
-                      className="fred-execution-detail-fold"
-                      open={step.status === "running" ? true : undefined}
-                    >
-                      <summary>Details</summary>
-                      <div className="fred-execution-detail">{step.detail}</div>
-                    </details>
-                  ) : (
-                    <div className="fred-execution-detail">{step.detail}</div>
-                  )
-                ) : null}
-              </div>
-            </li>
-          ))}
-        </ol>
+        <ExecutionStepList steps={executionSteps} />
       ) : (
         <ol className="fred-research-steps">
           {steps.map((step) => (

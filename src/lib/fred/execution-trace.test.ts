@@ -2,10 +2,25 @@ import { describe, expect, it } from "vitest";
 
 import {
   mergeFredExecutionStep,
+  mergeFredExecutionUpdate,
   parseStoredFredExecutionTrace,
   parseWeKnoraExecutionEvent,
+  EXECUTION_CUT_MARKER,
+  MAX_EXECUTION_ARGUMENTS_CHARS,
+  MAX_EXECUTION_COMMAND_CHARS,
+  MAX_EXECUTION_OUTPUT_CHARS,
+  MAX_EXECUTION_RESULT_CHARS,
   type FredExecutionStep,
+  type FredExecutionUpdate,
 } from "./execution-trace";
+
+/** Detail-summary policy tests inspect the step without the (intentionally full) advanced payload fields. */
+function withoutPayload(update: FredExecutionUpdate): FredExecutionUpdate {
+  if (!update.step) return update;
+  const step = { ...update.step };
+  for (const key of ["callId", "toolName", "arguments", "result", "output", "command"] as const) delete step[key];
+  return { ...update, step };
+}
 
 describe("WeKnora execution trace projection and parser", () => {
   it("shows bounded provider-exposed thinking text in advanced mode", () => {
@@ -97,7 +112,7 @@ describe("WeKnora execution trace projection and parser", () => {
       },
     });
 
-    expect(running.step).toEqual({
+    expect(running.step).toMatchObject({
       id: expect.stringMatching(/^planning:[a-z0-9]+$/u),
       kind: "planning",
       status: "running",
@@ -131,7 +146,7 @@ describe("WeKnora execution trace projection and parser", () => {
       },
     });
 
-    expect(completed.step).toEqual({
+    expect(completed.step).toMatchObject({
       id: running.step?.id,
       kind: "planning",
       status: "completed",
@@ -163,7 +178,7 @@ describe("WeKnora execution trace projection and parser", () => {
       },
     });
 
-    expect(kbCall.step).toEqual({
+    expect(kbCall.step).toMatchObject({
       id: expect.stringMatching(/^knowledge:[a-z0-9]+$/u),
       kind: "knowledge",
       status: "running",
@@ -190,7 +205,7 @@ describe("WeKnora execution trace projection and parser", () => {
       },
     });
 
-    expect(kbResult.step).toEqual({
+    expect(kbResult.step).toMatchObject({
       id: kbCall.step?.id,
       kind: "knowledge",
       status: "completed",
@@ -198,7 +213,7 @@ describe("WeKnora execution trace projection and parser", () => {
       detail: "2 Treffer",
       durationMs: 450,
     });
-    expect(JSON.stringify(kbResult)).not.toContain("Secret excerpt");
+    expect(JSON.stringify(withoutPayload(kbResult))).not.toContain("Secret excerpt");
 
     const webCall = parseWeKnoraExecutionEvent({
       response_type: "tool_call",
@@ -211,7 +226,7 @@ describe("WeKnora execution trace projection and parser", () => {
       },
     });
 
-    expect(webCall.step).toEqual({
+    expect(webCall.step).toMatchObject({
       id: expect.stringMatching(/^web:[a-z0-9]+$/u),
       kind: "web",
       status: "running",
@@ -231,14 +246,14 @@ describe("WeKnora execution trace projection and parser", () => {
       },
     });
 
-    expect(unknownCall.step).toEqual({
+    expect(unknownCall.step).toMatchObject({
       id: expect.stringMatching(/^tool:[a-z0-9]+$/u),
       kind: "tool",
       status: "running",
       label: "Recherchewerkzeug wird ausgeführt",
       detail: "Parameter: code: import os; print(os.environ)",
     });
-    expect(JSON.stringify(unknownCall)).not.toContain("run_arbitrary_python_script");
+    expect(JSON.stringify(withoutPayload(unknownCall))).not.toContain("run_arbitrary_python_script");
 
     const unknownFail = parseWeKnoraExecutionEvent({
       response_type: "error",
@@ -249,15 +264,15 @@ describe("WeKnora execution trace projection and parser", () => {
       },
     });
 
-    expect(unknownFail.step).toEqual({
+    expect(unknownFail.step).toMatchObject({
       id: unknownCall.step?.id,
       kind: "tool",
       status: "failed",
       label: "Recherchewerkzeug fehlgeschlagen",
     });
-    expect(JSON.stringify(unknownFail)).not.toContain("Stack trace");
+    expect(JSON.stringify(withoutPayload(unknownFail))).not.toContain("Stack trace");
     expect(JSON.stringify(unknownFail)).not.toContain("/var/log");
-    expect(JSON.stringify(unknownFail)).not.toContain("custom-tool-42");
+    expect(JSON.stringify(withoutPayload(unknownFail))).not.toContain("custom-tool-42");
   });
 
   it("merges and updates execution steps chronologically and enforces size bounds", () => {
@@ -529,7 +544,7 @@ describe("WeKnora execution trace projection and parser", () => {
     });
     expect(webResult.step?.detail).toBe("3 Treffer");
     expect(webResult.step?.durationMs).toBe(250);
-    expect(JSON.stringify(webResult)).not.toContain("Raw snippet");
+    expect(JSON.stringify(withoutPayload(webResult))).not.toContain("Raw snippet");
 
     // Single result
     const singleResult = parseWeKnoraExecutionEvent({
@@ -620,7 +635,7 @@ describe("WeKnora execution trace projection and parser", () => {
     expect(serializedResults).toContain("[REDACTED_STORAGE_URI]");
     expect(serializedResults).not.toContain("TOP_SECRET_PASSWORD");
     expect(serializedResults).not.toContain("auth.internal.corp");
-    expect(serializedResults).not.toContain("custom_fetch");
+    expect(maliciousPayloads.map((p) => JSON.stringify(withoutPayload(parseWeKnoraExecutionEvent(p)))).join(" ")).not.toContain("custom_fetch");
   });
 
   it("parses native WeKnora todo_write envelopes with direct data.steps and data.task", () => {
@@ -640,7 +655,7 @@ describe("WeKnora execution trace projection and parser", () => {
       },
     });
 
-    expect(nativeCall.step).toEqual({
+    expect(nativeCall.step).toMatchObject({
       id: expect.stringMatching(/^planning:[a-z0-9]+$/u),
       kind: "planning",
       status: "running",
@@ -671,7 +686,7 @@ describe("WeKnora execution trace projection and parser", () => {
       },
     });
 
-    expect(nativeResult.step).toEqual({
+    expect(nativeResult.step).toMatchObject({
       id: nativeCall.step?.id,
       kind: "planning",
       status: "completed",
@@ -689,7 +704,7 @@ describe("WeKnora execution trace projection and parser", () => {
     let merged = mergeFredExecutionStep([], nativeCall.step!);
     merged = mergeFredExecutionStep(merged, nativeResult.step!);
     expect(merged).toHaveLength(1);
-    expect(merged[0]).toEqual(nativeResult.step);
+    expect(merged[0]).toMatchObject(nativeResult.step!);
   });
 
   it("parses native thinking tool as analysis with thought progress, redactions, and merge", () => {
@@ -706,7 +721,7 @@ describe("WeKnora execution trace projection and parser", () => {
       },
     });
 
-    expect(thinkCall.step).toEqual({
+    expect(thinkCall.step).toMatchObject({
       id: expect.stringMatching(/^analysis:[a-z0-9]+$/u),
       kind: "analysis",
       status: "running",
@@ -726,7 +741,7 @@ describe("WeKnora execution trace projection and parser", () => {
       },
     });
 
-    expect(thinkResult.step).toEqual({
+    expect(thinkResult.step).toMatchObject({
       id: thinkCall.step?.id,
       kind: "analysis",
       status: "completed",
@@ -738,7 +753,7 @@ describe("WeKnora execution trace projection and parser", () => {
     let merged = mergeFredExecutionStep([], thinkCall.step!);
     merged = mergeFredExecutionStep(merged, thinkResult.step!);
     expect(merged).toHaveLength(1);
-    expect(merged[0]).toEqual(thinkResult.step);
+    expect(merged[0]).toMatchObject(thinkResult.step!);
   });
 
   it("parses native direct result shapes for retrieval tools (data.results, data.chunk_results, data.total_matches, etc.)", () => {
@@ -757,7 +772,7 @@ describe("WeKnora execution trace projection and parser", () => {
       },
     });
 
-    expect(directResults.step).toEqual({
+    expect(directResults.step).toMatchObject({
       id: expect.stringMatching(/^knowledge:[a-z0-9]+$/u),
       kind: "knowledge",
       status: "completed",
@@ -765,9 +780,9 @@ describe("WeKnora execution trace projection and parser", () => {
       detail: "2 Treffer",
       durationMs: 150,
     });
-    expect(JSON.stringify(directResults)).not.toContain("Raw confidential");
-    expect(JSON.stringify(directResults)).not.toContain("chk-456");
-    expect(JSON.stringify(directResults)).not.toContain("doc-123");
+    expect(JSON.stringify(withoutPayload(directResults))).not.toContain("Raw confidential");
+    expect(JSON.stringify(withoutPayload(directResults))).not.toContain("chk-456");
+    expect(JSON.stringify(withoutPayload(directResults))).not.toContain("doc-123");
 
     // 2. Direct data.total_matches and data.chunk_results on grep_chunks
     const grepResult = parseWeKnoraExecutionEvent({
@@ -784,7 +799,7 @@ describe("WeKnora execution trace projection and parser", () => {
       },
     });
 
-    expect(grepResult.step).toEqual({
+    expect(grepResult.step).toMatchObject({
       id: expect.stringMatching(/^knowledge:[a-z0-9]+$/u),
       kind: "knowledge",
       status: "completed",
@@ -944,7 +959,7 @@ describe("WeKnora execution trace projection and parser", () => {
 
     expect(sensitiveKbResult.step?.detail).toBe("1 Treffer");
     expect(JSON.stringify(sensitiveKbResult)).not.toContain("super-secret");
-    expect(JSON.stringify(sensitiveKbResult)).not.toContain("raw_tokens");
+    expect(JSON.stringify(withoutPayload(sensitiveKbResult))).not.toContain("raw_tokens");
   });
 
   it("strictly restricts thinking-tool detail to data.thought or data.output and rejects reasoning, content, or nested results", () => {
@@ -1440,7 +1455,7 @@ describe("WeKnora execution trace projection and parser", () => {
         },
       });
 
-      expect(call.step).toEqual({
+      expect(call.step).toMatchObject({
         id: expect.stringMatching(/^tool:[a-z0-9]+$/u),
         kind: "tool",
         status: "running",
@@ -1530,7 +1545,7 @@ describe("WeKnora execution trace projection and parser", () => {
         },
       });
 
-      expect(res.step).toEqual({
+      expect(res.step).toMatchObject({
         id: expect.stringMatching(/^tool:[a-z0-9]+$/u),
         kind: "tool",
         status: "completed",
@@ -1670,5 +1685,244 @@ describe("WeKnora execution trace projection and parser", () => {
       expect(lines[0]).toBe("Dokument Nr. 1 (kb-base-)");
       expect(lines[9]).toBe("Dokument Nr. 10 (kb-base-)");
     });
+  });
+});
+describe("Advanced execution trace: full WeKnora execution detail", () => {
+  const toolCall = (data: Record<string, unknown>) =>
+    parseWeKnoraExecutionEvent({ response_type: "tool_call", data: { tool_call_id: "call-1", tool_name: "shell_exec", ...data } });
+  const toolResult = (data: Record<string, unknown>) =>
+    parseWeKnoraExecutionEvent({ response_type: "tool_result", data: { tool_call_id: "call-1", tool_name: "shell_exec", success: true, ...data } });
+  const merge = (steps: FredExecutionStep[], update: ReturnType<typeof parseWeKnoraExecutionEvent>) =>
+    mergeFredExecutionUpdate(steps, update).trace;
+
+  it("keeps full pretty-printed arguments including nested objects", () => {
+    const step = toolCall({ arguments: { query: "Pendlerpauschale", filter: { year: 2025, tags: ["a", "b"] } } }).step!;
+    expect(step.callId).toBe("call-1");
+    expect(step.toolName).toBe("shell_exec");
+    expect(step.arguments).toBe(JSON.stringify({ query: "Pendlerpauschale", filter: { year: 2025, tags: ["a", "b"] } }, null, 2));
+    // JSON string arguments are parsed and pretty-printed too; non-JSON strings stay raw.
+    expect(toolCall({ arguments: '{"a":{"b":1}}' }).step?.arguments).toBe('{\n  "a": {\n    "b": 1\n  }\n}');
+    expect(toolCall({ arguments: "ls -la" }).step?.arguments).toBe("ls -la");
+    expect(toolCall({ arguments: {} }).step?.arguments).toBeUndefined();
+  });
+
+  it("redacts only sensitive substrings and never drops the whole block", () => {
+    const step = toolCall({
+      arguments: { query: "Familienbonus", api_key: "sk-abcdefghijklmnop", note: "token=abc123 und https://intern.local/x" },
+    }).step!;
+    expect(step.arguments).toContain('"query": "Familienbonus"');
+    expect(step.arguments).toContain('"api_key": "[REDACTED]"');
+    expect(step.arguments).not.toContain("sk-abcdefghijklmnop");
+    expect(step.arguments).not.toContain("intern.local");
+    expect(step.arguments).toContain("[REDACTED");
+    expect(toolCall({ arguments: "password=hunter2 ls" }).step?.arguments).not.toContain("hunter2");
+    expect(toolCall({ arguments: "password=hunter2 ls" }).step?.arguments).toContain("ls");
+  });
+
+  it("builds the result from data.output or from the remaining data keys", () => {
+    expect(toolResult({ output: "hello world\n", duration_ms: 12 }).step?.result).toBe("hello world\n");
+    const fromKeys = toolResult({ duration_ms: 5, count: 2, results: [{ title: "A" }], arguments: { x: 1 } }).step!;
+    expect(fromKeys.result).toBe(JSON.stringify({ count: 2, results: [{ title: "A" }] }, null, 2));
+    expect(toolResult({}).step?.result).toBeUndefined();
+    const failed = toolResult({ success: false, error: "boom", output: "partial" }).step!;
+    expect(failed.status).toBe("failed");
+    expect(failed.result).toBe("Fehler: boom\n\npartial");
+    expect(toolResult({ output: "Authorization: Bearer abcdefghijklmnop done" }).step?.result).not.toContain("abcdefghijklmnop");
+  });
+
+  it("caps payloads with a visible marker and keeps the end of command output", () => {
+    const args = toolCall({ arguments: "x".repeat(MAX_EXECUTION_ARGUMENTS_CHARS + 500) }).step!.arguments!;
+    expect(args.endsWith(`\n${EXECUTION_CUT_MARKER}`)).toBe(true);
+    expect(args.length).toBe(MAX_EXECUTION_ARGUMENTS_CHARS + EXECUTION_CUT_MARKER.length + 1);
+
+    const result = toolResult({ output: `HEAD${"y".repeat(MAX_EXECUTION_RESULT_CHARS)}` }).step!.result!;
+    expect(result.startsWith("HEAD")).toBe(true);
+    expect(result.endsWith(EXECUTION_CUT_MARKER)).toBe(true);
+
+    const out = parseWeKnoraExecutionEvent({
+      response_type: "command_output",
+      data: { tool_call_id: "call-1", command: "c".repeat(MAX_EXECUTION_COMMAND_CHARS + 50), output: `${"a".repeat(MAX_EXECUTION_OUTPUT_CHARS)}TAIL`, done: false },
+    }).step!;
+    expect(out.output!.startsWith(`${EXECUTION_CUT_MARKER}\n`)).toBe(true);
+    expect(out.output!.endsWith("TAIL")).toBe(true);
+    expect(out.output!.length).toBe(MAX_EXECUTION_OUTPUT_CHARS + EXECUTION_CUT_MARKER.length + 1);
+    expect(out.command!.endsWith(EXECUTION_CUT_MARKER)).toBe(true);
+  });
+
+  it("merges command_output into the tool step by callId, before and after tool_result, replacing the tail", () => {
+    const output = (text: string, done = false) => parseWeKnoraExecutionEvent({
+      response_type: "command_output",
+      data: { tool_call_id: "call-1", command: "ls -la", started_at: "2026-01-01T00:00:00Z", output: text, done },
+    });
+
+    // after tool_call
+    let trace = merge([], toolCall({ arguments: { command: "ls -la" } }));
+    trace = merge(trace, output("one\n"));
+    trace = merge(trace, output("one\ntwo\n"));
+    expect(trace).toHaveLength(1);
+    expect(trace[0]).toMatchObject({ kind: "tool", status: "running", label: "Recherchewerkzeug wird ausgeführt", command: "ls -la", output: "one\ntwo\n" });
+    expect(trace[0].arguments).toBeDefined();
+
+    // a finished tool step is never reverted to running, late output still lands
+    trace = merge(trace, toolResult({ output: "final" }));
+    trace = merge(trace, output("one\ntwo\nthree\n"));
+    expect(trace).toHaveLength(1);
+    expect(trace[0]).toMatchObject({ status: "completed", label: "Recherchewerkzeug ausgeführt", output: "one\ntwo\nthree\n", result: "final" });
+
+    // output arrives before any tool_call: placeholder step, later upgraded by the real events
+    let early = merge([], output("boot\n"));
+    expect(early).toHaveLength(1);
+    expect(early[0]).toMatchObject({ kind: "tool", status: "running", label: "Befehl wird ausgeführt", output: "boot\n", callId: "call-1" });
+    early = merge(early, output("boot\ndone\n", true));
+    expect(early[0]).toMatchObject({ status: "completed", output: "boot\ndone\n" });
+    early = merge(early, toolResult({ output: "ok" }));
+    expect(early).toHaveLength(1);
+    expect(early[0]).toMatchObject({ label: "Recherchewerkzeug ausgeführt", output: "boot\ndone\n", result: "ok" });
+  });
+
+  it("matches output to a step of another kind by callId", () => {
+    const call = parseWeKnoraExecutionEvent({ response_type: "tool_call", data: { tool_call_id: "kb-1", tool_name: "knowledge_search" } });
+    let trace = merge([], call);
+    trace = merge(trace, parseWeKnoraExecutionEvent({ response_type: "command_output", data: { tool_call_id: "kb-1", output: "x" } }));
+    expect(trace).toHaveLength(1);
+    expect(trace[0]).toMatchObject({ kind: "knowledge", label: "Wissensbasis wird durchsucht", output: "x" });
+  });
+
+  it("unwraps work_event with an inner command_output", () => {
+    const update = parseWeKnoraExecutionEvent({
+      response_type: "work_event",
+      data: {
+        work_id: "w1",
+        kind: "shell",
+        inner: { response_type: "command_output", data: { tool_call_id: "call-1", command: "sleep 1", output: "bg out", done: true } },
+      },
+    });
+    expect(update.step).toMatchObject({ callId: "call-1", command: "sleep 1", output: "bg out", status: "completed" });
+    const other = parseWeKnoraExecutionEvent({ response_type: "work_event", data: { work_id: "w1", inner: { response_type: "progress", data: {} } } });
+    expect(other.step).toBeUndefined();
+    expect(other.steps).toBeUndefined();
+  });
+
+  it("projects collaboration_status into agent steps nested under spawn_agent and ignores older revisions", () => {
+    const spawn = parseWeKnoraExecutionEvent({
+      response_type: "tool_call",
+      data: { tool_call_id: "sp-1", tool_name: "spawn_agent", arguments: { task_name: "Recherche BFG", prompt: "…" } },
+    });
+    const spawned = parseWeKnoraExecutionEvent({
+      response_type: "tool_result",
+      data: { tool_call_id: "sp-1", tool_name: "spawn_agent", success: true, member_id: "m-7", task_name: "Recherche BFG" },
+    });
+    let trace = merge(merge([], spawn), spawned);
+    const spawnId = trace[0].id;
+
+    const status = (revision: number, state: string, extra: Record<string, unknown> = {}) => parseWeKnoraExecutionEvent({
+      response_type: "collaboration_status",
+      data: {
+        group_id: "g1",
+        revision,
+        tasks: [
+          { member_id: "m-7", task_name: "Recherche BFG", display_name: "Rechercheur", status: state, ...extra },
+          { id: "other", name: "Zweiter", status: "queued" },
+        ],
+      },
+    });
+
+    const first = status(2, "running", { latest_message: { content: "Suche läuft" }, progress: { iteration: 3, tool_name: "grep_chunks" } });
+    expect(first.steps).toHaveLength(2);
+    trace = merge(trace, first);
+    const agent = trace.find((step) => step.kind === "agent" && step.callId === "m-7")!;
+    expect(agent).toMatchObject({
+      id: expect.stringMatching(/^agent:[a-z0-9]+$/u),
+      status: "running",
+      label: "Hilfs-Agent Rechercheur: Läuft",
+      detail: "Suche läuft\nSchritt 3: grep_chunks",
+      parentId: spawnId,
+    });
+    expect(trace.find((step) => step.label === "Hilfs-Agent Zweiter: Wartet")?.parentId).toBeUndefined();
+
+    // older revision is ignored, newer one wins
+    expect(merge(trace, status(1, "failed"))).toBe(trace);
+    trace = merge(trace, status(3, "succeeded", { latest_message: "Fertig gestellt" }));
+    expect(trace.filter((step) => step.kind === "agent")).toHaveLength(2);
+    expect(trace.find((step) => step.id === agent.id)).toMatchObject({ status: "completed", label: "Hilfs-Agent Rechercheur: Fertig", detail: "Fertig gestellt", parentId: spawnId });
+    expect(trace.find((step) => step.id === agent.id)?.revision).toBe(3);
+
+    const cancelling = merge([], status(1, "running", { cancel_requested: true }));
+    expect(cancelling[0].label).toBe("Hilfs-Agent Rechercheur: Wird abgebrochen");
+    expect(merge([], status(1, "interrupted"))[0]).toMatchObject({ status: "failed", label: "Hilfs-Agent Rechercheur: Unterbrochen" });
+  });
+
+  it("projects memory_recalled and context_compacted", () => {
+    const memory = parseWeKnoraExecutionEvent({
+      response_type: "memory_recalled",
+      data: { memories: [{ id: "1", kind: "fact", content: "Nutzer pendelt 30 km" }, { id: "2", kind: "fact", content: "Wohnt in Wien" }] },
+    });
+    expect(memory.step).toMatchObject({
+      kind: "memory",
+      status: "completed",
+      label: "2 Erinnerungen abgerufen",
+      detail: "- Nutzer pendelt 30 km\n- Wohnt in Wien",
+    });
+    expect(parseWeKnoraExecutionEvent({ response_type: "memory_recalled", data: { memories: [{ id: "1", content: "x" }] } }).step?.label).toBe("1 Erinnerung abgerufen");
+    expect(parseWeKnoraExecutionEvent({ response_type: "memory_recalled", data: { memories: [] } }).step).toBeUndefined();
+
+    const compacted = parseWeKnoraExecutionEvent({
+      response_type: "context_compacted",
+      data: { reason: "limit", tokens_before: 12000, tokens_after: 3000, messages_before: 40, messages_after: 6, summary: "Kurzfassung des Gesprächs", degraded: false },
+    });
+    expect(compacted.step).toMatchObject({
+      kind: "context",
+      status: "completed",
+      label: "Gesprächsverlauf komprimiert (12.000 → 3.000 Tokens)",
+      detail: "Kurzfassung des Gesprächs",
+    });
+  });
+
+  it("ignores non-step events", () => {
+    for (const type of ["heartbeat", "session_title", "work_started", "work_finished", "steer", "user_message_injected", "artifacts_pending", "run_resumed", "progress", "install_output", "tool_approval_resolved"]) {
+      const update = parseWeKnoraExecutionEvent({ response_type: type, data: { tool_call_id: "x" } });
+      expect(update.step).toBeUndefined();
+      expect(update.steps).toBeUndefined();
+    }
+  });
+
+  it("reports only touched steps from mergeFredExecutionUpdate", () => {
+    const a = merge([], toolCall({ tool_call_id: "a" }));
+    const b = merge(a, toolCall({ tool_call_id: "b", tool_name: "web_search" }));
+    const merged = mergeFredExecutionUpdate(b, toolResult({ tool_call_id: "a", output: "ok" }));
+    expect(merged.touched).toHaveLength(1);
+    expect(merged.touched[0]).toMatchObject({ callId: "a", status: "completed" });
+    expect(mergeFredExecutionUpdate(b, { fatalError: false, unsupported: false }).touched).toEqual([]);
+  });
+
+  it("round-trips the new fields through parseStoredFredExecutionTrace and re-caps them", () => {
+    const steps: FredExecutionStep[] = [
+      { id: "tool:1", kind: "tool", status: "completed", label: "Recherchewerkzeug ausgeführt", callId: "c", toolName: "spawn_agent", arguments: '{\n  "a": 1\n}', result: "r", output: "o", command: "ls" },
+      { id: "agent:1", kind: "agent", status: "running", label: "Hilfs-Agent X: Läuft", parentId: "tool:1", groupId: "g", revision: 4, taskName: "X", callId: "m" },
+      { id: "memory:1", kind: "memory", status: "completed", label: "1 Erinnerung abgerufen" },
+      { id: "context:1", kind: "context", status: "completed", label: "Gesprächsverlauf komprimiert" },
+    ];
+    expect(parseStoredFredExecutionTrace(JSON.parse(JSON.stringify(steps)))).toEqual(steps);
+
+    const capped = parseStoredFredExecutionTrace([{
+      id: "t", kind: "tool", status: "running", label: "L",
+      arguments: "a".repeat(20_000), result: "r".repeat(50_000), output: "o".repeat(20_000), command: "c".repeat(5_000),
+      callId: "i".repeat(500), parentId: "p".repeat(500),
+    }])[0];
+    expect(capped.arguments!.length).toBeLessThanOrEqual(MAX_EXECUTION_ARGUMENTS_CHARS + EXECUTION_CUT_MARKER.length + 1);
+    expect(capped.result!.length).toBeLessThanOrEqual(MAX_EXECUTION_RESULT_CHARS + EXECUTION_CUT_MARKER.length + 1);
+    expect(capped.output!.startsWith(EXECUTION_CUT_MARKER)).toBe(true);
+    expect(capped.command!.endsWith(EXECUTION_CUT_MARKER)).toBe(true);
+    expect(capped.callId).toHaveLength(180);
+    expect(capped.parentId).toHaveLength(180);
+    // re-parsing already capped data does not add a second marker
+    expect(parseStoredFredExecutionTrace([capped])[0]).toEqual(capped);
+    // stored secrets are redacted again
+    expect(parseStoredFredExecutionTrace([{ id: "t", kind: "tool", status: "running", label: "L", result: "password=hunter2" }])[0].result).not.toContain("hunter2");
+  });
+
+  it("parses old stored traces without the new fields unchanged", () => {
+    const old = [{ id: "analysis:1", kind: "analysis", status: "completed", label: "Anfrage analysiert", detail: "d", durationMs: 10 }];
+    expect(parseStoredFredExecutionTrace(old)).toEqual(old);
   });
 });

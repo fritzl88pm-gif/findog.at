@@ -2835,6 +2835,7 @@ textarea:focus {
 
 .fred-execution-steps li {
   position: relative;
+  min-width: 0;
   display: flex;
   align-items: flex-start;
   gap: 9px;
@@ -2852,18 +2853,18 @@ textarea:focus {
   border-radius: 50%;
 }
 
-.fred-execution-steps li.is-running .fred-execution-status {
+.fred-execution-steps li.is-running > .fred-execution-status {
   border-color: var(--bmf-blue);
   background: var(--bmf-blue);
   animation: fredResearchPulse 1.2s ease-in-out infinite;
 }
 
-.fred-execution-steps li.is-completed .fred-execution-status {
+.fred-execution-steps li.is-completed > .fred-execution-status {
   border-color: #25834a;
   background: #25834a;
 }
 
-.fred-execution-steps li.is-failed .fred-execution-status {
+.fred-execution-steps li.is-failed > .fred-execution-status {
   border-color: #b33a3a;
   background: #b33a3a;
 }
@@ -13343,3 +13344,91 @@ textarea:focus {
   .fredrun-leaderboard-list { padding: 10px 9px; }
 }
 /* The podium is intentionally static, including under prefers-reduced-motion. */
+
+.fred-execution-payload-fold {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: 4px;
+}
+
+.fred-execution-payload-fold > summary {
+  display: block;
+  width: 100%;
+  list-style: none;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 550;
+  color: var(--bmf-blue);
+  user-select: none;
+}
+
+.fred-execution-payload-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fred-execution-payload-fold > summary:hover {
+  text-decoration: underline;
+}
+
+.fred-execution-payload-fold[open] > summary {
+  margin-bottom: 4px;
+}
+
+.fred-execution-payload,
+.fred-execution-terminal {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  max-height: 16rem;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.fred-execution-payload {
+  border: 1px solid rgba(40, 111, 156, 0.16);
+  background: rgba(40, 111, 156, 0.05);
+  color: var(--ink);
+}
+
+.fred-execution-terminal {
+  border: 1px solid #1f2937;
+  background: #111827;
+  color: #e5e7eb;
+}
+
+.fred-execution-command {
+  display: block;
+  max-width: 100%;
+  margin-top: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.72rem;
+  color: var(--ink);
+}
+
+.fred-execution-steps.fred-execution-children {
+  margin-top: 6px;
+  padding: 0 0 0 10px;
+  border-left: 2px solid rgba(40, 111, 156, 0.16);
+}
+
+.fred-execution-tool-name {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(40, 111, 156, 0.08);
+  color: var(--bmf-blue-dark);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}

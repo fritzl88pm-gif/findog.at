@@ -3,6 +3,12 @@ export const MAX_EXECUTION_DETAIL_CHARS = 2000;
 export const MAX_EXECUTION_LABEL_CHARS = 200;
 export const MAX_PLANNING_TODOS_COUNT = 50;
 export const MAX_PLANNING_TASK_CHARS = 200;
+export const MAX_EXECUTION_ARGUMENTS_CHARS = 8_000;
+export const MAX_EXECUTION_RESULT_CHARS = 20_000;
+export const MAX_EXECUTION_OUTPUT_CHARS = 8_000;
+export const MAX_EXECUTION_COMMAND_CHARS = 2_000;
+export const MAX_EXECUTION_ID_CHARS = 180;
+export const EXECUTION_CUT_MARKER = "…[gekürzt]";
 
 export type FredExecutionStepKind =
   | "analysis"
@@ -11,7 +17,10 @@ export type FredExecutionStepKind =
   | "web"
   | "tool"
   | "evaluation"
-  | "sources";
+  | "sources"
+  | "agent"
+  | "memory"
+  | "context";
 
 export type FredExecutionStepStatus = "running" | "completed" | "failed";
 
@@ -30,10 +39,27 @@ export type FredExecutionStep = {
   detail?: string;
   durationMs?: number;
   counts?: FredPlanningCounts;
+  /** Raw upstream tool_call_id (tools) or member/task id (helper agents). */
+  callId?: string;
+  toolName?: string;
+  /** Pretty-printed, redacted tool arguments. */
+  arguments?: string;
+  /** Redacted tool result payload. */
+  result?: string;
+  /** Live or final sandbox command output (tail). */
+  output?: string;
+  command?: string;
+  /** Id of the parent step (helper agents hang below their spawn_agent step). */
+  parentId?: string;
+  /** Helper-agent bookkeeping: collaboration group, latest seen revision and task name. */
+  groupId?: string;
+  revision?: number;
+  taskName?: string;
 };
 
 export type FredExecutionUpdate = {
   step?: FredExecutionStep;
+  steps?: FredExecutionStep[];
   fatalError: boolean;
   unsupported: boolean;
 };
@@ -59,7 +85,10 @@ function durationMs(value: unknown): number | undefined {
 }
 
 import {
+  isSensitiveQueryParam,
+  redactSensitiveText,
   sanitizeAndRedactDetail,
+  sanitizeControlCharacters,
 } from "./safe-research-display";
 
 export {
@@ -67,16 +96,106 @@ export {
 };
 
 
-function eventId(event: Record<string, unknown>, data: Record<string, unknown>, prefix: string): string {
-  const upstreamId = boundedText(
-    data.tool_call_id ?? data.event_id ?? event.event_id ?? event.id,
-    180,
-  ) || boundedText(data.iteration ?? event.iteration, 20) || "0";
+function hashedId(prefix: string, upstreamId: string): string {
   let hash = 2_166_136_261;
   for (let index = 0; index < upstreamId.length; index += 1) {
     hash = Math.imul(hash ^ upstreamId.charCodeAt(index), 16_777_619);
   }
   return `${prefix}:${(hash >>> 0).toString(36)}`;
+}
+
+function eventId(event: Record<string, unknown>, data: Record<string, unknown>, prefix: string): string {
+  const upstreamId = boundedText(
+    data.tool_call_id ?? data.event_id ?? event.event_id ?? event.id,
+    180,
+  ) || boundedText(data.iteration ?? event.iteration, 20) || "0";
+  return hashedId(prefix, upstreamId);
+}
+
+const ANSI_ESCAPE_PATTERN = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
+const PAYLOAD_PRE_CUT_CHARS = 400_000;
+const MAX_PAYLOAD_DEPTH = 12;
+const TOOL_RESULT_META_KEYS = new Set(["tool_name", "tool_call_id", "success", "error", "duration_ms", "arguments"]);
+
+/** Masks values of credential-like keys structurally (JSON keys are quoted, so text redaction alone misses them). */
+function redactStructured(value: unknown, depth = 0): unknown {
+  if (depth > MAX_PAYLOAD_DEPTH) return "…";
+  if (Array.isArray(value)) return value.map((item) => redactStructured(item, depth + 1));
+  const record = recordOf(value);
+  if (!record) return value;
+  return Object.fromEntries(Object.entries(record).map(([key, item]) => [
+    key,
+    (typeof item === "string" || (item !== null && typeof item === "object")) && isSensitiveQueryParam(key)
+      ? "[REDACTED]"
+      : redactStructured(item, depth + 1),
+  ]));
+}
+
+/**
+ * Control-char sanitizing + redaction of only the sensitive substrings, then a visible cut.
+ * `keep: "tail"` keeps the END (rolling output); the cut is idempotent for already-cut text.
+ */
+function capPayload(value: unknown, maximum: number, keep: "head" | "tail" = "head"): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const bounded = keep === "head" ? value.slice(0, PAYLOAD_PRE_CUT_CHARS) : value.slice(-PAYLOAD_PRE_CUT_CHARS);
+  const sanitized = sanitizeControlCharacters(bounded.replace(ANSI_ESCAPE_PATTERN, ""));
+  if (!sanitized.trim()) return undefined;
+  // Bearer tokens first: "Authorization: Bearer <token>" would otherwise only mask the word "Bearer".
+  const text = redactSensitiveText(sanitized.replace(/\bBearer\s+[A-Za-z0-9_\-.~+/]+=*/gi, "Bearer [REDACTED]"));
+  const alreadyCut = keep === "head"
+    ? text.endsWith(`\n${EXECUTION_CUT_MARKER}`)
+    : text.startsWith(`${EXECUTION_CUT_MARKER}\n`);
+  if (text.length <= maximum + (alreadyCut ? EXECUTION_CUT_MARKER.length + 1 : 0)) return text;
+  return keep === "head"
+    ? `${text.slice(0, maximum)}\n${EXECUTION_CUT_MARKER}`
+    : `${EXECUTION_CUT_MARKER}\n${text.slice(-maximum)}`;
+}
+
+function prettyJsonPayload(value: unknown, maximum: number): string | undefined {
+  try {
+    return capPayload(JSON.stringify(redactStructured(value), null, 2), maximum);
+  } catch {
+    return undefined;
+  }
+}
+
+function formatArgumentsPayload(raw: unknown): string | undefined {
+  let value = raw;
+  if (typeof raw === "string") {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed !== null && typeof parsed === "object") value = parsed;
+    } catch {
+      // Not JSON: show the raw string.
+    }
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.keys(value).length > 0 ? prettyJsonPayload(value, MAX_EXECUTION_ARGUMENTS_CHARS) : undefined;
+  }
+  return capPayload(value, MAX_EXECUTION_ARGUMENTS_CHARS);
+}
+
+function formatResultPayload(
+  data: Record<string, unknown>,
+  event: Record<string, unknown>,
+  successful: boolean,
+): string | undefined {
+  const parts: string[] = [];
+  const error = boundedText(data.error ?? event.error, MAX_EXECUTION_RESULT_CHARS);
+  if (!successful && error) parts.push(`Fehler: ${error}`);
+  if (typeof data.output === "string" && data.output.trim()) {
+    parts.push(data.output);
+  } else {
+    const rest = Object.fromEntries(Object.entries(data).filter(([key]) => !TOOL_RESULT_META_KEYS.has(key)));
+    if (Object.keys(rest).length > 0) {
+      try {
+        parts.push(JSON.stringify(redactStructured(rest), null, 2));
+      } catch {
+        // Unserializable payloads are skipped.
+      }
+    }
+  }
+  return parts.length > 0 ? capPayload(parts.join("\n\n"), MAX_EXECUTION_RESULT_CHARS) : undefined;
 }
 
 function parseTodosFromUnknown(source: unknown): Array<Record<string, unknown>> | null {
@@ -780,6 +899,114 @@ function extractProviderReasoningContent(event: Record<string, unknown>, data: R
   return undefined;
 }
 
+const COMMAND_RUNNING_LABEL = "Befehl wird ausgeführt";
+const COMMAND_DONE_LABEL = "Befehl ausgeführt";
+
+const AGENT_STATUS_LABELS: Record<string, string> = {
+  queued: "Wartet",
+  running: "Läuft",
+  waiting: "Wartet auf Freigabe",
+  succeeded: "Fertig",
+  failed: "Fehlgeschlagen",
+  interrupted: "Unterbrochen",
+  cancelled: "Abgebrochen",
+  needs_attention: "Braucht Aufmerksamkeit",
+};
+
+function commandOutputStep(data: Record<string, unknown>, fallbackCallId?: unknown): FredExecutionStep | undefined {
+  const callId = boundedText(data.tool_call_id ?? fallbackCallId, MAX_EXECUTION_ID_CHARS);
+  if (!callId) return undefined;
+  const done = data.done === true;
+  const output = capPayload(data.output, MAX_EXECUTION_OUTPUT_CHARS, "tail");
+  const command = capPayload(data.command, MAX_EXECUTION_COMMAND_CHARS);
+  return {
+    id: hashedId("tool", callId),
+    kind: "tool",
+    status: done ? "completed" : "running",
+    label: done ? COMMAND_DONE_LABEL : COMMAND_RUNNING_LABEL,
+    callId,
+    ...(command ? { command } : {}),
+    ...(output ? { output } : {}),
+  };
+}
+
+function collaborationSteps(data: Record<string, unknown>): FredExecutionStep[] {
+  const groupId = boundedText(data.group_id, MAX_EXECUTION_ID_CHARS);
+  const revision = Number(data.revision);
+  const tasks = Array.isArray(data.tasks) ? data.tasks.slice(0, 50) : [];
+  return tasks.flatMap((candidate): FredExecutionStep[] => {
+    const task = recordOf(candidate);
+    if (!task) return [];
+    const taskId = boundedText(task.id ?? task.member_id, MAX_EXECUTION_ID_CHARS);
+    if (!taskId) return [];
+    const memberId = boundedText(task.member_id, MAX_EXECUTION_ID_CHARS) || taskId;
+    const taskName = sanitizeAndRedactDetail(boundedText(task.name ?? task.task_name, 120), 120);
+    const displayName = sanitizeAndRedactDetail(boundedText(task.display_name, 120), 120) ?? taskName;
+    const rawStatus = boundedText(task.status, 40).toLowerCase();
+    const cancelling = task.cancel_requested === true && !["succeeded", "failed", "cancelled", "interrupted"].includes(rawStatus);
+    const statusLabel = cancelling ? "Wird abgebrochen" : AGENT_STATUS_LABELS[rawStatus] ?? "Läuft";
+    const status: FredExecutionStepStatus = rawStatus === "succeeded"
+      ? "completed"
+      : ["failed", "interrupted", "cancelled"].includes(rawStatus) ? "failed" : "running";
+
+    const message = recordOf(task.latest_message);
+    const latest = boundedText(typeof task.latest_message === "string" ? task.latest_message : message?.content ?? message?.message, MAX_EXECUTION_DETAIL_CHARS);
+    const progress = recordOf(task.progress);
+    const iteration = Number(progress?.iteration);
+    const progressTool = boundedText(progress?.tool_name, 120);
+    const progressLine = [
+      Number.isFinite(iteration) && iteration > 0 ? `Schritt ${Math.round(iteration)}` : "",
+      progressTool,
+    ].filter(Boolean).join(": ");
+    const detail = sanitizeAndRedactDetail([latest, progressLine].filter(Boolean).join("\n"), MAX_EXECUTION_DETAIL_CHARS);
+
+    return [{
+      id: hashedId("agent", taskId),
+      kind: "agent",
+      status,
+      label: boundedText(`Hilfs-Agent${displayName ? ` ${displayName}` : ""}: ${statusLabel}`, MAX_EXECUTION_LABEL_CHARS),
+      ...(detail ? { detail } : {}),
+      callId: memberId,
+      ...(taskName ? { taskName } : {}),
+      ...(groupId ? { groupId } : {}),
+      ...(Number.isFinite(revision) ? { revision } : {}),
+    }];
+  });
+}
+
+function memoryStep(event: Record<string, unknown>, data: Record<string, unknown>): FredExecutionStep | undefined {
+  const memories = (Array.isArray(data.memories) ? data.memories : []).flatMap((candidate) => {
+    const memory = recordOf(candidate);
+    const content = boundedText(memory?.content, MAX_EXECUTION_DETAIL_CHARS);
+    return memory && content ? [{ id: boundedText(memory.id, 80), content }] : [];
+  });
+  if (memories.length === 0) return undefined;
+  const detail = sanitizeAndRedactDetail(memories.map((memory) => `- ${memory.content}`).join("\n"), MAX_EXECUTION_DETAIL_CHARS);
+  return {
+    id: hashedId("memory", boundedText(event.id ?? data.event_id, 180) || memories.map((memory) => memory.id || memory.content).join("|")),
+    kind: "memory",
+    status: "completed",
+    label: `${memories.length} ${memories.length === 1 ? "Erinnerung" : "Erinnerungen"} abgerufen`,
+    ...(detail ? { detail } : {}),
+  };
+}
+
+function contextCompactedStep(event: Record<string, unknown>, data: Record<string, unknown>): FredExecutionStep {
+  const before = Number(data.tokens_before);
+  const after = Number(data.tokens_after);
+  const hasTokens = data.tokens_before != null && data.tokens_after != null && Number.isFinite(before) && Number.isFinite(after);
+  const detail = sanitizeAndRedactDetail(boundedText(data.summary, MAX_EXECUTION_DETAIL_CHARS), MAX_EXECUTION_DETAIL_CHARS);
+  return {
+    id: hashedId("context", boundedText(event.id ?? data.event_id, 180) || [data.tokens_before, data.tokens_after, data.messages_before, data.messages_after].join("|")),
+    kind: "context",
+    status: "completed",
+    label: hasTokens
+      ? `Gesprächsverlauf komprimiert (${Math.round(before).toLocaleString("de-DE")} → ${Math.round(after).toLocaleString("de-DE")} Tokens)`
+      : "Gesprächsverlauf komprimiert",
+    ...(detail ? { detail } : {}),
+  };
+}
+
 export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate {
   const event = recordOf(value);
   if (!event) return { fatalError: false, unsupported: false };
@@ -870,6 +1097,29 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
     };
   }
 
+  if (responseType === "command_output" || responseType === "work_event") {
+    const inner = responseType === "work_event" ? recordOf(data.inner) : null;
+    if (responseType === "work_event" && boundedText(inner?.response_type, 40).toLowerCase() !== "command_output") {
+      return { fatalError: false, unsupported: false };
+    }
+    const step = commandOutputStep(inner ? recordOf(inner.data) ?? {} : data, data.work_id);
+    return { fatalError: false, unsupported: false, ...(step ? { step } : {}) };
+  }
+
+  if (responseType === "collaboration_status") {
+    const steps = collaborationSteps(data);
+    return { fatalError: false, unsupported: false, ...(steps.length > 0 ? { steps } : {}) };
+  }
+
+  if (responseType === "memory_recalled") {
+    const step = memoryStep(event, data);
+    return { fatalError: false, unsupported: false, ...(step ? { step } : {}) };
+  }
+
+  if (responseType === "context_compacted") {
+    return { fatalError: false, unsupported: false, step: contextCompactedStep(event, data) };
+  }
+
   if (responseType === "tool_call" || responseType === "tool_result" || responseType === "error") {
     const toolName = boundedText(data.tool_name ?? event.tool_name, 180);
     const config = resolveToolConfig(toolName);
@@ -927,6 +1177,10 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
 
     label = boundedText(label, MAX_EXECUTION_LABEL_CHARS);
 
+    const callId = boundedText(data.tool_call_id ?? event.tool_call_id, MAX_EXECUTION_ID_CHARS);
+    const argumentsText = responseType === "tool_call" ? formatArgumentsPayload(data.arguments ?? event.arguments) : undefined;
+    const resultText = responseType === "tool_call" ? undefined : formatResultPayload(data, event, successful);
+
     return {
       fatalError: false,
       unsupported: false,
@@ -935,6 +1189,10 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
         kind: config.kind,
         status,
         label,
+        ...(callId ? { callId } : {}),
+        ...(toolName ? { toolName } : {}),
+        ...(argumentsText ? { arguments: argumentsText } : {}),
+        ...(resultText ? { result: resultText } : {}),
         ...(detail ? { detail } : {}),
         ...(counts ? { counts } : {}),
         ...(duration !== undefined ? { durationMs: duration } : {}),
@@ -945,11 +1203,39 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
   return { fatalError: false, unsupported: false };
 }
 
+function findSpawnParentId(steps: FredExecutionStep[], agent: FredExecutionStep): string | undefined {
+  const quotedName = agent.taskName ? JSON.stringify(agent.taskName) : undefined;
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index];
+    if (step.toolName !== "spawn_agent") continue;
+    if (agent.callId && step.result?.includes(agent.callId)) return step.id;
+    if (quotedName && step.arguments?.includes(quotedName)) return step.id;
+  }
+  return undefined;
+}
+
 export function mergeFredExecutionStep(
   steps: FredExecutionStep[],
-  update: FredExecutionStep,
+  rawUpdate: FredExecutionStep,
 ): FredExecutionStep[] {
-  const existingIndex = steps.findIndex((step) => step.id === update.id);
+  let update = rawUpdate;
+  const isAgent = update.kind === "agent";
+  if (isAgent) {
+    // Helper-agent snapshots carry a group revision: a lower one than already seen is stale.
+    if (update.revision !== undefined && steps.some((step) =>
+      step.kind === "agent" && step.groupId === update.groupId && (step.revision ?? -Infinity) > update.revision!)) {
+      return steps;
+    }
+    const parentId = update.parentId ?? findSpawnParentId(steps, update);
+    if (parentId) update = { ...update, parentId };
+  }
+  const isCommandUpdate = update.kind === "tool" && (update.label === COMMAND_RUNNING_LABEL || update.label === COMMAND_DONE_LABEL);
+
+  let existingIndex = steps.findIndex((step) => step.id === update.id);
+  if (existingIndex < 0 && update.callId && !isAgent) {
+    // Updates without a reliable id (e.g. live command output) are matched by the upstream tool_call_id.
+    existingIndex = steps.findIndex((step) => step.kind !== "agent" && step.callId === update.callId);
+  }
   if (existingIndex < 0) {
     // Merge consecutive analysis steps (mirroring native WeKnora buildFullEventList)
     if (steps.length > 0 && update.kind === "analysis") {
@@ -990,6 +1276,21 @@ export function mergeFredExecutionStep(
   }
 
   const existing = steps[existingIndex];
+  const next = [...steps];
+
+  if (isCommandUpdate) {
+    // Live output replaces the previous tail; it never changes label/status of a real tool step.
+    const placeholder = existing.label === COMMAND_RUNNING_LABEL && update.status !== "running";
+    next[existingIndex] = {
+      ...existing,
+      ...(placeholder ? { status: update.status, label: update.label } : {}),
+      callId: existing.callId ?? update.callId,
+      ...(update.command ? { command: update.command } : {}),
+      ...(update.output ? { output: update.output } : {}),
+    };
+    return next;
+  }
+
   let detail = existing.detail;
   if (update.detail !== undefined && update.detail !== "") {
     if (!existing.detail) {
@@ -1003,25 +1304,41 @@ export function mergeFredExecutionStep(
     } else {
       detail = update.detail;
     }
+  } else if (isAgent) {
+    detail = undefined;
   }
 
   const merged: FredExecutionStep = {
     ...existing,
     ...update,
+    id: existing.id,
     ...(detail !== undefined ? { detail } : {}),
   };
   if (detail === undefined) {
     delete merged.detail;
   }
 
-  const next = [...steps];
   next[existingIndex] = merged;
   return next;
 }
 
+/** Merges every step of a parsed update and returns the steps that changed (for per-frame streaming). */
+export function mergeFredExecutionUpdate(
+  steps: FredExecutionStep[],
+  update: FredExecutionUpdate,
+): { trace: FredExecutionStep[]; touched: FredExecutionStep[] } {
+  let trace = steps;
+  for (const step of [...(update.step ? [update.step] : []), ...(update.steps ?? [])]) {
+    trace = mergeFredExecutionStep(trace, step);
+  }
+  if (trace === steps) return { trace, touched: [] };
+  const previous = new Set(steps);
+  return { trace, touched: trace.filter((step) => !previous.has(step)) };
+}
+
 export function parseStoredFredExecutionTrace(value: unknown): FredExecutionStep[] {
   if (!Array.isArray(value)) return [];
-  const validKinds = new Set(["analysis", "planning", "knowledge", "web", "tool", "evaluation", "sources"]);
+  const validKinds = new Set(["analysis", "planning", "knowledge", "web", "tool", "evaluation", "sources", "agent", "memory", "context"]);
   const validStatuses = new Set(["running", "completed", "failed"]);
 
   return value.slice(0, MAX_EXECUTION_STEPS).flatMap((candidate) => {
@@ -1060,6 +1377,17 @@ export function parseStoredFredExecutionTrace(value: unknown): FredExecutionStep
       }
     }
 
+    const callId = boundedText(item.callId, MAX_EXECUTION_ID_CHARS);
+    const toolName = boundedText(item.toolName, MAX_EXECUTION_ID_CHARS);
+    const argumentsText = capPayload(item.arguments, MAX_EXECUTION_ARGUMENTS_CHARS);
+    const result = capPayload(item.result, MAX_EXECUTION_RESULT_CHARS);
+    const output = capPayload(item.output, MAX_EXECUTION_OUTPUT_CHARS, "tail");
+    const command = capPayload(item.command, MAX_EXECUTION_COMMAND_CHARS);
+    const parentId = boundedText(item.parentId, MAX_EXECUTION_ID_CHARS);
+    const groupId = boundedText(item.groupId, MAX_EXECUTION_ID_CHARS);
+    const taskName = boundedText(item.taskName, MAX_EXECUTION_ID_CHARS);
+    const revision = typeof item.revision === "number" && Number.isFinite(item.revision) ? item.revision : undefined;
+
     return [{
       id,
       kind,
@@ -1068,6 +1396,16 @@ export function parseStoredFredExecutionTrace(value: unknown): FredExecutionStep
       ...(detail ? { detail } : {}),
       ...(duration !== undefined ? { durationMs: duration } : {}),
       ...(counts ? { counts } : {}),
+      ...(callId ? { callId } : {}),
+      ...(toolName ? { toolName } : {}),
+      ...(argumentsText ? { arguments: argumentsText } : {}),
+      ...(result ? { result } : {}),
+      ...(output ? { output } : {}),
+      ...(command ? { command } : {}),
+      ...(parentId ? { parentId } : {}),
+      ...(groupId ? { groupId } : {}),
+      ...(taskName ? { taskName } : {}),
+      ...(revision !== undefined ? { revision } : {}),
     }];
   });
 }

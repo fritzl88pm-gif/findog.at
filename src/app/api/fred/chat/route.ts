@@ -106,6 +106,7 @@ import {
 } from "@/lib/weknora/fred-research";
 import {
   mergeFredExecutionStep,
+  mergeFredExecutionUpdate,
   parseWeKnoraExecutionEvent,
   type FredExecutionStep,
 } from "@/lib/fred/execution-trace";
@@ -1422,12 +1423,10 @@ export async function POST(request: Request) {
               send(controller, { type: "research", step: research.step });
             }
             if (isAdvanced) {
-              const exec = parseWeKnoraExecutionEvent(parsed);
-              if (exec.step) {
-                executionTrace = mergeFredExecutionStep(executionTrace, exec.step);
-                clearAttachmentStatus();
-                send(controller, { type: "execution", step: exec.step });
-              }
+              const merged = mergeFredExecutionUpdate(executionTrace, parseWeKnoraExecutionEvent(parsed));
+              executionTrace = merged.trace;
+              if (merged.touched.length > 0) clearAttachmentStatus();
+              for (const step of merged.touched) send(controller, { type: "execution", step });
             }
             // Track upstream complete event for EOF detection
             if (isUpstreamCompleteEvent(parsed)) {
