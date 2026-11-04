@@ -19,7 +19,7 @@ const IDS = {
   fexklusiv: "7eac30a9-3add-4f84-bac2-4a3ae3c7c2c2",
   laws: "e0282ab8-b94f-4553-962e-68705201cf9a",
   forms: "d4cda9b9-23c6-4aa4-abae-9539146e227b",
-  amounts: "442ad2e8-c69f-4cb5-985c-f3afadeb8645",
+  amounts: "7baab9be-4c81-49ba-a01f-8e78512cab26",
   winAnv: "952bd9ad-59a5-4ca4-ad28-3c945dab9515",
   bfg: "7e203a75-9e51-4839-afd4-7d24d2e5b033",
 } as const;

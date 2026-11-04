@@ -48,7 +48,7 @@ const APPROVED_KNOWLEDGE_BASES: readonly ApprovedKnowledgeBase[] = [
     kind: "document",
   },
   {
-    id: "442ad2e8-c69f-4cb5-985c-f3afadeb8645",
+    id: "7baab9be-4c81-49ba-a01f-8e78512cab26",
     name: "Betragstabelle FAQ",
     kind: "faq",
   },
