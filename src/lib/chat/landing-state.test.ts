@@ -30,11 +30,11 @@ describe("authenticated dashboard landing", () => {
     expect(pageSource).toMatch(/async function selectFredConversation[\s\S]*?fetchFredConversationHistory/);
   });
 
-  it("keeps the home landing reset scoped to a newly authenticated user", () => {
+  it("keeps the Fred chat landing reset scoped to a newly authenticated user", () => {
     expect(pageSource).toMatch(
       /const isFreshAuthenticatedLanding\s*=\s*authenticatedUserIdRef\.current\s*!==\s*user\.id/,
     );
-    expect(pageSource).toMatch(/if \(isFreshAuthenticatedLanding\) \{[\s\S]*?setAppView\("home"\)[\s\S]*?setFredConversationId\(""\)[\s\S]*?setFredMessages\(\[\]\)/);
+    expect(pageSource).toMatch(/if \(isFreshAuthenticatedLanding\) \{[\s\S]*?setAppView\("chat"\)[\s\S]*?setFredConversationId\(""\)[\s\S]*?setFredMessages\(\[\]\)/);
   });
 
   it("renders Fred, one greeting, and the existing composer as a centered group", () => {

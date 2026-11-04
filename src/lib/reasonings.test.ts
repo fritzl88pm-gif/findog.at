@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { LAUNCHER_GROUPS } from "@/lib/tools-launcher";
+
 import {
   getChildCategoryIds,
   MAX_REASONING_CATEGORY_NAME_CHARS,
@@ -313,8 +315,11 @@ describe("category hierarchy presentation", () => {
 });
 
 describe("reasonings UI integration", () => {
-  it("adds Textbausteine to expanded and collapsed navigation", () => {
-    expect(pageSource.match(/onClick=\{openReasoningsView\}/gu)).toHaveLength(2);
+  it("adds Textbausteine to the Werkzeuge launcher", () => {
+    expect(pageSource).toContain('case "reasonings": openReasoningsView(); break;');
+    expect(LAUNCHER_GROUPS.flatMap((group) => group.tools)).toContainEqual(
+      expect.objectContaining({ id: "reasonings", label: "Textbausteine" }),
+    );
     expect(pageSource).toContain('appView === "reasonings"');
     expect(pageSource).toContain(
       '<ReasoningsView accessToken={session?.access_token ?? ""} />',
@@ -361,10 +366,9 @@ describe("reasonings UI integration", () => {
     // as visible product language (exclude aria-label which uses Textbaustein now).
     expect(viewSource).not.toMatch(/Begründung(?!s-ID)/u);
     expect(viewSource).not.toMatch(/Begründungen/u);
-    // Page source should also say Textbausteine for navigation.
-    expect(pageSource).toContain("Textbausteine");
+    // The launcher (and the page) say Textbausteine for navigation.
+    expect(LAUNCHER_GROUPS.some((group) => group.tools.some((tool) => tool.label === "Textbausteine"))).toBe(true);
     expect(pageSource).not.toMatch(/>\s*Begründungen\s*</u);
-    expect(pageSource).toContain('title="Textbausteine"');
   });
 
   it("shows hierarchy UI markers for subcategory disambiguation", () => {

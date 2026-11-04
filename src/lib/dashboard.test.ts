@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   DASHBOARD_NEWS_SUMMARY_MAX_LENGTH,
   assertDashboardNewsStatusTransition,
-  formatDashboardDate,
-  getDashboardGreeting,
   parseDashboardNewsInput,
   type DashboardNewsInput,
 } from "./dashboard";
@@ -44,22 +42,6 @@ function legalInput(overrides: Partial<DashboardNewsInput> = {}): DashboardNewsI
     ...overrides,
   };
 }
-
-describe("dashboard Vienna greeting", () => {
-  it.each([
-    ["2026-01-15T04:00:00.000Z", "Guten Morgen"],
-    ["2026-01-15T10:00:00.000Z", "Guten Tag"],
-    ["2026-01-15T17:00:00.000Z", "Guten Abend"],
-    ["2026-01-15T21:00:00.000Z", "Willkommen"],
-    ["2026-07-15T03:00:00.000Z", "Guten Morgen"],
-  ])("uses Europe/Vienna for %s", (timestamp, expected) => {
-    expect(getDashboardGreeting(new Date(timestamp))).toBe(expected);
-  });
-
-  it("formats the displayed date in Vienna", () => {
-    expect(formatDashboardDate(new Date("2026-08-29T22:30:00.000Z"))).toBe("Sonntag, 30. August 2026");
-  });
-});
 
 describe("dashboard news validation", () => {
   it("accepts strict product and RIS/EVI legal news", () => {

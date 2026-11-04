@@ -8,16 +8,6 @@ import Link from "next/link";
 import { applyConversationDeletion } from "@/lib/chat/deletion";
 import { buildFredConversationPdfContent } from "@/lib/chat/fred-actions";
 import { downloadFredPdfFile } from "@/lib/chat/pdf-download";
-import {
-  clampSidebarHistoryPercent,
-  DEFAULT_SIDEBAR_HISTORY_PERCENT,
-  MAX_SIDEBAR_HISTORY_PERCENT,
-  MIN_SIDEBAR_HISTORY_PERCENT,
-  parseStoredApplicationNavigationExpanded,
-  parseStoredSidebarHistoryPercent,
-  SIDEBAR_APPLICATION_NAVIGATION_STORAGE_KEY,
-  SIDEBAR_HISTORY_PERCENT_STORAGE_KEY,
-} from "@/lib/chat/sidebar-split";
 import { ellipsizeFilename } from "@/lib/attachment-names";
 import {
   BFG_PRO_STREAM_CONTENT_TYPE,
@@ -105,12 +95,14 @@ import AdminWorkspace from "@/components/admin-workspace";
 import AdminDialog from "@/components/admin-dialog";
 import { AdminGuardContext, useAdminEditorGuard, useAdminNavigationGuard } from "@/components/admin-editor-guard";
 import type { AdminArea } from "@/lib/admin-navigation";
-import SidebarNavigationGroup from "@/components/sidebar-navigation-group";
-import DashboardView, { type DashboardAppTarget } from "@/components/dashboard-view";
+import AppHeaderBar from "@/components/app-header-bar";
+import NewsView from "@/components/news-view";
+import { hasUnreadNews, NEWS_LAST_SEEN_STORAGE_KEY, nextNewsLastSeen, parseStoredNewsLastSeen } from "@/lib/news-unread";
+import type { LauncherToolId } from "@/lib/tools-launcher";
+import { usePlatformNews } from "@/lib/use-platform-news";
 import TelegramSettings, {
   type TelegramIntegrationPublicState,
 } from "@/components/telegram-settings";
-import FredResearchDisplaySettings from "@/components/fred-research-display-settings";
 import { parseStoredFredArtifacts, type FredGeneratedArtifact } from "@/lib/fred-native-stream";
 
 type ChatMessage = {
@@ -146,7 +138,7 @@ const FredRun2View = dynamic(() => import("@/components/fredrun2/FredRun2View"),
   ),
 });
 
-type AppView = "home" | "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "bfg-newsletters" | "german-sv-pension" | "l17b-currency" | "fredrun" | "fredrun2" | "quiz" | "fred-live" | "administration" | "data" | "reasonings";
+type AppView = "chat" | "news" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "bfg-newsletters" | "german-sv-pension" | "l17b-currency" | "fredrun" | "fredrun2" | "quiz" | "fred-live" | "administration" | "data" | "reasonings";
 
 const TELEGRAM_BOT_USERNAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{4,31}$/u;
 
@@ -1156,11 +1148,6 @@ export default function Home() {
   const [error, setError] = useState("");
   const [isLoaded, setIsLoaded] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(true);
-  const [sidebarHistoryPercent, setSidebarHistoryPercent] = useState(
-    DEFAULT_SIDEBAR_HISTORY_PERCENT,
-  );
-  const [isApplicationNavigationExpanded, setIsApplicationNavigationExpanded] = useState(true);
-  const [isSidebarSplitResizing, setIsSidebarSplitResizing] = useState(false);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminError, setAdminError] = useState("");
@@ -1183,7 +1170,6 @@ export default function Home() {
   const [scanningPrompt, setScanningPrompt] = useState("");
   const [isScanningSettingsLoading, setIsScanningSettingsLoading] = useState(false);
   const [isScanningSettingsSaving, setIsScanningSettingsSaving] = useState(false);
-  const [researchDisplayMode, setResearchDisplayMode] = useState<"simple" | "advanced">("simple");
 
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthLoaded, setIsAuthLoaded] = useState(false);
@@ -1200,7 +1186,7 @@ export default function Home() {
   const [isAccountDeletionSubmitting, setIsAccountDeletionSubmitting] = useState(false);
   const [authError, setAuthError] = useState("");
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
-  const [appView, setAppView] = useState<AppView>("home");
+  const [appView, setAppView] = useState<AppView>("chat");
   const adminGuard = useAdminNavigationGuard();
   const scanningSnapshot = JSON.stringify([scanningDocumentPipeline, fredAttachmentMode, scanningProvider, scanningModelId, scanningPrompt]);
   useAdminEditorGuard({
@@ -1256,10 +1242,16 @@ export default function Home() {
   const settingsDialogRef = useRef<HTMLElement>(null);
   const settingsDialogCloseRef = useRef<HTMLButtonElement>(null);
   const authenticatedUserIdRef = useRef<string | null>(null);
-  const sidebarSplitRegionRef = useRef<HTMLDivElement>(null);
-  const sidebarHistoryPercentRef = useRef(DEFAULT_SIDEBAR_HISTORY_PERCENT);
   const user = session?.user ?? null;
   const signedInEmail = user?.email ?? "";
+  const platformNews = usePlatformNews(session?.access_token ?? "");
+  const [newsLastSeenAt, setNewsLastSeenAt] = useState<number | null>(null);
+  const [isNewsLastSeenLoaded, setIsNewsLastSeenLoaded] = useState(false);
+  const newsItems = platformNews.items;
+  const isNewsLoading = platformNews.isLoading;
+  const hasUnseenNews = isNewsLastSeenLoaded
+    && appView !== "news"
+    && hasUnreadNews(newsItems, newsLastSeenAt);
   const closeSettingsDialog = useCallback(() => {
     setIsSettingsDialogOpen(false);
     requestAnimationFrame(() => settingsTriggerRef.current?.focus());
@@ -1286,120 +1278,32 @@ export default function Home() {
 
   useEffect(() => {
     let isActive = true;
-
     queueMicrotask(() => {
-      if (!isActive) {
-        return;
-      }
-
+      if (!isActive) return;
       try {
-        const storedHistoryPercent = parseStoredSidebarHistoryPercent(
-          window.localStorage.getItem(SIDEBAR_HISTORY_PERCENT_STORAGE_KEY),
-        );
-        sidebarHistoryPercentRef.current = storedHistoryPercent;
-        setSidebarHistoryPercent(storedHistoryPercent);
-        setIsApplicationNavigationExpanded(
-          parseStoredApplicationNavigationExpanded(
-            window.localStorage.getItem(SIDEBAR_APPLICATION_NAVIGATION_STORAGE_KEY),
-          ),
-        );
+        setNewsLastSeenAt(parseStoredNewsLastSeen(window.localStorage.getItem(NEWS_LAST_SEEN_STORAGE_KEY)));
       } catch {
-        // Storage can be unavailable in privacy-restricted browser contexts.
+        // Without storage the unread dot simply reappears on every visit.
       }
+      setIsNewsLastSeenLoaded(true);
     });
-
     return () => {
       isActive = false;
     };
   }, []);
 
-  const persistSidebarHistoryPercent = useCallback((value: number) => {
-    try {
-      window.localStorage.setItem(SIDEBAR_HISTORY_PERCENT_STORAGE_KEY, String(value));
-    } catch {
-      // Resizing remains usable when storage is unavailable.
-    }
-  }, []);
-
-  const updateSidebarHistoryPercent = useCallback((value: number, persist = false) => {
-    const nextValue = clampSidebarHistoryPercent(value);
-    sidebarHistoryPercentRef.current = nextValue;
-    setSidebarHistoryPercent(nextValue);
-    if (persist) {
-      persistSidebarHistoryPercent(nextValue);
-    }
-  }, [persistSidebarHistoryPercent]);
-
-  const updateSidebarHistoryPercentFromPointer = useCallback((clientY: number) => {
-    const splitRegion = sidebarSplitRegionRef.current;
-    if (!splitRegion) {
-      return;
-    }
-
-    const bounds = splitRegion.getBoundingClientRect();
-    if (bounds.height <= 0) {
-      return;
-    }
-
-    updateSidebarHistoryPercent(((clientY - bounds.top) / bounds.height) * 100);
-  }, [updateSidebarHistoryPercent]);
-
-  const handleSidebarSplitPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!event.isPrimary || event.button !== 0) {
-      return;
-    }
-
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setIsSidebarSplitResizing(true);
-  };
-
-  const handleSidebarSplitPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
-      return;
-    }
-
-    updateSidebarHistoryPercentFromPointer(event.clientY);
-  };
-
-  const finishSidebarSplitResize = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    setIsSidebarSplitResizing(false);
-    persistSidebarHistoryPercent(sidebarHistoryPercentRef.current);
-  };
-
-  const handleSidebarSplitKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    let nextValue: number | undefined;
-    if (event.key === "ArrowUp") {
-      nextValue = sidebarHistoryPercentRef.current - 5;
-    } else if (event.key === "ArrowDown") {
-      nextValue = sidebarHistoryPercentRef.current + 5;
-    } else if (event.key === "Home") {
-      nextValue = MIN_SIDEBAR_HISTORY_PERCENT;
-    } else if (event.key === "End") {
-      nextValue = MAX_SIDEBAR_HISTORY_PERCENT;
-    }
-
-    if (nextValue !== undefined) {
-      event.preventDefault();
-      updateSidebarHistoryPercent(nextValue, true);
-    }
-  };
-
-  const toggleApplicationNavigation = () => {
-    const nextValue = !isApplicationNavigationExpanded;
-    setIsApplicationNavigationExpanded(nextValue);
-    try {
-      window.localStorage.setItem(
-        SIDEBAR_APPLICATION_NAVIGATION_STORAGE_KEY,
-        String(nextValue),
-      );
-    } catch {
-      // The toggle remains usable when storage is unavailable.
-    }
-  };
+  useEffect(() => {
+    if (appView !== "news" || isNewsLoading) return;
+    const seenAt = nextNewsLastSeen(newsItems, Date.now());
+    queueMicrotask(() => {
+      setNewsLastSeenAt(seenAt);
+      try {
+        window.localStorage.setItem(NEWS_LAST_SEEN_STORAGE_KEY, String(seenAt));
+      } catch {
+        // Marking news as read is best effort when storage is unavailable.
+      }
+    });
+  }, [appView, isNewsLoading, newsItems]);
 
   useEffect(() => {
     if (!supabase) {
@@ -1449,7 +1353,7 @@ export default function Home() {
         setFredConversations([]);
         setSelectedFredConversationIds([]);
         setIsHistorySelectionMode(false);
-        setAppView("home");
+        setAppView("chat");
         setBfgQuery("");
         setBfgPage(null);
         setBfgError("");
@@ -1474,7 +1378,7 @@ export default function Home() {
       const isFreshAuthenticatedLanding = authenticatedUserIdRef.current !== user.id;
       authenticatedUserIdRef.current = user.id;
       if (isFreshAuthenticatedLanding) {
-        setAppView("home");
+        setAppView("chat");
         setFredConversationId("");
         setActiveConversationOrigin("web");
         setFredMessages([]);
@@ -1524,35 +1428,6 @@ export default function Home() {
   useEffect(() => {
     const accessToken = session?.access_token;
     if (!accessToken || !user?.id) {
-      queueMicrotask(() => setResearchDisplayMode("simple"));
-      return;
-    }
-
-    const controller = new AbortController();
-    void fetch("/api/account/settings/fred-research-display", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      cache: "no-store",
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) return null;
-        return await response.json() as Record<string, unknown>;
-      })
-      .then((payload) => {
-        if (!controller.signal.aborted && payload) {
-          setResearchDisplayMode(payload.researchDisplayMode === "advanced" ? "advanced" : "simple");
-        }
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setResearchDisplayMode("simple");
-      });
-
-    return () => controller.abort();
-  }, [session?.access_token, user?.id]);
-
-  useEffect(() => {
-    const accessToken = session?.access_token;
-    if (!accessToken || !user?.id) {
       queueMicrotask(() => setTelegramIntegration(null));
       return;
     }
@@ -1572,7 +1447,7 @@ export default function Home() {
     if (!accessToken || !user?.id) {
       queueMicrotask(() => {
         setIsAdmin(false);
-        setAppView((current) => current === "administration" || current === "quiz" ? "home" : current);
+        setAppView((current) => current === "administration" || current === "quiz" ? "chat" : current);
       });
       return;
     }
@@ -1585,13 +1460,13 @@ export default function Home() {
         }
         setIsAdmin(adminCapability.isAdmin);
         if (!adminCapability.isAdmin) {
-          setAppView((current) => current === "administration" || current === "quiz" ? "home" : current);
+          setAppView((current) => current === "administration" || current === "quiz" ? "chat" : current);
         }
       })
       .catch(() => {
         if (isActive) {
           setIsAdmin(false);
-          setAppView((current) => current === "administration" || current === "quiz" ? "home" : current);
+          setAppView((current) => current === "administration" || current === "quiz" ? "chat" : current);
         }
       });
 
@@ -1799,7 +1674,7 @@ export default function Home() {
       setSelectedFredConversationIds([]);
       setIsHistorySelectionMode(false);
       setIsAdmin(false);
-      setAppView("home");
+      setAppView("chat");
       closeSettingsDialog();
     } catch (deletionError) {
       setAccountDeletionError(
@@ -1841,17 +1716,18 @@ export default function Home() {
     }
   }
 
-  function openHomeView() {
+  function openNewsView() {
     if (!leaveAdministration()) return;
-    setAppView("home");
+    setAppView("news");
     setError("");
+    platformNews.refresh();
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 960px)").matches) {
       setSettingsOpen(false);
     }
   }
 
-  function openDashboardApp(target: DashboardAppTarget) {
-    switch (target) {
+  function openLauncherTool(id: LauncherToolId) {
+    switch (id) {
       case "bfg-decisions": openBfgDecisionsView(); break;
       case "bfg-pro": openBfgProView(); break;
       case "bfg-newsletters": openBfgNewslettersView(); break;
@@ -1865,13 +1741,8 @@ export default function Home() {
       case "fredrun": openFredRunView(); break;
       case "fredrun2": openFredRun2View(); break;
       case "quiz": openQuizView(); break;
-      case "administration": void openAdministrationView(); break;
+      case "fred-live": openFredLiveView(); break;
     }
-  }
-
-  function openDashboardConversation(id: string) {
-    const conversation = fredConversations.find((item) => item.id === id);
-    if (conversation) void selectFredConversation(conversation);
   }
 
   function openFormsView() {
@@ -2943,18 +2814,6 @@ export default function Home() {
         />
       )}
 
-      {!settingsOpen && (
-        <button
-          className="mobile-menu-toggle"
-          type="button"
-          onClick={() => setSettingsOpen(true)}
-          aria-label="Menü öffnen"
-          title="Menü öffnen"
-        >
-          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
-        </button>
-      )}
-
       <aside className={`sidebar ${settingsOpen ? "expanded" : "collapsed"}`} aria-label="Seitenmenü">
         <div className="sidebar-header">
           {settingsOpen ? (
@@ -2964,7 +2823,7 @@ export default function Home() {
                 href="/"
                 onClick={(event) => {
                   event.preventDefault();
-                  openHomeView();
+                  startNewManagedConversation();
                 }}
                 aria-label="findog.at Startseite"
               >
@@ -3003,15 +2862,6 @@ export default function Home() {
           <div className="sidebar-content">
             <div className="sidebar-primary-navigation">
               <button
-                className={`sidebar-view-button ${appView === "home" ? "active" : ""}`}
-                type="button"
-                onClick={openHomeView}
-                aria-current={appView === "home" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 11 9-8 9 8"></path><path d="M5 10v10h14V10M9 20v-6h6v6"></path></svg>
-                Startseite
-              </button>
-              <button
                 className="primary-button new-conversation-button"
                 type="button"
                 onClick={startNewManagedConversation}
@@ -3021,302 +2871,108 @@ export default function Home() {
                 Neue Frage an Fred
               </button>
             </div>
-            <div
-              ref={sidebarSplitRegionRef}
-              className={`sidebar-split-region${isSidebarSplitResizing ? " is-resizing" : ""}${isApplicationNavigationExpanded ? "" : " applications-collapsed"
-                }`}
-              style={{
-                "--sidebar-history-share": `${sidebarHistoryPercent}%`,
-              } as React.CSSProperties}
-            >
-              <div className="conversation-history" aria-label="Gespeicherte Unterhaltungen">
-                <div className="conversation-history-heading">
-                  <span>Unterhaltungen</span>
-                  <button
-                    className="history-selection-toggle"
-                    type="button"
-                    aria-pressed={isHistorySelectionMode}
-                    onClick={() => {
-                      setIsHistorySelectionMode(!isHistorySelectionMode);
-                      setSelectedFredConversationIds([]);
-                    }}
-                    disabled={historyControlsDisabled || (!isHistorySelectionMode && visibleConversations.length === 0)}
-                  >
-                    {isHistorySelectionMode ? "Fertig" : "Auswählen"}
-                  </button>
-                  {isHistoryLoading || isDeleting ? (
-                    <span className="history-loading">{isDeleting ? "Löscht…" : "Lädt…"}</span>
-                  ) : null}
-                </div>
-                {isHistorySelectionMode ? (
-                  <div className="conversation-bulk-actions">
-                    <span>{visibleSelectedConversationIds.length} ausgewählt</span>
-                    <button
-                      className="bulk-delete-button"
-                      type="button"
-                      onClick={() => void deleteFredConversations(visibleSelectedConversationIds, true)}
-                      disabled={historyControlsDisabled || visibleSelectedConversationIds.length === 0}
-                    >
-                      Auswahl löschen
-                    </button>
-                  </div>
-                ) : null}
-                <div className="conversation-list">
-                  {!isHistoryLoading && visibleConversations.length === 0 ? (
-                    <p className="conversation-empty">Noch keine gespeicherten Unterhaltungen.</p>
-                  ) : null}
-                  {visibleConversations.map((conversation) => (
-                    <div
-                      className={`conversation-row${isHistorySelectionMode ? " is-selecting" : ""} ${conversation.id === visibleActiveConversationId ? "active" : ""}`}
-                      key={conversation.id}
-                    >
-                      {isHistorySelectionMode ? (
-                        <input
-                          className="conversation-checkbox"
-                          type="checkbox"
-                          checked={visibleSelectedConversationIds.includes(conversation.id)}
-                          onChange={() => toggleFredConversationSelection(conversation.id)}
-                          disabled={historyControlsDisabled}
-                          aria-label={`Unterhaltung „${conversation.title}“ auswählen`}
-                        />
-                      ) : null}
-                      <button
-                        className="conversation-open"
-                        type="button"
-                        onClick={() => void selectFredConversation(conversation)}
-                        disabled={historyControlsDisabled}
-                        aria-current={conversation.id === visibleActiveConversationId ? "page" : undefined}
-                      >
-                        <span className="conversation-title-row">
-                          {conversation.origin === "telegram" ? (
-                            <svg className="conversation-telegram-icon" aria-label="Telegram-Unterhaltung" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.81-.75-1-.65-1.56-1.06-2.53-1.7-1.12-.74-.4-1.14.25-1.8.17-.17 3.02-2.77 3.08-3.01.01-.03.01-.18-.07-.25-.08-.07-.19-.05-.27-.03-.12.03-1.99 1.26-5.62 3.72-.53.36-1.01.54-1.44.53-.47-.01-1.38-.27-2.06-.49-.83-.27-1.49-.41-1.43-.87.03-.24.36-.48.99-.73 3.88-1.69 6.47-2.8 7.77-3.34 3.7-1.54 4.47-1.81 4.97-1.82.11 0 .35.03.51.16.13.12.16.27.18.39.01.11.02.37 0 .57z" />
-                            </svg>
-                          ) : null}
-                          <span title={conversation.title}>{conversation.title}</span>
-                        </span>
-                        <time dateTime={conversation.updatedAt}>{formatHistoryDate(conversation.updatedAt)}</time>
-                      </button>
-                      <div className="conversation-actions">
-                        {conversation.id === visibleActiveConversationId ? (
-                          <button
-                            className="conversation-export"
-                            type="button"
-                            onClick={() => void exportFredConversationPdf(conversation)}
-                            disabled={historyControlsDisabled || isDownloadingFredConversationPdf}
-                            aria-label={`Unterhaltung „${conversation.title}“ als PDF exportieren`}
-                            aria-busy={isDownloadingFredConversationPdf}
-                            title={isDownloadingFredConversationPdf ? "PDF wird erstellt …" : "Verlauf als PDF"}
-                          >
-                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                              <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 18v2h14v-2" />
-                            </svg>
-                          </button>
-                        ) : null}
-                        {isHistorySelectionMode ? (
-                          <button
-                            className="conversation-delete"
-                            type="button"
-                            onClick={() => void deleteFredConversations([conversation.id])}
-                            disabled={historyControlsDisabled}
-                            aria-label={`Unterhaltung „${conversation.title}“ löschen`}
-                            title="Unterhaltung löschen"
-                          >
-                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                              <path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" />
-                            </svg>
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              {isApplicationNavigationExpanded ? (
-                <div
-                  className="sidebar-split-divider"
-                  role="separator"
-                  aria-label="Höhe der Unterhaltungshistorie anpassen"
-                  aria-orientation="horizontal"
-                  aria-valuemin={MIN_SIDEBAR_HISTORY_PERCENT}
-                  aria-valuemax={MAX_SIDEBAR_HISTORY_PERCENT}
-                  aria-valuenow={sidebarHistoryPercent}
-                  tabIndex={0}
-                  onPointerDown={handleSidebarSplitPointerDown}
-                  onPointerMove={handleSidebarSplitPointerMove}
-                  onPointerUp={finishSidebarSplitResize}
-                  onPointerCancel={finishSidebarSplitResize}
-                  onLostPointerCapture={() => setIsSidebarSplitResizing(false)}
-                  onKeyDown={handleSidebarSplitKeyDown}
-                />
-              ) : null}
-              <section className="application-navigation-section">
+            <div className="conversation-history" aria-label="Gespeicherte Unterhaltungen">
+              <div className="conversation-history-heading">
+                <span>Unterhaltungen</span>
                 <button
-                  className="application-navigation-toggle"
+                  className="history-selection-toggle"
                   type="button"
-                  onClick={toggleApplicationNavigation}
-                  aria-expanded={isApplicationNavigationExpanded}
-                  aria-controls="application-navigation"
+                  aria-pressed={isHistorySelectionMode}
+                  onClick={() => {
+                    setIsHistorySelectionMode(!isHistorySelectionMode);
+                    setSelectedFredConversationIds([]);
+                  }}
+                  disabled={historyControlsDisabled || (!isHistorySelectionMode && visibleConversations.length === 0)}
                 >
-                  <span>Anwendungsbereiche</span>
-                  <svg
-                    aria-hidden="true"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <polyline points={isApplicationNavigationExpanded ? "6 9 12 15 18 9" : "9 6 15 12 9 18"}></polyline>
-                  </svg>
+                  {isHistorySelectionMode ? "Fertig" : "Auswählen"}
                 </button>
-                {isApplicationNavigationExpanded ? (
-                  <nav className="forms-navigation"
-                    id="application-navigation"
-                    aria-label="Anwendungsbereiche"
-                  >
-                    <SidebarNavigationGroup title="Recherche" active={["bfg-decisions", "bfg-pro", "bfg-newsletters", "data"].includes(appView)} defaultExpanded>
-                      <button
-                        className={`sidebar-view-button ${appView === "bfg-decisions" ? "active" : ""}`}
-                        type="button"
-                        onClick={openBfgDecisionsView}
-                        aria-current={appView === "bfg-decisions" ? "page" : undefined}
-                      >
-                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="20" y1="20" x2="16.65" y2="16.65"></line><path d="M8 11h6M11 8v6"></path></svg>
-                        BFG Suche
-                      </button>
-                      <button
-                        className={`sidebar-view-button ${appView === "bfg-pro" ? "active" : ""}`}
-                        type="button"
-                        onClick={openBfgProView}
-                        aria-current={appView === "bfg-pro" ? "page" : undefined}
-                      >
-                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"></path><path d="m19 15 .75 2.25L22 18l-2.25.75L19 21l-.75-2.25L16 18l2.25-.75L19 15Z"></path></svg>
-                        BFG Suche PRO
-                      </button>
-                      <button
-                        className={`sidebar-view-button ${appView === "bfg-newsletters" ? "active" : ""}`}
-                        type="button"
-                        onClick={openBfgNewslettersView}
-                        aria-current={appView === "bfg-newsletters" ? "page" : undefined}
-                      >
-                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path><path d="M7 16h5"></path></svg>
-                        BFG Newsletter
-                      </button>
-                      <button
-                        className={`sidebar-view-button ${appView === "data" ? "active" : ""}`}
-                        type="button"
-                        onClick={openDataView}
-                        aria-current={appView === "data" ? "page" : undefined}
-                      >
-                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="7" ry="3"></ellipse><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path></svg>
-                        Wissensbestand
-                      </button>
-                    </SidebarNavigationGroup>
-                    <SidebarNavigationGroup title="Dokumente" active={["scanning", "reasonings", "forms", "downloads"].includes(appView)}>
-                      <button
-                        className={`sidebar-view-button ${appView === "scanning" ? "active" : ""}`}
-                        type="button"
-                        onClick={openScanningView}
-                        aria-current={appView === "scanning" ? "page" : undefined}
-                      >
-                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8h10M7 12h10M7 16h6" /></svg>
-                        Dokumente scannen
-                      </button>
-                      <button
-                        className={`sidebar-view-button ${appView === "reasonings" ? "active" : ""}`}
-                        type="button"
-                        onClick={openReasoningsView}
-                        aria-current={appView === "reasonings" ? "page" : undefined}
-                      >
-                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"></path><path d="M4 5.5v16M8 7h8M8 11h8"></path></svg>
-                        Textbausteine
-                      </button>
-                      <button
-                        className={`sidebar-view-button ${appView === "forms" ? "active" : ""}`}
-                        type="button"
-                        onClick={openFormsView}
-                        aria-current={appView === "forms" ? "page" : undefined}
-                      >
-                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
-                        Formulare
-                      </button>
-                      <button
-                        className={`sidebar-view-button ${appView === "downloads" ? "active" : ""}`}
-                        type="button"
-                        onClick={openDownloadsView}
-                        aria-current={appView === "downloads" ? "page" : undefined}
-                      >
-                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12"></path><polyline points="7 10 12 15 17 10"></polyline><path d="M5 21h14a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2"></path></svg>
-                        Downloads
-                      </button>
-                    </SidebarNavigationGroup>
-                    <SidebarNavigationGroup title="Rechner" active={["german-sv-pension", "l17b-currency"].includes(appView)}>
-                      <button
-                        className={`sidebar-view-button ${appView === "german-sv-pension" ? "active" : ""}`}
-                        type="button"
-                        onClick={openGermanSvPensionView}
-                        aria-current={appView === "german-sv-pension" ? "page" : undefined}
-                      >
-                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"></rect><path d="M8 6h8M8 10h2M14 10h2M8 14h2M14 14h2M8 18h2M14 18h2"></path></svg>
-                        Deutsche SV-Rente
-                      </button>
-                      <button
-                        className={`sidebar-view-button ${appView === "l17b-currency" ? "active" : ""}`}
-                        type="button"
-                        onClick={openL17bCurrencyView}
-                        aria-current={appView === "l17b-currency" ? "page" : undefined}
-                      >
-                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v12M8 10h8"></path></svg>
-                        L17b Währungsrechner
-                      </button>
-                    </SidebarNavigationGroup>
-                    <SidebarNavigationGroup title="Lernen & Spiel" active={["fredrun", "fredrun2", "quiz"].includes(appView)}>
-                      <button
-                        className={`sidebar-view-button ${appView === "fredrun" ? "active" : ""}`}
-                        type="button"
-                        onClick={openFredRunView}
-                        aria-current={appView === "fredrun" ? "page" : undefined}
-                      >
-                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17h3l2-4 3 2 2-5 2 4h4"></path><path d="M5 7h.01M9 5h.01M13 7h.01"></path></svg>
-                        Fredrun
-                      </button>
-                      <button
-                        className={`sidebar-view-button ${appView === "fredrun2" ? "active" : ""}`}
-                        type="button"
-                        onClick={openFredRun2View}
-                        aria-current={appView === "fredrun2" ? "page" : undefined}
-                      >
-                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"></path></svg>
-                        Fredrun 2.0
-                      </button>
-                      {isAdmin ? (<button
-                        className={`sidebar-view-button ${appView === "quiz" ? "active" : ""}`}
-                        type="button"
-                        onClick={openQuizView}
-                        aria-current={appView === "quiz" ? "page" : undefined}
-                      >
-                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9 9a3 3 0 0 1 6 0c0 2-3 3-3 5"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                        Quiz
-                      </button>) : null}
-                      {isAdmin ? (<button
-                        className={`sidebar-view-button ${appView === "fred-live" ? "active" : ""}`}
-                        type="button"
-                        onClick={openFredLiveView}
-                        aria-current={appView === "fred-live" ? "page" : undefined}
-                        title="Fred Live"
-                        aria-label="Fred Live"
-                      >
-                        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 10a8 8 0 0 1 16 0v4a2 2 0 0 1-2 2h-2v-6h4M4 10v6H2v-4a2 2 0 0 1 2-2M8 19h8"></path></svg>
-                        Fred Live
-                      </button>) : null}
-                    </SidebarNavigationGroup>
-                  </nav>
+                {isHistoryLoading || isDeleting ? (
+                  <span className="history-loading">{isDeleting ? "Löscht…" : "Lädt…"}</span>
                 ) : null}
-              </section>
+              </div>
+              {isHistorySelectionMode ? (
+                <div className="conversation-bulk-actions">
+                  <span>{visibleSelectedConversationIds.length} ausgewählt</span>
+                  <button
+                    className="bulk-delete-button"
+                    type="button"
+                    onClick={() => void deleteFredConversations(visibleSelectedConversationIds, true)}
+                    disabled={historyControlsDisabled || visibleSelectedConversationIds.length === 0}
+                  >
+                    Auswahl löschen
+                  </button>
+                </div>
+              ) : null}
+              <div className="conversation-list">
+                {!isHistoryLoading && visibleConversations.length === 0 ? (
+                  <p className="conversation-empty">Noch keine gespeicherten Unterhaltungen.</p>
+                ) : null}
+                {visibleConversations.map((conversation) => (
+                  <div
+                    className={`conversation-row${isHistorySelectionMode ? " is-selecting" : ""} ${conversation.id === visibleActiveConversationId ? "active" : ""}`}
+                    key={conversation.id}
+                  >
+                    {isHistorySelectionMode ? (
+                      <input
+                        className="conversation-checkbox"
+                        type="checkbox"
+                        checked={visibleSelectedConversationIds.includes(conversation.id)}
+                        onChange={() => toggleFredConversationSelection(conversation.id)}
+                        disabled={historyControlsDisabled}
+                        aria-label={`Unterhaltung „${conversation.title}“ auswählen`}
+                      />
+                    ) : null}
+                    <button
+                      className="conversation-open"
+                      type="button"
+                      onClick={() => void selectFredConversation(conversation)}
+                      disabled={historyControlsDisabled}
+                      aria-current={conversation.id === visibleActiveConversationId ? "page" : undefined}
+                    >
+                      <span className="conversation-title-row">
+                        {conversation.origin === "telegram" ? (
+                          <svg className="conversation-telegram-icon" aria-label="Telegram-Unterhaltung" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.81-.75-1-.65-1.56-1.06-2.53-1.7-1.12-.74-.4-1.14.25-1.8.17-.17 3.02-2.77 3.08-3.01.01-.03.01-.18-.07-.25-.08-.07-.19-.05-.27-.03-.12.03-1.99 1.26-5.62 3.72-.53.36-1.01.54-1.44.53-.47-.01-1.38-.27-2.06-.49-.83-.27-1.49-.41-1.43-.87.03-.24.36-.48.99-.73 3.88-1.69 6.47-2.8 7.77-3.34 3.7-1.54 4.47-1.81 4.97-1.82.11 0 .35.03.51.16.13.12.16.27.18.39.01.11.02.37 0 .57z" />
+                          </svg>
+                        ) : null}
+                        <span title={conversation.title}>{conversation.title}</span>
+                      </span>
+                      <time dateTime={conversation.updatedAt}>{formatHistoryDate(conversation.updatedAt)}</time>
+                    </button>
+                    <div className="conversation-actions">
+                      {conversation.id === visibleActiveConversationId ? (
+                        <button
+                          className="conversation-export"
+                          type="button"
+                          onClick={() => void exportFredConversationPdf(conversation)}
+                          disabled={historyControlsDisabled || isDownloadingFredConversationPdf}
+                          aria-label={`Unterhaltung „${conversation.title}“ als PDF exportieren`}
+                          aria-busy={isDownloadingFredConversationPdf}
+                          title={isDownloadingFredConversationPdf ? "PDF wird erstellt …" : "Verlauf als PDF"}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 18v2h14v-2" />
+                          </svg>
+                        </button>
+                      ) : null}
+                      {isHistorySelectionMode ? (
+                        <button
+                          className="conversation-delete"
+                          type="button"
+                          onClick={() => void deleteFredConversations([conversation.id])}
+                          disabled={historyControlsDisabled}
+                          aria-label={`Unterhaltung „${conversation.title}“ löschen`}
+                          title="Unterhaltung löschen"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" />
+                          </svg>
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         ) : (
@@ -3331,237 +2987,9 @@ export default function Home() {
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             </button>
-            <button
-              className={`icon-button rail-icon-btn rail-home-button ${appView === "home" ? "active" : ""}`}
-              type="button"
-              onClick={openHomeView}
-              title="Startseite"
-              aria-label="Startseite"
-              aria-current={appView === "home" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 11 9-8 9 8"></path><path d="M5 10v10h14V10M9 20v-6h6v6"></path></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "bfg-decisions" ? "active" : ""}`}
-              type="button"
-              onClick={openBfgDecisionsView}
-              title="BFG Suche"
-              aria-label="BFG Suche"
-              aria-current={appView === "bfg-decisions" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="20" y1="20" x2="16.65" y2="16.65"></line><path d="M8 11h6M11 8v6"></path></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "bfg-pro" ? "active" : ""}`}
-              type="button"
-              onClick={openBfgProView}
-              title="BFG Suche PRO"
-              aria-label="BFG Suche PRO"
-              aria-current={appView === "bfg-pro" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"></path><path d="m19 15 .75 2.25L22 18l-2.25.75L19 21l-.75-2.25L16 18l2.25-.75L19 15Z"></path></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "bfg-newsletters" ? "active" : ""}`}
-              type="button"
-              onClick={openBfgNewslettersView}
-              title="BFG Newsletter"
-              aria-label="BFG Newsletter"
-              aria-current={appView === "bfg-newsletters" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path><path d="M7 16h5"></path></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "data" ? "active" : ""}`}
-              type="button"
-              onClick={openDataView}
-              title="Wissensbestand"
-              aria-label="Wissensbestand"
-              aria-current={appView === "data" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="7" ry="3"></ellipse><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "scanning" ? "active" : ""}`}
-              type="button"
-              onClick={openScanningView}
-              title="Dokumente scannen"
-              aria-label="Dokumente scannen"
-              aria-current={appView === "scanning" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8h10M7 12h10M7 16h6" /></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "reasonings" ? "active" : ""}`}
-              type="button"
-              onClick={openReasoningsView}
-              title="Textbausteine"
-              aria-label="Textbausteine"
-              aria-current={appView === "reasonings" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"></path><path d="M4 5.5v16M8 7h8M8 11h8"></path></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn rail-forms-button ${appView === "forms" ? "active" : ""}`}
-              type="button"
-              onClick={openFormsView}
-              title="Formulare"
-              aria-label="Formulare"
-              aria-current={appView === "forms" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "downloads" ? "active" : ""}`}
-              type="button"
-              onClick={openDownloadsView}
-              title="Downloads"
-              aria-label="Downloads"
-              aria-current={appView === "downloads" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12"></path><polyline points="7 10 12 15 17 10"></polyline><path d="M5 21h14a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2"></path></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "german-sv-pension" ? "active" : ""}`}
-              type="button"
-              onClick={openGermanSvPensionView}
-              title="Deutsche SV-Rente"
-              aria-label="Deutsche SV-Rente"
-              aria-current={appView === "german-sv-pension" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"></rect><path d="M8 6h8M8 10h2M14 10h2M8 14h2M14 14h2M8 18h2M14 18h2"></path></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "l17b-currency" ? "active" : ""}`}
-              type="button"
-              onClick={openL17bCurrencyView}
-              title="L17b Währungsrechner"
-              aria-label="L17b Währungsrechner"
-              aria-current={appView === "l17b-currency" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v12M8 10h8"></path></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "fredrun" ? "active" : ""}`}
-              type="button"
-              onClick={openFredRunView}
-              title="Fredrun"
-              aria-label="Fredrun"
-              aria-current={appView === "fredrun" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 17h3l2-4 3 2 2-5 2 4h4"></path><path d="M5 7h.01M9 5h.01M13 7h.01"></path></svg>
-            </button>
-            <button
-              className={`icon-button rail-icon-btn ${appView === "fredrun2" ? "active" : ""}`}
-              type="button"
-              onClick={openFredRun2View}
-              title="Fredrun 2.0"
-              aria-label="Fredrun 2.0"
-              aria-current={appView === "fredrun2" ? "page" : undefined}
-            >
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"></path></svg>
-            </button>
-            {isAdmin ? (
-              <button
-                className={`icon-button rail-icon-btn ${appView === "quiz" ? "active" : ""}`}
-                type="button"
-                onClick={openQuizView}
-                title="Quiz"
-                aria-label="Quiz"
-                aria-current={appView === "quiz" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9 9a3 3 0 0 1 6 0c0 2-3 3-3 5"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-              </button>
-            ) : null}
-            {isAdmin ? (
-              <button
-                className={`icon-button rail-icon-btn ${appView === "fred-live" ? "active" : ""}`}
-                type="button"
-                onClick={openFredLiveView}
-                title="Fred Live"
-                aria-label="Fred Live"
-                aria-current={appView === "fred-live" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 10a8 8 0 0 1 16 0v4a2 2 0 0 1-2 2h-2v-6h4M4 10v6H2v-4a2 2 0 0 1 2-2M8 19h8"></path></svg>
-              </button>
-            ) : null}
           </div>
         )}
 
-        <div className="sidebar-footer">
-          {settingsOpen ? (
-            <>
-              <div className="user-profile">
-                <span className="user-email-label">Angemeldet als</span>
-                <span className="user-email" title={signedInEmail}>{signedInEmail}</span>
-              </div>
-              <button
-                ref={settingsTriggerRef}
-                className="secondary-button sidebar-settings-btn"
-                type="button"
-                onClick={openSettingsDialog}
-              >
-                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                Einstellungen
-              </button>
-              {isAdmin ? (<button
-                className={`sidebar-view-button ${appView === "administration" ? "active" : ""}`}
-                type="button"
-                onClick={() => void openAdministrationView()}
-                aria-current={appView === "administration" ? "page" : undefined}
-              >
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-4"></path></svg>
-                Administration
-              </button>) : null}
-              <button
-                className="secondary-button sidebar-signout-btn"
-                type="button"
-                onClick={handleSignOut}
-                disabled={isAuthSubmitting}
-                title="Abmelden"
-                aria-label="Abmelden"
-              >
-                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
-                Abmelden
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                ref={settingsTriggerRef}
-                className="icon-button rail-icon-btn"
-                type="button"
-                onClick={openSettingsDialog}
-                title="Einstellungen"
-                aria-label="Einstellungen"
-              >
-                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-              </button>
-              {isAdmin ? (
-                <button
-                  className={`icon-button rail-icon-btn rail-forms-button ${appView === "administration" ? "active" : ""}`}
-                  type="button"
-                  onClick={() => void openAdministrationView()}
-                  title="Administration"
-                  aria-label="Administration"
-                  aria-current={appView === "administration" ? "page" : undefined}
-                >
-                  <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-4"></path></svg>
-                </button>
-              ) : null}
-              <button
-                className="icon-button rail-icon-btn sidebar-signout-btn"
-                type="button"
-                onClick={handleSignOut}
-                disabled={isAuthSubmitting}
-                title="Abmelden"
-                aria-label="Abmelden"
-              >
-                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
-              </button>
-            </>
-          )}
-        </div>
       </aside>
 
       {isSettingsDialogOpen ? (
@@ -3597,10 +3025,6 @@ export default function Home() {
               </button>
             </div>
             <div className="account-settings-content">
-              <FredResearchDisplaySettings
-                accessToken={session?.access_token ?? ""}
-                onResearchDisplayModeChange={setResearchDisplayMode}
-              />
               <section className="account-settings-section" aria-labelledby="password-settings-title">
                 <h3 id="password-settings-title">Passwort ändern</h3>
               <form
@@ -3696,16 +3120,36 @@ export default function Home() {
         </div>
       ) : null}
 
-      {appView === "home" ? (
-        <DashboardView
-          accessToken={session?.access_token ?? ""}
-          conversations={fredConversations}
-          isHistoryLoading={isHistoryLoading}
-          isAdmin={isAdmin}
-          onStartConversation={startNewManagedConversation}
-          onOpenConversation={openDashboardConversation}
-          onOpenApp={openDashboardApp}
-        />
+      <div className="app-main">
+        <div className="app-topbar">
+          {!settingsOpen && (
+            <button
+              className="mobile-menu-toggle"
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Menü öffnen"
+              title="Menü öffnen"
+            >
+              <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+            </button>
+          )}
+          <AppHeaderBar
+            activeView={appView}
+            isAdmin={isAdmin}
+            email={signedInEmail}
+            isSigningOut={isAuthSubmitting}
+            hasUnreadNews={hasUnseenNews}
+            accountTriggerRef={settingsTriggerRef}
+            onOpenNews={openNewsView}
+            onSelectTool={openLauncherTool}
+            onOpenSettings={openSettingsDialog}
+            onOpenAdministration={() => void openAdministrationView()}
+            onSignOut={() => void handleSignOut()}
+          />
+        </div>
+        <div className="app-main-view">
+      {appView === "news" ? (
+        <NewsView items={newsItems} error={platformNews.error} isLoading={isNewsLoading} />
       ) : appView === "chat" ? (
         <FredNativeChatView
           key={fredChatInstance}
@@ -3715,7 +3159,6 @@ export default function Home() {
           externalError={error}
           readOnly={activeConversationOrigin === "telegram"}
           readOnlyNotice="Diese Unterhaltung wird in Telegram fortgesetzt."
-          researchDisplayMode={researchDisplayMode}
           telegramBotUrl={
             activeConversationOrigin === "telegram"
             && telegramIntegration?.status === "active"
@@ -4494,6 +3937,8 @@ export default function Home() {
           </AdminWorkspace>
         </AdminGuardContext.Provider>
       ) : null}
+        </div>
+      </div>
     </main>
   );
 }

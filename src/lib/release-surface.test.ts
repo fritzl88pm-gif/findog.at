@@ -4,6 +4,10 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { LAUNCHER_GROUPS } from "@/lib/tools-launcher";
+
+const launcherTools = LAUNCHER_GROUPS.flatMap((group) => group.tools);
+
 describe("approved release surface", () => {
   const pagePath = fileURLToPath(new URL("../app/page.tsx", import.meta.url));
   const globalsPath = fileURLToPath(new URL("../app/globals.css", import.meta.url));
@@ -30,20 +34,18 @@ describe("approved release surface", () => {
   const l17bCountrySelectSource = readFileSync(l17bCountrySelectPath, "utf8");
   const nextConfigSource = readFileSync(nextConfigPath, "utf8");
 
-  it("labels the standalone BFG view as BFG Suche in expanded and collapsed navigation", () => {
-    expect(pageSource).toMatch(/className={`sidebar-view-button[\s\S]*?<\/svg>\s*BFG Suche\s*<\/button>/);
-    expect(pageSource).toContain('title="BFG Suche"');
-    expect(pageSource).toContain('aria-label="BFG Suche"');
+  it("labels the standalone BFG view as BFG Suche in the Werkzeuge launcher", () => {
+    expect(launcherTools).toContainEqual(expect.objectContaining({ id: "bfg-decisions", label: "BFG Suche" }));
+    expect(pageSource).toContain('case "bfg-decisions": openBfgDecisionsView(); break;');
     expect(pageSource).toContain('<h1 id="bfg-decisions-view-title">BFG-Entscheidungen</h1>');
     expect(pageSource).toContain('appView === "bfg-decisions"');
     expect(pageSource).toContain('/api/findok/bfg');
   });
 
   it("adds a separate BFG Suche PRO view and controls without replacing the normal search", () => {
-    expect(pageSource).toContain('type AppView = "home" | "chat" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "bfg-newsletters" | "german-sv-pension" | "l17b-currency" | "fredrun" | "quiz" | "administration" | "data"');
-    expect(pageSource).toMatch(/className={`sidebar-view-button[\s\S]*?BFG Suche PRO\s*<\/button>/);
-    expect(pageSource).toContain('title="BFG Suche PRO"');
-    expect(pageSource).toContain('aria-label="BFG Suche PRO"');
+    expect(pageSource).toMatch(/type AppView = [^;]*"bfg-decisions"[^;]*"bfg-pro"[^;]*;/u);
+    expect(launcherTools).toContainEqual(expect.objectContaining({ id: "bfg-pro", label: "BFG Suche PRO" }));
+    expect(pageSource).toContain('case "bfg-pro": openBfgProView(); break;');
     expect(pageSource).toContain('appView === "bfg-pro"');
     expect(pageSource).toContain('<h1 id="bfg-pro-view-title">BFG Suche PRO</h1>');
     expect(pageSource).toContain("KI-gestützte Reihung auf Basis veröffentlichter Findok BFG-Entscheidungen");
@@ -87,27 +89,24 @@ describe("approved release surface", () => {
 
   it("keeps the Quiz view behind the administrator capability in every client path", () => {
     expect(pageSource).toMatch(/function openQuizView\(\) \{\r?\n\s+if \(!isAdmin\)/);
-    expect(pageSource.match(/\{isAdmin \? \(\s*<button[\s\S]{0,500}?appView === "quiz"/g)).toHaveLength(2);
-    expect(pageSource).toContain('current === "administration" || current === "quiz" ? "home" : current');
+    expect(pageSource).toMatch(/function openFredLiveView\(\) \{\r?\n\s+if \(!isAdmin/);
+    expect(launcherTools.filter((tool) => tool.adminOnly).map((tool) => tool.id)).toEqual(["quiz", "fred-live"]);
+    expect(pageSource).toContain("isAdmin={isAdmin}");
+    expect(pageSource).toContain('current === "administration" || current === "quiz" ? "chat" : current');
     expect(pageSource).toContain('appView === "quiz" && isAdmin ?');
   });
 
-  it("adds the local Deutsche SV Rente AppView directly below BFG Suche PRO", () => {
-    const expandedNavigation = pageSource.slice(
-      pageSource.indexOf('<nav className="forms-navigation"'),
-      pageSource.indexOf('</nav>', pageSource.indexOf('<nav className="forms-navigation"')),
-    );
-    const collapsedRail = pageSource.slice(
-      pageSource.indexOf('<div className="rail-content">'),
-      pageSource.indexOf('<div className="sidebar-footer">'),
-    );
+  it("adds the local Deutsche SV-Rente AppView to the Rechner group of the launcher", () => {
     const pensionView = pageSource.slice(
       pageSource.indexOf('function GermanSvPensionView('),
       pageSource.indexOf('export default function Home()'),
     );
 
-    expect(expandedNavigation).toMatch(/BFG Suche PRO\s*<\/button>\s*<button[\s\S]*?appView === "german-sv-pension"[\s\S]*?Deutsche SV Rente\s*<\/button>/);
-    expect(collapsedRail).toMatch(/title="BFG Suche PRO"[\s\S]*?<\/button>\s*<button[\s\S]*?title="Deutsche SV Rente"[\s\S]*?aria-label="Deutsche SV Rente"/);
+    expect(LAUNCHER_GROUPS.find((group) => group.title === "Rechner")?.tools[0]).toMatchObject({
+      id: "german-sv-pension",
+      label: "Deutsche SV-Rente",
+    });
+    expect(pageSource).toContain('case "german-sv-pension": openGermanSvPensionView(); break;');
     expect(pageSource).toContain('appView === "german-sv-pension"');
     expect(pageSource).toContain('<GermanSvPensionView');
     expect(pensionView).toContain('<fieldset className="german-sv-mode">');
@@ -185,7 +184,7 @@ describe("approved release surface", () => {
   it("retires the legacy global system prompt: absent from the Administration client UI, not called by chat, server file preserved", () => {
     const settingsDialog = pageSource.slice(
       pageSource.indexOf('{isSettingsDialogOpen ? ('),
-      pageSource.indexOf('{appView === "home" ? ('),
+      pageSource.indexOf("<AppHeaderBar"),
     );
 
     expect(settingsDialog).not.toContain('settings-tab-system-prompt');
@@ -304,7 +303,7 @@ describe("approved release surface", () => {
     expect(pageSource).toContain("bfgAppliedFilters");
   });
 
-  it("renders the expanded findog.at brand as a home link with a Beta tag", () => {
+  it("renders the expanded findog.at brand as a new-conversation link with a Beta tag", () => {
     expect(pageSource).toMatch(
       /<Link[\s\S]*?className="sidebar-brand"[\s\S]*?href="\/"[\s\S]*?onClick=[\s\S]*?className="austria-flag"[\s\S]*?findog\.at[\s\S]*?Beta[\s\S]*?<\/Link>/,
     );
@@ -368,27 +367,21 @@ describe("approved release surface", () => {
     expect(l17bCountrySelectSource).toContain("<CountryFlag");
     expect(globalsSource).toContain(".l17b-country-flag");
   });
-  it("renders FredResearchDisplaySettings before password and Telegram settings", () => {
-    expect(pageSource).toContain("import FredResearchDisplaySettings from");
+  it("has no research display setting and keeps password before Telegram settings", () => {
+    expect(pageSource).not.toContain("FredResearchDisplaySettings");
+    expect(pageSource).not.toContain("fred-research-display");
 
     const settingsDialog = pageSource.slice(
       pageSource.indexOf("{isSettingsDialogOpen ? ("),
       pageSource.indexOf("{appView === \"chat\" ? ("),
     );
 
-    expect(settingsDialog).toContain("<FredResearchDisplaySettings");
-    expect(settingsDialog).toContain("accessToken={session?.access_token ?? \"\"}");
-
-    const fredPos = settingsDialog.indexOf("<FredResearchDisplaySettings");
     const telegramPos = settingsDialog.indexOf("<TelegramSettings");
     const deletionPos = settingsDialog.indexOf("account-deletion-section");
-    expect(fredPos).toBeGreaterThan(-1);
-    expect(telegramPos).toBeGreaterThan(fredPos);
-    expect(deletionPos).toBeGreaterThan(telegramPos);
-
     const passwordPos = settingsDialog.indexOf("id=\"password-settings-title\"");
-    expect(fredPos).toBeLessThan(passwordPos);
+    expect(passwordPos).toBeGreaterThan(-1);
     expect(passwordPos).toBeLessThan(telegramPos);
+    expect(telegramPos).toBeLessThan(deletionPos);
   });
 
   it("ships the supplied maintenance mascot unchanged and renders it on the maintenance page", () => {

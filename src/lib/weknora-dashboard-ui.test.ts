@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { LAUNCHER_GROUPS } from "@/lib/tools-launcher";
+
 const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.meta.url)), "utf8");
 const viewSource = readFileSync(
   fileURLToPath(new URL("../components/knowledge-landscape-view.tsx", import.meta.url)),
@@ -15,11 +17,13 @@ const routeSource = readFileSync(
 );
 
 describe("knowledge landscape UI integration", () => {
-  it("adds Daten to expanded and collapsed navigation outside the admin gates", () => {
+  it("adds Wissensbestand to the Werkzeuge launcher outside the admin gates", () => {
     expect(pageSource).toMatch(/type AppView = [^;]*"data"[^;]*;/u);
-    expect(pageSource.match(/onClick=\{openDataView\}/gu)).toHaveLength(2);
-    expect(pageSource).toMatch(/<nav className="forms-navigation"[\s\S]*?onClick=\{openDataView\}[\s\S]*?\{isAdmin \? \(/u);
-    expect(pageSource).toMatch(/<div className="rail-content">[\s\S]*?onClick=\{openDataView\}[\s\S]*?title="Wissensbestand"[\s\S]*?aria-label="Wissensbestand"[\s\S]*?\{isAdmin \? \(/u);
+    expect(pageSource).toContain('case "data": openDataView(); break;');
+    expect(LAUNCHER_GROUPS.flatMap((group) => group.tools)).toContainEqual(
+      expect.objectContaining({ id: "data", label: "Wissensbestand" }),
+    );
+    expect(LAUNCHER_GROUPS.flatMap((group) => group.tools).find((tool) => tool.id === "data")?.adminOnly).toBeUndefined();
     expect(pageSource).toContain('appView === "data"');
     expect(pageSource).toContain('<KnowledgeLandscapeView accessToken={session?.access_token ?? ""} />');
   });

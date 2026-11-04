@@ -315,32 +315,3 @@ export function dashboardNewsInputToRow(input: DashboardNewsInput): Record<strin
     as_of_date: input.asOfDate,
   };
 }
-
-export function getDashboardGreeting(date = new Date()): string {
-  const hourPart = new Intl.DateTimeFormat("de-AT", {
-    timeZone: "Europe/Vienna",
-    hour: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date).find((part) => part.type === "hour")?.value;
-  const hour = Number(hourPart ?? 0);
-  if (hour >= 5 && hour < 11) {
-    return "Guten Morgen";
-  }
-  if (hour >= 11 && hour < 18) {
-    return "Guten Tag";
-  }
-  if (hour >= 18 && hour < 22) {
-    return "Guten Abend";
-  }
-  return "Willkommen";
-}
-
-export function formatDashboardDate(date = new Date()): string {
-  return new Intl.DateTimeFormat("de-AT", {
-    timeZone: "Europe/Vienna",
-    weekday: "long",
-    day: "2-digit",
-    month: "long",
-    year: "numeric",
-  }).format(date);
-}

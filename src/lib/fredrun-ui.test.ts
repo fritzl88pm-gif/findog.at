@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
+import { LAUNCHER_GROUPS } from "@/lib/tools-launcher";
+
 import {
   FREDRUN_GROUND_Y,
   FREDRUN_LIGHTNING_HEIGHT,
@@ -413,11 +415,12 @@ describe("Fredrun UI surface", () => {
     expect(standalonePageSource).not.toContain("notFound()");
   });
 
-  it("registers Fredrun in both navigation modes and the app view", () => {
+  it("registers Fredrun in the Werkzeuge launcher and the app view", () => {
     expect(pageSource).toContain('"fredrun"');
-    expect(pageSource).toContain('onClick={openFredRunView}');
-    expect(pageSource).toContain('title="Fredrun"');
-    expect(pageSource).toContain('aria-label="Fredrun"');
+    expect(pageSource).toContain('case "fredrun": openFredRunView(); break;');
+    expect(LAUNCHER_GROUPS.flatMap((group) => group.tools)).toContainEqual(
+      expect.objectContaining({ id: "fredrun", label: "Fredrun" }),
+    );
     expect(pageSource).toContain('appView === "fredrun"');
     expect(pageSource).toContain(
       '<FredRunView key={user?.id ?? "fredrun"} accessToken={session?.access_token ?? ""} />',

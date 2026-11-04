@@ -3,21 +3,21 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { LAUNCHER_GROUPS } from "@/lib/tools-launcher";
+
 const page = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.meta.url)), "utf8");
-const dashboard = readFileSync(fileURLToPath(new URL("../components/dashboard-view.tsx", import.meta.url)), "utf8");
 const view = readFileSync(fileURLToPath(new URL("../components/bfg-newsletter-view.tsx", import.meta.url)), "utf8");
 const admin = readFileSync(fileURLToPath(new URL("../components/admin-bfg-newsletters.tsx", import.meta.url)), "utf8");
 const css = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
+const launcherTools = LAUNCHER_GROUPS.flatMap((group) => group.tools);
+
 describe("BFG newsletter UI", () => {
-  it("adds the named section to expanded, collapsed and dashboard navigation", () => {
+  it("adds the named section to the Werkzeuge launcher", () => {
     expect(page).toContain('appView === "bfg-newsletters"');
     expect(page).toContain("openBfgNewslettersView");
-    expect(page).toMatch(/className=\{`sidebar-view-button[\s\S]*?BFG Newsletter\s*<\/button>/u);
-    expect(page).toContain('title="BFG Newsletter"');
-    expect(page).toContain('aria-label="BFG Newsletter"');
-    expect(dashboard).toContain('{ label: "BFG Newsletter"');
-    expect(dashboard).toContain('target: "bfg-newsletters"');
+    expect(page).toContain('case "bfg-newsletters": openBfgNewslettersView(); break;');
+    expect(launcherTools).toContainEqual(expect.objectContaining({ id: "bfg-newsletters", label: "BFG Newsletter" }));
   });
 
   it("loads newsletters, renders their date and safe Markdown, and handles all states", () => {

@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { LAUNCHER_GROUPS } from "@/lib/tools-launcher";
+
 const pageSource = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.meta.url)), "utf8");
 const viewSource = readFileSync(fileURLToPath(new URL("../components/scanning-view.tsx", import.meta.url)), "utf8");
 const richAnswerSource = readFileSync(fileURLToPath(new URL("../components/rich-answer.tsx", import.meta.url)), "utf8");
@@ -10,11 +12,12 @@ const routeSource = readFileSync(fileURLToPath(new URL("../app/api/scanning/rout
 const providerSource = readFileSync(fileURLToPath(new URL("./scanning/openrouter.ts", import.meta.url)), "utf8");
 
 describe("Scanning UI integration", () => {
-  it("adds Scanning to both navigation modes as its own app view", () => {
-    expect(pageSource).toContain('type AppView = "home" | "chat" | "scanning"');
-    expect(pageSource.match(/onClick=\{openScanningView\}/gu)).toHaveLength(2);
-    expect(pageSource).toMatch(/SidebarNavigationGroup title="Dokumente"[\s\S]*?onClick=\{openScanningView\}/u);
-    expect(pageSource).toContain('aria-label="Dokumente scannen"');
+  it("adds Scanning to the Werkzeuge launcher as its own app view", () => {
+    expect(pageSource).toContain('type AppView = "chat" | "news" | "scanning"');
+    expect(pageSource).toContain('case "scanning": openScanningView(); break;');
+    expect(LAUNCHER_GROUPS.find((group) => group.title === "Dokumente")?.tools).toContainEqual(
+      expect.objectContaining({ id: "scanning", label: "Dokumente scannen" }),
+    );
     expect(pageSource).toContain('appView === "scanning"');
     expect(pageSource).toContain("<ScanningView accessToken={session?.access_token ?? \"\"} />");
   });

@@ -66,7 +66,7 @@ describe("Fred native Findog UI", () => {
   });
 
   it("uses the new-conversation action as the only Fred navigation and renders the native chat", () => {
-    expect(pageSource).toContain('type AppView = "home" | "chat" | "scanning" | "forms"');
+    expect(pageSource).toContain('type AppView = "chat" | "news" | "scanning" | "forms"');
     expect(pageSource).not.toContain('type AppView = "chat" | "fred"');
     expect(pageSource).not.toContain("onClick={openFredView}");
     expect(pageSource.match(/onClick=\{startNewManagedConversation\}/gu)).toHaveLength(2);
@@ -582,14 +582,11 @@ describe("Fred ResearchTrace rendering", () => {
     expect(viewSource).toMatch(/steps=\{activeAssistant\.researchTrace \?\? \[\]\}[\s\S]*?\n\s+active\n/u);
   });
 
-  it("passes researchDisplayMode from page state to FredResearchDisplaySettings and FredNativeChatView", () => {
-    expect(pageSource).toContain("const [researchDisplayMode, setResearchDisplayMode] = useState<\"simple\" | \"advanced\">(\"simple\");");
-    expect(pageSource).toContain("onResearchDisplayModeChange={setResearchDisplayMode}");
-    expect(pageSource).toContain("researchDisplayMode={researchDisplayMode}");
-    expect(pageSource).toContain('fetch("/api/account/settings/fred-research-display"');
-    expect(pageSource).toContain('setResearchDisplayMode(payload.researchDisplayMode === "advanced" ? "advanced" : "simple")');
-    expect(viewSource).toContain("researchDisplayMode?: \"simple\" | \"advanced\";");
-    expect(viewSource).toMatch(/displayMode=\{researchDisplayMode\}/u);
+  it("always renders the advanced research display with no user-selectable mode", () => {
+    expect(pageSource).not.toContain("researchDisplayMode");
+    expect(pageSource).not.toContain("fred-research-display");
+    expect(viewSource).not.toContain("researchDisplayMode");
+    expect(viewSource).toMatch(/displayMode="advanced"/u);
   });
 
   it("renders advanced execution steps through the dedicated timeline component", () => {
@@ -606,7 +603,7 @@ describe("Fred ResearchTrace rendering", () => {
   });
 
   it("retains an advanced trace when a turn fails before the first answer delta", () => {
-    expect(viewSource).toMatch(/hasAnswerContent \|\| \(\s*researchDisplayMode === "advanced"/u);
+    expect(viewSource).toMatch(/hasAnswerContent \|\| \(\s*executionTrace\.length > 0/u);
     expect(viewSource).toContain("executionTrace.length > 0 || researchTrace.length > 0 || sourceReferences.length > 0");
     expect(viewSource).toContain("content: answerChunks.join(\"\")");
   });

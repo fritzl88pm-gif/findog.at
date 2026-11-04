@@ -741,23 +741,9 @@ function buildWebTurnConfig(
   };
 }
 
-async function loadResearchDisplayMode(
-  supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
-  userId: string,
-): Promise<"simple" | "advanced"> {
-  try {
-    const { data: prefData, error: prefError } = await supabase
-      .from("fred_user_preferences")
-      .select("research_display_mode")
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (prefError) return "simple";
-    return prefData?.research_display_mode === "advanced" ? "advanced" : "simple";
-  } catch {
-    return "simple";
-  }
-}
+// The web chat always shows the advanced research display (execution timeline
+// and source cards); there is no per-user switch any more.
+const WEB_RESEARCH_DISPLAY_MODE = "advanced" as const;
 
 function streamTextOnlyTurn(options: {
   request: Request;
@@ -940,15 +926,13 @@ export async function POST(request: Request) {
       releaseAdmission();
     }
     requireActiveRequest(request);
-    const [researchDisplayMode, storedConversation] = await awaitWithIngressSignal(
-      Promise.all([
-        loadResearchDisplayMode(supabase, user.id),
-        loadOwnedConversation({
-          supabase,
-          userId: user.id,
-          conversationId: body.conversationId,
-        }),
-      ]),
+    const researchDisplayMode = WEB_RESEARCH_DISPLAY_MODE;
+    const storedConversation = await awaitWithIngressSignal(
+      loadOwnedConversation({
+        supabase,
+        userId: user.id,
+        conversationId: body.conversationId,
+      }),
       ingressDeadline?.signal,
     );
     requireActiveRequest(request);

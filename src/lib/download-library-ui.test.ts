@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { LAUNCHER_GROUPS } from "@/lib/tools-launcher";
+
 function source(path: string): string {
   return readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
 }
@@ -15,13 +17,15 @@ const downloadRoute = source("../app/api/downloads/[documentId]/route.ts");
 const categoryRoute = source("../app/api/admin/downloads/categories/route.ts");
 const documentRoute = source("../app/api/admin/downloads/documents/route.ts");
 
+const launcherTools = LAUNCHER_GROUPS.flatMap((group) => group.tools);
+
 describe("download library surface", () => {
-  it("adds Downloads to both navigation modes and renders the public view", () => {
+  it("adds Downloads to the Werkzeuge launcher and renders the public view", () => {
     expect(page).toContain('"downloads"');
     expect(page).toContain("openDownloadsView");
+    expect(page).toContain('case "downloads": openDownloadsView(); break;');
     expect(page).toContain('<DownloadsView accessToken={session?.access_token ?? ""} />');
-    expect(page.match(/aria-label="Downloads"/gu)).toHaveLength(1);
-    expect(page.match(/>\s*Downloads\s*<\/button>/gu)?.length).toBeGreaterThanOrEqual(1);
+    expect(launcherTools).toContainEqual(expect.objectContaining({ id: "downloads", label: "Downloads" }));
   });
 
   it("implements the screenshot-inspired category, file, size and pagination UI", () => {

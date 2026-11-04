@@ -3,97 +3,114 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-const page = readFileSync(fileURLToPath(new URL("../app/page.tsx", import.meta.url)), "utf8");
-const view = readFileSync(fileURLToPath(new URL("../components/dashboard-view.tsx", import.meta.url)), "utf8");
-const admin = readFileSync(fileURLToPath(new URL("../components/admin-dashboard-news.tsx", import.meta.url)), "utf8");
-const css = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
+const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
 
-describe("logged-in dashboard UI", () => {
-  it("lands on home after initialization and every fresh authenticated landing", () => {
-    expect(page).toContain('type AppView = "home" | "chat"');
-    expect(page).toContain('useState<AppView>("home")');
-    expect(page).toMatch(/if \(isFreshAuthenticatedLanding\) \{[\s\S]*?setAppView\("home"\)[\s\S]*?setFredConversationId\(""\)/u);
-    expect(page).toContain('appView === "home" ? (');
-    expect(page).toContain("<DashboardView");
+const page = read("../app/page.tsx");
+const header = read("../components/app-header-bar.tsx");
+const launcher = read("../components/tools-launcher.tsx");
+const newsSection = read("../components/news-section.tsx");
+const newsView = read("../components/news-view.tsx");
+const newsHook = read("./use-platform-news.ts");
+const admin = read("../components/admin-dashboard-news.tsx");
+const css = read("../app/globals.css");
+
+describe("chat-first home", () => {
+  it("lands in the Fred chat after initialization and every fresh authenticated landing", () => {
+    expect(page).toContain('type AppView = "chat" | "news"');
+    expect(page).toContain('useState<AppView>("chat")');
+    expect(page).not.toContain('"home"');
+    expect(page).toMatch(/if \(isFreshAuthenticatedLanding\) \{[\s\S]*?setAppView\("chat"\)[\s\S]*?setFredConversationId\(""\)/u);
   });
 
-  it("keeps brand, sidebar and rail navigation client-side while new chat opens Fred", () => {
+  it("no longer ships the dashboard start page", () => {
+    expect(page).not.toContain("DashboardView");
+    expect(page).not.toContain("openDashboardApp");
+    expect(page).not.toContain("openHomeView");
+    expect(css).not.toContain(".dashboard-hero");
+    expect(css).not.toContain(".dashboard-quicklink");
+  });
+
+  it("starts a new Fred conversation from the logo without a full page navigation", () => {
     expect(page).toContain('aria-label="findog.at Startseite"');
-    expect(page).toContain("event.preventDefault()");
-    expect(page).toContain("openHomeView();");
-    expect(page.match(/aria-label="Startseite"/gu)).toHaveLength(1);
-    expect(page).toMatch(/onClick=\{openHomeView\}[\s\S]*?>[\s\S]*?Startseite\s*<\/button>/u);
-    expect(page).toContain("function startNewManagedConversation()");
+    expect(page).toMatch(
+      /className="sidebar-brand"[\s\S]*?onClick=\{\(event\) => \{\s*event\.preventDefault\(\);\s*startNewManagedConversation\(\);/u,
+    );
     expect(page).toMatch(/function startNewManagedConversation\(\) \{\s*openFredView\(\);/u);
   });
+});
 
-  it("renders all planned quicklinks and keeps Quiz and Administration permission-filtered", () => {
-    for (const label of [
-      "Fred", "BFG Suche", "BFG Suche PRO", "Wissensbestand", "Dokumente scannen", "Textbausteine",
-      "Formulare", "Downloads", "Deutsche SV-Rente", "L17b Währungsrechner", "Quiz", "Fredrun",
-      "Administration",
-    ]) expect(view).toContain(`label: "${label}"`);
-    expect(view.match(/adminOnly: true/gu)).toHaveLength(2);
-    expect(view).toContain("!link.adminOnly || isAdmin");
+describe("header bar", () => {
+  it("renders Neuigkeiten, Werkzeuge and Konto in this order on every view", () => {
+    expect(header.indexOf('aria-label="Neuigkeiten"')).toBeGreaterThan(-1);
+    expect(header.indexOf("<ToolsLauncher")).toBeGreaterThan(header.indexOf('aria-label="Neuigkeiten"'));
+    expect(header.indexOf("<AccountMenu")).toBeGreaterThan(header.indexOf("<ToolsLauncher"));
+    expect(launcher).toContain('aria-label="Werkzeuge"');
+    expect(launcher).toContain("aria-expanded={isOpen}");
+    expect(header).toContain('aria-label="Konto"');
+    // Rendered once, outside the per-view conditional, so it shows on every view.
+    expect(page.match(/<AppHeaderBar/gu)).toHaveLength(1);
+    expect(page.indexOf("<AppHeaderBar")).toBeLessThan(page.indexOf('appView === "news" ? ('));
   });
 
-  it("keeps the latest conversation in the hero and renders platform update states", () => {
-    expect(view).toContain("const latestConversation = conversations[0]");
-    expect(view).toContain("onOpenConversation(latestConversation.id)");
-    expect(view).toContain('title="Neu bei findog.at"');
-    expect(view).not.toContain('title="Recht aktuell"');
-    expect(view).toContain("Vorübergehend nicht verfügbar");
-    expect(view).toContain("Derzeit keine Meldungen");
-    expect(view).not.toContain("<dt>Stichtag</dt>");
-    expect(view).toContain("Plattformupdate");
-    expect(view.match(/formatTimestamp\(item\.publishedAt\)/gu)).toHaveLength(1);
+  it("keeps the sidebar toggle on the left on mobile and hides sidebar-only chrome", () => {
+    expect(page).toContain('className="mobile-menu-toggle"');
+    for (const removed of ["Anwendungsbereiche", "sidebar-footer", "Angemeldet als", "sidebar-signout-btn"]) {
+      expect(page).not.toContain(removed);
+    }
   });
 
-  it("uses the dedicated casual Fred artwork in the dashboard hero", () => {
-    const heroStart = view.indexOf('<header className="dashboard-hero">');
-    const heroEnd = view.indexOf("</header>", heroStart);
-    const hero = view.slice(heroStart, heroEnd);
-
-    expect(hero).toContain('src="/fred_casual.png"');
-    expect(hero).toContain("width={409}");
-    expect(hero).toContain("height={614}");
-    expect(hero).not.toContain('src="/fred.png"');
+  it("offers Einstellungen, Administration (admin only) and Abmelden in the account menu", () => {
+    expect(header).toContain("Angemeldet als");
+    expect(header).toContain("Einstellungen");
+    expect(header).toMatch(/\{isAdmin \? \(\s*<button[\s\S]*?Administration/u);
+    expect(header).toContain("disabled={isSigningOut}");
+    expect(page).toContain("accountTriggerRef={settingsTriggerRef}");
+    expect(page).toContain("isSigningOut={isAuthSubmitting}");
+    expect(page).toContain("onOpenSettings={openSettingsDialog}");
   });
 
-  it("puts platform updates across the available width above applications", () => {
-    const heroIndex = view.indexOf('className="dashboard-hero"');
-    const newsIndex = view.indexOf('className="dashboard-news-grid"');
-    const productNewsIndex = view.indexOf('id="dashboard-product-news-title"', newsIndex);
-    const legalNewsIndex = view.indexOf('id="dashboard-legal-news-title"', newsIndex);
-    const applicationsIndex = view.indexOf('className="dashboard-section dashboard-quicklinks-section"');
+  it("closes both popovers on outside click and Escape", () => {
+    for (const source of [header, launcher]) {
+      expect(source).toContain('addEventListener("pointerdown"');
+      expect(source).toContain('event.key !== "Escape"');
+    }
+  });
 
-    expect(heroIndex).toBeGreaterThan(-1);
-    expect(newsIndex).toBeGreaterThan(heroIndex);
-    expect(productNewsIndex).toBeGreaterThan(newsIndex);
-    expect(legalNewsIndex).toBe(-1);
-    expect(applicationsIndex).toBeGreaterThan(productNewsIndex);
-    expect(css).toMatch(/\.dashboard-news-grid \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\);/u);
-    expect(view).not.toContain('className="dashboard-overview"');
-    expect(view).not.toContain('className="dashboard-main-grid"');
-    expect(view).not.toContain("Zuletzt verwendet");
-    expect(view).not.toContain("Ihre Übersicht");
+  it("aligns launcher columns and lets the panel span the viewport on mobile", () => {
+    expect(css).toMatch(/\.tools-launcher-grid \{[\s\S]*?grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/u);
+    expect(css).toMatch(/@media \(max-width: 700px\)[\s\S]*?\.tools-launcher-panel \{[\s\S]*?left: 10px;[\s\S]*?right: 10px;/u);
+    expect(css).toMatch(/\.tools-launcher-admin-badge \{[\s\S]*?position: absolute;/u);
+    expect(css).toMatch(/\.app-header-news-dot \{[\s\S]*?var\(--accent-yellow\)/u);
+  });
+});
 
-    expect(view).toContain("is-featured");
-    expect(view).toContain("is-secondary");
+describe("Neuigkeiten view", () => {
+  it("shows the platform updates with the heading and subtitle from the old dashboard", () => {
+    expect(newsView).toContain('title="Neuigkeiten"');
+    expect(newsView).toContain('subtitle="Neuigkeiten und Hinweise zur Plattform"');
+    expect(newsHook).toContain('fetch("/api/dashboard"');
+    expect(newsHook).toContain("payload?.news.product");
+    expect(page).toContain('appView === "news" ? (');
+    expect(page).toContain("<NewsView");
+  });
+
+  it("renders every news state through the shared NewsSection", () => {
+    expect(newsView).toContain("<NewsSection");
+    expect(newsSection).toContain("Vorübergehend nicht verfügbar");
+    expect(newsSection).toContain("Derzeit keine Meldungen");
+    expect(newsSection).toContain("Plattformupdate");
+    expect(newsSection.match(/formatTimestamp\(item\.publishedAt\)/gu)).toHaveLength(1);
+    expect(newsSection).not.toContain("<dt>Stichtag</dt>");
     expect(css).toContain(".dashboard-news-card.is-featured");
     expect(css).toContain(".dashboard-news-card.is-secondary");
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.dashboard-skeleton-card/u);
   });
 
-  it("keeps news and enlarged application icons responsive with focus and reduced motion", () => {
-    expect(css).toContain("width: min(100%, 1280px)");
-    expect(css).toMatch(/\.dashboard-quicklink-groups \{[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/u);
-    expect(css).toMatch(/\.dashboard-quicklink-icon \{[\s\S]*?width: 46px;[\s\S]*?height: 46px;/u);
-    expect(css).toMatch(/\.dashboard-quicklink-icon \.dashboard-icon \{\s*width: 24px;\s*height: 24px;/u);
-    expect(css).toMatch(/@media \(max-width: 960px\)[\s\S]*?\.dashboard-news-grid \{\s*grid-template-columns: 1fr;/u);
-    expect(css).toMatch(/@media \(max-width: 700px\)[\s\S]*?\.dashboard-quicklink-groups \{\s*grid-template-columns: 1fr;/u);
-    expect(css).toMatch(/@media \(max-width: 560px\)[\s\S]*?\.dashboard-quicklink-icon \.dashboard-icon \{\s*width: 22px;\s*height: 22px;/u);
-    expect(css).toContain(".dashboard-quicklink-grid button:focus-visible");
-    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.dashboard-skeleton-card/u);
+  it("lights the unread dot from the persisted last-seen time and clears it when the view opens", () => {
+    expect(page).toContain("NEWS_LAST_SEEN_STORAGE_KEY");
+    expect(page).toContain("hasUnreadNews(newsItems, newsLastSeenAt)");
+    expect(page).toContain("nextNewsLastSeen(newsItems, Date.now())");
+    expect(page).toContain("hasUnreadNews={hasUnseenNews}");
   });
 
   it("keeps the protected platform update editor and lifecycle actions", () => {

@@ -143,7 +143,6 @@ type FredNativeChatViewProps = {
   readOnly?: boolean;
   readOnlyNotice?: string;
   telegramBotUrl?: string;
-  researchDisplayMode?: "simple" | "advanced";
   renderAssistantContent: (content: string) => ReactNode;
   renderUserContent: (content: string) => ReactNode;
   onConversationUpdated: (
@@ -437,7 +436,6 @@ export default function FredNativeChatView({
   readOnly = false,
   readOnlyNotice,
   telegramBotUrl,
-  researchDisplayMode = "simple",
   renderAssistantContent,
   renderUserContent,
   onConversationUpdated,
@@ -905,8 +903,7 @@ export default function FredNativeChatView({
       if (options.rollbackMessages) {
         setMessages(options.rollbackMessages);
       } else if (hasAnswerContent || (
-        researchDisplayMode === "advanced"
-        && (executionTrace.length > 0 || researchTrace.length > 0 || sourceReferences.length > 0)
+        executionTrace.length > 0 || researchTrace.length > 0 || sourceReferences.length > 0
       )) {
         setMessages([
           ...baseMessages,
@@ -1650,7 +1647,7 @@ export default function FredNativeChatView({
                   <ResearchTrace
                     steps={message.researchTrace ?? []}
                     executionSteps={message.executionTrace}
-                    displayMode={researchDisplayMode}
+                    displayMode="advanced"
                     sources={message.sourceReferences ?? []}
                     active={false}
                     agentName={fredAgentName(message.agentKey)}
@@ -1792,7 +1789,7 @@ export default function FredNativeChatView({
                 <ResearchTrace
                   steps={activeAssistant.researchTrace ?? []}
                   executionSteps={activeAssistant.executionTrace}
-                  displayMode={researchDisplayMode}
+                  displayMode="advanced"
                   sources={activeAssistant.sourceReferences ?? []}
                   active
                   agentName={fredAgentName(activeAssistant.agentKey)}

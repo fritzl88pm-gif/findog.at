@@ -28,7 +28,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   try {
     const supabase = getSupabaseServerClient();
     if (!supabase) {
-      throw new UserVisibleError("Die Startseite ist derzeit nicht verfügbar.", 503);
+      throw new UserVisibleError("Die Neuigkeiten sind derzeit nicht verfügbar.", 503);
     }
     const user = await authenticateSupabaseRequest(request, supabase);
     const now = new Date().toISOString();
@@ -77,7 +77,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     if (error instanceof UserVisibleError) {
       return json({ error: error.message }, error.status);
     }
-    return json({ error: "Die Startseite ist derzeit nicht verfügbar." }, 500);
+    return json({ error: "Die Neuigkeiten sind derzeit nicht verfügbar." }, 500);
   }
 }
 
