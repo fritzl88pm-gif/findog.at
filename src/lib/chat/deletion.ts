@@ -15,3 +15,13 @@ export function applyConversationDeletion<T extends { id: string }>(options: {
     activeConversationDeleted: deleted.has(options.activeConversationId),
   };
 }
+
+/** Splits ids into consecutive chunks of at most `size` entries. */
+export function chunkIds(ids: string[], size: number): string[][] {
+  const chunkSize = Math.max(1, Math.floor(size));
+  const chunks: string[][] = [];
+  for (let index = 0; index < ids.length; index += chunkSize) {
+    chunks.push(ids.slice(index, index + chunkSize));
+  }
+  return chunks;
+}

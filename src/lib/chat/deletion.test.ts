@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyConversationDeletion } from "./deletion";
+import { applyConversationDeletion, chunkIds } from "./deletion";
 
 describe("applyConversationDeletion", () => {
   it("removes deleted summaries and selections and reports an active deletion", () => {
@@ -27,5 +27,20 @@ describe("applyConversationDeletion", () => {
       selectedIds: [],
       activeConversationDeleted: false,
     });
+  });
+});
+
+describe("chunkIds", () => {
+  it("splits ids into chunks of at most the given size", () => {
+    const ids = Array.from({ length: 250 }, (_, index) => `id-${index}`);
+    const chunks = chunkIds(ids, 100);
+
+    expect(chunks.map((chunk) => chunk.length)).toEqual([100, 100, 50]);
+    expect(chunks.flat()).toEqual(ids);
+  });
+
+  it("returns no chunks for an empty list and a single chunk for exact fits", () => {
+    expect(chunkIds([], 100)).toEqual([]);
+    expect(chunkIds(["a", "b"], 2)).toEqual([["a", "b"]]);
   });
 });

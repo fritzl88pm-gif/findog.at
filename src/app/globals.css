@@ -447,12 +447,89 @@ button:disabled {
 
 .conversation-bulk-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 4px 8px;
   padding: 0 4px;
   color: var(--muted);
   font-size: 0.72rem;
+}
+
+.conversation-bulk-count {
+  flex: 1 1 100%;
+}
+
+.conversation-bulk-actions .history-selection-toggle {
+  margin-left: 0;
+  border: 1px solid var(--border-color);
+  min-height: 30px;
+  background: #fff;
+}
+
+.conversation-search {
+  position: relative;
+  flex-shrink: 0;
+  padding: 0 4px;
+}
+
+.conversation-search-input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0 28px 0 10px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.8rem;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.conversation-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  display: none;
+}
+
+.conversation-search-input::placeholder {
+  color: var(--muted);
+}
+
+.conversation-search-input:hover {
+  border-color: var(--border-hover);
+}
+
+.conversation-search-input:focus-visible {
+  border-color: var(--border-focus);
+  outline: 2px solid var(--border-focus);
+  outline-offset: -1px;
+}
+
+.conversation-search-clear {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.conversation-search-clear:hover {
+  background: rgba(40, 111, 156, 0.1);
+  color: var(--bmf-blue-deep);
+}
+
+.conversation-search-clear:focus-visible {
+  outline: 2px solid var(--bmf-blue);
 }
 
 .bulk-delete-button {

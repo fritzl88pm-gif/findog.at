@@ -5,7 +5,8 @@ import type { Session } from "@supabase/supabase-js";
 import Image from "next/image";
 import Link from "next/link";
 
-import { applyConversationDeletion } from "@/lib/chat/deletion";
+import { filterConversationsByTitle } from "@/lib/chat/conversation-filter";
+import { applyConversationDeletion, chunkIds } from "@/lib/chat/deletion";
 import { buildFredConversationPdfContent } from "@/lib/chat/fred-actions";
 import { downloadFredPdfFile } from "@/lib/chat/pdf-download";
 import { ellipsizeFilename } from "@/lib/attachment-names";
@@ -140,6 +141,8 @@ const FredRun2View = dynamic(() => import("@/components/fredrun2/FredRun2View"),
 
 type AppView = "chat" | "news" | "scanning" | "forms" | "downloads" | "bfg-decisions" | "bfg-pro" | "bfg-newsletters" | "german-sv-pension" | "l17b-currency" | "fredrun" | "fredrun2" | "quiz" | "fred-live" | "administration" | "data" | "reasonings";
 
+// Must not exceed MAX_BULK_DELETE_IDS in src/app/api/fred/conversations/route.ts.
+const BULK_DELETE_CHUNK_SIZE = 100;
 const TELEGRAM_BOT_USERNAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{4,31}$/u;
 
 type AuthForm = {
@@ -1142,6 +1145,7 @@ export default function Home() {
   const [fredConversations, setFredConversations] = useState<ConversationSummary[]>([]);
   const [isHistorySelectionMode, setIsHistorySelectionMode] = useState(false);
   const [selectedFredConversationIds, setSelectedFredConversationIds] = useState<string[]>([]);
+  const [conversationSearch, setConversationSearch] = useState("");
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDownloadingFredConversationPdf, setIsDownloadingFredConversationPdf] = useState(false);
@@ -1352,6 +1356,7 @@ export default function Home() {
         setFredMessages([]);
         setFredConversations([]);
         setSelectedFredConversationIds([]);
+        setConversationSearch("");
         setIsHistorySelectionMode(false);
         setAppView("chat");
         setBfgQuery("");
@@ -1672,6 +1677,7 @@ export default function Home() {
       setFredMessages([]);
       setFredConversations([]);
       setSelectedFredConversationIds([]);
+      setConversationSearch("");
       setIsHistorySelectionMode(false);
       setIsAdmin(false);
       setAppView("chat");
@@ -1707,6 +1713,7 @@ export default function Home() {
       setFredMessages([]);
       setFredConversations([]);
       setSelectedFredConversationIds([]);
+      setConversationSearch("");
       setIsHistorySelectionMode(false);
       setError("");
     } catch {
@@ -2541,6 +2548,23 @@ export default function Home() {
     );
   }
 
+  function toggleAllVisibleFredConversations() {
+    setSelectedFredConversationIds(
+      allVisibleConversationsSelected ? [] : visibleConversations.map((conversation) => conversation.id),
+    );
+  }
+
+  function deleteAllVisibleFredConversations() {
+    const count = visibleConversations.length;
+    void deleteFredConversations(
+      visibleConversations.map((conversation) => conversation.id),
+      true,
+      count > 1
+        ? `Alle ${count} ${hasConversationSearch ? "gefundenen " : ""}Fred-Unterhaltungen wirklich löschen? Alle gespeicherten Nachrichten werden entfernt.`
+        : undefined,
+    );
+  }
+
   function handleFredConversationUpdated(
     conversation: ConversationSummary,
     updatedMessages?: FredNativeMessage[],
@@ -2581,7 +2605,11 @@ export default function Home() {
   }
 
 
-  async function deleteFredConversations(ids: string[], useBulkEndpoint = false) {
+  async function deleteFredConversations(
+    ids: string[],
+    useBulkEndpoint = false,
+    confirmMessage?: string,
+  ) {
     if (
       ids.length === 0
       || isHistoryLoading
@@ -2592,9 +2620,10 @@ export default function Home() {
     }
 
     const confirmed = window.confirm(
-      ids.length === 1
-        ? "Diese Fred-Unterhaltung wirklich löschen? Alle gespeicherten Nachrichten werden entfernt."
-        : `${ids.length} Fred-Unterhaltungen wirklich löschen? Alle gespeicherten Nachrichten werden entfernt.`,
+      confirmMessage
+        ?? (ids.length === 1
+          ? "Diese Fred-Unterhaltung wirklich löschen? Alle gespeicherten Nachrichten werden entfernt."
+          : `${ids.length} Fred-Unterhaltungen wirklich löschen? Alle gespeicherten Nachrichten werden entfernt.`),
     );
     if (!confirmed) {
       return;
@@ -2602,42 +2631,35 @@ export default function Home() {
 
     setError("");
     setIsDeleting(true);
+    const deletedIds: string[] = [];
     try {
-      const response = await fetch(
-        useBulkEndpoint
-          ? "/api/fred/conversations"
-          : `/api/fred/conversations/${encodeURIComponent(ids[0])}`,
-        {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            ...(useBulkEndpoint ? { "Content-Type": "application/json" } : {}),
+      // The bulk endpoint accepts at most MAX_BULK_DELETE_IDS ids per request.
+      for (const chunk of useBulkEndpoint ? chunkIds(ids, BULK_DELETE_CHUNK_SIZE) : [ids]) {
+        const response = await fetch(
+          useBulkEndpoint
+            ? "/api/fred/conversations"
+            : `/api/fred/conversations/${encodeURIComponent(chunk[0])}`,
+          {
+            method: "DELETE",
+            headers: {
+              Authorization: `Bearer ${session.access_token}`,
+              ...(useBulkEndpoint ? { "Content-Type": "application/json" } : {}),
+            },
+            ...(useBulkEndpoint ? { body: JSON.stringify({ ids: chunk }) } : {}),
           },
-          ...(useBulkEndpoint ? { body: JSON.stringify({ ids }) } : {}),
-        },
-      );
-      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!response.ok) {
-        throw new Error(
-          typeof payload.error === "string"
-            ? payload.error
-            : "Fred-Unterhaltung konnte nicht gelöscht werden.",
         );
-      }
+        const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+        if (!response.ok) {
+          throw new Error(
+            typeof payload.error === "string"
+              ? payload.error
+              : "Fred-Unterhaltung konnte nicht gelöscht werden.",
+          );
+        }
 
-      const deletedIds = Array.isArray(payload.deletedIds)
-        ? payload.deletedIds.filter((id): id is string => typeof id === "string")
-        : [];
-      const result = applyConversationDeletion({
-        conversations: fredConversations,
-        selectedIds: selectedFredConversationIds,
-        activeConversationId: fredConversationId,
-        deletedIds,
-      });
-      setFredConversations(result.conversations);
-      setSelectedFredConversationIds(result.selectedIds);
-      if (result.activeConversationDeleted) {
-        openFredView();
+        if (Array.isArray(payload.deletedIds)) {
+          deletedIds.push(...payload.deletedIds.filter((id): id is string => typeof id === "string"));
+        }
       }
     } catch (deleteError) {
       setError(
@@ -2646,6 +2668,20 @@ export default function Home() {
           : "Fred-Unterhaltung konnte nicht gelöscht werden.",
       );
     } finally {
+      // Also applies after a partial failure: drop whatever was actually deleted.
+      if (deletedIds.length > 0) {
+        const result = applyConversationDeletion({
+          conversations: fredConversations,
+          selectedIds: selectedFredConversationIds,
+          activeConversationId: fredConversationId,
+          deletedIds,
+        });
+        setFredConversations(result.conversations);
+        setSelectedFredConversationIds(result.selectedIds);
+        if (result.activeConversationDeleted) {
+          openFredView();
+        }
+      }
       setIsDeleting(false);
     }
   }
@@ -2724,8 +2760,16 @@ export default function Home() {
   const isAppReady = isLoaded && isAuthLoaded;
   const isAuthConfigured = isSupabaseBrowserConfigured();
   const historyControlsDisabled = isHistoryLoading || isDeleting;
-  const visibleConversations = fredConversations;
-  const visibleSelectedConversationIds = selectedFredConversationIds;
+  const trimmedConversationSearch = conversationSearch.trim();
+  const hasConversationSearch = trimmedConversationSearch !== "" && fredConversations.length > 0;
+  const visibleConversations = hasConversationSearch
+    ? filterConversationsByTitle(fredConversations, trimmedConversationSearch)
+    : fredConversations;
+  const visibleSelectedConversationIds = selectedFredConversationIds.filter((id) =>
+    visibleConversations.some((conversation) => conversation.id === id),
+  );
+  const allVisibleConversationsSelected = visibleConversations.length > 0
+    && visibleSelectedConversationIds.length === visibleConversations.length;
   const visibleActiveConversationId = fredConversationId;
 
   if (!isAuthLoaded) {
@@ -2890,9 +2934,42 @@ export default function Home() {
                   <span className="history-loading">{isDeleting ? "Löscht…" : "Lädt…"}</span>
                 ) : null}
               </div>
+              {fredConversations.length > 0 ? (
+                <div className="conversation-search">
+                  <input
+                    className="conversation-search-input"
+                    type="search"
+                    value={conversationSearch}
+                    onChange={(event) => setConversationSearch(event.target.value)}
+                    placeholder="Unterhaltungen durchsuchen"
+                    aria-label="Unterhaltungen durchsuchen"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  {conversationSearch ? (
+                    <button
+                      className="conversation-search-clear"
+                      type="button"
+                      onClick={() => setConversationSearch("")}
+                      aria-label="Suche zurücksetzen"
+                      title="Suche zurücksetzen"
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               {isHistorySelectionMode ? (
                 <div className="conversation-bulk-actions">
-                  <span>{visibleSelectedConversationIds.length} ausgewählt</span>
+                  <span className="conversation-bulk-count">{visibleSelectedConversationIds.length} ausgewählt</span>
+                  <button
+                    className="history-selection-toggle"
+                    type="button"
+                    onClick={toggleAllVisibleFredConversations}
+                    disabled={historyControlsDisabled || visibleConversations.length === 0}
+                  >
+                    {allVisibleConversationsSelected ? "Auswahl aufheben" : "Alle auswählen"}
+                  </button>
                   <button
                     className="bulk-delete-button"
                     type="button"
@@ -2901,11 +2978,23 @@ export default function Home() {
                   >
                     Auswahl löschen
                   </button>
+                  <button
+                    className="bulk-delete-button"
+                    type="button"
+                    onClick={deleteAllVisibleFredConversations}
+                    disabled={historyControlsDisabled || visibleConversations.length === 0}
+                  >
+                    Alle löschen
+                  </button>
                 </div>
               ) : null}
               <div className="conversation-list">
                 {!isHistoryLoading && visibleConversations.length === 0 ? (
-                  <p className="conversation-empty">Noch keine gespeicherten Unterhaltungen.</p>
+                  <p className="conversation-empty">
+                    {hasConversationSearch
+                      ? "Keine Unterhaltungen gefunden."
+                      : "Noch keine gespeicherten Unterhaltungen."}
+                  </p>
                 ) : null}
                 {visibleConversations.map((conversation) => (
                   <div
