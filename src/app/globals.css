@@ -4973,6 +4973,13 @@ textarea:focus {
   color: var(--muted);
 }
 
+.bfg-pro-unranked-hint {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
 .bfg-pro-excerpt blockquote {
   margin: 2px 0 0;
   padding-left: 12px;

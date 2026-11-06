@@ -15,6 +15,8 @@ export type BfgProResult = {
   sourceQuote: string | null;
   periodAssessment: string;
   textTruncated: boolean;
+  /** AI ranking was unavailable: plain search hit without model-generated fields. */
+  unranked?: boolean;
 };
 
 export function normalizeBfgProResults(value: unknown): BfgProResult[] | null {
@@ -30,6 +32,7 @@ export function normalizeBfgProResults(value: unknown): BfgProResult[] | null {
       return [];
     }
     const item = value as Record<string, unknown>;
+    const unranked = item.unranked === true;
     if (
       typeof item.title !== "string"
       || typeof item.gz !== "string"
@@ -37,7 +40,7 @@ export function normalizeBfgProResults(value: unknown): BfgProResult[] | null {
       || typeof item.decisionDate !== "string"
       || typeof item.publicationDate !== "string"
       || typeof item.caseSummary !== "string"
-      || !item.caseSummary.trim()
+      || (!unranked && !item.caseSummary.trim())
       || item.caseSummary.length > 500
       || typeof item.whyRelevant !== "string"
       || typeof item.score !== "number"
@@ -71,6 +74,7 @@ export function normalizeBfgProResults(value: unknown): BfgProResult[] | null {
       sourceQuote: item.sourceQuote,
       periodAssessment: item.periodAssessment,
       textTruncated: item.textTruncated,
+      ...(unranked ? { unranked: true } : {}),
     }];
   });
   return results.length === payload.results.length ? results : null;
@@ -106,55 +110,63 @@ export function BfgProResultCard({ result }: { result: BfgProResult }) {
               : "",
         ].filter(Boolean).join(" · ")}
       </p>
-      <div className="bfg-pro-relevance">
-        <div className="bfg-pro-relevance-heading">
-          <h3>Warum relevant</h3>
-          <span className="bfg-pro-score">Relevanz {result.score}/100</span>
-        </div>
-        <p>{result.whyRelevant}</p>
-      </div>
-      {result.legalIssue ? (
-        <div className="bfg-pro-excerpt">
-          <h3>Rechtliche Kernfrage</h3>
-          <p>{result.legalIssue}</p>
-        </div>
-      ) : null}
-      {result.caseSummary ? (
-        <div className="bfg-pro-excerpt">
-          <h3>Sachverhalt</h3>
-          <p>{result.caseSummary}</p>
-        </div>
-      ) : null}
-      {result.similarities || result.differences ? (
-        <div className="bfg-pro-excerpt">
-          <h3>Sachverhaltsvergleich</h3>
-          {result.similarities ? (
-            <p><strong>Gemeinsamkeiten:</strong> {result.similarities}</p>
+      {result.unranked ? (
+        <p className="bfg-pro-unranked-hint">
+          <em>Nicht KI-bewertet – Reihung nach Suchtreffern</em>
+        </p>
+      ) : (
+        <>
+          <div className="bfg-pro-relevance">
+            <div className="bfg-pro-relevance-heading">
+              <h3>Warum relevant</h3>
+              <span className="bfg-pro-score">Relevanz {result.score}/100</span>
+            </div>
+            <p>{result.whyRelevant}</p>
+          </div>
+          {result.legalIssue ? (
+            <div className="bfg-pro-excerpt">
+              <h3>Rechtliche Kernfrage</h3>
+              <p>{result.legalIssue}</p>
+            </div>
           ) : null}
-          {result.differences ? (
-            <p><strong>Unterschiede:</strong> {result.differences}</p>
+          {result.caseSummary ? (
+            <div className="bfg-pro-excerpt">
+              <h3>Sachverhalt</h3>
+              <p>{result.caseSummary}</p>
+            </div>
           ) : null}
-        </div>
-      ) : null}
-      {result.periodAssessment ? (
-        <div className="bfg-pro-excerpt">
-          <h3>Zeitliche Einordnung &amp; Rechtslage</h3>
-          <p>{result.periodAssessment}</p>
-        </div>
-      ) : null}
-      <div className="bfg-pro-excerpt">
-        <h3>Quellenzitat</h3>
-        {result.sourceQuote ? (
-          <blockquote>„{result.sourceQuote}“</blockquote>
-        ) : (
-          <p>Kein verifiziertes Quellenzitat vorhanden.</p>
-        )}
-      </div>
-      {result.textTruncated ? (
-        <div className="bfg-pro-excerpt">
-          <p><em>Hinweis: Bewertung erfolgte auf Basis eines gekürzten Entscheidungstextes (Teilnachweis).</em></p>
-        </div>
-      ) : null}
+          {result.similarities || result.differences ? (
+            <div className="bfg-pro-excerpt">
+              <h3>Sachverhaltsvergleich</h3>
+              {result.similarities ? (
+                <p><strong>Gemeinsamkeiten:</strong> {result.similarities}</p>
+              ) : null}
+              {result.differences ? (
+                <p><strong>Unterschiede:</strong> {result.differences}</p>
+              ) : null}
+            </div>
+          ) : null}
+          {result.periodAssessment ? (
+            <div className="bfg-pro-excerpt">
+              <h3>Zeitliche Einordnung &amp; Rechtslage</h3>
+              <p>{result.periodAssessment}</p>
+            </div>
+          ) : null}
+          <div className="bfg-pro-excerpt">
+            <h3>Quellenzitat</h3>
+            {result.sourceQuote ? (
+              <blockquote>„{result.sourceQuote}“</blockquote>
+            ) : (
+              <p>Kein verifiziertes Quellenzitat vorhanden.</p>
+            )}
+          </div>
+          {result.textTruncated ? (
+            <div className="bfg-pro-excerpt">
+              <p><em>Hinweis: Bewertung erfolgte auf Basis eines gekürzten Entscheidungstextes (Teilnachweis).</em></p>
+            </div>
+          ) : null}
+        </>
+      )}
       <div className="bfg-result-links">
         {result.htmlUrl ? (
           <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener">

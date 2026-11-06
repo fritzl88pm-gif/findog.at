@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  FindokAbortError,
+  FindokUpstreamError,
   detectExactFindokGz,
   fetchBfgDecisions,
   fetchBfgProCandidates,
@@ -591,5 +593,192 @@ describe("Findok BFG result mapping", () => {
     expect(result.results[0]?.htmlUrl).toBe(
       "https://findok.bmf.gv.at/findok/volltext?dokumentId=doc&segmentId=seg&indexName=idx",
     );
+  });
+});
+
+describe("fetchBfgProCandidates fault tolerance", () => {
+  function searchPage(count: number, totalPages = 1, offset = 0): Response {
+    return sseResponse({
+      pageResults: {
+        searchResults: Array.from({ length: count }, (_value, index) => ({
+          dokumentId: `doc-${offset + index + 1}`,
+          segmentId: "seg-1",
+          indexName: "findok",
+          title: `Treffer ${offset + index + 1}`,
+          dokumenttyp: "BFG",
+          snippet: "",
+        })),
+        currentPage: 0,
+        pageSize: 20,
+        totalPages,
+        totalSize: count,
+      },
+    });
+  }
+
+  function detailFor(url: string): Response {
+    const id = new URL(url).searchParams.get("documentId") ?? "";
+    return jsonResponse({
+      bfg: true,
+      dokumentId: id,
+      segmentId: "seg-1",
+      indexName: "findok",
+      titel: `Titel ${id}`,
+      geschaeftszahl: `RV/${id}/2025`,
+      content: `Text ${id}`,
+    });
+  }
+
+  /** Routes search requests to `search` and detail requests to `detail`. */
+  function routedFetch(
+    search: (page: number) => Response | Promise<Response>,
+    detail: (url: string, call: number) => Response | Promise<Response>,
+  ) {
+    const detailCalls = new Map<string, number>();
+    return vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (new URL(url).pathname.endsWith("/dokumente")) {
+        return search(Number(new URL(url).searchParams.get("page")));
+      }
+      const call = (detailCalls.get(url) ?? 0) + 1;
+      detailCalls.set(url, call);
+      return detail(url, call);
+    });
+  }
+
+  it("keeps 19 candidates when 1 of 20 detail fetches keeps failing", async () => {
+    const fetchMock = routedFetch(
+      () => searchPage(20),
+      (url) => (url.includes("documentId=doc-7&")
+        ? new Response("boom", { status: 503 })
+        : detailFor(url)),
+    );
+
+    const result = await fetchBfgProCandidates({ query: "Test", fetchImpl: fetchMock });
+
+    expect(result).toHaveLength(19);
+    expect(result.map((candidate) => candidate.gz)).not.toContain("RV/doc-7/2025");
+  });
+
+  it("retries a transient 5xx detail fetch once and keeps the document", async () => {
+    const fetchMock = routedFetch(
+      () => searchPage(3),
+      (url, call) => (url.includes("documentId=doc-2&") && call === 1
+        ? new Response("boom", { status: 502 })
+        : detailFor(url)),
+    );
+
+    const result = await fetchBfgProCandidates({ query: "Test", fetchImpl: fetchMock });
+
+    expect(result).toHaveLength(3);
+    const doc2Calls = fetchMock.mock.calls.filter(([url]) => String(url).includes("documentId=doc-2&"));
+    expect(doc2Calls).toHaveLength(2);
+  });
+
+  it("retries a thrown network error once, but never a 4xx or a third time", async () => {
+    const fetchMock = routedFetch(
+      () => searchPage(3),
+      (url, call) => {
+        if (url.includes("documentId=doc-1&")) {
+          if (call === 1) throw new TypeError("fetch failed");
+          return detailFor(url);
+        }
+        if (url.includes("documentId=doc-2&")) {
+          return new Response("nope", { status: 404 });
+        }
+        throw new TypeError("fetch failed");
+      },
+    );
+
+    const result = await fetchBfgProCandidates({ query: "Test", fetchImpl: fetchMock });
+
+    expect(result.map((candidate) => candidate.gz)).toEqual(["RV/doc-1/2025"]);
+    const callsFor = (id: string) => fetchMock.mock.calls
+      .filter(([url]) => String(url).includes(`documentId=${id}&`)).length;
+    expect(callsFor("doc-1")).toBe(2);
+    expect(callsFor("doc-2")).toBe(1);
+    expect(callsFor("doc-3")).toBe(2);
+  });
+
+  it("throws the upstream error only when every detail fetch fails", async () => {
+    const fetchMock = routedFetch(
+      () => searchPage(20),
+      () => new Response("down", { status: 503 }),
+    );
+
+    await expect(fetchBfgProCandidates({ query: "Test", fetchImpl: fetchMock }))
+      .rejects.toBeInstanceOf(FindokUpstreamError);
+  });
+
+  it("keeps page 1 results when the page 2 search fails", async () => {
+    const fetchMock = routedFetch(
+      (page) => (page === 1 ? searchPage(5, 2) : new Response("down", { status: 503 })),
+      (url) => detailFor(url),
+    );
+
+    const result = await fetchBfgProCandidates({ query: "Test", fetchImpl: fetchMock });
+
+    expect(result).toHaveLength(5);
+  });
+
+  it("keeps page 1 results when every page 2 detail fetch fails", async () => {
+    const fetchMock = routedFetch(
+      (page) => (page === 1 ? searchPage(2, 2) : searchPage(2, 2, 10)),
+      (url) => (/documentId=doc-1\d&/u.test(url)
+        ? new Response("down", { status: 500 })
+        : detailFor(url)),
+    );
+
+    const result = await fetchBfgProCandidates({ query: "Test", fetchImpl: fetchMock });
+
+    expect(result.map((candidate) => candidate.gz)).toEqual(["RV/doc-1/2025", "RV/doc-2/2025"]);
+  });
+
+  it("still fails when the first search page itself fails", async () => {
+    const fetchMock = routedFetch(
+      () => new Response("down", { status: 503 }),
+      (url) => detailFor(url),
+    );
+
+    await expect(fetchBfgProCandidates({ query: "Test", fetchImpl: fetchMock }))
+      .rejects.toBeInstanceOf(FindokUpstreamError);
+  });
+
+  it("passes the abort signal to every Findok request and stops without retrying", async () => {
+    const controller = new AbortController();
+    const seenSignals: AbortSignal[] = [];
+    const fetchMock = routedFetch(
+      () => searchPage(3),
+      (url) => {
+        controller.abort();
+        return detailFor(url);
+      },
+    );
+    const spy = vi.fn<typeof fetch>((input, init) => {
+      if (init?.signal) seenSignals.push(init.signal);
+      return fetchMock(input, init);
+    });
+
+    await expect(fetchBfgProCandidates({
+      query: "Test",
+      fetchImpl: spy,
+      signal: controller.signal,
+    })).rejects.toBeInstanceOf(FindokAbortError);
+
+    expect(seenSignals.length).toBeGreaterThan(0);
+    expect(seenSignals.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  it("rejects immediately when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchMock = vi.fn<typeof fetch>();
+
+    await expect(fetchBfgProCandidates({
+      query: "Test",
+      fetchImpl: fetchMock,
+      signal: controller.signal,
+    })).rejects.toBeInstanceOf(FindokAbortError);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -128,3 +128,45 @@ describe("BFG PRO UI card rendering", () => {
     expect(markup).toContain("Teilnachweis");
   });
 });
+
+describe("BFG PRO unranked fallback card", () => {
+  const unranked: BfgProResult = {
+    title: "Erkenntnis des BFG",
+    gz: "RV/7100001/2025",
+    documentType: "Erkenntnis",
+    decisionDate: "2025-04-03",
+    publicationDate: "2025-04-10",
+    caseSummary: "",
+    whyRelevant: "",
+    score: 0,
+    htmlUrl: "https://findok.bmf.gv.at/findok/volltext?dokumentId=doc-1",
+    pdfUrl: null,
+    legalIssue: "",
+    similarities: "",
+    differences: "",
+    sourceQuote: null,
+    periodAssessment: "",
+    textTruncated: false,
+    unranked: true,
+  };
+
+  it("normalizes unranked results with empty model fields", () => {
+    expect(normalizeBfgProResults({ results: [unranked] })).toEqual([unranked]);
+  });
+
+  it("still rejects an empty caseSummary on a ranked result", () => {
+    expect(normalizeBfgProResults({ results: [{ ...unranked, unranked: undefined }] })).toBeNull();
+  });
+
+  it("shows the German hint and omits the model-only sections", () => {
+    const markup = renderToStaticMarkup(createElement(BfgProResultCard, { result: unranked }));
+
+    expect(markup).toContain("Nicht KI-bewertet – Reihung nach Suchtreffern");
+    expect(markup).toContain("Erkenntnis des BFG");
+    expect(markup).toContain("Entscheidung öffnen");
+    expect(markup).not.toContain("Relevanz");
+    expect(markup).not.toContain("Warum relevant");
+    expect(markup).not.toContain("Quellenzitat");
+  });
+});
+

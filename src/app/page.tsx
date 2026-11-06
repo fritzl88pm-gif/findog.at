@@ -1946,6 +1946,10 @@ export default function Home() {
           setBfgProStatus(bfgProStageLabel(streamEvent));
           return;
         }
+        if (streamEvent.type === "warning") {
+          setBfgProStatus(streamEvent.message);
+          return;
+        }
         streamedResults = normalizeBfgProResults({ results: streamEvent.results });
         if (!streamedResults) {
           throw new Error("Die BFG Suche PRO lieferte eine ungültige Antwort.");

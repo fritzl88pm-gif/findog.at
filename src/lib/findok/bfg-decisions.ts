@@ -82,9 +82,21 @@ export type BfgProCandidate = {
 };
 
 export class FindokUpstreamError extends Error {
-  constructor(message = "Findok lieferte keine verwertbare Antwort.") {
+  /** True for transient failures (network error, timeout, HTTP 5xx) that merit one retry. */
+  readonly retryable: boolean;
+
+  constructor(message = "Findok lieferte keine verwertbare Antwort.", retryable = false) {
     super(message);
     this.name = "FindokUpstreamError";
+    this.retryable = retryable;
+  }
+}
+
+/** Thrown when the caller's abort signal (e.g. a closed client connection) fired. */
+export class FindokAbortError extends Error {
+  constructor(message = "Die Findok-Abfrage wurde abgebrochen.") {
+    super(message);
+    this.name = "FindokAbortError";
   }
 }
 
@@ -273,7 +285,10 @@ function mapDetail(
 
 async function readJsonResponse(response: Response): Promise<Record<string, unknown>> {
   if (!response.ok) {
-    throw new FindokUpstreamError(`Findok antwortete mit HTTP ${response.status}.`);
+    throw new FindokUpstreamError(
+      `Findok antwortete mit HTTP ${response.status}.`,
+      response.status >= 500,
+    );
   }
   try {
     const payload = await response.json() as unknown;
@@ -289,13 +304,22 @@ async function readJsonResponse(response: Response): Promise<Record<string, unkn
   }
 }
 
-function requestOptions(accept: string): RequestInit {
+function requestOptions(accept: string, signal?: AbortSignal): RequestInit {
+  const timeout = AbortSignal.timeout(10_000);
   return {
     headers: { Accept: accept },
     cache: "no-store",
     redirect: "error",
-    signal: AbortSignal.timeout(10_000),
+    signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
   };
+}
+
+/** Wraps a network-level fetch failure; timeouts and connection errors are retryable. */
+function upstreamFetchError(error: unknown, signal?: AbortSignal): Error {
+  if (signal?.aborted) {
+    return new FindokAbortError();
+  }
+  return new FindokUpstreamError(error instanceof Error ? error.message : undefined, true);
 }
 
 async function fetchExactGz(
@@ -503,6 +527,7 @@ async function fetchProSearchPage(
   norm: string,
   page: number,
   fetchImpl: FetchLike,
+  signal?: AbortSignal,
 ): Promise<{ hits: FindokSearchHit[]; totalPages: number }> {
   const url = fixedApiUrl("/dokumente");
   url.searchParams.set("page", String(page));
@@ -517,12 +542,15 @@ async function fetchProSearchPage(
 
   let response: Response;
   try {
-    response = await fetchImpl(url.toString(), requestOptions("text/event-stream"));
+    response = await fetchImpl(url.toString(), requestOptions("text/event-stream", signal));
   } catch (error) {
-    throw new FindokUpstreamError(error instanceof Error ? error.message : undefined);
+    throw upstreamFetchError(error, signal);
   }
   if (!response.ok) {
-    throw new FindokUpstreamError(`Findok antwortete mit HTTP ${response.status}.`);
+    throw new FindokUpstreamError(
+      `Findok antwortete mit HTTP ${response.status}.`,
+      response.status >= 500,
+    );
   }
   const payload = parseFindokSseData(await response.text());
   if (!isRecord(payload) || !isRecord(payload.pageResults)) {
@@ -534,46 +562,116 @@ async function fetchProSearchPage(
   };
 }
 
+type ProDetail = Omit<BfgProCandidate, "candidateId"> | null;
+
+async function fetchProDetailOnce(
+  hit: FindokSearchHit,
+  fetchImpl: FetchLike,
+  signal?: AbortSignal,
+): Promise<ProDetail> {
+  const url = fixedApiUrl("/volltext");
+  url.searchParams.set("documentId", hit.dokumentId);
+  url.searchParams.set("segmentId", hit.segmentId);
+  url.searchParams.set("indexName", hit.indexName);
+  let response: Response;
+  try {
+    response = await fetchImpl(url.toString(), requestOptions("application/json", signal));
+  } catch (error) {
+    throw upstreamFetchError(error, signal);
+  }
+  try {
+    return mapProDetail(await readJsonResponse(response), hit);
+  } catch (error) {
+    if (signal?.aborted) {
+      throw new FindokAbortError();
+    }
+    throw error;
+  }
+}
+
+/** One bounded retry per document for timeouts, network errors and HTTP 5xx. */
+async function fetchProDetail(
+  hit: FindokSearchHit,
+  fetchImpl: FetchLike,
+  signal?: AbortSignal,
+): Promise<ProDetail> {
+  try {
+    return await fetchProDetailOnce(hit, fetchImpl, signal);
+  } catch (error) {
+    if (error instanceof FindokUpstreamError && error.retryable && !signal?.aborted) {
+      return fetchProDetailOnce(hit, fetchImpl, signal);
+    }
+    throw error;
+  }
+}
+
 async function fetchProDetails(
   hits: FindokSearchHit[],
   fetchImpl: FetchLike,
-): Promise<Array<Omit<BfgProCandidate, "candidateId"> | null>> {
-  return Promise.all(hits.map(async (hit) => {
-    const url = fixedApiUrl("/volltext");
-    url.searchParams.set("documentId", hit.dokumentId);
-    url.searchParams.set("segmentId", hit.segmentId);
-    url.searchParams.set("indexName", hit.indexName);
-    let response: Response;
-    try {
-      response = await fetchImpl(url.toString(), requestOptions("application/json"));
-    } catch (error) {
-      throw new FindokUpstreamError(error instanceof Error ? error.message : undefined);
+  signal?: AbortSignal,
+): Promise<{ details: Array<Omit<BfgProCandidate, "candidateId">>; failures: Error[] }> {
+  const settled = await Promise.allSettled(hits.map((hit) => fetchProDetail(hit, fetchImpl, signal)));
+  const details: Array<Omit<BfgProCandidate, "candidateId">> = [];
+  const failures: Error[] = [];
+  for (const outcome of settled) {
+    if (outcome.status === "fulfilled") {
+      if (outcome.value !== null) {
+        details.push(outcome.value);
+      }
+    } else {
+      failures.push(outcome.reason instanceof Error ? outcome.reason : new FindokUpstreamError());
     }
-    return mapProDetail(await readJsonResponse(response), hit);
-  }));
+  }
+  if (signal?.aborted) {
+    throw new FindokAbortError();
+  }
+  return { details, failures };
 }
 
 export async function fetchBfgProCandidates({
   query,
   norm,
   fetchImpl = fetch,
+  signal,
 }: {
   query: string;
   norm?: string;
   fetchImpl?: FetchLike;
+  signal?: AbortSignal;
 }): Promise<BfgProCandidate[]> {
   const normalizedQuery = normalizeFindokQuery(query);
   const normalizedNorm = normalizeFindokQuery(norm ?? "");
   const candidates: Array<Omit<BfgProCandidate, "candidateId">> = [];
   let totalPages = 1;
+  let attemptedDetails = 0;
+  let failedDetails = 0;
+  let lastFailure: Error | null = null;
 
   for (let page = 1; page <= BFG_PRO_MAX_PAGES && page <= totalPages; page += 1) {
-    const searchPage = await fetchProSearchPage(normalizedQuery, normalizedNorm, page, fetchImpl);
+    if (signal?.aborted) {
+      throw new FindokAbortError();
+    }
+    let searchPage: { hits: FindokSearchHit[]; totalPages: number };
+    try {
+      searchPage = await fetchProSearchPage(normalizedQuery, normalizedNorm, page, fetchImpl, signal);
+    } catch (error) {
+      // A failing follow-up page must not discard what page 1 already delivered.
+      if (page > 1 && !(error instanceof FindokAbortError)) {
+        break;
+      }
+      throw error;
+    }
     totalPages = Math.max(1, searchPage.totalPages);
-    const details = await fetchProDetails(searchPage.hits, fetchImpl);
-    candidates.push(...details.filter(
-      (candidate): candidate is Omit<BfgProCandidate, "candidateId"> => candidate !== null,
-    ));
+    const { details, failures } = await fetchProDetails(searchPage.hits, fetchImpl, signal);
+    attemptedDetails += searchPage.hits.length;
+    failedDetails += failures.length;
+    lastFailure = failures[failures.length - 1] ?? lastFailure;
+    candidates.push(...details);
+  }
+
+  // Only a total detail outage is an upstream error; partial loss keeps the survivors.
+  if (attemptedDetails > 0 && failedDetails === attemptedDetails && lastFailure) {
+    throw lastFailure;
   }
 
   const seen = new Set<string>();

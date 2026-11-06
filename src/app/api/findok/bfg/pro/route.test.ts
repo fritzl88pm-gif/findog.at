@@ -109,7 +109,11 @@ describe("POST /api/findok/bfg/pro", () => {
     expect(response.headers.get("x-accel-buffering")).toBe("no");
     expect(runBfgProSearch).toHaveBeenCalledWith(
       "Beruflich genutztes Arbeitszimmer",
-      { onProgress: expect.any(Function) },
+      {
+        onProgress: expect.any(Function),
+        onWarning: expect.any(Function),
+        signal: expect.any(AbortSignal),
+      },
     );
     await expect(streamEvents(response)).resolves.toEqual([{ type: "result", results }]);
   });

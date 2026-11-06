@@ -9,8 +9,14 @@ export type BfgProProgress = {
   count?: number;
 };
 
+export type BfgProWarning = {
+  warning: "unranked";
+  message: string;
+};
+
 export type BfgProStreamEvent =
   | ({ type: "status" } & BfgProProgress)
+  | ({ type: "warning" } & BfgProWarning)
   | { type: "result"; results: unknown[] }
   | { type: "error"; error: string };
 
@@ -75,6 +81,12 @@ export function parseBfgProStreamLine(line: string): BfgProStreamEvent | null {
     return value.count === undefined
       ? { type: "status", stage: value.stage }
       : { type: "status", stage: value.stage, count: value.count };
+  }
+  if (value.type === "warning") {
+    if (value.warning !== "unranked" || typeof value.message !== "string" || !value.message) {
+      throw new Error("Ungültiges PRO-Streaming-Ereignis.");
+    }
+    return { type: "warning", warning: "unranked", message: value.message };
   }
   if (value.type === "result") {
     if (!Array.isArray(value.results)) {

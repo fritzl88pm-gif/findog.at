@@ -1,5 +1,5 @@
-import { runWithTimeout } from "@/lib/deadline";
-import { BfgProModelError } from "./bfg-pro";
+import { runWithTimeout, type Deadline } from "@/lib/deadline";
+import { BfgProAbortError, BfgProModelError } from "./bfg-pro";
 
 export const BFG_PRO_LUNA_MODEL = "codex/gpt-5.6-luna" as const;
 export const BFG_PRO_LUNA_REASONING_EFFORT = "medium" as const;
@@ -16,6 +16,10 @@ export type CompleteBfgProLunaOptions = {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   maxTokens?: number;
+  /** Aborts the upstream call (e.g. the client closed the connection). */
+  signal?: AbortSignal;
+  /** Shared run deadline; bounds the per-call timeout to the remaining run time. */
+  deadline?: Deadline;
 };
 
 export function normalizeOmnirouteChatCompletionsUrl(baseUrl: string): string {
@@ -28,7 +32,7 @@ function resolveOmnirouteConfig(): { url: string; apiKey: string } {
   const baseUrl = process.env.OMNIROUTE_BASE_URL?.trim() ?? "";
   const apiKey = process.env.OMNIROUTE_API_KEY?.trim() ?? "";
   if (!baseUrl || !apiKey) {
-    throw new BfgProModelError();
+    throw new BfgProModelError(undefined, { retryable: false });
   }
   return {
     url: normalizeOmnirouteChatCompletionsUrl(baseUrl),
@@ -69,7 +73,9 @@ export async function completeBfgProLuna(options: CompleteBfgProLunaOptions): Pr
         });
 
         if (!response.ok) {
-          throw new BfgProModelError();
+          // 4xx (auth, bad request) will not heal by itself; 408/429/5xx are transient.
+          const transient = response.status >= 500 || response.status === 408 || response.status === 429;
+          throw new BfgProModelError(undefined, { retryable: transient });
         }
 
         const readBodyWithSignal = async (): Promise<string> => {
@@ -110,7 +116,9 @@ export async function completeBfgProLuna(options: CompleteBfgProLunaOptions): Pr
         }
 
         if (firstChoice.finish_reason !== "stop") {
-          throw new BfgProModelError();
+          throw new BfgProModelError(undefined, {
+            reason: firstChoice.finish_reason === "length" ? "length" : "other",
+          });
         }
 
         const message = firstChoice.message;
@@ -120,11 +128,19 @@ export async function completeBfgProLuna(options: CompleteBfgProLunaOptions): Pr
 
         return message.content;
       },
-      { timeoutMs, timeoutMessage: "OmniRoute request timed out." },
+      {
+        timeoutMs,
+        timeoutMessage: "OmniRoute request timed out.",
+        signal: options.signal,
+        deadline: options.deadline,
+      },
     );
 
     return rawContent;
   } catch (error) {
+    if (options.signal?.aborted) {
+      throw new BfgProAbortError();
+    }
     if (error instanceof BfgProModelError) {
       throw error;
     }

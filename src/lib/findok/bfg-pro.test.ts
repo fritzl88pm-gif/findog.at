@@ -1,11 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fetchBfgProCandidates, type BfgProCandidate } from "./bfg-decisions";
+import {
+  FindokUpstreamError,
+  fetchBfgProCandidates,
+  type BfgProCandidate,
+} from "./bfg-decisions";
 import type { BfgProProgress } from "./bfg-pro-stream";
 import {
+  BfgProAbortError,
   BfgProModelError,
   buildDeterministicExcerpt,
   runBfgProSearch,
+  truncateAtWord,
+  type BfgProResult,
 } from "./bfg-pro";
 import {
   BFG_PRO_LUNA_MODEL,
@@ -844,140 +851,333 @@ describe("BFG PRO query generation and full-text Luna Medium evaluation", () => 
     expect(response.results[0]?.sourceQuote).toBeNull();
   });
 
-  it("rejects final evaluation payload with unknown top-level field", async () => {
+  const validFinalItem = (id: string, overrides: Record<string, unknown> = {}) => ({
+    candidateId: id,
+    score: 85,
+    legalIssue: "Kernfrage",
+    caseSummary: "Zusammenfassung",
+    whyRelevant: "Relevanz",
+    similarities: "Gemeinsamkeiten",
+    differences: "Unterschiede",
+    sourceQuote: null,
+    periodAssessment: "2020",
+    ...overrides,
+  });
+  const queryPlanResponse = () => mockLunaResponse('{"queries":["Arbeitszimmer"],"norm":null}');
+  const finalResponse = (...items: unknown[]) => mockLunaResponse(JSON.stringify({ selections: items }));
+
+  it("ignores unknown top-level and item fields instead of rejecting the response", async () => {
     vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce([candidate(1)]);
     fetchMock
-      .mockResolvedValueOnce(mockLunaResponse('{"queries":["Arbeitszimmer"],"norm":null}'))
+      .mockResolvedValueOnce(queryPlanResponse())
       .mockResolvedValueOnce(mockLunaResponse(JSON.stringify({
-        selections: [{
-          candidateId: "candidate-1",
-          score: 85,
-          legalIssue: "Kernfrage",
-          caseSummary: "Zusammenfassung",
-          whyRelevant: "Relevanz",
-          similarities: "Gemeinsamkeiten",
-          differences: "Unterschiede",
-          sourceQuote: null,
-          periodAssessment: "2020",
-        }],
-        unexpectedTopLevelKey: "not-allowed",
+        selections: [validFinalItem("candidate-1", { unexpectedField: "ignored" })],
+        unexpectedTopLevelKey: "ignored",
       })));
 
-    await expect(runBfgProSearch("Sachverhalt")).rejects.toBeInstanceOf(BfgProModelError);
+    const response = await runBfgProSearch("Sachverhalt");
+
+    expect(response.results).toHaveLength(1);
+    expect(response.results[0]).not.toHaveProperty("unexpectedField");
+    expect(response.results[0]?.unranked).toBeUndefined();
   });
 
-  it("rejects final evaluation payload with unknown item field", async () => {
+  it("treats a wrongly typed quote as unverified instead of rejecting the selection", async () => {
     vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce([candidate(1)]);
     fetchMock
-      .mockResolvedValueOnce(mockLunaResponse('{"queries":["Arbeitszimmer"],"norm":null}'))
-      .mockResolvedValueOnce(mockLunaResponse(JSON.stringify({
-        selections: [{
-          candidateId: "candidate-1",
-          score: 85,
-          legalIssue: "Kernfrage",
-          caseSummary: "Zusammenfassung",
-          whyRelevant: "Relevanz",
-          similarities: "Gemeinsamkeiten",
-          differences: "Unterschiede",
-          sourceQuote: null,
-          periodAssessment: "2020",
-          unexpectedField: "invalid",
-        }],
-      })));
+      .mockResolvedValueOnce(queryPlanResponse())
+      .mockResolvedValueOnce(finalResponse(validFinalItem("candidate-1", { sourceQuote: 12345 })));
 
-    await expect(runBfgProSearch("Sachverhalt")).rejects.toBeInstanceOf(BfgProModelError);
+    const response = await runBfgProSearch("Sachverhalt");
+
+    expect(response.results).toHaveLength(1);
+    expect(response.results[0]?.sourceQuote).toBeNull();
   });
 
-  it("rejects final evaluation payload using legacy comment alias instead of whyRelevant", async () => {
-    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce([candidate(1)]);
+  it("drops items lacking an essential field (legacy comment alias) and keeps the others", async () => {
+    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce([candidate(1), candidate(2)]);
+    const legacy: Record<string, unknown> = validFinalItem("candidate-1");
+    delete legacy.whyRelevant;
     fetchMock
-      .mockResolvedValueOnce(mockLunaResponse('{"queries":["Arbeitszimmer"],"norm":null}'))
-      .mockResolvedValueOnce(mockLunaResponse(JSON.stringify({
-        selections: [{
-          candidateId: "candidate-1",
-          score: 85,
-          legalIssue: "Kernfrage",
-          caseSummary: "Zusammenfassung",
-          comment: "Alte Bezeichnung statt whyRelevant",
-          similarities: "Gemeinsamkeiten",
-          differences: "Unterschiede",
-          sourceQuote: null,
-          periodAssessment: "2020",
-        }],
-      })));
+      .mockResolvedValueOnce(queryPlanResponse())
+      .mockResolvedValueOnce(finalResponse(
+        { ...legacy, comment: "Alte Bezeichnung statt whyRelevant" },
+        validFinalItem("candidate-2", { score: 70 }),
+      ));
 
-    await expect(runBfgProSearch("Sachverhalt")).rejects.toBeInstanceOf(BfgProModelError);
-  });
+    const response = await runBfgProSearch("Sachverhalt");
 
-  it("rejects final evaluation payload with wrong quote type", async () => {
-    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce([candidate(1)]);
-    fetchMock
-      .mockResolvedValueOnce(mockLunaResponse('{"queries":["Arbeitszimmer"],"norm":null}'))
-      .mockResolvedValueOnce(mockLunaResponse(JSON.stringify({
-        selections: [{
-          candidateId: "candidate-1",
-          score: 85,
-          legalIssue: "Kernfrage",
-          caseSummary: "Zusammenfassung",
-          whyRelevant: "Relevanz",
-          similarities: "Gemeinsamkeiten",
-          differences: "Unterschiede",
-          sourceQuote: 12345,
-          periodAssessment: "2020",
-        }],
-      })));
-
-    await expect(runBfgProSearch("Sachverhalt")).rejects.toBeInstanceOf(BfgProModelError);
+    expect(response.results.map((r) => r.gz)).toEqual([candidate(2).gz]);
   });
 
   it.each([
-    ["legalIssue > 300", { legalIssue: "x".repeat(301) }],
-    ["caseSummary > 500", { caseSummary: "x".repeat(501) }],
-    ["whyRelevant > 300", { whyRelevant: "x".repeat(301) }],
-    ["similarities > 400", { similarities: "x".repeat(401) }],
-    ["differences > 400", { differences: "x".repeat(401) }],
-    ["periodAssessment > 400", { periodAssessment: "x".repeat(401) }],
-  ])("rejects final evaluation payload with oversize prose: %s", async (_label, override) => {
-    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce([candidate(1)]);
+    ["legalIssue", 300],
+    ["caseSummary", 500],
+    ["whyRelevant", 300],
+    ["similarities", 400],
+    ["differences", 400],
+    ["periodAssessment", 400],
+  ])("truncates an over-long %s at a word boundary and keeps all selections", async (field, cap) => {
+    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce([candidate(1), candidate(2)]);
+    const longText = "Wort ".repeat(Math.ceil((cap * 2) / 5));
     fetchMock
-      .mockResolvedValueOnce(mockLunaResponse('{"queries":["Arbeitszimmer"],"norm":null}'))
-      .mockResolvedValueOnce(mockLunaResponse(JSON.stringify({
-        selections: [{
-          candidateId: "candidate-1",
-          score: 85,
-          legalIssue: "Kernfrage",
-          caseSummary: "Zusammenfassung",
-          whyRelevant: "Relevanz",
-          similarities: "Gemeinsamkeiten",
-          differences: "Unterschiede",
-          sourceQuote: null,
-          periodAssessment: "2020",
-          ...override,
-        }],
-      })));
+      .mockResolvedValueOnce(queryPlanResponse())
+      .mockResolvedValueOnce(finalResponse(
+        validFinalItem("candidate-1", { [field]: longText }),
+        validFinalItem("candidate-2", { score: 70 }),
+      ));
 
-    await expect(runBfgProSearch("Sachverhalt")).rejects.toBeInstanceOf(BfgProModelError);
+    const response = await runBfgProSearch("Sachverhalt");
+
+    expect(response.results).toHaveLength(2);
+    const truncated = response.results[0]?.[field as keyof BfgProResult] as string;
+    expect(truncated.length).toBeLessThanOrEqual(cap);
+    expect(truncated.endsWith("…")).toBe(true);
+    expect(truncated.slice(0, -1).endsWith("Wort")).toBe(true);
+    expect(response.results[1]?.[field as keyof BfgProResult]).not.toMatch(/…$/u);
   });
 
-  it("rejects final evaluation payload with more than 10 selections", async () => {
+  it("keeps the valid selections when one has an over-long field and one an unknown GZ", async () => {
+    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce([candidate(1), candidate(2), candidate(3)]);
+    fetchMock
+      .mockResolvedValueOnce(queryPlanResponse())
+      .mockResolvedValueOnce(finalResponse(
+        validFinalItem("candidate-1", { caseSummary: "Sehr lang. ".repeat(100), score: 90 }),
+        validFinalItem("candidate-99", { score: 99 }),
+        validFinalItem("candidate-3", { score: 60 }),
+      ));
+
+    const response = await runBfgProSearch("Sachverhalt");
+
+    expect(response.results.map((r) => r.gz)).toEqual([candidate(1).gz, candidate(3).gz]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("only keeps up to 10 selections when the model returns more", async () => {
+    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce(
+      Array.from({ length: 10 }, (_v, i) => candidate(i + 1)),
+    );
+    fetchMock
+      .mockResolvedValueOnce(queryPlanResponse())
+      .mockResolvedValueOnce(finalResponse(
+        ...Array.from({ length: 12 }, (_v, i) => validFinalItem(`candidate-${(i % 10) + 1}`)),
+      ));
+
+    const response = await runBfgProSearch("Sachverhalt");
+
+    expect(response.results).toHaveLength(10);
+  });
+
+  it("retries the final stage once and uses the second answer", async () => {
     vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce([candidate(1)]);
     fetchMock
-      .mockResolvedValueOnce(mockLunaResponse('{"queries":["Arbeitszimmer"],"norm":null}'))
-      .mockResolvedValueOnce(mockLunaResponse(JSON.stringify({
-        selections: Array.from({ length: 11 }, (_v, i) => ({
-          candidateId: `candidate-${i + 1}`,
-          score: 85,
-          legalIssue: "Kernfrage",
-          caseSummary: "Zusammenfassung",
-          whyRelevant: "Relevanz",
-          similarities: "Gemeinsamkeiten",
-          differences: "Unterschiede",
-          sourceQuote: null,
-          periodAssessment: "2020",
-        })),
-      })));
+      .mockResolvedValueOnce(queryPlanResponse())
+      .mockResolvedValueOnce(new Response("overloaded", { status: 503 }))
+      .mockResolvedValueOnce(finalResponse(validFinalItem("candidate-1")));
 
-    await expect(runBfgProSearch("Sachverhalt")).rejects.toBeInstanceOf(BfgProModelError);
+    const response = await runBfgProSearch("Sachverhalt");
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(response.results).toHaveLength(1);
+    expect(response.results[0]?.unranked).toBeUndefined();
+  });
+
+  it("retries after finish_reason length with a larger token budget", async () => {
+    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce([candidate(1)]);
+    fetchMock
+      .mockResolvedValueOnce(queryPlanResponse())
+      .mockResolvedValueOnce(mockLunaResponse("{", "length"))
+      .mockResolvedValueOnce(finalResponse(validFinalItem("candidate-1")));
+
+    await runBfgProSearch("Sachverhalt");
+
+    const budgets = fetchMock.mock.calls.slice(1).map(([, init]) => (
+      JSON.parse(String((init as RequestInit).body)).max_tokens as number
+    ));
+    expect(budgets[1]).toBeGreaterThan(budgets[0]);
+  });
+
+  it("does not retry non-transient model failures such as an HTTP 401", async () => {
+    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce([candidate(1)]);
+    fetchMock
+      .mockResolvedValueOnce(queryPlanResponse())
+      .mockResolvedValueOnce(new Response("unauthorized", { status: 401 }));
+
+    const warnings: unknown[] = [];
+    const response = await runBfgProSearch("Sachverhalt", { onWarning: (w) => warnings.push(w) });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(response.results[0]?.unranked).toBe(true);
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("falls back to unranked candidates when the final stage fails twice", async () => {
+    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce([candidate(1), candidate(2)]);
+    fetchMock
+      .mockResolvedValueOnce(queryPlanResponse())
+      .mockResolvedValueOnce(mockLunaResponse("kein JSON"))
+      .mockResolvedValueOnce(mockLunaResponse("immer noch kein JSON"));
+    const warnings: unknown[] = [];
+    const progress: BfgProProgress[] = [];
+
+    const response = await runBfgProSearch("Sachverhalt", {
+      onProgress: (p) => progress.push(p),
+      onWarning: (w) => warnings.push(w),
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(response.results).toHaveLength(2);
+    expect(response.results[0]).toMatchObject({
+      title: candidate(1).title,
+      gz: candidate(1).gz,
+      htmlUrl: candidate(1).htmlUrl,
+      pdfUrl: candidate(1).pdfUrl,
+      unranked: true,
+      score: 0,
+      caseSummary: "",
+      whyRelevant: "",
+      legalIssue: "",
+      similarities: "",
+      differences: "",
+      periodAssessment: "",
+      sourceQuote: null,
+    });
+    expect(warnings).toEqual([{
+      warning: "unranked",
+      message: expect.stringContaining("ohne KI-Bewertung"),
+    }]);
+    expect(progress.at(-1)).toEqual({ stage: "summarizing", count: 2 });
+  });
+
+  it("falls back to unranked candidates when no selection survives validation twice", async () => {
+    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce([candidate(1)]);
+    fetchMock
+      .mockResolvedValueOnce(queryPlanResponse())
+      .mockResolvedValueOnce(finalResponse(validFinalItem("candidate-99")))
+      .mockResolvedValueOnce(finalResponse(validFinalItem("candidate-98")));
+
+    const response = await runBfgProSearch("Sachverhalt");
+
+    expect(response.results).toHaveLength(1);
+    expect(response.results[0]?.unranked).toBe(true);
+  });
+
+  it("limits the unranked fallback to 10 deterministically sorted candidates", async () => {
+    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce(
+      Array.from({ length: 30 }, (_v, i) => candidate(i + 1)),
+    );
+    const shortlist = mockLunaResponse(JSON.stringify({
+      selections: Array.from({ length: 18 }, (_v, i) => ({
+        candidateId: `candidate-${i + 1}`,
+        score: 80,
+        comment: "passt",
+        caseSummary: "Sachverhalt",
+      })),
+    }));
+    fetchMock
+      .mockResolvedValueOnce(queryPlanResponse())
+      .mockResolvedValueOnce(shortlist)
+      .mockResolvedValueOnce(mockLunaResponse("", "stop"))
+      .mockResolvedValueOnce(mockLunaResponse("{"));
+
+    const response = await runBfgProSearch("Arbeitszimmer");
+
+    expect(response.results).toHaveLength(10);
+    expect(response.results.every((r) => r.unranked === true)).toBe(true);
+  });
+
+  it("still ranks the deterministic top 10 when the preliminary stage fails twice", async () => {
+    vi.mocked(fetchBfgProCandidates).mockResolvedValueOnce(
+      Array.from({ length: 30 }, (_v, i) => candidate(i + 1)),
+    );
+    fetchMock
+      .mockResolvedValueOnce(queryPlanResponse())
+      .mockResolvedValueOnce(mockLunaResponse("kaputt"))
+      .mockResolvedValueOnce(mockLunaResponse("kaputt"))
+      .mockImplementationOnce(async (_url, init) => {
+        const body = JSON.parse(String((init as RequestInit).body)) as {
+          messages: Array<{ content: string }>;
+        };
+        const sent = JSON.parse(body.messages[1].content) as { candidates: Array<{ candidateId: string }> };
+        expect(sent.candidates).toHaveLength(10);
+        return finalResponse(validFinalItem(sent.candidates[0].candidateId));
+      });
+
+    const response = await runBfgProSearch("Arbeitszimmer");
+
+    expect(response.results).toHaveLength(1);
+    expect(response.results[0]?.unranked).toBeUndefined();
+  });
+
+  it("keeps candidates from earlier queries when a later Findok query fails", async () => {
+    fetchMock.mockResolvedValueOnce(mockLunaResponse(
+      '{"queries":["Arbeitszimmer","Homeoffice"],"norm":null}',
+    ));
+    vi.mocked(fetchBfgProCandidates)
+      .mockResolvedValueOnce([candidate(1)])
+      .mockRejectedValueOnce(new FindokUpstreamError("down"));
+    fetchMock.mockResolvedValueOnce(finalResponse(validFinalItem("candidate-1")));
+
+    const response = await runBfgProSearch("Sachverhalt");
+
+    expect(response.results).toHaveLength(1);
+  });
+
+  it("throws the Findok upstream error only when every query failed", async () => {
+    fetchMock.mockResolvedValueOnce(mockLunaResponse(
+      '{"queries":["Arbeitszimmer","Homeoffice"],"norm":null}',
+    ));
+    vi.mocked(fetchBfgProCandidates).mockRejectedValue(new FindokUpstreamError("down"));
+
+    await expect(runBfgProSearch("Sachverhalt")).rejects.toBeInstanceOf(FindokUpstreamError);
+  });
+
+  it("hands the client signal to Findok and stops before any further model call once aborted", async () => {
+    const controller = new AbortController();
+    const modelSignals: AbortSignal[] = [];
+    fetchMock.mockImplementation(async (_url: unknown, init?: RequestInit) => {
+      if (init?.signal) modelSignals.push(init.signal);
+      return queryPlanResponse();
+    });
+    vi.mocked(fetchBfgProCandidates).mockImplementation(async ({ signal }) => {
+      expect(signal).toBe(controller.signal);
+      controller.abort();
+      return [candidate(1)];
+    });
+
+    await expect(runBfgProSearch("Sachverhalt", { signal: controller.signal }))
+      .rejects.toBeInstanceOf(BfgProAbortError);
+
+    // Only the query stage ran; the aborted run never reached a second model call.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(modelSignals).toHaveLength(1);
+  });
+
+  it("aborts an in-flight OmniRoute request when the client signal fires", async () => {
+    const controller = new AbortController();
+    let seen: AbortSignal | undefined;
+    fetchMock.mockImplementation((_url: unknown, init?: RequestInit) => {
+      seen = init?.signal ?? undefined;
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      });
+    });
+
+    const run = runBfgProSearch("Sachverhalt", { signal: controller.signal });
+    await vi.waitFor(() => expect(seen).toBeDefined());
+    controller.abort();
+
+    await expect(run).rejects.toBeInstanceOf(BfgProAbortError);
+    expect(seen?.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("truncateAtWord cuts at a word boundary, appends an ellipsis and respects the cap", () => {
+    expect(truncateAtWord("kurz", 10)).toBe("kurz");
+    const cut = truncateAtWord("Eins zwei drei vier fünf sechs", 20);
+    expect(cut).toBe("Eins zwei drei vier…");
+    expect(cut.length).toBeLessThanOrEqual(20);
+    expect(truncateAtWord("Unzerteilbareslangeswort", 10)).toBe("Unzerteil…");
   });
 
   it("includes explicit character caps for all seven substantive prose fields in final evaluation prompt", async () => {
