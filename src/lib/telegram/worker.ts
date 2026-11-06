@@ -19,6 +19,7 @@ import {
   type JobQueueRpc,
   type UpdateHandle,
 } from "./jobs";
+import { answerWithPlainCitations } from "../fred/citations";
 import { chunkTelegramMessage, hasGfmTable, normalizeFredMarkdown } from "./text";
 import type { EncryptionAad } from "./credentials";
 import type { TelegramUpdate } from "./types";
@@ -1369,9 +1370,11 @@ async function deliverAnswer(
   handle: UpdateHandle,
   lifecycle: TurnLifecycle,
   chatId: number,
-  answer: string,
+  storedAnswer: string,
 ): Promise<ProcessedUpdateResult | undefined> {
   const { storage } = config;
+  // Citation tags become `[n]` markers plus a compact `Quellen:` list.
+  const answer = answerWithPlainCitations(storedAnswer);
   const chunks = chunkTelegramMessage(normalizeFredMarkdown(answer));
   const richMarkdown = hasGfmTable(answer)
     && answer.length <= RICH_MESSAGE_MAX_LENGTH

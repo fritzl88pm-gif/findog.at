@@ -2,6 +2,13 @@ import { randomUUID } from "node:crypto";
 
 import { UserVisibleError } from "@/lib/errors";
 import {
+  createCitationStreamFilter,
+  mapOutsideCitationTags,
+  publicCitedSources,
+  renderCitedAnswer,
+  stripCitationTags,
+} from "@/lib/fred/citations";
+import {
   normalizeGeneratedArtifactLinks,
   parseGeneratedArtifacts,
   type ParsedGeneratedArtifact,
@@ -561,6 +568,8 @@ export async function* executeFredTurn(
     const yieldedResearchSteps = new Map<string, string>();
     const yieldedExecutionSteps = new Map<string, string>();
     let yieldedChunkCount = 0;
+    // Citation tags (`<kb …/>`) may arrive split across deltas; they never reach the client.
+    const citationFilter = createCitationStreamFilter();
     while (true) {
       const readResult = request.signal
         ? await Promise.race([
@@ -604,10 +613,12 @@ export async function* executeFredTurn(
           answerRetracted = false;
           if (yieldedChunkCount > 0) yield { type: "replace", answer: "" };
           yieldedChunkCount = 0;
+          citationFilter.reset();
         }
         // Yield any new content chunks from this frame
         for (const chunk of answerChunks.slice(yieldedChunkCount)) {
-          yield { type: "delta", content: chunk };
+          const visible = citationFilter.push(chunk);
+          if (visible) yield { type: "delta", content: visible };
         }
         yieldedChunkCount = answerChunks.length;
       }
@@ -680,7 +691,7 @@ export async function* executeFredTurn(
       }
     }
 
-    await verifyFinalCitations(plainFinalAnswer);
+    await verifyFinalCitations(stripCitationTags(plainFinalAnswer));
     // Flush any pending citation research steps
     for (const step of pendingCitationSteps) {
       const signature = JSON.stringify(step);
@@ -699,11 +710,14 @@ export async function* executeFredTurn(
       }
     }
 
-    const finalAnswer = normalizeGeneratedArtifactLinks(linkVerifiedBfgCitations(
+    // The stored answer keeps its citation tags; readers turn them into
+    // numbered markers with renderCitedAnswer (single source of truth).
+    const finalAnswer = normalizeGeneratedArtifactLinks(mapOutsideCitationTags(
       plainFinalAnswer,
-      [...verifiedCitations.values()],
-      { target: "fullText" },
+      (segment) => linkVerifiedBfgCitations(segment, [...verifiedCitations.values()], { target: "fullText" }),
     ), generatedArtifacts);
+    const citedAnswer = renderCitedAnswer(finalAnswer);
+    sourceReferences = mergeFredSources(sourceReferences, citedAnswer.cited);
 
     const { conversation: finalConversation, messageId: assistantMessageId } = await persistence.recordEvent({
       clientId: request.clientId,
@@ -752,12 +766,13 @@ export async function* executeFredTurn(
 
     yield {
       type: "final",
-      answer: finalAnswer,
+      answer: citedAnswer.text,
       assistantMessageId,
       conversation: finalConversation,
       researchTrace,
       executionTrace: isAdvanced ? executionTrace : undefined,
       sourceReferences: isAdvanced ? stripSourceReferenceIds(sourceReferences) : sourceReferences,
+      ...(citedAnswer.cited.length > 0 ? { citedSources: publicCitedSources(citedAnswer.cited) } : {}),
       ...(persistedArtifacts.length > 0 ? { artifacts: persistedArtifacts } : {}),
     };
 

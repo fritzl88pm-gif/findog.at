@@ -13609,3 +13609,245 @@ textarea:focus {
     transition: none;
   }
 }
+
+/* ── Clickable knowledge-base citations ─────────────────────────────────── */
+
+.fred-cite {
+  margin-left: 1px;
+  font-size: 0.7em;
+  line-height: 0;
+}
+
+.fred-cite button,
+.fred-cite a,
+.fred-cite .fred-cite-static {
+  position: relative;
+  display: inline-block;
+  min-width: 1.5em;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.12em 0.4em;
+  background: rgba(40, 111, 156, 0.1);
+  color: var(--bmf-blue-dark);
+  font: inherit;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.fred-cite .fred-cite-static {
+  cursor: default;
+}
+
+/* Larger touch target without a larger glyph. */
+.fred-cite button::after,
+.fred-cite a::after {
+  content: "";
+  position: absolute;
+  inset: -0.5em -0.35em;
+}
+
+.fred-cite button:hover,
+.fred-cite a:hover {
+  background: rgba(40, 111, 156, 0.2);
+}
+
+.fred-cite button[aria-expanded="true"] {
+  background: var(--bmf-blue);
+  color: #fff;
+}
+
+.fred-cite button:focus-visible,
+.fred-cite a:focus-visible,
+.fred-source-cite:focus-visible,
+.fred-cite-close:focus-visible {
+  outline: 2px solid var(--bmf-blue);
+  outline-offset: 2px;
+}
+
+.fred-cite-plain {
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
+.fred-source-cite {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.fred-source-cite:hover {
+  color: var(--bmf-blue);
+}
+
+.fred-research-sources .fred-source-cite {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(40, 111, 156, 0.17);
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: #fff;
+  color: var(--bmf-blue-deep);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fred-research-sources .fred-source-cite:hover {
+  border-color: var(--bmf-blue);
+  text-decoration: underline;
+}
+
+.fred-cite-pop {
+  position: fixed;
+  z-index: 1200;
+  box-sizing: border-box;
+  overflow-y: auto;
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-md);
+  padding: 12px 14px 14px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+  color: var(--ink);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.fred-cite-pop:focus {
+  outline: none;
+}
+
+.fred-cite-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.fred-cite-num {
+  flex: 0 0 auto;
+  min-width: 20px;
+  margin-top: 1px;
+  border-radius: 999px;
+  padding: 1px 6px;
+  background: var(--bmf-blue);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.fred-cite-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--bmf-blue-deep);
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
+.fred-cite-close {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin: -4px -6px 0 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.fred-cite-close:hover {
+  background: rgba(40, 111, 156, 0.08);
+  color: var(--bmf-blue-deep);
+}
+
+.fred-cite-close svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.fred-cite-location {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.fred-cite-text {
+  margin-top: 8px;
+  border-left: 3px solid var(--border-hover);
+  padding-left: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.fred-cite-status {
+  margin: 10px 0 0;
+  color: var(--muted);
+}
+
+.fred-cite-status.is-error {
+  color: var(--danger);
+}
+
+.fred-cite-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1199;
+  background: rgba(16, 53, 75, 0.28);
+}
+
+.fred-cite-pop.is-sheet {
+  top: auto;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: auto;
+  max-height: 70vh;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  animation: fred-cite-sheet-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fred-cite-sheet-in {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fred-cite-pop.is-sheet {
+    animation: none;
+  }
+}
+
+.fred-public-share-sources {
+  margin-top: 1.25rem;
+  border-top: 1px solid var(--border-color);
+  padding-top: 0.75rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.fred-public-share-sources ol {
+  margin: 0.4rem 0 0;
+  padding-left: 1.4rem;
+}

@@ -63,8 +63,8 @@ describe("Fred public share page", () => {
     expect(pageSource).toMatch(/catch\s*\{[\s\S]*?notFound\(\)/);
   });
 
-  it("transforms stored answer with transformWeKnoraAnswer before rendering", () => {
-    expect(pageSource).toContain("transformWeKnoraAnswer(share.answer_content)");
+  it("renders the stored answer through renderCitedAnswer so citation tags never show up", () => {
+    expect(pageSource).toContain("renderCitedAnswer(share.answer_content)");
   });
 
   it("disables table copy actions in the public rendering", () => {

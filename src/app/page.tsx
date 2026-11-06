@@ -105,6 +105,7 @@ import TelegramSettings, {
   type TelegramIntegrationPublicState,
 } from "@/components/telegram-settings";
 import { parseStoredFredArtifacts, type FredGeneratedArtifact } from "@/lib/fred-native-stream";
+import { parseCitedSources } from "@/lib/fred/citations";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -327,6 +328,7 @@ function normalizeFredMessages(value: unknown): ChatMessage[] {
       agentKey: isFredAgentKey(item.agentKey) ? item.agentKey : "fred",
       ...(attachments.length ? { attachments } : {}),
       ...(item.role === "assistant" ? { artifacts: parseStoredFredArtifacts(item.artifacts) } : {}),
+      ...(item.role === "assistant" ? { citedSources: parseCitedSources(item.citedSources) } : {}),
       ...(item.role === "user" && item.webSearchEnabled === true
         ? { webSearchEnabled: true }
         : {}),

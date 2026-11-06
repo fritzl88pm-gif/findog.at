@@ -104,6 +104,13 @@ import {
   type FredResearchStep,
   type FredSourceReference,
 } from "@/lib/weknora/fred-research";
+import {
+  createCitationStreamFilter,
+  mapOutsideCitationTags,
+  publicCitedSources,
+  renderCitedAnswer,
+  stripCitationTags,
+} from "@/lib/fred/citations";
 import { stripSourceReferenceIds } from "@/lib/fred/execution-sanitize";
 import {
   finalizeExecutionTrace,
@@ -1329,6 +1336,8 @@ export async function POST(request: Request) {
           let researchTrace: FredResearchStep[] = [];
           let executionTrace: FredExecutionStep[] = [];
           let sourceReferences: FredSourceReference[] = [];
+          // Citation tags (`<kb …/>`) may arrive split across deltas; they never reach the client.
+          const citationFilter = createCitationStreamFilter();
           let generatedArtifacts: Array<Omit<FredGeneratedArtifact, "id"> & { sourceUri: string }> = [];
           let persistedGeneratedArtifacts: FredGeneratedArtifact[] = [];
           const verifiedCitations = new Map<string, VerifiedBfgCitation>();
@@ -1435,12 +1444,14 @@ export async function POST(request: Request) {
             if (isPreambleRetractingToolCall(parsed) && answerChunks.length > 0) {
               answerChunks.length = 0;
               send(controller, { type: "replace", answer: "" });
+              citationFilter.reset();
             }
             const event = upstreamDelta(parsed);
             if (event.content) {
               if (isAnswerDelta(parsed)) clearAttachmentStatus();
               answerChunks.push(event.content);
-              send(controller, { type: "delta", content: event.content });
+              const visibleContent = citationFilter.push(event.content);
+              if (visibleContent) send(controller, { type: "delta", content: visibleContent });
               // Record first real answer delta
               if (!firstDeltaRecorded && isAnswerDelta(parsed)) {
                 firstDeltaRecorded = true;
@@ -1508,11 +1519,11 @@ export async function POST(request: Request) {
             );
           }
           if (isAdvanced) executionTrace = finalizeExecutionTrace(executionTrace);
-          await verifyFinalCitations(plainFinalAnswer);
-          const finalAnswer = linkVerifiedBfgCitations(
+          await verifyFinalCitations(stripCitationTags(plainFinalAnswer));
+          // Citation tags stay in the stored answer; readers render them with renderCitedAnswer.
+          const finalAnswer = mapOutsideCitationTags(
             plainFinalAnswer,
-            [...verifiedCitations.values()],
-            { target: "fullText" },
+            (segment) => linkVerifiedBfgCitations(segment, [...verifiedCitations.values()], { target: "fullText" }),
           );
           let displayAnswer = normalizeGeneratedArtifactLinks(finalAnswer, generatedArtifacts);
           const hasImageAttachments = (body.attachments ?? []).some((a) => a.kind === "image");
@@ -1555,6 +1566,8 @@ export async function POST(request: Request) {
               displayAnswer = sanitizeProviderImageMarkupToAlt(finalAnswer);
             }
           }
+          const citedAnswer = renderCitedAnswer(displayAnswer);
+          sourceReferences = mergeFredSources(sourceReferences, citedAnswer.cited);
           const { conversation: finalConversation, messageId: assistantMessageId } = await recordEvent({
             supabase,
             userId: user.id,
@@ -1605,11 +1618,12 @@ export async function POST(request: Request) {
           });
           const finalEvent: Parameters<typeof encodeFredNativeStreamEvent>[0] = {
             type: "final",
-            answer: displayAnswer,
+            answer: citedAnswer.text,
             conversation: finalConversation,
             researchTrace,
             executionTrace: isAdvanced ? executionTrace : undefined,
             sourceReferences: isAdvanced ? stripSourceReferenceIds(sourceReferences) : sourceReferences,
+            ...(citedAnswer.cited.length > 0 ? { citedSources: publicCitedSources(citedAnswer.cited) } : {}),
             ...(persistedGeneratedArtifacts.length > 0 ? { artifacts: persistedGeneratedArtifacts } : {}),
           };
           if (assistantMessageId !== undefined) {

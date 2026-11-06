@@ -108,6 +108,8 @@ export type FredTurnEvent =
       researchTrace?: FredResearchStep[];
       executionTrace?: FredExecutionStep[];
       sourceReferences?: FredSourceReference[];
+      /** Ordered cited sources without ids; marker n in `answer` is entry n-1. */
+      citedSources?: FredSourceReference[];
       artifacts?: FredGeneratedArtifact[];
     }
   | { type: "cancelled"; conversation: FredNativeConversation }
@@ -115,7 +117,10 @@ export type FredTurnEvent =
 
 /** Result returned by the turn service. */
 export interface FredTurnResult {
-  /** The final answer text (display content). Empty when `stopped` is true. */
+  /**
+   * The final answer as stored (display content, citation tags still in it; use
+   * `renderCitedAnswer` / `answerWithPlainCitations` to present it). Empty when `stopped` is true.
+   */
   answer: string;
   /** The raw answer text (before citation transforms). Empty when `stopped` is true. */
   rawAnswer: string;

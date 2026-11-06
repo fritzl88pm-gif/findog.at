@@ -5,7 +5,9 @@ export type RichInline =
   | { type: "code"; text: string }
   | { type: "highlight"; children: RichInline[] }
   | { type: "link"; href: string; children: RichInline[] }
-  | { type: "image"; artifactId: string; alt: string };
+  | { type: "image"; artifactId: string; alt: string }
+  /** Numbered knowledge-base citation (`⟦n⟧` in the answer text); n is 1-based. */
+  | { type: "citation"; number: number };
 
 export type RichBlock =
   | { type: "paragraph"; children: RichInline[] }
@@ -27,6 +29,7 @@ export function richInlinePlainText(nodes: RichInline[]): string {
     if (node.type === "text" || node.type === "code") return node.text;
     if (node.type === "math-inline") return node.expression;
     if (node.type === "image") return node.alt;
+    if (node.type === "citation") return `[${node.number}]`;
     return richInlinePlainText(node.children);
   }).join("");
 }
@@ -120,7 +123,18 @@ type InlineToken =
   | { type: "math-inline"; index: number; expression: string; end: number }
   | { type: "link"; index: number; label: string; href: string; end: number }
   | { type: "image"; index: number; alt: string; artifactId: string; end: number }
-  | { type: "untrusted-image"; index: number; alt: string; end: number };
+  | { type: "untrusted-image"; index: number; alt: string; end: number }
+  | { type: "citation"; index: number; number: number; end: number };
+
+// Same syntax as formatCitationMarker in lib/fred/citations.ts.
+const CITATION_MARKER = /⟦(\d{1,3})⟧/u;
+
+function findNextCitation(text: string, start: number): InlineToken | null {
+  const match = CITATION_MARKER.exec(text.slice(start));
+  if (!match) return null;
+  const index = start + match.index;
+  return { type: "citation", index, number: Number(match[1]), end: index + match[0].length };
+}
 
 function sanitizedImageAltText(value: string): string {
   return value
@@ -299,7 +313,8 @@ function findNextToken(text: string, start: number): InlineToken | null {
   const image = findNextMarkdownImage(text, start);
   const link = findNextMarkdownLink(text, start);
   const math = findNextInlineMath(text, start);
-  const nonMarkers = [image, link, math].filter((t): t is InlineToken => t !== null);
+  const citation = findNextCitation(text, start);
+  const nonMarkers = [image, link, math, citation].filter((t): t is InlineToken => t !== null);
   return [...nonMarkers, ...candidates].sort((left, right) => left.index - right.index)[0] ?? null;
 }
 
@@ -338,6 +353,12 @@ export function parseInline(text: string): RichInline[] {
 
     if (token.type === "math-inline") {
       nodes.push({ type: "math-inline", expression: token.expression });
+      cursor = token.end;
+      continue;
+    }
+
+    if (token.type === "citation") {
+      nodes.push({ type: "citation", number: token.number });
       cursor = token.end;
       continue;
     }

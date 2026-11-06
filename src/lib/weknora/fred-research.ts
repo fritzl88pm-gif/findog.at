@@ -34,7 +34,9 @@ export type FredResearchUpdate = {
   unsupported: boolean;
 };
 
-const COMPLETE_CITATION_TAG = /<(kb|web)\b([^>]{0,4096})\s*\/?>/giu;
+const COMPLETE_CITATION_TAG = /<(kb|web|ref)\b([^>]{0,4096})\s*\/?>/giu;
+/** Longest tag we keep waiting for while streaming; anything longer is ordinary text. */
+const MAX_CITATION_TAG_LENGTH = 4_200;
 const ATTRIBUTE = /([a-z_][a-z0-9_-]*)\s*=\s*(["'])(.*?)\2/giu;
 const TOOL_HINTS: Array<{ pattern: RegExp; kind: FredResearchStepKind; running: string; completed: string }> = [
   {
@@ -101,7 +103,7 @@ function attributes(value: string): Record<string, string> {
   return result;
 }
 
-function sourceKey(source: FredSourceReference): string {
+export function fredSourceKey(source: FredSourceReference): string {
   return source.kind === "knowledge"
     ? `knowledge:${source.knowledgeBaseId ?? ""}:${source.chunkId ?? ""}:${source.doc}`
     : `web:${source.url}`;
@@ -109,13 +111,16 @@ function sourceKey(source: FredSourceReference): string {
 
 export function mergeFredSources(...groups: FredSourceReference[][]): FredSourceReference[] {
   const sources = new Map<string, FredSourceReference>();
-  for (const source of groups.flat()) sources.set(sourceKey(source), source);
+  for (const source of groups.flat()) sources.set(fredSourceKey(source), source);
   return [...sources.values()].slice(0, 100);
 }
 
 function citationSource(kind: string, rawAttributes: string): FredSourceReference | null {
   const values = attributes(rawAttributes);
-  if (kind.toLowerCase() === "kb") {
+  const normalizedKind = kind.toLowerCase();
+  // Stray <ref …/> tags are removed from the text but carry no usable source.
+  if (normalizedKind !== "kb" && normalizedKind !== "web") return null;
+  if (normalizedKind === "kb") {
     const doc = sanitizeSafeLabel(values.doc, 512);
     if (!doc) return null;
     const chunkId = sanitizeSafeId(values.chunk_id ?? values.faq_id, 128);
@@ -136,11 +141,44 @@ function citationSource(kind: string, rawAttributes: string): FredSourceReferenc
   return { kind: "web", url, ...(title ? { title } : {}) };
 }
 
-function incompleteCitationStart(value: string): number {
+/**
+ * Start of a trailing, not yet closed `<kb …`, `<web …` or `<ref …` tag, or -1.
+ * Streaming code holds that part back until the tag is complete.
+ */
+export function incompleteCitationStart(value: string): number {
   const start = value.lastIndexOf("<");
   if (start < 0 || value.indexOf(">", start) >= 0) return -1;
+  if (value.length - start > MAX_CITATION_TAG_LENGTH) return -1;
   const tail = value.slice(start).toLowerCase();
-  return /^(?:<|<k|<kb(?:\s|$)|<w|<we|<web(?:\s|$))/u.test(tail) ? start : -1;
+  return /^<(?:k|kb|w|we|web|r|re|ref)?$|^<(?:kb|web|ref)\s/u.test(tail) ? start : -1;
+}
+
+/** Splits text into plain parts and complete citation tags (in order). */
+export function splitByCitationTags(text: string): Array<{ tag: boolean; value: string }> {
+  const parts: Array<{ tag: boolean; value: string }> = [];
+  let position = 0;
+  for (const match of text.matchAll(COMPLETE_CITATION_TAG)) {
+    const index = match.index ?? 0;
+    if (index > position) parts.push({ tag: false, value: text.slice(position, index) });
+    parts.push({ tag: true, value: match[0] });
+    position = index + match[0].length;
+  }
+  if (position < text.length) parts.push({ tag: false, value: text.slice(position) });
+  return parts;
+}
+
+/**
+ * Replaces every complete citation tag. `source` is null for tags without a
+ * usable source (stray `<ref …/>`, malformed attributes).
+ */
+export function replaceCitationTags(
+  text: string,
+  replacer: (source: FredSourceReference | null, tag: string) => string,
+): string {
+  return text.replace(
+    COMPLETE_CITATION_TAG,
+    (tag, kind: string, rawAttributes: string) => replacer(citationSource(kind, rawAttributes), tag),
+  );
 }
 
 export function transformWeKnoraAnswer(

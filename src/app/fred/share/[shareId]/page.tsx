@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 
 import RichAnswer from "@/components/rich-answer";
 import { loadFredPublicShare } from "@/lib/fred-public-share";
-import { transformWeKnoraAnswer } from "@/lib/weknora/fred-research";
+import { citedSourceLabel, renderCitedAnswer } from "@/lib/fred/citations";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -33,8 +33,9 @@ export default async function FredPublicSharePage({ params }: PageParams) {
     notFound();
   }
 
-  // Transform the stored answer content so legacy <kb>/<web> tags are handled.
-  const transformedAnswer = transformWeKnoraAnswer(share.answer_content);
+  // Citation tags become numbered markers; the public page shows them as plain [n].
+  const citedAnswer = renderCitedAnswer(share.answer_content);
+  const sourceNames = citedAnswer.cited.map(citedSourceLabel);
 
   return (
     <div className="fred-public-share-shell">
@@ -74,7 +75,17 @@ export default async function FredPublicSharePage({ params }: PageParams) {
               <span className="fred-public-share-section-tag fred-public-share-section-tag-answer" aria-hidden="true" />
               <h2 id="shared-answer-heading">Freds Antwort</h2>
             </div>
-            <RichAnswer content={transformedAnswer.text} showTableCopyActions={false} />
+            <RichAnswer content={citedAnswer.text} showTableCopyActions={false} />
+            {sourceNames.length > 0 ? (
+              <div className="fred-public-share-sources">
+                <strong>Quellen</strong>
+                <ol>
+                  {sourceNames.map((name, index) => (
+                    <li key={`${index}-${name}`} value={index + 1}>{name}</li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
           </section>
         </div>
 

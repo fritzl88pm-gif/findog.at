@@ -63,7 +63,7 @@ describe("Fred feedback UI", () => {
     );
     expect(positiveHandler).not.toContain("fetch(");
     expect(negativeHandler).toContain('fetch("/api/feedback"');
-    expect(negativeHandler).toContain("assistantResponse: message.content");
+    expect(negativeHandler).toContain("assistantResponse: citationMarkersToBrackets(message.content)");
     expect(viewSource).toContain("Warum ist diese Antwort nicht korrekt?");
     expect(viewSource).toContain("Rückmeldung senden");
   });

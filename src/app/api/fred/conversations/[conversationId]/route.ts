@@ -16,6 +16,7 @@ import {
   parseStoredFredSources,
   transformWeKnoraAnswer,
 } from "@/lib/weknora/fred-research";
+import { publicCitedSources, renderCitedAnswer, type CitedAnswer } from "@/lib/fred/citations";
 import { stripSourceReferenceIds } from "@/lib/fred/execution-sanitize";
 import { sanitizeStoredExecutionTrace } from "@/lib/fred/execution-trace";
 import { parseStoredFredArtifacts } from "@/lib/fred-native-stream";
@@ -52,7 +53,8 @@ type FredMessageRow = {
 
 type PreparedFredMessage = FredMessageRow & {
   rawTransformation: ReturnType<typeof transformWeKnoraAnswer>;
-  displayTransformation: ReturnType<typeof transformWeKnoraAnswer>;
+  /** Stored answer with citation tags turned into numbered markers (shared with the live stream). */
+  citedAnswer: CitedAnswer;
   legacyBfgCandidates: string[];
 };
 
@@ -138,15 +140,15 @@ export async function GET(
       const rawTransformation = message.role === "assistant"
         ? transformWeKnoraAnswer(message.content)
         : { text: message.content, sources: [] };
-      const displayTransformation = message.role === "assistant" && message.display_content
-        ? transformWeKnoraAnswer(message.display_content)
-        : rawTransformation;
+      const citedAnswer: CitedAnswer = message.role === "assistant"
+        ? renderCitedAnswer(message.display_content || message.content)
+        : { text: message.content, cited: [] };
       return {
         ...message,
         rawTransformation,
-        displayTransformation,
+        citedAnswer,
         legacyBfgCandidates: message.role === "assistant" && !message.display_content
-          ? extractBfgGzCandidates(displayTransformation.text)
+          ? extractBfgGzCandidates(citedAnswer.text)
           : [],
       };
     });
@@ -172,17 +174,17 @@ export async function GET(
         const messageCitations = verifiedLegacyCitations.filter((citation) => candidateSet.has(citation.gz));
         const displayContent = messageCitations.length > 0
           ? linkVerifiedBfgCitations(
-              message.displayTransformation.text,
+              message.citedAnswer.text,
               messageCitations,
               { target: "fullText" },
             )
-          : message.displayTransformation.text;
+          : message.citedAnswer.text;
         // Stored traces may predate the redesign: strip reasoning text, internal ids and raw payloads on read.
         const executionTrace = sanitizeStoredExecutionTrace(message.execution_trace, { finalize: true });
         const sourceReferences = mergeFredSources(
           parseStoredFredSources(message.source_references),
           message.rawTransformation.sources,
-          message.displayTransformation.sources,
+          message.citedAnswer.cited,
           verifiedCitationSources(messageCitations),
         );
         return {
@@ -197,6 +199,7 @@ export async function GET(
           researchTrace: parseStoredFredResearchTrace(message.research_trace),
           executionTrace,
           sourceReferences: executionTrace.length > 0 ? stripSourceReferenceIds(sourceReferences) : sourceReferences,
+          citedSources: publicCitedSources(message.citedAnswer.cited),
         };
       }),
     });

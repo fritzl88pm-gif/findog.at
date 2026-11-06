@@ -522,3 +522,51 @@ Keine Bindungswirkung.
     }]);
   });
 });
+
+describe("citation markers", () => {
+  it("parses ⟦n⟧ into citation nodes between text", () => {
+    expect(parseRichAnswer("Der Betrag beträgt 5 €⟦1⟧ und gilt⟦2⟧⟦3⟧.")).toEqual([{
+      type: "paragraph",
+      children: [
+        { type: "text", text: "Der Betrag beträgt 5 €" },
+        { type: "citation", number: 1 },
+        { type: "text", text: " und gilt" },
+        { type: "citation", number: 2 },
+        { type: "citation", number: 3 },
+        { type: "text", text: "." },
+      ],
+    }]);
+  });
+
+  it("parses markers inside strong text, list items and table cells", () => {
+    const [paragraph] = parseRichAnswer("**fett⟦1⟧**");
+    expect(paragraph).toEqual({
+      type: "paragraph",
+      children: [{ type: "strong", children: [
+        { type: "text", text: "fett" },
+        { type: "citation", number: 1 },
+      ] }],
+    });
+    const [list] = parseRichAnswer("- Punkt⟦2⟧");
+    expect(list).toMatchObject({ type: "unordered-list", items: [[
+      { type: "text", text: "Punkt" },
+      { type: "citation", number: 2 },
+    ]] });
+    const [table] = parseRichAnswer("| A | B |\n| --- | --- |\n| x⟦3⟧ | y |");
+    expect(table).toMatchObject({ type: "table", rows: [[
+      [{ type: "text", text: "x" }, { type: "citation", number: 3 }],
+      [{ type: "text", text: "y" }],
+    ]] });
+  });
+
+  it("keeps markers inside code spans literal and copies them as [n]", () => {
+    const [paragraph] = parseRichAnswer("`⟦1⟧` und Text⟦1⟧");
+    expect(paragraph).toMatchObject({ children: [
+      { type: "code", text: "⟦1⟧" },
+      { type: "text", text: " und Text" },
+      { type: "citation", number: 1 },
+    ] });
+    if (paragraph.type !== "paragraph") throw new Error("paragraph expected");
+    expect(richInlinePlainText(paragraph.children)).toBe("⟦1⟧ und Text[1]");
+  });
+});

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
+import { publicCitedSources, renderCitedAnswer } from "@/lib/fred/citations";
 import { verifyBfgCitations } from "@/lib/findok/bfg-citations";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { DELETE, GET } from "./route";
@@ -160,7 +161,9 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
     expect(payload.messages[0]).not.toHaveProperty("proModeEnabled");
     expect(payload.messages[1]).toMatchObject({
       agentKey: "fred",
-      content: "Ergebnis",
+      // The stored citation tag becomes a numbered marker (clickable in the UI).
+      content: "Ergebnis⟦1⟧",
+      citedSources: [{ kind: "knowledge", doc: "EStG.md" }],
       researchTrace: [{
         id: "call-1",
         kind: "knowledge",
@@ -487,5 +490,88 @@ describe("GET /api/fred/conversations/[conversationId]", () => {
     for (const leaked of ["geheim", uuid, "raw-call-id", "chunk-secret", "knowledge_base_ids"]) {
       expect(json).not.toContain(leaked);
     }
+  });
+});
+
+describe("GET /api/fred/conversations/[conversationId] citations", () => {
+  const conversationId = "33333333-3333-4333-8333-333333333333";
+  const chunkA = "2d9470d0-2723-444a-8bfa-fcced491c15d";
+  const chunkB = "3e9470d0-2723-444a-8bfa-fcced491c15e";
+  const kbId = "e0282ab8-b94f-4553-962e-68705201cf9a";
+  const tagA = `<kb doc="DBA_Deutschland_Fassung_2026-07-13.md" chunk_id="${chunkA}" kb_id="${kbId}" />`;
+  const tagB = `<kb doc="EStG_1988.md" chunk_id="${chunkB}" kb_id="${kbId}" />`;
+  const stored = `Erstens ${tagA}. Zweitens ${tagB}. Wieder ${tagA}.`;
+
+  async function load(message: Record<string, unknown>) {
+    vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "user-1" });
+    vi.mocked(verifyBfgCitations).mockResolvedValue({ verified: [], rejected: [] });
+    const conversationQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          id: conversationId, title: "T", created_at: "2026-07-19T07:00:00.000Z",
+          updated_at: "2026-07-19T07:01:00.000Z", agent_key: "fred", origin: "web", telegram_integration_id: null,
+        },
+        error: null,
+      }),
+    };
+    const messageResult = {
+      data: [{
+        id: 5, role: "assistant", content: stored, display_content: stored, research_trace: [],
+        source_references: [], provider_created_at: "2026-07-19T07:01:00.000Z",
+        created_at: "2026-07-19T07:01:00.000Z", attachments: [], web_search_enabled: false, artifacts: [],
+        ...message,
+      }],
+      error: null,
+    };
+    const messagesQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      then: (resolve: (value: typeof messageResult) => unknown) => resolve(messageResult),
+    };
+    vi.mocked(getSupabaseServerClient).mockReturnValue({
+      from: vi.fn((table: string) => table === "fred_conversations" ? conversationQuery : messagesQuery),
+    } as never);
+    const response = await GET(
+      new Request(`https://findog.at/api/fred/conversations/${conversationId}`, {
+        headers: { Authorization: "Bearer token", "Sec-Fetch-Site": "same-origin" },
+      }),
+      { params: Promise.resolve({ conversationId }) },
+    );
+    expect(response.status).toBe(200);
+    return (await response.json()).messages[0] as Record<string, unknown>;
+  }
+
+  beforeEach(() => vi.resetAllMocks());
+
+  it("returns the same marker text and numbering as the live final event", async () => {
+    const message = await load({});
+    expect(message.content).toBe("Erstens⟦1⟧. Zweitens⟦2⟧. Wieder⟦1⟧.");
+    expect(message.citedSources).toEqual([
+      { kind: "knowledge", doc: "DBA_Deutschland_Fassung_2026-07-13.md" },
+      { kind: "knowledge", doc: "EStG_1988.md" },
+    ]);
+    // Identical to what the turn service sends for the same stored text.
+    const live = renderCitedAnswer(stored);
+    expect(message.content).toBe(live.text);
+    expect(message.citedSources).toEqual(publicCitedSources(live.cited));
+    expect(JSON.stringify(message.content)).not.toMatch(/<kb|chunk_id/u);
+  });
+
+  it("falls back to the raw content for legacy rows without display_content", async () => {
+    const message = await load({ display_content: null });
+    expect(message.content).toBe("Erstens⟦1⟧. Zweitens⟦2⟧. Wieder⟦1⟧.");
+  });
+
+  it("never sends chunk or knowledge-base ids in citedSources, in simple or advanced mode", async () => {
+    const simple = await load({});
+    expect(JSON.stringify(simple.citedSources)).not.toMatch(new RegExp(`${chunkA}|${kbId}`, "u"));
+    const advanced = await load({
+      execution_trace: [{ id: "s1", kind: "planning", status: "completed", label: "Plan" }],
+    });
+    expect(JSON.stringify(advanced.citedSources)).not.toMatch(new RegExp(`${chunkA}|${kbId}`, "u"));
+    expect(JSON.stringify(advanced.sourceReferences)).not.toMatch(new RegExp(`${chunkA}|${kbId}`, "u"));
   });
 });

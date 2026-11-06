@@ -1,6 +1,7 @@
 import "server-only";
 
 import { UserVisibleError } from "@/lib/errors";
+import { stripCitationTags } from "@/lib/fred/citations";
 import {
   isPreambleRetractingToolCall,
   isUpstreamCompleteEvent,
@@ -48,7 +49,8 @@ const MAX_ANSWER_CHARS = 6_000;
  * emphasis characters are dropped, and code fences lose their delimiters.
  */
 export function toSpokenAnswer(markdown: string): string {
-  return markdown
+  // Citation tags (`<kb …/>`, `<web …/>`) are never spoken.
+  return stripCitationTags(markdown)
     .replace(/```[^\n]*\n?/gu, "")
     .replace(/~~~[^\n]*\n?/gu, "")
     .replace(/!\[([^\]]*)\]\([^)]*\)/gu, "$1")

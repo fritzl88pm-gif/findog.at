@@ -8,6 +8,7 @@ import {
   type FredResearchStep,
   type FredSourceReference,
 } from "./weknora/fred-research";
+import { parseCitedSources } from "./fred/citations";
 import {
   parseStoredFredExecutionTrace,
   type FredExecutionStep,
@@ -47,6 +48,8 @@ export type FredNativeStreamEvent =
     researchTrace?: FredResearchStep[];
     executionTrace?: FredExecutionStep[];
     sourceReferences?: FredSourceReference[];
+    /** Ordered cited sources without ids; marker n in `answer` is entry n-1. */
+    citedSources?: FredSourceReference[];
     artifacts?: FredGeneratedArtifact[];
   }
   | { type: "error"; error: string };
@@ -158,6 +161,7 @@ export function parseFredNativeStreamLine(line: string): FredNativeStreamEvent |
         executionTrace: parseStoredFredExecutionTrace(value.executionTrace),
       } : {}),
       sourceReferences: parseStoredFredSources(value.sourceReferences),
+      ...(value.citedSources !== undefined ? { citedSources: parseCitedSources(value.citedSources) } : {}),
       ...(value.artifacts !== undefined ? { artifacts: parseStoredFredArtifacts(value.artifacts) } : {}),
     };
   }

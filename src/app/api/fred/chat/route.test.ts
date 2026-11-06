@@ -1706,6 +1706,39 @@ describe("POST /api/fred/chat", () => {
         }),
       });
     });
+
+    it("strips split citation tags from deltas and sends numbered markers in the final event on the attachment path", async () => {
+      vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "77777777-0000-4777-8777-000000000004" });
+      const rpc = rpcForTurn();
+      vi.mocked(getSupabaseServerClient).mockReturnValue({ rpc } as never);
+      const tag = '<kb doc="DBA_Deutschland_Fassung_2026-07-13.md" chunk_id="2d9470d0-2723-444a-8bfa-fcced491c15d" kb_id="e0282ab8-b94f-4553-962e-68705201cf9a" />';
+      vi.mocked(openFredUpstreamStream).mockImplementation(async () => new Response([
+        'data: {"response_type":"agent_query","assistant_message_id":"answer-1"}\n\n',
+        `data: ${JSON.stringify({ response_type: "answer", content: "Der Beleg ist gültig <kb doc=\"DBA_Deutschland" })}\n\n`,
+        `data: ${JSON.stringify({ response_type: "answer", content: tag.slice(tag.indexOf("_Fassung")) + " Ende." })}\n\n`,
+        `data: ${JSON.stringify({ response_type: "complete", data: { final_content: `Der Beleg ist gültig ${tag} Ende.` } })}\n\n`,
+      ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+      const events = await streamEvents(await POST(multipartRequest({
+        query: "Prüfe den Beleg",
+        attachment: pdfFile(),
+      })));
+
+      const streamed = events.flatMap((event) => event?.type === "delta" ? [event.content] : []).join("");
+      expect(streamed).not.toMatch(/[<>]|doc=|chunk_id|\.md/u);
+      expect(events.at(-1)).toMatchObject({
+        type: "final",
+        answer: "Der Beleg ist gültig⟦1⟧ Ende.",
+        citedSources: [{ kind: "knowledge", doc: "DBA_Deutschland_Fassung_2026-07-13.md" }],
+      });
+      expect(JSON.stringify(events.at(-1))).not.toContain("2d9470d0");
+      expect(rpc).toHaveBeenNthCalledWith(2, "record_fred_native_event", {
+        payload: expect.objectContaining({
+          display_content: `Der Beleg ist gültig ${tag} Ende.`,
+          source_references: [expect.objectContaining({ chunkId: "2d9470d0-2723-444a-8bfa-fcced491c15d" })],
+        }),
+      });
+    });
   });
 
   describe("embed session reuse and stream end", () => {

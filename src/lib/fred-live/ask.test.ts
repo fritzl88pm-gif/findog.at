@@ -127,6 +127,19 @@ describe("askQuickFred", () => {
     expect(assembleFredLiveAnswer([{ response_type: "answer", content: "**Hallo** Welt" }])).toBe("Hallo Welt");
   });
 
+  it("never speaks citation tags, whether the answer is final or streamed in pieces", () => {
+    const tag = '<kb doc="UStG_1994.md" chunk_id="2d9470d0-2723-444a-8bfa-fcced491c15d" kb_id="e0282ab8-b94f-4553-962e-68705201cf9a" />';
+    expect(toSpokenAnswer(`Der Satz beträgt 20 % ${tag}. Siehe <web url="https://example.test" title="X"/> hier.`))
+      .toBe("Der Satz beträgt 20 %. Siehe hier.");
+    const pieces = [`Der Satz beträgt 20 % ${tag.slice(0, 25)}`, tag.slice(25), " Ende."];
+    expect(assembleFredLiveAnswer(pieces.map((content) => ({ response_type: "answer", content }))))
+      .toBe("Der Satz beträgt 20 % Ende.");
+    expect(assembleFredLiveAnswer([
+      { response_type: "answer", content: "Vorspann" },
+      { response_type: "complete", data: { final_content: `Fertig ${tag}.` } },
+    ])).toBe("Fertig.");
+  });
+
   it("caps and deduplicates answer and sources", () => {
     expect(assembleFredLiveAnswer([{ response_type: "answer", content: "x".repeat(6_100) }])).toHaveLength(6_000);
     expect(projectFredLiveSources([

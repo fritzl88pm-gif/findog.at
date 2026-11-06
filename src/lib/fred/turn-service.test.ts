@@ -1047,3 +1047,91 @@ describe("researchDisplayMode", () => {
     }));
   });
 });
+
+describe("executeFredTurn citation tags", () => {
+  const chunkId = "2d9470d0-2723-444a-8bfa-fcced491c15d";
+  const kbId = "e0282ab8-b94f-4553-962e-68705201cf9a";
+  const tag = `<kb doc="DBA_Deutschland_Fassung_2026-07-13.md" chunk_id="${chunkId}" kb_id="${kbId}" />`;
+
+  function citedUpstream(answerParts: string[], finalContent?: string): TurnServiceUpstreamDeps {
+    return makeUpstreamDeps({
+      openStream: vi.fn().mockResolvedValue(sseStream([
+        { response_type: "agent_query", assistant_message_id: "answer-1" },
+        ...answerParts.map((content) => ({ response_type: "answer", content, done: false })),
+        { response_type: "complete", data: finalContent ? { content: finalContent } : {} },
+      ])),
+    });
+  }
+
+  it("never streams raw tags, even when a tag is split across deltas", async () => {
+    const full = `Der Betrag ist 5 €${" "}${tag}. Zweiter Satz ${tag} Ende.`;
+    // Cut inside the tag and inside the attribute value.
+    const cuts = [full.indexOf("<kb") + 2, full.indexOf("chunk_id") + 4, full.lastIndexOf("<kb") + 1];
+    const parts = [
+      full.slice(0, cuts[0]),
+      full.slice(cuts[0], cuts[1]),
+      full.slice(cuts[1], cuts[2]),
+      full.slice(cuts[2]),
+    ];
+    const { events } = await collectEvents(executeFredTurn(
+      baseRequest(),
+      citedUpstream(parts),
+      makePersistenceDeps(),
+      makeConfigDeps(),
+    ));
+    const streamed = events.flatMap((event) => event.type === "delta" ? [event.content] : []).join("");
+    expect(streamed).not.toMatch(/[<>]|doc=|chunk_id|kb_id|\.md/u);
+    expect(streamed).toContain("Der Betrag ist 5 €");
+    expect(streamed).toContain("Zweiter Satz");
+  });
+
+  it("replaces the streamed text with numbered markers in the final event and keeps ids server-side", async () => {
+    const persistence = makePersistenceDeps();
+    const { events, result } = await collectEvents(executeFredTurn(
+      baseRequest({ researchDisplayMode: "advanced" }),
+      citedUpstream([`Betrag 5 € ${tag}. Nochmals ${tag}.`]),
+      persistence,
+      makeConfigDeps(),
+    ));
+    const final = events.find((event) => event.type === "final");
+    expect(final).toMatchObject({
+      type: "final",
+      answer: "Betrag 5 €⟦1⟧. Nochmals⟦1⟧.",
+      citedSources: [{ kind: "knowledge", doc: "DBA_Deutschland_Fassung_2026-07-13.md" }],
+    });
+    expect(JSON.stringify(final)).not.toContain(chunkId);
+    expect(JSON.stringify(final)).not.toContain(kbId);
+
+    // Stored answer keeps the tags (readers render them with renderCitedAnswer); ids stay in the DB.
+    expect(persistence.recordEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      eventType: "message_received",
+      displayContent: `Betrag 5 € ${tag}. Nochmals ${tag}.`,
+      sourceReferences: [expect.objectContaining({ kind: "knowledge", chunkId, knowledgeBaseId: kbId })],
+    }));
+    // The Telegram/other consumers get the stored form and convert it themselves.
+    expect(result.answer).toContain(tag);
+  });
+
+  it("does not let BFG linking rewrite citation tag attributes", async () => {
+    const gz = "RV/1234567/2099";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      dokumentId: "doc-final",
+      segmentId: "segment-final",
+      indexName: "findok-bfg",
+      dokumentPdfMediaUrl: "findok/resources/pdf/segment-final/doc-final.pdf",
+      dokumentTitel: `BFG 01.01.2099, ${gz}`,
+      titel: "Verifizierte Entscheidung",
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    const gzTag = `<kb doc="BFG_RV_1234567_2099.md" chunk_id="${chunkId}" kb_id="${kbId}" />`;
+    const { events } = await collectEvents(executeFredTurn(
+      baseRequest(),
+      citedUpstream([`Siehe ${gz} ${gzTag}.`]),
+      makePersistenceDeps(),
+      makeConfigDeps(),
+    ));
+    const final = events.find((event) => event.type === "final");
+    expect(final).toMatchObject({ type: "final", answer: expect.stringMatching(/⟦1⟧\.$/u) });
+    expect(final && final.type === "final" ? final.answer : "").toContain("](");
+    vi.unstubAllGlobals();
+  });
+});

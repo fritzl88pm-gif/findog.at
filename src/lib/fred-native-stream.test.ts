@@ -164,4 +164,25 @@ describe("Fred native stream", () => {
       "Unbekanntes Fred-Streaming-Ereignis.",
     );
   });
+
+  it("round-trips the ordered cited sources of a final event, keeping duplicate documents", () => {
+    const citedSources = [
+      { kind: "knowledge" as const, doc: "DBA_Deutschland.md" },
+      { kind: "knowledge" as const, doc: "DBA_Deutschland.md" },
+      { kind: "web" as const, url: "https://example.test/seite", title: "Seite" },
+    ];
+    const event = parseFredNativeStreamLine(encodeFredNativeStreamEvent({
+      type: "final",
+      answer: "A⟦1⟧ B⟦2⟧ C⟦3⟧",
+      conversation,
+      citedSources,
+    }));
+    expect(event).toMatchObject({ type: "final", answer: "A⟦1⟧ B⟦2⟧ C⟦3⟧", citedSources });
+    const withoutCitations = parseFredNativeStreamLine(encodeFredNativeStreamEvent({
+      type: "final",
+      answer: "Text",
+      conversation,
+    }));
+    expect(withoutCitations).not.toHaveProperty("citedSources");
+  });
 });

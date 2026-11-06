@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import katex from "katex";
 
 import CopyIconButton from "@/components/copy-icon-button";
+import { CitationMarker } from "@/components/fred-citations";
 import FredNativeImage from "@/components/fred-native-image";
 import {
   parseRichAnswer,
@@ -39,6 +40,7 @@ function renderRichInline(nodes: RichInline[], keyPrefix: string): ReactNode[] {
     if (node.type === "strong") return <strong key={key}>{renderRichInline(node.children, key)}</strong>;
     if (node.type === "code") return <code key={key}>{node.text}</code>;
     if (node.type === "highlight") return <mark key={key}>{renderRichInline(node.children, key)}</mark>;
+    if (node.type === "citation") return <CitationMarker key={key} number={node.number} />;
     if (node.type === "image") {
       return <FredNativeImage key={key} artifactId={node.artifactId} alt={node.alt} />;
     }

@@ -1,6 +1,7 @@
 import { Fragment, useId, useMemo } from "react";
 import type { ReactElement, ReactNode } from "react";
 
+import { CitedSourceEntry } from "@/components/fred-citations";
 import {
   aggregateExecutionSources,
   buildExecutionOverview,
@@ -168,7 +169,9 @@ function SourceCard({ source, queries, headingLevel = 4 }: {
         <Heading className="fred-source-card-title">
           {source.url ? (
             <a href={source.url} target="_blank" rel="noreferrer">{view.title}</a>
-          ) : view.title}
+          ) : (
+            <CitedSourceEntry entry={{ title: source.title }} fallback={view.title}>{view.title}</CitedSourceEntry>
+          )}
         </Heading>
       </header>
       {view.subtitle ? <p className="fred-source-subtitle">{view.subtitle}</p> : null}

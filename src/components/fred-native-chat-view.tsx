@@ -43,6 +43,8 @@ import {
   getWelcomeImage,
 } from "@/lib/chat/welcome";
 import FredArtifactCards from "@/components/fred-artifact-cards";
+import { CitedSourceEntry, FredCitationScope } from "@/components/fred-citations";
+import { citationMarkersToBrackets } from "@/lib/fred/citations";
 import { ExecutionTimeline } from "@/components/fred-execution-view";
 import {
   MAX_REASONING_CATEGORY_NAME_CHARS,
@@ -76,6 +78,8 @@ export type FredNativeMessage = {
   researchTrace?: FredResearchStep[];
   executionTrace?: FredExecutionStep[];
   sourceReferences?: FredSourceReference[];
+  /** Ordered cited sources without ids; the answer's marker n is entry n-1. */
+  citedSources?: FredSourceReference[];
   artifacts?: FredGeneratedArtifact[];
 };
 export type FredNativeAttachment = {
@@ -307,11 +311,17 @@ export function ResearchTrace({
               </a>
             ) : displayMode === "advanced" ? (
               // Advanced mode never exposes internal knowledge-base / chunk ids.
-              <span key={`kb-${index}`}>{source.doc}</span>
-            ) : (
-              <span title={source.chunkId ? `Chunk: ${source.chunkId}` : undefined} key={`kb-${source.knowledgeBaseId ?? ""}-${source.chunkId ?? ""}-${index}`}>
+              <CitedSourceEntry entry={{ doc: source.doc }} key={`kb-${index}`} fallback={<span>{source.doc}</span>}>
                 {source.doc}
-              </span>
+              </CitedSourceEntry>
+            ) : (
+              <CitedSourceEntry
+                entry={{ doc: source.doc }}
+                key={`kb-${source.knowledgeBaseId ?? ""}-${source.chunkId ?? ""}-${index}`}
+                fallback={<span title={source.chunkId ? `Chunk: ${source.chunkId}` : undefined}>{source.doc}</span>}
+              >
+                {source.doc}
+              </CitedSourceEntry>
             ))}
           </div>
         </div>
@@ -865,6 +875,7 @@ export default function FredNativeChatView({
           researchTrace,
           executionTrace,
           sourceReferences,
+          citedSources: streamEvent.citedSources,
           artifacts: streamEvent.artifacts,
         };
         if (streamEvent.assistantMessageId !== undefined) {
@@ -1257,7 +1268,7 @@ export default function FredNativeChatView({
         body: JSON.stringify({
           conversationId: currentConversationId,
           userRequest,
-          assistantResponse: message.content,
+          assistantResponse: citationMarkersToBrackets(message.content),
           feedback,
         }),
       });
@@ -1544,7 +1555,7 @@ export default function FredNativeChatView({
                       && !(isSending && index === messages.length - 1) ? (
                         <>
                           <CopyIconButton
-                            text={message.content}
+                            text={citationMarkersToBrackets(message.content)}
                             label="Antwort kopieren"
                           />
                           <button
@@ -1558,7 +1569,7 @@ export default function FredNativeChatView({
                             disabled={Boolean(pdfDownloadKey)}
                             onClick={() => void downloadFredPdf(
                               `${fredAgentName(message.agentKey)}-Antwort`,
-                              message.content,
+                              citationMarkersToBrackets(message.content),
                               `answer-${index}`,
                             )}
                           >
@@ -1624,35 +1635,38 @@ export default function FredNativeChatView({
                       ) : null}
                   </div>
                 </div>
-                {message.role === "assistant"
-                  ? (message.content
-                    ? (
-                      <div
-                        className="fred-assistant-answer"
-                        onContextMenu={handleAssistantContextMenu}
-                      >
-                        {renderAssistantContent(message.content)}
-                      </div>
-                    )
-                    : (isSending && index === messages.length - 1 ? (
-                      <FredSniffingIndicator
-                        agentName={fredAgentName(message.agentKey)}
-                      />
-                    ) : null))
-                  : renderUserContent(message.content)}
                 {message.role === "assistant" ? (
-                  <FredArtifactCards accessToken={accessToken} artifacts={message.artifacts ?? []} conversationId={conversationId} messageId={message.id} />
-                ) : null}
-                {message.role === "assistant" ? (
-                  <ResearchTrace
-                    steps={message.researchTrace ?? []}
-                    executionSteps={message.executionTrace}
-                    displayMode="advanced"
-                    sources={message.sourceReferences ?? []}
-                    active={false}
-                    agentName={fredAgentName(message.agentKey)}
-                  />
-                ) : null}
+                  <FredCitationScope
+                    accessToken={accessToken}
+                    conversationId={conversationId}
+                    messageId={message.id}
+                    citedSources={message.citedSources}
+                  >
+                    {message.content
+                      ? (
+                        <div
+                          className="fred-assistant-answer"
+                          onContextMenu={handleAssistantContextMenu}
+                        >
+                          {renderAssistantContent(message.content)}
+                        </div>
+                      )
+                      : (isSending && index === messages.length - 1 ? (
+                        <FredSniffingIndicator
+                          agentName={fredAgentName(message.agentKey)}
+                        />
+                      ) : null)}
+                    <FredArtifactCards accessToken={accessToken} artifacts={message.artifacts ?? []} conversationId={conversationId} messageId={message.id} />
+                    <ResearchTrace
+                      steps={message.researchTrace ?? []}
+                      executionSteps={message.executionTrace}
+                      displayMode="advanced"
+                      sources={message.sourceReferences ?? []}
+                      active={false}
+                      agentName={fredAgentName(message.agentKey)}
+                    />
+                  </FredCitationScope>
+                ) : renderUserContent(message.content)}
                 {message.role === "assistant"
                   && message.content
                   && !(isSending && index === messages.length - 1) ? (

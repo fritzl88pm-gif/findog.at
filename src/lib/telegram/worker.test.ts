@@ -990,6 +990,67 @@ describe("processUpdate: free text routed to Fred", () => {
     }));
   });
 
+  describe("citation tags", () => {
+    const tag = (doc: string, chunk: string) =>
+      `<kb doc="${doc}" chunk_id="${chunk}" kb_id="e0282ab8-b94f-4553-962e-68705201cf9a" />`;
+    const stored = `Der Satz beträgt 20 % ${tag("UStG_1994.md", "c1")}. Ausnahmen ${tag("UStR_2000.md", "c2")} ${tag("UStG_1994.md", "c1")}.`;
+
+    it("sends [n] markers and a compact Quellen list instead of raw tags", async () => {
+      const rpc = fakeRpc();
+      const storage = fakeStorage();
+      const botApi = fakeBotApi();
+      const { executeTurn } = answerTurn(stored);
+      const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+      expect((await processUpdate(config, makeUpdate({ id: 61 }))).status).toBe("completed");
+
+      const sent = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+      expect(sent).toContain("20 %[1]");
+      expect(sent).toContain("Ausnahmen[2][1]");
+      expect(sent).toContain("Quellen:\n[1] UStG 1994\n[2] UStR 2000");
+      expect(sent).not.toMatch(/&lt;|<kb|chunk_id|kb_id|\.md|⟦/u);
+    });
+
+    it("converts the persisted answer the same way when a completed request is resumed", async () => {
+      const rpc = fakeRpc();
+      const botApi = fakeBotApi();
+      const storage = fakeStorage({
+        resumeRequestReceipt: vi.fn().mockResolvedValue({
+          status: "completed",
+          contentDeleted: false,
+          conversationId: "conv-1",
+          userMessageId: 80,
+          assistantMessageId: 81,
+          answer: stored,
+        }),
+      });
+      const { executeTurn } = answerTurn();
+      const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+      await processUpdate(config, makeUpdate({ id: 62, attemptCount: 1 }));
+
+      const sent = (botApi.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].text as string;
+      expect(sent).toContain("Quellen:");
+      expect(sent).not.toMatch(/<kb|chunk_id|⟦/u);
+    });
+
+    it("keeps the table path: converted Markdown goes out as one rich message", async () => {
+      const rpc = fakeRpc();
+      const storage = fakeStorage();
+      const botApi = fakeBotApi();
+      const table = `| Steuer | Satz |\n|---|---|\n| USt | 20% ${tag("UStG_1994.md", "c1")} |`;
+      const { executeTurn } = answerTurn(table);
+      const config = fakeConfig({ rpc, storage, createBotApiForToken: () => botApi, executeTurn });
+
+      await processUpdate(config, makeUpdate({ id: 63 }));
+
+      const markdown = (botApi.sendRichMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].rich_message.markdown as string;
+      expect(markdown).toContain("| USt | 20%[1] |");
+      expect(markdown).toContain("Quellen:\n[1] UStG 1994");
+      expect(markdown).not.toContain("<kb");
+    });
+  });
+
   it("uses legacy delivery when rich Markdown exceeds the cap", async () => {
     const rpc = fakeRpc();
     const storage = fakeStorage();
