@@ -12,6 +12,9 @@ import {
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
+// No other route sets maxDuration; BFG PRO runs several sequential model stages (~100 s
+// typical), so allow up to 300 s. The search itself stops at 285 s (BFG_PRO_RUN_DEADLINE_MS).
+export const maxDuration = 300;
 const MAX_BFG_PRO_SCENARIO_CHARS = 2_000;
 const BFG_PRO_RATE_LIMIT_MAX_REQUESTS = 5;
 const BFG_PRO_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1_000;
@@ -115,6 +118,15 @@ export async function POST(request: Request) {
 
   const encoder = new TextEncoder();
   let open = true;
+  // Closed client connection (request.signal) or a cancelled response stream both stop
+  // the upstream Findok/OmniRoute work.
+  const upstream = new AbortController();
+  const abortUpstream = () => upstream.abort();
+  if (request.signal.aborted) {
+    abortUpstream();
+  } else {
+    request.signal.addEventListener("abort", abortUpstream, { once: true });
+  }
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (event: BfgProStreamEvent) => {
@@ -130,12 +142,15 @@ export async function POST(request: Request) {
       try {
         const { results } = await runBfgProSearch(scenario, {
           onProgress: (progress) => send({ type: "status", ...progress }),
+          onWarning: (warning) => send({ type: "warning", ...warning }),
+          signal: upstream.signal,
         });
         send({ type: "result", results });
       } catch (error) {
         send({ type: "error", error: searchErrorMessage(error) });
       } finally {
         open = false;
+        request.signal.removeEventListener("abort", abortUpstream);
         try {
           controller.close();
         } catch {
@@ -145,6 +160,7 @@ export async function POST(request: Request) {
     },
     cancel() {
       open = false;
+      abortUpstream();
     },
   });
 

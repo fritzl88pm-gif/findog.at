@@ -63,3 +63,21 @@ describe("BFG PRO progress stream", () => {
       .toBe("1 Urteil wird bewertet und zusammengefasst…");
   });
 });
+
+describe("BFG PRO warning event", () => {
+  it("round-trips the unranked warning", () => {
+    const event = {
+      type: "warning",
+      warning: "unranked",
+      message: "Die KI-Bewertung war nicht möglich.",
+    } satisfies BfgProStreamEvent;
+    expect(parseBfgProStreamLine(encodeBfgProStreamEvent(event))).toEqual(event);
+  });
+
+  it.each([
+    ["unknown warning", JSON.stringify({ type: "warning", warning: "other", message: "x" })],
+    ["blank message", JSON.stringify({ type: "warning", warning: "unranked", message: "" })],
+  ])("rejects an invalid warning line: %s", (_label, line) => {
+    expect(() => parseBfgProStreamLine(line)).toThrow(/PRO-Streaming-Ereignis/u);
+  });
+});
