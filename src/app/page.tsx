@@ -1143,6 +1143,7 @@ export default function Home() {
   const [telegramIntegration, setTelegramIntegration] =
     useState<TelegramIntegrationPublicState | null>(null);
   const [fredChatInstance, setFredChatInstance] = useState(0);
+  const [toolsOpenRequest, setToolsOpenRequest] = useState(0);
   const [fredMessages, setFredMessages] = useState<ChatMessage[]>([]);
   const [fredConversations, setFredConversations] = useState<ConversationSummary[]>([]);
   const [isHistorySelectionMode, setIsHistorySelectionMode] = useState(false);
@@ -3237,6 +3238,7 @@ export default function Home() {
             accountTriggerRef={settingsTriggerRef}
             onOpenNews={openNewsView}
             onSelectTool={openLauncherTool}
+            toolsOpenRequest={toolsOpenRequest}
             onOpenSettings={openSettingsDialog}
             onOpenAdministration={() => void openAdministrationView()}
             onSignOut={() => void handleSignOut()}
@@ -3264,6 +3266,11 @@ export default function Home() {
           }
           renderAssistantContent={(content) => <RichAnswer content={content} />}
           renderUserContent={renderUserMessageContent}
+          toolChips={{
+            isAdmin,
+            onSelectTool: openLauncherTool,
+            onOpenAllTools: () => setToolsOpenRequest((current) => current + 1),
+          }}
           onConversationUpdated={handleFredConversationUpdated}
         />
       ) : appView === "data" ? (

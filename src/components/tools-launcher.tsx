@@ -25,9 +25,9 @@ const ICON_PATHS: Record<LauncherIconName, ReactNode> = {
   headset: <path d="M4 10a8 8 0 0 1 16 0v4a2 2 0 0 1-2 2h-2v-6h4M4 10v6H2v-4a2 2 0 0 1 2-2M8 19h8" />,
 };
 
-function LauncherIcon({ name }: { name: LauncherIconName }) {
+export function LauncherIcon({ name, size = 22 }: { name: LauncherIconName; size?: number }) {
   return (
-    <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
       {ICON_PATHS[name]}
     </svg>
   );
@@ -37,10 +37,17 @@ type Props = {
   isAdmin: boolean;
   activeView: string;
   onSelect: (id: LauncherToolId) => void;
+  /** Increment to open the popover from outside (e.g. the "Alle Werkzeuge" chip in the empty chat). */
+  openRequest?: number;
 };
 
-export default function ToolsLauncher({ isAdmin, activeView, onSelect }: Props) {
+export default function ToolsLauncher({ isAdmin, activeView, onSelect, openRequest = 0 }: Props) {
   const [isOpen, setIsOpen] = useState(false);
+  const [handledOpenRequest, setHandledOpenRequest] = useState(openRequest);
+  if (openRequest !== handledOpenRequest) {
+    setHandledOpenRequest(openRequest);
+    setIsOpen(true);
+  }
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -121,7 +128,7 @@ export default function ToolsLauncher({ isAdmin, activeView, onSelect }: Props) 
     <div className="app-header-menu" ref={containerRef}>
       <button
         ref={triggerRef}
-        className={`app-header-icon-button${isOpen ? " is-open" : ""}`}
+        className={`app-header-icon-button app-header-labeled-button${isOpen ? " is-open" : ""}`}
         type="button"
         aria-label="Werkzeuge"
         title="Werkzeuge"
@@ -135,6 +142,7 @@ export default function ToolsLauncher({ isAdmin, activeView, onSelect }: Props) 
             <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="2.1" />
           )))}
         </svg>
+        <span className="app-header-button-label">Werkzeuge</span>
       </button>
       {isOpen ? (
         <div
