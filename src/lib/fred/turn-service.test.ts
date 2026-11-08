@@ -1048,6 +1048,135 @@ describe("researchDisplayMode", () => {
   });
 });
 
+describe("executeFredTurn admin-only Gedankengang", () => {
+  const english = "I should check the commuter allowance in weknora://doc/99ada6f9-5075-445c-b071-ccc7718f4b02 chunk 32";
+  const german = "Ich prüfe die Pendlerpauschale gemäß § 16 Abs. 1 Z 6 EStG.";
+
+  function thinkingUpstream() {
+    return makeUpstreamDeps({
+      openStream: vi.fn().mockImplementation(async () => sseStream([
+        { response_type: "agent_query", assistant_message_id: "answer-1" },
+        { id: "th-1", response_type: "thinking", content: english.slice(0, 20), done: false, data: {} },
+        { id: "th-1", response_type: "thinking", content: english.slice(20), done: false, data: {} },
+        { id: "th-1", response_type: "thinking", content: "", done: true, data: {} },
+        { response_type: "tool_call", data: { tool_call_id: "c1", tool_name: "knowledge_search", arguments: { query: "pendler" } } },
+        { response_type: "answer", content: "Ergebnis", done: true },
+        { response_type: "complete", data: {} },
+      ])),
+    });
+  }
+
+  async function run(options: {
+    request?: Partial<FredTurnRequest>;
+    translate?: TurnServiceUpstreamDeps["translateThinking"];
+  }) {
+    const upstream = thinkingUpstream();
+    if (options.translate) upstream.translateThinking = options.translate;
+    const persistence = makePersistenceDeps();
+    const { events } = await collectEvents(executeFredTurn(
+      baseRequest({ researchDisplayMode: "advanced", ...options.request }),
+      upstream,
+      persistence,
+      makeConfigDeps(),
+    ));
+    return { events, persistence };
+  }
+
+  const thinkingSteps = (events: FredTurnEvent[]) => events.flatMap((event) =>
+    event.type === "execution" && event.step.kind === "thinking" ? [event.step] : []);
+
+  it("delivers and persists a translated, sanitized German block for admins", async () => {
+    const translate = vi.fn().mockResolvedValue(german);
+    const { events, persistence } = await run({ request: { includeThinking: true }, translate });
+
+    expect(translate).toHaveBeenCalledTimes(1);
+    const sent = String(translate.mock.calls[0][0]);
+    expect(sent).not.toMatch(/weknora|99ada6f9/u);
+    expect(sent).toContain("Fundstelle");
+
+    const streamed = thinkingSteps(events);
+    expect(streamed).toHaveLength(1);
+    expect(streamed[0]).toMatchObject({ kind: "thinking", label: "Gedankengang", detail: german });
+
+    const final = events.find((event) => event.type === "final");
+    const finalTrace = final?.type === "final" ? final.executionTrace ?? [] : [];
+    const kinds = finalTrace.map((step) => step.kind);
+    // placed right after the analysis marker, before the tool step that followed the thought
+    expect(kinds.indexOf("thinking")).toBe(kinds.indexOf("analysis") + 1);
+    expect(kinds.indexOf("thinking")).toBeLessThan(kinds.indexOf("knowledge"));
+    expect(persistence.recordEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      executionTrace: expect.arrayContaining([expect.objectContaining({ kind: "thinking", detail: german })]),
+    }));
+    // the English source text never reaches the client or storage
+    expect(JSON.stringify(events)).not.toContain("commuter allowance");
+    expect(JSON.stringify(vi.mocked(persistence.recordEvent).mock.calls)).not.toContain("commuter allowance");
+  });
+
+  it("gives non-admins only the neutral phase marker and never calls the translator", async () => {
+    const translate = vi.fn().mockResolvedValue(german);
+    const { events, persistence } = await run({ translate });
+
+    expect(translate).not.toHaveBeenCalled();
+    expect(thinkingSteps(events)).toEqual([]);
+    const payload = JSON.stringify([events, vi.mocked(persistence.recordEvent).mock.calls]);
+    expect(payload).not.toContain(german);
+    expect(payload).not.toContain("commuter allowance");
+    expect(payload).not.toContain('"thinking"');
+    expect(events.some((event) => event.type === "execution" && event.step.id === "analysis:phase")).toBe(true);
+  });
+
+  it("does nothing without a translator dependency or in simple (Telegram) mode", async () => {
+    const withoutTranslator = await run({ request: { includeThinking: true } });
+    expect(thinkingSteps(withoutTranslator.events)).toEqual([]);
+
+    const translate = vi.fn().mockResolvedValue(german);
+    const simple = await run({ request: { includeThinking: true, researchDisplayMode: "simple" }, translate });
+    expect(translate).not.toHaveBeenCalled();
+    expect(simple.events.some((event) => event.type === "execution")).toBe(false);
+  });
+
+  it("drops the block silently when translation fails or returns nothing", async () => {
+    for (const translate of [
+      vi.fn().mockRejectedValue(new Error("deepseek down")),
+      vi.fn().mockResolvedValue(null),
+    ]) {
+      const { events, persistence } = await run({ request: { includeThinking: true }, translate });
+      expect(translate).toHaveBeenCalledTimes(1);
+      expect(thinkingSteps(events)).toEqual([]);
+      expect(events.some((event) => event.type === "error")).toBe(false);
+      const final = events.find((event) => event.type === "final");
+      expect(final).toMatchObject({ type: "final", answer: "Ergebnis" });
+      const payload = JSON.stringify([events, vi.mocked(persistence.recordEvent).mock.calls]);
+      expect(payload).not.toContain("commuter allowance");
+      expect(payload).not.toContain("deepseek down");
+    }
+  });
+
+  it("does not block the answer stream on a slow translation", async () => {
+    vi.useFakeTimers();
+    try {
+      const translate = vi.fn().mockImplementation(() => new Promise(() => undefined));
+      const upstream = thinkingUpstream();
+      upstream.translateThinking = translate;
+      const gen = executeFredTurn(
+        baseRequest({ researchDisplayMode: "advanced", includeThinking: true }),
+        upstream,
+        makePersistenceDeps(),
+        makeConfigDeps(),
+      );
+      const collected = collectEvents(gen);
+      // answer deltas are delivered long before the (never finishing) translation is given up on
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(3_100);
+      const { events } = await collected;
+      expect(events.find((event) => event.type === "delta")).toMatchObject({ content: "Ergebnis" });
+      expect(thinkingSteps(events)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("executeFredTurn citation tags", () => {
   const chunkId = "2d9470d0-2723-444a-8bfa-fcced491c15d";
   const kbId = "e0282ab8-b94f-4553-962e-68705201cf9a";

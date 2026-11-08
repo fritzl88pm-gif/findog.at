@@ -1240,7 +1240,7 @@ describe("Advanced execution trace: structured tool views", () => {
   });
 });
 
-describe("Advanced execution trace: thinking is never surfaced", () => {
+describe("Advanced execution trace: raw thinking is never surfaced (admin-only German Gedankengang is built separately)", () => {
   const secretThought = "Ich überlege geheim: der Nutzer pendelt, also Pendlerpauschale prüfen";
 
   it("turns thinking events of any shape into one text-free phase marker", () => {
@@ -1309,6 +1309,76 @@ describe("Advanced execution trace: thinking is never surfaced", () => {
     expect(JSON.stringify(clean)).not.toContain("geheim");
     expect(clean[0].status).toBe("running");
     expect(sanitizeStoredExecutionTrace(clean, { finalize: true })[0].status).toBe("completed");
+  });
+});
+
+describe("Advanced execution trace: admin-only German Gedankengang steps", () => {
+  const thinkingStep = (overrides: Record<string, unknown> = {}) => ({
+    id: "thinking:abc:1",
+    kind: "thinking",
+    status: "completed",
+    label: "irgendwas",
+    detail: "Ich prüfe § 33 Abs. 4 Z 1 EStG und LStR Rz 785.",
+    ...overrides,
+  });
+
+  it("never lets the parser surface thinking text (not for anyone, not untranslated)", () => {
+    const update = parseWeKnoraExecutionEvent({ id: "t1", response_type: "thinking", content: "English secret reasoning", done: true });
+    expect(JSON.stringify(update)).not.toContain("secret");
+    expect(update.step).toMatchObject({ kind: "analysis" });
+  });
+
+  it("keeps sanitized German thinking steps with a fixed label", () => {
+    const [step] = sanitizeStoredExecutionTrace([thinkingStep({ afterId: "knowledge:1", toolName: "x", sources: [{ title: "t" }] })]);
+    expect(step).toEqual({
+      id: "thinking:abc:1",
+      kind: "thinking",
+      status: "completed",
+      label: "Gedankengang",
+      detail: "Ich prüfe § 33 Abs. 4 Z 1 EStG und LStR Rz 785.",
+      afterId: "knowledge:1",
+    });
+  });
+
+  it("sanitizes stored thinking text again and drops empty blocks", () => {
+    const uuid = "99ada6f9-5075-445c-b071-ccc7718f4b02";
+    const clean = sanitizeStoredExecutionTrace([
+      thinkingStep({ detail: `Siehe weknora://doc/${uuid} und knowledge_search, chunk 4.` }),
+      thinkingStep({ id: "thinking:abc:2", detail: `weknora://doc/${uuid}` }),
+      thinkingStep({ id: "thinking:abc:3", detail: undefined }),
+    ]);
+    expect(clean).toHaveLength(1);
+    expect(clean[0].detail).not.toMatch(/weknora|knowledge_search|chunk|99ada6f9/u);
+    expect(clean[0].detail).toContain("Fundstelle");
+  });
+
+  it("strips thinking steps for non-admin readers", () => {
+    const stored = [
+      { id: "analysis:phase", kind: "analysis", status: "completed", label: "Anfrage analysiert" },
+      thinkingStep({ afterId: "analysis:phase" }),
+      { id: "knowledge:1", kind: "knowledge", status: "completed", label: "Wissensbasis durchsucht" },
+    ];
+    const forNonAdmin = sanitizeStoredExecutionTrace(stored, { finalize: true, stripThinking: true });
+    expect(forNonAdmin.map((step) => step.kind)).toEqual(["analysis", "knowledge"]);
+    expect(JSON.stringify(forNonAdmin)).not.toContain("33 Abs. 4");
+    const forAdmin = sanitizeStoredExecutionTrace(stored, { finalize: true });
+    expect(forAdmin.map((step) => step.kind)).toEqual(["analysis", "thinking", "knowledge"]);
+  });
+
+  it("inserts late thinking steps after their anchor, in order, once, without closing the phase marker", () => {
+    let trace = mergeFredExecutionUpdate([], parseWeKnoraExecutionEvent({ response_type: "agent_query", assistant_message_id: "m" })).trace;
+    trace = mergeFredExecutionUpdate(trace, parseWeKnoraExecutionEvent({ response_type: "tool_call", data: { tool_call_id: "k1", tool_name: "knowledge_search", arguments: { query: "pendler" } } })).trace;
+    const anchor = trace[0].id;
+    const first = sanitizeStoredExecutionTrace([thinkingStep({ id: "thinking:a:1", afterId: anchor })])[0];
+    const second = sanitizeStoredExecutionTrace([thinkingStep({ id: "thinking:a:2", afterId: anchor, detail: "Zweiter Gedanke." })])[0];
+    const running = [{ ...trace[0], status: "running" as const, label: "Analysiert die Anfrage" }, ...trace.slice(1)];
+    let merged = mergeFredExecutionStep(running, first);
+    merged = mergeFredExecutionStep(merged, second);
+    merged = mergeFredExecutionStep(merged, first);
+    expect(merged.map((step) => step.id)).toEqual([anchor, "thinking:a:1", "thinking:a:2", trace[1].id]);
+    expect(merged[0].status).toBe("running");
+    const unanchored = mergeFredExecutionStep(running, { ...first, id: "thinking:z:1", afterId: "missing" });
+    expect(unanchored.at(-1)?.id).toBe("thinking:z:1");
   });
 });
 

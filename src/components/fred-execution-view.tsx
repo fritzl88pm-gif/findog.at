@@ -247,7 +247,7 @@ function stepMeta(step: FredExecutionStep): string[] {
   const meta: string[] = [];
   const sourceCount = step.sources?.length ?? 0;
   if (step.kind !== "sources" && sourceCount > 0) meta.push(executionIconKey(step) === "read" ? "Ausschnitt" : `${sourceCount} Treffer`);
-  else if (step.detail && step.kind !== "planning" && step.detail.length <= 40 && !step.detail.includes("\n")) meta.push(step.detail);
+  else if (step.detail && step.kind !== "planning" && step.kind !== "thinking" && step.detail.length <= 40 && !step.detail.includes("\n")) meta.push(step.detail);
   return meta;
 }
 
@@ -257,11 +257,12 @@ function ExecutionStepItem({ step, children }: { step: FredExecutionStep; childr
   const sources = step.kind === "sources" ? [] : step.sources ?? [];
   const meta = stepMeta(step);
   const isPlanning = step.kind === "planning" && Boolean(step.detail);
-  const longDetail = !isPlanning && step.detail !== undefined && step.detail.length > 40;
+  const longDetail = !isPlanning && step.kind !== "thinking" && step.detail !== undefined && step.detail.length > 40;
   const hasTerminal = Boolean(step.command || step.output);
   const facts = step.facts ?? [];
   const taskName = step.kind === "agent" ? step.taskName : undefined;
-  const hasBody = sources.length > 0 || hasTerminal || facts.length > 0 || isPlanning || longDetail;
+  const isThinking = step.kind === "thinking" && Boolean(step.detail);
+  const hasBody = sources.length > 0 || hasTerminal || facts.length > 0 || isPlanning || longDetail || isThinking;
 
   const head = (
     <>
@@ -286,6 +287,7 @@ function ExecutionStepItem({ step, children }: { step: FredExecutionStep; childr
   const body = (
     <div className="fred-exec-body">
       {isPlanning && step.detail ? <PlanningList detail={step.detail} /> : null}
+      {isThinking && step.detail ? <p className="fred-exec-thinking">{step.detail}</p> : null}
       {longDetail && step.detail ? (
         <p className="fred-exec-summary">{step.detail}</p>
       ) : null}
@@ -332,7 +334,7 @@ function ExecutionStepItem({ step, children }: { step: FredExecutionStep; childr
           </div>
         )}
         {taskName ? <p className="fred-exec-task">Aufgabe: {taskName}</p> : null}
-        {!hasBody && !longDetail && step.detail && !meta.includes(step.detail) && step.kind !== "agent" ? (
+        {!hasBody && !longDetail && step.detail && !meta.includes(step.detail) && step.kind !== "agent" && step.kind !== "thinking" ? (
           <p className="fred-exec-summary">{step.detail}</p>
         ) : null}
         {step.kind === "agent" && step.detail ? <p className="fred-exec-summary">{step.detail}</p> : null}

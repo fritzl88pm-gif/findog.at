@@ -47,6 +47,11 @@ import {
   type FredExecutionStep,
 } from "./execution-trace";
 
+import {
+  createThinkingCollector,
+  type ThinkingTranslator,
+} from "./thinking-trace";
+
 import type { FredGeneratedArtifact } from "@/lib/fred-native-stream";
 
 import type {
@@ -59,6 +64,11 @@ import type {
 // ── Dependency injection interfaces ──────────────────────────────────────────
 
 export interface TurnServiceUpstreamDeps {
+  /**
+   * Translates one sanitized English reasoning block to German (null on failure). Together with
+   * `request.includeThinking` this enables the admin-only "Gedankengang" trace; absent → never captured.
+   */
+  translateThinking?: ThinkingTranslator;
   /** Mint a Fred embed session token. */
   mintSession(params: {
     channelId: string;
@@ -365,6 +375,14 @@ export async function* executeFredTurn(
   const answerChunks: string[] = [];
   let researchTrace: FredResearchStep[] = [];
   let executionTrace: FredExecutionStep[] = [];
+  // Admin gate: only callers that resolved an admin user set `includeThinking`; everyone else never gets a collector.
+  const thinking = isAdvanced && request.includeThinking === true && upstream.translateThinking
+    ? createThinkingCollector({
+      translate: upstream.translateThinking,
+      currentStepId: () => executionTrace[executionTrace.length - 1]?.id,
+      signal: request.signal,
+    })
+    : null;
   let sourceReferences: FredSourceReference[] = [];
   let acceptingCitationUpdates = true;
   const selectedAgentName = fredAgentName(request.agentKey);
@@ -660,9 +678,16 @@ export async function* executeFredTurn(
           // yield is handled by caller
         }
         if (isAdvanced) {
+          // Before the merge: a non-thinking event ends the open block anchored on the step it follows.
+          thinking?.ingest(parsed);
           const merged = mergeFredExecutionUpdate(executionTrace, parseWeKnoraExecutionEvent(parsed));
           executionTrace = merged.trace;
           for (const step of merged.touched) touchedExecutionSteps.set(step.id, step);
+          // Translations that finished in the meantime join the trace (never awaited here).
+          for (const step of thinking?.drain() ?? []) {
+            executionTrace = mergeFredExecutionStep(executionTrace, step);
+            touchedExecutionSteps.set(step.id, step);
+          }
           // yield is handled by caller
         }
         if (isUpstreamCompleteEvent(parsed)) {
@@ -797,6 +822,10 @@ export async function* executeFredTurn(
         }
       }
       if (isAdvanced) {
+        // Answer text is already streamed; give just-finished reasoning translations a short grace period.
+        for (const step of (await thinking?.settle()) ?? []) {
+          executionTrace = mergeFredExecutionStep(executionTrace, step);
+        }
         // The run is over: a text-free analysis marker that never saw a `done` event must not keep pulsing.
         executionTrace = finalizeExecutionTrace(executionTrace);
         for (const step of executionTrace) {
@@ -887,6 +916,7 @@ export async function* executeFredTurn(
       researchTrace = [runningStep];
       yield { type: "research", step: runningStep };
       executionTrace = [];
+      thinking?.reset();
       if (isAdvanced) {
         executionTrace = [{ ...runningStep }];
         yield { type: "execution", step: executionTrace[0] };

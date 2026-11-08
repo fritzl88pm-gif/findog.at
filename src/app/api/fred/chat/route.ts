@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { isAdminUser } from "@/lib/admin-auth";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import {
   parseBoundedMultipart,
@@ -113,6 +114,10 @@ import {
   stripCitationTags,
 } from "@/lib/fred/citations";
 import { stripSourceReferenceIds } from "@/lib/fred/execution-sanitize";
+import {
+  createDeepSeekThinkingTranslator,
+  createThinkingCollector,
+} from "@/lib/fred/thinking-trace";
 import {
   finalizeExecutionTrace,
   mergeFredExecutionStep,
@@ -594,8 +599,24 @@ function sseData(frame: string): string | null {
 
 type FredServerConfig = ReturnType<typeof readFredEmbedServerConfig>;
 
+/**
+ * Admin gate for the German "Gedankengang": decided here, on the server, per request. A failed lookup
+ * means "no" - the feature must never break a chat turn.
+ */
+async function canViewThinking(
+  supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
+  userId: string,
+): Promise<boolean> {
+  try {
+    return await isAdminUser(supabase, userId);
+  } catch {
+    return false;
+  }
+}
+
 function buildWebTurnUpstream(
   registeredConfigs: Map<string, FredServerConfig>,
+  includeThinking = false,
 ): TurnServiceUpstreamDeps {
   const serverConfig = (channelId: string): FredServerConfig => {
     const value = registeredConfigs.get(channelId);
@@ -611,6 +632,7 @@ function buildWebTurnUpstream(
   // Session tokens come from the shared cache. A call WeKnora rejects with an
   // expired or unknown token is retried once with a freshly minted one.
   return {
+    ...(includeThinking ? { translateThinking: createDeepSeekThinkingTranslator() } : {}),
     async mintSession(params) {
       const session = await getFredEmbedSession({
         config: serverConfig(params.channelId),
@@ -784,6 +806,7 @@ function streamTextOnlyTurn(options: {
   body: ParsedFredChatRequest;
   agentKey: FredAgentKey;
   researchDisplayMode: "simple" | "advanced";
+  includeThinking: boolean;
   receipt: FredRequestReceipt;
   storedConversation: FredConversationRow | null;
 }): Response {
@@ -823,6 +846,7 @@ function streamTextOnlyTurn(options: {
             agentKey: options.agentKey,
             webSearchEnabled: options.body.webSearchEnabled,
             researchDisplayMode: options.researchDisplayMode,
+            ...(options.includeThinking ? { includeThinking: true } : {}),
             userEventId: options.receipt.userEventId,
             assistantEventId: options.receipt.assistantEventId,
             onRequestTransition: async (transition: FredRequestLifecycleTransition) => {
@@ -857,7 +881,7 @@ function streamTextOnlyTurn(options: {
             },
             signal: streamAbort.signal,
           },
-          buildWebTurnUpstream(registeredConfigs),
+          buildWebTurnUpstream(registeredConfigs, options.includeThinking),
           buildWebTurnPersistence(options.supabase, options.storedConversation),
           buildWebTurnConfig(registeredConfigs),
         );
@@ -959,6 +983,7 @@ export async function POST(request: Request) {
     }
     requireActiveRequest(request);
     const researchDisplayMode = WEB_RESEARCH_DISPLAY_MODE;
+    const includeThinking = await canViewThinking(supabase, user.id);
     const storedConversation = await awaitWithIngressSignal(
       loadOwnedConversation({
         supabase,
@@ -1015,6 +1040,7 @@ export async function POST(request: Request) {
         body,
         agentKey,
         researchDisplayMode,
+        includeThinking,
         receipt: requestReceipt,
         storedConversation,
       });
@@ -1360,6 +1386,13 @@ export async function POST(request: Request) {
           let finalContent = "";
           let researchTrace: FredResearchStep[] = [];
           let executionTrace: FredExecutionStep[] = [];
+          const thinking = isAdvanced && includeThinking
+            ? createThinkingCollector({
+              translate: createDeepSeekThinkingTranslator(),
+              currentStepId: () => executionTrace[executionTrace.length - 1]?.id,
+              signal: lifetimeAbort!.signal,
+            })
+            : null;
           let sourceReferences: FredSourceReference[] = [];
           // Citation tags (`<kb …/>`) may arrive split across deltas; they never reach the client.
           const citationFilter = createCitationStreamFilter();
@@ -1443,10 +1476,16 @@ export async function POST(request: Request) {
               send(controller, { type: "research", step: research.step });
             }
             if (isAdvanced) {
+              // Before the merge: a non-thinking event ends the open block anchored on the step it follows.
+              thinking?.ingest(parsed);
               const merged = mergeFredExecutionUpdate(executionTrace, parseWeKnoraExecutionEvent(parsed));
               executionTrace = merged.trace;
               if (merged.touched.length > 0) clearAttachmentStatus();
               for (const step of merged.touched) send(controller, { type: "execution", step });
+              for (const step of thinking?.drain() ?? []) {
+                executionTrace = mergeFredExecutionStep(executionTrace, step);
+                send(controller, { type: "execution", step });
+              }
             }
             // Track upstream complete event for EOF detection
             if (isUpstreamCompleteEvent(parsed)) {
@@ -1543,7 +1582,13 @@ export async function POST(request: Request) {
               502,
             );
           }
-          if (isAdvanced) executionTrace = finalizeExecutionTrace(executionTrace);
+          if (isAdvanced) {
+            for (const step of (await thinking?.settle()) ?? []) {
+              executionTrace = mergeFredExecutionStep(executionTrace, step);
+              send(controller, { type: "execution", step });
+            }
+            executionTrace = finalizeExecutionTrace(executionTrace);
+          }
           await verifyFinalCitations(stripCitationTags(plainFinalAnswer));
           // Citation tags stay in the stored answer; readers render them with renderCitedAnswer.
           const finalAnswer = mapOutsideCitationTags(

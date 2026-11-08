@@ -32,6 +32,7 @@ import {
   type FredExecutionSource,
   type FredToolVariant,
 } from "./execution-structured";
+import { THINKING_STEP_LABEL, MAX_THINKING_DETAIL_CHARS, sanitizeThinkingText } from "./thinking-sanitize";
 
 export { EXECUTION_CUT_MARKER, sanitizeAndRedactDetail };
 export type { FredExecutionFact, FredExecutionSource };
@@ -63,7 +64,9 @@ export type FredExecutionStepKind =
   | "sources"
   | "agent"
   | "memory"
-  | "context";
+  | "context"
+  /** Admin-only German "Gedankengang" (sanitized + translated reasoning); `detail` is the text. */
+  | "thinking";
 
 export type FredExecutionStepStatus = "running" | "completed" | "failed";
 
@@ -79,8 +82,13 @@ export type FredExecutionStep = {
   kind: FredExecutionStepKind;
   status: FredExecutionStepStatus;
   label: string;
-  /** Short plain-text summary. Never reasoning text: analysis/evaluation steps carry no detail. */
+  /**
+   * Short plain-text summary. Never raw reasoning text: analysis/evaluation steps carry no detail; only
+   * admin-only `thinking` steps carry (sanitized, German) reasoning.
+   */
   detail?: string;
+  /** `thinking` steps only: id of the step this block follows (translation finishes after later steps). */
+  afterId?: string;
   durationMs?: number;
   counts?: FredPlanningCounts;
   /** Opaque (hashed) correlation id of the upstream tool call / helper agent; never the raw id. */
@@ -948,7 +956,8 @@ export function parseWeKnoraExecutionEvent(value: unknown): FredExecutionUpdate 
   }
 
   if (responseType === "thinking") {
-    // Reasoning is never surfaced - not as text, not as detail. Only the neutral phase marker remains.
+    // Reasoning text is never surfaced by this parser - only the neutral phase marker. The admin-only German
+    // "Gedankengang" is built separately (thinking-trace.ts: sanitized + translated) and never untranslated.
     const done = data.done === true || event.done === true;
     return { fatalError: false, unsupported: false, step: phaseStep(done) };
   }
@@ -1091,6 +1100,22 @@ function unique(values: readonly string[], maximum: number): string[] {
   return [...new Set(values)].slice(0, maximum);
 }
 
+/**
+ * Thinking blocks are translated asynchronously, so they arrive after later steps: they are placed right
+ * after the step that was current when the block ended (and after earlier blocks of the same anchor).
+ * They never close the analysis marker and are inserted at most once per id.
+ */
+function mergeThinkingStep(steps: FredExecutionStep[], update: FredExecutionStep): FredExecutionStep[] {
+  if (steps.some((step) => step.id === update.id)) return steps;
+  const anchor = update.afterId ? steps.findIndex((step) => step.id === update.afterId) : -1;
+  if (anchor < 0) return [...steps, update].slice(-MAX_EXECUTION_STEPS);
+  let position = anchor + 1;
+  while (position < steps.length && steps[position].kind === "thinking" && steps[position].afterId === update.afterId) {
+    position += 1;
+  }
+  return [...steps.slice(0, position), update, ...steps.slice(position)].slice(-MAX_EXECUTION_STEPS);
+}
+
 export function mergeFredExecutionStep(
   rawSteps: FredExecutionStep[],
   rawUpdate: FredExecutionStep,
@@ -1109,6 +1134,7 @@ export function mergeFredExecutionStep(
     // The marker is coalesced: once completed, later thinking/reflection rounds never reopen it.
     if (known && (known.status !== "running" || update.status === "running")) return rawSteps;
   }
+  if (update.kind === "thinking") return mergeThinkingStep(rawSteps, update);
   const steps = update.id === EXECUTION_PHASE_STEP_ID ? rawSteps : completePhase(rawSteps);
   if (isAgent) {
     const parentId = update.parentId ?? findSpawnParentId(steps, update);
@@ -1190,7 +1216,7 @@ export function finalizeExecutionTrace(steps: FredExecutionStep[]): FredExecutio
 
 // ── Stored / streamed trace sanitizing ──────────────────────────────────────
 
-const VALID_KINDS = new Set<string>(["analysis", "planning", "knowledge", "web", "tool", "evaluation", "sources", "agent", "memory", "context"]);
+const VALID_KINDS = new Set<string>(["analysis", "planning", "knowledge", "web", "tool", "evaluation", "sources", "agent", "memory", "context", "thinking"]);
 const VALID_STATUSES = new Set<string>(["running", "completed", "failed"]);
 const REASONING_KINDS = new Set<string>(["analysis", "evaluation"]);
 
@@ -1259,6 +1285,21 @@ function sanitizeStoredStep(candidate: unknown): FredExecutionStep | null {
   const status = boundedText(item.status, 30) as FredExecutionStepStatus;
   const label = sanitizeDisplayLine(boundedText(item.label, MAX_EXECUTION_LABEL_CHARS), MAX_EXECUTION_LABEL_CHARS) ?? "";
   if (!id || !VALID_KINDS.has(kind) || !VALID_STATUSES.has(status) || !label) return null;
+
+  if (kind === "thinking") {
+    // Only German, sanitized text survives; a block without text is dropped (never an empty or English stub).
+    const text = sanitizeThinkingText(item.detail, "de").slice(0, MAX_THINKING_DETAIL_CHARS).trim();
+    if (!text) return null;
+    const afterId = boundedText(item.afterId, 180);
+    return {
+      id,
+      kind: "thinking",
+      status: "completed",
+      label: THINKING_STEP_LABEL,
+      detail: text,
+      ...(afterId ? { afterId } : {}),
+    };
+  }
 
   const toolName = sanitizeDisplayLine(boundedText(item.toolName, 80), 80);
   const isReasoning = REASONING_KINDS.has(kind) || toolName?.toLowerCase() === "thinking";
@@ -1381,15 +1422,19 @@ function completedMarkerLabel(step: FredExecutionStep): FredExecutionStep {
 
 /**
  * Validates, masks and projects a persisted or streamed execution trace for the browser:
- * no reasoning text, no internal ids / hosts / model names, no raw JSON payloads.
+ * no raw reasoning text (only admin-only, sanitized German `thinking` steps; `stripThinking` removes them), no internal ids / hosts / model names, no raw JSON payloads.
  * Idempotent, so it is safe to apply on the server (read path) and again on the client.
  * `finalize` closes a still-running analysis marker (stored traces belong to finished runs).
  */
-export function sanitizeStoredExecutionTrace(value: unknown, options: { finalize?: boolean } = {}): FredExecutionStep[] {
+export function sanitizeStoredExecutionTrace(
+  value: unknown,
+  options: { finalize?: boolean; stripThinking?: boolean } = {},
+): FredExecutionStep[] {
   if (!Array.isArray(value)) return [];
   const steps = coalesceReasoningSteps(value.slice(0, MAX_EXECUTION_STEPS).flatMap((candidate) => {
     const step = sanitizeStoredStep(candidate);
-    return step ? [step] : [];
+    // `stripThinking` is the server-side admin gate for reads: non-admins never receive "Gedankengang" text.
+    return step && !(options.stripThinking && step.kind === "thinking") ? [step] : [];
   }));
   return options.finalize ? finalizeExecutionTrace(steps) : steps;
 }

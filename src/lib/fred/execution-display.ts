@@ -25,6 +25,7 @@ export function executionIconKey(step: Pick<FredExecutionStep, "kind" | "toolNam
   switch (step.kind) {
     case "analysis":
     case "evaluation":
+    case "thinking":
       return "analysis";
     case "planning":
     case "memory":
@@ -122,7 +123,7 @@ export function buildExecutionOverview(
     .filter((step) => !step.parentId && step.durationMs !== undefined)
     .reduce((sum, step) => sum + (step.durationMs ?? 0), 0);
   return {
-    steps: steps.length,
+    steps: steps.filter((step) => step.kind !== "thinking").length,
     tools: steps.filter((step) => toolKinds.has(step.kind)).length,
     sources: sourceCount,
     ...(total > 0 ? { durationMs: total } : {}),
