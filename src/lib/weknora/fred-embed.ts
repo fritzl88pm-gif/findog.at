@@ -112,6 +112,33 @@ export function readQuickFredEmbedServerConfig(
   };
 }
 
+/**
+ * Optional "Fred-Fallback" agent (same config as Fred, different model). The
+ * feature is off unless channel, token and agent id are all valid.
+ */
+export function readFredFallbackEmbedServerConfig(
+  environment: Environment = process.env,
+): FredEmbedServerConfig & { expectedAgentId: string } {
+  const channelId = environment.WEKNORA_FRED_FALLBACK_CHANNEL_ID?.trim() ?? "";
+  const publishToken = environment.WEKNORA_FRED_FALLBACK_PUBLISH_TOKEN?.trim() ?? "";
+  const exchangeOrigin = exactHttpOrigin(
+    environment.WEKNORA_FRED_EXCHANGE_ORIGIN?.trim() || DEFAULT_EXCHANGE_ORIGIN,
+  );
+  const expectedAgentId = environment.WEKNORA_FRED_FALLBACK_AGENT_ID?.trim() ?? "";
+
+  if (
+    !CHANNEL_ID_PATTERN.test(channelId)
+    || !PUBLISH_TOKEN_PATTERN.test(publishToken)
+    || !exchangeOrigin
+    || !UUID_PATTERN.test(expectedAgentId)
+    || channelId === environment.WEKNORA_FRED_CHANNEL_ID?.trim()
+  ) {
+    throw new FredEmbedConfigurationError();
+  }
+
+  return { agentKey: "fred", channelId, publishToken, exchangeOrigin, expectedAgentId };
+}
+
 function parsedSessionPayload(value: unknown): { token: string; expiresIn: number } | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const root = value as Record<string, unknown>;

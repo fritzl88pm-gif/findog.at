@@ -1135,3 +1135,445 @@ describe("executeFredTurn citation tags", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("executeFredTurn Fred-Fallback", () => {
+  const fallbackChannel = "fred-fallback-channel";
+  const fallbackAgent = "agent-fallback";
+  const refusal = "Sorry, this request was blocked by the content safety policy. Please try rephrasing your question.";
+  const note = "\n\n_Antwort über Ersatzmodell erstellt._";
+  const refusedMessage = "Fred konnte die Anfrage nicht beantworten. Bitte formuliere sie um.";
+
+  const answerEvents = (text: string, id = "answer-primary") => [
+    { response_type: "agent_query", assistant_message_id: id },
+    { response_type: "answer", content: text, done: true },
+    { response_type: "complete", data: {} },
+  ];
+  const fallbackOk = () => sseStream(answerEvents("Ersatzantwort", "answer-fallback"));
+
+  function fallbackConfigDeps(overrides: Partial<TurnServiceConfigDeps> = {}) {
+    return makeConfigDeps({
+      readFredFallbackConfig: vi.fn().mockReturnValue({
+        channelId: fallbackChannel,
+        publishToken: "em_fallback_publish_token_fixture_1",
+        exchangeOrigin: "https://findog.at",
+        expectedAgentId: fallbackAgent,
+      }),
+      ...overrides,
+    });
+  }
+
+  function fallbackUpstream(
+    primary: () => ReadableStream<Uint8Array> | Promise<ReadableStream<Uint8Array>>,
+    fallback: () => ReadableStream<Uint8Array> | Promise<ReadableStream<Uint8Array>> = fallbackOk,
+    overrides: Partial<TurnServiceUpstreamDeps> = {},
+  ) {
+    return makeUpstreamDeps({
+      fetchUpstreamConfig: vi.fn().mockImplementation(async ({ channelId: c }: { channelId: string }) => ({
+        agentId: c === fallbackChannel ? fallbackAgent : "agent-1",
+        knowledgeBaseIds: ["kb-1"],
+        allowWebSearch: false,
+        allowFileUpload: true,
+      })),
+      createSession: vi.fn().mockImplementation(async ({ channelId: c }: { channelId: string }) => ({
+        id: c === fallbackChannel ? "session-fallback" : "session-1",
+        signature: "session-signature",
+      })),
+      openStream: vi.fn().mockImplementation(async (params: { channelId: string }) => (
+        params.channelId === fallbackChannel ? fallback() : primary()
+      )),
+      ...overrides,
+    });
+  }
+
+  function persistenceWithIds(overrides: Partial<TurnServicePersistenceDeps> = {}) {
+    return makePersistenceDeps({
+      recordEvent: vi.fn()
+        .mockResolvedValueOnce({ conversation: summaryConv(), messageId: 1 })
+        .mockResolvedValueOnce({ conversation: summaryConv(), messageId: 2 }),
+      ...overrides,
+    });
+  }
+
+  const persistedContents = (persistence: TurnServicePersistenceDeps) =>
+    (persistence.recordEvent as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([params]) => `${params.content}|${params.displayContent ?? ""}`,
+    ).join("\n");
+
+  let warn: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    warn.mockRestore();
+  });
+
+  it("retries a refusal on the fallback channel without persisting or delivering the refusal", async () => {
+    const upstream = fallbackUpstream(() => sseStream(answerEvents(refusal)));
+    const persistence = persistenceWithIds();
+    const { events, result } = await collectEvents(executeFredTurn(
+      baseRequest({ requestId: "req-1", researchDisplayMode: "advanced" }),
+      upstream,
+      persistence,
+      fallbackConfigDeps(),
+    ));
+
+    // The refusal was streamed once, then retracted before the replacement.
+    const replaceIndex = events.findIndex((event) => event.type === "replace");
+    expect(replaceIndex).toBeGreaterThan(events.findIndex((event) => event.type === "delta"));
+    expect(events[replaceIndex]).toEqual({ type: "replace", answer: "" });
+    expect(events.slice(replaceIndex + 1)).toContainEqual({
+      type: "research",
+      step: { id: "fallback", kind: "tool", status: "running", label: "Fred formuliert neu …" },
+    });
+    expect(events.slice(replaceIndex + 1)).toContainEqual({
+      type: "execution",
+      step: expect.objectContaining({ id: "fallback", status: "running" }),
+    });
+    expect(events.at(-2)).toEqual({
+      type: "execution",
+      step: expect.objectContaining({ id: "fallback", status: "completed" }),
+    });
+    const deltaAfter = events.slice(replaceIndex + 1).filter((event) => event.type === "delta");
+    expect(deltaAfter).toEqual([{ type: "delta", content: "Ersatzantwort" }]);
+    expect(events.at(-1)).toMatchObject({
+      type: "final",
+      answer: `Ersatzantwort${note}`,
+      assistantMessageId: 2,
+    });
+    expect(result.answer).toBe(`Ersatzantwort${note}`);
+
+    // Own upstream session on the fallback channel, primary message stopped.
+    expect(upstream.mintSession).toHaveBeenLastCalledWith(expect.objectContaining({ channelId: fallbackChannel }));
+    expect(upstream.createSession).toHaveBeenCalledTimes(2);
+    expect(upstream.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ channelId: fallbackChannel }));
+    expect(upstream.openStream).toHaveBeenLastCalledWith(expect.objectContaining({
+      channelId: fallbackChannel,
+      sessionId: "session-fallback",
+      agentId: fallbackAgent,
+    }));
+    expect(upstream.stopSession).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: channelId,
+      messageId: "answer-primary",
+    }));
+
+    // Stored in the original conversation/session/agent; note only in displayContent.
+    expect(persistence.recordEvent).toHaveBeenCalledTimes(2);
+    expect(persistence.recordEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      channelId,
+      sessionId: "session-1",
+      agentKey: "fred",
+      weknoraAgentId: "agent-1",
+      eventType: "message_received",
+      content: "Ersatzantwort",
+      displayContent: `Ersatzantwort${note}`,
+    }));
+    expect(persistedContents(persistence)).not.toContain("content safety policy");
+    expect(events.some((event) => event.type === "final" && event.answer.includes("content safety"))).toBe(false);
+    expect(warn).toHaveBeenCalledWith("fred fallback", { requestId: "req-1", reason: "refusal" });
+  });
+
+  it("does not emit replace when nothing was streamed yet", async () => {
+    const upstream = fallbackUpstream(() => sseStream([
+      { response_type: "agent_query", assistant_message_id: "answer-primary" },
+      { response_type: "complete", data: { content: refusal } },
+    ]));
+    const { events } = await collectEvents(executeFredTurn(
+      baseRequest(), upstream, persistenceWithIds(), fallbackConfigDeps(),
+    ));
+    expect(events.some((event) => event.type === "replace")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "final", answer: `Ersatzantwort${note}` });
+  });
+
+  it("detects the refusal after stripping citation tags, case-insensitively", async () => {
+    const upstream = fallbackUpstream(() => sseStream(answerEvents(
+      `<kb doc="a.md" chunk_id="c1" kb_id="k1" />  ${refusal.toUpperCase()}`,
+    )));
+    const persistence = persistenceWithIds();
+    await collectEvents(executeFredTurn(baseRequest(), upstream, persistence, fallbackConfigDeps()));
+    expect(warn).toHaveBeenCalledWith("fred fallback", expect.objectContaining({ reason: "refusal" }));
+    expect(persistedContents(persistence)).not.toMatch(/content safety/iu);
+  });
+
+  it.each([
+    ["empty answer", () => sseStream([
+      { response_type: "agent_query", assistant_message_id: "answer-primary" },
+      { response_type: "complete", data: {} },
+    ]), "empty"],
+    ["fatal error event", () => sseStream([
+      { response_type: "agent_query", assistant_message_id: "answer-primary" },
+      { response_type: "error", content: "boom" },
+    ]), "stream_error"],
+    ["EOF without completion", () => sseStream([
+      { response_type: "agent_query", assistant_message_id: "answer-primary" },
+      { response_type: "answer", content: "halb", done: false },
+    ]), "stream_error"],
+    ["invalid stream frame", () => new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        ctrl.enqueue(new TextEncoder().encode("data: {nope\n\n"));
+        ctrl.close();
+      },
+    }), "stream_error"],
+    ["read exception", () => new ReadableStream<Uint8Array>({
+      start(ctrl) { ctrl.error(new Error("socket hang up")); },
+    }), "upstream_error"],
+  ])("falls back on %s", async (_label, primary, reason) => {
+    const upstream = fallbackUpstream(primary);
+    const persistence = persistenceWithIds();
+    const { events } = await collectEvents(executeFredTurn(
+      baseRequest({ requestId: "req-2" }), upstream, persistence, fallbackConfigDeps(),
+    ));
+    expect(events.at(-1)).toMatchObject({ type: "final", answer: `Ersatzantwort${note}` });
+    expect(persistence.recordEvent).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith("fred fallback", { requestId: "req-2", reason });
+  });
+
+  it("falls back when opening the stream throws", async () => {
+    const upstream = fallbackUpstream(() => { throw new Error("ECONNRESET"); });
+    const { events } = await collectEvents(executeFredTurn(
+      baseRequest({ requestId: "req-3" }), upstream, persistenceWithIds(), fallbackConfigDeps(),
+    ));
+    expect(events.at(-1)).toMatchObject({ type: "final", answer: `Ersatzantwort${note}` });
+    expect(warn).toHaveBeenCalledWith("fred fallback", { requestId: "req-3", reason: "upstream_error" });
+  });
+
+  it("persists fallback artifacts with the fallback upstream message id", async () => {
+    const persistGeneratedArtifacts = vi.fn().mockResolvedValue([]);
+    const upstream = fallbackUpstream(
+      () => sseStream(answerEvents(refusal)),
+      () => artifactStream("[R](sandbox:/workspace/output/report.txt)", {
+        artifacts: [{ file_name: "report.txt", file_size: 12, file_type: ".txt", handle: "resource://report" }],
+      }),
+    );
+    await collectEvents(executeFredTurn(
+      baseRequest(), upstream, persistenceWithIds({ persistGeneratedArtifacts }), fallbackConfigDeps(),
+    ));
+    expect(persistGeneratedArtifacts).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: 2,
+      upstreamMessageId: "answer-artifact",
+    }));
+  });
+
+  describe("does not fall back", () => {
+    async function expectNoFallback(
+      upstream: TurnServiceUpstreamDeps,
+      request: FredTurnRequest,
+      config: TurnServiceConfigDeps,
+      persistence = persistenceWithIds(),
+    ) {
+      const outcome = await collectEvents(executeFredTurn(request, upstream, persistence, config))
+        .then((value) => ({ value }), (error: unknown) => ({ error }));
+      expect(upstream.mintSession).not.toHaveBeenCalledWith(expect.objectContaining({ channelId: fallbackChannel }));
+      expect(upstream.createSession).not.toHaveBeenCalledWith(expect.objectContaining({ channelId: fallbackChannel }));
+      expect(warn).not.toHaveBeenCalledWith("fred fallback", expect.anything());
+      return outcome;
+    }
+
+    it("for QuickFred", async () => {
+      const quickChannel = "quickfred-channel";
+      const upstream = fallbackUpstream(() => sseStream(answerEvents(refusal)), fallbackOk, {
+        fetchUpstreamConfig: vi.fn().mockResolvedValue({
+          agentId: "agent-quick", knowledgeBaseIds: [], allowWebSearch: false, allowFileUpload: false,
+        }),
+      });
+      const outcome = await expectNoFallback(upstream, baseRequest({ agentKey: "quickfred" }), fallbackConfigDeps({
+        readQuickFredConfig: vi.fn().mockReturnValue({
+          channelId: quickChannel,
+          publishToken: "em_quick_publish_token_fixture_1",
+          exchangeOrigin: "https://findog.at",
+          expectedAgentId: "agent-quick",
+        }),
+      }));
+      expect(outcome).toHaveProperty("value");
+    });
+
+    it("when the fallback is not configured", async () => {
+      const upstream = fallbackUpstream(() => { throw new Error("ECONNRESET"); });
+      const outcome = await expectNoFallback(upstream, baseRequest(), makeConfigDeps());
+      expect(outcome).toHaveProperty("error");
+    });
+
+    it("when the fallback uses Fred's own channel", async () => {
+      const upstream = fallbackUpstream(() => { throw new Error("ECONNRESET"); });
+      const outcome = await expectNoFallback(upstream, baseRequest(), fallbackConfigDeps({
+        readFredFallbackConfig: vi.fn().mockReturnValue({
+          channelId, publishToken: "em_x_publish_token_fixture_12", exchangeOrigin: "https://findog.at",
+          expectedAgentId: fallbackAgent,
+        }),
+      }));
+      expect(outcome).toHaveProperty("error");
+      expect(upstream.openStream).toHaveBeenCalledTimes(1);
+    });
+
+    it("on an explicit user stop", async () => {
+      const abortController = new AbortController();
+      const upstream = fallbackUpstream(() => new ReadableStream<Uint8Array>({
+        start(ctrl) {
+          ctrl.enqueue(new TextEncoder().encode(
+            'data: {"response_type":"agent_query","assistant_message_id":"answer-primary"}\n\n',
+          ));
+        },
+      }));
+      const gen = executeFredTurn(
+        baseRequest({ signal: abortController.signal }), upstream, persistenceWithIds(), fallbackConfigDeps(),
+      );
+      const done = collectEvents(gen);
+      await vi.waitFor(() => expect(upstream.openStream).toHaveBeenCalled());
+      abortController.abort();
+      const { result } = await done;
+      expect(result.stopped).toBe(true);
+      expect(upstream.createSession).toHaveBeenCalledTimes(1);
+      expect(warn).not.toHaveBeenCalledWith("fred fallback", expect.anything());
+    });
+
+    it("on a request deadline", async () => {
+      const abortController = new AbortController();
+      const timeout = new UserVisibleError("Die Verarbeitung der Anfrage hat zu lange gedauert.", 504);
+      const upstream = fallbackUpstream(() => new ReadableStream<Uint8Array>({
+        start(ctrl) {
+          ctrl.enqueue(new TextEncoder().encode(
+            'data: {"response_type":"agent_query","assistant_message_id":"answer-primary"}\n\n',
+          ));
+          abortController.signal.addEventListener("abort", () => ctrl.error(abortController.signal.reason), { once: true });
+        },
+      }));
+      const done = collectEvents(executeFredTurn(
+        baseRequest({ signal: abortController.signal }), upstream, persistenceWithIds(), fallbackConfigDeps(),
+      )).catch((error: unknown) => error);
+      await vi.waitFor(() => expect(upstream.openStream).toHaveBeenCalled());
+      abortController.abort(timeout);
+      expect(await done).toBe(timeout);
+      expect(upstream.createSession).toHaveBeenCalledTimes(1);
+      expect(warn).not.toHaveBeenCalledWith("fred fallback", expect.anything());
+    });
+
+    it("on unsupported upstream events", async () => {
+      const upstream = fallbackUpstream(() => sseStream([
+        { response_type: "agent_query", assistant_message_id: "answer-primary" },
+        { response_type: "tool_approval_required", data: { tool_call_id: "a-1", tool_name: "danger" } },
+      ]));
+      const outcome = await expectNoFallback(upstream, baseRequest(), fallbackConfigDeps());
+      expect(outcome).toMatchObject({ error: expect.objectContaining({ status: 409 }) });
+    });
+
+    it("when the conversation is not found (before the user event is persisted)", async () => {
+      const persistence = persistenceWithIds({ loadConversation: vi.fn().mockResolvedValue(null) });
+      const upstream = fallbackUpstream(() => sseStream(answerEvents("x")));
+      const outcome = await expectNoFallback(
+        upstream, baseRequest({ conversationId }), fallbackConfigDeps(), persistence,
+      );
+      expect(outcome).toMatchObject({ error: expect.objectContaining({ status: 404 }) });
+      expect(persistence.recordEvent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports the original error when the fallback agent binding does not match", async () => {
+    const upstream = fallbackUpstream(() => sseStream(answerEvents(refusal)), fallbackOk, {
+      fetchUpstreamConfig: vi.fn().mockImplementation(async ({ channelId: c }: { channelId: string }) => ({
+        agentId: c === fallbackChannel ? "someone-else" : "agent-1",
+        knowledgeBaseIds: [], allowWebSearch: false, allowFileUpload: false,
+      })),
+    });
+    const persistence = persistenceWithIds();
+    const events: FredTurnEvent[] = [];
+    await expect((async () => {
+      for await (const event of executeFredTurn(baseRequest(), upstream, persistence, fallbackConfigDeps())) {
+        events.push(event);
+      }
+    })()).rejects.toMatchObject({ message: refusedMessage, status: 502 });
+    expect(upstream.createSession).toHaveBeenCalledTimes(1);
+    expect(persistence.recordEvent).toHaveBeenCalledTimes(1);
+    expect(events.at(-1)).toEqual({ type: "error", error: refusedMessage });
+  });
+
+  it("fails with a friendly message and exactly one failed transition when the fallback refuses too", async () => {
+    const onRequestTransition = vi.fn().mockResolvedValue(undefined);
+    const upstream = fallbackUpstream(
+      () => sseStream(answerEvents(refusal)),
+      () => sseStream(answerEvents(refusal, "answer-fallback")),
+    );
+    const persistence = persistenceWithIds();
+    const events: FredTurnEvent[] = [];
+    await expect((async () => {
+      for await (const event of executeFredTurn(
+        baseRequest({ onRequestTransition }), upstream, persistence, fallbackConfigDeps(),
+      )) events.push(event);
+    })()).rejects.toMatchObject({ message: refusedMessage, status: 502 });
+
+    expect(events.at(-1)).toEqual({ type: "error", error: refusedMessage });
+    expect(events.some((event) => event.type === "final")).toBe(false);
+    expect(persistence.recordEvent).toHaveBeenCalledTimes(1);
+    const statuses = onRequestTransition.mock.calls.map(([transition]) => transition.status);
+    expect(statuses.filter((status) => status === "failed")).toHaveLength(1);
+    expect(statuses).not.toContain("completed");
+    expect(statuses.at(-1)).toBe("failed");
+    expect(upstream.createSession).toHaveBeenCalledTimes(2);
+    expect(upstream.openStream).toHaveBeenCalledTimes(2);
+  });
+
+  it("ends a successful fallback with exactly one completed transition and no failed one", async () => {
+    const onRequestTransition = vi.fn().mockResolvedValue(undefined);
+    await collectEvents(executeFredTurn(
+      baseRequest({ onRequestTransition }),
+      fallbackUpstream(() => sseStream(answerEvents(refusal))),
+      persistenceWithIds(),
+      fallbackConfigDeps(),
+    ));
+    expect(onRequestTransition.mock.calls.map(([transition]) => transition.status)).toEqual([
+      "user_persisted", "generating", "completed",
+    ]);
+  });
+
+  describe("history", () => {
+    const run = async (persistence: TurnServicePersistenceDeps, upstream = fallbackUpstream(
+      () => sseStream(answerEvents(refusal)),
+    )) => {
+      await collectEvents(executeFredTurn(
+        baseRequest({ query: "Aktuelle Frage?" }), upstream, persistence, fallbackConfigDeps(),
+      ));
+      return (upstream.openStream as ReturnType<typeof vi.fn>).mock.calls.map(([params]) => params.query as string);
+    };
+
+    it("prepends a compact history without the current question", async () => {
+      const loadRecentMessages = vi.fn().mockResolvedValue([
+        { role: "user", content: "Frage 1" },
+        { role: "assistant", content: `Antwort 1 <kb doc="a.md" chunk_id="c1" kb_id="k1" />` },
+        { role: "user", content: "Aktuelle Frage?" },
+      ]);
+      const [primaryQuery, fallbackQuery] = await run(persistenceWithIds({ loadRecentMessages }));
+      expect(primaryQuery).toBe("Aktuelle Frage?");
+      expect(fallbackQuery).toBe(
+        "[Bisheriger Gesprächsverlauf – nur Kontext]\nNutzer: Frage 1\nFred: Antwort 1\n[Ende Verlauf]\n\nAktuelle Frage?",
+      );
+      expect(loadRecentMessages).toHaveBeenCalledWith({
+        clientId: userId, conversationId, limit: 7,
+      });
+    });
+
+    it("keeps the last 6 messages, truncated to 2000 chars and 8000 chars in total", async () => {
+      const long = "x".repeat(5_000);
+      const messages = Array.from({ length: 8 }, (_, index) => ({
+        role: index % 2 === 0 ? "user" as const : "assistant" as const,
+        content: `${index}${long}`,
+      }));
+      const [, fallbackQuery] = await run(persistenceWithIds({
+        loadRecentMessages: vi.fn().mockResolvedValue(messages),
+      }));
+      const body = fallbackQuery.split("[Ende Verlauf]")[0];
+      const lines = body.split("\n").slice(1).filter(Boolean);
+      expect(lines.length).toBeLessThanOrEqual(4); // 4 × 2000 = 8000 fits, 5 does not
+      expect(lines.every((line) => line.length <= 2_000 + "Nutzer: ".length)).toBe(true);
+      expect(body).not.toContain("0xxx");
+      expect(body).toContain("7xxx");
+      expect(fallbackQuery.endsWith("\n\nAktuelle Frage?")).toBe(true);
+    });
+
+    it("sends only the question without the loader or when it fails", async () => {
+      const [, withoutDep] = await run(persistenceWithIds());
+      expect(withoutDep).toBe("Aktuelle Frage?");
+      const [, failing] = await run(persistenceWithIds({
+        loadRecentMessages: vi.fn().mockRejectedValue(new Error("db down")),
+      }));
+      expect(failing).toBe("Aktuelle Frage?");
+    });
+  });
+});

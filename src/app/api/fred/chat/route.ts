@@ -68,6 +68,7 @@ import {
   FredEmbedUpstreamError,
   FRED_EMBED_ORIGIN,
   readFredEmbedServerConfig,
+  readFredFallbackEmbedServerConfig,
   readQuickFredEmbedServerConfig,
   type FredEmbedSession,
 } from "@/lib/weknora/fred-embed";
@@ -714,6 +715,21 @@ function buildWebTurnPersistence(
         conversationId: params.conversationId,
       });
     },
+    async loadRecentMessages(params) {
+      const { data, error } = await supabase
+        .from("fred_messages")
+        .select("role,content")
+        .eq("conversation_id", params.conversationId)
+        .eq("client_id", params.clientId)
+        .order("provider_created_at", { ascending: false, nullsFirst: true })
+        .order("id", { ascending: false })
+        .limit(params.limit);
+      if (error) throw new UserVisibleError("Fred-Nachrichten konnten nicht geladen werden.", 503);
+      return (data ?? []).reverse().flatMap((row) =>
+        (row.role === "user" || row.role === "assistant") && typeof row.content === "string"
+          ? [{ role: row.role as "user" | "assistant", content: row.content }]
+          : []);
+    },
     async persistGeneratedArtifacts(params) {
       return persistGeneratedArtifacts({
         supabase,
@@ -739,6 +755,15 @@ function buildWebTurnConfig(
     readQuickFredConfig: () => {
       try {
         const value = readQuickFredEmbedServerConfig();
+        registeredConfigs.set(value.channelId, value);
+        return value;
+      } catch {
+        return null;
+      }
+    },
+    readFredFallbackConfig: () => {
+      try {
+        const value = readFredFallbackEmbedServerConfig();
         registeredConfigs.set(value.channelId, value);
         return value;
       } catch {

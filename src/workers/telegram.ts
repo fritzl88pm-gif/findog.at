@@ -26,6 +26,7 @@ import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-
 import { createConfiguredDocumentProvider } from "@/lib/attachments/document-pipeline";
 import {
   readFredEmbedServerConfig,
+  readFredFallbackEmbedServerConfig,
   readQuickFredEmbedServerConfig,
   FRED_EMBED_ORIGIN,
   type FredEmbedSession,
@@ -519,6 +520,21 @@ function buildTurnPersistence(supabase: Supabase): TurnServicePersistenceDeps {
       if (error) throw dbError("FRED_CONVERSATION_READ_FAILED");
       return data ? (data as unknown as ConversationRow) : null;
     },
+    async loadRecentMessages(params) {
+      const { data, error } = await supabase
+        .from("fred_messages")
+        .select("role,content")
+        .eq("conversation_id", params.conversationId)
+        .eq("client_id", params.clientId)
+        .order("provider_created_at", { ascending: false, nullsFirst: true })
+        .order("id", { ascending: false })
+        .limit(params.limit);
+      if (error) throw dbError("FRED_CONVERSATION_READ_FAILED");
+      return (data ?? []).reverse().flatMap((row) =>
+        (row.role === "user" || row.role === "assistant") && typeof row.content === "string"
+          ? [{ role: row.role as "user" | "assistant", content: row.content }]
+          : []);
+    },
     async persistGeneratedArtifacts(params) {
       const rows = params.artifacts.map((artifact) => ({
         id: crypto.randomUUID(), fileName: artifact.fileName, fileSize: artifact.fileSize, fileType: artifact.fileType,
@@ -545,6 +561,13 @@ function buildTurnConfig(): TurnServiceConfigDeps {
     readQuickFredConfig: () => {
       try {
         return readQuickFredEmbedServerConfig();
+      } catch {
+        return null;
+      }
+    },
+    readFredFallbackConfig: () => {
+      try {
+        return readFredFallbackEmbedServerConfig();
       } catch {
         return null;
       }

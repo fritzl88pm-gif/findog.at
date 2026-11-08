@@ -5,6 +5,7 @@ import {
   FredEmbedConfigurationError,
   mintFredEmbedSession,
   readFredEmbedServerConfig,
+  readFredFallbackEmbedServerConfig,
   readQuickFredEmbedServerConfig,
 } from "./fred-embed";
 
@@ -67,6 +68,37 @@ describe("Fred WeKnora Secure Embed", () => {
       WEKNORA_QUICKFRED_PUBLISH_TOKEN: "em_quickfred_publish_fixture_123456",
       WEKNORA_QUICKFRED_EXCHANGE_ORIGIN: "https://findog.at",
       WEKNORA_QUICKFRED_AGENT_ID: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
+      ...override,
+    })).toThrow(FredEmbedConfigurationError);
+  });
+
+  const FALLBACK_ENVIRONMENT = {
+    ...VALID_ENVIRONMENT,
+    WEKNORA_FRED_FALLBACK_CHANNEL_ID: "fred-fallback-channel-2026",
+    WEKNORA_FRED_FALLBACK_PUBLISH_TOKEN: "em_fallback_publish_fixture_123456",
+    WEKNORA_FRED_FALLBACK_AGENT_ID: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
+  };
+
+  it("accepts a complete Fred-Fallback channel and expected agent UUID", () => {
+    expect(readFredFallbackEmbedServerConfig(FALLBACK_ENVIRONMENT)).toEqual({
+      agentKey: "fred",
+      channelId: "fred-fallback-channel-2026",
+      publishToken: "em_fallback_publish_fixture_123456",
+      exchangeOrigin: "https://findog.at",
+      expectedAgentId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789",
+    });
+  });
+
+  it.each([
+    ["missing channel", { WEKNORA_FRED_FALLBACK_CHANNEL_ID: "" }],
+    ["wrong token", { WEKNORA_FRED_FALLBACK_PUBLISH_TOKEN: "sk-not-an-embed-token" }],
+    ["unsafe origin", { WEKNORA_FRED_EXCHANGE_ORIGIN: "http://findog.at" }],
+    ["missing agent", { WEKNORA_FRED_FALLBACK_AGENT_ID: "" }],
+    ["non-UUID agent", { WEKNORA_FRED_FALLBACK_AGENT_ID: "fallback" }],
+    ["same channel as Fred", { WEKNORA_FRED_FALLBACK_CHANNEL_ID: "fred-channel-2026" }],
+  ])("rejects incomplete Fred-Fallback configuration: %s", (_label, override) => {
+    expect(() => readFredFallbackEmbedServerConfig({
+      ...FALLBACK_ENVIRONMENT,
       ...override,
     })).toThrow(FredEmbedConfigurationError);
   });
