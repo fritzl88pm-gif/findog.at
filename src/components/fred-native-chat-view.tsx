@@ -42,9 +42,7 @@ import {
   getWelcomeGreeting,
   getWelcomeImage,
 } from "@/lib/chat/welcome";
-import EmptyChatToolChips from "@/components/empty-chat-tool-chips";
 import FredArtifactCards from "@/components/fred-artifact-cards";
-import type { LauncherToolId } from "@/lib/tools-launcher";
 import { CitedSourceEntry, FredCitationScope } from "@/components/fred-citations";
 import { citationMarkersToBrackets } from "@/lib/fred/citations";
 import { ExecutionTimeline } from "@/components/fred-execution-view";
@@ -151,12 +149,6 @@ type FredNativeChatViewProps = {
   telegramBotUrl?: string;
   renderAssistantContent: (content: string) => ReactNode;
   renderUserContent: (content: string) => ReactNode;
-  /** Tool shortcuts under the composer while the conversation is empty; omitted → no chips. */
-  toolChips?: {
-    isAdmin: boolean;
-    onSelectTool: (id: LauncherToolId) => void;
-    onOpenAllTools: () => void;
-  };
   onConversationUpdated: (
     conversation: FredNativeConversation,
     messages: FredNativeMessage[],
@@ -456,7 +448,6 @@ export default function FredNativeChatView({
   telegramBotUrl,
   renderAssistantContent,
   renderUserContent,
-  toolChips,
   onConversationUpdated,
 }: FredNativeChatViewProps) {
   const [messages, setMessages] = useState<FredNativeMessage[]>(initialMessages);
@@ -1994,13 +1985,6 @@ export default function FredNativeChatView({
               </div>
             ) : null}
           </form>
-          {messages.length === 0 && toolChips ? (
-            <EmptyChatToolChips
-              isAdmin={toolChips.isAdmin}
-              onSelectTool={toolChips.onSelectTool}
-              onOpenAllTools={toolChips.onOpenAllTools}
-            />
-          ) : null}
         </div>
         )}
       </div>

@@ -108,18 +108,3 @@ export function getLauncherGroups(isAdmin: boolean): LauncherGroup[] {
 export function getLauncherToolIds(isAdmin: boolean): LauncherToolId[] {
   return getLauncherGroups(isAdmin).flatMap((group) => group.tools.map((tool) => tool.id));
 }
-
-export type LauncherChip = { tool: LauncherTool; tone: LauncherTone };
-
-/**
- * Tools suggested as chips under the empty-chat composer: the first tool of every
- * visible group plus the second research tool. Derived from `getLauncherGroups`, so
- * admin-only tools never leak to non-admins and the list cannot drift from the launcher.
- */
-export function getLauncherChips(isAdmin: boolean): LauncherChip[] {
-  const groups = getLauncherGroups(isAdmin);
-  const chips: LauncherChip[] = groups.map((group) => ({ tool: group.tools[0], tone: group.tone }));
-  const second = groups[0]?.tools[1];
-  if (second) chips.splice(1, 0, { tool: second, tone: groups[0].tone });
-  return chips;
-}

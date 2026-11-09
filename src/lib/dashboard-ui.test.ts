@@ -8,7 +8,6 @@ const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.m
 const page = read("../app/page.tsx");
 const header = read("../components/app-header-bar.tsx");
 const launcher = read("../components/tools-launcher.tsx");
-const chips = read("../components/empty-chat-tool-chips.tsx");
 const chatView = read("../components/fred-native-chat-view.tsx");
 const newsSection = read("../components/news-section.tsx");
 const newsView = read("../components/news-view.tsx");
@@ -97,30 +96,8 @@ describe("tools discoverability", () => {
     expect(css).not.toMatch(/\.app-header-button-label \{[^}]*display: none/u);
   });
 
-  it("builds the empty-chat chips from the launcher data and the shared selection handler", () => {
-    expect(chips).toContain("getLauncherChips(isAdmin)");
-    expect(chips).not.toMatch(/id: "(bfg|scanning|data)/u);
-    expect(chips).toContain("Alle Werkzeuge");
-    expect(chips).toContain("onSelectTool(tool.id)");
-    expect(page).toMatch(/toolChips=\{\{\s*isAdmin,\s*onSelectTool: openLauncherTool,/u);
-    expect(page).toMatch(/onOpenAllTools: \(\) => setToolsOpenRequest/u);
-    expect(page).toContain("toolsOpenRequest={toolsOpenRequest}");
-    expect(header).toContain("openRequest={toolsOpenRequest}");
-    expect(launcher).toContain("openRequest");
-  });
 
-  it("renders the chips only while the conversation has no messages", () => {
-    expect(chatView).toMatch(/messages\.length === 0 && toolChips \? \(\s*<EmptyChatToolChips/u);
-    expect(chatView.match(/<EmptyChatToolChips/gu)).toHaveLength(1);
-    // Rendered inside the composer container, i.e. directly below the composer.
-    expect(chatView.indexOf("<EmptyChatToolChips")).toBeGreaterThan(chatView.indexOf('<form className="composer"'));
-  });
 
-  it("wraps the chips on mobile without horizontal overflow", () => {
-    expect(css).toMatch(/\.empty-chat-tool-chips \{[\s\S]*?flex-wrap: wrap;/u);
-    expect(css).toMatch(/\.empty-chat-tool-chip \{[\s\S]*?max-width: 100%;/u);
-    expect(css).not.toMatch(/\.empty-chat-tool-chips \{[^}]*overflow-x/u);
-  });
 
   it("does not bring back the sidebar Anwendungsbereiche", () => {
     expect(page).not.toContain("Anwendungsbereiche");
