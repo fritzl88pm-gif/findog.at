@@ -106,43 +106,28 @@ describe("greeting content", () => {
 });
 
 describe("getWelcomeGreeting", () => {
-  it.each(PERIODS)("picks a weekday greeting of the %s set, stable within a day", (period) => {
-    const time = PERIOD_TIMES[period];
-    const first = getWelcomeGreeting(at(TUESDAY, time));
-
-    expect(WEEKDAY_GREETINGS[period]).toContain(first);
-    expect(getWelcomeGreeting(at(TUESDAY, time))).toBe(first);
+  it.each(PERIODS)("picks a weekday greeting of the %s set", (period) => {
+    expect(WEEKDAY_GREETINGS[period]).toContain(getWelcomeGreeting(at(TUESDAY, PERIOD_TIMES[period])));
   });
 
-  it("never repeats a greeting on consecutive days for the same period", () => {
-    for (const period of PERIODS) {
-      const time = PERIOD_TIMES[period];
-      let previous = "";
-      // Vier Jahre taeglich, inkl. Sonntage, Feiertage und Jahreswechsel.
-      for (let offset = 0; offset < 4 * 366; offset += 1) {
-        const date = new Date(Date.UTC(2026, 0, 1 + offset, 12));
-        const iso = date.toISOString().slice(0, 10);
-        const greeting = getWelcomeGreeting(at(iso, time));
+  it("draws a new greeting on every load and covers the whole set", () => {
+    const list = WEEKDAY_GREETINGS.morning;
+    const drawn = new Set(
+      Array.from({ length: 500 }, (_unused, index) =>
+        getWelcomeGreeting(at(TUESDAY, PERIOD_TIMES.morning), index / 500),
+      ),
+    );
 
-        expect(greeting, `${iso} ${period}`).not.toBe(previous);
-        previous = greeting;
-      }
-    }
+    expect(drawn).toEqual(new Set(list));
+    expect(getWelcomeGreeting(at(TUESDAY, PERIOD_TIMES.morning), 0)).toBe(list[0]);
+    expect(getWelcomeGreeting(at(TUESDAY, PERIOD_TIMES.morning), 1)).toBe(list[list.length - 1]);
+    expect(getWelcomeGreeting(at(TUESDAY, PERIOD_TIMES.morning), -1)).toBe(list[0]);
   });
 
-  it("uses every weekday greeting of a period over 25 consecutive weekdays", () => {
-    const period: WelcomePeriod = "morning";
-    const seen = new Set<string>();
-    // Mo-Sa, Sonntage und Feiertage ueberspringen.
-    for (let offset = 0; offset < 200; offset += 1) {
-      const date = new Date(Date.UTC(2026, 0, 13 + offset, 12));
-      const iso = date.toISOString().slice(0, 10);
-      if (getWelcomeDayKind(at(iso, PERIOD_TIMES[period])).kind === "weekday") {
-        seen.add(getWelcomeGreeting(at(iso, PERIOD_TIMES[period])));
-      }
-    }
+  it("uses a real random draw when no explicit pick is given", () => {
+    const drawn = new Set(Array.from({ length: 300 }, () => getWelcomeGreeting(at(TUESDAY, PERIOD_TIMES.morning))));
 
-    expect(seen).toEqual(new Set(WEEKDAY_GREETINGS[period]));
+    expect(drawn.size).toBeGreaterThan(5);
   });
 
   it("uses Europe/Vienna daylight-saving time before choosing the period", () => {

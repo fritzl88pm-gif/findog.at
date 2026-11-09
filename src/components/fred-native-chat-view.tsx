@@ -502,7 +502,22 @@ export default function FredNativeChatView({
   const [feedbackText, setFeedbackText] = useState("");
   const [feedbackError, setFeedbackError] = useState("");
   const [isFeedbackSaving, setIsFeedbackSaving] = useState(false);
-  const [welcomeGreeting] = useState(() => getWelcomeGreeting());
+  // Spruch und Motiv werden bei jedem Laden neu gezogen. Wie beim Motiv liefert
+  // useSyncExternalStore serverseitig einen festen Spruch und erst im Client
+  // die Zufallsauswahl, damit kein Hydration-Mismatch entsteht.
+  const [readWelcomeGreeting] = useState(() => {
+    let chosenGreeting: string | null = null;
+    return () => (chosenGreeting ??= getWelcomeGreeting());
+  });
+  const [readStableWelcomeGreeting] = useState(() => {
+    let stableGreeting: string | null = null;
+    return () => (stableGreeting ??= getWelcomeGreeting(new Date(), 0));
+  });
+  const welcomeGreeting = useSyncExternalStore(
+    subscribeToStableValue,
+    readWelcomeGreeting,
+    readStableWelcomeGreeting,
+  );
   // Das Motiv wird zufaellig gezogen, darf im vorgerenderten HTML also noch
   // nicht feststehen. useSyncExternalStore liefert serverseitig das
   // Standardbild und erst im Client die Zufallsauswahl - einmal gezogen und

@@ -31,7 +31,16 @@ export interface WelcomeImageManifest {
  */
 export const WELCOME_IMAGE_MANIFEST: WelcomeImageManifest = {
   periods: {
-    morning: ["/fred-welcome-morgen-1.png", "/fred-welcome-morgen-2.png", "/fred-welcome-morgen-3.png", "/fred-welcome-morgen-4.png", "/fred-welcome-morgen-5.png"],
+    morning: [
+      "/fred-welcome-morgen-1.png",
+      "/fred-welcome-morgen-2.png",
+      "/fred-welcome-morgen-3.png",
+      "/fred-welcome-morgen-4.png",
+      "/fred-welcome-morgen-5.png",
+      "/fred-welcome-morgen-6.png",
+      "/fred-welcome-morgen-7.png",
+      "/fred-welcome-morgen-8.png",
+    ],
     midday: [
       "/fred-welcome-mittag-1.png",
       "/fred-welcome-mittag-2.png",
@@ -39,26 +48,59 @@ export const WELCOME_IMAGE_MANIFEST: WelcomeImageManifest = {
       "/fred-welcome-mittag-4.png",
       "/fred-welcome-mittag-5.png",
       "/fred-welcome-mittag-6.png",
+      "/fred-welcome-mittag-7.png",
+      "/fred-welcome-mittag-8.png",
+      "/fred-welcome-mittag-9.png",
     ],
-    afternoon: ["/fred-welcome-nachmittag-1.png", "/fred-welcome-nachmittag-2.png", "/fred-welcome-nachmittag-3.png", "/fred-welcome-nachmittag-4.png"],
-    evening: ["/fred-welcome-abend-1.png", "/fred-welcome-abend-2.png", "/fred-welcome-abend-3.png", "/fred-welcome-abend-4.png"],
-    lateNight: ["/fred-welcome-nacht-1.png", "/fred-welcome-nacht-2.png", "/fred-welcome-nacht-3.png", "/fred-welcome-nacht-4.png"],
+    afternoon: [
+      "/fred-welcome-nachmittag-1.png",
+      "/fred-welcome-nachmittag-2.png",
+      "/fred-welcome-nachmittag-3.png",
+      "/fred-welcome-nachmittag-4.png",
+      "/fred-welcome-nachmittag-5.png",
+      "/fred-welcome-nachmittag-6.png",
+      "/fred-welcome-nachmittag-7.png",
+    ],
+    evening: [
+      "/fred-welcome-abend-1.png",
+      "/fred-welcome-abend-2.png",
+      "/fred-welcome-abend-3.png",
+      "/fred-welcome-abend-4.png",
+      "/fred-welcome-abend-5.png",
+      "/fred-welcome-abend-6.png",
+      "/fred-welcome-abend-7.png",
+    ],
+    lateNight: [
+      "/fred-welcome-nacht-1.png",
+      "/fred-welcome-nacht-2.png",
+      "/fred-welcome-nacht-3.png",
+      "/fred-welcome-nacht-4.png",
+      "/fred-welcome-nacht-5.png",
+      "/fred-welcome-nacht-6.png",
+      "/fred-welcome-nacht-7.png",
+    ],
   },
-  sunday: ["/fred-welcome-sonntag-1.png", "/fred-welcome-sonntag-2.png"],
+  sunday: [
+    "/fred-welcome-sonntag-1.png",
+    "/fred-welcome-sonntag-2.png",
+    "/fred-welcome-sonntag-3.png",
+    "/fred-welcome-sonntag-4.png",
+    "/fred-welcome-sonntag-5.png",
+  ],
   holidays: {
     neujahr: ["/fred-welcome-neujahr-1.png"],
-    dreikoenige: [],
+    dreikoenige: ["/fred-welcome-dreikoenige-1.png"],
     ostersonntag: ["/fred-welcome-ostern-1.png"],
     ostermontag: ["/fred-welcome-ostern-1.png"],
-    staatsfeiertag: [],
-    himmelfahrt: [],
+    staatsfeiertag: ["/fred-welcome-staatsfeiertag-1.png"],
+    himmelfahrt: ["/fred-welcome-himmelfahrt-1.png"],
     pfingstsonntag: ["/fred-welcome-pfingsten-1.png"],
     pfingstmontag: ["/fred-welcome-pfingsten-1.png"],
-    fronleichnam: [],
-    mariaeHimmelfahrt: [],
+    fronleichnam: ["/fred-welcome-fronleichnam-1.png"],
+    mariaeHimmelfahrt: ["/fred-welcome-mariaehimmelfahrt-1.png"],
     nationalfeiertag: ["/fred-welcome-nationalfeiertag-1.png"],
     allerheiligen: ["/fred-welcome-allerheiligen-1.png"],
-    mariaeEmpfaengnis: [],
+    mariaeEmpfaengnis: ["/fred-welcome-mariaeempfaengnis-1.png"],
     heiligerAbend: ["/fred-welcome-weihnachten-1.png"],
     christtag: ["/fred-welcome-weihnachten-1.png"],
     stefanitag: ["/fred-welcome-weihnachten-1.png"],
@@ -98,7 +140,10 @@ export type WelcomeDayKind =
  * Ostersonntag nach dem Gregorianischen Algorithmus (Meeus/Jones/Butcher).
  * Liefert Monat (3 oder 4) und Tag.
  */
-export function computeEasterSunday(year: number): { month: number; day: number } {
+export function computeEasterSunday(year: number): {
+  month: number;
+  day: number;
+} {
   const a = year % 19;
   const b = Math.floor(year / 100);
   const c = year % 100;
@@ -132,7 +177,9 @@ const FIXED_HOLIDAYS: Record<string, WelcomeHolidayId> = {
 };
 
 /** Bewegliche Feiertage als Abstand in Tagen zum Ostersonntag. */
-const EASTER_RELATIVE_HOLIDAYS: ReadonlyArray<readonly [number, WelcomeHolidayId]> = [
+const EASTER_RELATIVE_HOLIDAYS: ReadonlyArray<
+  readonly [number, WelcomeHolidayId]
+> = [
   [0, "ostersonntag"],
   [1, "ostermontag"],
   [39, "himmelfahrt"],
@@ -147,7 +194,9 @@ function dayNumber(year: number, month: number, day: number): number {
   return Math.round(Date.UTC(year, month - 1, day) / MS_PER_DAY);
 }
 
-export function getWelcomeHoliday(instant: Date = new Date()): WelcomeHolidayId | null {
+export function getWelcomeHoliday(
+  instant: Date = new Date(),
+): WelcomeHolidayId | null {
   const { year, month, day } = readViennaParts(instant);
   const fixed = FIXED_HOLIDAYS[`${month}-${day}`];
   if (fixed) return fixed;
@@ -156,7 +205,11 @@ export function getWelcomeHoliday(instant: Date = new Date()): WelcomeHolidayId 
   const easterDay = dayNumber(year, easter.month, easter.day);
   const today = dayNumber(year, month, day);
 
-  return EASTER_RELATIVE_HOLIDAYS.find(([offset]) => easterDay + offset === today)?.[1] ?? null;
+  return (
+    EASTER_RELATIVE_HOLIDAYS.find(
+      ([offset]) => easterDay + offset === today,
+    )?.[1] ?? null
+  );
 }
 
 function isSundayInVienna(instant: Date): boolean {
@@ -183,8 +236,15 @@ export function getWelcomePeriod(instant: Date = new Date()): WelcomePeriod {
   return "lateNight";
 }
 
-export function getWelcomeGreeting(instant: Date = new Date()): string {
-  const { year, month, day } = readViennaParts(instant);
+/**
+ * Wählt bei jedem Laden zufällig einen Spruch des Tages: Feiertag, sonst
+ * Sonntag, sonst Tageszeit. `pick` ist nur für Tests da und erwartet einen
+ * Wert aus [0, 1).
+ */
+export function getWelcomeGreeting(
+  instant: Date = new Date(),
+  pick: number = Math.random(),
+): string {
   const dayKind = getWelcomeDayKind(instant);
   const period = getWelcomePeriod(instant);
   const greetings =
@@ -194,9 +254,11 @@ export function getWelcomeGreeting(instant: Date = new Date()): string {
         ? SUNDAY_GREETINGS[period]
         : WEEKDAY_GREETINGS[period];
 
-  // Fortlaufende Tagesnummer statt Datumssumme: aufeinanderfolgende Tage
-  // landen so immer auf unterschiedlichen Eintraegen derselben Liste.
-  return greetings[dayNumber(year, month, day) % greetings.length];
+  const index = Math.min(
+    greetings.length - 1,
+    Math.max(0, Math.floor(pick * greetings.length)),
+  );
+  return greetings[index];
 }
 
 /**
@@ -218,7 +280,10 @@ export function getWelcomeImage(
   const images = candidates.find((list) => list.length > 0);
   if (!images) return FALLBACK_WELCOME_IMAGE;
 
-  const imageIndex = Math.min(images.length - 1, Math.max(0, Math.floor(pick * images.length)));
+  const imageIndex = Math.min(
+    images.length - 1,
+    Math.max(0, Math.floor(pick * images.length)),
+  );
 
   return images[imageIndex];
 }
