@@ -4,6 +4,7 @@ import {
   MAX_MINERU_MARKDOWN_BYTES,
   MineruBatchError,
   processMineruBatch,
+  processMineruInBatches,
   type MineruFileInput,
 } from "./mineru-cloud";
 
@@ -333,4 +334,46 @@ describe("MinerU cloud adapter", () => {
     await expect(processMineruBatch([input], { fetch, maxPolls: 1 }))
       .resolves.toEqual(["valid markdown"]);
   });
+
+  it("splits more than five files into batches of five and keeps input order", async () => {
+    const inputs = Array.from({ length: 12 }, (_, index) => file(`doc-${index}.pdf`, `h${index}`));
+    const batchFiles: string[][] = [];
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url === `${BASE}/file-urls/batch`) {
+        const body = JSON.parse(String(init?.body)) as { files: Array<{ name: string; data_id: string }> };
+        const id = batchFiles.push(body.files.map((entry) => entry.data_id)) - 1;
+        return jsonResponse({
+          code: 0,
+          data: { batch_id: `batch-${id}`, file_urls: body.files.map((_, index) => `https://uploads.example.com/${id}/${index}`) },
+          msg: "ok",
+        });
+      }
+      if (url.startsWith("https://uploads.example.com/")) return new Response(null, { status: 200 });
+      const status = url.match(/extract-results\/batch\/batch-(\d+)$/);
+      if (status) {
+        const id = Number(status[1]);
+        return jsonResponse({
+          code: 0,
+          data: {
+            batch_id: `batch-${id}`,
+            extract_result: batchFiles[id].map((dataId) => ({
+              data_id: dataId, state: "done", err_msg: "", full_zip_url: `${CDN}/${dataId}/full.zip`,
+            })),
+          },
+          msg: "ok",
+        });
+      }
+      const result = url.match(/\/results\/(.+)\/full\.zip$/);
+      if (result) return zipResponse(zipBuf({ "full.md": `md-${result[1]}` }));
+      return new Response("not found", { status: 404 });
+    });
+
+    const markdown = await processMineruInBatches(inputs, { fetch, sleep: vi.fn(), maxPolls: 1 });
+
+    expect(batchFiles.map((ids) => ids.length)).toEqual([5, 5, 2]);
+    expect(markdown).toHaveLength(12);
+    markdown.forEach((value, index) => expect(value).toContain(`h${index}`));
+  });
 });
+

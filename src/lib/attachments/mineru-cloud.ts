@@ -419,3 +419,29 @@ export async function processMineruBatch(
     downloadAndExtract(file, results.get(file.dataId)!, fetcher, maxZipBytes, maxMarkdownBytes, options.signal),
   ));
 }
+
+/**
+ * Runs MinerU over any number of files by splitting them into batches of at
+ * most MAX_BATCH_SIZE, two batches at a time. Results keep the input order.
+ */
+export async function processMineruInBatches(
+  files: MineruFileInput[],
+  options: MineruBatchOptions = {},
+): Promise<string[]> {
+  if (files.length <= MAX_BATCH_SIZE) return processMineruBatch(files, options);
+  const batches: MineruFileInput[][] = [];
+  for (let start = 0; start < files.length; start += MAX_BATCH_SIZE) {
+    batches.push(files.slice(start, start + MAX_BATCH_SIZE));
+  }
+  const results = new Array<string[]>(batches.length);
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const index = nextIndex++;
+      if (index >= batches.length) return;
+      results[index] = await processMineruBatch(batches[index], options);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(2, batches.length) }, () => worker()));
+  return results.flat();
+}

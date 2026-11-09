@@ -132,7 +132,7 @@ const readReducedMotion = () => window.matchMedia(REDUCED_MOTION_QUERY).matches;
 const readNoReducedMotion = () => false;
 
 const MAX_IMAGE_UPLOADS = 5;
-const MAX_FILE_UPLOADS = 5;
+const MAX_FILE_UPLOADS = 50;
 const MAX_IMAGE_UPLOAD_BYTES = 10 * 1_024 * 1_024;
 const MAX_FILE_UPLOAD_BYTES = 20 * 1_024 * 1_024;
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
@@ -1123,7 +1123,7 @@ export default function FredNativeChatView({
     event.target.value = "";
     setIsAttachmentMenuOpen(false);
     if (selectedFiles.length + files.length > MAX_FILE_UPLOADS) {
-      setError("Bitte maximal fünf Dateien pro Anfrage auswählen.");
+      setError(`Bitte maximal ${MAX_FILE_UPLOADS} Dateien pro Anfrage auswählen.`);
       return;
     }
     if (files.some((file) => !FILE_EXTENSIONS.has(fileExtension(file.name)))) {
@@ -1917,7 +1917,7 @@ export default function FredNativeChatView({
                       {capabilities.fileUpload ? (
                         <button type="button" role="menuitem" onClick={() => fileInputRef.current?.click()}>
                           <span>Datei anhängen</span>
-                          <small className="attachment-menu-limit">max. {MAX_FILE_UPLOADS} · je 20 MB</small>
+                          <small className="attachment-menu-limit">max. {MAX_FILE_UPLOADS} · je 20 MB · zusammen 35 MB</small>
                         </button>
                       ) : null}
                     </div>

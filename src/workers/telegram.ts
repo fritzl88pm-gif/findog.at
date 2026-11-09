@@ -20,7 +20,7 @@ import {
   createAttachmentPreprocessor,
   type AttachmentPreprocessorProviders,
 } from "@/lib/telegram/attachment-preprocessor";
-import { processMineruBatch } from "@/lib/attachments/mineru-cloud";
+import { processMineruInBatches } from "@/lib/attachments/mineru-cloud";
 import { describeImage } from "@/lib/attachments/gemini-image-context";
 import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-fallback";
 import { createConfiguredDocumentProvider } from "@/lib/attachments/document-pipeline";
@@ -135,7 +135,7 @@ export function buildPreprocessorProviders(supabase: Supabase): AttachmentPrepro
   return {
     document: createConfiguredDocumentProvider({
       getSettings: () => getScanningSettings(supabase),
-      mineruProvider: (files, options = {}) => processMineruBatch(files, options),
+      mineruProvider: (files, options = {}) => processMineruInBatches(files, options),
       omnirouteProvider: (files, options) => extractDocumentsWithConfiguredModel(files, {
         signal: options?.signal,
       }),

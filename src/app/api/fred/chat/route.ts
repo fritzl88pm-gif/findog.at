@@ -29,7 +29,7 @@ import {
 } from "@/lib/attachments/validation";
 import { extractDocumentsWithConfiguredModel } from "@/lib/attachments/document-fallback";
 import { createConfiguredDocumentProvider } from "@/lib/attachments/document-pipeline";
-import { processMineruBatch } from "@/lib/attachments/mineru-cloud";
+import { processMineruInBatches } from "@/lib/attachments/mineru-cloud";
 import { describeImage } from "@/lib/attachments/gemini-image-context";
 import {
   createDeadline,
@@ -340,7 +340,7 @@ async function readMultipartRequestBody(
       attachment: {
         maxCount: MAX_FILE_UPLOADS,
         maxBytes: MAX_FILE_BYTES,
-        tooManyMessage: "Bitte maximal fünf Dateien pro Anfrage hochladen.",
+        tooManyMessage: `Bitte maximal ${MAX_FILE_UPLOADS} Dateien pro Anfrage hochladen.`,
         tooLargeMessage: "Eine Datei darf maximal 20 MB groß sein.",
       },
     },
@@ -1163,7 +1163,7 @@ export async function POST(request: Request) {
               const attachmentInputs = body.attachments.map(attachmentToInput);
               const configuredDocumentProvider = createConfiguredDocumentProvider({
                 getSettings: async () => attachmentSettings,
-                mineruProvider: (files, options = {}) => processMineruBatch(files, options),
+                mineruProvider: (files, options = {}) => processMineruInBatches(files, options),
                 omnirouteProvider: (files, options) => extractDocumentsWithConfiguredModel(files, {
                   signal: options?.signal,
                 }),

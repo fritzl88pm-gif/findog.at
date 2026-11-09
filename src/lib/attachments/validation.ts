@@ -7,7 +7,7 @@ import type { AttachmentKind } from "./context";
 
 export const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MiB
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MiB
-export const MAX_FILE_UPLOADS = 5;
+export const MAX_FILE_UPLOADS = 50;
 export const MAX_IMAGE_UPLOADS = 5;
 
 export const FILE_MIME_BY_EXTENSION: Record<string, string> = {
