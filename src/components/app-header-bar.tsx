@@ -148,6 +148,8 @@ type Props = {
   accountTriggerRef: RefObject<HTMLButtonElement | null>;
   onOpenNews: () => void;
   onSelectTool: (id: LauncherToolId) => void;
+  /** Increment to open the tools popover programmatically. */
+  toolsOpenRequest?: number;
   onOpenSettings: () => void;
   onOpenAdministration: () => void;
   onSignOut: () => void;
@@ -163,6 +165,7 @@ export default function AppHeaderBar({
   accountTriggerRef,
   onOpenNews,
   onSelectTool,
+  toolsOpenRequest,
   onOpenSettings,
   onOpenAdministration,
   onSignOut,
@@ -183,7 +186,7 @@ export default function AppHeaderBar({
         </svg>
         {hasUnreadNews ? <span className="app-header-news-dot" aria-hidden="true" /> : null}
       </button>
-      <ToolsLauncher isAdmin={isAdmin} activeView={activeView} onSelect={onSelectTool} />
+      <ToolsLauncher isAdmin={isAdmin} activeView={activeView} onSelect={onSelectTool} openRequest={toolsOpenRequest} />
       <AccountMenu
         email={email}
         isAdmin={isAdmin}

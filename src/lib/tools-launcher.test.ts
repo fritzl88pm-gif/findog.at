@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  getLauncherChips,
   getLauncherGroups,
   getLauncherToolIds,
   LAUNCHER_GROUPS,
@@ -47,5 +48,27 @@ describe("tools launcher entries", () => {
   it("drops a group that would be empty for regular users", () => {
     const groups = getLauncherGroups(false);
     expect(groups.every((group) => group.tools.length > 0)).toBe(true);
+  });
+});
+
+describe("empty-chat tool chips", () => {
+  it("suggests five tools derived from the launcher groups", () => {
+    expect(getLauncherChips(false).map((chip) => chip.tool.id)).toEqual([
+      "bfg-decisions",
+      "bfg-pro",
+      "scanning",
+      "german-sv-pension",
+      "fredrun",
+    ]);
+  });
+
+  it("never contains admin-only tools for regular users and only known launcher ids", () => {
+    for (const isAdmin of [false, true]) {
+      const ids = getLauncherToolIds(isAdmin);
+      for (const chip of getLauncherChips(isAdmin)) {
+        expect(ids).toContain(chip.tool.id);
+        if (!isAdmin) expect(chip.tool.adminOnly).toBeUndefined();
+      }
+    }
   });
 });
