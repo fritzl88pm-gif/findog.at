@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 
-import { isAdminUser } from "@/lib/admin-auth";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import { UserVisibleError } from "@/lib/errors";
 import {
@@ -160,13 +159,6 @@ export async function GET(
       ? (await verifyBfgCitations(legacyCandidates)).verified
       : [];
     const row = conversation as FredConversationRow;
-    // Server-side admin gate: "Gedankengang" steps are stored for admins only and never leave the server otherwise.
-    let viewerIsAdmin = false;
-    try {
-      viewerIsAdmin = await isAdminUser(supabase, user.id);
-    } catch {
-      viewerIsAdmin = false;
-    }
     return json({
       conversation: {
         id: row.id,
@@ -188,10 +180,7 @@ export async function GET(
             )
           : message.citedAnswer.text;
         // Stored traces may predate the redesign: strip reasoning text, internal ids and raw payloads on read.
-        const executionTrace = sanitizeStoredExecutionTrace(message.execution_trace, {
-          finalize: true,
-          stripThinking: !viewerIsAdmin,
-        });
+        const executionTrace = sanitizeStoredExecutionTrace(message.execution_trace, { finalize: true });
         const sourceReferences = mergeFredSources(
           parseStoredFredSources(message.source_references),
           message.rawTransformation.sources,

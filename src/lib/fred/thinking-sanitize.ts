@@ -1,5 +1,5 @@
 /**
- * Client-safe sanitizing for the admin-only German "Gedankengang" (no server-only imports):
+ * Client-safe sanitizing for the German "Gedankengang" (no server-only imports):
  * shared by the collector (server) and the trace parser (server + browser).
  */
 import { maskDisplayText } from "./execution-sanitize";

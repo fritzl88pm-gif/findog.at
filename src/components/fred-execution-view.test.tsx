@@ -20,10 +20,9 @@ const steps: FredExecutionStep[] = [
 describe("ExecutionTimeline Gedankengang", () => {
   const html = renderToStaticMarkup(<ExecutionTimeline steps={steps} />);
 
-  it("renders a collapsed, expandable 'Gedankengang' block", () => {
+  it("renders an expanded-by-default (still collapsible) 'Gedankengang' block", () => {
     expect(html).toContain("Gedankengang");
-    expect(html).toContain('<details class="fred-exec-fold">');
-    expect(html).not.toMatch(/<details[^>]*\sopen/u);
+    expect(html).toMatch(/<details class="fred-exec-fold" open(="")?>/u);
     expect(html).toContain('class="fred-exec-thinking"');
   });
 

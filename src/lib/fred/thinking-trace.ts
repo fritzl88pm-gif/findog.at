@@ -1,5 +1,5 @@
 /**
- * Admin-only "Gedankengang": Fred's (English) reasoning blocks, sanitized and translated to German.
+ * "Gedankengang": Fred's (English) reasoning blocks, sanitized and translated to German.
  *
  * Pipeline per thinking block: accumulate chunks (by upstream event id) → sanitize deterministically →
  * translate with a small model in the background → sanitize again → deliver as a `thinking` trace step.

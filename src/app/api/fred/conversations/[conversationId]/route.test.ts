@@ -576,11 +576,11 @@ describe("GET /api/fred/conversations/[conversationId] citations", () => {
   });
 });
 
-describe("GET /api/fred/conversations/[conversationId] Gedankengang gate", () => {
+describe("GET /api/fred/conversations/[conversationId] Gedankengang", () => {
   const conversationId = "33333333-3333-4333-8333-333333333333";
   const german = "Ich prüfe die Pendlerpauschale nach § 16 Abs. 1 Z 6 EStG.";
 
-  async function load(adminLookup: "admin" | "user" | "error") {
+  async function load(detail: string = german) {
     vi.mocked(authenticateSupabaseRequest).mockResolvedValue({ id: "user-1" });
     vi.mocked(verifyBfgCitations).mockResolvedValue({ verified: [], rejected: [] });
     const conversationQuery = {
@@ -599,7 +599,7 @@ describe("GET /api/fred/conversations/[conversationId] Gedankengang gate", () =>
         id: 5, role: "assistant", content: "Antwort", display_content: "Antwort", research_trace: [],
         execution_trace: [
           { id: "analysis:phase", kind: "analysis", status: "completed", label: "Anfrage analysiert" },
-          { id: "thinking:a:1", kind: "thinking", status: "completed", label: "Gedankengang", detail: german, afterId: "analysis:phase" },
+          { id: "thinking:a:1", kind: "thinking", status: "completed", label: "Gedankengang", detail, afterId: "analysis:phase" },
         ],
         source_references: [], provider_created_at: "2026-07-19T07:01:00.000Z",
         created_at: "2026-07-19T07:01:00.000Z", attachments: [], web_search_enabled: false, artifacts: [],
@@ -612,17 +612,8 @@ describe("GET /api/fred/conversations/[conversationId] Gedankengang gate", () =>
       order: vi.fn().mockReturnThis(),
       then: (resolve: (value: typeof messageResult) => unknown) => resolve(messageResult),
     };
-    const adminQuery = {
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValue(adminLookup === "error"
-        ? { data: null, error: { message: "db down" } }
-        : { data: adminLookup === "admin" ? { user_id: "user-1" } : null, error: null }),
-    };
     vi.mocked(getSupabaseServerClient).mockReturnValue({
-      from: vi.fn((table: string) => table === "fred_conversations"
-        ? conversationQuery
-        : table === "admin_users" ? adminQuery : messagesQuery),
+      from: vi.fn((table: string) => table === "fred_conversations" ? conversationQuery : messagesQuery),
     } as never);
     const response = await GET(
       new Request(`https://findog.at/api/fred/conversations/${conversationId}`, {
@@ -636,17 +627,15 @@ describe("GET /api/fred/conversations/[conversationId] Gedankengang gate", () =>
 
   beforeEach(() => vi.resetAllMocks());
 
-  it("returns stored Gedankengang steps to admins", async () => {
-    const payload = await load("admin");
+  it("returns stored German Gedankengang steps to every user (no admin lookup)", async () => {
+    const payload = await load();
     expect(payload.messages[0].executionTrace.map((step) => step.kind)).toEqual(["analysis", "thinking"]);
     expect(payload.messages[0].executionTrace[1].detail).toBe(german);
   });
 
-  it("never returns the thinking text to non-admins or when the admin check fails", async () => {
-    for (const lookup of ["user", "error"] as const) {
-      const payload = await load(lookup);
-      expect(payload.messages[0].executionTrace.map((step) => step.kind)).toEqual(["analysis"]);
-      expect(JSON.stringify(payload)).not.toContain("Pendlerpauschale nach");
-    }
+  it("re-sanitizes stored thinking text on read", async () => {
+    const payload = await load("Siehe weknora://doc/99ada6f9-5075-445c-b071-ccc7718f4b02 und knowledge_search.");
+    const text = payload.messages[0].executionTrace[1].detail ?? "";
+    expect(text).not.toMatch(/weknora|99ada6f9|knowledge_search/u);
   });
 });

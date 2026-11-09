@@ -261,6 +261,7 @@ function ExecutionStepItem({ step, children }: { step: FredExecutionStep; childr
   const hasTerminal = Boolean(step.command || step.output);
   const facts = step.facts ?? [];
   const taskName = step.kind === "agent" ? step.taskName : undefined;
+  // "Gedankengang" blocks start expanded; `open` is only the initial state, users can still collapse them.
   const isThinking = step.kind === "thinking" && Boolean(step.detail);
   const hasBody = sources.length > 0 || hasTerminal || facts.length > 0 || isPlanning || longDetail || isThinking;
 
@@ -320,7 +321,7 @@ function ExecutionStepItem({ step, children }: { step: FredExecutionStep; childr
       </span>
       <div className="fred-exec-card">
         {hasBody ? (
-          <details className="fred-exec-fold" open={step.status === "running" ? true : undefined}>
+          <details className="fred-exec-fold" open={step.status === "running" || isThinking ? true : undefined}>
             <summary className="fred-exec-head">
               {head}
               {queryChips}

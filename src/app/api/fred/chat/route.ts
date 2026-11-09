@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 
-import { isAdminUser } from "@/lib/admin-auth";
 import { authenticateSupabaseRequest } from "@/lib/auth/server";
 import {
   parseBoundedMultipart,
@@ -599,24 +598,8 @@ function sseData(frame: string): string | null {
 
 type FredServerConfig = ReturnType<typeof readFredEmbedServerConfig>;
 
-/**
- * Admin gate for the German "Gedankengang": decided here, on the server, per request. A failed lookup
- * means "no" - the feature must never break a chat turn.
- */
-async function canViewThinking(
-  supabase: NonNullable<ReturnType<typeof getSupabaseServerClient>>,
-  userId: string,
-): Promise<boolean> {
-  try {
-    return await isAdminUser(supabase, userId);
-  } catch {
-    return false;
-  }
-}
-
 function buildWebTurnUpstream(
   registeredConfigs: Map<string, FredServerConfig>,
-  includeThinking = false,
 ): TurnServiceUpstreamDeps {
   const serverConfig = (channelId: string): FredServerConfig => {
     const value = registeredConfigs.get(channelId);
@@ -632,7 +615,7 @@ function buildWebTurnUpstream(
   // Session tokens come from the shared cache. A call WeKnora rejects with an
   // expired or unknown token is retried once with a freshly minted one.
   return {
-    ...(includeThinking ? { translateThinking: createDeepSeekThinkingTranslator() } : {}),
+    translateThinking: createDeepSeekThinkingTranslator(),
     async mintSession(params) {
       const session = await getFredEmbedSession({
         config: serverConfig(params.channelId),
@@ -806,7 +789,6 @@ function streamTextOnlyTurn(options: {
   body: ParsedFredChatRequest;
   agentKey: FredAgentKey;
   researchDisplayMode: "simple" | "advanced";
-  includeThinking: boolean;
   receipt: FredRequestReceipt;
   storedConversation: FredConversationRow | null;
 }): Response {
@@ -846,7 +828,6 @@ function streamTextOnlyTurn(options: {
             agentKey: options.agentKey,
             webSearchEnabled: options.body.webSearchEnabled,
             researchDisplayMode: options.researchDisplayMode,
-            ...(options.includeThinking ? { includeThinking: true } : {}),
             userEventId: options.receipt.userEventId,
             assistantEventId: options.receipt.assistantEventId,
             onRequestTransition: async (transition: FredRequestLifecycleTransition) => {
@@ -881,7 +862,7 @@ function streamTextOnlyTurn(options: {
             },
             signal: streamAbort.signal,
           },
-          buildWebTurnUpstream(registeredConfigs, options.includeThinking),
+          buildWebTurnUpstream(registeredConfigs),
           buildWebTurnPersistence(options.supabase, options.storedConversation),
           buildWebTurnConfig(registeredConfigs),
         );
@@ -983,7 +964,6 @@ export async function POST(request: Request) {
     }
     requireActiveRequest(request);
     const researchDisplayMode = WEB_RESEARCH_DISPLAY_MODE;
-    const includeThinking = await canViewThinking(supabase, user.id);
     const storedConversation = await awaitWithIngressSignal(
       loadOwnedConversation({
         supabase,
@@ -1040,7 +1020,6 @@ export async function POST(request: Request) {
         body,
         agentKey,
         researchDisplayMode,
-        includeThinking,
         receipt: requestReceipt,
         storedConversation,
       });
@@ -1386,7 +1365,7 @@ export async function POST(request: Request) {
           let finalContent = "";
           let researchTrace: FredResearchStep[] = [];
           let executionTrace: FredExecutionStep[] = [];
-          const thinking = isAdvanced && includeThinking
+          const thinking = isAdvanced
             ? createThinkingCollector({
               translate: createDeepSeekThinkingTranslator(),
               currentStepId: () => executionTrace[executionTrace.length - 1]?.id,

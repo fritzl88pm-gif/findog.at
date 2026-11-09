@@ -1048,7 +1048,7 @@ describe("researchDisplayMode", () => {
   });
 });
 
-describe("executeFredTurn admin-only Gedankengang", () => {
+describe("executeFredTurn Gedankengang", () => {
   const english = "I should check the commuter allowance in weknora://doc/99ada6f9-5075-445c-b071-ccc7718f4b02 chunk 32";
   const german = "Ich prüfe die Pendlerpauschale gemäß § 16 Abs. 1 Z 6 EStG.";
 
@@ -1085,9 +1085,9 @@ describe("executeFredTurn admin-only Gedankengang", () => {
   const thinkingSteps = (events: FredTurnEvent[]) => events.flatMap((event) =>
     event.type === "execution" && event.step.kind === "thinking" ? [event.step] : []);
 
-  it("delivers and persists a translated, sanitized German block for admins", async () => {
+  it("delivers and persists a translated, sanitized German block for any user", async () => {
     const translate = vi.fn().mockResolvedValue(german);
-    const { events, persistence } = await run({ request: { includeThinking: true }, translate });
+    const { events, persistence } = await run({ translate });
 
     expect(translate).toHaveBeenCalledTimes(1);
     const sent = String(translate.mock.calls[0][0]);
@@ -1112,25 +1112,23 @@ describe("executeFredTurn admin-only Gedankengang", () => {
     expect(JSON.stringify(vi.mocked(persistence.recordEvent).mock.calls)).not.toContain("commuter allowance");
   });
 
-  it("gives non-admins only the neutral phase marker and never calls the translator", async () => {
+  it("delivers the same German-only payload to a non-admin user (no gating, English never reaches the client)", async () => {
     const translate = vi.fn().mockResolvedValue(german);
-    const { events, persistence } = await run({ translate });
+    const { events, persistence } = await run({ request: { clientId: "22222222-2222-4222-8222-222222222222" }, translate });
 
-    expect(translate).not.toHaveBeenCalled();
-    expect(thinkingSteps(events)).toEqual([]);
+    expect(thinkingSteps(events)).toHaveLength(1);
     const payload = JSON.stringify([events, vi.mocked(persistence.recordEvent).mock.calls]);
-    expect(payload).not.toContain(german);
+    expect(payload).toContain(german);
     expect(payload).not.toContain("commuter allowance");
-    expect(payload).not.toContain('"thinking"');
-    expect(events.some((event) => event.type === "execution" && event.step.id === "analysis:phase")).toBe(true);
+    expect(payload).not.toMatch(/weknora:\/\/|99ada6f9/u);
   });
 
   it("does nothing without a translator dependency or in simple (Telegram) mode", async () => {
-    const withoutTranslator = await run({ request: { includeThinking: true } });
+    const withoutTranslator = await run({});
     expect(thinkingSteps(withoutTranslator.events)).toEqual([]);
 
     const translate = vi.fn().mockResolvedValue(german);
-    const simple = await run({ request: { includeThinking: true, researchDisplayMode: "simple" }, translate });
+    const simple = await run({ request: { researchDisplayMode: "simple" }, translate });
     expect(translate).not.toHaveBeenCalled();
     expect(simple.events.some((event) => event.type === "execution")).toBe(false);
   });
@@ -1140,7 +1138,7 @@ describe("executeFredTurn admin-only Gedankengang", () => {
       vi.fn().mockRejectedValue(new Error("deepseek down")),
       vi.fn().mockResolvedValue(null),
     ]) {
-      const { events, persistence } = await run({ request: { includeThinking: true }, translate });
+      const { events, persistence } = await run({ translate });
       expect(translate).toHaveBeenCalledTimes(1);
       expect(thinkingSteps(events)).toEqual([]);
       expect(events.some((event) => event.type === "error")).toBe(false);
@@ -1159,7 +1157,7 @@ describe("executeFredTurn admin-only Gedankengang", () => {
       const upstream = thinkingUpstream();
       upstream.translateThinking = translate;
       const gen = executeFredTurn(
-        baseRequest({ researchDisplayMode: "advanced", includeThinking: true }),
+        baseRequest({ researchDisplayMode: "advanced" }),
         upstream,
         makePersistenceDeps(),
         makeConfigDeps(),

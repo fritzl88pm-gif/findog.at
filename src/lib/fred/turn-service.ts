@@ -65,8 +65,8 @@ import type {
 
 export interface TurnServiceUpstreamDeps {
   /**
-   * Translates one sanitized English reasoning block to German (null on failure). Together with
-   * `request.includeThinking` this enables the admin-only "Gedankengang" trace; absent → never captured.
+   * Translates one sanitized English reasoning block to German (null on failure). Provided by the web
+   * route only; enables the German "Gedankengang" trace in advanced mode. Absent (Telegram) → never captured.
    */
   translateThinking?: ThinkingTranslator;
   /** Mint a Fred embed session token. */
@@ -375,8 +375,8 @@ export async function* executeFredTurn(
   const answerChunks: string[] = [];
   let researchTrace: FredResearchStep[] = [];
   let executionTrace: FredExecutionStep[] = [];
-  // Admin gate: only callers that resolved an admin user set `includeThinking`; everyone else never gets a collector.
-  const thinking = isAdvanced && request.includeThinking === true && upstream.translateThinking
+  // Only the web route supplies a translator (Telegram is final-only); simple mode never captures.
+  const thinking = isAdvanced && upstream.translateThinking
     ? createThinkingCollector({
       translate: upstream.translateThinking,
       currentStepId: () => executionTrace[executionTrace.length - 1]?.id,

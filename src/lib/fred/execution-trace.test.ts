@@ -1240,7 +1240,7 @@ describe("Advanced execution trace: structured tool views", () => {
   });
 });
 
-describe("Advanced execution trace: raw thinking is never surfaced (admin-only German Gedankengang is built separately)", () => {
+describe("Advanced execution trace: raw thinking is never surfaced (German Gedankengang is built separately)", () => {
   const secretThought = "Ich überlege geheim: der Nutzer pendelt, also Pendlerpauschale prüfen";
 
   it("turns thinking events of any shape into one text-free phase marker", () => {
@@ -1312,7 +1312,7 @@ describe("Advanced execution trace: raw thinking is never surfaced (admin-only G
   });
 });
 
-describe("Advanced execution trace: admin-only German Gedankengang steps", () => {
+describe("Advanced execution trace: German Gedankengang steps", () => {
   const thinkingStep = (overrides: Record<string, unknown> = {}) => ({
     id: "thinking:abc:1",
     kind: "thinking",
@@ -1352,17 +1352,14 @@ describe("Advanced execution trace: admin-only German Gedankengang steps", () =>
     expect(clean[0].detail).toContain("Fundstelle");
   });
 
-  it("strips thinking steps for non-admin readers", () => {
+  it("keeps thinking steps for every reader (no role-based stripping)", () => {
     const stored = [
       { id: "analysis:phase", kind: "analysis", status: "completed", label: "Anfrage analysiert" },
       thinkingStep({ afterId: "analysis:phase" }),
       { id: "knowledge:1", kind: "knowledge", status: "completed", label: "Wissensbasis durchsucht" },
     ];
-    const forNonAdmin = sanitizeStoredExecutionTrace(stored, { finalize: true, stripThinking: true });
-    expect(forNonAdmin.map((step) => step.kind)).toEqual(["analysis", "knowledge"]);
-    expect(JSON.stringify(forNonAdmin)).not.toContain("33 Abs. 4");
-    const forAdmin = sanitizeStoredExecutionTrace(stored, { finalize: true });
-    expect(forAdmin.map((step) => step.kind)).toEqual(["analysis", "thinking", "knowledge"]);
+    const read = sanitizeStoredExecutionTrace(stored, { finalize: true });
+    expect(read.map((step) => step.kind)).toEqual(["analysis", "thinking", "knowledge"]);
   });
 
   it("inserts late thinking steps after their anchor, in order, once, without closing the phase marker", () => {

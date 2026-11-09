@@ -56,11 +56,6 @@ export interface FredTurnRequest {
   webSearchEnabled: boolean;
   /** Research display mode resolved by server from user preferences. */
   researchDisplayMode?: "simple" | "advanced";
-  /**
-   * Admin-only: capture Fred's reasoning as a sanitized, German "Gedankengang" trace step. Set by the
-   * server after an admin check; requires the `translateThinking` upstream dependency. Never for Telegram.
-   */
-  includeThinking?: boolean;
   /** Attachment metadata for persistence. */
   attachments?: FredTurnAttachmentMeta[];
   /**
