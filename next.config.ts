@@ -1,8 +1,5 @@
 import type { NextConfig } from "next";
 
-// Relative import: next.config.ts is loaded outside the "@/" alias; this module has no imports.
-import { MAX_SCANNING_MULTIPART_BYTES } from "./src/lib/scanning/config";
-
 const supabaseConnectSources = [
   "https://*.supabase.co",
   "wss://*.supabase.co",
@@ -40,11 +37,10 @@ const developmentScriptSources = process.env.NODE_ENV === "development" ? " 'uns
 // Next's proxy buffers request bodies up to proxyClientMaxBodySize (default 10 MB)
 // and silently truncates larger ones before the route sees them. The proxy runs
 // on every route (maintenance mode), so this must cover the largest legitimate
-// route limit: scanning multipart (5x5 MiB images + 5x10 MiB PDFs + 1 MiB =
-// 76 MiB), above Fred native attachments (35 MiB + 64 KiB + 1 MiB) and admin
-// downloads (20 MiB). Routes still enforce their own, smaller limits.
-// next.config.test.ts checks the other limits stay below this value.
-const PROXY_CLIENT_MAX_BODY_BYTES = MAX_SCANNING_MULTIPART_BYTES + 4 * 1_024 * 1_024;
+// route limit: Fred preprocessed attachments (10 files x 20 MiB + 64 KiB text
+// + 1 MiB multipart overhead ~= 201 MiB), above scanning (76 MiB). Routes still
+// enforce their own, smaller limits; src/next-config.test.ts guards this.
+const PROXY_CLIENT_MAX_BODY_BYTES = 205 * 1_024 * 1_024;
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,

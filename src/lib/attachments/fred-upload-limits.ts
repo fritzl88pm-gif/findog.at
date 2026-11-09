@@ -1,4 +1,5 @@
 import { UserVisibleError } from "@/lib/errors";
+import { MAX_FILE_BYTES, MAX_FILE_UPLOADS } from "@/lib/attachments/validation";
 import { MAX_NATIVE_ATTACHMENT_TOTAL_BYTES } from "@/lib/weknora/fred-native";
 
 const MAX_FRED_MULTIPART_TEXT_BYTES = 64 * 1_024;
@@ -8,8 +9,10 @@ export const MAX_FRED_NATIVE_MULTIPART_BYTES = MAX_NATIVE_ATTACHMENT_TOTAL_BYTES
   + MAX_FRED_MULTIPART_TEXT_BYTES
   + FRED_MULTIPART_BOUNDARY_AND_HEADERS_BYTES;
 
+// Preprocessed attachments go through MinerU (batched) or the Luna fallback,
+// not into the WeKnora request, so every file may use its full per-file limit.
 export const MAX_FRED_PREPROCESSED_ATTACHMENT_BYTES =
-  MAX_NATIVE_ATTACHMENT_TOTAL_BYTES;
+  MAX_FILE_UPLOADS * MAX_FILE_BYTES;
 
 export const MAX_FRED_PREPROCESSED_MULTIPART_BYTES = MAX_FRED_MULTIPART_TEXT_BYTES
   + MAX_FRED_PREPROCESSED_ATTACHMENT_BYTES

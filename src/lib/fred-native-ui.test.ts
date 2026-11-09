@@ -152,7 +152,7 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).toContain("if (!capabilities.imageUpload)");
     expect(viewSource).toContain("Bild-Uploads sind derzeit nicht verfügbar.");
     expect(viewSource).toContain("max. {MAX_IMAGE_UPLOADS} · je 10 MB");
-    expect(viewSource).toContain("max. {MAX_FILE_UPLOADS} · je 20 MB · zusammen 35 MB");
+    expect(viewSource).toContain("max. {MAX_FILE_UPLOADS} · je 20 MB");
     expect(viewSource).toContain('className="fred-quick-icon"');
     expect(viewSource).toContain('className="fred-web-search-icon"');
     expect(viewSource).toContain('fetch("/api/fred/chat"');
@@ -316,7 +316,7 @@ describe("Fred native Findog UI", () => {
     expect(viewSource).toContain('formData.append("attachment"');
     expect(viewSource).toContain("webSearchEnabled");
     expect(attachmentValidationSource).toContain("MAX_IMAGE_UPLOADS = 5");
-    expect(attachmentValidationSource).toContain("MAX_FILE_UPLOADS = 50");
+    expect(attachmentValidationSource).toContain("MAX_FILE_UPLOADS = 10");
     expect(routeSource).toContain('rpc("record_fred_native_event"');
     expect(pageSource).toContain("normalizeFredAttachments");
   });

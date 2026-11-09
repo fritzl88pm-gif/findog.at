@@ -18,8 +18,10 @@ describe("Fred multipart upload limits", () => {
     expect(fredMultipartRequestByteLimit(true)).toBe(MAX_FRED_NATIVE_MULTIPART_BYTES);
     expect(fredMultipartRequestByteLimit(false)).toBe(MAX_FRED_PREPROCESSED_MULTIPART_BYTES);
     expect(fredAttachmentAggregateByteLimit(true)).toBe(MAX_NATIVE_ATTACHMENT_TOTAL_BYTES);
-    expect(fredAttachmentAggregateByteLimit(false)).toBe(MAX_NATIVE_ATTACHMENT_TOTAL_BYTES);
-    expect(MAX_FRED_NATIVE_MULTIPART_BYTES).toBe(MAX_FRED_PREPROCESSED_MULTIPART_BYTES);
+    expect(fredAttachmentAggregateByteLimit(false)).toBe(10 * 20 * 1_024 * 1_024);
+    expect(MAX_FRED_PREPROCESSED_MULTIPART_BYTES).toBe(
+      10 * 20 * 1_024 * 1_024 + 64 * 1_024 + 1_024 * 1_024,
+    );
   });
 
   it("accepts exactly 35 MiB and rejects one aggregate byte more before provider work", () => {
