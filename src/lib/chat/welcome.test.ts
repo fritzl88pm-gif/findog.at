@@ -322,17 +322,21 @@ describe("getWelcomeImage", () => {
   const SUNDAY = new Date("2026-01-18T07:00:00.000Z");
   const NEW_YEAR = new Date("2026-01-01T07:00:00.000Z");
 
+  const NO_HOLIDAY_IMAGES = Object.fromEntries(
+    Object.keys(WELCOME_IMAGE_MANIFEST.holidays).map((id) => [id, []]),
+  ) as unknown as WelcomeImageManifest["holidays"];
+
   const manifest = (overrides: Partial<WelcomeImageManifest>): WelcomeImageManifest => ({
     ...WELCOME_IMAGE_MANIFEST,
     ...overrides,
   });
 
   it("rotates through every morning and midday motif", () => {
-    expect(getWelcomeImage(MORNING, 0)).toBe("/fred-welcome-morgen-1.png");
-    expect(getWelcomeImage(MORNING, 0.75)).toBe("/fred-welcome-morgen-2.png");
-    expect(getWelcomeImage(MIDDAY, 0)).toBe("/fred-welcome-mittag-1.png");
-    expect(getWelcomeImage(MIDDAY, 0.5)).toBe("/fred-welcome-mittag-2.png");
-    expect(getWelcomeImage(MIDDAY, 0.99)).toBe("/fred-welcome-mittag-3.png");
+    const { morning, midday } = WELCOME_IMAGE_MANIFEST.periods;
+    expect(getWelcomeImage(MORNING, 0)).toBe(morning[0]);
+    expect(getWelcomeImage(MORNING, 0.99)).toBe(morning[morning.length - 1]);
+    expect(getWelcomeImage(MIDDAY, 0)).toBe(midday[0]);
+    expect(getWelcomeImage(MIDDAY, 0.99)).toBe(midday[midday.length - 1]);
   });
 
   it("covers each motif of a period across many random draws", () => {
@@ -344,21 +348,23 @@ describe("getWelcomeImage", () => {
   });
 
   it("stays inside the motif list even when the draw returns the upper bound or below zero", () => {
-    expect(getWelcomeImage(MIDDAY, 1)).toBe("/fred-welcome-mittag-3.png");
-    expect(getWelcomeImage(MORNING, 1)).toBe("/fred-welcome-morgen-2.png");
-    expect(getWelcomeImage(MORNING, -1)).toBe("/fred-welcome-morgen-1.png");
+    const { morning, midday } = WELCOME_IMAGE_MANIFEST.periods;
+    expect(getWelcomeImage(MIDDAY, 1)).toBe(midday[midday.length - 1]);
+    expect(getWelcomeImage(MORNING, 1)).toBe(morning[morning.length - 1]);
+    expect(getWelcomeImage(MORNING, -1)).toBe(morning[0]);
   });
 
-  it("serves the single motif of single-image periods for every draw", () => {
-    const cases: Array<[string, string]> = [
-      ["2026-01-13T15:00:00.000Z", "/fred-welcome-nachmittag-1.png"],
-      ["2026-01-13T19:00:00.000Z", "/fred-welcome-abend-1.png"],
-      ["2026-01-13T23:00:00.000Z", "/fred-welcome-nacht-1.png"],
+  it("serves only motifs of the current period for every draw", () => {
+    const { afternoon, evening, lateNight } = WELCOME_IMAGE_MANIFEST.periods;
+    const cases: Array<[string, readonly string[]]> = [
+      ["2026-01-13T15:00:00.000Z", afternoon],
+      ["2026-01-13T19:00:00.000Z", evening],
+      ["2026-01-13T23:00:00.000Z", lateNight],
     ];
 
     for (const [timestamp, expected] of cases) {
       for (const pick of [0, 0.5, 1]) {
-        expect(getWelcomeImage(new Date(timestamp), pick)).toBe(expected);
+        expect(expected).toContain(getWelcomeImage(new Date(timestamp), pick));
       }
     }
   });
@@ -372,13 +378,13 @@ describe("getWelcomeImage", () => {
   it("uses a real random draw when no explicit pick is given", () => {
     const drawn = new Set(Array.from({ length: 200 }, () => getWelcomeImage(MIDDAY)));
 
-    expect(drawn.size).toBe(3);
+    expect(drawn.size).toBe(WELCOME_IMAGE_MANIFEST.periods.midday.length);
   });
 
   it("falls back to the period images while Sunday and holiday lists are empty", () => {
-    expect(WELCOME_IMAGE_MANIFEST.sunday).toEqual([]);
-    expect(getWelcomeImage(SUNDAY, 0)).toBe("/fred-welcome-morgen-1.png");
-    expect(getWelcomeImage(NEW_YEAR, 0)).toBe("/fred-welcome-morgen-1.png");
+    const empty = manifest({ sunday: [], holidays: NO_HOLIDAY_IMAGES });
+    expect(getWelcomeImage(SUNDAY, 0, empty)).toBe("/fred-welcome-morgen-1.png");
+    expect(getWelcomeImage(NEW_YEAR, 0, empty)).toBe("/fred-welcome-morgen-1.png");
   });
 
   it("uses the Sunday list on Sundays and the period list on other days", () => {
@@ -392,7 +398,7 @@ describe("getWelcomeImage", () => {
   it("prefers the holiday list over Sunday and period lists", () => {
     const withLists = manifest({
       sunday: ["/sonntag-1.png"],
-      holidays: { ...WELCOME_IMAGE_MANIFEST.holidays, ostersonntag: ["/ostern-1.webp"] },
+      holidays: { ...NO_HOLIDAY_IMAGES, ostersonntag: ["/ostern-1.webp"] },
     });
 
     // Ostersonntag 2026 ist Sonntag und Feiertag.
@@ -402,7 +408,7 @@ describe("getWelcomeImage", () => {
   });
 
   it("falls back from an empty holiday list to the Sunday list, then to the period list", () => {
-    const sundayOnly = manifest({ sunday: ["/sonntag-1.png"] });
+    const sundayOnly = manifest({ sunday: ["/sonntag-1.png"], holidays: NO_HOLIDAY_IMAGES });
 
     // Ostersonntag hat keine eigene Liste, ist aber ein Sonntag.
     expect(getWelcomeImage(new Date("2026-04-05T07:00:00.000Z"), 0, sundayOnly)).toBe("/sonntag-1.png");
