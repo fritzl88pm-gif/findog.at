@@ -25,10 +25,32 @@ function renderMathHtml(expression: string, displayMode: boolean): string | null
   }
 }
 
+// Platzhalter wie [Datum], [Betrag] oder [Name des Bf] – beginnen mit einem
+// Buchstaben, damit Zitatkürzungen wie [...] oder [§ 4] unberührt bleiben.
+const PLACEHOLDER_PATTERN = /\[[A-Za-zÄÖÜäöüß][^\[\]\n]{0,60}\]/gu;
+
+function renderTextWithPlaceholders(text: string, key: string): ReactNode {
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  for (const match of text.matchAll(PLACEHOLDER_PATTERN)) {
+    const start = match.index ?? 0;
+    if (start > lastIndex) parts.push(text.slice(lastIndex, start));
+    parts.push(
+      <mark className="answer-placeholder" key={`${key}-ph-${start}`} title="Platzhalter – bitte ersetzen">
+        {match[0]}
+      </mark>,
+    );
+    lastIndex = start + match[0].length;
+  }
+  if (parts.length === 0) return <span key={key}>{text}</span>;
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return <span key={key}>{parts}</span>;
+}
+
 function renderRichInline(nodes: RichInline[], keyPrefix: string): ReactNode[] {
   return nodes.map((node, index) => {
     const key = `${keyPrefix}-${index}`;
-    if (node.type === "text") return <span key={key}>{node.text}</span>;
+    if (node.type === "text") return renderTextWithPlaceholders(node.text, key);
     if (node.type === "math-inline") {
       const html = renderMathHtml(node.expression, false);
       return html ? (

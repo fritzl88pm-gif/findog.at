@@ -7190,6 +7190,15 @@ textarea:focus {
   padding: 0.05em 0.25em;
 }
 
+.answer-content mark.answer-placeholder {
+  border: 1.5px dashed var(--danger);
+  border-radius: 4px;
+  background: rgba(179, 38, 30, 0.1);
+  color: var(--danger);
+  font-weight: 700;
+  padding: 0 0.25em;
+}
+
 .fred-native-image-container {
   display: block;
   margin: 12px 0;
