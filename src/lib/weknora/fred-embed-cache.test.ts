@@ -80,6 +80,95 @@ describe("getFredEmbedSession", () => {
     expect(mintFredEmbedSession).toHaveBeenCalledTimes(2);
   });
 
+  it("hands out the cached token at once inside the prefetch window and mints one replacement in the background", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-18T10:00:00.000Z"));
+    const replacement = deferred<FredEmbedSession>();
+    vi.mocked(mintFredEmbedSession)
+      .mockResolvedValueOnce(embedSession("ems_first_token_fixture_1234567"))
+      .mockReturnValueOnce(replacement.promise);
+    await getFredEmbedSession({ config });
+
+    // 10 minutes in: 20 minutes of lifetime remain, so no prefetch yet.
+    vi.setSystemTime(new Date("2026-10-18T10:09:59.999Z"));
+    await getFredEmbedSession({ config });
+    expect(mintFredEmbedSession).toHaveBeenCalledOnce();
+
+    // 10:10 sharp: 20 minutes remain -> prefetch window starts, token is still returned immediately.
+    vi.setSystemTime(new Date("2026-10-18T10:10:00.000Z"));
+    const results = await Promise.all([getFredEmbedSession({ config }), getFredEmbedSession({ config })]);
+    expect(results.map((session) => session.token)).toEqual([
+      "ems_first_token_fixture_1234567",
+      "ems_first_token_fixture_1234567",
+    ]);
+    expect(mintFredEmbedSession).toHaveBeenCalledTimes(2);
+
+    replacement.resolve(embedSession("ems_second_token_fixture_123456"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await expect(getFredEmbedSession({ config })).resolves.toMatchObject({ token: "ems_second_token_fixture_123456" });
+    expect(mintFredEmbedSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("never hands out a token with less than 15 minutes left, even while a prefetch is still running", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-18T10:00:00.000Z"));
+    const replacement = deferred<FredEmbedSession>();
+    vi.mocked(mintFredEmbedSession)
+      .mockResolvedValueOnce(embedSession("ems_first_token_fixture_1234567"))
+      .mockReturnValueOnce(replacement.promise);
+    await getFredEmbedSession({ config });
+
+    vi.setSystemTime(new Date("2026-10-18T10:14:59.999Z"));
+    await expect(getFredEmbedSession({ config })).resolves.toMatchObject({ token: "ems_first_token_fixture_1234567" });
+
+    // At exactly 15 minutes remaining the old token is off limits: the caller waits for the shared mint.
+    vi.setSystemTime(new Date("2026-10-18T10:15:00.000Z"));
+    const waiting = getFredEmbedSession({ config });
+    replacement.resolve(embedSession("ems_second_token_fixture_123456"));
+    await expect(waiting).resolves.toMatchObject({ token: "ems_second_token_fixture_123456" });
+    expect(mintFredEmbedSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the cached token when the background mint fails, without an unhandled rejection", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-18T10:00:00.000Z"));
+    vi.mocked(mintFredEmbedSession)
+      .mockResolvedValueOnce(embedSession("ems_first_token_fixture_1234567"))
+      .mockRejectedValueOnce(new FredEmbedUpstreamError("unavailable"))
+      .mockResolvedValueOnce(embedSession("ems_second_token_fixture_123456"));
+    await getFredEmbedSession({ config });
+
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      vi.setSystemTime(new Date("2026-10-18T10:12:00.000Z"));
+      await expect(getFredEmbedSession({ config })).resolves.toMatchObject({ token: "ems_first_token_fixture_1234567" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+
+    // The next caller still gets the valid token and retries the prefetch.
+    await expect(getFredEmbedSession({ config })).resolves.toMatchObject({ token: "ems_first_token_fixture_1234567" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mintFredEmbedSession).toHaveBeenCalledTimes(3);
+  });
+
+  it("drops a rejected token even inside the prefetch window and waits for a replacement", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-18T10:00:00.000Z"));
+    vi.mocked(mintFredEmbedSession)
+      .mockResolvedValueOnce(embedSession("ems_first_token_fixture_1234567"))
+      .mockResolvedValueOnce(embedSession("ems_second_token_fixture_123456"));
+    await getFredEmbedSession({ config });
+
+    vi.setSystemTime(new Date("2026-10-18T10:12:00.000Z"));
+    await expect(getFredEmbedSession({ config, rejectedToken: "ems_first_token_fixture_1234567" }))
+      .resolves.toMatchObject({ token: "ems_second_token_fixture_123456" });
+    expect(mintFredEmbedSession).toHaveBeenCalledTimes(2);
+  });
+
   it("never reuses a session issued for less than 15 minutes", async () => {
     vi.mocked(mintFredEmbedSession).mockResolvedValue(embedSession("ems_short_token_fixture_1234567", 600));
 
@@ -186,7 +275,7 @@ describe("withFredEmbedSession", () => {
 });
 
 describe("getFredUpstreamConfig", () => {
-  it("caches the channel config for a minute and shares concurrent fetches", async () => {
+  it("serves the cached channel config for a minute and shares concurrent fetches", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-18T10:00:00.000Z"));
     vi.mocked(mintFredEmbedSession).mockResolvedValue(embedSession("ems_config_token_fixture_1234567"));
@@ -204,10 +293,96 @@ describe("getFredUpstreamConfig", () => {
 
     vi.setSystemTime(new Date("2026-10-18T10:00:59.999Z"));
     await expect(getFredUpstreamConfig({ config })).resolves.toEqual(upstreamConfig);
+    expect(fetchFredUpstreamConfig).toHaveBeenCalledOnce();
+
+    // Past the TTL the stale value is still served at once; the refresh runs in the background.
     vi.setSystemTime(new Date("2026-10-18T10:01:00.000Z"));
+    await expect(getFredUpstreamConfig({ config })).resolves.toEqual(upstreamConfig);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     await expect(getFredUpstreamConfig({ config })).resolves.toMatchObject({ agentId: "agent-2" });
     expect(fetchFredUpstreamConfig).toHaveBeenCalledTimes(2);
     expect(mintFredEmbedSession).toHaveBeenCalledOnce();
+  });
+
+  it("serves a stale config without waiting and runs exactly one shared background fetch", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-18T10:00:00.000Z"));
+    vi.mocked(mintFredEmbedSession).mockResolvedValue(embedSession("ems_config_token_fixture_1234567"));
+    const refresh = deferred<typeof upstreamConfig>();
+    vi.mocked(fetchFredUpstreamConfig)
+      .mockResolvedValueOnce(upstreamConfig)
+      .mockReturnValueOnce(refresh.promise);
+    await getFredUpstreamConfig({ config });
+
+    vi.setSystemTime(new Date("2026-10-18T10:05:00.000Z"));
+    const results = await Promise.all([
+      getFredUpstreamConfig({ config }),
+      getFredUpstreamConfig({ config }),
+      getFredUpstreamConfig({ config }),
+    ]);
+    expect(results).toEqual([upstreamConfig, upstreamConfig, upstreamConfig]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchFredUpstreamConfig).toHaveBeenCalledTimes(2);
+
+    refresh.resolve({ ...upstreamConfig, agentId: "agent-2" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await expect(getFredUpstreamConfig({ config })).resolves.toMatchObject({ agentId: "agent-2" });
+    expect(fetchFredUpstreamConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for a fresh fetch once the cached config is older than ten minutes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-18T10:00:00.000Z"));
+    vi.mocked(mintFredEmbedSession).mockResolvedValue(embedSession("ems_config_token_fixture_1234567"));
+    const refresh = deferred<typeof upstreamConfig>();
+    vi.mocked(fetchFredUpstreamConfig)
+      .mockResolvedValueOnce(upstreamConfig)
+      .mockReturnValueOnce(refresh.promise);
+    await getFredUpstreamConfig({ config });
+
+    vi.setSystemTime(new Date("2026-10-18T10:09:59.999Z"));
+    await expect(getFredUpstreamConfig({ config })).resolves.toEqual(upstreamConfig);
+
+    vi.setSystemTime(new Date("2026-10-18T10:10:00.000Z"));
+    let settled = false;
+    const blocking = getFredUpstreamConfig({ config }).then((value) => {
+      settled = true;
+      return value;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    expect(fetchFredUpstreamConfig).toHaveBeenCalledTimes(2);
+
+    refresh.resolve({ ...upstreamConfig, agentId: "agent-2" });
+    await expect(blocking).resolves.toMatchObject({ agentId: "agent-2" });
+  });
+
+  it("keeps the stale config when the background refresh fails, without an unhandled rejection", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-18T10:00:00.000Z"));
+    vi.mocked(mintFredEmbedSession).mockResolvedValue(embedSession("ems_config_token_fixture_1234567"));
+    vi.mocked(fetchFredUpstreamConfig)
+      .mockResolvedValueOnce(upstreamConfig)
+      .mockRejectedValueOnce(new UserVisibleError("Fred ist derzeit nicht erreichbar.", 502))
+      .mockResolvedValueOnce({ ...upstreamConfig, agentId: "agent-2" });
+    await getFredUpstreamConfig({ config });
+
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      vi.setSystemTime(new Date("2026-10-18T10:02:00.000Z"));
+      await expect(getFredUpstreamConfig({ config })).resolves.toEqual(upstreamConfig);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+
+    // The failure was not cached as success: the next call serves the stale value and retries.
+    await expect(getFredUpstreamConfig({ config })).resolves.toEqual(upstreamConfig);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await expect(getFredUpstreamConfig({ config })).resolves.toMatchObject({ agentId: "agent-2" });
+    expect(fetchFredUpstreamConfig).toHaveBeenCalledTimes(3);
   });
 
   it("fetches with its own timeout instead of the caller's signal", async () => {
