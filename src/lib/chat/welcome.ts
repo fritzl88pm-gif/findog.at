@@ -1,105 +1,67 @@
-const MORNING_GREETINGS = [
-  "Guten Morgen! Ich hab mich schon zweimal gestreckt und einmal geschüttelt – bereit, wenn du es bist.",
-  "Guten Morgen! Der Kaffee ist heiß, der Aktenstapel ist kalt. Womit fangen wir an?",
-  "Guten Morgen! Ich hab die Nacht auf dem Ordnerstapel verbracht – überraschend bequem. Wobei kann ich helfen?",
-  "Guten Morgen! Erste Runde ums Revier gedreht, alles ruhig. Und bei dir?",
-  "Einen wunderschönen guten Morgen! Wirf mir deine Frage zu, ich bin schon in Position.",
-  "Guten Morgen! Frisch aus dem Körbchen und bereits auf der Fährte. Wo geht's hin?",
-  "Guten Morgen! Frühstück verschlungen, Platz für deine Fragen ist trotzdem noch da.",
-  "Guten Morgen! Ohren aufgestellt, Nase justiert, Schwanz auf Betriebstemperatur. Leg los!",
-  "Guten Morgen! Wer früh aufsteht, dem apportiert Fred. Was darf's sein?",
-  "Guten Morgen! Ich hab schon die Zeitung geholt – jetzt bist du dran.",
-] as const;
+import {
+  HOLIDAY_GREETINGS,
+  SUNDAY_GREETINGS,
+  WEEKDAY_GREETINGS,
+  type WelcomeHolidayId,
+  type WelcomePeriod,
+} from "@/lib/chat/welcome-greetings";
 
-const MIDDAY_GREETINGS = [
-  "Mahlzeit! Ich hab schon zweimal um den Tisch geschlichen. Was gibt's bei dir?",
-  "Mahlzeit! Die Jause ist gesichert, die Ohren sind frei. Wobei kann ich helfen?",
-  "Hallo! Mittagspause – ich teile alles, außer der Wurstsemmel.",
-  "Mahlzeit! Kurz durchgeatmet, Napf geleert, volle Konzentration für dich.",
-  "Servus! Ich sitz mit treuem Blick neben dem Tisch. Funktioniert erstaunlich oft.",
-  "Mahlzeit! Zwischen zwei Bissen hab ich immer Zeit für deine Frage.",
-  "Hallo! Ich hab das Mittagessen im Blick und dich im Ohr. Leg los.",
-  "Mahlzeit! Erst die Pause, dann die Arbeit – oder beides gleichzeitig, das ist meine Spezialität.",
-  "Servus! Mittagszeit ist der beste Moment, um Unangenehmes zu erledigen. Was steht an?",
-  "Mahlzeit! Ich kau noch, aber ich hör dir schon zu.",
-] as const;
+export type { WelcomeHolidayId, WelcomePeriod };
 
-const AFTERNOON_GREETINGS = [
-  "Hallo! Mittagsschlaf verschoben, deine Frage ist wichtiger.",
-  "Servus! Ich sitz brav neben dem Ordner und wedle. Wobei kann ich helfen?",
-  "Hallo! Ich hab die Nase tief im Papierstapel – wirf mir was zu.",
-  "Hallo! Zwei Runden um den Schreibtisch gedreht, jetzt bin ich voll fokussiert. Was liegt an?",
-  "Servus! Welche Frage soll ich für dich apportieren?",
-  "Hallo! Ich bin der einzige Hund, der freiwillig Formulare holt. Welches darf's sein?",
-  "Hallo! Gerade einen Beleg gefunden, der unter dem Sofa lag. Hast du auch welche?",
-  "Grüß dich! Ich hab Zeit, Geduld und eine ausgezeichnete Nase. Leg los.",
-  "Hallo! Kurze Pause vom Stöckchen, volle Aufmerksamkeit für dich.",
-  "Servus! Sag ein Stichwort, den Rest bring ich dir.",
-] as const;
-
-const EVENING_GREETINGS = [
-  "Guten Abend! Der Tag war lang, mein Schwanz wedelt trotzdem noch. Was liegt an?",
-  "Guten Abend! Noch eine Runde durchs Aktenrevier, bevor wir Feierabend machen?",
-  "Guten Abend! Ich hab mir den Platz vorm Kamin gesichert – frag ruhig von dort aus.",
-  "Guten Abend! Wirf mir deine Frage zu, ich fang sie auch im Halbdunkel.",
-  "Guten Abend! Der Napf ist leer, der Kopf ist voll. Womit kann ich helfen?",
-  "Guten Abend! Ich hab den ganzen Tag Papier gehütet. Jetzt bist du dran.",
-  "Guten Abend! Für dich mach ich gern Überstunden – zahlt mir eh keiner in Leckerlis.",
-  "Schönen Abend! Ein letzter Schnüffler durchs Steuerrecht, bevor Ruhe einkehrt?",
-  "Guten Abend! Müde genug für Gemütlichkeit, wach genug für deine Frage.",
-  "Guten Abend! Was hat sich heute angesammelt? Ich hör zu.",
-] as const;
-
-const LATE_NIGHT_GREETINGS = [
-  "Andere zählen Schafe, ich sortiere Ordner. Was hält dich wach?",
-  "So spät noch auf der Fährte? Ich bin dabei.",
-  "Um die Zeit sind nur Nachtschwärmer, Eulen und ich unterwegs. Was liegt an?",
-  "Ich hab ein Ohr im Körbchen und eins bei dir. Erzähl.",
-  "Nachtschicht? Ich hab mich extra nicht zusammengerollt. Leg los.",
-  "Der Mond steht hoch, der Papierstapel auch. Womit fangen wir an?",
-  "Psst, die anderen schlafen. Wir zwei können ganz leise arbeiten.",
-  "Zu später Stunde noch was Steuerliches? Ich schnüffel mit.",
-  "Ich hab mich dreimal im Kreis gedreht und mich dann doch für dich entschieden.",
-  "Späte Stunde, wache Nase. Was beschäftigt dich?",
-] as const;
-
-/** Bild, das gezeigt wird, solange eine Tageszeit noch keine eigenen Motive hat. */
+/** Bild, das gezeigt wird, solange kein Motiv der Auswahl vorhanden ist. */
 export const FALLBACK_WELCOME_IMAGE = "/fred.png";
 
-const MORNING_IMAGES = [
-  "/fred-welcome-morgen-1.png",
-  "/fred-welcome-morgen-2.png",
-] as const;
+export interface WelcomeImageManifest {
+  /** Motive je Tageszeit - der letzte Rueckfall vor FALLBACK_WELCOME_IMAGE. */
+  periods: Record<WelcomePeriod, readonly string[]>;
+  /** Motive fuer Sonntage; leer = Motive der Tageszeit. */
+  sunday: readonly string[];
+  /** Motive je Feiertag; leer = Sonntags-/Tageszeitmotive. */
+  holidays: Record<WelcomeHolidayId, readonly string[]>;
+  /**
+   * Statische Ersatzbilder (`<name>-static.png`) fuer animierte Motive
+   * (.webp/.gif). Nur Pfade eintragen, die in public/ wirklich existieren.
+   */
+  staticFallbacks: readonly string[];
+}
 
-const MIDDAY_IMAGES = [
-  "/fred-welcome-mittag-1.png",
-  "/fred-welcome-mittag-2.png",
-  "/fred-welcome-mittag-3.png",
-] as const;
-
-const AFTERNOON_IMAGES = [
-  "/fred-welcome-nachmittag-1.png",
-] as const;
-
-const EVENING_IMAGES = [
-  "/fred-welcome-abend-1.png",
-] as const;
-
-const LATE_NIGHT_IMAGES = [
-  "/fred-welcome-nacht-1.png",
-] as const;
-
-type WelcomePeriod = "morning" | "midday" | "afternoon" | "evening" | "lateNight";
-
-const PERIOD_CONTENT: Record<
-  WelcomePeriod,
-  { greetings: readonly string[]; images: readonly string[] }
-> = {
-  morning: { greetings: MORNING_GREETINGS, images: MORNING_IMAGES },
-  midday: { greetings: MIDDAY_GREETINGS, images: MIDDAY_IMAGES },
-  afternoon: { greetings: AFTERNOON_GREETINGS, images: AFTERNOON_IMAGES },
-  evening: { greetings: EVENING_GREETINGS, images: EVENING_IMAGES },
-  lateNight: { greetings: LATE_NIGHT_GREETINGS, images: LATE_NIGHT_IMAGES },
+/**
+ * Einziger Ort fuer Bildpfade. Neue Motive (auch animierte .webp/.gif) werden
+ * nur hier eingetragen, die Auswahllogik bleibt unveraendert.
+ */
+export const WELCOME_IMAGE_MANIFEST: WelcomeImageManifest = {
+  periods: {
+    morning: ["/fred-welcome-morgen-1.png", "/fred-welcome-morgen-2.png"],
+    midday: [
+      "/fred-welcome-mittag-1.png",
+      "/fred-welcome-mittag-2.png",
+      "/fred-welcome-mittag-3.png",
+    ],
+    afternoon: ["/fred-welcome-nachmittag-1.png"],
+    evening: ["/fred-welcome-abend-1.png"],
+    lateNight: ["/fred-welcome-nacht-1.png"],
+  },
+  sunday: [],
+  holidays: {
+    neujahr: [],
+    dreikoenige: [],
+    ostersonntag: [],
+    ostermontag: [],
+    staatsfeiertag: [],
+    himmelfahrt: [],
+    pfingstsonntag: [],
+    pfingstmontag: [],
+    fronleichnam: [],
+    mariaeHimmelfahrt: [],
+    nationalfeiertag: [],
+    allerheiligen: [],
+    mariaeEmpfaengnis: [],
+    heiligerAbend: [],
+    christtag: [],
+    stefanitag: [],
+    silvester: [],
+  },
+  staticFallbacks: [],
 };
 
 const VIENNA_DATE_TIME = new Intl.DateTimeFormat("de-AT", {
@@ -124,6 +86,90 @@ function readViennaParts(instant: Date) {
   };
 }
 
+export type WelcomeDayKind =
+  | { kind: "holiday"; holiday: WelcomeHolidayId }
+  | { kind: "sunday" }
+  | { kind: "weekday" };
+
+/**
+ * Ostersonntag nach dem Gregorianischen Algorithmus (Meeus/Jones/Butcher).
+ * Liefert Monat (3 oder 4) und Tag.
+ */
+export function computeEasterSunday(year: number): { month: number; day: number } {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+
+  return { month, day };
+}
+
+const FIXED_HOLIDAYS: Record<string, WelcomeHolidayId> = {
+  "1-1": "neujahr",
+  "1-6": "dreikoenige",
+  "5-1": "staatsfeiertag",
+  "8-15": "mariaeHimmelfahrt",
+  "10-26": "nationalfeiertag",
+  "11-1": "allerheiligen",
+  "12-8": "mariaeEmpfaengnis",
+  "12-24": "heiligerAbend",
+  "12-25": "christtag",
+  "12-26": "stefanitag",
+  "12-31": "silvester",
+};
+
+/** Bewegliche Feiertage als Abstand in Tagen zum Ostersonntag. */
+const EASTER_RELATIVE_HOLIDAYS: ReadonlyArray<readonly [number, WelcomeHolidayId]> = [
+  [0, "ostersonntag"],
+  [1, "ostermontag"],
+  [39, "himmelfahrt"],
+  [49, "pfingstsonntag"],
+  [50, "pfingstmontag"],
+  [60, "fronleichnam"],
+];
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function dayNumber(year: number, month: number, day: number): number {
+  return Math.round(Date.UTC(year, month - 1, day) / MS_PER_DAY);
+}
+
+export function getWelcomeHoliday(instant: Date = new Date()): WelcomeHolidayId | null {
+  const { year, month, day } = readViennaParts(instant);
+  const fixed = FIXED_HOLIDAYS[`${month}-${day}`];
+  if (fixed) return fixed;
+
+  const easter = computeEasterSunday(year);
+  const easterDay = dayNumber(year, easter.month, easter.day);
+  const today = dayNumber(year, month, day);
+
+  return EASTER_RELATIVE_HOLIDAYS.find(([offset]) => easterDay + offset === today)?.[1] ?? null;
+}
+
+function isSundayInVienna(instant: Date): boolean {
+  const { year, month, day } = readViennaParts(instant);
+
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay() === 0;
+}
+
+/** Feiertag vor Sonntag vor Werktag (Wiener Kalendertag). */
+export function getWelcomeDayKind(instant: Date = new Date()): WelcomeDayKind {
+  const holiday = getWelcomeHoliday(instant);
+  if (holiday) return { kind: "holiday", holiday };
+
+  return isSundayInVienna(instant) ? { kind: "sunday" } : { kind: "weekday" };
+}
+
 export function getWelcomePeriod(instant: Date = new Date()): WelcomePeriod {
   const { hour } = readViennaParts(instant);
 
@@ -136,24 +182,59 @@ export function getWelcomePeriod(instant: Date = new Date()): WelcomePeriod {
 
 export function getWelcomeGreeting(instant: Date = new Date()): string {
   const { year, month, day } = readViennaParts(instant);
-  const { greetings } = PERIOD_CONTENT[getWelcomePeriod(instant)];
-  const greetingIndex = (year + month + day) % greetings.length;
+  const dayKind = getWelcomeDayKind(instant);
+  const period = getWelcomePeriod(instant);
+  const greetings =
+    dayKind.kind === "holiday"
+      ? HOLIDAY_GREETINGS[dayKind.holiday]
+      : dayKind.kind === "sunday"
+        ? SUNDAY_GREETINGS[period]
+        : WEEKDAY_GREETINGS[period];
 
-  return greetings[greetingIndex];
+  // Fortlaufende Tagesnummer statt Datumssumme: aufeinanderfolgende Tage
+  // landen so immer auf unterschiedlichen Eintraegen derselben Liste.
+  return greetings[dayNumber(year, month, day) % greetings.length];
 }
 
 /**
- * Wählt zufällig eines der Motive der aktuellen Tageszeit. `pick` ist nur für
- * Tests da und erwartet einen Wert aus [0, 1).
+ * Wählt zufällig eines der Motive des Tages: Feiertag, sonst Sonntag, sonst
+ * Tageszeit - jeweils mit Rückfall auf die nächste nicht leere Liste.
+ * `pick` ist nur für Tests da und erwartet einen Wert aus [0, 1).
  */
 export function getWelcomeImage(
   instant: Date = new Date(),
   pick: number = Math.random(),
+  manifest: WelcomeImageManifest = WELCOME_IMAGE_MANIFEST,
 ): string {
-  const { images } = PERIOD_CONTENT[getWelcomePeriod(instant)];
-  if (images.length === 0) return FALLBACK_WELCOME_IMAGE;
+  const dayKind = getWelcomeDayKind(instant);
+  const candidates: ReadonlyArray<readonly string[]> = [
+    dayKind.kind === "holiday" ? manifest.holidays[dayKind.holiday] : [],
+    isSundayInVienna(instant) ? manifest.sunday : [],
+    manifest.periods[getWelcomePeriod(instant)],
+  ];
+  const images = candidates.find((list) => list.length > 0);
+  if (!images) return FALLBACK_WELCOME_IMAGE;
 
   const imageIndex = Math.min(images.length - 1, Math.max(0, Math.floor(pick * images.length)));
 
   return images[imageIndex];
+}
+
+const ANIMATED_IMAGE = /\.(webp|gif)$/iu;
+
+/**
+ * Bei `prefers-reduced-motion` wird für animierte Motive (.webp/.gif) das
+ * statische Ersatzbild `<name>-static.png` genutzt, sofern es im Manifest
+ * eingetragen ist. Sonst bleibt das animierte Motiv.
+ */
+export function resolveWelcomeImage(
+  src: string,
+  reducedMotion: boolean,
+  manifest: WelcomeImageManifest = WELCOME_IMAGE_MANIFEST,
+): string {
+  if (!reducedMotion || !ANIMATED_IMAGE.test(src)) return src;
+
+  const staticSrc = src.replace(ANIMATED_IMAGE, "-static.png");
+
+  return manifest.staticFallbacks.includes(staticSrc) ? staticSrc : src;
 }

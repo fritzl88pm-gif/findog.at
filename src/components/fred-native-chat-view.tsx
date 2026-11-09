@@ -41,6 +41,7 @@ import {
   FALLBACK_WELCOME_IMAGE,
   getWelcomeGreeting,
   getWelcomeImage,
+  resolveWelcomeImage,
 } from "@/lib/chat/welcome";
 import FredArtifactCards from "@/components/fred-artifact-cards";
 import { CitedSourceEntry, FredCitationScope } from "@/components/fred-citations";
@@ -120,6 +121,15 @@ type ReasoningSaveDraft = {
 /** Das Begruessungsmotiv aendert sich nach der Auswahl nicht mehr. */
 const subscribeToStableValue = () => () => {};
 const readFallbackWelcomeImage = () => FALLBACK_WELCOME_IMAGE;
+
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+const subscribeToReducedMotion = (onChange: () => void) => {
+  const query = window.matchMedia(REDUCED_MOTION_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+};
+const readReducedMotion = () => window.matchMedia(REDUCED_MOTION_QUERY).matches;
+const readNoReducedMotion = () => false;
 
 const MAX_IMAGE_UPLOADS = 5;
 const MAX_FILE_UPLOADS = 5;
@@ -501,11 +511,19 @@ export default function FredNativeChatView({
     let chosenImage: string | null = null;
     return () => (chosenImage ??= getWelcomeImage());
   });
-  const welcomeImage = useSyncExternalStore(
+  const chosenWelcomeImage = useSyncExternalStore(
     subscribeToStableValue,
     readWelcomeImage,
     readFallbackWelcomeImage,
   );
+  // Animierte Motive (.webp/.gif) weichen bei reduzierter Bewegung auf ihr
+  // statisches Ersatzbild aus, sofern es eines gibt.
+  const prefersReducedMotion = useSyncExternalStore(
+    subscribeToReducedMotion,
+    readReducedMotion,
+    readNoReducedMotion,
+  );
+  const welcomeImage = resolveWelcomeImage(chosenWelcomeImage, prefersReducedMotion);
   const activeConversationIdRef = useRef(conversationId);
   const shareStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
