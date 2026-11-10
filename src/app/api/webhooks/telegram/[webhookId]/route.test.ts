@@ -418,6 +418,74 @@ describe("POST /api/webhooks/telegram/[webhookId]", () => {
     expect(rpc).not.toHaveBeenCalled();
   });
 
+  it("lets an admin's own bot work normally during maintenance", async () => {
+    process.env.FINDOG_MAINTENANCE_MODE = "on";
+    const integrationId = randomUUID();
+    const adminId = randomUUID();
+    const ms = mockQuery({
+      data: { id: integrationId, client_id: adminId, webhook_secret_sha256: webhookSecretHash, status: "active", paired_telegram_user_id: 123, paired_telegram_chat_id: 456 },
+      error: null,
+    });
+    const admin = mockQuery({ data: { user_id: adminId }, error: null });
+    const rpc = mockRpc({ data: { id: 1, status: "pending" }, error: null });
+    const from = vi.fn((table: string) => (table === "admin_users" ? admin : ms));
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from, rpc } as never);
+
+    const response = await POST(
+      buildRequest({
+        update_id: 301,
+        message: {
+          message_id: 401,
+          from: { id: 123, is_bot: false, first_name: "Admin" },
+          chat: { id: 456, type: "private" },
+          date: Math.floor(Date.now() / 1000),
+          text: "Hallo Fred",
+        },
+      }, webhookSecret),
+      { params: Promise.resolve({ webhookId }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(admin.eq).toHaveBeenCalledWith("user_id", adminId);
+    expect(rpc).toHaveBeenCalledWith("enqueue_telegram_update", expect.objectContaining({
+      p_integration_id: integrationId,
+      p_update_id: 301,
+    }));
+  });
+
+  it("keeps a non-admin bot in maintenance", async () => {
+    process.env.FINDOG_MAINTENANCE_MODE = "on";
+    const ms = mockQuery({
+      data: { id: randomUUID(), client_id: randomUUID(), webhook_secret_sha256: webhookSecretHash, status: "active", paired_telegram_user_id: 123, paired_telegram_chat_id: 456 },
+      error: null,
+    });
+    const admin = mockQuery({ data: null, error: null });
+    const rpc = mockRpc({ data: { id: 1, status: "pending" }, error: null });
+    const from = vi.fn((table: string) => (table === "admin_users" ? admin : ms));
+    vi.mocked(getSupabaseServerClient).mockReturnValue({ from, rpc } as never);
+
+    const response = await POST(
+      buildRequest({
+        update_id: 302,
+        message: {
+          message_id: 402,
+          from: { id: 123, is_bot: false, first_name: "User" },
+          chat: { id: 456, type: "private" },
+          date: Math.floor(Date.now() / 1000),
+          text: "Hallo Fred",
+        },
+      }, webhookSecret),
+      { params: Promise.resolve({ webhookId }) },
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      method: "sendMessage",
+      chat_id: 456,
+      text: "Findog/Fred wird gerade gewartet. Bitte versuche es später noch einmal.",
+    });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
   it("acknowledges a foreign private chat during maintenance without RPC work", async () => {
     process.env.FINDOG_MAINTENANCE_MODE = "on";
     const ms = mockQuery({

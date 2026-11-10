@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { isAdminUser } from "@/lib/admin-auth";
 import { MAINTENANCE_MESSAGE, isMaintenanceModeEnabled } from "@/lib/maintenance-mode";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { parseSlashCommand } from "@/lib/telegram/commands";
@@ -118,7 +119,7 @@ export async function POST(
 
   const { data: integration, error: lookupError } = await supabase
     .from("telegram_integrations")
-    .select("id, webhook_secret_sha256, status, pairing_token_sha256, pairing_expires_at, paired_telegram_user_id, paired_telegram_chat_id")
+    .select("id, client_id, webhook_secret_sha256, status, pairing_token_sha256, pairing_expires_at, paired_telegram_user_id, paired_telegram_chat_id")
     .eq("webhook_id", webhookId)
     .maybeSingle();
 
@@ -149,7 +150,12 @@ export async function POST(
 
   const status = integration.status as string;
 
-  if (isMaintenanceModeEnabled()) {
+  // Admins keep full access to their own Telegram bot during maintenance.
+  const maintenanceBlocksIntegration = isMaintenanceModeEnabled()
+    && !(typeof integration.client_id === "string"
+      && await isAdminUser(supabase, integration.client_id).catch(() => false));
+
+  if (maintenanceBlocksIntegration) {
     if (status === "active") {
       const message = body.message;
       const pairedUser = integration.paired_telegram_user_id as number | null;

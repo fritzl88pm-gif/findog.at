@@ -62,4 +62,47 @@ describe("maintenance proxy", () => {
     expect(response.headers.get("x-middleware-next")).toBe("1");
     expect(response.headers.get("x-middleware-rewrite")).toBeNull();
   });
+
+  describe("admin bypass", () => {
+    const token = "a".repeat(40);
+
+    afterEach(() => {
+      delete process.env.FINDOG_MAINTENANCE_BYPASS_TOKEN;
+    });
+
+    function withCookie(pathname: string, value: string): NextRequest {
+      return new NextRequest(new URL(pathname, "https://findog.at"), {
+        headers: { cookie: `findog_maintenance_bypass=${value}` },
+      });
+    }
+
+    it("passes pages and APIs through with a valid bypass cookie", () => {
+      process.env.FINDOG_MAINTENANCE_MODE = "on";
+      process.env.FINDOG_MAINTENANCE_BYPASS_TOKEN = token;
+      for (const pathname of ["/", "/api/fred/chat"]) {
+        const response = proxy(withCookie(pathname, token));
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-middleware-next")).toBe("1");
+      }
+    });
+
+    it("keeps maintenance for a wrong cookie", () => {
+      process.env.FINDOG_MAINTENANCE_MODE = "on";
+      process.env.FINDOG_MAINTENANCE_BYPASS_TOKEN = token;
+      expect(proxy(withCookie("/", "b".repeat(40))).status).toBe(503);
+    });
+
+    it("never bypasses when no or a too short token is configured", () => {
+      process.env.FINDOG_MAINTENANCE_MODE = "on";
+      expect(proxy(withCookie("/", "")).status).toBe(503);
+      process.env.FINDOG_MAINTENANCE_BYPASS_TOKEN = "short";
+      expect(proxy(withCookie("/", "short")).status).toBe(503);
+    });
+
+    it("keeps the bypass entry route reachable", () => {
+      process.env.FINDOG_MAINTENANCE_MODE = "on";
+      expect(proxy(request("/maintenance/bypass")).headers.get("x-middleware-next")).toBe("1");
+    });
+  });
 });
+

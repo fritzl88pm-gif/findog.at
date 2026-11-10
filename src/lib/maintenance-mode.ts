@@ -1,4 +1,13 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+
 export const MAINTENANCE_ENV_VAR = "FINDOG_MAINTENANCE_MODE";
+
+// Secret that lets the admin keep using Findog during maintenance. Opening
+// /maintenance/bypass?token=<secret> stores it in an HttpOnly cookie.
+export const MAINTENANCE_BYPASS_ENV_VAR = "FINDOG_MAINTENANCE_BYPASS_TOKEN";
+export const MAINTENANCE_BYPASS_COOKIE = "findog_maintenance_bypass";
+export const MAINTENANCE_BYPASS_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+const MIN_BYPASS_TOKEN_CHARS = 32;
 
 export const MAINTENANCE_MESSAGE =
   "Findog/Fred wird gerade gewartet. Bitte versuche es später noch einmal.";
@@ -90,4 +99,19 @@ export function buildMaintenanceHtml(): string {
     </main>
   </body>
 </html>`;
+}
+
+function configuredBypassToken(): string | null {
+  const token = process.env[MAINTENANCE_BYPASS_ENV_VAR]?.trim();
+  return token && token.length >= MIN_BYPASS_TOKEN_CHARS ? token : null;
+}
+
+function digest(value: string): Buffer {
+  return createHash("sha256").update(value).digest();
+}
+
+export function isValidMaintenanceBypassToken(value: string | null | undefined): boolean {
+  const expected = configuredBypassToken();
+  if (!expected || !value) return false;
+  return timingSafeEqual(digest(value), digest(expected));
 }

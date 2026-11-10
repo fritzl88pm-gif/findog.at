@@ -1,10 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import {
+  MAINTENANCE_BYPASS_COOKIE,
   MAINTENANCE_MESSAGE,
   MAINTENANCE_RETRY_AFTER_SECONDS,
   buildMaintenanceHtml,
   isMaintenanceModeEnabled,
+  isValidMaintenanceBypassToken,
 } from "@/lib/maintenance-mode";
 
 function maintenanceHeaders(contentType?: string): Headers {
@@ -24,11 +26,16 @@ export function proxy(request: NextRequest): NextResponse {
   const { pathname } = request.nextUrl;
   if (
     pathname === "/maintenance"
+    || pathname === "/maintenance/bypass"
     || pathname === "/fred-maintenance.png"
     || pathname.startsWith("/_next/")
     || pathname === "/api/health"
     || pathname.startsWith("/api/webhooks/telegram/")
   ) {
+    return NextResponse.next();
+  }
+
+  if (isValidMaintenanceBypassToken(request.cookies.get(MAINTENANCE_BYPASS_COOKIE)?.value)) {
     return NextResponse.next();
   }
 
