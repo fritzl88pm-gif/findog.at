@@ -18,7 +18,7 @@ describe("GET /maintenance/bypass", () => {
     process.env.FINDOG_MAINTENANCE_BYPASS_TOKEN = token;
     const response = get(`?token=${token}`);
     expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe("https://findog.at/");
+    expect(response.headers.get("location")).toBe("/");
     const cookie = response.headers.get("set-cookie") ?? "";
     expect(cookie).toContain(`findog_maintenance_bypass=${token}`);
     expect(cookie).toMatch(/HttpOnly/i);
